@@ -43,13 +43,18 @@ impl std::fmt::Debug for SinkToken {
 // that its *own* tests can build tokens, and Cargo's feature unification
 // then turns the feature on for every test/dev build of this crate,
 // `trybuild`'s fixtures included (see the note in
-// `tests/derive_compile_fail.rs`). The guarantee is instead checked here:
-// this item only compiles when `executor` is off, which never happens
-// under `cargo test` in this crate, but does happen for a plain
-// `cargo check -p willikins-types` (no `--tests`) and for any downstream
-// crate that depends on `willikins-types` without opting into `executor`.
-#[cfg(not(feature = "executor"))]
-#[allow(dead_code)]
-fn sink_token_new_is_unreachable_without_executor() {
-    let _: SinkToken = SinkToken::new();
-}
+// `tests/derive_compile_fail.rs`). There is also no way to write a
+// same-crate, `#[cfg(not(feature = "executor"))]`-gated item that calls
+// `SinkToken::new()` as a *proof* the call fails without the feature: such
+// an item would only ever be compiled in the one configuration where the
+// call is invalid, so it would break every ordinary build of this crate
+// without `executor` (which is every crate in this workspace except
+// `willikins-core`) rather than exercise anything.
+//
+// The guarantee is therefore structural, not a runnable check: `new` is
+// declared under `#[cfg(feature = "executor")]` above, full stop. Nothing
+// else in this module references it, so the only way to reach `expose` is
+// through a token minted in a crate that opted into `executor` on purpose.
+// The closest thing to an automated check is `cargo check -p
+// willikins-types` (no `--tests`, so no dev-dependency unification) succeeding
+// with `executor` off, which every other gate here already implies.

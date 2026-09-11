@@ -34,6 +34,13 @@ fn string_storage_rejects_a_value_that_does_not_match_the_pattern() {
 }
 
 #[test]
+fn string_storage_pattern_is_anchored_even_though_the_author_did_not_anchor_it() {
+    // The written pattern is `[a-z][a-z0-9-]*`, unanchored. If the derive
+    // did not anchor it, "1abc" would match on its "abc" tail.
+    assert!(TestSlug::parse("1abc").is_err());
+}
+
+#[test]
 fn string_storage_rejects_a_value_that_is_too_short() {
     let err = TestSlug::parse("a").unwrap_err();
     assert!(
@@ -201,4 +208,15 @@ fn other_storage_applies_length_limits_to_the_canonical_form() {
         "reason was {:?}",
         err.reason
     );
+}
+
+// ---------------------------------------------------------------------
+// `assert_example_parses`
+// ---------------------------------------------------------------------
+
+#[test]
+fn every_test_types_own_example_parses_as_itself() {
+    willikins_types::assert_example_parses::<TestSlug>();
+    willikins_types::assert_example_parses::<TestSecret>();
+    willikins_types::assert_example_parses::<TestKebab>();
 }

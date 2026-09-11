@@ -23,16 +23,20 @@
 //! `SinkToken::new()` would compile here regardless of whether it "should"
 //! be allowed to.
 //!
-//! The guarantee is instead checked structurally, in
-//! `src/sink.rs`: `SinkToken::new` is declared under
-//! `#[cfg(feature = "executor")]`, and a private function under
-//! `#[cfg(not(feature = "executor"))]` calls it, so that function only
-//! compiles (and only then proves the call resolves) when the feature is
-//! off — which is exactly the condition this crate's own gates never
-//! exercise (`cargo test` and `cargo clippy --all-targets` both unify
-//! `executor` on), but which is exactly the condition every other crate
-//! in this workspace is in, since only `willikins-core`'s milestone-2
-//! apply executor enables `executor` on purpose.
+//! A same-crate `#[cfg(not(feature = "executor"))]` item that calls
+//! `SinkToken::new()` to "prove" the call fails doesn't work either: such
+//! an item is only ever compiled in the one configuration where the call
+//! is invalid, so it would break every ordinary build of this crate
+//! without `executor` (every crate in this workspace except
+//! `willikins-core`) instead of proving anything.
+//!
+//! The guarantee is therefore structural, not a runnable check: in
+//! `src/sink.rs`, `SinkToken::new` is declared under
+//! `#[cfg(feature = "executor")]` and nothing else in that module
+//! references it. The nearest automated check is `cargo check -p
+//! willikins-types` (no `--tests`, so no dev-dependency feature
+//! unification) succeeding with `executor` off — which every gate that
+//! isn't `--all-targets`/`cargo test` already exercises.
 #[test]
 fn compile_fail() {
     let t = trybuild::TestCases::new();
