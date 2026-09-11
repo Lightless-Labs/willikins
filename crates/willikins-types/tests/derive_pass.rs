@@ -343,3 +343,94 @@ fn the_string_schema_carries_every_documented_keyword() {
     assert_eq!(schema["description"], "A lowercase test slug");
     assert_eq!(schema["examples"], serde_json::json!(["abc"]));
 }
+
+// ---------------------------------------------------------------------
+// Pattern anchoring
+// ---------------------------------------------------------------------
+
+#[derive(DomainType)]
+#[domain(
+    pattern = "^[a-z]+$",
+    description = "A pattern the author anchored",
+    example = "abc"
+)]
+struct TestPreAnchored(String);
+
+#[test]
+fn an_already_anchored_pattern_is_not_anchored_twice() {
+    // The schema must publish the author's own pattern, unchanged.
+    let schema = serde_json::to_value(TestPreAnchored::json_schema()).unwrap();
+    assert_eq!(schema["pattern"], "^[a-z]+$");
+    assert!(TestPreAnchored::parse("abc").is_ok());
+    assert!(TestPreAnchored::parse("abc1").is_err());
+}
+
+#[derive(DomainType)]
+#[domain(
+    pattern = "abc|def",
+    description = "A top-level alternation the author did not anchor",
+    example = "abc"
+)]
+struct TestAlternation(String);
+
+#[test]
+fn a_top_level_alternation_is_anchored_as_a_group() {
+    let schema = serde_json::to_value(TestAlternation::json_schema()).unwrap();
+    assert_eq!(schema["pattern"], "^(?:abc|def)$");
+    assert!(TestAlternation::parse("abc").is_ok());
+    assert!(TestAlternation::parse("def").is_ok());
+    // With `^abc|def$` instead of `^(?:abc|def)$`, both of these match.
+    assert!(TestAlternation::parse("abcXXX").is_err());
+    assert!(TestAlternation::parse("XXXdef").is_err());
+}
+
+#[derive(DomainType)]
+#[domain(
+    pattern = "^abc|def$",
+    description = "An alternation whose branches the author anchored only at the ends",
+    example = "abc"
+)]
+struct TestHalfAnchoredAlternation(String);
+
+#[test]
+fn an_alternation_anchored_only_at_its_ends_is_still_anchored_whole() {
+    // `^abc|def$` reads as `(^abc)|(def$)`: it starts with `^` and ends
+    // with `$`, yet neither branch is anchored at both ends. Treating it
+    // as already anchored would accept "abcXXX" and "XXXdef".
+    assert!(TestHalfAnchoredAlternation::parse("abc").is_ok());
+    assert!(TestHalfAnchoredAlternation::parse("def").is_ok());
+    assert!(TestHalfAnchoredAlternation::parse("abcXXX").is_err());
+    assert!(TestHalfAnchoredAlternation::parse("XXXdef").is_err());
+}
+
+#[derive(DomainType)]
+#[domain(
+    pattern = "^price\\$",
+    description = "A pattern whose trailing dollar is an escaped literal",
+    example = "price$"
+)]
+struct TestTrailingLiteralDollar(String);
+
+#[test]
+fn a_trailing_escaped_dollar_is_not_an_end_anchor() {
+    // `^price\$` ends with the character `$`, but as a literal, not an
+    // anchor: without a real end anchor "price$and-more" matches.
+    assert!(TestTrailingLiteralDollar::parse("price$").is_ok());
+    assert!(TestTrailingLiteralDollar::parse("price$and-more").is_err());
+}
+
+#[derive(DomainType)]
+#[domain(
+    pattern = "^abc$|^def$",
+    description = "An alternation whose every branch the author anchored",
+    example = "abc"
+)]
+struct TestFullyAnchoredAlternation(String);
+
+#[test]
+fn an_alternation_with_every_branch_anchored_is_left_alone() {
+    let schema = serde_json::to_value(TestFullyAnchoredAlternation::json_schema()).unwrap();
+    assert_eq!(schema["pattern"], "^abc$|^def$");
+    assert!(TestFullyAnchoredAlternation::parse("abc").is_ok());
+    assert!(TestFullyAnchoredAlternation::parse("abcXXX").is_err());
+}

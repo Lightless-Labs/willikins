@@ -871,6 +871,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
+ "regex-syntax",
  "syn 2.0.119",
 ]
 

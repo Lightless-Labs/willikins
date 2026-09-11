@@ -34,6 +34,7 @@ petgraph = "0.8"
 indexmap = { version = "2", features = ["serde"] }
 unicode-normalization = "0.1"
 regex = "1"
+regex-syntax = "0.8"
 clap = { version = "4", features = ["derive"] }
 syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"
