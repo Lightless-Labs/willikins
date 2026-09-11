@@ -78,9 +78,11 @@ impl TypeInfo {
 }
 
 pub mod reserved;
+pub mod slug;
 pub mod word;
 
 pub use reserved::is_reserved;
+pub use slug::{ComponentSlug, EnvironmentSlug, ProjectSlug};
 pub use word::{Word, WordList};
 
 /// The beginning of the type catalog: every domain type this crate
@@ -88,5 +90,10 @@ pub use word::{Word, WordList};
 /// and credential types.
 #[must_use]
 pub fn type_infos() -> Vec<TypeInfo> {
-    vec![TypeInfo::of::<WordList>()]
+    vec![
+        TypeInfo::of::<WordList>(),
+        TypeInfo::of::<ProjectSlug>(),
+        TypeInfo::of::<ComponentSlug>(),
+        TypeInfo::of::<EnvironmentSlug>(),
+    ]
 }
