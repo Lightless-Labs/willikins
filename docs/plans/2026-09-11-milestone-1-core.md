@@ -3,6 +3,7 @@
 **Created:** 2026-09-11
 **Addendum:** 2026-09-11 — pinned dependencies and slug grammar filled in from the research note.
 **Reviewed:** 2026-09-11 (via document-review workflow: scope, feasibility, security, coherence, adversarial personas). 23 findings folded in; see "Review resolutions" at the end.
+**Addendum:** 2026-09-11 — `SinkToken` moved to `willikins-types` behind the `executor` feature; the derive's third storage generalised to any `FromStr + Display` inner type.
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
 **Research:** `docs/research/2026-09-11-m1-dependencies.md`
 
@@ -86,10 +87,13 @@ This section is normative for every crate.
   `Display`. Secret types implement no `Serialize` at all.
 - **Secret types** store a `secrecy::SecretString`. `Debug` and `Display` print
   `[REDACTED <TypeName>]`. The value is reachable only through
-  `expose(&self, &SinkToken) -> &str`. `SinkToken` is defined in `willikins-core` with a
-  private constructor; it is created only by the apply executor (milestone 2) and, behind
-  the `test-util` feature, by tests. `Tool::read` never receives one, so a `read`
-  implementation provably cannot expose a secret.
+  `expose(&self, &SinkToken) -> &str`. `SinkToken` is defined in `willikins-types`
+  (module `sink`) because the derive generates `expose` there. Its only constructor,
+  `SinkToken::new()`, exists only when the `executor` cargo feature of `willikins-types` is
+  enabled. `willikins-core` enables it and creates tokens only inside the apply executor
+  (milestone 2); tests enable it in dev-dependencies. No other crate enables it, which a
+  manifest review catches. `Tool::read` never receives one, so a `read` implementation
+  provably cannot expose a secret.
 - **Enum domain types** (`RepoVisibility`) are hand-written in milestone 1: a Rust enum
   whose canonical strings are its variants.
 - **Structured identities** (`GitHubRepo { owner, name }`, `DopplerConfig { project, name }`)
@@ -169,10 +173,13 @@ Dependencies flow downward only: cli -> dsl, providers-fake -> core -> types -> 
 - `String`: `#[domain(pattern = "...", min_len = N, max_len = N, description, example)]`.
   Generates `DomainType`, `FromStr`, `Display`, `Debug`, `Serialize` (via `Display`),
   `Deserialize` (via `parse`), `JsonSchema` (string with pattern and lengths).
-- `WordList`: the same attributes plus `max_len` applying to the kebab serialisation.
-  Serialize, Display, and schema use the kebab string, never the word array.
 - `secrecy::SecretString`, required when `#[domain(secret, ...)]` is present: validation
-  runs on the raw `&str` before wrapping. Generates `DomainType` with `IS_SECRET = true`,
+  runs on the raw `&str` before wrapping.
+- Any other inner type that implements `FromStr + Display + Clone + Eq` (such as
+  `WordList`): `parse` delegates to `FromStr`, then applies `max_len` to the `Display`
+  form; `Display`, `Serialize`, and the schema use the `Display` form. This is how the
+  `WordList` storage works, and it lets the derive be built and tested before `WordList`
+  exists. Generates `DomainType` with `IS_SECRET = true`,
   `FromStr`, redacted `Display` and `Debug`, `Deserialize` (via `parse`), `JsonSchema`,
   and `expose(&self, &SinkToken) -> &str`. Generates no `Serialize`.
 
@@ -184,7 +191,8 @@ on a secret type.
 
 ### willikins-core
 
-- `TypeRef`, `PortType`, `Value`, `ValueState`, `Known`, `SinkToken` per the Type model.
+- `TypeRef`, `PortType`, `Value`, `ValueState`, `Known` per the Type model; re-exports
+  `SinkToken` from `willikins-types` with the `executor` feature enabled.
 - `Class::{Reversible, Irreversible, Destructive}`, ordered. `requires_approval()` is true
   above `Reversible`.
 - `ToolSpec { name, description, inputs: IndexMap<PortName, PortSpec>, outputs:
@@ -355,8 +363,8 @@ The milestone cannot ship without every one of these.
 10. **Reserved words.** `native`, `default`, `type`, `match`, `self`, `nul` are rejected as
     project slugs; `type-system` and `self-hosted` are accepted.
 11. **Compile-time guarantees.** `trybuild`: `serde_json::to_string(&token)` does not
-    compile; constructing a `SinkToken` outside `willikins-core` without the `test-util`
-    feature does not compile; `#[domain(secret)]` on a `String` newtype does not compile.
+    compile; `SinkToken::new()` does not compile without the `executor` feature;
+    `#[domain(secret)]` on a `String` newtype does not compile.
 12. **Adversarial passes.** Two, recorded in `docs/research/`: one on `check` immediately
     after task 7, one end to end after task 12. Each attempts to construct a workflow, a
     value path, a fake-state file, or a CLI invocation that leaks a secret past `check` or
