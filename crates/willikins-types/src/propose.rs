@@ -69,6 +69,14 @@ pub enum ProposeError {
 /// NFKD-normalises, drops combining marks, keeps ASCII alphanumerics,
 /// treats every other character as a separator, splits `camelCase` and
 /// `PascalCase` at case boundaries, lowercases, and joins with hyphens.
+///
+/// The case-boundary split is applied uniformly, with no special case for
+/// a one-letter prefix: `iPhone App` proposes `i-phone-app`, not
+/// `iphone-app`, and `iOS Companion` proposes `i-os-companion`. A run of
+/// capitals followed by a lowercase letter breaks before the last capital,
+/// so `HTTPServer` proposes `http-server`. The proposal is confirmed by a
+/// human or agent before it is persisted, so an unwanted split is corrected
+/// there rather than guessed at here.
 pub fn propose_slug(name: &ProjectName) -> Result<ProjectSlug, ProposeError> {
     let input = name.as_str().to_owned();
 

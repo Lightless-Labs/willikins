@@ -5,7 +5,9 @@
 //! limit is rejected.
 
 use proptest::prelude::*;
-use willikins_types::{DomainType, ProjectSlug, Word, WordList, is_reserved};
+use willikins_types::{
+    DomainType, ProjectName, ProjectSlug, Word, WordList, is_reserved, propose_slug,
+};
 
 /// A single word: a letter followed by up to five letters or digits, or a
 /// run of one to three digits.
@@ -79,5 +81,54 @@ proptest! {
         let single_word_reserved = matches!(words, [only] if is_reserved(only.as_str()));
         prop_assume!(!single_word_reserved);
         prop_assert!(ProjectSlug::parse(&kebab).is_ok());
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// Arbitrary input must be rejected, never panic: these parsers sit on
+    /// the boundary between untrusted text and the frozen grammar.
+    #[test]
+    fn parse_kebab_never_panics(input in any::<String>()) {
+        let _ = WordList::parse_kebab(&input);
+    }
+
+    #[test]
+    fn project_slug_parse_never_panics(input in any::<String>()) {
+        let _ = ProjectSlug::parse(&input);
+    }
+
+    #[test]
+    fn propose_slug_never_panics(input in any::<String>()) {
+        if let Ok(name) = ProjectName::parse(&input) {
+            let _ = propose_slug(&name);
+        }
+    }
+
+    /// The same three entry points against text shaped like a display name:
+    /// letters, digits, combining marks, punctuation, and spaces, which is
+    /// where the tokenizer's case-boundary and mark-stripping logic runs.
+    #[test]
+    fn name_like_text_never_panics(
+        input in r"[\p{L}\p{N}\p{M}\p{P} ]{0,60}"
+    ) {
+        let _ = WordList::parse_kebab(&input);
+        let _ = ProjectSlug::parse(&input);
+        if let Ok(name) = ProjectName::parse(&input) {
+            let _ = propose_slug(&name);
+        }
+    }
+
+    /// Whatever `propose_slug` returns is a slug that parses back to itself:
+    /// the proposal is persisted verbatim, so it must be canonical.
+    #[test]
+    fn a_proposed_slug_is_canonical(input in r"[\p{L}\p{N}\p{M}\p{P} ]{0,60}") {
+        if let Ok(name) = ProjectName::parse(&input)
+            && let Ok(slug) = propose_slug(&name)
+        {
+            let text = slug.to_string();
+            prop_assert_eq!(ProjectSlug::parse(&text).unwrap(), slug);
+        }
     }
 }
