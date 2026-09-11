@@ -1,0 +1,5 @@
+error: #[derive(DomainType)] requires a concrete newtype: generic parameters, lifetimes, and where clauses are not supported
+ --> tests/derive/fail/generic_struct.rs:7:11
+  |
+7 | struct Foo<T>(T);
+  |           ^^^

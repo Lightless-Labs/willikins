@@ -46,6 +46,14 @@ fn expand(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
     let field_ty = single_newtype_field(input)?;
 
+    if !input.generics.params.is_empty() || input.generics.where_clause.is_some() {
+        return Err(syn::Error::new_spanned(
+            &input.generics,
+            "#[derive(DomainType)] requires a concrete newtype: generic parameters, \
+             lifetimes, and where clauses are not supported",
+        ));
+    }
+
     let attrs = DomainAttrs::parse(name.span(), &input.attrs)?;
     let anchored_pattern = attrs.anchored_pattern()?;
 

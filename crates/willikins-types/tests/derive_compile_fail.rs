@@ -3,9 +3,9 @@
 //! Covers, per acceptance test 11 and the milestone plan's derive
 //! contract: `#[domain(secret)]` on `String` storage, `secrecy::SecretString`
 //! storage without `secret`, an invalid `pattern`, a non-newtype input
-//! (an enum), and calling `serde_json::to_string` on a secret type (which
-//! fails because secret types generate no `Serialize`, not because of a
-//! macro-time compile error).
+//! (an enum), a generic struct, and calling `serde_json::to_string` on a
+//! secret type (which fails because secret types generate no `Serialize`,
+//! not because of a macro-time compile error).
 //!
 //! `.stderr` files were generated with `TRYBUILD=overwrite`.
 //!
