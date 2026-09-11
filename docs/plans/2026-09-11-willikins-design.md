@@ -137,7 +137,19 @@ therefore on the idempotence path and must be treated as frozen.
 | Rust lib / env prefix | snake | `third_thoughts` / `THIRD_THOUGHTS_` |
 | Swift module / Xcode product | pascal | `ThirdThoughts` |
 | Bundle ID | org reverse-DNS prefix + `.` + kebab | `com.lightlesslabs.third-thoughts` |
+| Bundle ID, app extension | prefix + `.` + kebab + `.` + component | `com.lightlesslabs.third-thoughts.widget` |
+| Android applicationId | org reverse-DNS prefix + `.` + snake | `com.lightlesslabs.third_thoughts` |
 
+- **The reverse-DNS prefix comes from a domain the org owns, not from the GitHub org slug.**
+  `lightlesslabs.com` gives `com.lightlesslabs`; the GitHub org `lightless-labs` would give a
+  valid but mismatched prefix that every app group, iCloud container, keychain access group,
+  and extension bundle ID would inherit. The org record carries a typed `Domain` and derives
+  `ReverseDnsPrefix` from it, falling back to the GitHub org slug only when no domain is
+  recorded. The prefix is frozen in the org record: bundle IDs cannot be deleted and changing
+  one means a new app.
+- **Android is the strictest target.** A Java package segment allows no hyphens, cannot start
+  with a digit, and cannot be a Java keyword, so `native` or `default` must be rejected as a
+  project slug at parse time if the project might ever gain an Android layer.
 - **Structured identifiers, not string concatenation.** Derivation takes `(org, project_slug,
   component?, environment?)`. Components and environments are word-list types with the same
   grammar. Org-level parts such as the reverse-DNS prefix and the GitHub, Doppler, and Buildkite
@@ -154,8 +166,8 @@ therefore on the idempotence path and must be treated as frozen.
   in the repo, alongside the template answers, so every derived name is reproducible from the
   repo alone. A new scheme version applies only to new projects. Renaming an existing project
   is an explicit destructive-class workflow, not a side effect of a rules change.
-- **Reserved words are a real constraint.** Rust keywords cannot be lib names, and some targets
-  reserve names. Treat them as part of the slug grammar's reject list so the failure happens at
+- **Reserved words are a real constraint.** Rust keywords cannot be lib names, Java keywords
+  cannot be package segments, and some targets reserve names. Treat them as part of the slug grammar's reject list so the failure happens at
   parse time, not at apply time.
 - **Property-test the contract.** For every valid `ProjectSlug`, every derivation succeeds and
   every result parses as its target type. For the join functions, snake and pascal round-trip
