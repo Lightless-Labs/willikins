@@ -78,11 +78,13 @@ impl TypeInfo {
 }
 
 pub mod name;
+pub mod propose;
 pub mod reserved;
 pub mod slug;
 pub mod word;
 
 pub use name::ProjectName;
+pub use propose::{ProposeError, propose_slug};
 pub use reserved::is_reserved;
 pub use slug::{ComponentSlug, EnvironmentSlug, ProjectSlug};
 pub use word::{Word, WordList};
