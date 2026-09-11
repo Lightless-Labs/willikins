@@ -7,7 +7,11 @@
 //!
 //! See `docs/plans/2026-09-11-willikins-design.md` for the invariants.
 
+extern crate self as willikins_types;
+
 pub mod __private;
+#[cfg(test)]
+mod probe;
 pub mod sink;
 
 /// Capability token gating access to secret values; see [`sink::SinkToken`].
