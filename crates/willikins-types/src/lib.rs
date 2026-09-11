@@ -92,16 +92,20 @@ impl TypeInfo {
 
 pub use willikins_derive::DomainType;
 
+pub mod github;
 pub mod name;
 pub mod propose;
 pub mod reserved;
 pub mod slug;
+pub mod text;
 pub mod word;
 
+pub use github::{ActionsSecretName, GitHubOrg, GitHubRepo, HttpsUrl, RepoVisibility};
 pub use name::ProjectName;
 pub use propose::{ProposeError, propose_slug};
 pub use reserved::is_reserved;
 pub use slug::{ComponentSlug, EnvironmentSlug, ProjectSlug};
+pub use text::{TemplateSource, Text};
 pub use word::{Word, WordList};
 
 /// The beginning of the type catalog: every domain type this crate
@@ -115,6 +119,13 @@ pub fn type_infos() -> Vec<TypeInfo> {
         TypeInfo::of::<ComponentSlug>(),
         TypeInfo::of::<EnvironmentSlug>(),
         TypeInfo::of::<ProjectName>(),
+        TypeInfo::of::<Text>(),
+        TypeInfo::of::<TemplateSource>(),
+        TypeInfo::of::<GitHubOrg>(),
+        TypeInfo::of::<RepoVisibility>(),
+        TypeInfo::of::<GitHubRepo>(),
+        TypeInfo::of::<HttpsUrl>(),
+        TypeInfo::of::<ActionsSecretName>(),
     ]
 }
 
