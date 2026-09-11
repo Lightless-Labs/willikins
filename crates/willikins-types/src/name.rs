@@ -9,6 +9,29 @@ use crate::{DomainType, ParseError};
 /// The maximum length of a [`ProjectName`], in characters.
 const MAX_LEN: usize = 100;
 
+/// Whether `c` is an invisible Unicode format character or a bidirectional
+/// control, the kind that can hide extra text or reorder what a human
+/// reads without changing what a naive length or equality check sees.
+/// [`ProjectName`] ends up in rendered templates such as `CLAUDE.md`, so
+/// these are rejected outright rather than merely trimmed.
+///
+/// Covers soft hyphen, the zero-width space family, the explicit
+/// bidirectional embedding/override controls, the word-joiner family, the
+/// isolate controls, and the byte-order mark / zero-width no-break space.
+/// Not an exhaustive Unicode category-Cf sweep, but every codepoint this
+/// crate is asked to reject by name.
+fn is_invisible_or_bidi_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
+}
+
 /// A project's free-form, human-readable display name.
 ///
 /// Trimmed, non-empty, at most 100 characters, and free of control
@@ -51,7 +74,12 @@ impl DomainType for ProjectName {
     }
 
     fn parse(input: &str) -> Result<Self, ParseError> {
-        let trimmed = input.trim();
+        // U+00A0 (no-break space) looks like a space and is often typed as
+        // one via a dead key or a pasted document; fold it before trimming
+        // so "Third\u{A0}Thoughts " trims and displays like plain text
+        // instead of silently keeping a byte a human cannot see is there.
+        let folded = input.replace('\u{00A0}', " ");
+        let trimmed = folded.trim();
         if trimmed.is_empty() {
             return Err(ParseError::new(Self::TYPE_NAME, "must not be empty"));
         }
@@ -66,6 +94,14 @@ impl DomainType for ProjectName {
             return Err(ParseError::new(
                 Self::TYPE_NAME,
                 format!("must not contain control characters (found {c:?})"),
+            ));
+        }
+        if let Some(c) = trimmed.chars().find(|&c| is_invisible_or_bidi_control(c)) {
+            return Err(ParseError::new(
+                Self::TYPE_NAME,
+                format!(
+                    "must not contain invisible or bidirectional control character (found {c:?})"
+                ),
             ));
         }
         Ok(Self(trimmed.to_owned()))
@@ -156,6 +192,48 @@ mod tests {
         assert!(ProjectName::parse("Étoile").is_ok());
         assert!(ProjectName::parse("Lightless Labs' Foundry").is_ok());
         assert!(ProjectName::parse("!!!").is_ok());
+    }
+
+    #[test]
+    fn folds_a_no_break_space_to_a_plain_space_before_trimming() {
+        let name = ProjectName::parse("Third\u{A0}Thoughts").unwrap();
+        assert_eq!(name.as_str(), "Third Thoughts");
+    }
+
+    #[test]
+    fn folding_a_no_break_space_can_still_leave_the_input_empty() {
+        assert!(ProjectName::parse("\u{A0}").is_err());
+    }
+
+    #[test]
+    fn rejects_every_listed_invisible_or_bidi_control_character() {
+        let codepoints: Vec<char> = ['\u{00AD}']
+            .into_iter()
+            .chain('\u{200B}'..='\u{200F}')
+            .chain('\u{202A}'..='\u{202E}')
+            .chain('\u{2060}'..='\u{2064}')
+            .chain('\u{2066}'..='\u{2069}')
+            .chain(['\u{FEFF}'])
+            .collect();
+        assert_eq!(
+            codepoints.len(),
+            1 + 5 + 5 + 5 + 4 + 1,
+            "the ranges in this test no longer match the ones the reason names"
+        );
+        for c in codepoints {
+            let input = format!("Third{c}Thoughts");
+            let result = ProjectName::parse(&input);
+            let Err(err) = result else {
+                panic!("U+{:04X} was accepted", c as u32);
+            };
+            assert!(
+                err.reason
+                    .contains("invisible or bidirectional control character"),
+                "U+{:04X}: reason was {:?}",
+                c as u32,
+                err.reason
+            );
+        }
     }
 
     #[test]
