@@ -76,3 +76,15 @@ impl TypeInfo {
         }
     }
 }
+
+pub mod word;
+
+pub use word::{Word, WordList};
+
+/// The beginning of the type catalog: every domain type this crate
+/// defines. Later milestone-1 tasks append the org, resource-identity,
+/// and credential types.
+#[must_use]
+pub fn type_infos() -> Vec<TypeInfo> {
+    vec![TypeInfo::of::<WordList>()]
+}
