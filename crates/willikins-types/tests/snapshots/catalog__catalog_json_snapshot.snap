@@ -1,0 +1,328 @@
+---
+source: crates/willikins-types/tests/catalog.rs
+assertion_line: 73
+expression: json
+---
+[
+  {
+    "name": "WordList",
+    "secret": false,
+    "description": "An ordered, non-empty list of lowercase ASCII words, serialised as kebab-case.",
+    "example": "third-thoughts",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "WordList",
+      "description": "An ordered, non-empty list of lowercase ASCII words, serialised as kebab-case.",
+      "type": "string",
+      "examples": [
+        "third-thoughts"
+      ],
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    }
+  },
+  {
+    "name": "ProjectSlug",
+    "secret": false,
+    "description": "The canonical, immutable slug identifying a project.",
+    "example": "third-thoughts",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ProjectSlug",
+      "description": "The canonical, immutable slug identifying a project.",
+      "type": "string",
+      "examples": [
+        "third-thoughts"
+      ],
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    }
+  },
+  {
+    "name": "ComponentSlug",
+    "secret": false,
+    "description": "A slug identifying one component within a project.",
+    "example": "api",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ComponentSlug",
+      "description": "A slug identifying one component within a project.",
+      "type": "string",
+      "examples": [
+        "api"
+      ],
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    }
+  },
+  {
+    "name": "EnvironmentSlug",
+    "secret": false,
+    "description": "A slug identifying a deployment environment.",
+    "example": "prd",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "EnvironmentSlug",
+      "description": "A slug identifying a deployment environment.",
+      "type": "string",
+      "examples": [
+        "prd"
+      ],
+      "maxLength": 16,
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    }
+  },
+  {
+    "name": "ProjectName",
+    "secret": false,
+    "description": "A project's free-form, human-readable display name.",
+    "example": "Third Thoughts",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ProjectName",
+      "description": "A project's free-form, human-readable display name.",
+      "type": "string",
+      "examples": [
+        "Third Thoughts"
+      ],
+      "maxLength": 100,
+      "minLength": 1
+    }
+  },
+  {
+    "name": "Text",
+    "secret": false,
+    "description": "A free-form piece of text. Never secret.",
+    "example": "Third Thoughts",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Text",
+      "description": "A free-form piece of text. Never secret.",
+      "type": "string",
+      "examples": [
+        "Third Thoughts"
+      ],
+      "maxLength": 65536
+    }
+  },
+  {
+    "name": "TemplateSource",
+    "secret": false,
+    "description": "The source text of a template.",
+    "example": "Hello, {{ value }}!",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "TemplateSource",
+      "description": "The source text of a template.",
+      "type": "string",
+      "examples": [
+        "Hello, {{ value }}!"
+      ],
+      "maxLength": 65536
+    }
+  },
+  {
+    "name": "GitHubOrg",
+    "secret": false,
+    "description": "A GitHub organisation or user login.",
+    "example": "lightless-labs",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GitHubOrg",
+      "description": "A GitHub organisation or user login.",
+      "type": "string",
+      "examples": [
+        "lightless-labs"
+      ],
+      "maxLength": 39,
+      "pattern": "^(?:[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)$"
+    }
+  },
+  {
+    "name": "RepoVisibility",
+    "secret": false,
+    "description": "A GitHub repository's visibility: private or public.",
+    "example": "private",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "RepoVisibility",
+      "description": "A GitHub repository's visibility: private or public.",
+      "type": "string",
+      "enum": [
+        "private",
+        "public"
+      ],
+      "examples": [
+        "private"
+      ]
+    }
+  },
+  {
+    "name": "GitHubRepo",
+    "secret": false,
+    "description": "A GitHub repository identity: owner/name.",
+    "example": "lightless-labs/third-thoughts",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GitHubRepo",
+      "description": "A GitHub repository identity: owner/name.",
+      "type": "string",
+      "examples": [
+        "lightless-labs/third-thoughts"
+      ],
+      "maxLength": 72,
+      "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    }
+  },
+  {
+    "name": "HttpsUrl",
+    "secret": false,
+    "description": "An https:// URL.",
+    "example": "https://github.com/lightless-labs/third-thoughts",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "HttpsUrl",
+      "description": "An https:// URL.",
+      "type": "string",
+      "examples": [
+        "https://github.com/lightless-labs/third-thoughts"
+      ],
+      "maxLength": 2048,
+      "pattern": "^(?:https://[^\\s/]+(?:/[^\\s]*)?)$"
+    }
+  },
+  {
+    "name": "ActionsSecretName",
+    "secret": false,
+    "description": "A GitHub Actions repository secret name. Must not start with GITHUB_, which GitHub reserves for its own automatically supplied secrets.",
+    "example": "DOPPLER_TOKEN",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ActionsSecretName",
+      "description": "A GitHub Actions repository secret name. Must not start with GITHUB_, which GitHub reserves for its own automatically supplied secrets.",
+      "type": "string",
+      "examples": [
+        "DOPPLER_TOKEN"
+      ],
+      "maxLength": 200,
+      "pattern": "^[A-Z_][A-Z0-9_]*$"
+    }
+  },
+  {
+    "name": "DopplerProject",
+    "secret": false,
+    "description": "A Doppler project slug.",
+    "example": "third-thoughts",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DopplerProject",
+      "description": "A Doppler project slug.",
+      "type": "string",
+      "examples": [
+        "third-thoughts"
+      ],
+      "maxLength": 64,
+      "pattern": "^(?:[a-z0-9]+(?:-[a-z0-9]+)*)$"
+    }
+  },
+  {
+    "name": "DopplerConfigName",
+    "secret": false,
+    "description": "A Doppler config name.",
+    "example": "prd",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DopplerConfigName",
+      "description": "A Doppler config name.",
+      "type": "string",
+      "examples": [
+        "prd"
+      ],
+      "maxLength": 64,
+      "pattern": "^(?:[a-z0-9_]+)$"
+    }
+  },
+  {
+    "name": "DopplerConfig",
+    "secret": false,
+    "description": "A Doppler config identity: project/name.",
+    "example": "third-thoughts/prd",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DopplerConfig",
+      "description": "A Doppler config identity: project/name.",
+      "type": "string",
+      "examples": [
+        "third-thoughts/prd"
+      ],
+      "maxLength": 129,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9_]+$"
+    }
+  },
+  {
+    "name": "DopplerTokenName",
+    "secret": false,
+    "description": "A Doppler service token name.",
+    "example": "ci",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DopplerTokenName",
+      "description": "A Doppler service token name.",
+      "type": "string",
+      "examples": [
+        "ci"
+      ],
+      "maxLength": 64,
+      "pattern": "^(?:[a-z0-9]+(?:-[a-z0-9]+)*)$"
+    }
+  },
+  {
+    "name": "SecretName",
+    "secret": false,
+    "description": "A secret's name within a Doppler config.",
+    "example": "DATABASE_URL",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SecretName",
+      "description": "A secret's name within a Doppler config.",
+      "type": "string",
+      "examples": [
+        "DATABASE_URL"
+      ],
+      "maxLength": 256,
+      "pattern": "^(?:[A-Z_][A-Z0-9_]*)$"
+    }
+  },
+  {
+    "name": "DopplerServiceToken",
+    "secret": true,
+    "description": "A Doppler service token value.",
+    "example": "dp.st.prd.exampleexampleexample",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DopplerServiceToken",
+      "description": "A Doppler service token value.",
+      "type": "string",
+      "examples": [
+        "dp.st.prd.exampleexampleexample"
+      ],
+      "pattern": "^(?:dp\\.st\\.[A-Za-z0-9._-]{8,})$"
+    }
+  },
+  {
+    "name": "DopplerSecretValue",
+    "secret": true,
+    "description": "A secret's value.",
+    "example": "s3cr3t-value",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DopplerSecretValue",
+      "description": "A secret's value.",
+      "type": "string",
+      "examples": [
+        "s3cr3t-value"
+      ],
+      "maxLength": 65536,
+      "minLength": 1
+    }
+  }
+]
