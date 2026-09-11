@@ -92,6 +92,7 @@ impl TypeInfo {
 
 pub use willikins_derive::DomainType;
 
+pub mod doppler;
 pub mod github;
 pub mod name;
 pub mod propose;
@@ -100,6 +101,10 @@ pub mod slug;
 pub mod text;
 pub mod word;
 
+pub use doppler::{
+    DopplerConfig, DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken,
+    DopplerTokenName, SecretName,
+};
 pub use github::{ActionsSecretName, GitHubOrg, GitHubRepo, HttpsUrl, RepoVisibility};
 pub use name::ProjectName;
 pub use propose::{ProposeError, propose_slug};
@@ -126,6 +131,13 @@ pub fn type_infos() -> Vec<TypeInfo> {
         TypeInfo::of::<GitHubRepo>(),
         TypeInfo::of::<HttpsUrl>(),
         TypeInfo::of::<ActionsSecretName>(),
+        TypeInfo::of::<DopplerProject>(),
+        TypeInfo::of::<DopplerConfigName>(),
+        TypeInfo::of::<DopplerConfig>(),
+        TypeInfo::of::<DopplerTokenName>(),
+        TypeInfo::of::<SecretName>(),
+        TypeInfo::of::<DopplerServiceToken>(),
+        TypeInfo::of::<DopplerSecretValue>(),
     ]
 }
 
