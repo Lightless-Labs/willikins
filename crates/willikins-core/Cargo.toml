@@ -1,0 +1,25 @@
+[package]
+name = "willikins-core"
+description = "Values, tool contract, catalog, workflow graph, checker, describe, plan, ledger"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+willikins-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+petgraph.workspace = true
+indexmap.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true
