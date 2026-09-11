@@ -267,6 +267,17 @@ mod tests {
         assert!(DopplerConfigName::parse(&too_long).is_err());
     }
 
+    #[test]
+    fn doppler_config_name_serde_round_trips() {
+        let value = DopplerConfigName::parse("dev_ci").unwrap();
+        let json = serde_json::to_string(&value).unwrap();
+        assert_eq!(json, "\"dev_ci\"");
+        assert_eq!(
+            serde_json::from_str::<DopplerConfigName>(&json).unwrap(),
+            value
+        );
+    }
+
     // -------------------------------------------------------------
     // DopplerTokenName
     // -------------------------------------------------------------
@@ -285,6 +296,17 @@ mod tests {
     fn doppler_token_name_rejects_over_max_len() {
         let too_long = "a".repeat(65);
         assert!(DopplerTokenName::parse(&too_long).is_err());
+    }
+
+    #[test]
+    fn doppler_token_name_serde_round_trips() {
+        let value = DopplerTokenName::parse("ci").unwrap();
+        let json = serde_json::to_string(&value).unwrap();
+        assert_eq!(json, "\"ci\"");
+        assert_eq!(
+            serde_json::from_str::<DopplerTokenName>(&json).unwrap(),
+            value
+        );
     }
 
     // -------------------------------------------------------------
@@ -319,6 +341,14 @@ mod tests {
     fn secret_name_accepts_exactly_max_len() {
         let at_limit = "A".repeat(256);
         assert!(SecretName::parse(&at_limit).is_ok());
+    }
+
+    #[test]
+    fn secret_name_serde_round_trips() {
+        let value = SecretName::parse("DATABASE_URL").unwrap();
+        let json = serde_json::to_string(&value).unwrap();
+        assert_eq!(json, "\"DATABASE_URL\"");
+        assert_eq!(serde_json::from_str::<SecretName>(&json).unwrap(), value);
     }
 
     // -------------------------------------------------------------
@@ -394,6 +424,23 @@ mod tests {
     fn doppler_secret_value_rejects_over_max_len() {
         let too_long = "a".repeat(65537);
         assert!(DopplerSecretValue::parse(&too_long).is_err());
+    }
+
+    #[test]
+    fn doppler_secret_value_deserialize_works_and_stays_redacted() {
+        let value: DopplerSecretValue = serde_json::from_str("\"s3cr3t-value\"").unwrap();
+        assert_eq!(format!("{value:?}"), "[REDACTED DopplerSecretValue]");
+        assert_eq!(value.expose(&SinkToken::new()), "s3cr3t-value");
+
+        // Reject on the length rule, with a distinctive marker inside the
+        // over-limit input, and check the marker never reaches the error.
+        let too_long = format!("MARKER-{}", "a".repeat(65537));
+        let json = serde_json::to_string(&too_long).unwrap();
+        let err = serde_json::from_str::<DopplerSecretValue>(&json).unwrap_err();
+        assert!(
+            !err.to_string().contains("MARKER"),
+            "error leaked input: {err}"
+        );
     }
 
     #[test]

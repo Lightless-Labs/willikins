@@ -538,6 +538,14 @@ mod tests {
         assert!(HttpsUrl::parse("https://example.com").is_ok());
     }
 
+    #[test]
+    fn https_url_serde_round_trips() {
+        let value = HttpsUrl::parse("https://github.com/lightless-labs/third-thoughts").unwrap();
+        let json = serde_json::to_string(&value).unwrap();
+        assert_eq!(json, "\"https://github.com/lightless-labs/third-thoughts\"");
+        assert_eq!(serde_json::from_str::<HttpsUrl>(&json).unwrap(), value);
+    }
+
     // -------------------------------------------------------------
     // GitHubRepo
     // -------------------------------------------------------------

@@ -519,3 +519,104 @@ fn as_any_downcasts_to_the_concrete_type() {
     assert_eq!(downcast.as_str(), "abc-1");
     assert!(value.as_any().downcast_ref::<TestKebab>().is_none());
 }
+
+#[test]
+fn a_boxed_secret_trait_object_debugs_redacted_via_the_dyn_debug_supertrait() {
+    // `DomainObject: Debug` means `dyn DomainObject` inherits a `Debug`
+    // impl that dispatches to the concrete type's own impl. This is the
+    // exact path a `Debug`-deriving container built over `Box<dyn
+    // DomainObject>` (such as `willikins-core`'s `Value`) will hit, so the
+    // redaction guarantee must hold through the box, not only on the
+    // concrete type directly.
+    let boxed: Box<dyn DomainObject> = Box::new(TestSecret::parse("hunter2-hunter2").unwrap());
+    assert_eq!(format!("{boxed:?}"), "[REDACTED TestSecret]");
+}
+
+// ---------------------------------------------------------------------
+// `impl_domain_object_non_secret!` from outside `willikins-types`
+// ---------------------------------------------------------------------
+
+/// A hand-written, non-secret domain type local to this test crate,
+/// standing in for a provider crate's hand-written enum (such as
+/// `RepoVisibility`). Proves the macro's `$crate::...` paths resolve when
+/// invoked as `willikins_types::impl_domain_object_non_secret!` from
+/// outside `willikins-types`, not only from `crate::...!` inside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalHandWritten {
+    On,
+    Off,
+}
+
+impl LocalHandWritten {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+}
+
+impl std::fmt::Display for LocalHandWritten {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for LocalHandWritten {
+    type Err = willikins_types::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+impl DomainType for LocalHandWritten {
+    const TYPE_NAME: &'static str = "LocalHandWritten";
+
+    fn description() -> &'static str {
+        "A hand-written on/off type local to this test crate."
+    }
+
+    fn example() -> &'static str {
+        "on"
+    }
+
+    fn parse(input: &str) -> Result<Self, willikins_types::ParseError> {
+        match input {
+            "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
+            _ => Err(willikins_types::ParseError::new(
+                Self::TYPE_NAME,
+                "must be `on` or `off`",
+            )),
+        }
+    }
+
+    fn json_schema() -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "enum": ["on", "off"],
+            "description": "A hand-written on/off type local to this test crate.",
+            "examples": ["on"]
+        })
+    }
+}
+
+willikins_types::impl_domain_object_non_secret!(LocalHandWritten);
+
+#[test]
+fn the_macro_resolves_its_crate_paths_when_invoked_from_outside_willikins_types() {
+    let value: Box<dyn DomainObject> = Box::new(LocalHandWritten::On);
+    assert_eq!(value.type_name(), "LocalHandWritten");
+    assert!(!value.is_secret());
+    assert_eq!(value.render(), Rendered::Plain("on".to_string()));
+    assert_eq!(value.expose(&SinkToken::new()), "on");
+
+    let same: Box<dyn DomainObject> = Box::new(LocalHandWritten::On);
+    let different: Box<dyn DomainObject> = Box::new(LocalHandWritten::Off);
+    assert!(value.dyn_eq(same.as_ref()));
+    assert!(!value.dyn_eq(different.as_ref()));
+
+    let cloned = value.clone_box();
+    assert!(value.dyn_eq(cloned.as_ref()));
+}
