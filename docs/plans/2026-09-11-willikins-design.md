@@ -3,6 +3,7 @@
 **Created:** 2026-09-11 (design conversation)
 **Addendum:** 2026-09-11 — added the Naming section: slug canonicalisation, frozen derivation, overrides, scheme versioning.
 **Addendum:** 2026-09-11 — added Workflow inputs: explicit checked signatures, decisions-only inputs, no secret inputs, describe as a pure resolution tool.
+**Addendum:** 2026-09-11 — open questions decided (YAML, typed refs, Railway, web approval, Doppler vault, MIT, Cargo); milestone list added.
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
 runs reusable, composable project-provisioning workflows against GitHub, Doppler, Buildkite,
@@ -245,12 +246,27 @@ These came up from memory during the conversation and have not been checked.
 - Whether App Store Connect exposes every step needed for app, bundle ID, certificate, and
   profile creation.
 
-## Open questions
+## Decisions on the open questions
 
-- DSL surface syntax: YAML, JSON, KDL, or CUE.
-- Expression language for interpolation and `when`: CEL or a smaller custom one.
-- Hosting target for the first deployment.
-- Approval channel: push notification, web page, chat.
-- Server-side credential storage: OS keychain, 1Password service account, Doppler as vault.
-- License. Sibling public repos disagree: refinery is MIT, third-thoughts is AGPL-3.0.
-- Build: the monorepo standard is Bazel, sibling public repos use Cargo directly.
+**Decided:** 2026-09-11. Each can be revisited, but code proceeds on these.
+
+| Question | Decision | Rationale |
+| --- | --- | --- |
+| DSL syntax | YAML, validated by a published JSON schema | Agents are fluent in it, validators exist everywhere |
+| Expressions | Typed references only, `${{ steps.repo.url }}`. No expression language | Add CEL or similar only when a real workflow needs it |
+| Hosting | Railway first | Small always-on box later if the circularity bites |
+| Approval | Web page plus push notification | Chat integration later |
+| Credential storage | Doppler as the vault, one bootstrap token | Already trusted by the org |
+| License | MIT | Matches refinery; third-thoughts is AGPL-3.0 so there is no single org rule |
+| Build | Cargo | Matches every public sibling; Bazel only if the monorepo pulls it in |
+
+## Milestones
+
+1. Core with no real providers: domain types and derive macro, tool contract, graph checker
+   with taint and approval classes, `describe` and `plan` against fake providers, one
+   project-creation workflow as the test fixture. Plan: `docs/plans/2026-09-11-milestone-1-core.md`.
+2. Real GitHub and Doppler providers, `apply`, run ledger, approval gate, MCP server over
+   stdio and Streamable HTTP.
+3. Templates and versioned re-apply.
+4. Buildkite and Railway.
+5. App Store Connect.
