@@ -5,6 +5,7 @@
 **Addendum:** 2026-09-11 — added Workflow inputs: explicit checked signatures, decisions-only inputs, no secret inputs, describe as a pure resolution tool.
 **Addendum:** 2026-09-11 — open questions decided (YAML, typed refs, Railway, web approval, Doppler vault, MIT, Cargo); milestone list added.
 **Addendum:** 2026-09-11 — after dependency research: Railway service name is the component alone; Swift keywords join the reserved-word union.
+**Addendum:** 2026-09-11 — task 2 verification: pascal is not injective for digit-only words; accepted, since pascal never feeds a natural key.
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
 runs reusable, composable project-provisioning workflows against GitHub, Doppler, Buildkite,
@@ -204,8 +205,11 @@ therefore on the idempotence path and must be treated as frozen.
   `Self`), and some targets reserve names such as Windows device names. Treat them as part of the slug grammar's reject list so the failure happens at
   parse time, not at apply time.
 - **Property-test the contract.** For every valid `ProjectSlug`, every derivation succeeds and
-  every result parses as its target type. For the join functions, snake and pascal round-trip
-  back to the same word list.
+  every result parses as its target type. Kebab and snake round-trip back to the same word
+  list. Pascal does not: a digit-only word fuses with its predecessor, so `foundry-2` and
+  `foundry2` both become `Foundry2`. This is accepted. Pascal feeds only Swift module and
+  Xcode product names, which are never natural keys of a provisioned resource; every identity
+  that is a natural key uses kebab or snake and stays distinct.
 
 ### Hosting
 

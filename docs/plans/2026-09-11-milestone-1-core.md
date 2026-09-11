@@ -4,6 +4,7 @@
 **Addendum:** 2026-09-11 — pinned dependencies and slug grammar filled in from the research note.
 **Reviewed:** 2026-09-11 (via document-review workflow: scope, feasibility, security, coherence, adversarial personas). 23 findings folded in; see "Review resolutions" at the end.
 **Addendum:** 2026-09-11 — `SinkToken` moved to `willikins-types` behind the `executor` feature; the derive's third storage generalised to any `FromStr + Display` inner type.
+**Addendum:** 2026-09-11 — tasks 2 and 3 done and merged. Pascal non-injectivity accepted in test 9; `cargo check -p willikins-types` added as a fourth gate; keyword-list verification listed under Risks.
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
 **Research:** `docs/research/2026-09-11-m1-dependencies.md`
 
@@ -359,7 +360,9 @@ The milestone cannot ship without every one of these.
 9. **Naming.** Golden tests for every `naming::v1` function against the design doc's join
    table, and property tests that every valid `ProjectSlug` derives successfully for every
    target and every result parses as its target type. `WordList` joins are property-tested
-   for their character classes, and snake and pascal round-trip to the word list.
+   for their character classes; kebab and snake round-trip to the word list. Pascal is
+   not injective for digit-only words (`foundry-2` and `foundry2` both give `Foundry2`);
+   this is accepted and pinned by a test, because pascal never feeds a natural key.
 10. **Reserved words.** `native`, `default`, `type`, `match`, `self`, `nul` are rejected as
     project slugs; `type-system` and `self-hosted` are accepted.
 11. **Compile-time guarantees.** `trybuild`: `serde_json::to_string(&token)` does not
@@ -374,8 +377,11 @@ The milestone cannot ship without every one of these.
 ## Gates
 
 `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace`. `unsafe_code = "forbid"` and pedantic clippy are set at the
-workspace level. Run after every task, before every commit.
+`cargo test --workspace`, and `cargo check -p willikins-types`. The last one exists because
+`willikins-types` enables its own `executor` feature through a self dev-dependency, so
+`--all-targets` never builds the crate the way its dependents see it; a cfg-gated bug slipped
+past the first three gates during task 3. `unsafe_code = "forbid"` and pedantic clippy are
+set at the workspace level. Run after every task, before every commit.
 
 ## Tasks
 
@@ -409,6 +415,10 @@ Groups: A = {2, 3}; B = {7, 9}; C = {8, 10}. Everything else is sequential on `m
   how the impls are produced.
 - **`for_each` at plan time.** Expansion happens after inputs are known, so `check` can only
   verify shapes. The `KeyNotInForEach` plan error and test 7 cover the gap.
+- **Keyword lists from recall.** The Swift and Kotlin reserved-word lists in
+  `reserved.rs` were written without network access and should be checked once against
+  docs.swift.org and kotlinlang.org by someone with a browser before the grammar is
+  declared frozen. The Rust 2024 `gen` reservation rests on RFC 3513.
 - **Machine load.** Builds on this host have been slow in this session. Every cargo
   invocation in agents runs in the background with a generous timeout.
 
