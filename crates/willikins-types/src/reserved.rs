@@ -3,14 +3,15 @@
 //! matches any of these is rejected; a multi-word slug can never collide
 //! because every join keeps the separator or the case boundary.
 
-/// Rust strict and reserved keywords. `Self` is folded into `self`;
-/// weak keywords such as `union` and `dyn`'s pre-2018 status are not
-/// included because they remain valid identifiers.
+/// Rust strict and reserved keywords, across every edition this workspace
+/// can build with, including `gen`, reserved by the 2024 edition. `Self`
+/// is folded into `self`; weak keywords such as `union` are not included
+/// because they remain valid identifiers.
 /// Source: <https://doc.rust-lang.org/reference/keywords.html>
 const RUST_KEYWORDS: &[&str] = &[
     "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
-    "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
-    "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+    "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl",
+    "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
     "return", "self", "static", "struct", "super", "trait", "true", "try", "type", "typeof",
     "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
 ];
@@ -254,6 +255,14 @@ mod tests {
         assert!(is_reserved("type"));
         assert!(is_reserved("match"));
         assert!(is_reserved("com1"));
+    }
+
+    #[test]
+    fn gen_is_reserved_in_the_2024_edition() {
+        // `gen` became a reserved keyword in the 2024 edition (RFC 3513),
+        // which is the edition this workspace builds with, so a `gen` slug
+        // could never be a Rust lib or module name.
+        assert!(is_reserved("gen"));
     }
 
     #[test]

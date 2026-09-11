@@ -197,6 +197,18 @@ fn windows_device_names_are_reserved_only_for_the_documented_numbers() {
 }
 
 #[test]
+fn edition_2024_rust_keywords_are_reserved() {
+    assert!(
+        ProjectSlug::parse("gen").is_err(),
+        "`gen` is reserved in Rust 2024 and must be rejected as a single-word slug"
+    );
+    assert!(
+        ProjectSlug::parse("gen-art").is_ok(),
+        "`gen-art` is multi-word and must be accepted"
+    );
+}
+
+#[test]
 fn the_reserved_check_applies_to_every_slug_type() {
     assert!(ComponentSlug::parse("match").is_err());
     assert!(EnvironmentSlug::parse("nul").is_err());
