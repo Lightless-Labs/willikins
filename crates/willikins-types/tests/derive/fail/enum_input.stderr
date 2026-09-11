@@ -1,0 +1,5 @@
+error: #[derive(DomainType)] requires a newtype struct: a tuple struct with exactly one field, such as `struct GitHubOrg(String);`
+ --> tests/derive/fail/enum_input.rs:5:6
+  |
+5 | enum Foo {
+  |      ^^^
