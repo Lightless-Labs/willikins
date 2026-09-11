@@ -77,10 +77,12 @@ impl TypeInfo {
     }
 }
 
+pub mod name;
 pub mod reserved;
 pub mod slug;
 pub mod word;
 
+pub use name::ProjectName;
 pub use reserved::is_reserved;
 pub use slug::{ComponentSlug, EnvironmentSlug, ProjectSlug};
 pub use word::{Word, WordList};
@@ -95,5 +97,6 @@ pub fn type_infos() -> Vec<TypeInfo> {
         TypeInfo::of::<ProjectSlug>(),
         TypeInfo::of::<ComponentSlug>(),
         TypeInfo::of::<EnvironmentSlug>(),
+        TypeInfo::of::<ProjectName>(),
     ]
 }
