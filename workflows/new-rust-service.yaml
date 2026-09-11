@@ -1,36 +1,40 @@
 # The milestone 1 positive fixture: a new Rust service with a GitHub repo,
-# a Doppler project with one config per environment, and the production
-# service token stored as a GitHub Actions secret. The token never appears
-# in any output.
+# a Doppler project with one root config per environment, and the production
+# service token stored as a GitHub Actions secret. Provider names are derived
+# inside the graph by naming.v1. The token never appears in any output.
 name: new-rust-service
 description: Provision a GitHub repository and Doppler project for a Rust service.
 inputs:
-  display_name: { type: ProjectName }
-  slug: { type: ProjectSlug }
-  org: { type: GitHubOrg }
+  slug: { type: ProjectSlug, description: Canonical project slug }
+  org: { type: GitHubOrg, description: GitHub organization that owns the repository }
   visibility: { type: RepoVisibility, default: private }
   environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
 steps:
+  names:
+    tool: naming.v1
+    with:
+      org: ${{ inputs.org }}
+      slug: ${{ inputs.slug }}
   repo:
     tool: github.repo.ensure
     with:
-      org: ${{ inputs.org }}
-      name: ${{ inputs.slug }}
+      repo: ${{ steps.names.github_repo }}
       visibility: ${{ inputs.visibility }}
   doppler:
     tool: doppler.project.ensure
     with:
-      name: ${{ inputs.slug }}
+      project: ${{ steps.names.doppler_project }}
   configs:
     tool: doppler.config.ensure
     for_each: ${{ inputs.environments }}
     with:
       project: ${{ steps.doppler.project }}
-      name: ${{ item }}
+      environment: ${{ item }}
   token:
     tool: doppler.service_token.ensure
     with:
       config: ${{ steps.configs[prd].config }}
+      name: ci
   ci_secret:
     tool: github.actions_secret.ensure
     with:
