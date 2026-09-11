@@ -17,12 +17,15 @@ Rust workspace. Read `docs/plans/2026-09-11-willikins-design.md` before changing
 ## Commands
 
 ```
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo check -p willikins-types
 ```
 
-Run all three before every commit. Builds on this host can be slow; run cargo in the
+Run all four before every commit. The last one matters because `willikins-types` enables its
+own `executor` feature through a self dev-dependency, so `--all-targets` never builds the crate
+the way its dependents see it. Builds on this host can be slow; run cargo in the
 background with a generous timeout.
 
 ## Conventions

@@ -1,0 +1,8 @@
+error: #[domain(pattern = ...)] is not a valid regex: regex parse error:
+           ^(?:[)$
+               ^
+       error: unclosed character class
+ --> tests/derive/fail/invalid_regex.rs:4:20
+  |
+4 | #[domain(pattern = "[", description = "d", example = "e")]
+  |                    ^^^
