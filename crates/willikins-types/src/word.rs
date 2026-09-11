@@ -212,6 +212,8 @@ impl schemars::JsonSchema for WordList {
     }
 }
 
+crate::impl_domain_object_non_secret!(WordList);
+
 fn capitalize(word: &str) -> String {
     if word.bytes().all(|b| b.is_ascii_digit()) {
         return word.to_owned();
@@ -336,5 +338,19 @@ mod tests {
     fn flat_join_has_no_separators() {
         let list = WordList::parse_kebab("third-thoughts").unwrap();
         assert_eq!(list.flat(), "thirdthoughts");
+    }
+
+    #[test]
+    fn implements_domain_object_via_the_macro() {
+        use crate::DomainObject;
+
+        let value: Box<dyn DomainObject> =
+            Box::new(WordList::parse_kebab("third-thoughts").unwrap());
+        assert_eq!(value.type_name(), "WordList");
+        assert!(!value.is_secret());
+        assert_eq!(
+            value.render(),
+            crate::Rendered::Plain("third-thoughts".to_string())
+        );
     }
 }

@@ -137,6 +137,92 @@ fn json_schema_impl(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&st
     }
 }
 
+/// The `DomainObject` impl shared by the two non-secret storages (`String`
+/// and `Other`): rendering and exposing both go through `Display`, since
+/// neither storage hides anything.
+fn domain_object_non_secret(name: &syn::Ident) -> TokenStream {
+    quote! {
+        impl ::willikins_types::object::DomainObject for #name {
+            fn type_name(&self) -> &'static str {
+                <Self as ::willikins_types::DomainType>::TYPE_NAME
+            }
+
+            fn is_secret(&self) -> bool {
+                false
+            }
+
+            fn render(&self) -> ::willikins_types::object::Rendered {
+                ::willikins_types::object::Rendered::Plain(::std::string::ToString::to_string(self))
+            }
+
+            fn expose(&self, _token: &::willikins_types::SinkToken) -> ::std::string::String {
+                ::std::string::ToString::to_string(self)
+            }
+
+            fn as_any(&self) -> &dyn ::std::any::Any {
+                self
+            }
+
+            fn dyn_eq(&self, other: &dyn ::willikins_types::object::DomainObject) -> bool {
+                other
+                    .as_any()
+                    .downcast_ref::<Self>()
+                    .is_some_and(|other| other == self)
+            }
+
+            fn clone_box(&self) -> ::std::boxed::Box<dyn ::willikins_types::object::DomainObject> {
+                ::std::boxed::Box::new(::std::clone::Clone::clone(self))
+            }
+        }
+    }
+}
+
+/// The `DomainObject` impl for the secret storage: `render` and `expose`
+/// route through the type's own redacted `Display` and inherent `expose`,
+/// so this cannot drift from the redaction rule the type already obeys.
+/// `self.expose(token)` here resolves to the inherent method (it returns
+/// `&str`; the trait method returns `String`), never back to this trait
+/// method, because an inherent method always takes priority over a trait
+/// method of the same name.
+fn domain_object_secret(name: &syn::Ident) -> TokenStream {
+    quote! {
+        impl ::willikins_types::object::DomainObject for #name {
+            fn type_name(&self) -> &'static str {
+                <Self as ::willikins_types::DomainType>::TYPE_NAME
+            }
+
+            fn is_secret(&self) -> bool {
+                true
+            }
+
+            fn render(&self) -> ::willikins_types::object::Rendered {
+                ::willikins_types::object::Rendered::Redacted {
+                    type_name: <Self as ::willikins_types::DomainType>::TYPE_NAME,
+                }
+            }
+
+            fn expose(&self, token: &::willikins_types::SinkToken) -> ::std::string::String {
+                ::std::string::ToString::to_string(self.expose(token))
+            }
+
+            fn as_any(&self) -> &dyn ::std::any::Any {
+                self
+            }
+
+            fn dyn_eq(&self, other: &dyn ::willikins_types::object::DomainObject) -> bool {
+                other
+                    .as_any()
+                    .downcast_ref::<Self>()
+                    .is_some_and(|other| other == self)
+            }
+
+            fn clone_box(&self) -> ::std::boxed::Box<dyn ::willikins_types::object::DomainObject> {
+                ::std::boxed::Box::new(::std::clone::Clone::clone(self))
+            }
+        }
+    }
+}
+
 /// The `Clone`/`PartialEq`/`Eq` impls shared by non-secret storages, which
 /// simply delegate to the field.
 fn structural_eq_and_clone(name: &syn::Ident) -> TokenStream {
@@ -170,6 +256,7 @@ pub fn gen_string(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&str>
     let checks = checks(&target, attrs, pattern_ident);
     let json_schema_impl = json_schema_impl(name, attrs, anchored);
     let eq_and_clone = structural_eq_and_clone(name);
+    let domain_object_impl = domain_object_non_secret(name);
 
     quote! {
         #pattern_decl
@@ -249,6 +336,7 @@ pub fn gen_string(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&str>
         }
 
         #json_schema_impl
+        #domain_object_impl
     }
 }
 
@@ -265,6 +353,7 @@ pub fn gen_secret(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&str>
     let target = quote!(input);
     let checks = checks(&target, attrs, pattern_ident);
     let json_schema_impl = json_schema_impl(name, attrs, anchored);
+    let domain_object_impl = domain_object_secret(name);
 
     quote! {
         #pattern_decl
@@ -353,6 +442,7 @@ pub fn gen_secret(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&str>
         }
 
         #json_schema_impl
+        #domain_object_impl
     }
 }
 
@@ -376,6 +466,7 @@ pub fn gen_other(
     let checks = checks(&target, attrs, pattern_ident);
     let json_schema_impl = json_schema_impl(name, attrs, anchored);
     let eq_and_clone = structural_eq_and_clone(name);
+    let domain_object_impl = domain_object_non_secret(name);
 
     quote! {
         #pattern_decl
@@ -462,5 +553,6 @@ pub fn gen_other(
         }
 
         #json_schema_impl
+        #domain_object_impl
     }
 }

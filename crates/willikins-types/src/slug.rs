@@ -126,6 +126,8 @@ macro_rules! define_slug {
                 })
             }
         }
+
+        crate::impl_domain_object_non_secret!($name);
     };
 }
 
@@ -253,6 +255,21 @@ mod tests {
         assert_eq!(value["type"], "string");
         assert_eq!(value["maxLength"], 32);
         assert_eq!(value["pattern"], r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$");
+    }
+
+    #[test]
+    fn implements_domain_object_via_the_macro() {
+        use crate::DomainObject;
+
+        let value: Box<dyn DomainObject> = Box::new(ProjectSlug::parse("third-thoughts").unwrap());
+        assert_eq!(value.type_name(), "ProjectSlug");
+        assert!(!value.is_secret());
+        assert_eq!(
+            value.render(),
+            crate::Rendered::Plain("third-thoughts".to_string())
+        );
+        let other: Box<dyn DomainObject> = Box::new(ComponentSlug::parse("api").unwrap());
+        assert!(!value.dyn_eq(other.as_ref()));
     }
 
     #[test]

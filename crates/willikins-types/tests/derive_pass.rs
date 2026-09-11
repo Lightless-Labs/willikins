@@ -434,3 +434,88 @@ fn an_alternation_with_every_branch_anchored_is_left_alone() {
     assert!(TestFullyAnchoredAlternation::parse("abc").is_ok());
     assert!(TestFullyAnchoredAlternation::parse("abcXXX").is_err());
 }
+
+// ---------------------------------------------------------------------
+// `DomainObject`: the object-safe view the derive emits for every storage
+// ---------------------------------------------------------------------
+
+use willikins_types::{DomainObject, Rendered};
+
+#[test]
+fn a_non_secret_string_type_renders_and_exposes_plainly_through_the_trait_object() {
+    let value: Box<dyn DomainObject> = Box::new(TestSlug::parse("abc-1").unwrap());
+    assert_eq!(value.type_name(), "TestSlug");
+    assert!(!value.is_secret());
+    assert_eq!(value.render(), Rendered::Plain("abc-1".to_string()));
+    assert_eq!(value.expose(&SinkToken::new()), "abc-1");
+}
+
+#[test]
+fn an_other_storage_type_renders_and_exposes_plainly_through_the_trait_object() {
+    let value: Box<dyn DomainObject> = Box::new(TestKebab::parse("abc-def").unwrap());
+    assert_eq!(value.type_name(), "TestKebab");
+    assert!(!value.is_secret());
+    assert_eq!(value.render(), Rendered::Plain("abc-def".to_string()));
+    assert_eq!(value.expose(&SinkToken::new()), "abc-def");
+}
+
+#[test]
+fn a_secret_type_is_redacted_and_only_exposes_with_a_sink_token_through_the_trait_object() {
+    let value: Box<dyn DomainObject> = Box::new(TestSecret::parse("hunter2-hunter2").unwrap());
+    assert_eq!(value.type_name(), "TestSecret");
+    assert!(value.is_secret());
+    assert_eq!(
+        value.render(),
+        Rendered::Redacted {
+            type_name: "TestSecret"
+        }
+    );
+    assert_eq!(
+        format!("{:?}", value.render()),
+        "Redacted { type_name: \"TestSecret\" }"
+    );
+    assert_eq!(value.render().to_string(), "[REDACTED TestSecret]");
+    assert!(
+        serde_json::to_string(&value.render())
+            .unwrap()
+            .contains("REDACTED"),
+    );
+    assert!(
+        !serde_json::to_string(&value.render())
+            .unwrap()
+            .contains("hunter2")
+    );
+    assert_eq!(value.expose(&SinkToken::new()), "hunter2-hunter2");
+}
+
+#[test]
+fn dyn_eq_compares_by_concrete_type_and_value() {
+    let a: Box<dyn DomainObject> = Box::new(TestSlug::parse("abc-1").unwrap());
+    let b: Box<dyn DomainObject> = Box::new(TestSlug::parse("abc-1").unwrap());
+    let c: Box<dyn DomainObject> = Box::new(TestSlug::parse("abc-2").unwrap());
+    let d: Box<dyn DomainObject> = Box::new(TestKebab::parse("abc-1").unwrap());
+
+    assert!(a.dyn_eq(b.as_ref()));
+    assert!(!a.dyn_eq(c.as_ref()));
+    assert!(
+        !a.dyn_eq(d.as_ref()),
+        "values of two different concrete types must never compare equal"
+    );
+}
+
+#[test]
+fn clone_box_produces_an_independent_equal_value() {
+    let original: Box<dyn DomainObject> = Box::new(TestSlug::parse("abc-1").unwrap());
+    let cloned = original.clone_box();
+    assert!(original.dyn_eq(cloned.as_ref()));
+    assert_eq!(cloned.type_name(), "TestSlug");
+    assert_eq!(cloned.render(), Rendered::Plain("abc-1".to_string()));
+}
+
+#[test]
+fn as_any_downcasts_to_the_concrete_type() {
+    let value: Box<dyn DomainObject> = Box::new(TestSlug::parse("abc-1").unwrap());
+    let downcast = value.as_any().downcast_ref::<TestSlug>().unwrap();
+    assert_eq!(downcast.as_str(), "abc-1");
+    assert!(value.as_any().downcast_ref::<TestKebab>().is_none());
+}

@@ -41,3 +41,17 @@ fn the_derive_expands_for_a_secret_inside_this_crate() {
     assert_eq!(format!("{value:?}"), "[REDACTED ProbeSecret]");
     assert_eq!(value.expose(&SinkToken::new()), "probe-secret");
 }
+
+#[test]
+fn the_derive_emits_domain_object_inside_this_crate() {
+    use crate::DomainObject;
+
+    let plain: Box<dyn DomainObject> = Box::new(Probe::parse("probe").unwrap());
+    assert!(!plain.is_secret());
+    assert_eq!(plain.expose(&SinkToken::new()), "probe");
+
+    let secret: Box<dyn DomainObject> = Box::new(ProbeSecret::parse("probe-secret").unwrap());
+    assert!(secret.is_secret());
+    assert_eq!(secret.render().to_string(), "[REDACTED ProbeSecret]");
+    assert_eq!(secret.expose(&SinkToken::new()), "probe-secret");
+}

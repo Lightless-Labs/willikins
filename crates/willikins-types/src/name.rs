@@ -111,6 +111,8 @@ impl schemars::JsonSchema for ProjectName {
     }
 }
 
+crate::impl_domain_object_non_secret!(ProjectName);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +156,21 @@ mod tests {
         assert!(ProjectName::parse("Étoile").is_ok());
         assert!(ProjectName::parse("Lightless Labs' Foundry").is_ok());
         assert!(ProjectName::parse("!!!").is_ok());
+    }
+
+    #[test]
+    fn implements_domain_object_via_the_macro() {
+        use crate::DomainObject;
+
+        let value: Box<dyn DomainObject> = Box::new(ProjectName::parse("Third Thoughts").unwrap());
+        assert_eq!(value.type_name(), "ProjectName");
+        assert!(!value.is_secret());
+        assert_eq!(
+            value.render(),
+            crate::Rendered::Plain("Third Thoughts".to_string())
+        );
+        let cloned = value.clone_box();
+        assert!(value.dyn_eq(cloned.as_ref()));
     }
 
     #[test]
