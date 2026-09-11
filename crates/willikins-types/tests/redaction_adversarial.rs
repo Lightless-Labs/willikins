@@ -412,3 +412,17 @@ fn no_catalog_entry_carries_a_secret_looking_example() {
         );
     }
 }
+
+#[test]
+fn project_name_rejects_unicode_line_and_paragraph_separators() {
+    // U+2028 and U+2029 are category Zl/Zp, so `char::is_control` (which is
+    // Cc only) misses them, yet they break a line in every renderer a
+    // `ProjectName` reaches — a rendered `CLAUDE.md` included. A name is a
+    // single line by definition, so they belong with the other invisibles.
+    for bad in ["Third\u{2028}Thoughts", "Third\u{2029}Thoughts"] {
+        assert!(
+            ProjectName::parse(bad).is_err(),
+            "ProjectName accepted a line separator: {bad:?}"
+        );
+    }
+}

@@ -17,14 +17,23 @@ const MAX_LEN: usize = 100;
 ///
 /// Covers soft hyphen, the zero-width space family, the explicit
 /// bidirectional embedding/override controls, the word-joiner family, the
-/// isolate controls, and the byte-order mark / zero-width no-break space.
-/// Not an exhaustive Unicode category-Cf sweep, but every codepoint this
-/// crate is asked to reject by name.
+/// isolate controls, the byte-order mark / zero-width no-break space, and
+/// the Unicode line and paragraph separators. Not an exhaustive Unicode
+/// category-Cf sweep, but every codepoint this crate is asked to reject by
+/// name.
+///
+/// U+2028 and U+2029 are categories Zl and Zp rather than Cc, so
+/// [`char::is_control`] does not see them, yet they break a line in every
+/// renderer a `ProjectName` reaches — a rendered `CLAUDE.md` included. A
+/// display name is a single line by definition, so they are rejected with
+/// the invisibles rather than left to the control-character check.
 fn is_invisible_or_bidi_control(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'
             | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'
+            | '\u{2029}'
             | '\u{202A}'..='\u{202E}'
             | '\u{2060}'..='\u{2064}'
             | '\u{2066}'..='\u{2069}'
