@@ -77,8 +77,10 @@ impl TypeInfo {
     }
 }
 
+pub mod reserved;
 pub mod word;
 
+pub use reserved::is_reserved;
 pub use word::{Word, WordList};
 
 /// The beginning of the type catalog: every domain type this crate
