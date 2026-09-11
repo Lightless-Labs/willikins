@@ -5,6 +5,7 @@
 **Reviewed:** 2026-09-11 (via document-review workflow: scope, feasibility, security, coherence, adversarial personas). 23 findings folded in; see "Review resolutions" at the end.
 **Addendum:** 2026-09-11 — `SinkToken` moved to `willikins-types` behind the `executor` feature; the derive's third storage generalised to any `FromStr + Display` inner type.
 **Addendum:** 2026-09-11 — tasks 2 and 3 done and merged. Pascal non-injectivity accepted in test 9; `cargo check -p willikins-types` added as a fourth gate; keyword-list verification listed under Risks.
+**Addendum:** 2026-09-11 — pre-task-6 review: feature unification defeats the `SinkToken` gate inside the workspace, so a `disallowed-methods` lint enforces it; `TypeRegistry` added (task 5b); `SecretLiteral` check error; `Absent { predicted }` and `KeyUnknown`; Value JSON shape specified.
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
 **Research:** `docs/research/2026-09-11-m1-dependencies.md`
 
@@ -91,10 +92,15 @@ This section is normative for every crate.
   `expose(&self, &SinkToken) -> &str`. `SinkToken` is defined in `willikins-types`
   (module `sink`) because the derive generates `expose` there. Its only constructor,
   `SinkToken::new()`, exists only when the `executor` cargo feature of `willikins-types` is
-  enabled. `willikins-core` enables it and creates tokens only inside the apply executor
-  (milestone 2); tests enable it in dev-dependencies. No other crate enables it, which a
-  manifest review catches. `Tool::read` never receives one, so a `read` implementation
-  provably cannot expose a secret.
+  enabled. Cargo unifies features across a build, so once `willikins-core` enables the
+  feature every crate in the same build can call the constructor; the feature gate protects
+  external consumers only. Inside the workspace the rule is enforced by clippy:
+  `clippy.toml` lists `willikins_types::sink::SinkToken::new` under `disallowed-methods`,
+  the gates run with `-D warnings`, and the only allowed call sites are the apply executor
+  module in `willikins-core` (milestone 2) and `#[cfg(test)]` modules, each with an explicit
+  `#[allow(clippy::disallowed_methods)]` that a reviewer can grep for. `Tool::read` takes no
+  token, so a `read` implementation has no legitimate way to expose a secret; this is a
+  structural aid on top of the lint, not a proof.
 - **Enum domain types** (`RepoVisibility`) are hand-written in milestone 1: a Rust enum
   whose canonical strings are its variants.
 - **Structured identities** (`GitHubRepo { owner, name }`, `DopplerConfig { project, name }`)
@@ -106,6 +112,13 @@ This section is normative for every crate.
 - **Port type.** `PortType::Exact(TypeRef)` or `PortType::AnySecret`. `AnySecret` accepts
   any secret scalar type and exists only for sinks such as `github.actions_secret.ensure`'s
   `value`. A non-secret value bound to an `AnySecret` port is a `TypeMismatch`.
+- **Type registry.** `willikins-types::registry::TypeRegistry` maps a type name to its
+  `TypeInfo` and to a parser `fn(&str) -> Result<Arc<dyn DomainObject>, ParseError>`. One
+  macro invocation lists every domain type and builds both `type_infos()` and the registry,
+  so they cannot drift. It also parses type references: `TypeRef::parse("list<T>")`. The
+  registry refuses to parse a secret type from a string, with a `ParseError` saying secrets
+  cannot be supplied as literals or inputs; fake-state seeding constructs secret values
+  through serde `Deserialize` on the concrete type instead.
 - **Value.** `Value { ty: TypeRef, state: ValueState }` with
   `ValueState::{Unknown, Known(Known)}` and `Known::{Scalar(Arc<dyn DomainObject>),
   List(Vec<Arc<dyn DomainObject>>)}`. `DomainObject` is the object-safe view of a domain
@@ -114,6 +127,12 @@ This section is normative for every crate.
   `Value`'s own `Debug` and `Serialize` go through `render()`, so a secret `Value` prints
   `[REDACTED <TypeName>]` in every container that derives `Debug` or `Serialize`. Cloning a
   `Value` clones the `Arc`.
+- **Value JSON shape**, because an agent is the consumer. A tagged object:
+  `{"type": "GitHubRepo", "list": false, "state": "known", "value": "lightless-labs/third-thoughts"}`;
+  a secret adds `"redacted": true` and its `value` is the marker string;
+  `{"type": "DopplerServiceToken", "list": false, "state": "unknown"}` has no `value`;
+  a list has `"list": true` and `value` is an array of the element strings. Pinned by an
+  insta snapshot in task 6.
 
 ## Workspace layout
 
@@ -164,8 +183,8 @@ Dependencies flow downward only: cli -> dsl, providers-fake -> core -> types -> 
   ASCII lowercase, split on non-alphanumerics and case boundaries, join. Not on the
   idempotence path; may change between versions. Consumed by the `propose-slug` CLI
   subcommand in this milestone and by an MCP tool in milestone 2.
-- `type_infos() -> Vec<TypeInfo>`: every domain type with name, secrecy, schema,
-  description, example.
+- `type_infos() -> Vec<TypeInfo>` and `registry()`: every domain type with name, secrecy,
+  schema, description, example, and parser, from one macro invocation (see Type registry).
 
 ### willikins-derive
 
@@ -203,8 +222,12 @@ on a secret type.
   approval.
 - `Tool` trait: `spec()`, `read(&Inputs) -> Result<Observation, ToolError>`,
   `ensure(&Inputs, &SinkToken) -> Result<Outputs, ToolError>` (unused until milestone 2).
-  `Observation::{Absent, Present(Outputs), Foreign}`, where `Foreign` means the natural key
-  exists but the resource is not ours. Implementations must not persist, log, or include a
+  `Observation::{Absent { predicted: Outputs }, Present(Outputs), Foreign}`, where
+  `Foreign` means the natural key exists but the resource is not ours. On `Absent` the tool
+  fills every output it can derive from its inputs (a repo's identity and URL, a config's
+  identity) and leaves the rest `Unknown` (a token's value), so downstream nodes can still
+  `read` at plan time. A tool whose key port is `Unknown` cannot be read; `plan` reports
+  `KeyUnknown` for it. Implementations must not persist, log, or include a
   secret input in any `Observation`, `Outputs`, or `ToolError`; `ToolError` carries a
   message and a kind, never a value. `read` cannot expose secrets by construction.
 - `Catalog`: tools by name plus `type_infos()`. Serializable to JSON for `list_tools`.
@@ -223,6 +246,7 @@ on a secret type.
   `UnknownNode { node, port, referenced }`, `UnboundInput { node, port }`,
   `UndeclaredInput { node, port, input }`, `InvalidLiteral { node, port, error }`,
   `TypeMismatch { node, port, expected: PortType, found: TypeRef }`,
+  `SecretLiteral { node, port }` (a literal bound to a secret-typed or `AnySecret` port),
   `SecretToNonSecretSink { from: (NodeName, PortName), to: (NodeName, PortName) }`,
   `SecretWorkflowInput { input, ty }`, `SecretForEachSource { node }`,
   `ForEachOverScalar { node }`, `ItemOutsideForEach { node, port }`,
@@ -240,7 +264,7 @@ on a secret type.
   `Plan { nodes: Vec<PlannedNode>, class, requires_approval }`, `PlannedNode { name,
   instance: Option<String>, tool, action: Action::{Compute, Create, NoOp}, inputs: Inputs,
   outputs: Outputs }`. `PlanError::{NameTaken { node, tool, key: Inputs }, KeyNotInForEach {
-  node, key }, Tool { node, error }, MissingInput { input }}`. `Foreign` from `read`
+  node, key }, KeyUnknown { node, port }, Tool { node, error }, MissingInput { input }}`. `Foreign` from `read`
   becomes `NameTaken`; it never appears inside a returned `Plan`. Plan output is redacted by
   construction because every value inside it is a `Value`.
 
@@ -298,11 +322,11 @@ table, not against the fixture prose.
 | Tool | Inputs | Outputs | Key | Class | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `naming.v1` | `org: GitHubOrg`, `slug: ProjectSlug` | `github_repo: GitHubRepo`, `doppler_project: DopplerProject` | none | pure | wraps `naming::v1` |
-| `github.repo.ensure` | `repo: GitHubRepo`, `visibility: RepoVisibility` | `repo: GitHubRepo`, `url: HttpsUrl` | `repo` | Reversible | `url` is `https://github.com/<owner>/<name>` |
+| `github.repo.ensure` | `repo: GitHubRepo`, `visibility: RepoVisibility` | `repo: GitHubRepo`, `url: HttpsUrl` | `repo` | Reversible | `url` is `https://github.com/<owner>/<name>`; both outputs predicted on `Absent` |
 | `github.actions_secret.ensure` | `repo: GitHubRepo`, `name: ActionsSecretName`, `value: AnySecret` | none | `repo`, `name` | Reversible | `read` checks existence by key only |
 | `doppler.project.ensure` | `project: DopplerProject` | `project: DopplerProject` | `project` | Reversible | |
-| `doppler.config.ensure` | `project: DopplerProject`, `environment: EnvironmentSlug` | `config: DopplerConfig` | `project`, `environment` | Reversible | root config named after the environment |
-| `doppler.service_token.ensure` | `config: DopplerConfig`, `name: DopplerTokenName` | `token: DopplerServiceToken` (secret) | `config`, `name` | Reversible | `Present` yields `token` as `Unknown`: values cannot be re-read |
+| `doppler.config.ensure` | `project: DopplerProject`, `environment: EnvironmentSlug` | `config: DopplerConfig` | `project`, `environment` | Reversible | root config named after the environment; predicted on `Absent` |
+| `doppler.service_token.ensure` | `config: DopplerConfig`, `name: DopplerTokenName` | `token: DopplerServiceToken` (secret) | `config`, `name` | Reversible | `token` is `Unknown` on both `Absent` and `Present`: values cannot be re-read |
 | `doppler.secret.get` | `config: DopplerConfig`, `name: SecretName` | `value: DopplerSecretValue` (secret) | `config`, `name` | pure | `read` returns the seeded value as `Known`; the redaction proof path |
 | `fake.secret_list` | `config: DopplerConfig` | `tokens: list<DopplerServiceToken>` (secret) | none | pure | test tool for `SecretForEachSource` |
 | `fake.irreversible.ensure` | `key: ProjectSlug` | none | `key` | Irreversible | test tool for approval class |
@@ -329,8 +353,9 @@ The milestone cannot ship without every one of these.
    fails `check` with `SecretWorkflowInput`.
 3. **Static errors.** One fixture each for `UnboundInput`, `UndeclaredInput`,
    `InvalidLiteral` (`visibility: internal`), `TypeMismatch` (`inputs.slug` bound to
-   `github.repo.ensure`'s `repo`), `UnknownTool`, `UnknownPort`, `Cycle`. Each error names
-   the node and port.
+   `github.repo.ensure`'s `repo`), `SecretLiteral` (`value: dp.st.prd.hunter2` bound to
+   `github.actions_secret.ensure`), `UnknownTool`, `UnknownPort`, `Cycle`. Each error names
+   the node and port. The registry also refuses `--input token=dp.st...` for a secret type.
 4. **for_each.** `SecretForEachSource` for a `for_each` over `fake.secret_list`'s `tokens`;
    `ForEachOverScalar` for a `for_each` over a scalar input; `ItemOutsideForEach`;
    `KeyedOnScalarNode`. On the positive fixture, `steps.configs[prd].config` type-checks
@@ -396,7 +421,8 @@ coordinator merges.
 | 3 | `willikins-derive` for `String`, `WordList`, `SecretString` storages; `__private` re-exports; trybuild suite in `willikins-types/tests/derive/` | 1 | A | sonnet, verified by opus |
 | 4 | Milestone 1 domain types, `DomainObject`, `Rendered`, `type_infos()`; redaction unit tests | 2, 3 | | sonnet |
 | 5 | `naming::v1` with golden and property tests | 4 | | sonnet |
-| 6 | Core: `TypeRef`, `PortType`, `Value`, `SinkToken`, `Class`, `ToolSpec`, `Tool`, `Observation`, `Catalog`; acceptance test 8a | 4, 5 | | sonnet, verified by opus |
+| 5b | `TypeRegistry` and `TypeRef::parse` in `willikins-types`, from one macro with `type_infos()`; secret-type refusal | 5 | | sonnet |
+| 6 | `clippy.toml` disallowing `SinkToken::new`; core: `TypeRef`, `PortType`, `Value` with its JSON shape, `Class`, `ToolSpec`, `Tool`, `Observation`, `Catalog`; acceptance test 8a | 5b | | sonnet, verified by opus |
 | 7 | Core: `Workflow`, `Binding`, `check` with every variant, `Checked`; fixture-driven tests | 6 | B | sonnet, verified by opus |
 | 7b | Adversarial pass on `check` (acceptance test 12, first pass) | 7 | | opus |
 | 9 | Fake providers per the port table, seedable state | 6 | B | sonnet |
