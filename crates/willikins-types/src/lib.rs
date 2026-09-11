@@ -7,6 +7,12 @@
 //!
 //! See `docs/plans/2026-09-11-willikins-design.md` for the invariants.
 
+pub mod __private;
+pub mod sink;
+
+/// Capability token gating access to secret values; see [`sink::SinkToken`].
+pub use sink::SinkToken;
+
 /// Error returned when a string does not parse as a domain type.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{type_name}: {reason}")]
@@ -74,5 +80,23 @@ impl TypeInfo {
             example: T::example(),
             schema: T::json_schema(),
         }
+    }
+}
+
+/// Assert that `T::example()` parses as `T`.
+///
+/// For use by catalog tests that check every domain type's own example
+/// against its own parser. Panics, naming the type, if it does not.
+///
+/// # Panics
+///
+/// Panics when `T::parse(T::example())` returns `Err`.
+pub fn assert_example_parses<T: DomainType>() {
+    if let Err(err) = T::parse(T::example()) {
+        panic!(
+            "{}: example {:?} does not parse as its own type: {err}",
+            T::TYPE_NAME,
+            T::example()
+        );
     }
 }

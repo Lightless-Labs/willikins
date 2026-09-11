@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+executor = []
+
 [dependencies]
 willikins-derive.workspace = true
 serde.workspace = true
@@ -16,11 +19,13 @@ schemars.workspace = true
 secrecy.workspace = true
 thiserror.workspace = true
 unicode-normalization.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
 trybuild.workspace = true
 insta.workspace = true
+willikins-types = { path = ".", features = ["executor"] }
 
 [lints]
 workspace = true
