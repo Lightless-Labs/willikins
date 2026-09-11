@@ -6,6 +6,7 @@
 **Addendum:** 2026-09-11 — `SinkToken` moved to `willikins-types` behind the `executor` feature; the derive's third storage generalised to any `FromStr + Display` inner type.
 **Addendum:** 2026-09-11 — tasks 2 and 3 done and merged. Pascal non-injectivity accepted in test 9; `cargo check -p willikins-types` added as a fourth gate; keyword-list verification listed under Risks.
 **Addendum:** 2026-09-11 — pre-task-6 review: feature unification defeats the `SinkToken` gate inside the workspace, so a `disallowed-methods` lint enforces it; `TypeRegistry` added (task 5b); `SecretLiteral` check error; `Absent { predicted }` and `KeyUnknown`; Value JSON shape specified.
+**Addendum:** 2026-09-11 — task 3 verification: the derive decided pattern anchoring on the pattern's first and last characters, which left `^a|b$` and `^price\$` under-anchored; it now decides on the parsed regex. A generic struct is rejected with its own message and trybuild fixture. `willikins-types` aliases itself with `extern crate self as willikins_types;` so the derive's `::willikins_types::` paths resolve inside the crate, which task 4 needs.
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
 **Research:** `docs/research/2026-09-11-m1-dependencies.md`
 
@@ -206,8 +207,8 @@ Dependencies flow downward only: cli -> dsl, providers-fake -> core -> types -> 
 Generated code reaches serde, schemars, and secrecy through `willikins_types::__private`
 re-exports so users of the derive need no extra dependencies. Compile-fail tests with
 `trybuild` live in `crates/willikins-types/tests/derive/`: `secret` on a `String` newtype,
-`pattern` that is not a valid regex, a non-newtype struct, and calling `serde_json::to_string`
-on a secret type.
+`pattern` that is not a valid regex, a non-newtype struct, a generic struct, and calling
+`serde_json::to_string` on a secret type.
 
 ### willikins-core
 
