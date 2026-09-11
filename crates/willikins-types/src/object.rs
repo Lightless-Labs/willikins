@@ -85,9 +85,24 @@ pub trait DomainObject: Send + Sync + fmt::Debug {
 /// the derive itself; use this macro only for a type you write by hand,
 /// such as a hand-written enum or a structured identity whose canonical
 /// string is a documented join of its fields.
+///
+/// Applying it to a type whose [`crate::DomainType::IS_SECRET`] is `true`
+/// is a compile error. Without that guard, one line of macro would give a
+/// hand-written secret type an `is_secret()` of `false` and a `render()`
+/// that publishes the secret's `Display` form as a plain value — the
+/// exact leak the type system exists to prevent, introduced by the
+/// shortest possible diff.
 #[macro_export]
 macro_rules! impl_domain_object_non_secret {
     ($ty:ty) => {
+        const _: () = ::std::assert!(
+            !<$ty as $crate::DomainType>::IS_SECRET,
+            "impl_domain_object_non_secret! was used on a type whose \
+             DomainType::IS_SECRET is true. A secret type must implement \
+             DomainObject by hand, so that render() returns \
+             Rendered::Redacted and expose() is the only way out."
+        );
+
         impl $crate::object::DomainObject for $ty {
             fn type_name(&self) -> &'static str {
                 <$ty as $crate::DomainType>::TYPE_NAME
