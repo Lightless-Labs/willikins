@@ -220,3 +220,126 @@ fn every_test_types_own_example_parses_as_itself() {
     willikins_types::assert_example_parses::<TestSecret>();
     willikins_types::assert_example_parses::<TestKebab>();
 }
+
+// ---------------------------------------------------------------------
+// Adversarial pins: length counting, secret reasons, empty input,
+// unconstrained storages, and the bare-name derive path
+// ---------------------------------------------------------------------
+
+#[derive(DomainType)]
+#[domain(
+    max_len = 3,
+    description = "At most three characters, counted as characters",
+    example = "abc"
+)]
+struct TestThreeChars(String);
+
+#[test]
+fn lengths_count_characters_not_bytes() {
+    // Three multibyte characters: nine bytes, three chars.
+    let value = TestThreeChars::parse("ééé").unwrap();
+    assert_eq!(value.as_str(), "ééé");
+    assert!(TestThreeChars::parse("éééé").is_err());
+}
+
+#[test]
+fn type_name_is_the_struct_identifier() {
+    assert_eq!(TestThreeChars::TYPE_NAME, "TestThreeChars");
+    assert_eq!(TestSlug::TYPE_NAME, "TestSlug");
+    assert_eq!(TestSecret::TYPE_NAME, "TestSecret");
+    assert_eq!(TestKebab::TYPE_NAME, "TestKebab");
+}
+
+#[derive(DomainType)]
+#[domain(
+    pattern = "dp\\.st\\.[a-z0-9-]+",
+    min_len = 10,
+    secret,
+    description = "A prefixed test secret",
+    example = "dp.st.example-token"
+)]
+struct TestPrefixedSecret(secrecy::SecretString);
+
+#[test]
+fn secret_pattern_rejection_never_echoes_the_input() {
+    // Long enough to pass min_len, so the regex is what rejects it.
+    let err = TestPrefixedSecret::parse("LEAKME-LEAKME-LEAKME").unwrap_err();
+    assert!(!err.reason.contains("LEAKME"), "reason leaked: {err:?}");
+    assert!(!err.to_string().contains("LEAKME"), "Display leaked: {err}");
+}
+
+#[test]
+fn secret_length_rejection_never_echoes_the_input() {
+    let err = TestPrefixedSecret::parse("LEAKME").unwrap_err();
+    assert!(!err.to_string().contains("LEAKME"), "Display leaked: {err}");
+    assert!(
+        err.reason.contains("at least"),
+        "reason was {:?}",
+        err.reason
+    );
+}
+
+#[test]
+fn secret_deserialize_failure_never_echoes_the_input() {
+    let err = serde_json::from_str::<TestPrefixedSecret>("\"LEAKME-LEAKME-LEAKME\"").unwrap_err();
+    assert!(
+        !err.to_string().contains("LEAKME"),
+        "serde error leaked: {err}"
+    );
+    assert!(err.to_string().contains("TestPrefixedSecret"), "{err}");
+}
+
+#[test]
+fn secret_deserialized_from_json_is_redacted_afterwards() {
+    let value: TestPrefixedSecret = serde_json::from_str("\"dp.st.hunter2-token\"").unwrap();
+    assert_eq!(format!("{value:?}"), "[REDACTED TestPrefixedSecret]");
+    assert_eq!(value.to_string(), "[REDACTED TestPrefixedSecret]");
+    assert_eq!(value.expose(&SinkToken::new()), "dp.st.hunter2-token");
+}
+
+#[derive(DomainType)]
+#[domain(
+    description = "Anything at all, including nothing",
+    example = "anything"
+)]
+struct TestUnconstrained(String);
+
+#[derive(DomainType)]
+#[domain(
+    min_len = 1,
+    description = "Anything but the empty string",
+    example = "anything"
+)]
+struct TestNonEmpty(String);
+
+#[test]
+fn a_type_with_no_pattern_and_no_lengths_accepts_the_empty_string() {
+    assert_eq!(TestUnconstrained::parse("").unwrap().as_str(), "");
+    assert!(TestNonEmpty::parse("").is_err());
+    assert_eq!(TestNonEmpty::parse("a").unwrap().as_str(), "a");
+}
+
+/// A `FromStr`+`Display` storage with no `pattern`, `min_len`, or
+/// `max_len` at all: the generated `parse` must still compile clean under
+/// `-D warnings` even though it has no check to run.
+#[derive(DomainType)]
+#[domain(description = "An unconstrained kebab word list", example = "abc-def")]
+struct TestUnconstrainedKebab(Kebab);
+
+#[test]
+fn an_unconstrained_other_storage_parses_and_round_trips() {
+    let value = TestUnconstrainedKebab::parse("abc-def").unwrap();
+    assert_eq!(value.to_string(), "abc-def");
+    assert!(TestUnconstrainedKebab::parse("").is_err());
+}
+
+#[test]
+fn the_string_schema_carries_every_documented_keyword() {
+    let schema = serde_json::to_value(TestSlug::json_schema()).unwrap();
+    assert_eq!(schema["type"], "string");
+    assert_eq!(schema["pattern"], "^(?:[a-z][a-z0-9-]*)$");
+    assert_eq!(schema["minLength"], 2);
+    assert_eq!(schema["maxLength"], 10);
+    assert_eq!(schema["description"], "A lowercase test slug");
+    assert_eq!(schema["examples"], serde_json::json!(["abc"]));
+}
