@@ -1,6 +1,7 @@
 # Milestone 1: the core, with no real providers
 
 **Created:** 2026-09-11
+**Addendum:** 2026-09-11 — pinned dependencies and slug grammar filled in from the research note.
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
 **Research:** `docs/research/2026-09-11-m1-dependencies.md`
 
@@ -17,6 +18,48 @@ fixture.
 Real providers, `apply`, persistence of the ledger, the MCP server, templates, authentication,
 hosting. Those are milestones 2 and later. The MCP surface is designed here only as far as the
 CLI mirrors it, so that milestone 2 is a transport, not a redesign.
+
+## Pinned dependencies
+
+From the research note. Caret requirements on the major; `Cargo.lock` pins the rest.
+
+| Crate | Requirement | Why |
+| --- | --- | --- |
+| `schemars` | `1` | JSON schema for every domain type and the document format; `rmcp` requires 1.x |
+| `serde`, `serde_json` | `1` | serialization |
+| `serde_yaml_ng` | `0.10` | maintained fork of `serde_yaml` with `Error::location()`; `serde_yml` is deprecated and has a RustSec advisory |
+| `secrecy` | `0.10` | `SecretBox<str>` storage inside credential types; `serde` feature for deserialize only, never `SerializableSecret` |
+| `thiserror` | `2` | error types |
+| `petgraph` | `0.8` | topological order and cycle detection |
+| `unicode-normalization` | `0.1` | NFKD in `propose_slug` |
+| `indexmap` | `2` | ordered maps for ports, steps, inputs |
+| `clap` | `4` | CLI |
+| `syn`, `quote`, `proc-macro2` | `2`, `1`, `1` | derive macro |
+| `proptest`, `trybuild`, `insta` | dev | property, compile-fail, and snapshot tests |
+| `rmcp` | `3` (milestone 2) | official MCP SDK; features `server`, `macros`, `schemars`, `transport-io`, later `transport-streamable-http-server` plus `axum`. MSRV 1.88, edition 2024 |
+
+Toolchain: Rust 1.97 stable, edition 2024.
+
+## Slug grammar
+
+From the research note, corrected for the word-list model.
+
+- Word: `[a-z][a-z0-9]*` or `[0-9]+`. Slug: one or more words, first word starts with a
+  letter, serialised with single hyphens. Regex over the serialisation:
+  `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`.
+- `ProjectSlug` max serialised length 32. Binding constraint: a single-service project uses
+  the slug as its Railway service name, and Railway caps service names at 32. Every other
+  documented cap is looser: Cargo 64, GitHub repo 100, Buildkite 100. Bundle IDs, Doppler
+  names, and Android segments have no documented cap.
+- `ComponentSlug` max 32, same reason. `EnvironmentSlug` max 16.
+- Reserved words, matched case-insensitively against a single-word slug: Rust strict and
+  reserved keywords, Java keywords, Kotlin hard keywords, Swift keywords, Windows device
+  names (`nul`, `con`, `prn`, `aux`, `com1`..`com9`, `lpt1`..`lpt9`). Multi-word slugs
+  cannot collide because every join keeps the separator or the case boundary.
+- Every join is total on this grammar: kebab satisfies GitHub `[A-Za-z0-9._-]`, Buildkite
+  `[a-zA-Z0-9][a-zA-Z0-9-]*`, Doppler's lowercase-hyphen convention, Cargo, Railway's DNS
+  label use, and Apple's `[A-Za-z0-9.-]`; snake satisfies Android `[a-zA-Z0-9_]` with a
+  leading letter and Rust identifiers; pascal satisfies Swift and Xcode module names.
 
 ## Workspace layout
 
@@ -45,8 +88,7 @@ Dependencies flow downward only: cli -> dsl, providers-fake -> core -> types -> 
 
 - `Word`: `[a-z][a-z0-9]*` or `[0-9]+`. `WordList`: non-empty, first word starts with a
   letter. `ProjectSlug`, `ComponentSlug`, `EnvironmentSlug` wrap a `WordList` with the
-  intersection constraints from the research note (max length, reserved words: Rust keywords,
-  Java keywords, provider-reserved names).
+  constraints in the Slug grammar section.
 - `ProjectName`: free-form display name, non-empty, trimmed.
 - Org configuration types: `GitHubOrg`, `Domain`, `ReverseDnsPrefix` (derived from `Domain`,
   fallback from `GitHubOrg`), `DopplerWorkspace`, `BuildkiteOrg`.
@@ -180,7 +222,8 @@ These are the tests the milestone cannot ship without.
 9. **Naming.** Property test: every valid `ProjectSlug` derives successfully for every target
    and every result parses as its target type. Snake and pascal round-trip to the word list.
    Golden tests for the join table examples in the design doc.
-10. **Reserved words.** `native`, `default`, `type`, `match` are rejected as project slugs.
+10. **Reserved words.** `native`, `default`, `type`, `match`, `self`, `nul` are rejected as
+    project slugs; `type-system` is accepted.
 
 ## Gates
 

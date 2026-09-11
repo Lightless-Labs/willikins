@@ -313,6 +313,16 @@ All facts in this section are confidence "inferred" (derived from WebSearch snip
 
 ## Slug grammar implications
 
+> **Correction (2026-09-11, reviewed against the design doc):** the derivation below treats the
+> project slug as a single token, so it excludes `-` and applies Doppler's `<environment>_`
+> prefix to it. In the design the slug is a *word list*; the hyphen is the serialisation
+> separator and each target's join replaces it (`kebab`, `snake`, `pascal`), so the per-word
+> charset is `[a-z0-9]` and hyphens never reach Android. Doppler branch-config prefixes apply
+> to config names, not to the project slug. Railway service names are scoped to a project, so
+> they are the component alone, which removes the only composition that touched Railway's
+> 32-character cap. The corrected grammar lives in the milestone 1 plan; the per-provider
+> facts above stand.
+
 The nine provider topics above each define naming rules for something a "project slug" for this platform would need to become: a GitHub repo name (and, if the platform provisions a GitHub org/user per project, a GitHub login), a Doppler project name, a Buildkite pipeline slug, a Railway service name, an Apple bundle ID component, a Cargo package name, and an Android applicationId segment. This section derives the intersection of those rules for a single canonical project slug. Where a cited fact underlying a derivation step is marked "inferred" in the source research, the derived constraint is flagged **(unverified)** here too.
 
 ### Allowed characters (intersection)

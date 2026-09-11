@@ -4,6 +4,7 @@
 **Addendum:** 2026-09-11 — added the Naming section: slug canonicalisation, frozen derivation, overrides, scheme versioning.
 **Addendum:** 2026-09-11 — added Workflow inputs: explicit checked signatures, decisions-only inputs, no secret inputs, describe as a pure resolution tool.
 **Addendum:** 2026-09-11 — open questions decided (YAML, typed refs, Railway, web approval, Doppler vault, MIT, Cargo); milestone list added.
+**Addendum:** 2026-09-11 — after dependency research: Railway service name is the component alone; Swift keywords join the reserved-word union.
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
 runs reusable, composable project-provisioning workflows against GitHub, Doppler, Buildkite,
@@ -164,7 +165,7 @@ therefore on the idempotence path and must be treated as frozen.
 | Doppler project | kebab | `third-thoughts` |
 | Buildkite pipeline slug | kebab | `third-thoughts` |
 | Railway project | kebab | `third-thoughts` |
-| Railway service | kebab + `-` + component | `third-thoughts-api` |
+| Railway service | component alone, scoped to the Railway project; slug when there is no component | `api` |
 | Cargo package | kebab | `third-thoughts` |
 | Rust lib / env prefix | snake | `third_thoughts` / `THIRD_THOUGHTS_` |
 | Swift module / Xcode product | pascal | `ThirdThoughts` |
@@ -199,7 +200,8 @@ therefore on the idempotence path and must be treated as frozen.
   repo alone. A new scheme version applies only to new projects. Renaming an existing project
   is an explicit destructive-class workflow, not a side effect of a rules change.
 - **Reserved words are a real constraint.** Rust keywords cannot be lib names, Java keywords
-  cannot be package segments, and some targets reserve names. Treat them as part of the slug grammar's reject list so the failure happens at
+  cannot be package segments, Swift keywords collide with the pascal join (`self` becomes
+  `Self`), and some targets reserve names such as Windows device names. Treat them as part of the slug grammar's reject list so the failure happens at
   parse time, not at apply time.
 - **Property-test the contract.** For every valid `ProjectSlug`, every derivation succeeds and
   every result parses as its target type. For the join functions, snake and pascal round-trip
