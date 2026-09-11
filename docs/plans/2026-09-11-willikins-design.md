@@ -2,6 +2,7 @@
 
 **Created:** 2026-09-11 (design conversation)
 **Addendum:** 2026-09-11 — added the Naming section: slug canonicalisation, frozen derivation, overrides, scheme versioning.
+**Addendum:** 2026-09-11 — added Workflow inputs: explicit checked signatures, decisions-only inputs, no secret inputs, describe as a pure resolution tool.
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
 runs reusable, composable project-provisioning workflows against GitHub, Doppler, Buildkite,
@@ -67,6 +68,36 @@ a secret. The agent plans; the butler acts.
   Primitives are Rust, composites are DSL, one abstraction.
 - The document JSON schema and the tool catalog are published over MCP so an agent can
   validate a workflow locally before submitting it.
+
+### Workflow inputs
+
+A workflow must declare its inputs so an agent can gather them up front and call `plan`
+once with a complete, typed set.
+
+- **Explicit signature, statically checked against the graph.** Every tool input in the
+  graph is bound to one of: an upstream output, a literal, org configuration, or a declared
+  workflow input. The checker rejects a workflow with an unbound input, and warns on a
+  declared input nothing consumes. Inputs are not inferred from free variables: editing the
+  graph must never silently change the public signature. This is "workflows are tools"
+  applied to the interface.
+- **An input is public only if it is a decision, not a consequence.** Display name, slug,
+  org, profile layers, visibility, license, environments, region, and per-target name
+  overrides are decisions. Every provider name is a consequence and is derived inside the
+  graph. `propose_slug` is a helper tool; the slug itself is a required input, so the frozen
+  choice is explicit in the call rather than hidden in a default.
+- **No secret input types.** The checker rejects a signature containing a secret type. When
+  a workflow needs an existing secret, it takes a typed non-secret reference such as a
+  Doppler or 1Password item path, and a secret-source tool resolves it inside the butler.
+- **Conditional requirements are part of the signature.** Layers gate inputs: bundle-ID
+  overrides only matter for an ios-app layer. The published JSON schema expresses this with
+  conditional requirements rather than a flat required list.
+- **Resolution is itself a tool.** `describe(workflow, partial_inputs)` is pure, makes no
+  provider calls, parses what it is given into domain types, and returns validation errors
+  plus the still-missing inputs, each with type, constraints, description, default, example,
+  and a prompt string fit for asking a human. The agent loops on it until nothing is missing,
+  then calls `plan` once. `plan` is where `read` runs and where "name taken" surfaces.
+- **MCP elicitation** may let the butler ask the human directly for missing inputs. Verify
+  the current spec and client support before relying on it; `describe` does not depend on it.
 
 ### Execution
 
@@ -221,5 +252,5 @@ These came up from memory during the conversation and have not been checked.
 - Hosting target for the first deployment.
 - Approval channel: push notification, web page, chat.
 - Server-side credential storage: OS keychain, 1Password service account, Doppler as vault.
-- License.
+- License. Sibling public repos disagree: refinery is MIT, third-thoughts is AGPL-3.0.
 - Build: the monorepo standard is Bazel, sibling public repos use Cargo directly.
