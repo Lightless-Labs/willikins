@@ -1,6 +1,7 @@
 # Willikins: design
 
 **Created:** 2026-09-11 (design conversation)
+**Addendum:** 2026-09-11 — added the Naming section: slug canonicalisation, frozen derivation, overrides, scheme versioning.
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
 runs reusable, composable project-provisioning workflows against GitHub, Doppler, Buildkite,
@@ -98,6 +99,68 @@ a secret. The agent plans; the butler acts.
 - Org conventions may already live in the sibling foundry repo. Templates should reference
   them rather than duplicate them.
 
+### Naming
+
+The problem: one project needs a GitHub repo name, a Doppler project, a Buildkite pipeline
+slug, Railway names, a bundle ID, a crate name, a Swift module name, and more, each with its
+own grammar. Derived names are the natural keys that make tools idempotent, so if derivation
+ever changes for an existing project, `read` misses and `ensure` creates duplicates. Naming is
+therefore on the idempotence path and must be treated as frozen.
+
+- **Display name and slug are different types.** `ProjectName` is free-form, mutable, and only
+  used for labels and template text. `ProjectSlug` is the canonical identifier: an ordered list
+  of words, serialised as kebab-case, immutable once the project exists. Every provider name is
+  derived from the slug, never from the display name.
+- **Two operations, only one of them deterministic by contract.** `propose_slug(name)` is a
+  lossy heuristic run once at creation: NFKD, strip diacritics, ASCII lowercase, split on
+  non-alphanumerics and case boundaries, join with hyphens. Its result is shown to the human or
+  agent, confirmed, and persisted. It may improve over time because it is never re-run for
+  existing projects. `derive_<target>(org, slug, ...)` is pure, total, ASCII-only, independent
+  of time and of existing state, and versioned. It never changes for a given scheme version.
+- **The slug grammar is the intersection of every target.** Words match `[a-z][a-z0-9]*` or
+  `[0-9]+`, the first word starts with a letter, single hyphens separate words, no leading or
+  trailing hyphen, length bounded by the tightest target after prefixes are accounted for.
+  Because `ProjectSlug::parse` enforces the intersection, every derivation is total and cannot
+  fail at plan or apply time. Validate against the union of all known targets, not just the
+  current profile, so a project can add a layer later without renaming.
+- **Derivation is a table of joins over the word list**, one row per target, never a parse of
+  a target name back into words.
+
+| Target | Join | Example for `third-thoughts` |
+| --- | --- | --- |
+| GitHub repo | kebab | `third-thoughts` |
+| Doppler project | kebab | `third-thoughts` |
+| Buildkite pipeline slug | kebab | `third-thoughts` |
+| Railway project | kebab | `third-thoughts` |
+| Railway service | kebab + `-` + component | `third-thoughts-api` |
+| Cargo package | kebab | `third-thoughts` |
+| Rust lib / env prefix | snake | `third_thoughts` / `THIRD_THOUGHTS_` |
+| Swift module / Xcode product | pascal | `ThirdThoughts` |
+| Bundle ID | org reverse-DNS prefix + `.` + kebab | `com.lightlesslabs.third-thoughts` |
+
+- **Structured identifiers, not string concatenation.** Derivation takes `(org, project_slug,
+  component?, environment?)`. Components and environments are word-list types with the same
+  grammar. Org-level parts such as the reverse-DNS prefix and the GitHub, Doppler, and Buildkite
+  org slugs are typed org configuration set once, not per-project inputs.
+- **Collisions are resolved by recorded overrides, never by auto-suffixing.** Derivation cannot
+  solve global namespaces: a repo name may be taken in the org, a crate name squatted, a bundle
+  ID registered elsewhere. When `read` finds a resource that exists but is not ours, the plan
+  fails with "name taken, provide an override". The override is typed, must parse as the target
+  type, and is persisted in the project record. The natural key for that resource is then the
+  override. Auto-suffixing with `-2` depends on what exists at run time, which is exactly the
+  non-determinism the model forbids.
+- **The scheme is versioned and recorded.** The project record carries the slug, display name,
+  org, naming scheme version, profile layers, and overrides. It lives in the butler's ledger and
+  in the repo, alongside the template answers, so every derived name is reproducible from the
+  repo alone. A new scheme version applies only to new projects. Renaming an existing project
+  is an explicit destructive-class workflow, not a side effect of a rules change.
+- **Reserved words are a real constraint.** Rust keywords cannot be lib names, and some targets
+  reserve names. Treat them as part of the slug grammar's reject list so the failure happens at
+  parse time, not at apply time.
+- **Property-test the contract.** For every valid `ProjectSlug`, every derivation succeeds and
+  every result parses as its target type. For the join functions, snake and pascal round-trip
+  back to the same word list.
+
 ### Hosting
 
 - Nothing requires macOS. The App Store Connect API is REST and CSR generation is plain
@@ -132,6 +195,9 @@ These came up from memory during the conversation and have not been checked.
 - Maturity of Rust CEL implementations, if CEL is chosen as the expression language.
 - Fit of the `secrecy` crate as the underlying redaction primitive.
 - Exact token prefix formats for GitHub, Doppler, and Buildkite.
+- Exact name grammars and length limits for GitHub repos, Doppler projects and configs,
+  Buildkite pipeline slugs, Railway projects and services, bundle IDs, and crates.io, so the
+  slug grammar can be set to the true intersection.
 - Whether a maintained Railway API client or provider exists.
 - Whether App Store Connect exposes every step needed for app, bundle ID, certificate, and
   profile creation.
