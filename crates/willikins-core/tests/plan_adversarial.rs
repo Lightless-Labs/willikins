@@ -693,3 +693,43 @@ fn describe_echoes_a_rejected_non_secret_raw_value_and_never_sees_a_secret_one()
     let refusal = Value::parse(&ty("DopplerServiceToken"), "dp.st.prd.realtokenbytes").unwrap_err();
     assert!(!refusal.to_string().contains("realtokenbytes"), "{refusal}");
 }
+
+/// `plan` resolves a `for_each` source with no item in hand, so its
+/// `resolve_binding` treats `Binding::Literal` and `Binding::Item` there as
+/// `unreachable!`. That is only sound because `check` refuses both before a
+/// `Checked` can exist — pinned here, since a regression in `check` would
+/// turn into a panic in `plan`.
+#[test]
+fn check_refuses_the_for_each_sources_plan_treats_as_unreachable() {
+    let (_state, fake_catalog) = empty();
+    let over = |source: Binding| {
+        Workflow::new("fe").node(
+            node("configs"),
+            Node::new(tool_name("doppler.config.ensure"))
+                .for_each(source)
+                .port(
+                    port("project"),
+                    Binding::Literal("third-thoughts".to_string()),
+                )
+                .port(port("environment"), Binding::Item),
+        )
+    };
+
+    let errors = check(&over(Binding::Literal("dev".to_string())), &fake_catalog)
+        .expect_err("a literal for_each source is a scalar");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, willikins_core::CheckError::ForEachOverScalar { .. })),
+        "{errors:?}"
+    );
+
+    let errors = check(&over(Binding::Item), &fake_catalog)
+        .expect_err("`item` cannot be its own for_each source");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, willikins_core::CheckError::ItemOutsideForEach { .. })),
+        "{errors:?}"
+    );
+}
