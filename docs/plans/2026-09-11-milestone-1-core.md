@@ -1,10 +1,12 @@
 # Milestone 1: the core, with no real providers
 
 **Created:** 2026-09-11
+**Completed:** 2026-09-12
 **Addendum:** 2026-09-11 — pinned dependencies and slug grammar filled in from the research note.
 **Reviewed:** 2026-09-11 (via document-review workflow: scope, feasibility, security, coherence, adversarial personas). 23 findings folded in; see "Review resolutions" at the end.
 **Addendum:** 2026-09-11 — `SinkToken` moved to `willikins-types` behind the `executor` feature; the derive's third storage generalised to any `FromStr + Display` inner type.
 **Addendum:** 2026-09-11 — tasks 2 and 3 done and merged. Pascal non-injectivity accepted in test 9; `cargo check -p willikins-types` added as a fourth gate; keyword-list verification listed under Risks.
+**Addendum:** 2026-09-12 — tasks 11, 12 and 13 done. End-to-end adversarial pass 2 recorded in `docs/research/2026-09-12-e2e-adversarial-pass-2.md`: no attack reached a secret byte; seven robustness findings fixed and pinned as fixtures (`LiteralOutput`, output-from-step-named-outputs, `deny_unknown_fields` on documents and fake state, repeated `--input` refused, `DuplicateForEachDefault`, bounded and escaped quoting of rejected input). Left open and filed under `todos/`: YAML scalar-alias amplification, workflow name and description bounds, document text reaching agent prompts, the sentinel-site enum, and the write-only fake state. `CheckError` has 21 variants against the 16 first listed; the rule both passes kept rediscovering is that everything knowable statically is rejected by `check`, and `plan` only backstops it.
 **Addendum:** 2026-09-12 — tasks 8 and 10 done; plan adversarial pass added `DuplicateForEachKey` and `ForEachUnknown`; the DSL rejects duplicate mapping keys through its own visitor because serde_yaml_ng keeps the last one silently.
 **Addendum:** 2026-09-12 — tasks 7 and 9 done; checker adversarial pass 1 recorded in `docs/research/2026-09-12-check-adversarial-pass-1.md`: default-value leak closed, output type map separated, nested lists rejected. Three error variants added; sentinel sites and secret outputs documented.
 **Addendum:** 2026-09-12 — tasks 5b and 6 done and verified: empty-list bypass of the secret refusal closed; `SinkToken` lint confirmed firing; gates go through `rtk proxy cargo`; `SecretToNonSecretSink` precedence stated; workflow-as-tool deferred to milestone 2.
@@ -268,7 +270,11 @@ with `trybuild` live in `crates/willikins-types/tests/derive/fail/`.
   against its declared type, since `check` is the only gate a programmatically built
   workflow passes), `NestedList { node, port }` (a `Step` on a `for_each` node whose output
   is already a list would need `list<list<T>>`, which `TypeRef` cannot represent),
-  `UnregisteredInputType { input, ty }` (an input's declared type is not in the registry). Warnings, returned alongside a successful check:
+  `UnregisteredInputType { input, ty }` (an input's declared type is not in the registry),
+  `LiteralOutput { output }` (a workflow output must be a reference so its type is known),
+  `DuplicateForEachDefault { node, input, key }` (a `for_each` source whose statically
+  known default holds two items with the same key). The rule: everything knowable
+  statically is rejected by `check`; `plan` only backstops it. Warnings, returned alongside a successful check:
   `UnusedInput { input }`. `Checked` carries the workflow, a topological order (Kahn's
   algorithm advancing the lowest declaration index, so a workflow written in dependency
   order keeps its order), `class: Class` (max over nodes, pure nodes excluded), the
