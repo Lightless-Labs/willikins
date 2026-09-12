@@ -11,17 +11,21 @@
 //! what actually keeps every other call site honest.
 
 pub mod catalog;
+pub mod check;
 pub mod class;
 pub mod tool;
 pub mod value;
+pub mod workflow;
 
 pub use catalog::{Catalog, CatalogError};
+pub use check::{CheckError, CheckWarning, Checked, check};
 pub use class::Class;
 pub use tool::{
     Inputs, Observation, Outputs, PortName, PortSpec, SpecError, Tool, ToolError, ToolErrorKind,
     ToolName, ToolSpec,
 };
 pub use value::{Known, PortType, TypeName, TypeRef, TypeRegistry, Value, ValueState};
+pub use workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};
 
 /// Capability token gating access to secret values; see `willikins_types::sink::SinkToken`.
 pub use willikins_types::SinkToken;
