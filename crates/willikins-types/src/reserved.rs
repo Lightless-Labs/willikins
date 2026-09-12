@@ -2,6 +2,25 @@
 //! and Swift, plus reserved Windows device names. A single-word slug that
 //! matches any of these is rejected; a multi-word slug can never collide
 //! because every join keeps the separator or the case boundary.
+//!
+//! Verified 2026-09-12 against the Rust reference
+//! (<https://doc.rust-lang.org/reference/keywords.html>), JLS 21 section
+//! 3.9
+//! (<https://docs.oracle.com/javase/specs/jls/se21/html/jls-3.html#jls-3.9>),
+//! kotlinlang.org's keyword reference
+//! (<https://kotlinlang.org/docs/keyword-reference.html>), Microsoft's file
+//! naming page
+//! (<https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file>),
+//! and, for Swift, the `swiftlang/swift-book` `DocC` source that
+//! docs.swift.org's lexical-structure page renders
+//! (<https://raw.githubusercontent.com/swiftlang/swift-book/main/TSPL.docc/ReferenceManual/LexicalStructure.md>) —
+//! the rendered page itself is a JavaScript shell to every fetcher, so this
+//! `DocC` file is its primary source, not a secondary summary. See
+//! `docs/research/2026-09-12-m2-dependencies.md` section 5 for the full
+//! pass. That pass found Rust, Java, Kotlin hard keywords, and the Windows
+//! device names already exact; it added `borrowing`, `consuming`, and
+//! `nonisolated` to [`SWIFT_KEYWORDS`], gained by Swift's
+//! ownership/concurrency features since this module was written.
 
 /// Rust strict and reserved keywords, across every edition this workspace
 /// can build with, including `gen`, reserved by the 2024 edition. `Self`
@@ -110,16 +129,25 @@ const KOTLIN_KEYWORDS: &[&str] = &[
 /// Swift keywords used in declarations, statements, expressions, and
 /// types. Keywords reserved only in particular patterns or contexts are
 /// excluded, per the task's scope.
+/// Verified 2026-09-12 against the `swiftlang/swift-book` `DocC` source that
+/// docs.swift.org's "Lexical Structure" page renders (the rendered page is
+/// a JavaScript shell to every fetcher, so this `DocC` file is its primary
+/// source, not a secondary summary):
+/// <https://raw.githubusercontent.com/swiftlang/swift-book/main/TSPL.docc/ReferenceManual/LexicalStructure.md>.
+/// That pass found `borrowing`, `consuming`, and `nonisolated` missing from
+/// the declarations group and added them here.
 /// Source: <https://docs.swift.org/swift-book/documentation/the-swift-programming-language/lexicalstructure/>
 const SWIFT_KEYWORDS: &[&str] = &[
     "any",
     "as",
     "associatedtype",
     "await",
+    "borrowing",
     "break",
     "case",
     "catch",
     "class",
+    "consuming",
     "continue",
     "default",
     "defer",
@@ -143,6 +171,7 @@ const SWIFT_KEYWORDS: &[&str] = &[
     "is",
     "let",
     "nil",
+    "nonisolated",
     "open",
     "operator",
     "precedencegroup",

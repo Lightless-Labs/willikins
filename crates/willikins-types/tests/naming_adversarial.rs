@@ -165,17 +165,63 @@ fn ascii_non_word_characters_are_rejected() {
 #[test]
 fn reserved_words_are_matched_case_insensitively_and_only_alone() {
     for reserved in [
-        "match", "Match", "MATCH", "self", "Self", "type", "native", "default", "nul",
+        "match",
+        "Match",
+        "MATCH",
+        "self",
+        "Self",
+        "type",
+        "native",
+        "default",
+        "nul",
+        "borrowing",
+        "Borrowing",
+        "BORROWING",
+        "consuming",
+        "Consuming",
+        "CONSUMING",
+        "nonisolated",
+        "Nonisolated",
+        "NONISOLATED",
     ] {
         assert!(
             ProjectSlug::parse(reserved).is_err(),
             "`{reserved}` must be rejected as a single-word slug"
         );
     }
-    for ok in ["match-maker", "self-hosted", "type-system", "nul-island"] {
+    for ok in [
+        "match-maker",
+        "self-hosted",
+        "type-system",
+        "nul-island",
+        "borrowing-checker",
+        "consuming-actor",
+        "nonisolated-context",
+    ] {
         assert!(
             ProjectSlug::parse(ok).is_ok(),
             "`{ok}` is multi-word and must be accepted"
+        );
+    }
+}
+
+/// Swift's ownership/concurrency keywords added to the declarations group
+/// since `reserved.rs` was written (research note, section 5): `borrowing`,
+/// `consuming`, `nonisolated`. Verified 2026-09-12 against the
+/// `swiftlang/swift-book` `DocC` source. Pinned as their own test, distinct
+/// from the general case-insensitivity test above, so a future edit to
+/// that test cannot silently drop coverage of these three.
+#[test]
+fn swift_ownership_and_concurrency_keywords_added_2026_09_12_are_reserved() {
+    for reserved in ["borrowing", "consuming", "nonisolated"] {
+        assert!(
+            ProjectSlug::parse(reserved).is_err(),
+            "`{reserved}` is a Swift keyword and must be rejected as a single-word slug"
+        );
+        let name = ProjectName::parse(reserved).expect("valid ProjectName in test fixture");
+        assert!(
+            matches!(propose_slug(&name), Err(ProposeError::Reserved { .. })),
+            "`propose_slug` must reject `{reserved}` as reserved"
         );
     }
 }
