@@ -1,6 +1,14 @@
-# Replace the outputs/for_each sentinel sites in CheckError with a site enum
+---
+title: "Replace the outputs/for_each sentinel sites in CheckError with a site enum"
+created: 2026-09-12
+status: open
+priority: medium
+area: core
+related:
+  - docs/research/2026-09-12-check-adversarial-pass-1.md
+---
 
-**Filed:** 2026-09-12 (checker adversarial pass 1, confirmed by pass 2)
+# Replace the outputs/for_each sentinel sites in CheckError with a site enum
 
 Errors on a workflow output binding use the sentinel node name `outputs`, and errors on a
 `for_each` binding use the sentinel port name `for_each`. Three bugs so far came from the

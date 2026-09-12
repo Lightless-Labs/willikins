@@ -1,6 +1,14 @@
-# propose_slug: digit-then-letter tokens
+---
+title: "propose_slug: digit-then-letter tokens"
+created: 2026-09-11
+status: open
+priority: low
+area: types
+related:
+  - crates/willikins-types/src/propose.rs
+---
 
-**Filed:** 2026-09-11 (task 2 verification)
+# propose_slug: digit-then-letter tokens
 
 `propose_slug("Foo 3D Printing")` returns `ProposeError::Invalid` because the token `3d`
 matches neither `[a-z][a-z0-9]*` nor `[0-9]+`. A friendlier proposal would split it into

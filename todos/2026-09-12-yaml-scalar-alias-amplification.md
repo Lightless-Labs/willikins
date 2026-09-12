@@ -1,6 +1,14 @@
-# YAML scalar-alias memory amplification
+---
+title: "YAML scalar-alias memory amplification"
+created: 2026-09-12
+status: open
+priority: high
+area: dsl
+related:
+  - docs/research/2026-09-12-e2e-adversarial-pass-2.md
+---
 
-**Filed:** 2026-09-12 (end-to-end adversarial pass 2, deliberately not fixed)
+# YAML scalar-alias memory amplification
 
 A 1 MB document with a 1 MB `description:` anchor referenced 2,000 times from a `list<Text>`
 default peaked at 952 MB resident before `Text`'s length bound rejected it. The allocation

@@ -1,6 +1,14 @@
-# FakeState serialization is a redacted view, not a round trip
+---
+title: "FakeState serialization is a redacted view, not a round trip"
+created: 2026-09-12
+status: open
+priority: low
+area: providers-fake
+related:
+  - docs/research/2026-09-12-e2e-adversarial-pass-2.md
+---
 
-**Filed:** 2026-09-12 (end-to-end adversarial pass 2)
+# FakeState serialization is a redacted view, not a round trip
 
 Serializing a `FakeState` prints the redaction marker in place of each seeded secret, so a
 dump reloads with the marker as the value. Correct for a test fixture that must never leak,

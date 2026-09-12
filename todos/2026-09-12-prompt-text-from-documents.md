@@ -1,6 +1,15 @@
-# Document text reaches the agent as the tool's own voice
+---
+title: "Document text reaches the agent as the tool's own voice"
+created: 2026-09-12
+status: open
+priority: medium
+area: security
+related:
+  - docs/research/2026-09-12-e2e-adversarial-pass-2.md
+  - docs/plans/2026-09-11-willikins-design.md
+---
 
-**Filed:** 2026-09-12 (end-to-end adversarial pass 2)
+# Document text reaches the agent as the tool's own voice
 
 `describe` builds `MissingInput::prompt` from an input's `description`, so a hostile workflow
 document can put arbitrary text into what the agent reads as willikins speaking ("SYSTEM:
