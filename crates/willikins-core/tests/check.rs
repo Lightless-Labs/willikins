@@ -4,6 +4,12 @@
 //! exactly, and the milestone's positive and negative workflow fixtures,
 //! built as [`Workflow`] values directly since the YAML DSL does not exist
 //! yet (that is task 10).
+//!
+//! The positive fixture builder itself
+//! ([`common::new_rust_service_workflow`]) is shared with `tests/plan.rs`
+//! and friends, rather than duplicated here.
+
+mod common;
 
 use std::sync::Arc;
 
@@ -14,7 +20,7 @@ use willikins_core::{
     Observation, Outputs, PortName, PortSpec, PortType, Tool, ToolError, ToolName, ToolSpec,
     TypeName, TypeRef, Value, Workflow, check,
 };
-use willikins_types::{DomainType, EnvironmentSlug, RepoVisibility, SinkToken};
+use willikins_types::SinkToken;
 
 fn ty(name: &str) -> TypeRef {
     TypeRef::scalar(TypeName::parse(name).unwrap())
@@ -223,115 +229,6 @@ fn test_catalog() -> Catalog {
     catalog
 }
 
-/// `workflows/new-rust-service.yaml`, built directly as a [`Workflow`].
-#[allow(clippy::too_many_lines)]
-fn new_rust_service_workflow() -> Workflow {
-    Workflow::new("new-rust-service")
-        .with_description("Provision a GitHub repository and Doppler project for a Rust service.")
-        .input(
-            input("slug"),
-            InputSpec::new(ty("ProjectSlug")).with_description("Canonical project slug"),
-        )
-        .input(
-            input("org"),
-            InputSpec::new(ty("GitHubOrg"))
-                .with_description("GitHub organization that owns the repository"),
-        )
-        .input(
-            input("visibility"),
-            InputSpec::new(ty("RepoVisibility"))
-                .with_default(Value::known(RepoVisibility::Private)),
-        )
-        .input(
-            input("environments"),
-            InputSpec::new(list_ty("EnvironmentSlug")).with_default(Value::known_list(vec![
-                EnvironmentSlug::parse("dev").unwrap(),
-                EnvironmentSlug::parse("stg").unwrap(),
-                EnvironmentSlug::parse("prd").unwrap(),
-            ])),
-        )
-        .node(
-            node("names"),
-            Node::new(tool_name("naming.v1"))
-                .port(port("org"), Binding::Input(input("org")))
-                .port(port("slug"), Binding::Input(input("slug"))),
-        )
-        .node(
-            node("repo"),
-            Node::new(tool_name("github.repo.ensure"))
-                .port(
-                    port("repo"),
-                    Binding::Step {
-                        node: node("names"),
-                        port: port("github_repo"),
-                    },
-                )
-                .port(port("visibility"), Binding::Input(input("visibility"))),
-        )
-        .node(
-            node("doppler"),
-            Node::new(tool_name("doppler.project.ensure")).port(
-                port("project"),
-                Binding::Step {
-                    node: node("names"),
-                    port: port("doppler_project"),
-                },
-            ),
-        )
-        .node(
-            node("configs"),
-            Node::new(tool_name("doppler.config.ensure"))
-                .for_each(Binding::Input(input("environments")))
-                .port(
-                    port("project"),
-                    Binding::Step {
-                        node: node("doppler"),
-                        port: port("project"),
-                    },
-                )
-                .port(port("environment"), Binding::Item),
-        )
-        .node(
-            node("token"),
-            Node::new(tool_name("doppler.service_token.ensure"))
-                .port(
-                    port("config"),
-                    Binding::Keyed {
-                        node: node("configs"),
-                        key: "prd".to_string(),
-                        port: port("config"),
-                    },
-                )
-                .port(port("name"), Binding::Literal("ci".to_string())),
-        )
-        .node(
-            node("ci_secret"),
-            Node::new(tool_name("github.actions_secret.ensure"))
-                .port(
-                    port("repo"),
-                    Binding::Step {
-                        node: node("repo"),
-                        port: port("repo"),
-                    },
-                )
-                .port(port("name"), Binding::Literal("DOPPLER_TOKEN".to_string()))
-                .port(
-                    port("value"),
-                    Binding::Step {
-                        node: node("token"),
-                        port: port("token"),
-                    },
-                ),
-        )
-        .output(
-            output("repo_url"),
-            Binding::Step {
-                node: node("repo"),
-                port: port("url"),
-            },
-        )
-}
-
 /// `workflows/fixtures/secret-into-template.yaml`, built directly as a
 /// [`Workflow`].
 fn secret_into_template_workflow() -> Workflow {
@@ -439,7 +336,7 @@ fn acceptance_3_the_registry_refuses_a_secret_literal_input_value() {
 
 #[test]
 fn positive_fixture_checks_successfully_with_the_expected_order_and_class() {
-    let workflow = new_rust_service_workflow();
+    let workflow = common::new_rust_service_workflow();
     let catalog = test_catalog();
     let checked = check(&workflow, &catalog).expect("the positive fixture must check cleanly");
 
@@ -456,7 +353,7 @@ fn positive_fixture_checks_successfully_with_the_expected_order_and_class() {
 
 #[test]
 fn acceptance_4_keyed_reference_into_a_for_each_node_resolves_to_the_scalar_type() {
-    let workflow = new_rust_service_workflow();
+    let workflow = common::new_rust_service_workflow();
     let catalog = test_catalog();
     let checked = check(&workflow, &catalog).expect("the positive fixture must check cleanly");
 
@@ -473,7 +370,7 @@ fn acceptance_4_plain_step_reference_into_a_for_each_node_resolves_to_a_list() {
     // `Keyed` reference from `token` does), so this is checked through an
     // extra output on a copy of the fixture rather than the canonical
     // fixture itself.
-    let workflow = new_rust_service_workflow().output(
+    let workflow = common::new_rust_service_workflow().output(
         output("all_configs"),
         Binding::Step {
             node: node("configs"),
@@ -664,7 +561,7 @@ fn a_secret_list_bound_to_an_any_secret_port_is_a_type_mismatch_not_a_taint_viol
 
 #[test]
 fn acceptance_6_a_workflow_with_an_irreversible_node_requires_approval() {
-    let workflow = new_rust_service_workflow().node(
+    let workflow = common::new_rust_service_workflow().node(
         node("danger"),
         Node::new(tool_name("fake.irreversible.ensure"))
             .port(port("key"), Binding::Input(input("slug"))),
