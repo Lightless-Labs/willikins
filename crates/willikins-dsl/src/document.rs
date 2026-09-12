@@ -23,8 +23,8 @@ use std::marker::PhantomData;
 use indexmap::IndexMap;
 use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
 
-/// A workflow document: the YAML source [`crate::parse_document`] and
-/// [`crate::load_document`] convert into a `willikins_core::Workflow`.
+/// A workflow document: named inputs, a graph of tool-calling steps, and
+/// named outputs.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct Document {
     /// The workflow's name.
@@ -60,8 +60,8 @@ pub struct InputDecl {
 }
 
 /// An input's default value: a single scalar for a scalar-typed input, or
-/// a list of scalars for a `list<T>`-typed one. Parsed against the
-/// input's declared type by [`crate::parse_document`], never here.
+/// a list of scalars for a `list<T>`-typed one. Checked against the
+/// input's declared type when the document is loaded.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum DefaultValue {

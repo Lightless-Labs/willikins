@@ -459,6 +459,162 @@ steps:
         }
     }
 
+    fn semantic_path(source: &str) -> String {
+        match parse_document(source).unwrap_err().kind {
+            DocumentErrorKind::Semantic { path, .. } => path,
+            DocumentErrorKind::Yaml {
+                message,
+                line,
+                column,
+            } => panic!(
+                "expected a semantic error, got a YAML error at {line:?}:{column:?}: {message}"
+            ),
+        }
+    }
+
+    #[test]
+    fn invalid_step_name_is_a_semantic_error_at_the_step_path() {
+        assert_eq!(
+            semantic_path(
+                "\
+name: demo
+steps:
+  Bad: { tool: naming.v1, with: {} }
+"
+            ),
+            "steps.Bad"
+        );
+    }
+
+    #[test]
+    fn invalid_tool_name_is_a_semantic_error_at_the_tool_path() {
+        assert_eq!(
+            semantic_path(
+                "\
+name: demo
+steps:
+  a: { tool: Not.Valid, with: {} }
+"
+            ),
+            "steps.a.tool"
+        );
+    }
+
+    #[test]
+    fn invalid_port_name_is_a_semantic_error_at_the_with_path() {
+        assert_eq!(
+            semantic_path(
+                "\
+name: demo
+steps:
+  a:
+    tool: naming.v1
+    with:
+      Bad: literal
+"
+            ),
+            "steps.a.with.Bad"
+        );
+    }
+
+    #[test]
+    fn invalid_output_name_is_a_semantic_error_at_the_output_path() {
+        assert_eq!(
+            semantic_path(
+                "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: {} }
+outputs:
+  Bad: literal
+"
+            ),
+            "outputs.Bad"
+        );
+    }
+
+    #[test]
+    fn bad_reference_in_an_output_is_a_semantic_error_at_the_output_path() {
+        assert_eq!(
+            semantic_path(
+                "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: {} }
+outputs:
+  out: ${{ steps.a }}
+"
+            ),
+            "outputs.out"
+        );
+    }
+
+    #[test]
+    fn literal_for_each_is_a_semantic_error_at_the_for_each_path() {
+        assert_eq!(
+            semantic_path(
+                "\
+name: demo
+steps:
+  a:
+    tool: naming.v1
+    for_each: dev
+    with: {}
+"
+            ),
+            "steps.a.for_each"
+        );
+    }
+
+    #[test]
+    fn malformed_for_each_reference_is_a_semantic_error_at_the_for_each_path() {
+        assert_eq!(
+            semantic_path(
+                "\
+name: demo
+steps:
+  a:
+    tool: naming.v1
+    for_each: ${{ steps.a }}
+    with: {}
+"
+            ),
+            "steps.a.for_each"
+        );
+    }
+
+    #[test]
+    fn list_default_for_a_scalar_type_is_a_semantic_error_at_the_default_path() {
+        assert_eq!(
+            semantic_path(
+                "\
+name: demo
+inputs:
+  org: { type: GitHubOrg, default: [a] }
+steps:
+  a: { tool: naming.v1, with: {} }
+"
+            ),
+            "inputs.org.default"
+        );
+    }
+
+    #[test]
+    fn scalar_default_for_a_list_type_is_a_semantic_error_at_the_default_path() {
+        assert_eq!(
+            semantic_path(
+                "\
+name: demo
+inputs:
+  environments: { type: list<EnvironmentSlug>, default: dev }
+steps:
+  a: { tool: naming.v1, with: {} }
+"
+            ),
+            "inputs.environments.default"
+        );
+    }
+
     #[test]
     fn with_value_that_is_a_list_is_a_yaml_error_with_a_location() {
         let err = parse_document(

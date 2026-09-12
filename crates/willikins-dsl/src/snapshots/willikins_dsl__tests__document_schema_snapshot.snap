@@ -5,7 +5,7 @@ expression: json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Document",
-  "description": "A workflow document: the YAML source [`crate::parse_document`] and\n[`crate::load_document`] convert into a `willikins_core::Workflow`.",
+  "description": "A workflow document: named inputs, a graph of tool-calling steps, and\nnamed outputs.",
   "type": "object",
   "properties": {
     "description": {
@@ -49,7 +49,7 @@ expression: json
   ],
   "$defs": {
     "DefaultValue": {
-      "description": "An input's default value: a single scalar for a scalar-typed input, or\na list of scalars for a `list<T>`-typed one. Parsed against the\ninput's declared type by [`crate::parse_document`], never here.",
+      "description": "An input's default value: a single scalar for a scalar-typed input, or\na list of scalars for a `list<T>`-typed one. Checked against the\ninput's declared type when the document is loaded.",
       "anyOf": [
         {
           "description": "A single scalar default.",
