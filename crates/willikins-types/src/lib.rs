@@ -25,7 +25,7 @@ pub use sink::SinkToken;
 pub use object::{DomainObject, Rendered, downcast};
 
 /// Error returned when a string does not parse as a domain type.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, serde::Serialize)]
 #[error("{type_name}: {reason}")]
 pub struct ParseError {
     /// The domain type that rejected the input.

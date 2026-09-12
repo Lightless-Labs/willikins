@@ -13,6 +13,7 @@
 pub mod catalog;
 pub mod check;
 pub mod class;
+pub mod describe;
 pub mod tool;
 pub mod value;
 pub mod workflow;
@@ -20,6 +21,9 @@ pub mod workflow;
 pub use catalog::{Catalog, CatalogError};
 pub use check::{CheckError, CheckWarning, Checked, check};
 pub use class::Class;
+pub use describe::{
+    Description, InputArg, InputError, MissingInput, PartialInputs, RawInput, describe,
+};
 pub use tool::{
     Inputs, Observation, Outputs, PortName, PortSpec, SpecError, Tool, ToolError, ToolErrorKind,
     ToolName, ToolSpec,
