@@ -13,13 +13,15 @@
 //! `Site` gives each of the three locations its own `kind` tag on the wire,
 //! so the two can never be confused there.
 //!
-//! *Text* rendering is not fully disambiguated: [`Site::Output`]'s
-//! `outputs.<name>` and a real node literally named `outputs` with a port
-//! named `<name>` (a [`Site::Port`]) render to the identical string. JSON
-//! output still disambiguates unconditionally (`kind` differs); only the
-//! CLI's hand-written text renderer can coincide, and only in that one
-//! contrived case. Not fixed here -- flagged for whoever next revisits
-//! `willikins-cli`'s text rendering.
+//! Text rendering is disambiguated too, which matters because
+//! `willikins-cli`'s `check_error_detail` renders a site through
+//! [`fmt::Display`] and nothing else. Every identifier matches
+//! `^[a-z][a-z0-9_]*$`, so it holds no `.` and no `[`: a [`Site::Port`] is
+//! always two dot-separated segments, a [`Site::ForEach`] always carries a
+//! `[`, and a [`Site::Output`] is always three dot-separated segments
+//! under the `workflow.outputs` prefix. No two forms can coincide, whatever
+//! a document names its steps, ports and outputs; see
+//! `tests::no_two_site_forms_share_a_display_string`.
 
 use std::fmt;
 
@@ -73,7 +75,7 @@ impl fmt::Display for Site {
         match self {
             Self::Port { node, port } => write!(f, "{node}.{port}"),
             Self::ForEach { node } => write!(f, "{node}[for_each]"),
-            Self::Output { name } => write!(f, "outputs.{name}"),
+            Self::Output { name } => write!(f, "workflow.outputs.{name}"),
         }
     }
 }
@@ -123,10 +125,49 @@ mod tests {
         assert_eq!(Site::Output { name: output("x") }.node(), None);
     }
 
+    /// The `workflow.` prefix is what keeps this apart from a
+    /// [`Site::Port`] on a node literally named `outputs`; see
+    /// [`no_two_site_forms_share_a_display_string`].
     #[test]
-    fn output_displays_under_outputs() {
+    fn output_displays_under_workflow_outputs() {
         let site = Site::Output { name: output("x") };
-        assert_eq!(site.to_string(), "outputs.x");
+        assert_eq!(site.to_string(), "workflow.outputs.x");
+    }
+
+    /// Three pairs a single document can produce at once: a node named
+    /// `outputs`, a port named `for_each`, and an output named `for_each`
+    /// are all legal identifiers. No two site forms may render to the same
+    /// text -- `willikins-cli`'s `check_error_detail` renders a site
+    /// through this `Display` and nothing else, so a collision here is a
+    /// collision an agent reading the text output cannot resolve.
+    #[test]
+    fn no_two_site_forms_share_a_display_string() {
+        assert_ne!(
+            Site::Output { name: output("x") }.to_string(),
+            Site::Port {
+                node: node("outputs"),
+                port: port("x"),
+            }
+            .to_string(),
+        );
+        assert_ne!(
+            Site::Output {
+                name: output("for_each"),
+            }
+            .to_string(),
+            Site::ForEach {
+                node: node("outputs"),
+            }
+            .to_string(),
+        );
+        assert_ne!(
+            Site::Port {
+                node: node("n"),
+                port: port("for_each"),
+            }
+            .to_string(),
+            Site::ForEach { node: node("n") }.to_string(),
+        );
     }
 
     #[test]

@@ -336,6 +336,42 @@ mod tests {
         assert!(text.contains("environments"));
     }
 
+    /// Text output reaches all three `Site` forms through the same
+    /// `Display`, and no two of them render alike -- here with a real node
+    /// named `outputs` in the same list as a workflow output, the pair the
+    /// `Site` enum exists to keep apart.
+    #[test]
+    fn check_errors_text_renders_every_site_form_distinctly() {
+        let ghost = NodeName::parse("ghost").unwrap();
+        let errors = vec![
+            CheckError::ItemOutsideForEach {
+                site: willikins_core::Site::ForEach {
+                    node: NodeName::parse("configs").unwrap(),
+                },
+            },
+            CheckError::UnknownNode {
+                site: willikins_core::Site::Output {
+                    name: willikins_core::OutputName::parse("repo_url").unwrap(),
+                },
+                referenced: ghost.clone(),
+            },
+            CheckError::UnknownNode {
+                site: willikins_core::Site::Port {
+                    node: NodeName::parse("outputs").unwrap(),
+                    port: PortName::parse("repo_url").unwrap(),
+                },
+                referenced: ghost,
+            },
+        ];
+        let rendered = check_errors_text(&errors);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines.len(), 3, "rendered: {rendered}");
+        assert!(lines[0].contains("configs[for_each]"), "{rendered}");
+        assert!(lines[1].contains("workflow.outputs.repo_url"), "{rendered}");
+        assert!(lines[2].contains("outputs.repo_url"), "{rendered}");
+        assert_ne!(lines[1], lines[2], "{rendered}");
+    }
+
     #[test]
     fn check_errors_text_and_json_both_name_the_dotted_ports() {
         let error = CheckError::SecretToNonSecretSink {
