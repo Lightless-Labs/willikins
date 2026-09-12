@@ -416,6 +416,23 @@ mod tests {
         assert!(ToolName::parse("GitHub.repo.ensure").is_err());
     }
 
+    #[test]
+    fn port_name_and_tool_name_have_string_json_schemas() {
+        let port_schema = serde_json::to_value(schemars::schema_for!(PortName)).unwrap();
+        assert_eq!(port_schema["type"], "string");
+        let tool_schema = serde_json::to_value(schemars::schema_for!(ToolName)).unwrap();
+        assert_eq!(tool_schema["type"], "string");
+    }
+
+    #[test]
+    fn tool_spec_json_schema_generates_without_panicking() {
+        // Exercises the derive over `IndexMap<PortName, _>` fields, which
+        // needs schemars' `indexmap2` feature to compile at all — this is
+        // the runtime half of that guarantee.
+        let schema = serde_json::to_value(schemars::schema_for!(ToolSpec)).unwrap();
+        assert_eq!(schema["type"], "object");
+    }
+
     // -------------------------------------------------------------
     // ToolSpec::validate
     // -------------------------------------------------------------
