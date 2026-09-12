@@ -1,0 +1,264 @@
+---
+source: crates/willikins-providers-fake/src/lib.rs
+expression: "catalog.list_tools_json()[\"tools\"]"
+---
+[
+  {
+    "class": "reversible",
+    "description": "Derive this project's GitHub repository and Doppler project identities from its org and slug.",
+    "inputs": {
+      "org": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubOrg"
+        }
+      },
+      "slug": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "ProjectSlug"
+        }
+      }
+    },
+    "key": [],
+    "name": "naming.v1",
+    "outputs": {
+      "doppler_project": "DopplerProject",
+      "github_repo": "GitHubRepo"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Ensure a GitHub repository exists.",
+    "inputs": {
+      "repo": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubRepo"
+        }
+      },
+      "visibility": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "RepoVisibility"
+        }
+      }
+    },
+    "key": [
+      "repo"
+    ],
+    "name": "github.repo.ensure",
+    "outputs": {
+      "repo": "GitHubRepo",
+      "url": "HttpsUrl"
+    },
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Ensure a GitHub Actions repository secret exists. Never reads or stores its value.",
+    "inputs": {
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "ActionsSecretName"
+        }
+      },
+      "repo": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubRepo"
+        }
+      },
+      "value": {
+        "required": true,
+        "ty": {
+          "kind": "any_secret"
+        }
+      }
+    },
+    "key": [
+      "repo",
+      "name"
+    ],
+    "name": "github.actions_secret.ensure",
+    "outputs": {},
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Ensure a Doppler project exists.",
+    "inputs": {
+      "project": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerProject"
+        }
+      }
+    },
+    "key": [
+      "project"
+    ],
+    "name": "doppler.project.ensure",
+    "outputs": {
+      "project": "DopplerProject"
+    },
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Ensure an environment's root Doppler config exists.",
+    "inputs": {
+      "environment": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "EnvironmentSlug"
+        }
+      },
+      "project": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerProject"
+        }
+      }
+    },
+    "key": [
+      "project",
+      "environment"
+    ],
+    "name": "doppler.config.ensure",
+    "outputs": {
+      "config": "DopplerConfig"
+    },
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Ensure a Doppler service token exists. Its value can never be re-read once issued.",
+    "inputs": {
+      "config": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerConfig"
+        }
+      },
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerTokenName"
+        }
+      }
+    },
+    "key": [
+      "config",
+      "name"
+    ],
+    "name": "doppler.service_token.ensure",
+    "outputs": {
+      "token": "DopplerServiceToken"
+    },
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Read a Doppler secret's value.",
+    "inputs": {
+      "config": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerConfig"
+        }
+      },
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "SecretName"
+        }
+      }
+    },
+    "key": [],
+    "name": "doppler.secret.get",
+    "outputs": {
+      "value": "DopplerSecretValue"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Test tool: always reports two constant, known service tokens.",
+    "inputs": {
+      "config": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerConfig"
+        }
+      }
+    },
+    "key": [],
+    "name": "fake.secret_list",
+    "outputs": {
+      "tokens": "list<DopplerServiceToken>"
+    },
+    "pure": true
+  },
+  {
+    "class": "irreversible",
+    "description": "Test tool: an irreversible resource, keyed by a project slug.",
+    "inputs": {
+      "key": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "ProjectSlug"
+        }
+      }
+    },
+    "key": [
+      "key"
+    ],
+    "name": "fake.irreversible.ensure",
+    "outputs": {},
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Render a template, replacing every `{{ value }}` with a plain-text value.",
+    "inputs": {
+      "template": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "TemplateSource"
+        }
+      },
+      "value": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "Text"
+        }
+      }
+    },
+    "key": [],
+    "name": "template.render",
+    "outputs": {
+      "rendered": "Text"
+    },
+    "pure": true
+  }
+]
