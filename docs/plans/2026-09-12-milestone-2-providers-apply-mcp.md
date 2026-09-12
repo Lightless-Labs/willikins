@@ -231,8 +231,9 @@ agent serializes as one JSON object shape: `{"kind": "<PascalCase variant>", "me
 new `ApplyError` derive `Serialize` with `#[serde(tag = "kind")]`; a shared `Reported<T>`
 wrapper adds `message`. Every result type the MCP surface returns through `rmcp::Json<T>`
 needs `schemars::JsonSchema` as well, which the core types do not have today: `Plan`,
-`PlannedNode`, `Action`, `Description`, `MissingInput`, `InputError`, `Inputs`, `Outputs`,
-and the new `Applied`, `AppliedNode`, `RunRecord` derive it; `Value` gets a hand-written
+`PlannedNode`, `Action`, `Description`, `MissingInput`, `InputError`, `Inputs`, `Outputs`
+derive it in task 1a, and each later task derives it on the result types it introduces
+(`Applied` and `AppliedNode` in task 4, `RunRecord` in task 10a); `Value` gets a hand-written
 `JsonSchema` that states the tagged object shape milestone 1 pinned by snapshot (`type`,
 `list`, `state`, optional `value` as a string or an array of strings, optional `redacted`),
 and `Inputs`/`Outputs` are maps of it. The derives are checked by a test that generates
@@ -319,11 +320,16 @@ Rules, in order:
 **`Tool::ensure` returns `Ensured`.** The trait's `ensure` changes from returning `Outputs`
 to returning `Ensured { outputs: Outputs, changed: bool }`, and the contract gains a
 sentence: an `ensure` implementation first observes the resource itself (its own `read`
-logic, without a token) and creates or writes only what is missing, so it is safe to call
-on a resource that already exists and is ours; a resource that exists and is not ours is
-`Conflict`. Idempotence is the tool's job, not the executor's, because the executor's plan
-is a snapshot taken before any node ran. Every fake tool is updated and already behaves
-this way in substance (they insert into sets).
+logic, without a token), so it is safe to call on a resource that already exists and is
+ours; a resource that exists and is not ours is `Conflict`. A tool whose resource has a
+comparable state (a repository, a project, an environment, a token's existence) creates
+only what is missing and reports `changed: false` otherwise. A sink whose value cannot be
+read back (`github.actions_secret.ensure`) always writes when called, and `changed` reports
+what the provider said: GitHub's 201 is `true` (created), its 204 is `true` as well
+(written), so test 6b's `ci_secret` `Created` after a rotation means the new value landed.
+Idempotence is the tool's job, not the executor's, because the executor's plan is a
+snapshot taken before any node ran. The signature change and the fakes' update land in
+task 3, before groups B and C, so every parallel task builds against the final trait.
 5. Resolve workflow outputs from the ensure outputs. `Applied { nodes: Vec<AppliedNode>,
    outputs }`; secret outputs stay `Value`s and print redacted.
 6. `ApplyObserver::on(event)` is called with `NodeStarted` before and `NodeFinished` after
@@ -784,12 +790,12 @@ separate worktrees; the coordinator merges on `main`.
 | # | Task | Depends on | Group | Delegate to |
 | --- | --- | --- | --- | --- |
 | 0 | Keyword lists: add `borrowing`, `consuming`, `nonisolated` to the Swift list test-first; date the module doc | research | | sonnet |
-| 1a | Core: `Serialize` on every error with the `{kind, message}` shape; `Reported<T>`; CLI adopts it and drops the hand-built JSON | | A | sonnet, verified by opus |
+| 1a | Core: `Serialize` on every error with the `{kind, message}` shape; `Reported<T>`; `JsonSchema` on the existing result types and a hand-written one for `Value`; CLI adopts the error shape and drops the hand-built JSON | | A | sonnet, verified by opus |
 | 1b | Core: `Site` enum across `CheckError` and `PlanError`; update every sentinel test | 1a | A | sonnet, verified by opus |
 | 1c | Types and DSL: `WorkflowName`, `Description`; byte cap; anchor and alias pre-scan; schema snapshot; format docs | | A | sonnet, verified by opus |
 | 1d | Core: `document_*` fields and willikins-voiced prompts in `describe`; CLI text prefix | | A | sonnet |
 | 2 | `willikins-tools`: move `naming.v1` and `template.render`; both catalogs | 1a..1d | | sonnet |
-| 3 | Core and fake: `Observation::Mismatch`, `AttributeMismatch`, visibility mismatch in the fake | 2 | | sonnet |
+| 3 | Core and fake: `Tool::ensure -> Ensured { outputs, changed }` with every fake `ensure` reading first and the fake project ensure seeding the default configs; `Observation::Mismatch`, `AttributeMismatch`, visibility mismatch in the fake | 2 | | sonnet, verified by opus |
 | 4 | Core: `apply`, `Approval`, `ApplyError`, `ApplyObserver`, `Plan::fingerprint`; fake: rotate tool, failure injection, call counters; second fixture; acceptance tests 5, 6 (including the 6d property test), 7 (core level), 9 | 3 | B | sonnet, verified by opus |
 | 5 | `willikins-journal`; acceptance test 10 | 1a | B | sonnet, verified by opus |
 | 6 | `willikins-providers-http`: `Credential`, client, retry, error mapping, test support; `clippy.toml` entry; derive `#[allow]`; acceptance test 4 | 1a | B | sonnet, verified by opus |
@@ -952,8 +958,11 @@ same point are merged; the reviewer in brackets is who raised it.
     background; `run_status` polls; a concurrent `apply` gets `RunInProgress`; the request
     timeout drops to 30 seconds and binds no run.
 17. **`rmcp::Json<T>` needs `JsonSchema` the result types lack** (feasibility, P1).
-    Scoped into task 1a: derives on every result type and a hand-written schema for
-    `Value` matching its pinned JSON shape.
+    Scoped into task 1a for the result types that exist today plus a hand-written schema
+    for `Value` matching its pinned JSON shape; tasks 4 and 10a derive it on the result
+    types they introduce. (Late edit, same day: the `Ensured` trait change moved into task
+    3 so groups B and C build against the final signature, and the `ensure` contract now
+    distinguishes comparable-state resources from write-only sinks.)
 18. **No `SinkToken::new` grep test existed to mirror** (feasibility, P3). Acceptance test
     4 now makes both allow-lists a test.
 19. **Undocumented Doppler facts were left to the last task** (feasibility, residual).
