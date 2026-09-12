@@ -15,6 +15,7 @@ pub mod check;
 pub mod class;
 pub mod describe;
 pub mod plan;
+pub mod reported;
 pub mod tool;
 pub mod value;
 pub mod workflow;
@@ -26,6 +27,7 @@ pub use describe::{
     Description, InputArg, InputError, MissingInput, PartialInputs, RawInput, describe,
 };
 pub use plan::{Action, Plan, PlanError, PlannedNode, plan};
+pub use reported::Reported;
 pub use tool::{
     Inputs, Observation, Outputs, PortName, PortSpec, SpecError, Tool, ToolError, ToolErrorKind,
     ToolName, ToolSpec,
