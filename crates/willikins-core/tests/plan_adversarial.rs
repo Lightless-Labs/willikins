@@ -635,3 +635,22 @@ fn describe_accepts_marker_shaped_text_as_an_ordinary_text_value() {
     let json = serde_json::to_string(&description).unwrap();
     assert!(!json.contains("\"redacted\""), "{json}");
 }
+#[test]
+fn two_for_each_items_rendering_to_the_same_key_are_rejected() {
+    let (_state, fake_catalog) = empty();
+    let workflow = configs_only_workflow();
+    let checked = check(&workflow, &fake_catalog).unwrap();
+    let err = plan(
+        &checked,
+        &environments(&["dev", "dev", "prd"]),
+        &fake_catalog,
+    )
+    .expect_err("two instances with the same key are ambiguous and must be refused");
+    match err {
+        PlanError::DuplicateForEachKey { node: n, key } => {
+            assert_eq!(n, node("configs"));
+            assert_eq!(key, "dev");
+        }
+        other => panic!("expected DuplicateForEachKey, got {other:?}"),
+    }
+}

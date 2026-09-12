@@ -14,6 +14,13 @@
 //! naming the *referencing* node, not the `for_each` node itself, when no
 //! instance matches — this is what acceptance test 7 pins.
 //!
+//! Because that canonical string is an instance's only identity — to a
+//! `Keyed` reference, and in [`PlannedNode::instance`] — a source list
+//! holding two items that render to the same string is refused outright
+//! with [`PlanError::DuplicateForEachKey`], before any of the node's
+//! instances is read, rather than silently planning two indistinguishable
+//! instances and letting `Keyed` pick the first.
+//!
 //! # Known gap: literal workflow outputs
 //!
 //! [`crate::check::check`] accepts a literal workflow output binding
@@ -33,7 +40,7 @@
 //! since planning one node can depend on another node's own plan already
 //! having succeeded.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -116,6 +123,17 @@ pub enum PlanError {
         /// The node whose `for_each` source is unknown.
         node: NodeName,
     },
+    /// Two of a `for_each` node's items rendered to the same canonical
+    /// string, so its instances would not be distinguishable: a
+    /// [`Binding::Keyed`] reference could not say which one it means, and
+    /// two [`PlannedNode`]s would share a `(name, instance)` pair. Reported
+    /// before any of the node's instances is read.
+    DuplicateForEachKey {
+        /// The `for_each` node whose items collide.
+        node: NodeName,
+        /// The canonical string two of its items share.
+        key: String,
+    },
     /// A `Binding::Keyed` reference named a key none of the referenced
     /// `for_each` node's instances have.
     KeyNotInForEach {
@@ -165,6 +183,10 @@ impl std::fmt::Display for PlanError {
             Self::ForEachUnknown { node } => {
                 write!(f, "node `{node}`: for_each source is unknown")
             }
+            Self::DuplicateForEachKey { node, key } => write!(
+                f,
+                "node `{node}`: two for_each items are both keyed `{key}`"
+            ),
             Self::KeyNotInForEach { node, key } => {
                 write!(f, "node `{node}`: no for_each instance is keyed `{key}`")
             }
@@ -276,10 +298,29 @@ pub fn plan(
                 let Some(items) = source_value.as_list() else {
                     return Err(PlanError::ForEachUnknown { node: name.clone() });
                 };
-                let mut instances = Vec::with_capacity(items.len());
-                for object in items {
-                    let item_value = Value::known_dyn(Arc::clone(object));
-                    let key = item_value.render().to_string();
+                // Key every item up front and refuse a collision before
+                // reading anything: two instances sharing a key would be
+                // indistinguishable both to a `Keyed` reference and in the
+                // finished plan.
+                let keyed: Vec<(Value, String)> = items
+                    .iter()
+                    .map(|object| {
+                        let value = Value::known_dyn(Arc::clone(object));
+                        let key = value.render().to_string();
+                        (value, key)
+                    })
+                    .collect();
+                let mut seen: HashSet<&str> = HashSet::with_capacity(keyed.len());
+                for (_, key) in &keyed {
+                    if !seen.insert(key.as_str()) {
+                        return Err(PlanError::DuplicateForEachKey {
+                            node: name.clone(),
+                            key: key.clone(),
+                        });
+                    }
+                }
+                let mut instances = Vec::with_capacity(keyed.len());
+                for (item_value, key) in keyed {
                     let bound = bind_ports(&ctx, name, node, spec, Some(&item_value))?;
                     let node_plan = plan_one(name, Some(key.clone()), spec, tool.as_ref(), bound)?;
                     instances.push(ForEachInstance {
