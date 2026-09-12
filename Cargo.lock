@@ -843,7 +843,9 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "indexmap",
+ "proptest",
  "serde_json",
+ "serde_yaml_ng",
  "thiserror",
  "willikins-core",
  "willikins-dsl",

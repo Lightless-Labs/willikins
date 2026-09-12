@@ -821,3 +821,202 @@ fn finding_06_a_huge_input_argument_is_not_echoed_in_full() {
         stdout(&output).len()
     );
 }
+
+// ---------------------------------------------------------------------
+// totality: neither file format may panic, on any input
+// ---------------------------------------------------------------------
+
+/// Document fragments drawn from the shipped fixtures, plus the shapes
+/// this pass attacked with. A generated document glues a `name` to a
+/// selection of these, so the generator explores real syntax (references,
+/// `for_each`, `item`, keyed references, list defaults, secret types, the
+/// `outputs`/`for_each` sentinel names) rather than random bytes, which
+/// would only ever exercise the YAML scanner.
+const FRAGMENTS: &[&str] = &[
+    "inputs:\n  slug: { type: ProjectSlug }\n",
+    "inputs:\n  org: { type: GitHubOrg, default: lightless-labs }\n",
+    "inputs:\n  environments: { type: list<EnvironmentSlug>, default: [dev, prd, prd] }\n",
+    "inputs:\n  token: { type: DopplerServiceToken }\n",
+    "inputs:\n  bogus: { type: NotARegisteredType }\n",
+    "inputs:\n  outputs: { type: ProjectSlug }\n",
+    "steps:\n  a:\n    tool: naming.v1\n    with:\n      org: lightless-labs\n      slug: demo\n",
+    "steps:\n  a:\n    tool: naming.v1\n    with:\n      org: ${{ inputs.org }}\n      slug: ${{ inputs.slug }}\n",
+    "steps:\n  outputs:\n    tool: naming.v1\n    with:\n      org: lightless-labs\n      slug: demo\n",
+    "steps:\n  configs:\n    tool: doppler.config.ensure\n    for_each: ${{ inputs.environments }}\n    with:\n      project: widgets\n      environment: ${{ item }}\n",
+    "steps:\n  configs:\n    tool: doppler.config.ensure\n    for_each: ${{ inputs.slug }}\n    with:\n      project: widgets\n      environment: ${{ item }}\n",
+    "steps:\n  token:\n    tool: doppler.service_token.ensure\n    with:\n      config: ${{ steps.configs[prd].config }}\n      name: ci\n",
+    "steps:\n  readme:\n    tool: template.render\n    with:\n      template: \"T={{ value }}\"\n      value: ${{ steps.token.token }}\n",
+    "steps:\n  a:\n    tool: no.such.tool\n    with:\n      x: y\n",
+    "steps:\n  a:\n    tool: naming.v1\n    with:\n      org: ${{ steps.a.github_repo }}\n      slug: demo\n",
+    "steps:\n  a:\n    tool: naming.v1\n    with:\n      for_each: nonsense\n",
+    "outputs:\n  out: ${{ steps.a.github_repo }}\n",
+    "outputs:\n  out: a-literal\n",
+    "outputs:\n  out: ${{ steps.outputs.doppler_project }}\n",
+    "outputs:\n  out: ${{ inputs.token }}\n",
+];
+
+/// Fake-state fragments, including the shapes that decide `Create` versus
+/// `NoOp` and the secret-carrying map.
+const STATE_FRAGMENTS: &[&str] = &[
+    "\"github_repos\": {\"lightless-labs/widgets\": {\"visibility\": \"private\", \"ours\": true}}",
+    "\"github_repos\": {\"lightless-labs/widgets\": {\"visibility\": \"public\", \"ours\": false}}",
+    "\"github_repos\": {\"\": {\"visibility\": \"private\", \"ours\": true}}",
+    "\"github_actions_secrets\": [\"lightless-labs/widgets#DOPPLER_TOKEN\"]",
+    "\"doppler_projects\": {\"widgets\": {\"ours\": true}}",
+    "\"doppler_configs\": [\"widgets/prd\"]",
+    "\"doppler_service_tokens\": [\"widgets/prd#ci\"]",
+    "\"doppler_secrets\": {\"widgets/prd#DATABASE_URL\": \"seeded\"}",
+    "\"doppler_secrets\": {\"widgets/prd#DATABASE_URL\": \"\"}",
+    "\"doppler_secrets\": {}",
+    "\"irreversible\": [\"widgets\"]",
+    "\"github_repos\": []",
+    "\"unknown_field\": 1",
+];
+
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(300))]
+
+    /// Loading, checking, describing and planning a document assembled
+    /// from those fragments never panics and never hangs, whatever the
+    /// combination. Whether the document is accepted is not the point:
+    /// the point is that no input reaches an `unwrap`, an index, or an
+    /// `unreachable!` it was not meant to.
+    #[test]
+    fn totality_the_pipeline_never_panics_on_an_assembled_document(
+        name in "[a-z][a-z0-9-]{0,12}",
+        picks in prop::collection::vec(0usize..FRAGMENTS.len(), 0..5),
+    ) {
+        let mut source = format!("name: {name}\n");
+        // `steps` is required and every fragment is a top-level key, so a
+        // selection that repeats one is a duplicate-key error rather than
+        // a panic -- itself worth covering.
+        for pick in &picks {
+            source.push_str(FRAGMENTS[*pick]);
+        }
+        let Ok(workflow) = willikins_dsl::parse_document(&source) else {
+            return Ok(());
+        };
+        let catalog = empty_catalog();
+        let Ok(checked) = willikins_core::check(&workflow, &catalog) else {
+            return Ok(());
+        };
+        let mut partial = PartialInputs::new();
+        partial.insert(
+            willikins_core::InputName::parse("slug").unwrap(),
+            RawInput::Scalar("widgets".to_string()),
+        );
+        partial.insert(
+            willikins_core::InputName::parse("org").unwrap(),
+            RawInput::Scalar("lightless-labs".to_string()),
+        );
+        let description = willikins_core::describe(&checked, &partial);
+        // `plan` needs every declared input resolved; skip the rest.
+        if !description.missing.is_empty() || !description.errors.is_empty() {
+            return Ok(());
+        }
+        let planned = willikins_core::plan(&checked, &description.resolved, &catalog);
+        if let Ok(plan) = planned {
+            // Finding 1 and 2's invariant, from the outside: `plan` never
+            // reports a smaller output surface than `check` typed.
+            prop_assert_eq!(
+                plan.outputs.keys().collect::<Vec<_>>(),
+                checked.output_types.keys().collect::<Vec<_>>()
+            );
+            // Redaction by construction: no rendering of a plan carries a
+            // secret's bytes, only the marker.
+            let json = serde_json::to_string(&plan).expect("Plan serializes");
+            prop_assert!(!json.contains("dp.st."), "a service token leaked: {}", json);
+        }
+    }
+
+    /// `FakeState::from_json` never panics, whatever a seed file holds:
+    /// a malformed document is an `Err`, never an abort. The secret map's
+    /// hand-written `Deserialize` is the part worth probing, since it is
+    /// the only place a secret enters the process from a file.
+    #[test]
+    fn totality_fake_state_parsing_never_panics(
+        picks in prop::collection::vec(0usize..STATE_FRAGMENTS.len(), 0..4),
+    ) {
+        let body = picks
+            .iter()
+            .map(|pick| STATE_FRAGMENTS[*pick])
+            .collect::<Vec<_>>()
+            .join(", ");
+        let json = format!("{{{body}}}");
+        if let Ok(state) = FakeState::from_json(&json) {
+            // Whatever was seeded, re-serializing never writes a secret's
+            // bytes back out.
+            let round_trip = serde_json::to_string(&state).expect("FakeState serializes");
+            prop_assert!(!round_trip.contains("seeded"), "a secret leaked: {}", round_trip);
+        }
+    }
+
+    /// The same for arbitrary bytes, which mostly exercises the YAML
+    /// scanner rather than the document format, but must still never
+    /// panic.
+    #[test]
+    fn totality_arbitrary_text_never_panics_the_parser(source in ".{0,400}") {
+        let _ = willikins_dsl::parse_document(&source);
+        let _ = FakeState::from_json(&source);
+    }
+}
+
+// ---------------------------------------------------------------------
+// the published schema must describe the documents willikins accepts
+// ---------------------------------------------------------------------
+
+/// `willikins schema --document` is what an agent generates a workflow
+/// from, so it must not drift from what `parse_document` actually accepts.
+/// Checked structurally rather than with a JSON Schema validator: adding
+/// one as a dependency was not worth its build cost here, and the facts
+/// that matter are few and exact.
+#[test]
+fn the_published_schema_matches_what_the_parser_accepts() {
+    let schema = willikins_dsl::document_schema();
+    let json = serde_json::to_value(&schema).expect("the schema serializes");
+
+    // Unknown fields are refused, at every level (finding 3).
+    assert_eq!(json["additionalProperties"], serde_json::json!(false));
+    for def in ["InputDecl", "StepDecl"] {
+        assert_eq!(
+            json["$defs"][def]["additionalProperties"],
+            serde_json::json!(false),
+            "the schema must refuse unknown fields in {def}"
+        );
+    }
+
+    // Every top-level key of every shipped fixture is a property the
+    // schema declares, and every fixture parses.
+    let properties = json["properties"]
+        .as_object()
+        .expect("the schema declares properties");
+    let mut checked_any = false;
+    let dir = workspace_root().join("workflows");
+    for entry in std::fs::read_dir(&dir)
+        .expect("workflows/ exists")
+        .chain(std::fs::read_dir(dir.join("fixtures")).expect("workflows/fixtures/ exists"))
+    {
+        let path = entry.expect("a readable directory entry").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("yaml") {
+            continue;
+        }
+        checked_any = true;
+        let source = std::fs::read_to_string(&path).expect("a readable fixture");
+        let document: serde_json::Value = serde_yaml_ng::from_str(&source)
+            .unwrap_or_else(|err| panic!("{}: not YAML: {err}", path.display()));
+        for key in document
+            .as_object()
+            .unwrap_or_else(|| panic!("{}: not a mapping", path.display()))
+            .keys()
+        {
+            assert!(
+                properties.contains_key(key),
+                "{}: `{key}` is not a property the published schema declares",
+                path.display()
+            );
+        }
+    }
+    assert!(checked_any, "no fixtures were checked");
+}
