@@ -9,8 +9,9 @@
 
 The goal set for this pass: construct a `Workflow` that `check` **accepts** and that either
 moves a secret into a non-secret place, or that a later stage (`describe`, `plan`) could not
-execute; or one that `check` **rejects wrongly**. Four defects were found, each now fixed and
-pinned by a test that was observed failing against the pre-fix code.
+execute; or one that `check` **rejects wrongly**. Four defects were found and fixed. Three of
+them (findings 1, 2 and 3) were observed failing against the pre-fix code; the fourth is a
+latent hole no workflow can reach today, pinned by a property-test invariant instead.
 
 ## Baseline
 
@@ -171,10 +172,12 @@ for it was reached.
    collide with a real node or port of that name. The types half of that collision is fixed
    here; the error half needs the plan to give `UnknownNode`, `ItemOutsideForEach` and
    `UnknownPort` a site that is not a `(NodeName, PortName)` pair.
-5. **Acceptance test 4's expectation for a secret `for_each` source over a workflow input**
-   (restated in this pass's own brief) is `SecretForEachSource`; the implementation reports
-   `SecretWorkflowInput` and cascades. Both are correct refusals; the plan should say which it
-   wants, since a fixture will assert on it.
+5. *(Not a plan defect — struck.)* The plan's acceptance test 4 asks for `SecretForEachSource`
+   on a `for_each` over **`fake.secret_list`'s `tokens`**, a tool output, which the
+   implementation does emit (`tests/check.rs::acceptance_4_for_each_over_a_secret_source_is_rejected`).
+   Only *this pass's brief* asked for it over a secret workflow *input*, where the
+   implementation reports `SecretWorkflowInput` instead. The plan is consistent; see the
+   attack table, row 3.
 6. **`check` never validates that a workflow input's declared type is registered at all**
    (inherited from task 7's report), only its secrecy when known. The plan assumes the DSL
    rejects an unregistered type name at load; nothing states it for a `Workflow` built any
