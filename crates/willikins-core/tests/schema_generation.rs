@@ -28,3 +28,53 @@ schema_snapshot!(missing_input_schema_generates, MissingInput);
 schema_snapshot!(input_error_schema_generates, InputError);
 schema_snapshot!(inputs_schema_generates, Inputs);
 schema_snapshot!(outputs_schema_generates, Outputs);
+
+/// [`MissingInput`] holds a `schemars::Schema` (the registry's schema for
+/// the missing input's own type) in a field that is itself published through
+/// `MissingInput`'s generated schema. Two things have to hold and neither
+/// is implied by the snapshot above:
+///
+/// - the generated schema is a real object schema, not the empty `{}` a
+///   `schema_with` attribute silently degrades to when it names the wrong
+///   thing;
+/// - a `schemars::Schema` *value* survives `serde_json` round-tripping, so
+///   the `rmcp::Json<Description>` an MCP client reads carries the type
+///   schema rather than failing to serialize it.
+#[test]
+fn missing_input_publishes_a_non_empty_schema_and_its_schema_field_round_trips() {
+    let schema = schemars::schema_for!(MissingInput);
+    let json = schema.as_value();
+    let properties = json["properties"]
+        .as_object()
+        .expect("MissingInput's schema must publish its properties");
+    for field in [
+        "name",
+        "ty",
+        "schema",
+        "description",
+        "default",
+        "example",
+        "prompt",
+    ] {
+        assert!(
+            properties.contains_key(field),
+            "MissingInput's schema is missing `{field}`: {json}"
+        );
+    }
+    assert_eq!(
+        properties["schema"]["type"], "object",
+        "the `schema` field must publish as an object: {json}"
+    );
+
+    // The field's own runtime value survives serialization: a
+    // `schemars::Schema` is just a JSON document, and this is the shape the
+    // MCP surface hands a client.
+    let type_schema = <willikins_types::GitHubOrg as willikins_types::DomainType>::json_schema();
+    let text = serde_json::to_string(&type_schema).expect("a Schema must serialize");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+    assert!(
+        parsed.is_object(),
+        "a type schema must serialize as a JSON object: {text}"
+    );
+    assert!(!text.is_empty());
+}
