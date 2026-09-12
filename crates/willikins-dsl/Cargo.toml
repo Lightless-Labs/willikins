@@ -17,8 +17,10 @@ serde_yaml_ng.workspace = true
 schemars.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
+willikins-providers-fake.workspace = true
 insta.workspace = true
 proptest.workspace = true
 

@@ -885,12 +885,14 @@ dependencies = [
  "indexmap",
  "insta",
  "proptest",
+ "regex",
  "schemars",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "thiserror",
  "willikins-core",
+ "willikins-providers-fake",
  "willikins-types",
 ]
 

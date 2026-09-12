@@ -1,0 +1,129 @@
+---
+source: crates/willikins-dsl/src/lib.rs
+expression: json
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Document",
+  "description": "A workflow document: named inputs, a graph of tool-calling steps, and\nnamed outputs.",
+  "type": "object",
+  "properties": {
+    "description": {
+      "description": "One-line description shown to an agent.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "inputs": {
+      "description": "The workflow's declared inputs, keyed by name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/InputDecl"
+      }
+    },
+    "name": {
+      "description": "The workflow's name.",
+      "type": "string"
+    },
+    "outputs": {
+      "description": "The workflow's outputs, keyed by name: each value is a reference or\na literal string, in the same grammar as a step's `with` value.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "steps": {
+      "description": "The workflow's nodes (a `steps.<name>` entry each), keyed by name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/StepDecl"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "steps"
+  ],
+  "$defs": {
+    "DefaultValue": {
+      "description": "An input's default value: a single scalar for a scalar-typed input, or\na list of scalars for a `list<T>`-typed one. Checked against the\ninput's declared type when the document is loaded.",
+      "anyOf": [
+        {
+          "description": "A single scalar default.",
+          "type": "string"
+        },
+        {
+          "description": "A list default.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "InputDecl": {
+      "description": "One declared workflow input.",
+      "type": "object",
+      "properties": {
+        "default": {
+          "description": "The value used when the workflow is run without this input bound.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DefaultValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "One-line description shown to an agent.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "type": {
+          "description": "The type this input accepts: a bare type name such as `GitHubOrg`,\nor `list<TypeName>`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "StepDecl": {
+      "description": "One declared workflow node (a `steps.<name>` entry).",
+      "type": "object",
+      "properties": {
+        "for_each": {
+          "description": "When set, this step runs once per item of the bound list. Must be\na reference (the same grammar as a `with` value), never a literal.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "tool": {
+          "description": "The tool this step calls, such as `github.repo.ensure`.",
+          "type": "string"
+        },
+        "with": {
+          "description": "This step's input port bindings, keyed by port name. Each value is\na reference or a literal string.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      },
+      "required": [
+        "tool"
+      ]
+    }
+  }
+}
