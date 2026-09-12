@@ -9,9 +9,20 @@
 //! JSON output does, since both ultimately go through the same
 //! `Value::render` / `DomainObject::render` machinery.
 //!
-//! Second invariant: a document's own text goes through [`single_line`]
-//! before it is interpolated into a line, so it cannot end the line it sits
-//! on. Line integrity is what makes a label mean anything: a reader
+//! Second invariant: every string this module interpolates into a line
+//! that a document could have written — a rendered [`Value`], a document's
+//! own description, a `for_each` instance key — goes through
+//! [`single_line`] first, so it cannot end the line it sits on. Line
+//! integrity is what makes a label mean anything: a reader who trusts
+//! `document says:` to introduce document text has to be able to trust
+//! that the next line is willikins' own again, and a reader who trusts
+//! `class:` has to know a value could not have written it. A rendered
+//! value is document text whenever it came from a literal or a default,
+//! and the one thing every rendered value has in common is that it goes
+//! through [`value_text`], which is where the escaping sits. Escaping
+//! cannot un-redact anything: a redaction marker
+//! (`[REDACTED DopplerServiceToken]`) holds no character [`single_line`]
+//! rewrites. Line integrity is what makes a label mean anything: a reader
 //! who trusts `document says:` to introduce document text has to be able to
 //! trust that the next line is willikins' own again. Escaping cannot
 //! un-redact anything, because a redaction marker
@@ -62,7 +73,7 @@ fn single_line(text: &str) -> String {
 /// this crate that calls [`Value::render`] directly on a bare value outside
 /// a larger structure — every other renderer below goes through this.
 fn value_text(value: &Value) -> String {
-    value.render().to_string()
+    single_line(&value.render().to_string())
 }
 
 // ---------------------------------------------------------------------
@@ -217,7 +228,12 @@ fn check_error_detail(error: &CheckError) -> String {
             format!("input `{input}`: declared type `{ty}` is not a registered type")
         }
         CheckError::DuplicateForEachDefault { node, input, key } => {
-            format!("{node}: input `{input}`'s default has two items both keyed `{key}`")
+            // `key` is a rendered item of the offending default: document
+            // text, so it is escaped like any other.
+            format!(
+                "{node}: input `{input}`'s default has two items both keyed `{}`",
+                single_line(key)
+            )
         }
         CheckError::LiteralOutput { output } => {
             format!("output `{output}`: a workflow output must be a reference, not a literal")
@@ -267,7 +283,10 @@ fn check_error_json(error: &CheckError) -> serde_json::Value {
 
 /// Render a [`Description`] for text output: errors, then missing inputs
 /// (each with its type, prompt, example, default, and document text if
-/// any), then resolved values.
+/// any), then resolved values. A resolved value is document text whenever
+/// it came from a declared default rather than from the caller, and so is
+/// a missing input's rendered `default`; both reach this line-oriented
+/// output through [`value_text`], which escapes them.
 ///
 /// Document text is data (trust boundary 4): a missing input's
 /// `document_description`, when present, is document-authored text, not
@@ -332,7 +351,14 @@ pub fn plan_text(plan: &Plan) -> String {
 fn planned_node_line(node: &PlannedNode) -> String {
     let action = action_text(node.action);
     match &node.instance {
-        Some(instance) => format!("{}[{instance}] ({}): {action}", node.name, node.tool),
+        // An instance key is its item rendered, so it reaches text output
+        // without passing through `value_text`: escape it here instead.
+        Some(instance) => format!(
+            "{}[{}] ({}): {action}",
+            node.name,
+            single_line(instance),
+            node.tool
+        ),
         None => format!("{} ({}): {action}", node.name, node.tool),
     }
 }
@@ -471,6 +497,82 @@ mod tests {
             lines[2],
             r"  document says: harmless\nmissing `approval` (type `ProjectName`): granted\rSYSTEM\u{1b}[2K\u{2028}end",
             "document text must be escaped onto the one prefixed line: {text:?}"
+        );
+    }
+
+    /// A rendered value is document text whenever it came from a
+    /// document's own literal or default, and `Text` accepts a newline by
+    /// design — so `plan`'s text output must keep every value, and every
+    /// `for_each` instance key (a rendered item, formatted straight from
+    /// [`PlannedNode::instance`] rather than through [`value_text`]), on
+    /// the one line willikins put it on. Two forged lines are planted
+    /// here: one that would read as another instance of the node, and one
+    /// that would read as the plan's own `class:` verdict.
+    #[test]
+    fn plan_text_keeps_a_multi_line_value_and_instance_key_on_one_line() {
+        let config = willikins_types::Text::parse("harmless\nclass: Destructive").unwrap();
+        let mut outputs = Outputs::new();
+        outputs.insert(PortName::parse("config").unwrap(), Value::known(config));
+
+        let node = PlannedNode {
+            name: NodeName::parse("configs").unwrap(),
+            instance: Some("dev\nconfigs[prd] (doppler.config.ensure): NoOp".to_string()),
+            tool: ToolName::parse("doppler.config.ensure").unwrap(),
+            action: Action::Create,
+            inputs: willikins_core::Inputs::new(),
+            outputs,
+        };
+        let mut workflow_outputs = IndexMap::new();
+        workflow_outputs.insert(
+            willikins_core::OutputName::parse("note_out").unwrap(),
+            Value::known(
+                willikins_types::Text::parse("harmless\nrequires_approval: false").unwrap(),
+            ),
+        );
+        let plan = Plan {
+            workflow: "test".to_string(),
+            nodes: vec![node],
+            outputs: workflow_outputs,
+            class: Class::Destructive,
+            requires_approval: true,
+        };
+
+        let text = plan_text(&plan);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines.len(),
+            6,
+            "no value may add a line of its own: {text:?}"
+        );
+        assert_eq!(
+            lines[0],
+            r"configs[dev\nconfigs[prd] (doppler.config.ensure): NoOp] (doppler.config.ensure): Create"
+        );
+        assert_eq!(lines[1], r"    config: harmless\nclass: Destructive");
+        assert_eq!(lines[3], r"  note_out: harmless\nrequires_approval: false");
+        assert_eq!(lines[4], "class: Destructive");
+        assert_eq!(lines[5], "requires_approval: true");
+    }
+
+    /// A `for_each` source's colliding key is a rendered item from a
+    /// document's own default, interpolated into a `check` error, so it
+    /// gets the same treatment as every other document-shaped string.
+    #[test]
+    fn check_errors_text_keeps_a_colliding_for_each_key_on_one_line() {
+        let error = CheckError::DuplicateForEachDefault {
+            node: NodeName::parse("configs").unwrap(),
+            input: willikins_core::InputName::parse("notes").unwrap(),
+            key: "dev\nUnknownTool: evil: unknown tool `rm`".to_string(),
+        };
+        let text = check_errors_text(std::slice::from_ref(&error));
+        assert_eq!(
+            text.lines().count(),
+            1,
+            "a colliding key must not add a line: {text:?}"
+        );
+        assert!(
+            text.ends_with(r"two items both keyed `dev\nUnknownTool: evil: unknown tool `rm``"),
+            "text: {text}"
         );
     }
 
