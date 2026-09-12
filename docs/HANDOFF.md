@@ -9,8 +9,9 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ### RESUME HERE (2026-09-12) — milestone 2 plan written, researched, and reviewed; no milestone 2 code yet
 
-- **Live state:** `main` at 100 local commits, gates green at the last code change (699
-  tests; no code has changed since). No remote is configured and nothing has been pushed.
+- **Live state:** `main` at 102 local commits, gates green (699 tests) at the last commit;
+  every commit since the milestone 1 code is documentation. No remote is configured and
+  nothing has been pushed.
 - **What just happened:** the milestone 2 plan
   `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md` was written, backed by
   `docs/research/2026-09-12-m2-dependencies.md` (five parallel research passes with
@@ -22,7 +23,12 @@ compaction, before handing off, after a milestone, and after a plan change or di
   keywords) and group A (1a+1b core serialization and the `Site` enum; 1c types and DSL
   bounds plus the YAML pre-scan; 1d describe labelling) can start at once in separate
   worktrees, sonnet implementing test-first and opus verifying, one Workflow per group as
-  in milestone 1. Every `CONTEXT` string names the four bare `cargo` gates.
+  in milestone 1. Every `CONTEXT` string names the four bare `cargo` gates. The Workflow
+  tool needs the operator's opt-in per session ("use a workflow" or "ultracode"); without
+  it, dispatch the same groups through plain Agent calls.
+- **Late plan edit (same evening):** the `Tool::ensure -> Ensured` trait change lives in
+  task 3, before groups B and C; the `ensure` contract separates comparable-state
+  resources from write-only sinks (the GitHub secret always writes when called).
 - **Ask the operator for** sandbox credentials (a throwaway GitHub org token and a Doppler
   service-account token) before task 8, so the read-only probe settles the undocumented
   Doppler facts early rather than at the live smoke run.
