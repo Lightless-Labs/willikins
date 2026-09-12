@@ -105,6 +105,15 @@ fn load_workflow(file: &str, json: bool) -> Result<willikins_core::Workflow, Exi
     })
 }
 
+/// Print `err` to stderr, as JSON or as one line of text.
+///
+/// A document error's message quotes the document that failed — a YAML
+/// scalar, a field name — so it is document text (trust boundary 4), and a
+/// field name is text no domain type ever parses: nothing downstream can
+/// bound it. Rendered raw, a field name carrying a newline printed a second
+/// line that read like one of willikins' own `check` errors, so the text
+/// form goes through [`render::single_line`]. The JSON form needs no help:
+/// a string cannot escape its field.
 fn print_document_error(err: &DocumentError, json: bool) {
     if json {
         eprintln!(
@@ -112,7 +121,7 @@ fn print_document_error(err: &DocumentError, json: bool) {
             serde_json::to_string(err).unwrap_or_else(|_| err.to_string())
         );
     } else {
-        eprintln!("{err}");
+        eprintln!("{}", render::single_line(&err.to_string()));
     }
 }
 

@@ -227,6 +227,34 @@ fn describe_and_plan_keep_a_newline_bearing_document_default_on_one_line() {
     );
 }
 
+/// Acceptance test 14, the `DocumentError` path: a document's own text
+/// reaches an agent through the parser's messages as well, and a field
+/// *name* is text no domain type ever parses — "unknown field `...`" quotes
+/// it whole. Printed raw it forged a line on stderr that read like one of
+/// willikins' own `check` errors; the CLI escapes a document error onto one
+/// line instead.
+#[test]
+fn a_document_errors_text_stays_on_one_line() {
+    let path = workflow("workflows/fixtures/newline-in-document-error.yaml");
+    let output = run(&["validate", path.to_str().unwrap()]);
+    assert_eq!(exit_code(&output), 2);
+
+    let text = stderr(&output);
+    assert_eq!(
+        text.trim_end().lines().count(),
+        1,
+        "a document error must not span lines: {text:?}"
+    );
+    assert!(
+        text.contains(r"bogus\nUnknownTool: evil: unknown tool `rm -rf`"),
+        "the field name must appear escaped: {text:?}"
+    );
+    assert!(
+        !text.contains("\nUnknownTool"),
+        "no forged line may start: {text:?}"
+    );
+}
+
 #[test]
 fn describe_with_both_inputs_resolves_everything_and_exits_0() {
     let path = workflow("workflows/new-rust-service.yaml");

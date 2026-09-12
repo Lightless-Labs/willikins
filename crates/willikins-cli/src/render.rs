@@ -54,11 +54,15 @@ use willikins_core::{
 /// agent's stdout. [`willikins_types::quoted`] escapes a rejected literal
 /// for exactly these three reasons (adversarial pass 2, finding 6); this is
 /// the same rule applied to the other text that reaches an agent's stdout.
+/// Used on everything a document could have written that reaches a line of
+/// text output: a rendered value, a description, an instance key, and a
+/// [`willikins_dsl::DocumentError`]'s message (see `main`).
+///
 /// It is deliberately not `quoted` itself: that function also truncates at
 /// [`willikins_types::MAX_QUOTED_INPUT`] (64 characters), which is right
 /// for quoting a value a parser rejected and wrong for a description the
 /// CLI is asked to show.
-fn single_line(text: &str) -> String {
+pub(crate) fn single_line(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {
