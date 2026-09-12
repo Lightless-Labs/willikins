@@ -1,0 +1,246 @@
+---
+source: crates/willikins-core/tests/plan.rs
+expression: "serde_json::to_string_pretty(&result).unwrap()"
+---
+{
+  "workflow": "new-rust-service",
+  "nodes": [
+    {
+      "name": "names",
+      "instance": null,
+      "tool": "naming.v1",
+      "action": "compute",
+      "inputs": {
+        "org": {
+          "type": "GitHubOrg",
+          "list": false,
+          "state": "known",
+          "value": "lightless-labs"
+        },
+        "slug": {
+          "type": "ProjectSlug",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts"
+        }
+      },
+      "outputs": {
+        "github_repo": {
+          "type": "GitHubRepo",
+          "list": false,
+          "state": "known",
+          "value": "lightless-labs/third-thoughts"
+        },
+        "doppler_project": {
+          "type": "DopplerProject",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts"
+        }
+      }
+    },
+    {
+      "name": "repo",
+      "instance": null,
+      "tool": "github.repo.ensure",
+      "action": "create",
+      "inputs": {
+        "repo": {
+          "type": "GitHubRepo",
+          "list": false,
+          "state": "known",
+          "value": "lightless-labs/third-thoughts"
+        },
+        "visibility": {
+          "type": "RepoVisibility",
+          "list": false,
+          "state": "known",
+          "value": "private"
+        }
+      },
+      "outputs": {
+        "repo": {
+          "type": "GitHubRepo",
+          "list": false,
+          "state": "known",
+          "value": "lightless-labs/third-thoughts"
+        },
+        "url": {
+          "type": "HttpsUrl",
+          "list": false,
+          "state": "known",
+          "value": "https://github.com/lightless-labs/third-thoughts"
+        }
+      }
+    },
+    {
+      "name": "doppler",
+      "instance": null,
+      "tool": "doppler.project.ensure",
+      "action": "create",
+      "inputs": {
+        "project": {
+          "type": "DopplerProject",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts"
+        }
+      },
+      "outputs": {
+        "project": {
+          "type": "DopplerProject",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts"
+        }
+      }
+    },
+    {
+      "name": "configs",
+      "instance": "dev",
+      "tool": "doppler.config.ensure",
+      "action": "create",
+      "inputs": {
+        "project": {
+          "type": "DopplerProject",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts"
+        },
+        "environment": {
+          "type": "EnvironmentSlug",
+          "list": false,
+          "state": "known",
+          "value": "dev"
+        }
+      },
+      "outputs": {
+        "config": {
+          "type": "DopplerConfig",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts/dev"
+        }
+      }
+    },
+    {
+      "name": "configs",
+      "instance": "stg",
+      "tool": "doppler.config.ensure",
+      "action": "create",
+      "inputs": {
+        "project": {
+          "type": "DopplerProject",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts"
+        },
+        "environment": {
+          "type": "EnvironmentSlug",
+          "list": false,
+          "state": "known",
+          "value": "stg"
+        }
+      },
+      "outputs": {
+        "config": {
+          "type": "DopplerConfig",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts/stg"
+        }
+      }
+    },
+    {
+      "name": "configs",
+      "instance": "prd",
+      "tool": "doppler.config.ensure",
+      "action": "create",
+      "inputs": {
+        "project": {
+          "type": "DopplerProject",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts"
+        },
+        "environment": {
+          "type": "EnvironmentSlug",
+          "list": false,
+          "state": "known",
+          "value": "prd"
+        }
+      },
+      "outputs": {
+        "config": {
+          "type": "DopplerConfig",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts/prd"
+        }
+      }
+    },
+    {
+      "name": "token",
+      "instance": null,
+      "tool": "doppler.service_token.ensure",
+      "action": "create",
+      "inputs": {
+        "config": {
+          "type": "DopplerConfig",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts/prd"
+        },
+        "name": {
+          "type": "DopplerTokenName",
+          "list": false,
+          "state": "known",
+          "value": "ci"
+        }
+      },
+      "outputs": {
+        "token": {
+          "type": "DopplerServiceToken",
+          "list": false,
+          "state": "unknown"
+        }
+      }
+    },
+    {
+      "name": "ci_secret",
+      "instance": null,
+      "tool": "github.actions_secret.ensure",
+      "action": "create",
+      "inputs": {
+        "repo": {
+          "type": "GitHubRepo",
+          "list": false,
+          "state": "known",
+          "value": "lightless-labs/third-thoughts"
+        },
+        "name": {
+          "type": "ActionsSecretName",
+          "list": false,
+          "state": "known",
+          "value": "DOPPLER_TOKEN"
+        },
+        "value": {
+          "type": "DopplerServiceToken",
+          "list": false,
+          "state": "unknown"
+        }
+      },
+      "outputs": {}
+    }
+  ],
+  "outputs": {
+    "repo_url": {
+      "type": "HttpsUrl",
+      "list": false,
+      "state": "known",
+      "value": "https://github.com/lightless-labs/third-thoughts"
+    }
+  },
+  "class": "reversible",
+  "requires_approval": false
+}

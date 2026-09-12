@@ -21,6 +21,7 @@ regex.workspace = true
 [dev-dependencies]
 insta.workspace = true
 proptest.workspace = true
+willikins-providers-fake.workspace = true
 
 [lints]
 workspace = true
