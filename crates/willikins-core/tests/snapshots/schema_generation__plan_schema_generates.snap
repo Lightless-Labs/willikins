@@ -1,0 +1,199 @@
+---
+source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 23
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Plan",
+  "description": "A concrete, approval-classified plan.",
+  "type": "object",
+  "properties": {
+    "class": {
+      "description": "The plan's approval class: [`Checked::class`], a static property of\nthe checked workflow's tools, unaffected by anything `plan`\nobserves at runtime.",
+      "$ref": "#/$defs/Class"
+    },
+    "nodes": {
+      "description": "Every planned node, in [`Checked::order`]; a `for_each` node\ncontributes one entry per instance, in its source list's order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PlannedNode"
+      }
+    },
+    "outputs": {
+      "description": "Every workflow output's resolved value. A literal output binding has\nno entry here; see the module docs.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "$ref": "#/$defs/Value"
+        }
+      }
+    },
+    "requires_approval": {
+      "description": "Whether this plan should require human approval before running:\n`class.requires_approval()`.",
+      "type": "boolean"
+    },
+    "workflow": {
+      "description": "The planned workflow's name.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "workflow",
+    "nodes",
+    "outputs",
+    "class",
+    "requires_approval"
+  ],
+  "$defs": {
+    "Action": {
+      "description": "What `plan` decided to do for one node instance.",
+      "oneOf": [
+        {
+          "description": "A pure tool computed its outputs; there is no external state to\ncreate or leave alone, whatever [`Observation`] its `read` reported.",
+          "type": "string",
+          "const": "compute"
+        },
+        {
+          "description": "The resource does not exist yet: `ensure` would create it.",
+          "type": "string",
+          "const": "create"
+        },
+        {
+          "description": "The resource already exists and is ours: `ensure` would be a no-op.",
+          "type": "string",
+          "const": "noop"
+        }
+      ]
+    },
+    "Class": {
+      "description": "How much a tool's `ensure` should be trusted to run unattended.\n\nOrdered `Reversible < Irreversible < Destructive`, so\n[`Class::max_of`] over every node in a plan gives the plan's own class.",
+      "oneOf": [
+        {
+          "description": "Can be undone by another `ensure` call: creating a resource that can\nsimply be deleted again.",
+          "type": "string",
+          "const": "reversible"
+        },
+        {
+          "description": "Cannot be trivially undone, but is not destructive: minting a\nservice token that cannot be re-read once issued, say.",
+          "type": "string",
+          "const": "irreversible"
+        },
+        {
+          "description": "Destroys or overwrites something. The highest class.",
+          "type": "string",
+          "const": "destructive"
+        }
+      ]
+    },
+    "Inputs": {
+      "description": "The typed values bound to a tool's input ports.\n\nA newtype over an ordered map so a tool always sees its inputs in\ndeclaration order. `Debug` and `Serialize` both come from [`Value`]'s\nown redacting implementations, so a secret input never leaks through\neither.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "$ref": "#/$defs/Value"
+        }
+      }
+    },
+    "NodeName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "Outputs": {
+      "description": "The typed values produced by a tool's output ports.\n\nSee [`Inputs`]: same shape, same redaction guarantee, opposite\ndirection.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "$ref": "#/$defs/Value"
+        }
+      }
+    },
+    "PlannedNode": {
+      "description": "One planned call to a tool: a whole node with no `for_each`, or one\ninstance of a `for_each` node.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "What `plan` decided to do for this instance.",
+          "$ref": "#/$defs/Action"
+        },
+        "inputs": {
+          "description": "The values bound to this instance's input ports.",
+          "$ref": "#/$defs/Inputs"
+        },
+        "instance": {
+          "description": "For a `for_each` node, the current instance's item rendered as its\ncanonical string — the same string a [`Binding::Keyed`] matches\nagainst. `None` for a node with no `for_each`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The node this instance belongs to.",
+          "$ref": "#/$defs/NodeName"
+        },
+        "outputs": {
+          "description": "Every one of this tool's declared output ports: the predicted or\nobserved value where the tool supplied one, [`Value::unknown`]\notherwise.",
+          "$ref": "#/$defs/Outputs"
+        },
+        "tool": {
+          "description": "The tool this node calls.",
+          "$ref": "#/$defs/ToolName"
+        }
+      },
+      "required": [
+        "name",
+        "tool",
+        "action",
+        "inputs",
+        "outputs"
+      ]
+    },
+    "ToolName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+    },
+    "Value": {
+      "type": "object",
+      "properties": {
+        "list": {
+          "type": "boolean"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "unknown"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "list",
+        "state"
+      ]
+    }
+  }
+}

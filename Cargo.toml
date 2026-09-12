@@ -43,6 +43,7 @@ proc-macro2 = "1"
 proptest = "1"
 trybuild = "1"
 insta = { version = "1", features = ["json", "yaml"] }
+jsonschema = { version = "0.56", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

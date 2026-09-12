@@ -237,7 +237,7 @@ impl ToolSpec {
 /// declaration order. `Debug` and `Serialize` both come from [`Value`]'s
 /// own redacting implementations, so a secret input never leaks through
 /// either.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct Inputs(IndexMap<PortName, Value>);
 
@@ -245,7 +245,7 @@ pub struct Inputs(IndexMap<PortName, Value>);
 ///
 /// See [`Inputs`]: same shape, same redaction guarantee, opposite
 /// direction.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct Outputs(IndexMap<PortName, Value>);
 

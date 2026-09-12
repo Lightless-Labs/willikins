@@ -98,7 +98,7 @@ impl std::str::FromStr for InputArg {
 }
 
 /// Why one raw input, or one unrecognised input name, was rejected.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct InputError {
     /// The input name the raw value was supplied for — declared or not.
     pub input: InputName,
@@ -118,13 +118,14 @@ pub struct InputError {
 }
 
 /// A declared input `describe` found neither a raw value nor a default for.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
 pub struct MissingInput {
     /// The missing input's name.
     pub name: InputName,
     /// Its declared type.
     pub ty: TypeRef,
     /// JSON schema for the type, from the registry's [`willikins_types::TypeInfo`].
+    #[schemars(schema_with = "type_schema_json_schema")]
     pub schema: schemars::Schema,
     /// The input's own one-line description, if it declared one.
     pub description: Option<String>,
@@ -142,9 +143,16 @@ pub struct MissingInput {
     pub prompt: String,
 }
 
+/// The published schema for [`MissingInput::schema`]: a JSON Schema document
+/// is itself an arbitrary JSON object, so this states only that much rather
+/// than trying to describe the meta-schema.
+fn type_schema_json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({ "type": "object" })
+}
+
 /// The result of resolving [`PartialInputs`] against a [`Checked`]
 /// workflow's declared inputs.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct Description {
     /// Every rejected raw value or unrecognised input name, in the order
     /// documented on [`describe`].

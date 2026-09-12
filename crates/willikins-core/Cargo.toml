@@ -20,6 +20,7 @@ regex.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+jsonschema.workspace = true
 proptest.workspace = true
 willikins-providers-fake.workspace = true
 

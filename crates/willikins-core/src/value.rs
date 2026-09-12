@@ -10,6 +10,7 @@
 //! every container that derives `Debug` or `Serialize` from it, with no
 //! extra effort required at the call site.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 
@@ -414,6 +415,40 @@ impl serde::Serialize for Value {
     }
 }
 
+/// Hand-written to match [`serde::Serialize for Value`](Value)'s pinned
+/// shape exactly, rather than derived: [`Value`] is not a plain struct (its
+/// content depends on [`ValueState`], not on a fixed set of Rust fields), so
+/// there is nothing for `#[derive(JsonSchema)]` to reflect over. States the
+/// same shape milestone 1 pinned by snapshot: `type` and `list` always
+/// present, `state` one of `"known"`/`"unknown"`, `value` present only when
+/// known (a string for a scalar, a list of strings for a list), and
+/// `redacted` present (and `true`) only for a known secret value.
+impl schemars::JsonSchema for Value {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("Value")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "properties": {
+                "type": { "type": "string" },
+                "list": { "type": "boolean" },
+                "state": { "type": "string", "enum": ["known", "unknown"] },
+                "value": {
+                    "anyOf": [
+                        { "type": "string" },
+                        { "type": "array", "items": { "type": "string" } },
+                    ],
+                },
+                "redacted": { "type": "boolean" },
+            },
+            "required": ["type", "list", "state"],
+            "additionalProperties": false,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,6 +756,73 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&PortType::AnySecret).unwrap(),
             r#"{"kind":"any_secret"}"#
+        );
+    }
+
+    // -------------------------------------------------------------
+    // Value's hand-written JsonSchema validates every real JSON shape
+    // -------------------------------------------------------------
+
+    #[test]
+    fn hand_written_schema_validates_every_value_json_shape() {
+        let schema = schemars::schema_for!(Value);
+        let validator =
+            jsonschema::validator_for(schema.as_value()).expect("Value's schema is itself valid");
+
+        let secret_token =
+            || DopplerServiceToken::parse("dp.st.prd.exampleexampleexample").unwrap();
+
+        let known_scalar =
+            serde_json::to_value(Value::known(github_org("lightless-labs"))).unwrap();
+        let known_list =
+            serde_json::to_value(Value::known_list(vec![github_org("a"), github_org("b")]))
+                .unwrap();
+        let empty_list = serde_json::to_value(Value::known_list(Vec::<GitHubOrg>::new())).unwrap();
+        let unknown_scalar = serde_json::to_value(Value::unknown(TypeRef::scalar(
+            TypeName::parse("GitHubOrg").unwrap(),
+        )))
+        .unwrap();
+        let unknown_list = serde_json::to_value(Value::unknown(TypeRef::list_of(
+            TypeName::parse("GitHubOrg").unwrap(),
+        )))
+        .unwrap();
+        let secret_scalar = serde_json::to_value(Value::known(secret_token())).unwrap();
+        let secret_list = serde_json::to_value(Value::known_list(vec![secret_token()])).unwrap();
+
+        for (name, instance) in [
+            ("known_scalar", &known_scalar),
+            ("known_list", &known_list),
+            ("empty_list", &empty_list),
+            ("unknown_scalar", &unknown_scalar),
+            ("unknown_list", &unknown_list),
+            ("secret_scalar", &secret_scalar),
+            ("secret_list", &secret_list),
+        ] {
+            assert!(
+                validator.is_valid(instance),
+                "{name} must validate against Value's schema: {instance}"
+            );
+        }
+
+        // Negative cases: the schema must actually constrain something,
+        // not merely describe the happy path. An unrecognised `state` and
+        // a stray unknown property must both be rejected.
+        let bad_state = serde_json::json!({"type": "GitHubOrg", "list": false, "state": "bogus"});
+        assert!(
+            !validator.is_valid(&bad_state),
+            "an invalid `state` must be rejected"
+        );
+        let stray_property = serde_json::json!({
+            "type": "GitHubOrg", "list": false, "state": "unknown", "extra": true
+        });
+        assert!(
+            !validator.is_valid(&stray_property),
+            "an unrecognised property must be rejected"
+        );
+        let missing_required = serde_json::json!({"type": "GitHubOrg", "state": "unknown"});
+        assert!(
+            !validator.is_valid(&missing_required),
+            "a missing required property (`list`) must be rejected"
         );
     }
 }

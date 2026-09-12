@@ -1,0 +1,175 @@
+---
+source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 26
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Description",
+  "description": "The result of resolving [`PartialInputs`] against a [`Checked`]\nworkflow's declared inputs.",
+  "type": "object",
+  "properties": {
+    "errors": {
+      "description": "Every rejected raw value or unrecognised input name, in the order\ndocumented on [`describe`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InputError"
+      }
+    },
+    "missing": {
+      "description": "Every declared input with neither a raw value nor a default, in\ndeclaration order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MissingInput"
+      }
+    },
+    "resolved": {
+      "description": "Every input that resolved to a concrete [`Value`]: a parsed raw\nvalue, or a declared default. In declaration order.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "$ref": "#/$defs/Value"
+        }
+      }
+    }
+  },
+  "required": [
+    "errors",
+    "missing",
+    "resolved"
+  ],
+  "$defs": {
+    "InputError": {
+      "description": "Why one raw input, or one unrecognised input name, was rejected.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "Why it was rejected, exactly as the type's own parser reported it:\n`describe` adds nothing and removes nothing. For a *non-secret*\ntype that message typically quotes the offending raw text, which is\nintended — it is the caller's own value, and an agent needs to see\nwhat it got wrong.\n\nA *secret* raw value can never be echoed here, and not because this\ntype filters one out: a secret-typed workflow input cannot exist in\na successfully [`Checked`] workflow at all (`check` reports\n`SecretWorkflowInput` first), and the registry refuses a secret type\nbefore it looks at the text, so [`Value::parse`] never hands one to\na parser.",
+          "$ref": "#/$defs/ParseError"
+        },
+        "input": {
+          "description": "The input name the raw value was supplied for — declared or not.",
+          "$ref": "#/$defs/InputName"
+        }
+      },
+      "required": [
+        "input",
+        "error"
+      ]
+    },
+    "InputName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "MissingInput": {
+      "description": "A declared input `describe` found neither a raw value nor a default for.",
+      "type": "object",
+      "properties": {
+        "default": {
+          "description": "The input's default value, rendered — always `None` here: an input\nwith a default is never missing (see [`describe`]). Kept as a field\nrather than dropped so `MissingInput` carries the same shape as an\n[`InputSpec`] would, in case a future revision reports an input as\n\"missing but defaulted\" for some other reason; a plan defect, not\nexercised by any test today.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "The input's own one-line description, if it declared one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "example": {
+          "description": "A valid example value for the type, from the registry.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The missing input's name.",
+          "$ref": "#/$defs/InputName"
+        },
+        "prompt": {
+          "description": "A one-sentence question an agent could ask a human to fill this\ninput in, built from the name, description, and example.",
+          "type": "string"
+        },
+        "schema": {
+          "description": "JSON schema for the type, from the registry's [`willikins_types::TypeInfo`].",
+          "type": "object"
+        },
+        "ty": {
+          "description": "Its declared type.",
+          "$ref": "#/$defs/TypeRef"
+        }
+      },
+      "required": [
+        "name",
+        "ty",
+        "schema",
+        "example",
+        "prompt"
+      ]
+    },
+    "ParseError": {
+      "description": "Error returned when a string does not parse as a domain type.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "description": "Why it was rejected. Never contains the rejected value of a secret type.",
+          "type": "string"
+        },
+        "type_name": {
+          "description": "The domain type that rejected the input.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type_name",
+        "reason"
+      ]
+    },
+    "TypeRef": {
+      "type": "string",
+      "pattern": "^(?:[A-Z][A-Za-z0-9]*|list<[A-Z][A-Za-z0-9]*>)$"
+    },
+    "Value": {
+      "type": "object",
+      "properties": {
+        "list": {
+          "type": "boolean"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "unknown"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "list",
+        "state"
+      ]
+    }
+  }
+}

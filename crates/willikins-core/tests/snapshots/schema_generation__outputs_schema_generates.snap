@@ -1,0 +1,59 @@
+---
+source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 30
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Outputs",
+  "description": "The typed values produced by a tool's output ports.\n\nSee [`Inputs`]: same shape, same redaction guarantee, opposite\ndirection.",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": {
+    "^[a-z][a-z0-9_]*$": {
+      "$ref": "#/$defs/Value"
+    }
+  },
+  "$defs": {
+    "Value": {
+      "type": "object",
+      "properties": {
+        "list": {
+          "type": "boolean"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "unknown"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "list",
+        "state"
+      ]
+    }
+  }
+}

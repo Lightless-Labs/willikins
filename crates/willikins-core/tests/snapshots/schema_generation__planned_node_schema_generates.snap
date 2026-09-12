@@ -1,0 +1,137 @@
+---
+source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 24
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PlannedNode",
+  "description": "One planned call to a tool: a whole node with no `for_each`, or one\ninstance of a `for_each` node.",
+  "type": "object",
+  "properties": {
+    "action": {
+      "description": "What `plan` decided to do for this instance.",
+      "$ref": "#/$defs/Action"
+    },
+    "inputs": {
+      "description": "The values bound to this instance's input ports.",
+      "$ref": "#/$defs/Inputs"
+    },
+    "instance": {
+      "description": "For a `for_each` node, the current instance's item rendered as its\ncanonical string — the same string a [`Binding::Keyed`] matches\nagainst. `None` for a node with no `for_each`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "The node this instance belongs to.",
+      "$ref": "#/$defs/NodeName"
+    },
+    "outputs": {
+      "description": "Every one of this tool's declared output ports: the predicted or\nobserved value where the tool supplied one, [`Value::unknown`]\notherwise.",
+      "$ref": "#/$defs/Outputs"
+    },
+    "tool": {
+      "description": "The tool this node calls.",
+      "$ref": "#/$defs/ToolName"
+    }
+  },
+  "required": [
+    "name",
+    "tool",
+    "action",
+    "inputs",
+    "outputs"
+  ],
+  "$defs": {
+    "Action": {
+      "description": "What `plan` decided to do for one node instance.",
+      "oneOf": [
+        {
+          "description": "A pure tool computed its outputs; there is no external state to\ncreate or leave alone, whatever [`Observation`] its `read` reported.",
+          "type": "string",
+          "const": "compute"
+        },
+        {
+          "description": "The resource does not exist yet: `ensure` would create it.",
+          "type": "string",
+          "const": "create"
+        },
+        {
+          "description": "The resource already exists and is ours: `ensure` would be a no-op.",
+          "type": "string",
+          "const": "noop"
+        }
+      ]
+    },
+    "Inputs": {
+      "description": "The typed values bound to a tool's input ports.\n\nA newtype over an ordered map so a tool always sees its inputs in\ndeclaration order. `Debug` and `Serialize` both come from [`Value`]'s\nown redacting implementations, so a secret input never leaks through\neither.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "$ref": "#/$defs/Value"
+        }
+      }
+    },
+    "NodeName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "Outputs": {
+      "description": "The typed values produced by a tool's output ports.\n\nSee [`Inputs`]: same shape, same redaction guarantee, opposite\ndirection.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "$ref": "#/$defs/Value"
+        }
+      }
+    },
+    "ToolName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+    },
+    "Value": {
+      "type": "object",
+      "properties": {
+        "list": {
+          "type": "boolean"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "unknown"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "list",
+        "state"
+      ]
+    }
+  }
+}

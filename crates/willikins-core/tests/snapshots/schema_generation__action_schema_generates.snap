@@ -1,0 +1,27 @@
+---
+source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 25
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Action",
+  "description": "What `plan` decided to do for one node instance.",
+  "oneOf": [
+    {
+      "description": "A pure tool computed its outputs; there is no external state to\ncreate or leave alone, whatever [`Observation`] its `read` reported.",
+      "type": "string",
+      "const": "compute"
+    },
+    {
+      "description": "The resource does not exist yet: `ensure` would create it.",
+      "type": "string",
+      "const": "create"
+    },
+    {
+      "description": "The resource already exists and is ours: `ensure` would be a no-op.",
+      "type": "string",
+      "const": "noop"
+    }
+  ]
+}

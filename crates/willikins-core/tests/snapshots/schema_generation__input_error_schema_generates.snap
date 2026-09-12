@@ -1,0 +1,49 @@
+---
+source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 28
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InputError",
+  "description": "Why one raw input, or one unrecognised input name, was rejected.",
+  "type": "object",
+  "properties": {
+    "error": {
+      "description": "Why it was rejected, exactly as the type's own parser reported it:\n`describe` adds nothing and removes nothing. For a *non-secret*\ntype that message typically quotes the offending raw text, which is\nintended — it is the caller's own value, and an agent needs to see\nwhat it got wrong.\n\nA *secret* raw value can never be echoed here, and not because this\ntype filters one out: a secret-typed workflow input cannot exist in\na successfully [`Checked`] workflow at all (`check` reports\n`SecretWorkflowInput` first), and the registry refuses a secret type\nbefore it looks at the text, so [`Value::parse`] never hands one to\na parser.",
+      "$ref": "#/$defs/ParseError"
+    },
+    "input": {
+      "description": "The input name the raw value was supplied for — declared or not.",
+      "$ref": "#/$defs/InputName"
+    }
+  },
+  "required": [
+    "input",
+    "error"
+  ],
+  "$defs": {
+    "InputName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "ParseError": {
+      "description": "Error returned when a string does not parse as a domain type.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "description": "Why it was rejected. Never contains the rejected value of a secret type.",
+          "type": "string"
+        },
+        "type_name": {
+          "description": "The domain type that rejected the input.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type_name",
+        "reason"
+      ]
+    }
+  }
+}
