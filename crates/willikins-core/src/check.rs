@@ -2076,14 +2076,35 @@ mod tests {
     // Serialization: internally tagged `{"kind": "<Variant>", ...}`
     // -------------------------------------------------------------
 
-    /// One instance of every [`CheckError`] variant, paired with its
-    /// expected `kind` tag. Built through an exhaustive `match` on a
-    /// reference to each sample (`check_error_kind_of`, below) so that
-    /// adding a variant without adding a sample here is a compile error,
-    /// not a silently-passing test: the match has no wildcard arm, so a
-    /// forgotten sample leaves an index unreachable in the match, and the
-    /// length assertion in [`every_check_error_variant_serializes_with_its_kind`]
-    /// then fails instead.
+    /// Generates a wildcard-free `match` from a variant name to its `kind`
+    /// tag *and* the variant count, from one list of names.
+    ///
+    /// Both halves matter, and neither closes the gap alone. The
+    /// `match` makes a newly added variant a compile error (it is not
+    /// exhaustive until the name is listed here), and listing the name
+    /// bumps the count, which then fails the length assertion in the test
+    /// below until a sample is added too. A hand-written count could not
+    /// close that second half: adding a variant left the old count and the
+    /// old sample list agreeing with each other, and the new variant
+    /// escaped the test silently.
+    ///
+    /// `plan_error_serde.rs` carries its own copy for [`crate::PlanError`];
+    /// an integration test cannot see a `#[cfg(test)]` macro in the lib.
+    macro_rules! variant_kinds {
+        ($fn_name:ident, $count:ident, $enum:ident, $($variant:ident),+ $(,)?) => {
+            fn $fn_name(value: &$enum) -> &'static str {
+                match value {
+                    $($enum::$variant { .. } => stringify!($variant),)+
+                }
+            }
+
+            const $count: usize = [$(stringify!($variant)),+].len();
+        };
+    }
+
+    /// One instance of every [`CheckError`] variant. Kept in lockstep with
+    /// the enum by `variant_kinds!` above and the length assertion in
+    /// [`every_check_error_variant_serializes_with_its_kind`].
     fn check_error_samples() -> Vec<CheckError> {
         vec![
             CheckError::UnknownTool {
@@ -2178,39 +2199,32 @@ mod tests {
         ]
     }
 
-    /// The Rust variant identifier for `error` -- exhaustive, so a variant
-    /// added to [`CheckError`] without a matching arm here fails to compile.
-    fn check_error_kind_of(error: &CheckError) -> &'static str {
-        match error {
-            CheckError::UnknownTool { .. } => "UnknownTool",
-            CheckError::UnknownPort { .. } => "UnknownPort",
-            CheckError::UnknownNode { .. } => "UnknownNode",
-            CheckError::UnboundInput { .. } => "UnboundInput",
-            CheckError::UndeclaredInput { .. } => "UndeclaredInput",
-            CheckError::InvalidLiteral { .. } => "InvalidLiteral",
-            CheckError::TypeMismatch { .. } => "TypeMismatch",
-            CheckError::SecretLiteral { .. } => "SecretLiteral",
-            CheckError::SecretToNonSecretSink { .. } => "SecretToNonSecretSink",
-            CheckError::SecretWorkflowInput { .. } => "SecretWorkflowInput",
-            CheckError::SecretForEachSource { .. } => "SecretForEachSource",
-            CheckError::ForEachOverScalar { .. } => "ForEachOverScalar",
-            CheckError::ItemOutsideForEach { .. } => "ItemOutsideForEach",
-            CheckError::KeyedOnScalarNode { .. } => "KeyedOnScalarNode",
-            CheckError::Cycle { .. } => "Cycle",
-            CheckError::DefaultTypeMismatch { .. } => "DefaultTypeMismatch",
-            CheckError::NestedList { .. } => "NestedList",
-            CheckError::DuplicateNode { .. } => "DuplicateNode",
-            CheckError::UnregisteredInputType { .. } => "UnregisteredInputType",
-            CheckError::DuplicateForEachDefault { .. } => "DuplicateForEachDefault",
-            CheckError::LiteralOutput { .. } => "LiteralOutput",
-        }
-    }
-
-    /// The number of [`CheckError`] variants today. Kept in lockstep with
-    /// [`check_error_samples`] and [`check_error_kind_of`] by
-    /// [`every_check_error_variant_serializes_with_its_kind`]'s own length
-    /// and distinctness assertions, rather than trusted on its own.
-    const CHECK_ERROR_VARIANT_COUNT: usize = 21;
+    variant_kinds!(
+        check_error_kind_of,
+        CHECK_ERROR_VARIANT_COUNT,
+        CheckError,
+        UnknownTool,
+        UnknownPort,
+        UnknownNode,
+        UnboundInput,
+        UndeclaredInput,
+        InvalidLiteral,
+        TypeMismatch,
+        SecretLiteral,
+        SecretToNonSecretSink,
+        SecretWorkflowInput,
+        SecretForEachSource,
+        ForEachOverScalar,
+        ItemOutsideForEach,
+        KeyedOnScalarNode,
+        Cycle,
+        DefaultTypeMismatch,
+        NestedList,
+        DuplicateNode,
+        UnregisteredInputType,
+        DuplicateForEachDefault,
+        LiteralOutput,
+    );
 
     #[test]
     fn every_check_error_variant_serializes_with_its_kind() {
@@ -2245,13 +2259,44 @@ mod tests {
         assert_eq!(seen_kinds.len(), CHECK_ERROR_VARIANT_COUNT);
     }
 
+    variant_kinds!(
+        check_warning_kind_of,
+        CHECK_WARNING_VARIANT_COUNT,
+        CheckWarning,
+        UnusedInput,
+    );
+
+    /// One instance of every [`CheckWarning`] variant. One today; guarded
+    /// the same way [`check_error_samples`] is, so a second warning cannot
+    /// reach an agent without this test covering it.
+    fn check_warning_samples() -> Vec<CheckWarning> {
+        vec![CheckWarning::UnusedInput {
+            input: input_name("slug"),
+        }]
+    }
+
     #[test]
     fn every_check_warning_variant_serializes_with_its_kind() {
-        let warning = CheckWarning::UnusedInput {
-            input: input_name("slug"),
-        };
-        let json = serde_json::to_value(&warning).expect("CheckWarning must serialize");
-        assert_eq!(json["kind"], "UnusedInput");
-        assert!(json.as_object().unwrap().get("message").is_none());
+        let samples = check_warning_samples();
+        assert_eq!(
+            samples.len(),
+            CHECK_WARNING_VARIANT_COUNT,
+            "check_warning_samples must carry exactly one sample per CheckWarning variant"
+        );
+        let mut seen_kinds: HashSet<&'static str> = HashSet::new();
+        for sample in &samples {
+            let kind = check_warning_kind_of(sample);
+            assert!(
+                seen_kinds.insert(kind),
+                "duplicate sample for CheckWarning::{kind}"
+            );
+            let json = serde_json::to_value(sample).expect("CheckWarning must serialize");
+            assert_eq!(json["kind"], kind, "sample: {sample:?}");
+            assert!(
+                json.as_object().unwrap().get("message").is_none(),
+                "CheckWarning::{kind} must not have a field named `message`: {json}"
+            );
+        }
+        assert_eq!(seen_kinds.len(), CHECK_WARNING_VARIANT_COUNT);
     }
 }

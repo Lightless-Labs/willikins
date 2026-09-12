@@ -1,10 +1,10 @@
 //! [`PlanError`] serializes internally tagged: every variant's JSON carries
 //! `{"kind": "<Variant>", ...its own fields}`. Exhaustive over every
 //! variant the same way `willikins-core`'s own `check.rs` unit tests are
-//! exhaustive over `CheckError` and `CheckWarning`: a `match` with no
-//! wildcard arm, so a variant added to [`PlanError`] without a matching
-//! sample and arm here fails to compile rather than silently escaping this
-//! test.
+//! exhaustive over `CheckError` and `CheckWarning`: the `variant_kinds!`
+//! macro below generates a wildcard-free `match` and the variant count from
+//! one list of names, so a variant added to [`PlanError`] cannot reach an
+//! agent without a sample here -- see the macro's own doc comment.
 
 mod common;
 
@@ -45,23 +45,39 @@ fn plan_error_samples() -> Vec<PlanError> {
     ]
 }
 
-/// The Rust variant identifier for `error` -- exhaustive, so a variant added
-/// to [`PlanError`] without a matching arm here fails to compile.
-fn plan_error_kind_of(error: &PlanError) -> &'static str {
-    match error {
-        PlanError::MissingInput { .. } => "MissingInput",
-        PlanError::ForEachUnknown { .. } => "ForEachUnknown",
-        PlanError::DuplicateForEachKey { .. } => "DuplicateForEachKey",
-        PlanError::KeyNotInForEach { .. } => "KeyNotInForEach",
-        PlanError::KeyUnknown { .. } => "KeyUnknown",
-        PlanError::NameTaken { .. } => "NameTaken",
-        PlanError::Tool { .. } => "Tool",
-    }
+/// Generates a wildcard-free `match` from a variant name to its `kind` tag
+/// *and* the variant count, from one list of names -- so a variant added to
+/// [`PlanError`] is a compile error here (the `match` is not exhaustive
+/// until its name is listed), and listing it bumps the count, which then
+/// fails the length assertion below until [`plan_error_samples`] gains a
+/// sample too. A hand-written count could not close that second half. The
+/// same macro guards `CheckError` and `CheckWarning` in the lib's own
+/// `check.rs` tests, duplicated because an integration test cannot see a
+/// `#[cfg(test)]` macro in the lib.
+macro_rules! variant_kinds {
+    ($fn_name:ident, $count:ident, $enum:ident, $($variant:ident),+ $(,)?) => {
+        fn $fn_name(value: &$enum) -> &'static str {
+            match value {
+                $($enum::$variant { .. } => stringify!($variant),)+
+            }
+        }
+
+        const $count: usize = [$(stringify!($variant)),+].len();
+    };
 }
 
-/// The number of [`PlanError`] variants today; see [`plan_error_samples`]
-/// and [`plan_error_kind_of`].
-const PLAN_ERROR_VARIANT_COUNT: usize = 7;
+variant_kinds!(
+    plan_error_kind_of,
+    PLAN_ERROR_VARIANT_COUNT,
+    PlanError,
+    MissingInput,
+    ForEachUnknown,
+    DuplicateForEachKey,
+    KeyNotInForEach,
+    KeyUnknown,
+    NameTaken,
+    Tool,
+);
 
 #[test]
 fn every_plan_error_variant_serializes_with_its_kind() {
