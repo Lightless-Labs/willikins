@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-core/tests/schema_generation.rs
-assertion_line: 29
 expression: schema
 ---
 {
@@ -22,7 +21,7 @@ expression: schema
           "type": "boolean"
         },
         "redacted": {
-          "type": "boolean"
+          "const": true
         },
         "state": {
           "type": "string",
@@ -49,6 +48,70 @@ expression: schema
         }
       },
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "required": [
+              "value"
+            ]
+          },
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "value"
+                  ]
+                },
+                {
+                  "required": [
+                    "redacted"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "else": {
+            "properties": {
+              "value": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "list": {
+                "const": false
+              }
+            },
+            "required": [
+              "list"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ],
       "required": [
         "type",
         "list",

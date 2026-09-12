@@ -423,6 +423,15 @@ impl serde::Serialize for Value {
 /// present, `state` one of `"known"`/`"unknown"`, `value` present only when
 /// known (a string for a scalar, a list of strings for a list), and
 /// `redacted` present (and `true`) only for a known secret value.
+///
+/// The three `if`/`then` clauses are what make the last two clauses of that
+/// sentence more than prose: without them the schema listed the five keys
+/// and constrained nothing about how they combine, so a `value` on an
+/// `unknown` state, a `redacted: false`, or a scalar `value` under `list:
+/// true` all validated -- none of which `Serialize` can emit. An agent
+/// generating a `Value` from the published schema would have had no way to
+/// learn that from the schema. Both `state` and `list` are `required`, so no
+/// `if` is ever vacuously satisfied by a missing key.
 impl schemars::JsonSchema for Value {
     fn schema_name() -> Cow<'static, str> {
         Cow::Borrowed("Value")
@@ -441,10 +450,39 @@ impl schemars::JsonSchema for Value {
                         { "type": "array", "items": { "type": "string" } },
                     ],
                 },
-                "redacted": { "type": "boolean" },
+                "redacted": { "const": true },
             },
             "required": ["type", "list", "state"],
             "additionalProperties": false,
+            "allOf": [
+                {
+                    "if": {
+                        "properties": { "state": { "const": "unknown" } },
+                        "required": ["state"],
+                    },
+                    "then": {
+                        "not": {
+                            "anyOf": [
+                                { "required": ["value"] },
+                                { "required": ["redacted"] },
+                            ],
+                        },
+                    },
+                    "else": { "required": ["value"] },
+                },
+                {
+                    "if": {
+                        "properties": { "list": { "const": false } },
+                        "required": ["list"],
+                    },
+                    "then": { "properties": { "value": { "type": "string" } } },
+                    "else": {
+                        "properties": {
+                            "value": { "type": "array", "items": { "type": "string" } },
+                        },
+                    },
+                },
+            ],
         })
     }
 }
@@ -824,5 +862,66 @@ mod tests {
             !validator.is_valid(&missing_required),
             "a missing required property (`list`) must be rejected"
         );
+    }
+
+    /// The schema must also tie `value` to `state` and its cardinality to
+    /// `list`, not merely list the five keys: an `Unknown` value carries no
+    /// `value` (and so no `redacted`), a `Known` one always carries one,
+    /// and a scalar's `value` is a string exactly where a list's is an
+    /// array. Without these, a schema consumer (an agent generating a
+    /// `Value` from the published schema, or a future
+    /// `Deserialize`) could produce a document this crate can never emit.
+    #[test]
+    fn hand_written_schema_rejects_shapes_serialize_can_never_emit() {
+        let schema = schemars::schema_for!(Value);
+        let validator =
+            jsonschema::validator_for(schema.as_value()).expect("Value's schema is itself valid");
+
+        for (name, instance) in [
+            (
+                "value on an unknown state",
+                serde_json::json!({
+                    "type": "GitHubOrg", "list": false,
+                    "state": "unknown", "value": "lightless-labs"
+                }),
+            ),
+            (
+                "redacted on an unknown state",
+                serde_json::json!({
+                    "type": "DopplerServiceToken", "list": false,
+                    "state": "unknown", "redacted": true
+                }),
+            ),
+            (
+                "a known value with no value key",
+                serde_json::json!({"type": "GitHubOrg", "list": false, "state": "known"}),
+            ),
+            (
+                "a list flag disagreeing with a scalar value",
+                serde_json::json!({
+                    "type": "GitHubOrg", "list": true,
+                    "state": "known", "value": "lightless-labs"
+                }),
+            ),
+            (
+                "a scalar flag disagreeing with a list value",
+                serde_json::json!({
+                    "type": "GitHubOrg", "list": false,
+                    "state": "known", "value": ["a", "b"]
+                }),
+            ),
+            (
+                "redacted false, which Serialize never emits",
+                serde_json::json!({
+                    "type": "GitHubOrg", "list": false,
+                    "state": "known", "value": "a", "redacted": false
+                }),
+            ),
+        ] {
+            assert!(
+                !validator.is_valid(&instance),
+                "{name} must be rejected by Value's schema: {instance}"
+            );
+        }
     }
 }
