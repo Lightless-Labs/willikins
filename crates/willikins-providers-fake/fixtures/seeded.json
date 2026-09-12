@@ -1,0 +1,24 @@
+{
+  "github_repos": {
+    "lightless-labs/third-thoughts": {
+      "visibility": "private",
+      "ours": true
+    },
+    "lightless-labs/foreign-project": {
+      "visibility": "public",
+      "ours": false
+    }
+  },
+  "github_actions_secrets": ["lightless-labs/third-thoughts#DOPPLER_TOKEN"],
+  "doppler_projects": {
+    "third-thoughts": {
+      "ours": true
+    }
+  },
+  "doppler_configs": ["third-thoughts/prd", "third-thoughts/dev"],
+  "doppler_service_tokens": ["third-thoughts/prd#ci"],
+  "doppler_secrets": {
+    "third-thoughts/prd#DATABASE_URL": "postgres://example.invalid/fake"
+  },
+  "irreversible": ["third-thoughts"]
+}
