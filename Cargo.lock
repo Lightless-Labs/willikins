@@ -842,6 +842,7 @@ name = "willikins-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "indexmap",
  "serde_json",
  "thiserror",
  "willikins-core",
