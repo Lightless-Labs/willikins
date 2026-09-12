@@ -51,6 +51,14 @@
 //!   collides with a real port named `for_each`. Neither collision changes
 //!   which check fires, only which node/port name an error report for the
 //!   `outputs` pseudo-scope shares with a real, identically named node.
+//!   The adversarial pass (acceptance test 12, first pass) moved the one
+//!   consequence that was not merely cosmetic -- output types overwriting
+//!   a real `outputs` node's port types, which also made any consumer that
+//!   looked an entry of `types` up in `workflow.nodes` panic -- out of the
+//!   way by giving outputs their own [`Checked::output_types`] map. The
+//!   error-field collision remains, because removing it means changing the
+//!   plan's own field lists for `UnknownNode`, `ItemOutsideForEach` and
+//!   `UnknownPort`.
 //! - An unregistered scalar type named in an [`InputSpec`](crate::workflow::InputSpec)
 //!   is treated as non-secret (the registry has no secrecy answer for it);
 //!   the DSL is expected to reject an unregistered type name at load time,
@@ -76,7 +84,7 @@ use crate::catalog::Catalog;
 use crate::class::Class;
 use crate::tool::{PortName, PortSpec, ToolName, ToolSpec};
 use crate::value::{PortType, TypeRef, TypeRegistry, Value};
-use crate::workflow::{Binding, InputName, Node, NodeName, Workflow};
+use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
 use willikins_types::ParseError;
 
 /// A workflow that has passed [`check`]: its topological execution order,
@@ -94,11 +102,15 @@ pub struct Checked {
     pub class: Class,
     /// Non-fatal warnings, alongside a successful check.
     pub warnings: Vec<CheckWarning>,
-    /// The resolved type of every binding `check` validated, keyed by node
-    /// then port. Covers every node's `with` entries and every workflow
-    /// output (the latter under the synthetic node name `"outputs"`, see
-    /// the module docs). Does not cover `for_each` bindings.
+    /// The resolved type of every node `with` binding `check` validated,
+    /// keyed by node then port. Does not cover `for_each` bindings, and
+    /// never mixes in workflow outputs (those are
+    /// [`Self::output_types`]), so a node named `outputs` keeps its own
+    /// entry.
     pub types: IndexMap<NodeName, IndexMap<PortName, TypeRef>>,
+    /// The resolved type of every workflow output, in declaration order.
+    /// A literal output has no declared type to resolve and is absent.
+    pub output_types: IndexMap<OutputName, TypeRef>,
 }
 
 /// A non-fatal observation returned alongside a successful [`check`].
@@ -402,6 +414,7 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         index_of: &index_of,
         used_inputs: HashSet::new(),
         types: IndexMap::new(),
+        output_types: IndexMap::new(),
     };
 
     for (name, node) in &workflow.nodes {
@@ -413,7 +426,10 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
     resolver.check_outputs(&mut errors);
 
     let Resolver {
-        used_inputs, types, ..
+        used_inputs,
+        types,
+        output_types,
+        ..
     } = resolver;
 
     errors.extend(find_cycles(&graph, workflow));
@@ -432,6 +448,7 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         class,
         warnings,
         types,
+        output_types,
     })
 }
 
@@ -551,6 +568,7 @@ struct Resolver<'a> {
     index_of: &'a IndexMap<NodeName, NodeIndex>,
     used_inputs: HashSet<InputName>,
     types: IndexMap<NodeName, IndexMap<PortName, TypeRef>>,
+    output_types: IndexMap<OutputName, TypeRef>,
 }
 
 impl<'a> Resolver<'a> {
@@ -716,9 +734,13 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Check every workflow output, under the synthetic `"outputs"` node
-    /// name. A literal output has no target type to check against, so it
-    /// is accepted unconditionally.
+    /// Check every workflow output. Errors are reported under the
+    /// synthetic `"outputs"` node name (an output is not a node); resolved
+    /// types go to [`Checked::output_types`], keyed by output name, so a
+    /// real node named `outputs` cannot have its port types overwritten.
+    /// A literal output has no target type to check against, so it is
+    /// accepted unconditionally; a secret output is accepted too, by
+    /// decision -- see `tests/check_adversarial.rs`.
     fn check_outputs(&mut self, errors: &mut Vec<CheckError>) {
         let workflow = self.workflow;
         let node = outputs_node();
@@ -733,7 +755,7 @@ impl<'a> Resolver<'a> {
             if let Some((found, _source)) =
                 self.resolve(None, &node, &port, &not_in_for_each, binding, errors)
             {
-                self.record_type(&node, &port, found);
+                self.output_types.insert(out_name.clone(), found);
             }
         }
     }

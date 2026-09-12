@@ -16,8 +16,8 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use willikins_core::{
     Binding, Catalog, CheckError, Checked, Class, InputName, InputSpec, Inputs, Node, NodeName,
-    Observation, Outputs, PortName, PortSpec, PortType, Tool, ToolError, ToolName, ToolSpec,
-    TypeName, TypeRef, Value, Workflow, check,
+    Observation, OutputName, Outputs, PortName, PortSpec, PortType, Tool, ToolError, ToolName,
+    ToolSpec, TypeName, TypeRef, Value, Workflow, check,
 };
 use willikins_types::{
     DomainType, DopplerServiceToken, EnvironmentSlug, RepoVisibility, SinkToken,
@@ -45,6 +45,10 @@ fn node(name: &str) -> NodeName {
 
 fn input(name: &str) -> InputName {
     InputName::parse(name).unwrap()
+}
+
+fn output(name: &str) -> OutputName {
+    OutputName::parse(name).unwrap()
 }
 
 fn tool_name(name: &str) -> ToolName {
@@ -706,4 +710,138 @@ fn well_typed_defaults_including_unknown_are_accepted() {
 
     let checked = checked(&workflow);
     assert_eq!(checked.warnings.len(), 3);
+}
+
+// ---------------------------------------------------------------------
+// Attack: the `outputs` sentinel, and cardinality through a for_each node.
+// ---------------------------------------------------------------------
+
+/// The same `for_each` node reached by both `Step` and `Keyed`: the two
+/// bindings resolve to different cardinalities of the same element type,
+/// and both are accepted.
+#[test]
+fn one_for_each_node_referenced_by_both_step_and_keyed_resolves_to_list_and_scalar() {
+    let workflow = Workflow::new("step-and-keyed")
+        .input(
+            input("environments"),
+            InputSpec::new(list_ty("EnvironmentSlug")),
+        )
+        .node(
+            node("configs"),
+            Node::new(tool_name("doppler.config.ensure"))
+                .for_each(Binding::Input(input("environments")))
+                .port(port("project"), Binding::Literal("acme-web".to_string()))
+                .port(port("environment"), Binding::Item),
+        )
+        .node(
+            node("token"),
+            Node::new(tool_name("doppler.service_token.ensure"))
+                .port(
+                    port("config"),
+                    Binding::Keyed {
+                        node: node("configs"),
+                        key: "prd".to_string(),
+                        port: port("config"),
+                    },
+                )
+                .port(port("name"), Binding::Literal("ci".to_string())),
+        )
+        .output(
+            output("all_configs"),
+            Binding::Step {
+                node: node("configs"),
+                port: port("config"),
+            },
+        );
+
+    let checked = checked(&workflow);
+    assert_eq!(
+        checked.types[&node("token")][&port("config")],
+        ty("DopplerConfig")
+    );
+    assert_eq!(
+        checked.output_types[&output("all_configs")],
+        list_ty("DopplerConfig")
+    );
+    // Both references are one edge from `configs`, so it is ordered first.
+    assert_eq!(checked.order, vec![node("configs"), node("token")]);
+}
+/// The empty workflow is valid: nothing to order, nothing to approve.
+#[test]
+fn an_empty_workflow_is_accepted_with_an_empty_order_and_the_lowest_class() {
+    let checked = checked(&Workflow::new("empty"));
+    assert!(checked.order.is_empty());
+    assert_eq!(checked.class, Class::Reversible);
+    assert!(checked.warnings.is_empty());
+    assert!(checked.types.is_empty());
+    assert!(checked.output_types.is_empty());
+}
+/// A workflow whose node is literally named `outputs`, with a port whose
+/// name matches a workflow output's name. Before this pass, output types
+/// were recorded under a synthetic `NodeName("outputs")` in the same map
+/// as node port types, so the output silently overwrote the real node's
+/// port type. Output types now live in their own map.
+#[test]
+fn a_node_named_outputs_keeps_its_own_port_types() {
+    let workflow = Workflow::new("outputs-collision")
+        .node(
+            node("outputs"),
+            Node::new(tool_name("doppler.project.ensure"))
+                .port(port("project"), Binding::Literal("acme-web".to_string())),
+        )
+        .node(
+            node("repo"),
+            Node::new(tool_name("github.repo.ensure"))
+                .port(
+                    port("repo"),
+                    Binding::Literal("lightless-labs/acme-web".to_string()),
+                )
+                .port(port("visibility"), Binding::Literal("private".to_string())),
+        )
+        .output(
+            output("project"),
+            Binding::Step {
+                node: node("repo"),
+                port: port("url"),
+            },
+        );
+
+    let checked = checked(&workflow);
+    assert_eq!(
+        checked.types[&node("outputs")][&port("project")],
+        ty("DopplerProject"),
+        "the real node's port type must survive the output of the same name"
+    );
+    assert_eq!(checked.output_types[&output("project")], ty("HttpsUrl"));
+}
+/// A workflow output bound to a secret is **accepted**, deliberately.
+///
+/// The design doc constrains where a secret may *flow* ("a secret output
+/// may only flow to a secret-accepting input"); a workflow output is not
+/// an input and, in milestone 1, is not part of `Plan` at all. Every
+/// rendering path goes through `Value`, which redacts by construction, so
+/// no byte escapes. Milestone 2's workflow-as-tool must type a composite's
+/// output ports, at which point a secret workflow output becomes a secret
+/// output port and the ordinary sink rule covers it. Pinned here so the
+/// decision is a choice, not an accident.
+#[test]
+fn a_secret_workflow_output_is_accepted_and_keeps_its_secret_type() {
+    let workflow = Workflow::new("secret-output")
+        .node(node("api_key"), secret_source())
+        .output(
+            output("leaked"),
+            Binding::Step {
+                node: node("api_key"),
+                port: port("value"),
+            },
+        );
+
+    let checked = checked(&workflow);
+    assert_eq!(
+        checked.output_types[&output("leaked")],
+        ty("DopplerSecretValue")
+    );
+    // And it is still redacted everywhere it can be printed.
+    let rendered = format!("{:?}", checked.workflow);
+    assert!(!rendered.contains("dp.st."));
 }

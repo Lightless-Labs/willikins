@@ -485,7 +485,7 @@ fn acceptance_4_plain_step_reference_into_a_for_each_node_resolves_to_a_list() {
         check(&workflow, &catalog).expect("adding a plain-Step output must still check cleanly");
 
     assert_eq!(
-        checked.types[&node("outputs")][&port("all_configs")],
+        checked.output_types[&output("all_configs")],
         list_ty("DopplerConfig")
     );
 }
