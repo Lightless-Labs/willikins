@@ -5,6 +5,7 @@
 **Reviewed:** 2026-09-11 (via document-review workflow: scope, feasibility, security, coherence, adversarial personas). 23 findings folded in; see "Review resolutions" at the end.
 **Addendum:** 2026-09-11 — `SinkToken` moved to `willikins-types` behind the `executor` feature; the derive's third storage generalised to any `FromStr + Display` inner type.
 **Addendum:** 2026-09-11 — tasks 2 and 3 done and merged. Pascal non-injectivity accepted in test 9; `cargo check -p willikins-types` added as a fourth gate; keyword-list verification listed under Risks.
+**Addendum:** 2026-09-12 — tasks 5b and 6 done and verified: empty-list bypass of the secret refusal closed; `SinkToken` lint confirmed firing; gates go through `rtk proxy cargo`; `SecretToNonSecretSink` precedence stated; workflow-as-tool deferred to milestone 2.
 **Addendum:** 2026-09-12 — tasks 4 and 5 done and verified: `impl_domain_object_non_secret!` refuses secret types; `ProjectName` rejects U+2028/U+2029; `Text` limits are chars; root config names use the snake join. Derive section rewritten after its bullets were found merged.
 **Addendum:** 2026-09-11 — pre-task-6 review: feature unification defeats the `SinkToken` gate inside the workspace, so a `disallowed-methods` lint enforces it; `TypeRegistry` added (task 5b); `SecretLiteral` check error; `Absent { predicted }` and `KeyUnknown`; Value JSON shape specified.
 **Addendum:** 2026-09-11 — task 3 verification: the derive decided pattern anchoring on the pattern's first and last characters, which left `^a|b$` and `^price\$` under-anchored; it now decides on the parsed regex. A generic struct is rejected with its own message and trybuild fixture. `willikins-types` aliases itself with `extern crate self as willikins_types;` so the derive's `::willikins_types::` paths resolve inside the crate, which task 4 needs.
@@ -119,8 +120,10 @@ This section is normative for every crate.
   macro invocation lists every domain type and builds both `type_infos()` and the registry,
   so they cannot drift. It also parses type references: `TypeRef::parse("list<T>")`. The
   registry refuses to parse a secret type from a string, with a `ParseError` saying secrets
-  cannot be supplied as literals or inputs; fake-state seeding constructs secret values
-  through serde `Deserialize` on the concrete type instead.
+  cannot be supplied as literals or inputs. The element type is resolved and refused before
+  any element is looked at, so an empty list literal of a secret type is refused too.
+  Fake-state seeding constructs secret values through serde `Deserialize` on the concrete
+  type instead.
 - **Value.** `Value { ty: TypeRef, state: ValueState }` with
   `ValueState::{Unknown, Known(Known)}` and `Known::{Scalar(Arc<dyn DomainObject>),
   List(Vec<Arc<dyn DomainObject>>)}`. `DomainObject` is the object-safe view of a domain
@@ -135,8 +138,9 @@ This section is normative for every crate.
   `{"type": "GitHubRepo", "list": false, "state": "known", "value": "lightless-labs/third-thoughts"}`;
   a secret adds `"redacted": true` and its `value` is the marker string;
   `{"type": "DopplerServiceToken", "list": false, "state": "unknown"}` has no `value`;
-  a list has `"list": true` and `value` is an array of the element strings. Pinned by an
-  insta snapshot in task 6.
+  a list has `"list": true` and `value` is an array of the element strings (each the marker
+  for a secret list). `Debug` of a secret list prints one marker. Pinned by an insta
+  snapshot in task 6.
 
 ## Workspace layout
 
@@ -412,7 +416,8 @@ The milestone cannot ship without every one of these.
 `willikins-types` enables its own `executor` feature through a self dev-dependency, so
 `--all-targets` never builds the crate the way its dependents see it; a cfg-gated bug slipped
 past the first three gates during task 3. `unsafe_code = "forbid"` and pedantic clippy are
-set at the workspace level. Run after every task, before every commit.
+set at the workspace level. Run after every task, before every commit, through
+`rtk proxy cargo ...` so the RTK hook cannot summarize a failure away.
 
 ## Tasks
 
