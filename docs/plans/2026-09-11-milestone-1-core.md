@@ -5,6 +5,7 @@
 **Reviewed:** 2026-09-11 (via document-review workflow: scope, feasibility, security, coherence, adversarial personas). 23 findings folded in; see "Review resolutions" at the end.
 **Addendum:** 2026-09-11 — `SinkToken` moved to `willikins-types` behind the `executor` feature; the derive's third storage generalised to any `FromStr + Display` inner type.
 **Addendum:** 2026-09-11 — tasks 2 and 3 done and merged. Pascal non-injectivity accepted in test 9; `cargo check -p willikins-types` added as a fourth gate; keyword-list verification listed under Risks.
+**Addendum:** 2026-09-12 — tasks 8 and 10 done; plan adversarial pass added `DuplicateForEachKey` and `ForEachUnknown`; the DSL rejects duplicate mapping keys through its own visitor because serde_yaml_ng keeps the last one silently.
 **Addendum:** 2026-09-12 — tasks 7 and 9 done; checker adversarial pass 1 recorded in `docs/research/2026-09-12-check-adversarial-pass-1.md`: default-value leak closed, output type map separated, nested lists rejected. Three error variants added; sentinel sites and secret outputs documented.
 **Addendum:** 2026-09-12 — tasks 5b and 6 done and verified: empty-list bypass of the secret refusal closed; `SinkToken` lint confirmed firing; gates go through `rtk proxy cargo`; `SecretToNonSecretSink` precedence stated; workflow-as-tool deferred to milestone 2.
 **Addendum:** 2026-09-12 — tasks 4 and 5 done and verified: `impl_domain_object_non_secret!` refuses secret types; `ProjectName` rejects U+2028/U+2029; `Text` limits are chars; root config names use the snake join. Derive section rewritten after its bullets were found merged.
@@ -286,7 +287,10 @@ with `trybuild` live in `crates/willikins-types/tests/derive/fail/`.
   `Plan { nodes: Vec<PlannedNode>, class, requires_approval }`, `PlannedNode { name,
   instance: Option<String>, tool, action: Action::{Compute, Create, NoOp}, inputs: Inputs,
   outputs: Outputs }`. `PlanError::{NameTaken { node, tool, key: Inputs }, KeyNotInForEach {
-  node, key }, KeyUnknown { node, port }, Tool { node, error }, MissingInput { input }}`. `Foreign` from `read`
+  node, key }, KeyUnknown { node, port }, ForEachUnknown { node }, DuplicateForEachKey {
+  node, key }, Tool { node, error }, MissingInput { input }}`. A duplicate key is detected
+  before any instance of that node is read. A literal workflow output is omitted from
+  `Plan::outputs`; nothing in milestone 1 uses one. `Foreign` from `read`
   becomes `NameTaken`; it never appears inside a returned `Plan`. Plan output is redacted by
   construction because every value inside it is a `Value`.
 
