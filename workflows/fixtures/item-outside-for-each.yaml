@@ -1,0 +1,11 @@
+# Acceptance test 4: `${{ item }}` used in a node with no `for_each`.
+# `check` returns exactly one error:
+#   ItemOutsideForEach { node: config, port: project }
+name: item-outside-for-each
+description: An `item` reference outside any for_each node.
+steps:
+  config:
+    tool: doppler.config.ensure
+    with:
+      project: ${{ item }}
+      environment: prd

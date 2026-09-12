@@ -1,0 +1,12 @@
+# Acceptance test 3: a `with` key that is not one of the node's tool's
+# ports. `check` returns exactly one error:
+#   UnknownPort { node: names, tool: naming.v1, port: bogus }
+name: unknown-port
+description: An extra `with` key that naming.v1 has no port for.
+steps:
+  names:
+    tool: naming.v1
+    with:
+      org: lightless-labs
+      slug: third-thoughts
+      bogus: literal

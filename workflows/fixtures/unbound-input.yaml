@@ -1,0 +1,10 @@
+# Acceptance test 3: a tool's required input port with no binding at all.
+# `check` returns exactly one error:
+#   UnboundInput { node: repo, port: repo }
+name: unbound-input
+description: A required port with no binding.
+steps:
+  repo:
+    tool: github.repo.ensure
+    with:
+      visibility: private

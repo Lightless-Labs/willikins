@@ -1,0 +1,13 @@
+# Acceptance test 4: a `for_each` bound to a scalar (non-list) source.
+# `check` returns exactly one error:
+#   ForEachOverScalar { node: loop }
+name: for-each-over-scalar
+description: A for_each over a scalar workflow input.
+inputs:
+  slug: { type: ProjectSlug }
+steps:
+  loop:
+    tool: fake.irreversible.ensure
+    for_each: ${{ inputs.slug }}
+    with:
+      key: third-thoughts

@@ -1,0 +1,9 @@
+# Acceptance test 3: a node whose `tool` names a tool the catalog does not
+# have. `check` returns exactly one error:
+#   UnknownTool { node: mystery, tool: no.such.tool }
+name: unknown-tool
+description: A node calling a tool the catalog has never heard of.
+steps:
+  mystery:
+    tool: no.such.tool
+    with: {}

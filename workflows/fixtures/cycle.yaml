@@ -1,0 +1,11 @@
+# Acceptance test 3: a dependency cycle. A single node whose own input
+# binding reads its own output — the single-node case of `Cycle`.
+# `check` returns exactly one error:
+#   Cycle { nodes: [a] }
+name: cycle
+description: A node whose input reads its own output.
+steps:
+  a:
+    tool: doppler.project.ensure
+    with:
+      project: ${{ steps.a.project }}

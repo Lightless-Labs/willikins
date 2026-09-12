@@ -1,0 +1,11 @@
+# Acceptance test 3: a `${{ inputs.<name> }}` reference to a workflow input
+# that was never declared. `check` returns exactly one error:
+#   UndeclaredInput { node: repo, port: repo, input: slug }
+name: undeclared-input
+description: A reference to an undeclared workflow input.
+steps:
+  repo:
+    tool: github.repo.ensure
+    with:
+      repo: ${{ inputs.slug }}
+      visibility: private

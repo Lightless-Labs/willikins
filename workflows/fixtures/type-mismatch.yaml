@@ -1,0 +1,14 @@
+# Acceptance test 3: a binding resolves to a type its port does not
+# accept — `inputs.slug` (ProjectSlug) bound to `github.repo.ensure`'s
+# `repo` (GitHubRepo). `check` returns exactly one error:
+#   TypeMismatch { node: repo, port: repo, expected: Exact(GitHubRepo), found: ProjectSlug }
+name: type-mismatch
+description: A ProjectSlug bound to a port that expects a GitHubRepo.
+inputs:
+  slug: { type: ProjectSlug }
+steps:
+  repo:
+    tool: github.repo.ensure
+    with:
+      repo: ${{ inputs.slug }}
+      visibility: private

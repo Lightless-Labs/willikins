@@ -1,0 +1,11 @@
+# Acceptance test 3: a literal that fails to parse against its port's
+# scalar type. `check` returns exactly one error:
+#   InvalidLiteral { node: repo, port: visibility, error }
+name: invalid-literal
+description: A literal visibility value that is not `private` or `public`.
+steps:
+  repo:
+    tool: github.repo.ensure
+    with:
+      repo: lightless-labs/third-thoughts
+      visibility: internal

@@ -1,0 +1,50 @@
+# Acceptance test 6, second half: the positive fixture
+# (workflows/new-rust-service.yaml) plus one fake.irreversible.ensure node.
+# Planning this against empty state must yield class = Irreversible and
+# requires_approval = true, where the plain positive fixture yields
+# Reversible / false.
+name: new-rust-service-irreversible
+description: The positive fixture plus one irreversible node.
+inputs:
+  slug: { type: ProjectSlug, description: Canonical project slug }
+  org: { type: GitHubOrg, description: GitHub organization that owns the repository }
+  visibility: { type: RepoVisibility, default: private }
+  environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
+steps:
+  names:
+    tool: naming.v1
+    with:
+      org: ${{ inputs.org }}
+      slug: ${{ inputs.slug }}
+  repo:
+    tool: github.repo.ensure
+    with:
+      repo: ${{ steps.names.github_repo }}
+      visibility: ${{ inputs.visibility }}
+  doppler:
+    tool: doppler.project.ensure
+    with:
+      project: ${{ steps.names.doppler_project }}
+  configs:
+    tool: doppler.config.ensure
+    for_each: ${{ inputs.environments }}
+    with:
+      project: ${{ steps.doppler.project }}
+      environment: ${{ item }}
+  token:
+    tool: doppler.service_token.ensure
+    with:
+      config: ${{ steps.configs[prd].config }}
+      name: ci
+  ci_secret:
+    tool: github.actions_secret.ensure
+    with:
+      repo: ${{ steps.repo.repo }}
+      name: DOPPLER_TOKEN
+      value: ${{ steps.token.token }}
+  danger:
+    tool: fake.irreversible.ensure
+    with:
+      key: ${{ inputs.slug }}
+outputs:
+  repo_url: ${{ steps.repo.url }}
