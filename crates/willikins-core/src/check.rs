@@ -11,8 +11,9 @@
 //!
 //! 1. Workflow input errors, one per declared input, in declaration
 //!    order: [`CheckError::SecretWorkflowInput`] for a secret declared
-//!    type, or else [`CheckError::DefaultTypeMismatch`] for a default
-//!    value whose type is not the declared one.
+//!    type, [`CheckError::UnregisteredInputType`] for a declared type the
+//!    registry has never heard of, or else [`CheckError::DefaultTypeMismatch`]
+//!    for a default value whose type is not the declared one.
 //! 2. [`CheckError::UnknownTool`], one per node with an unrecognised tool,
 //!    in node declaration order. A node whose tool is unknown is skipped
 //!    for every later step (its ports cannot be checked against a spec
@@ -59,10 +60,16 @@
 //!   error-field collision remains, because removing it means changing the
 //!   plan's own field lists for `UnknownNode`, `ItemOutsideForEach` and
 //!   `UnknownPort`.
-//! - An unregistered scalar type named in an [`InputSpec`](crate::workflow::InputSpec)
-//!   is treated as non-secret (the registry has no secrecy answer for it);
-//!   the DSL is expected to reject an unregistered type name at load time,
-//!   before `check` ever sees it.
+//! - An unregistered type named in an [`InputSpec`](crate::workflow::InputSpec)
+//!   is now caught explicitly, at the declaration site, by
+//!   [`CheckError::UnregisteredInputType`] (added by task 8, alongside
+//!   `describe`). Once reported it is still treated as non-secret for the
+//!   rest of `check`'s own bookkeeping (the registry has no secrecy answer
+//!   for a name it does not have), which only matters for downstream node
+//!   ports that happen to reference the same undeclared type name — a tool
+//!   port naming an unregistered type is refused separately by
+//!   [`crate::tool::ToolSpec::validate`], via [`crate::catalog::Catalog::insert`],
+//!   so that avenue was already closed before this variant existed.
 //! - The plan lists sixteen [`CheckError`] variants. Two more were added
 //!   by the adversarial pass, because the plan has no variant for the
 //!   defects they name: [`CheckError::DefaultTypeMismatch`] (an input's
@@ -306,6 +313,16 @@ pub enum CheckError {
         /// The name two nodes shared.
         node: NodeName,
     },
+    /// A workflow input's declared type is not in the type registry at
+    /// all — neither secret nor non-secret, because the registry has never
+    /// heard of the name. Reported alongside [`Self::SecretWorkflowInput`],
+    /// in input declaration order.
+    UnregisteredInputType {
+        /// The offending input.
+        input: InputName,
+        /// Its unregistered declared type.
+        ty: TypeRef,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -405,6 +422,10 @@ impl fmt::Display for CheckError {
                 "node `{node}`, port `{port}`: node `{referenced}` runs once per item and its port is already a list; there is no list-of-list type"
             ),
             Self::DuplicateNode { node } => write!(f, "duplicate node name `{node}`"),
+            Self::UnregisteredInputType { input, ty } => write!(
+                f,
+                "input `{input}`: declared type `{ty}` is not a registered type"
+            ),
         }
     }
 }
@@ -473,22 +494,34 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
 }
 
 /// Check every declared input: [`CheckError::SecretWorkflowInput`] when
-/// its type is secret, or else [`CheckError::DefaultTypeMismatch`] when
-/// its default value is not of the declared type. A secret declared type
-/// is the root cause and suppresses the default check, which could only
-/// repeat it.
+/// its type is secret, [`CheckError::UnregisteredInputType`] when its type
+/// is not in the registry at all, or else [`CheckError::DefaultTypeMismatch`]
+/// when its default value is not of the declared type. Either of the first
+/// two is a root cause that suppresses the default check for that input,
+/// which could only repeat it (a secret type cannot have a valid default at
+/// all, and an unregistered type has nothing to check the default against).
 fn check_workflow_inputs(
     workflow: &Workflow,
     registry: &TypeRegistry,
     errors: &mut Vec<CheckError>,
 ) {
     for (name, spec) in &workflow.inputs {
-        if registry.is_secret(&spec.ty.name) == Some(true) {
-            errors.push(CheckError::SecretWorkflowInput {
-                input: name.clone(),
-                ty: spec.ty.clone(),
-            });
-            continue;
+        match registry.is_secret(&spec.ty.name) {
+            Some(true) => {
+                errors.push(CheckError::SecretWorkflowInput {
+                    input: name.clone(),
+                    ty: spec.ty.clone(),
+                });
+                continue;
+            }
+            None => {
+                errors.push(CheckError::UnregisteredInputType {
+                    input: name.clone(),
+                    ty: spec.ty.clone(),
+                });
+                continue;
+            }
+            Some(false) => {}
         }
         if let Some(default) = &spec.default
             && default.ty() != &spec.ty
@@ -1082,7 +1115,7 @@ mod tests {
     use crate::tool::{Inputs, Observation, Outputs, Tool, ToolError};
     use crate::value::TypeName;
     use crate::workflow::InputSpec;
-    use willikins_types::SinkToken;
+    use willikins_types::{DomainType, SinkToken};
 
     fn ty(name: &str) -> TypeRef {
         TypeRef::scalar(TypeName::parse(name).unwrap())
@@ -1789,6 +1822,14 @@ mod tests {
                 "n",
                 None,
             ),
+            (
+                CheckError::UnregisteredInputType {
+                    input: input_name("x"),
+                    ty: ty("Bogus"),
+                },
+                "x",
+                None,
+            ),
         ];
         // `DefaultTypeMismatch` names an input rather than a node, so it
         // is checked on its own rather than through the node/port loop.
@@ -1814,6 +1855,87 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn unregistered_input_type_for_a_scalar_input() {
+        let workflow =
+            Workflow::new("w").input(input_name("mystery"), InputSpec::new(ty("NoSuchType")));
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::UnregisteredInputType {
+                input: input_name("mystery"),
+                ty: ty("NoSuchType"),
+            }]
+        );
+        assert_eq!(
+            errors[0].to_string(),
+            "input `mystery`: declared type `NoSuchType` is not a registered type"
+        );
+    }
+
+    #[test]
+    fn unregistered_input_type_for_a_list_input() {
+        let workflow =
+            Workflow::new("w").input(input_name("mystery"), InputSpec::new(list_ty("NoSuchType")));
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::UnregisteredInputType {
+                input: input_name("mystery"),
+                ty: list_ty("NoSuchType"),
+            }]
+        );
+    }
+
+    #[test]
+    fn unregistered_input_type_suppresses_the_default_type_mismatch_check() {
+        // An unregistered type has nothing to check a default against, so
+        // only one error is reported for this input, same as the secret
+        // case already covers for `SecretWorkflowInput`.
+        let workflow = Workflow::new("w").input(
+            input_name("mystery"),
+            InputSpec::new(ty("NoSuchType")).with_default(Value::known(
+                willikins_types::GitHubOrg::parse("lightless-labs").unwrap(),
+            )),
+        );
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::UnregisteredInputType {
+                input: input_name("mystery"),
+                ty: ty("NoSuchType"),
+            }]
+        );
+    }
+
+    #[test]
+    fn unregistered_input_type_is_reported_alongside_secret_workflow_input_in_declaration_order() {
+        let workflow = Workflow::new("w")
+            .input(input_name("mystery"), InputSpec::new(ty("NoSuchType")))
+            .input(
+                input_name("token"),
+                InputSpec::new(ty("DopplerServiceToken")),
+            );
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![
+                CheckError::UnregisteredInputType {
+                    input: input_name("mystery"),
+                    ty: ty("NoSuchType"),
+                },
+                CheckError::SecretWorkflowInput {
+                    input: input_name("token"),
+                    ty: ty("DopplerServiceToken"),
+                },
+            ]
+        );
     }
 
     #[test]
