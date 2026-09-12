@@ -36,6 +36,7 @@ fn the_derive_expands_inside_this_crate() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
 fn the_derive_expands_for_a_secret_inside_this_crate() {
     let value = ProbeSecret::parse("probe-secret").unwrap();
     assert_eq!(format!("{value:?}"), "[REDACTED ProbeSecret]");
@@ -43,6 +44,7 @@ fn the_derive_expands_for_a_secret_inside_this_crate() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
 fn the_derive_emits_domain_object_inside_this_crate() {
     use crate::DomainObject;
 

@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "willikins_types::sink::SinkToken::new", reason = "SinkToken may only be constructed by the apply executor in willikins-core; tests must opt in with #[allow(clippy::disallowed_methods)]" },
+]

@@ -134,6 +134,7 @@ fn secret_storage_rejects_bad_input_without_echoing_it() {
 #[test]
 fn secret_storage_deserialize_works() {
     let value: TestSecret = serde_json::from_str("\"hunter2-hunter2\"").unwrap();
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
     let token = SinkToken::new();
     assert_eq!(value.expose(&token), "hunter2-hunter2");
 }
@@ -141,6 +142,7 @@ fn secret_storage_deserialize_works() {
 #[test]
 fn secret_storage_expose_with_sink_token_returns_the_value() {
     let value = TestSecret::parse("hunter2-hunter2").unwrap();
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
     let token = SinkToken::new();
     assert_eq!(value.expose(&token), "hunter2-hunter2");
 }
@@ -290,6 +292,7 @@ fn secret_deserialize_failure_never_echoes_the_input() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
 fn secret_deserialized_from_json_is_redacted_afterwards() {
     let value: TestPrefixedSecret = serde_json::from_str("\"dp.st.hunter2-token\"").unwrap();
     assert_eq!(format!("{value:?}"), "[REDACTED TestPrefixedSecret]");
@@ -442,6 +445,7 @@ fn an_alternation_with_every_branch_anchored_is_left_alone() {
 use willikins_types::{DomainObject, Rendered};
 
 #[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
 fn a_non_secret_string_type_renders_and_exposes_plainly_through_the_trait_object() {
     let value: Box<dyn DomainObject> = Box::new(TestSlug::parse("abc-1").unwrap());
     assert_eq!(value.type_name(), "TestSlug");
@@ -451,6 +455,7 @@ fn a_non_secret_string_type_renders_and_exposes_plainly_through_the_trait_object
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
 fn an_other_storage_type_renders_and_exposes_plainly_through_the_trait_object() {
     let value: Box<dyn DomainObject> = Box::new(TestKebab::parse("abc-def").unwrap());
     assert_eq!(value.type_name(), "TestKebab");
@@ -460,6 +465,7 @@ fn an_other_storage_type_renders_and_exposes_plainly_through_the_trait_object() 
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
 fn a_secret_type_is_redacted_and_only_exposes_with_a_sink_token_through_the_trait_object() {
     let value: Box<dyn DomainObject> = Box::new(TestSecret::parse("hunter2-hunter2").unwrap());
     assert_eq!(value.type_name(), "TestSecret");
@@ -605,6 +611,7 @@ impl DomainType for LocalHandWritten {
 willikins_types::impl_domain_object_non_secret!(LocalHandWritten);
 
 #[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
 fn the_macro_resolves_its_crate_paths_when_invoked_from_outside_willikins_types() {
     let value: Box<dyn DomainObject> = Box::new(LocalHandWritten::On);
     assert_eq!(value.type_name(), "LocalHandWritten");

@@ -500,6 +500,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn repo_visibility_domain_object_view() {
         use crate::DomainObject;
         let value: Box<dyn DomainObject> = Box::new(RepoVisibility::Public);
@@ -629,6 +630,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn github_repo_domain_object_view() {
         use crate::DomainObject;
         let repo = GitHubRepo::parse("lightless-labs/third-thoughts").unwrap();

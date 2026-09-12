@@ -356,6 +356,7 @@ mod tests {
     // -------------------------------------------------------------
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn doppler_service_token_accepts_a_valid_token() {
         let value = DopplerServiceToken::parse("dp.st.prd.exampleexampleexample").unwrap();
         assert_eq!(
@@ -389,6 +390,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn doppler_service_token_deserialize_works_and_stays_redacted() {
         let value: DopplerServiceToken =
             serde_json::from_str("\"dp.st.prd.exampleexampleexample\"").unwrap();
@@ -410,6 +412,7 @@ mod tests {
     // -------------------------------------------------------------
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn doppler_secret_value_accepts_any_non_empty_string() {
         let value = DopplerSecretValue::parse("s3cr3t-value").unwrap();
         assert_eq!(value.expose(&SinkToken::new()), "s3cr3t-value");
@@ -427,6 +430,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn doppler_secret_value_deserialize_works_and_stays_redacted() {
         let value: DopplerSecretValue = serde_json::from_str("\"s3cr3t-value\"").unwrap();
         assert_eq!(format!("{value:?}"), "[REDACTED DopplerSecretValue]");
@@ -522,6 +526,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn doppler_config_domain_object_view() {
         let config = DopplerConfig::parse("third-thoughts/prd").unwrap();
         let value: Box<dyn DomainObject> = Box::new(config.clone());
