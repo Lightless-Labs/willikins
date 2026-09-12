@@ -25,7 +25,16 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
 
 /// A workflow document: named inputs, a graph of tool-calling steps, and
 /// named outputs.
+// Every struct in this module carries `deny_unknown_fields`, which the
+// published schema reflects as `additionalProperties: false`. Ignoring an
+// unrecognised field meant a misspelled key -- `foreach` for `for_each`,
+// say -- validated clean while the workflow did something other than what
+// its author wrote, and meant a YAML merge key (`<<`, which serde never
+// applies to a struct) silently dropped whatever it was merging.
+// Adversarial pass 2, finding 3. Kept out of the doc comment so it stays
+// out of the published schema's `description`.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Document {
     /// The workflow's name.
     pub name: String,
@@ -46,6 +55,7 @@ pub struct Document {
 
 /// One declared workflow input.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct InputDecl {
     /// The type this input accepts: a bare type name such as `GitHubOrg`,
     /// or `list<TypeName>`.
@@ -73,6 +83,7 @@ pub enum DefaultValue {
 
 /// One declared workflow node (a `steps.<name>` entry).
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StepDecl {
     /// The tool this step calls, such as `github.repo.ensure`.
     pub tool: String,

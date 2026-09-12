@@ -43,6 +43,7 @@ expression: json
       }
     }
   },
+  "additionalProperties": false,
   "required": [
     "name",
     "steps"
@@ -92,6 +93,7 @@ expression: json
           "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
         "type"
       ]
@@ -121,6 +123,7 @@ expression: json
           "default": {}
         }
       },
+      "additionalProperties": false,
       "required": [
         "tool"
       ]

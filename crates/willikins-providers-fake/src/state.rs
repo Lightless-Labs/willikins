@@ -19,6 +19,7 @@ use willikins_types::{
 /// A GitHub repository record: enough to answer `github.repo.ensure`'s
 /// `read`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GitHubRepoRecord {
     /// The repository's visibility.
     pub visibility: RepoVisibility,
@@ -30,6 +31,7 @@ pub struct GitHubRepoRecord {
 /// A Doppler project record: enough to answer `doppler.project.ensure`'s
 /// `read`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DopplerProjectRecord {
     /// Whether this project was created by us.
     pub ours: bool,
@@ -97,8 +99,14 @@ impl<'de> Deserialize<'de> for SecretsMap {
 /// ([`Self::from_json`]); every field defaults to empty so a seed file may
 /// mention only the resources a test cares about. Shared between tools
 /// through `Arc<Mutex<FakeState>>`.
+///
+/// An *unrecognised* field is refused rather than ignored
+/// (`deny_unknown_fields`, which composes with the defaults above): a
+/// misspelled key used to leave the resource it meant to seed absent, so
+/// `plan` reported `Create` where the author had asked for `NoOp` and
+/// nothing anywhere said why. Adversarial pass 2, finding 3.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct FakeState {
     /// GitHub repositories, keyed by [`GitHubRepo`]'s canonical string.
     pub github_repos: HashMap<String, GitHubRepoRecord>,

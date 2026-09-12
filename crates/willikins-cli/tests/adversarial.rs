@@ -360,8 +360,9 @@ name: second
 steps:
   b: { tool: naming.v1, with: { org: evil-org, slug: pwned } }
 ";
-    let err = willikins_dsl::parse_document(source)
-        .expect_err("pinned: a multi-document stream must be refused");
+    let Err(err) = willikins_dsl::parse_document(source) else {
+        panic!("pinned: a multi-document stream must be refused");
+    };
     assert!(
         err.to_string().contains("more than one document"),
         "pinned: {err}"
@@ -440,4 +441,160 @@ steps:
             .any(|error| matches!(error, CheckError::Cycle { .. })),
         "finding 2: expected a Cycle, got {errors:?}"
     );
+}
+
+// ---------------------------------------------------------------------
+// finding 3: an unknown field in a file willikins reads
+// ---------------------------------------------------------------------
+
+/// A typo'd key in a workflow document used to be silently ignored, so a
+/// document could validate clean while doing something other than what its
+/// author wrote. The worst shape is a misspelled `for_each`: the step then
+/// runs once instead of once per item, with nothing said about it.
+/// Every unrecognised field is now a `DocumentError` naming it.
+#[test]
+fn finding_03_a_typod_document_field_is_refused() {
+    let cases = [
+        // A misspelled `for_each` on a step.
+        (
+            "foreach",
+            "\
+name: typo
+inputs:
+  environments: { type: list<EnvironmentSlug>, default: [dev, prd] }
+steps:
+  configs:
+    tool: doppler.config.ensure
+    foreach: ${{ inputs.environments }}
+    with:
+      project: widgets
+      environment: prd
+",
+        ),
+        // A misspelled `default` on an input.
+        (
+            "defualt",
+            "\
+name: typo
+inputs:
+  org: { type: GitHubOrg, defualt: lightless-labs }
+steps:
+  a: { tool: naming.v1, with: { org: lightless-labs, slug: demo } }
+",
+        ),
+        // A misspelled `description` at the top level.
+        (
+            "descriptin",
+            "\
+name: typo
+descriptin: a typo
+steps:
+  a: { tool: naming.v1, with: { org: lightless-labs, slug: demo } }
+",
+        ),
+    ];
+
+    for (field, source) in cases {
+        let Err(err) = willikins_dsl::parse_document(source) else {
+            panic!("finding 3: `{field}` must be refused");
+        };
+        assert!(
+            err.to_string().contains(field),
+            "finding 3: the error must name `{field}`: {err}"
+        );
+    }
+}
+
+/// A YAML merge key (`<<`) is not a field the document format knows, and
+/// `serde` never applies one when deserializing into a struct. Silently
+/// ignoring it meant a document written with merge-key defaults lost them
+/// without a word; it is now refused like any other unknown field.
+#[test]
+fn finding_03_a_yaml_merge_key_is_refused() {
+    let source = "\
+name: merge
+base: &base
+  tool: naming.v1
+  with: { org: lightless-labs, slug: demo }
+steps:
+  a:
+    <<: *base
+";
+    let Err(err) = willikins_dsl::parse_document(source) else {
+        panic!("finding 3: a merge key must not be silently dropped");
+    };
+    assert!(
+        err.to_string().contains("base") || err.to_string().contains("<<"),
+        "finding 3: {err}"
+    );
+}
+
+/// A typo'd key in a `--fake-state` file used to be silently ignored, so a
+/// seeded resource simply did not exist and `plan` reported `Create` where
+/// the author had asked for `NoOp` — a plan that misrepresents what would
+/// happen, with no diagnostic anywhere.
+#[test]
+fn finding_03_a_typod_fake_state_field_is_refused() {
+    // `github_repo`, not `github_repos`.
+    let typod = serde_json::json!({
+        "github_repo": {
+            "lightless-labs/widgets": { "visibility": "private", "ours": true },
+        },
+    })
+    .to_string();
+    let err = FakeState::from_json(&typod)
+        .expect_err("finding 3: an unknown fake-state field must be refused");
+    assert!(
+        err.to_string().contains("github_repo"),
+        "finding 3: the error must name the field: {err}"
+    );
+
+    // A typo inside a record, which decides `Create` versus `NoOp`.
+    let typod_record = serde_json::json!({
+        "github_repos": {
+            "lightless-labs/widgets": { "visibility": "private", "ours": true, "our": true },
+        },
+    })
+    .to_string();
+    FakeState::from_json(&typod_record)
+        .expect_err("finding 3: an unknown record field must be refused");
+
+    // Through the CLI: exit 2, on stderr, before anything is planned.
+    let path = temp_file("typod-state.json", &typod);
+    let output = willikins(&[
+        "plan",
+        positive_fixture().to_str().unwrap(),
+        "--input",
+        "slug=widgets",
+        "--input",
+        "org=lightless-labs",
+        "--fake-state",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(exit_code(&output), 2, "finding 3: {}", stdout(&output));
+    assert!(
+        stdout(&output).is_empty(),
+        "finding 3: nothing may reach stdout: {}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("invalid fake state"),
+        "finding 3: {}",
+        stderr(&output)
+    );
+}
+
+/// The state fixtures this workspace ships must still load: `deny_unknown_fields`
+/// composes with `#[serde(default)]`, so a file naming only the resources
+/// a test cares about is still valid.
+#[test]
+fn finding_03_the_shipped_state_fixtures_still_load() {
+    for name in ["repo-ours.json", "repo-foreign.json", "secret-seeded.json"] {
+        let path = fixture("state").join(name);
+        let json = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+        FakeState::from_json(&json)
+            .unwrap_or_else(|err| panic!("finding 3: {name} must still load: {err}"));
+    }
+    FakeState::from_json("{}").expect("finding 3: an empty state is still valid");
 }
