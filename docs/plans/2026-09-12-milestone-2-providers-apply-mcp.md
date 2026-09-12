@@ -110,27 +110,28 @@ Two further rules bind a plan to what a human saw:
 
 ## Pinned dependencies (new)
 
-Caret requirements on the major; `Cargo.lock` pins the rest. Versions to confirm against
-the registry from the research note before task 6 starts; entries marked *confirm* were not
-yet verified when this plan was written.
+Caret requirements on the major; `Cargo.lock` pins the rest. Versions confirmed against the
+registry on 2026-09-12 (research note, sections 1, 2, and 4). Rate limiting beyond the
+single-apply lock and the body limit is deferred; `tower_governor` is the candidate when it
+is needed.
 
 | Crate | Requirement | Why |
 | --- | --- | --- |
-| `rmcp` | `3` (3.3.x, *confirm* the advisory-fixed patch) | MCP server; features `server`, `macros`, `schemars`, `transport-io`, `transport-streamable-http-server` |
-| `axum` | *confirm* (the major rmcp 3.3 pairs with) | router the Streamable HTTP service mounts on; auth middleware; approval page |
+| `rmcp` | `3` (3.3.0) | MCP server; features `server`, `macros`, `schemars`, `transport-io`, `transport-streamable-http-server`. Every published rmcp advisory (five, including the session-table leak GHSA-9pj6-vhgr-3mwh) is patched at 2.0.0 or 2.1.0, so 3.x is clean; the `auth` features are client-side only and are not enabled |
+| `axum` | `0.8` | the router the Streamable HTTP service nests into (rmcp's own examples pin 0.8; rmcp itself depends only on `tower-service`); bearer middleware; approval page |
 | `tokio` | `1` | runtime; `spawn_blocking` around the synchronous core |
-| `tower-http` | *confirm* | request body limit and timeout layers |
-| `ureq` | `3` (*confirm*) | synchronous HTTP client for providers; no runtime of its own; rustls |
-| `crypto_box` | *confirm*, feature `seal` | libsodium-compatible sealed box for GitHub Actions secrets |
-| `base64` | `0.22` | public-key decode and sealed-box encode |
-| `sha2` | `0.10` | document hashes; bearer-token hashes at rest |
+| `tower-http` | `0.7`, feature `timeout` | request timeout layer (no default features); the body limit is rmcp's own `max_request_body_bytes` |
+| `ureq` | `3` (3.4.1), feature `json`, default `rustls` | synchronous HTTP client for providers; no runtime of its own, so it is safe inside `spawn_blocking`. `reqwest::blocking` is ruled out: it starts its own tokio runtime and panics when a runtime handle is already current, which a blocking-pool thread has. `http_status_as_error(false)` so 4xx and 5xx bodies can be read for their `message` |
+| `crypto_box` | `0.9` (0.9.1; never the `0.10.0-pre` line), feature `seal` | libsodium-compatible sealed box for GitHub Actions secrets; the API is `PublicKey::seal(&mut rng, plaintext)` and `SecretKey::unseal`, not a `SealedBox` type |
+| `base64` | `0.23` | public-key decode and sealed-box encode, through the `Engine` API |
+| `sha2` | `0.11` | document hashes; bearer-token hashes at rest. A random token of at least 128 bits needs no slow KDF (NIST SP 800-63B's look-up-secret rule); `cargo tree -i sha2` checks nothing else pins 0.10 |
 | `subtle` | `2` | constant-time comparison of token hashes |
-| `uuid` | `1`, feature `v7` | `plan_id`, `run_id`, event ids |
-| `chrono` or `jiff` | *confirm* (rmcp pulls `chrono` through schemars; prefer no second clock crate) | RFC 3339 timestamps |
-| `saphyr-parser` | *confirm* | YAML event pre-scan that refuses anchors and aliases |
-| `fd-lock` | *confirm* | exclusive lock on the journal file |
+| `uuid` | `1`, features `v7`, `std` | `plan_id`, `run_id`, event ids through `Uuid::now_v7()` |
+| `chrono` | `0.4`, `default-features = false`, features `now`, `serde` | RFC 3339 timestamps; unifies with the `chrono` that schemars' `chrono04` feature already brings in through rmcp, so no second clock crate |
+| `saphyr-parser` | `0.0` (0.0.12) | YAML event pre-scan that refuses anchors and aliases; seven transitive crates. Swapping the deserializer for `serde-saphyr` (which has a built-in alias budget) is deferred: it reached 1.0 two months ago and adds about twenty crates |
+| `fd-lock` | `4` | exclusive advisory lock on the journal file |
 | `tracing`, `tracing-subscriber` | `0.1`, `0.3` | operational logs, JSON to stderr |
-| `mockito` | `1` (*confirm*) | synchronous mock HTTP server for provider tests |
+| `mockito` | `1` (1.7.2) | synchronous mock HTTP server for provider tests: `Server::new()` needs no runtime, `Matcher::Json` and `PartialJson` assert bodies, `Mock::assert()` asserts call counts. `wiremock` is async-only and ruled out |
 | `secrecy` | `0.10` (already) | `Credential` storage |
 
 Toolchain: Rust 1.97 stable, edition 2024, unchanged.
@@ -160,7 +161,12 @@ crates/
 workflows/
   rotate-service-token.yaml    the second positive fixture: rotate a token and re-store it
 deploy/
-  Dockerfile, railway.json     infrastructure as code
+  Dockerfile                   multi-stage: rust:1.97-slim-bookworm + cargo-chef, then
+                               gcr.io/distroless/cc-debian12 (rustls, no OpenSSL)
+  teardown.sh                  removes the smoke-test repository and project
+.railway/
+  railway.ts                   Railway infrastructure as code (config-as-code files are
+                               deprecated and closed to new services)
 ```
 
 Dependencies flow downward only: cli, server-bin -> server-lib -> journal, providers-*,
@@ -177,9 +183,23 @@ and types. No crate other than `willikins-core` enables `willikins-types/executo
   `describe`'s schema can name them. Applied to `Workflow::name`, `Workflow::description`,
   `InputSpec::description`, and `Plan::workflow`. Closes
   `todos/2026-09-12-workflow-name-description-bounds.md`.
-- `reserved.rs`: the Swift and Kotlin lists checked against their source pages (task 0);
-  missing words added test-first; the module doc records the check date and URLs. Closes
+- `reserved.rs`: verified on 2026-09-12 against the primary sources (research note,
+  section 5). Rust, Java, Kotlin hard keywords, and the Windows device names match exactly;
+  Swift's declarations group has gained `borrowing`, `consuming`, and `nonisolated` since
+  the list was written. Task 0 adds those three test-first, extending the case-insensitivity
+  test in `naming_adversarial.rs` and its multi-word "still accepted" list, and dates the
+  module doc. `com0` and `lpt0` stay accepted: Microsoft's page reserves `COM1`..`COM9` and
+  `LPT1`..`LPT9` only, and the existing test that pins this is correct. Closes
   `todos/2026-09-12-verify-keyword-lists.md`.
+- Doppler bounds aligned with Doppler's published platform limits (research note, section
+  3): `DopplerConfigName` max 60 (was 64; the cap counts the environment prefix),
+  `SecretName` max 200 (was 256), and `DopplerServiceToken`'s pattern tightened from
+  `dp\.st\.[A-Za-z0-9._-]{8,}` to Doppler's documented
+  `dp\.st\.(?:[a-z0-9\-_]{2,35}\.)?[a-zA-Z0-9]{40,44}`. Every real token already matched the
+  old pattern, so this is a tightening, not a fix on the idempotence path: none of the three
+  is a natural key, `naming::v1` emits config names of at most 16 characters, and a secret
+  type's parse error never quotes its input. Fixture tokens in tests and under
+  `workflows/fixtures/state/` are regenerated to the real shape.
 - No credential type is added here. Credentials must never be able to become a port type.
 
 ### willikins-derive (change)
@@ -303,36 +323,66 @@ plus the new rotate tool.
 ### willikins-providers-github
 
 Port table unchanged from milestone 1. Ownership marker: the repository topic
-`managed-by-willikins`. If a human removes the topic, the repository reads as `Foreign` and
-the plan stops with `NameTaken` until milestone 3's overrides exist; the tool's description
-says so.
+`managed-by-willikins` (GitHub's rule is lowercase letters, digits, and hyphens, at most 50
+characters, at most 20 topics; `PUT .../topics` replaces the whole set and is idempotent). If
+a human removes the topic, the repository reads as `Foreign` and the plan stops with
+`NameTaken` until milestone 3's overrides exist; the tool's description says so. Facts below
+are from the research note, section 2, which quotes GitHub's published OpenAPI description.
+
+The credential is a fine-grained personal access token (`github_pat_`) or a classic one
+(`ghp_`); `Credential`'s format regex is `^(github_pat_|ghp_)[A-Za-z0-9_]+$`, because GitHub
+publishes the prefixes but not the body length. It needs repository `Administration: write`
+(create), `Secrets: write`, and `Metadata: read`. An org-owned fine-grained token sits in a
+pending state until an org owner approves it, which the server cannot detect at startup;
+the first `plan` surfaces it as a `Provider` error naming the permission. Every request
+carries `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, and a
+`User-Agent` of `willikins/<version>`, which GitHub requires.
 
 | Tool | `read` | `ensure` |
 | --- | --- | --- |
-| `github.repo.ensure` | `GET /repos/{owner}/{name}`: 404 -> `Absent` with `repo` and `url` predicted; 200 without the topic -> `Foreign`; 200 with the topic and the same visibility -> `Present`; 200 with the topic and a different visibility -> `Mismatch { visibility }` | `POST /orgs/{org}/repos` with `name` and `visibility`, then `PUT /repos/{o}/{r}/topics`; on a 422 name-exists after a retried or timed-out create, re-`read` and return the `Present` outputs if the repository is ours |
-| `github.actions_secret.ensure` | `GET /repos/{o}/{r}/actions/secrets/{name}`: 200 -> `Present`, 404 -> `Absent`; never reads or stores a value | `GET .../actions/secrets/public-key`; seal `value.expose(token)` with a libsodium sealed box; `PUT .../actions/secrets/{name}` with `encrypted_value` and `key_id`; 201 and 204 both succeed; a secret by that name in our repository is ours |
+| `github.repo.ensure` | `GET /repos/{owner}/{name}`: 404 -> `Absent` with `repo` and `url` predicted (GitHub returns 404 both for a missing repository and for one the token cannot see); 200 without the topic -> `Foreign`; 200 with the topic and the same visibility -> `Present`; 200 with the topic and a different visibility -> `Mismatch { visibility }`; 301 -> `Foreign` (renamed away) | `POST /orgs/{org}/repos` with `name` and `visibility`, then `PUT /repos/{o}/{r}/topics` with `names: ["managed-by-willikins"]`; a 422 whose `errors[].code` is `already_exists` (or `custom` on `field: name`) after a create that may have landed -> re-`read` and return the `Present` outputs if the repository is ours, else `Conflict` |
+| `github.actions_secret.ensure` | `GET /repos/{o}/{r}/actions/secrets/{name}`: 200 -> `Present`, 404 -> `Absent`; the response never carries a value | `GET .../actions/secrets/public-key` (`key_id`, base64 `key`); decode the key, `PublicKey::seal` the bytes of `value.expose(token)`, base64 the ciphertext; `PUT .../actions/secrets/{name}` with `encrypted_value` and `key_id`; 201 (created) and 204 (updated) both succeed; a secret by that name in our repository is ours |
 
-Required credential permissions and the exact token prefixes come from the research note
-and are validated by `Credential`'s format regex at startup.
+Every sealed box uses a fresh ephemeral key pair, so `encrypted_value` differs on every
+call for the same plaintext: a test proves correctness by unsealing with the test key pair,
+never by comparing request bodies, and the client never dedups a `PUT` by body. GitHub's
+secondary rate limit charges one point per `GET` and five per write with a budget of 900
+points per minute; a 403 or 429 with `retry-after` is honoured verbatim, and one with
+`x-ratelimit-remaining: 0` waits until `x-ratelimit-reset`.
 
 ### willikins-providers-doppler
 
 Port table unchanged, plus one new tool. Ownership marker: the project description carries
-`managed-by: willikins`; configs and tokens under an owned project are ours.
+`managed-by: willikins`; configs and tokens under an owned project are ours. Facts below are
+from the research note, section 3, which quotes each endpoint's OpenAPI schema.
+
+The credential is a Doppler *Service Account* token (`dp.sa.`) or, for a local operator, a
+*Personal* token (`dp.pt.`); a *Service* token (`dp.st.`) is secrets-only within one config
+and cannot provision. `Credential`'s format regex for Doppler is therefore
+`^dp\.(sa|pt)\.[a-zA-Z0-9]{40,44}$`, and a `dp.st.` credential is refused at startup with a
+message saying which kind is needed.
 
 | Tool | `read` | `ensure` |
 | --- | --- | --- |
-| `doppler.project.ensure` | `GET /v3/projects/project?project=`: 404 -> `Absent` (predicted); 200 with the marker -> `Present`; 200 without -> `Foreign` | `POST /v3/projects` with `name` and the marker description |
-| `doppler.config.ensure` | root config name from `naming::v1::doppler_root_config`; `GET /v3/configs/config?project&config`: 200 and `root` -> `Present`; 404 -> `Absent` (predicted) | `POST /v3/environments` with `project`, `name`, `slug` equal to the config name; Doppler creates the root config with the environment |
-| `doppler.service_token.ensure` | `GET /v3/configs/config/tokens?project&config`; a token whose `name` matches -> `Present` with `token` `Unknown`; none -> `Absent` with `token` `Unknown` | `Present` -> no call, `Unknown`; `Absent` -> `POST /v3/configs/config/tokens` with `access: read`, parse the response's `key` into `DopplerServiceToken`, return it `Known` |
-| `doppler.service_token.rotate` (new; inputs `config`, `name`; output `token`; key `config`, `name`; class `Destructive`) | as `ensure`'s read | revoke every token with that `name` in the config, then mint as above; `Known` output |
-| `doppler.secret.get` (pure) | `GET /v3/configs/config/secret?project&config&name`: parse the value into `DopplerSecretValue`, return `Present` with it `Known`; 404 -> `ToolError::NotFound` naming the key | identity |
+| `doppler.project.ensure` | `GET /v3/projects/project?project=<name>`: 404 -> `Absent` (predicted); 200 with the marker in `description` -> `Present`; 200 without -> `Foreign`. The project object has `id`, `name`, `description`, `created_at`; `name` is the identifier every other endpoint takes | `POST /v3/projects` with `name` and the marker `description`; on an error after a possibly delivered create, re-`read` |
+| `doppler.config.ensure` | root config name from `naming::v1::doppler_root_config`; `GET /v3/configs/config?project&config=<name>`: 200 and `root: true` -> `Present`; 404 -> `Absent` (predicted) | `POST /v3/environments?project=` with body `name` and `slug` both equal to the config name (both are required; neither carries a documented character class); Doppler creates the root config with the environment |
+| `doppler.service_token.ensure` | `GET /v3/configs/config/tokens?project&config`; a listed token whose `name` matches -> `Present` with `token` `Unknown`; none -> `Absent` with `token` `Unknown`. The list omits `key` and `access` | `Present` -> no call, `Unknown`; `Absent` -> `POST /v3/configs/config/tokens` with `project`, `config`, `name`, `access: "read"`; parse the response's `token.key` into `DopplerServiceToken`; drop the response; return it `Known` |
+| `doppler.service_token.rotate` (new; inputs `config`, `name`; output `token`; key `config`, `name`; class `Destructive`) | as `ensure`'s read | for every listed token with that `name`, `DELETE /v3/configs/config/tokens/token` with body `project`, `config`, `slug`; then mint as above; `Known` output |
+| `doppler.secret.get` (pure) | `GET /v3/configs/config/secret?project&config&name`: the response is `{name, value: {raw, computed, note}}`; parse `value.computed` (references resolved, which is what a consumer needs) into `DopplerSecretValue` and return `Present` with it `Known`; 404 -> `ToolError::NotFound` naming the key | identity |
+
+Doppler documents no error-body schema for any non-2xx response, so the client treats an
+error body as opaque: it reads a `messages` array if one is present and otherwise reports
+the status alone. Rate limits are per token and per IP, per minute, and a 429 carries
+`retry-after` in seconds, which the retry policy honours.
 
 The default environments Doppler creates with a project (`dev`, `stg`, `prd`) already have
 root configs, so `doppler.config.ensure` reads `Present` for them on the first plan after
 the project exists; a custom environment such as `qa` is created. Whether Doppler's
-environment-slug grammar accepts every name `naming::v1` can emit is on the verify list; a
-mismatch means a `naming::v2` row, never an edit to `v1`.
+environment slug accepts an underscore is undocumented (the schema gives only a 2 to 50
+character bound), so whether every name `naming::v1` can emit is accepted is answered by
+the live smoke run; a mismatch means a `naming::v2` row, never an edit to `v1`. Branch
+configs are not created in this milestone; the open question of whether Doppler prefixes a
+branch config's name server-side is recorded for milestone 3.
 
 ### willikins-journal
 
@@ -390,29 +440,48 @@ surfaces cannot drift:
 | `list_tools` | none | `Catalog::list_tools_json()` |
 | `propose_slug` | `name: String` | `{ slug }` or an error result |
 
-A domain error (`DocumentError`, `CheckError`s, `PlanError`, `ApplyError`, a `Butler`
-refusal) is returned as an `is_error` tool result whose content is the `{kind, message,
-...}` JSON; a transport or auth failure is an HTTP status. The server's `instructions`
-string tells the agent that `plan` and `apply` take names from the trusted directory and
-that document descriptions are quoted document text.
+Results are returned as structured content (`rmcp::Json<T>` over the same `serde` types the
+CLI prints), so the output schema is generated from the types. A domain error
+(`DocumentError`, `CheckError`s, `PlanError`, `ApplyError`, a `Butler` refusal) is returned
+with `CallToolResult::structured_error` carrying the `{kind, message, ...}` JSON, so the
+agent sees it as a tool outcome; `Err(ErrorData)` is reserved for an unroutable request or
+parameters that fail schema validation, as rmcp's docs prescribe. The server advertises
+`ProtocolVersion::V_2026_07_28` explicitly (rmcp 3.3's `LATEST` is still `2025-11-25`, and
+its `get_info` example pins an older one) and an `instructions` string that tells the agent
+that `plan` and `apply` take names from the trusted directory and that document
+descriptions are quoted document text. Elicitation is not used; if a later milestone adds
+it, the spec forbids form-mode elicitation for secrets, which matches this design anyway.
 
-**Transports.** `serve --stdio`: no authentication, for a local agent. `serve --http
---bind 0.0.0.0:$PORT`: an axum router with `/mcp` (Streamable HTTP, stateless JSON
-response mode unless the research note says stateful sessions are required by current
-clients), `/healthz`, `GET /approvals` (HTML: pending plans with their redacted plan text,
-one approve and one reject form each) and `POST /approvals/{plan_id}` (`decision`, `reason`).
-Middleware, outermost first: a request body limit of 1 MiB, a 60-second request timeout,
-bearer authentication for `/mcp` that hashes the presented token with SHA-256 and compares
-against the configured agent hashes in constant time (`subtle`), HTTP Basic authentication
-for `/approvals` whose password hashes to the approver hash. A missing or wrong token is
-401 with `WWW-Authenticate`; an agent token on `/approvals` or the approver token on `/mcp`
-is 403. Configuration comes from environment variables: `WILLIKINS_WORKFLOWS_DIR`,
+**Transports.** `serve --stdio`: no authentication, for a local agent, per the spec's own
+rule that stdio servers take credentials from the environment. `serve --http --bind
+0.0.0.0:$PORT`: an axum 0.8 router with `/mcp` nested as rmcp's `StreamableHttpService`
+over a `LocalSessionManager` with its default `keep_alive` and `init_timeout` left on,
+configured with `legacy_session_mode: false` and `json_response: true` (rmcp's defaults are
+the other way round; `json_response` has no effect until legacy mode is off), a 1 MiB
+`max_request_body_bytes` (rmcp enforces it while streaming and answers 413), and
+`allowed_hosts` set to the deployment's hostnames (the default is loopback-only, which is
+rmcp's DNS-rebinding defence; startup refuses an empty list in http mode). Also `/healthz`,
+`GET /approvals` (HTML: pending plans with their redacted plan text, one approve and one
+reject form each) and `POST /approvals/{plan_id}` (`decision`, `reason`). Middleware,
+outermost first: a 60-second request timeout (`tower-http`), bearer authentication for
+`/mcp` as an axum `from_fn_with_state` layer that hashes the presented token with SHA-256
+and compares against the configured agent hashes in constant time (`subtle`), and HTTP
+Basic authentication for `/approvals` whose password hashes to the approver hash. A missing
+or wrong token is 401 with `WWW-Authenticate: Bearer realm="willikins"`; an agent token on
+`/approvals` or the approver credential on `/mcp` is 403. The middleware attaches the
+principal to the request extensions, which rmcp exposes to tool handlers through the
+request parts, so every journal event carries who called. This is the MCP specification's
+"custom authentication strategy" (authorization is optional in the spec and this server
+does not implement the OAuth 2.1 framework), so the 401 carries no `resource_metadata`
+challenge; recorded as a decision. Configuration comes from environment variables:
+`WILLIKINS_WORKFLOWS_DIR`,
 `WILLIKINS_JOURNAL_PATH`, `WILLIKINS_AGENT_TOKEN_HASHES` (comma-separated hex),
 `WILLIKINS_APPROVER_TOKEN_HASH`, `WILLIKINS_GITHUB_TOKEN`, `WILLIKINS_DOPPLER_TOKEN`,
-`WILLIKINS_PLAN_TTL_SECONDS`, `PORT`. Startup refuses: no agent hash in http mode; approver
-hash among agent hashes; a credential that fails its format regex; an unlockable journal;
-an unreadable workflow directory; a document that fails `check`. `tracing` in JSON to
-stderr, never a body or header value; the journal is the audit source of truth.
+`WILLIKINS_ALLOWED_HOSTS`, `WILLIKINS_PLAN_TTL_SECONDS`, `PORT`. Startup refuses: no agent
+hash in http mode; approver hash among agent hashes; empty allowed hosts in http mode; a
+credential that fails its format regex; an unlockable journal; an unreadable workflow
+directory; a document that fails `check`. `tracing` in JSON to stderr, never a body or
+header value; the journal is the audit source of truth.
 
 ### willikins-cli (changes)
 
@@ -588,7 +657,7 @@ separate worktrees; the coordinator merges on `main`.
 
 | # | Task | Depends on | Group | Delegate to |
 | --- | --- | --- | --- | --- |
-| 0 | Keyword lists: apply the verification report to `reserved.rs` test-first, date the module doc | research | | sonnet |
+| 0 | Keyword lists: add `borrowing`, `consuming`, `nonisolated` to the Swift list test-first; date the module doc | research | | sonnet |
 | 1a | Core: `Serialize` on every error with the `{kind, message}` shape; `Reported<T>`; CLI adopts it and drops the hand-built JSON | | A | sonnet, verified by opus |
 | 1b | Core: `Site` enum across `CheckError` and `PlanError`; update every sentinel test | 1a | A | sonnet, verified by opus |
 | 1c | Types and DSL: `WorkflowName`, `Description`; byte cap; anchor and alias pre-scan; schema snapshot; format docs | | A | sonnet, verified by opus |
@@ -604,7 +673,7 @@ separate worktrees; the coordinator merges on `main`.
 | 10a | `willikins-server` library: `Butler`, plan identity, startup checks; acceptance tests 7 (identity half), 8, 13, 14 | 4, 5, 7, 8 | | sonnet, verified by opus |
 | 10b | `willikins-server` binary: rmcp tools, stdio, Streamable HTTP, auth, approval page; acceptance tests 7 (HTTP half), 11, 12 | 10a | D | sonnet, verified by opus |
 | 11 | CLI: `apply`, `approve`, `reject`, `runs`, `run`, `serve`, `--live`; renderers; parity half of test 11 | 10a | D | sonnet |
-| 12 | Deployment: `deploy/Dockerfile`, `deploy/railway.json`, README "Deploy", environment variable reference, teardown script, `docs/solutions` entry for the credential gate | 10b | | sonnet |
+| 12 | Deployment: `deploy/Dockerfile`, `.railway/railway.ts` (service from the GitHub source with a Dockerfile build, `/healthz` healthcheck, one replica, a volume mounted for the journal; Railway allows one volume per service and no replicas with a volume), README "Deploy" (Railway edge TLS, `PORT`, Doppler's native Railway integration for the credentials, PR environments), environment variable reference, `deploy/teardown.sh`, `docs/solutions` entry for the credential gate | 10b | | sonnet |
 | 13 | Adversarial pass 2: end to end over HTTP (acceptance test 19, second pass) | 10b, 11 | | opus |
 | 14 | Live smoke run with sandbox credentials (acceptance test 18); refresh recorded fixtures; mark the plan Completed | 12, 13, operator | | coordinator with the operator |
 
@@ -613,17 +682,20 @@ sequential on `main`.
 
 ## Risks
 
-- **rmcp's Streamable HTTP server had an unauthenticated session-table leak** (advisory
-  GHSA-9pj6-vhgr-3mwh). The research note records the fixed version; the pinned version
-  must be at or above it, and the server runs in stateless mode unless a client needs
-  sessions. Bearer authentication sits in front of the service either way.
+- **rmcp's Streamable HTTP server has had five advisories**, all patched before 2.1.0
+  (research note, section 1); 3.3.0 is clean. Two of them shape the configuration anyway:
+  `allowed_hosts` must name the deployment's hosts (DNS rebinding), and the session
+  manager's `keep_alive` and `init_timeout` stay on (zombie sessions). Bearer
+  authentication sits in front of the service either way, and the server runs stateless
+  for current clients.
 - **Doppler's environment-slug grammar versus `naming::v1`.** `doppler_root_config` emits
   the environment's snake join. If Doppler rejects underscores, multi-word environment slugs
   need a `naming::v2` row; the fixture's `dev`, `stg`, `prd` are single words, so the first
   live run is unaffected either way.
-- **`DopplerServiceToken`'s pattern is frozen** at `dp\.st\.[A-Za-z0-9._-]{8,}`. The live
-  tool must parse a real token through it; if a real token does not match, the fix is a new
-  type version, not an edit. On the verify list.
+- **Doppler's documented limits are tighter than three of our types**, resolved above by
+  tightening the types (research note, section 3). What remains undocumented is the
+  environment slug's character class and the error-body shape; both are answered
+  empirically by the live smoke run and the recorded fixtures.
 - **Ownership markers can be removed by a human**, after which the resource reads `Foreign`
   until milestone 3's overrides exist. Documented in each tool's description.
 - **A synchronous core under an asynchronous server.** Every `plan` and `apply` occupies a
@@ -640,24 +712,38 @@ sequential on `main`.
   it has run once, every live tool's behaviour rests on the documentation quoted in the
   research note.
 
-## Verify with a browser before relying on them
+## Verify before relying on them
 
-Filled from the research note's unresolved items when it lands; the list below is the
-minimum, in the order the tasks need them.
+The research note resolved, with verbatim quotes, the keyword lists, the rmcp API and
+advisories, the MCP authorization wording, the GitHub endpoints and error schemas, the
+sealed-box API, the Doppler endpoints and limits, and the Railway deployment model. What
+remains is either an implementation-time check or a fact only a live call answers, in the
+order the tasks need them.
 
-1. Task 0: the Swift and Kotlin keyword lists against docs.swift.org and kotlinlang.org.
-2. Task 6: whether clippy's `disallowed-methods` fires inside proc-macro expansions (decides
-   whether the derive's `#[allow]` is load-bearing).
-3. Task 7: GitHub fine-grained token prefixes and the permissions the two tools need; the
-   sealed-box base64 contract; the `crypto_box` seal API.
-4. Task 8: Doppler token prefixes and which token kind may create projects; the environment
-   slug grammar; the service-token create response shape and key format; whether two tokens
-   may share a name in one config; the revoke endpoint's request shape.
-5. Task 10b: `rmcp` 3's Streamable HTTP configuration and the advisory's fixed version; the
-   MCP authorization section's wording (MUST versus SHOULD) for bearer tokens on a private
-   deployment; whether stateless JSON mode is what current clients expect.
-6. Task 12: Railway's config-as-code schema, volume semantics for one replica, and the
-   Doppler integration.
+1. Task 1c: whether `saphyr-parser` uses anchor id `0` as "no anchor" on `Scalar`,
+   `SequenceStart`, and `MappingStart` events (read the crate source before writing the
+   reject condition; the pre-scan test with an anchored scalar settles it either way).
+2. Task 6: whether clippy's `disallowed-methods` fires inside proc-macro expansions, which
+   decides whether the derive's `#[allow]` is load-bearing; `cargo tree -i sha2` and
+   `cargo tree -e features -i chrono` after adding the new crates.
+3. Task 7: GitHub does not publish token body lengths, so `Credential`'s regex checks the
+   prefix only; the fine-grained permission table was read from a rendered page, so the
+   first live `plan` confirms `Administration: write`, `Secrets: write`, `Metadata: read`
+   suffice; whether the API rejects a `.git` or `.wiki` suffix is irrelevant because
+   `ProjectSlug` cannot produce one.
+4. Task 8: the Doppler error-body shape (undocumented; the client treats it as opaque), the
+   status of `POST /v3/projects` on a duplicate name, the environment slug's character class
+   (undocumented beyond 2 to 50 characters), and whether two service tokens may share a
+   name in one config. All four are answered by the recorded fixtures from the first live
+   smoke run.
+5. Task 10b: whether current MCP clients (Claude Code, the rmcp client used in test 11)
+   negotiate `2026-07-28` or fall back to a legacy version that needs
+   `legacy_session_mode: true`; test 11 runs the in-process client against both settings.
+6. Task 12: whether a Railway PR environment gets its own volume or none (undocumented),
+   which decides whether PR environments run with an in-memory journal; whether Railway's
+   pipeline accepts a distroless runtime image; the Doppler integration's sync latency.
+7. Milestone 3, recorded here so it is not lost: whether `POST /v3/configs` expects the
+   caller to prefix a branch config's name with `<environment>_` or does it server-side.
 
 ## Review resolutions
 
