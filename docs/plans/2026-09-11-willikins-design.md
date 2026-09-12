@@ -6,6 +6,7 @@
 **Addendum:** 2026-09-11 — open questions decided (YAML, typed refs, Railway, web approval, Doppler vault, MIT, Cargo); milestone list added.
 **Addendum:** 2026-09-11 — after dependency research: Railway service name is the component alone; Swift keywords join the reserved-word union.
 **Addendum:** 2026-09-11 — task 2 verification: pascal is not injective for digit-only words; accepted, since pascal never feeds a natural key.
+**Addendum:** 2026-09-12 — milestone 2 plan: two kinds of secret (graph secrets behind `SinkToken`, execution-context credentials behind one `authorize` function and a clippy entry); TLS terminated at the platform edge; the remote server plans and applies by workflow name only; a tool refuses rather than reconciles a non-key attribute it should not change; composition split out of milestone 2 into its own plan. See "Milestone 2 decisions".
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
 runs reusable, composable project-provisioning workflows against GitHub, Doppler, Buildkite,
@@ -266,6 +267,41 @@ These came up from memory during the conversation and have not been checked.
 | License | MIT | Matches refinery; third-thoughts is AGPL-3.0 so there is no single org rule |
 | Build | Cargo | Matches every public sibling; Bazel only if the monorepo pulls it in |
 
+## Milestone 2 decisions
+
+**Decided:** 2026-09-12, while writing the milestone 2 plan. Each refines a section above.
+
+- **Two kinds of secret** (refines Trust model and Type system). *Graph secrets* are values
+  that flow through tool ports; they are secret domain types, and the only way to read their
+  bytes is `expose(&SinkToken)`, which the apply executor alone can mint. *Execution-context
+  credentials* are the butler's own provider tokens. They are not domain types, never enter
+  the registry, a `Value`, a plan, or the ledger, and are held as `secrecy` newtypes whose
+  bytes are read in exactly one function per HTTP layer, the one that sets the
+  `Authorization` header. That function is the only allowed call site of
+  `secrecy::ExposeSecret::expose_secret` outside the derive's generated `expose` and tests,
+  enforced by the same `clippy.toml` mechanism that already guards `SinkToken::new`. The
+  two gates are separate on purpose: `Tool::read` needs a credential and must never hold a
+  `SinkToken`.
+- **TLS at the edge** (refines Hosting and "its own TLS"). Railway terminates TLS; the
+  binary listens on plain HTTP bound to the platform's port and never exposes that listener
+  without an edge in front. A self-hosted deployment puts it behind a reverse proxy. The
+  service still owns authentication and the audit log.
+- **Name-only planning on the remote server** (refines "Workflow definitions are privileged
+  content"). Over the network, `plan` and `apply` accept a workflow name resolved in a
+  directory that is a checkout of a trusted ref; only the pure `validate` and `describe`
+  accept a document body, for the authoring loop. Locally, the CLI and the stdio server
+  accept a path, because the caller already holds the machine that holds the credentials.
+- **Refuse, do not reconcile, a non-key attribute the tool should not change** (refines
+  Tool contract). The reversibility class is static per tool, but some attribute changes
+  are not reversible in spirit (a private repository turned public). Such a tool reports the
+  existing resource as a mismatch, the plan stops with the attribute named, and `ensure`
+  returns a conflict. Reconciliation of an attribute is a per-tool decision recorded in the
+  tool's description.
+- **Composition moves to its own plan.** Milestone 1 deferred workflow-as-tool to
+  milestone 2; milestone 2 does not need it and it needs typed composite output ports and a
+  `read` semantic over a sub-graph, so it gets a plan of its own once milestone 2 is
+  complete.
+
 ## Milestones
 
 1. Core with no real providers: domain types and derive macro, tool contract, graph checker
@@ -273,7 +309,9 @@ These came up from memory during the conversation and have not been checked.
    project-creation workflow as the test fixture. Plan: `docs/plans/2026-09-11-milestone-1-core.md`.
    **Completed:** 2026-09-12.
 2. Real GitHub and Doppler providers, `apply`, run ledger, approval gate, MCP server over
-   stdio and Streamable HTTP.
-3. Templates and versioned re-apply.
+   stdio and Streamable HTTP. Plan: `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`.
+2b. Composition: `Workflow` implements `Tool` with typed composite output ports. Plan to be
+   written when milestone 2 completes.
+3. Templates and versioned re-apply, the project record, recorded naming overrides.
 4. Buildkite and Railway.
 5. App Store Connect.

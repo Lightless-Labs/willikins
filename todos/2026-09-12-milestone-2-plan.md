@@ -12,6 +12,13 @@ related:
 
 # Milestone 2: write the plan, then build it
 
+**2026-09-12:** plan drafted at `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`
+with research in `docs/research/2026-09-12-m2-dependencies.md`. Scope item 6 (composition)
+moved to its own future plan (design doc, milestone 2b); the site enum stayed in as task 1b.
+Two additions to the scope below: `doppler.service_token.rotate` and a second positive
+fixture, because the convergence claim is otherwise false for a minted token. Document
+review and the `Reviewed` stamp are the remaining steps before implementation.
+
 ## First action of the next session
 
 Write `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md` with `Created`, `Design`,
