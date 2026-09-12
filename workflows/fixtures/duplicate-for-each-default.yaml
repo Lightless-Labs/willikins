@@ -1,0 +1,18 @@
+# Adversarial pass 2, finding 5: a `for_each` over an input whose declared
+# default holds two items with the same canonical key. `check` must return
+# exactly one error:
+#   DuplicateForEachDefault { node: configs, input: environments, key: "prd" }
+# Before the fix `validate` accepted this document and only `plan` refused
+# it (PlanError::DuplicateForEachKey), so a document that cannot run with
+# its own defaults passed the static gate.
+name: duplicate-for-each-default
+description: A for_each source whose default list has two identical items.
+inputs:
+  environments: { type: list<EnvironmentSlug>, default: [dev, prd, prd] }
+steps:
+  configs:
+    tool: doppler.config.ensure
+    for_each: ${{ inputs.environments }}
+    with:
+      project: widgets
+      environment: ${{ item }}

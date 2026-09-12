@@ -665,3 +665,87 @@ fn finding_04_distinct_input_arguments_still_resolve() {
         stdout(&output)
     );
 }
+
+// ---------------------------------------------------------------------
+// finding 5: a for_each default whose items collide
+// ---------------------------------------------------------------------
+
+/// A `for_each` node expands into one instance per item, keyed by the
+/// item's canonical string, and `plan` refuses two items that share a key
+/// (`PlanError::DuplicateForEachKey`) because the instances would be
+/// indistinguishable. When the source is an input whose *default* holds
+/// the collision, the value is known statically, so `check` used to accept
+/// a document that cannot run with its own defaults — exactly the "past
+/// validate, a later stage cannot execute" shape this pass hunts. `check`
+/// now reports it, the same way it already type-checks a default
+/// (`DefaultTypeMismatch`), and for the same reason: a default that can
+/// never work is a defect in the document, whether or not a caller could
+/// override it.
+#[test]
+fn finding_05_a_for_each_default_with_colliding_items_is_refused() {
+    let workflow = load(&fixture("duplicate-for-each-default.yaml"));
+    let errors = willikins_core::check(&workflow, &empty_catalog())
+        .expect_err("finding 5: a colliding for_each default must be refused");
+    assert_eq!(
+        errors,
+        vec![CheckError::DuplicateForEachDefault {
+            node: willikins_core::NodeName::parse("configs").unwrap(),
+            input: willikins_core::InputName::parse("environments").unwrap(),
+            key: "prd".to_string(),
+        }],
+        "finding 5: expected exactly one DuplicateForEachDefault"
+    );
+
+    let output = willikins(&[
+        "validate",
+        fixture("duplicate-for-each-default.yaml").to_str().unwrap(),
+    ]);
+    assert_eq!(exit_code(&output), 1, "finding 5: {}", stdout(&output));
+    assert!(
+        stdout(&output).contains("DuplicateForEachDefault"),
+        "finding 5: {}",
+        stdout(&output)
+    );
+}
+
+/// A default list with *distinct* items is untouched, and so is the
+/// milestone's own positive fixture, whose `environments` default is
+/// `[dev, stg, prd]`.
+#[test]
+fn finding_05_a_distinct_for_each_default_still_checks() {
+    let workflow = load(&positive_fixture());
+    willikins_core::check(&workflow, &empty_catalog())
+        .expect("finding 5: the positive fixture's default must still check");
+}
+
+/// The collision is still caught at plan time when it arrives through
+/// `--input` rather than a default: `check` cannot see a value the caller
+/// has not supplied yet, so `plan`'s own guard remains the backstop.
+#[test]
+fn finding_05_a_collision_supplied_at_runtime_is_still_caught_by_plan() {
+    let source = "\
+name: runtime-collision
+inputs:
+  environments: { type: list<EnvironmentSlug> }
+steps:
+  configs:
+    tool: doppler.config.ensure
+    for_each: ${{ inputs.environments }}
+    with:
+      project: widgets
+      environment: ${{ item }}
+";
+    let path = temp_file("runtime-collision.yaml", source);
+    let output = willikins(&[
+        "plan",
+        path.to_str().unwrap(),
+        "--input",
+        "environments=dev,prd,prd",
+    ]);
+    assert_eq!(exit_code(&output), 1, "finding 5: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("keyed `prd`"),
+        "finding 5: {}",
+        stdout(&output)
+    );
+}

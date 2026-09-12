@@ -323,6 +323,26 @@ pub enum CheckError {
         /// Its unregistered declared type.
         ty: TypeRef,
     },
+    /// A `for_each` source is a workflow input whose declared *default*
+    /// holds two items with the same canonical string.
+    ///
+    /// `plan` expands a `for_each` node into one instance per item, keyed
+    /// by that string, and refuses a collision
+    /// (`PlanError::DuplicateForEachKey`) because the instances would be
+    /// indistinguishable. A default is known statically, so a document
+    /// whose own defaults cannot run is reported here rather than only at
+    /// plan time -- the same reason [`Self::DefaultTypeMismatch`] exists,
+    /// and unaffected by whether a caller could override the input.
+    ///
+    /// Not one of the plan's variants; see the module docs.
+    DuplicateForEachDefault {
+        /// The `for_each` node whose source is the offending input.
+        node: NodeName,
+        /// The input whose default holds the collision.
+        input: InputName,
+        /// The canonical string two of its default's items share.
+        key: String,
+    },
     /// A workflow output was bound to a literal rather than a reference.
     ///
     /// A `with` literal is parsed against the port it is bound to; a
@@ -413,6 +433,10 @@ impl fmt::Display for CheckError {
                     .join(" -> ");
                 write!(f, "cycle among nodes: {joined}")
             }
+            Self::DuplicateForEachDefault { node, input, key } => write!(
+                f,
+                "node `{node}`: input `{input}`'s default has two items both keyed `{key}`; for_each instances must be distinguishable"
+            ),
             Self::NestedList {
                 node,
                 port,
@@ -736,7 +760,42 @@ impl<'a> Resolver<'a> {
             errors.push(CheckError::ForEachOverScalar { node: name.clone() });
             return ItemContext::ForEachBroken;
         }
+        if let Some(error) = self.colliding_for_each_default(name, binding) {
+            errors.push(error);
+            return ItemContext::ForEachBroken;
+        }
         ItemContext::ForEachOf(ty.element())
+    }
+
+    /// When `binding` is a workflow input carrying a known list default,
+    /// report [`CheckError::DuplicateForEachDefault`] if two of that
+    /// default's items render to the same canonical string -- the key
+    /// `plan` gives a `for_each` instance, and the key a `Binding::Keyed`
+    /// reference matches against. Any other binding resolves to a value
+    /// `check` cannot see, which is why `plan` keeps its own guard.
+    fn colliding_for_each_default(&self, name: &NodeName, binding: &Binding) -> Option<CheckError> {
+        let Binding::Input(input) = binding else {
+            return None;
+        };
+        let items = self
+            .workflow
+            .inputs
+            .get(input)?
+            .default
+            .as_ref()?
+            .as_list()?;
+        let mut seen: HashSet<String> = HashSet::with_capacity(items.len());
+        for object in items {
+            let key = object.render().to_string();
+            if !seen.insert(key.clone()) {
+                return Some(CheckError::DuplicateForEachDefault {
+                    node: name.clone(),
+                    input: input.clone(),
+                    key,
+                });
+            }
+        }
+        None
     }
 
     /// Check one `with` port: unbound-but-required, a literal, or a
