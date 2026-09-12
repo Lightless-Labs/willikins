@@ -5,6 +5,7 @@
 **Reviewed:** 2026-09-11 (via document-review workflow: scope, feasibility, security, coherence, adversarial personas). 23 findings folded in; see "Review resolutions" at the end.
 **Addendum:** 2026-09-11 — `SinkToken` moved to `willikins-types` behind the `executor` feature; the derive's third storage generalised to any `FromStr + Display` inner type.
 **Addendum:** 2026-09-11 — tasks 2 and 3 done and merged. Pascal non-injectivity accepted in test 9; `cargo check -p willikins-types` added as a fourth gate; keyword-list verification listed under Risks.
+**Addendum:** 2026-09-12 — tasks 4 and 5 done and verified: `impl_domain_object_non_secret!` refuses secret types; `ProjectName` rejects U+2028/U+2029; `Text` limits are chars; root config names use the snake join. Derive section rewritten after its bullets were found merged.
 **Addendum:** 2026-09-11 — pre-task-6 review: feature unification defeats the `SinkToken` gate inside the workspace, so a `disallowed-methods` lint enforces it; `TypeRegistry` added (task 5b); `SecretLiteral` check error; `Absent { predicted }` and `KeyUnknown`; Value JSON shape specified.
 **Addendum:** 2026-09-11 — task 3 verification: the derive decided pattern anchoring on the pattern's first and last characters, which left `^a|b$` and `^price\$` under-anchored; it now decides on the parsed regex. A generic struct is rejected with its own message and trybuild fixture. `willikins-types` aliases itself with `extern crate self as willikins_types;` so the derive's `::willikins_types::` paths resolve inside the crate, which task 4 needs.
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
@@ -124,7 +125,9 @@ This section is normative for every crate.
   `ValueState::{Unknown, Known(Known)}` and `Known::{Scalar(Arc<dyn DomainObject>),
   List(Vec<Arc<dyn DomainObject>>)}`. `DomainObject` is the object-safe view of a domain
   type: `type_name()`, `is_secret()`, `render() -> Rendered::{Plain(String), Redacted}`,
-  `as_any()`. `Known` always holds the parsed domain-typed object, never a string snapshot.
+  `expose(&SinkToken) -> String`, `as_any()`, `dyn_eq()`, `clone_box()`. `Known` always
+  holds the parsed domain-typed object, never a string snapshot. Hand-written non-secret
+  types use `impl_domain_object_non_secret!`, which refuses a secret type at compile time.
   `Value`'s own `Debug` and `Serialize` go through `render()`, so a secret `Value` prints
   `[REDACTED <TypeName>]` in every container that derives `Debug` or `Serialize`. Cloning a
   `Value` clones the `Arc`.
@@ -167,8 +170,8 @@ Dependencies flow downward only: cli -> dsl, providers-fake -> core -> types -> 
   `GitHubOrg`, `GitHubRepo { owner: GitHubOrg, name: ProjectSlug }`, `RepoVisibility`
   (`private` | `public`), `HttpsUrl`, `ActionsSecretName` (`[A-Z_][A-Z0-9_]*`, not starting
   with `GITHUB_`), `DopplerProject`, `DopplerConfig { project, name }`, `DopplerTokenName`,
-  `SecretName` (`[A-Z_][A-Z0-9_]*`), `Text` (free-form, max 64 KiB), `TemplateSource`
-  (free-form, max 64 KiB), `DopplerServiceToken` (secret, `dp.st.` prefix),
+  `SecretName` (`[A-Z_][A-Z0-9_]*`), `Text` (free-form, max 65536 chars), `TemplateSource`
+  (free-form, max 65536 chars), `DopplerServiceToken` (secret, `dp.st.` prefix),
   `DopplerSecretValue` (secret, any non-empty string).
   Buildkite, Railway, Apple, Android, Cargo, and Swift identity types are added by the
   milestone that adds their provider. The joins they need are already property-tested on
@@ -178,7 +181,8 @@ Dependencies flow downward only: cli -> dsl, providers-fake -> core -> types -> 
   `Rendered` live here too so `Value` can hold any domain type.
 - `naming::v1`: `github_repo(&GitHubOrg, &ProjectSlug) -> GitHubRepo`,
   `doppler_project(&ProjectSlug) -> DopplerProject`,
-  `doppler_root_config(&DopplerProject, &EnvironmentSlug) -> DopplerConfig`.
+  `doppler_root_config(&DopplerProject, &EnvironmentSlug) -> DopplerConfig`, whose config
+  name is the environment's snake join because `DopplerConfigName` allows no hyphen.
   `NamingScheme::V1`. Pure, total, frozen.
 - `propose_slug(&ProjectName) -> Result<ProjectSlug, ProposeError>`: NFKD, strip marks,
   ASCII lowercase, split on non-alphanumerics and case boundaries, join. Not on the
@@ -192,23 +196,24 @@ Dependencies flow downward only: cli -> dsl, providers-fake -> core -> types -> 
 `#[derive(DomainType)]` on a newtype with one of three storages, chosen by the inner type:
 
 - `String`: `#[domain(pattern = "...", min_len = N, max_len = N, description, example)]`.
-  Generates `DomainType`, `FromStr`, `Display`, `Debug`, `Serialize` (via `Display`),
-  `Deserialize` (via `parse`), `JsonSchema` (string with pattern and lengths).
+  Generates `DomainType`, `DomainObject`, `FromStr`, `Display`, `Debug`, `Serialize` (via
+  `Display`), `Deserialize` (via `parse`), `JsonSchema` (string with pattern and lengths).
+  Lengths count chars. Anchoring is decided on the parsed regex, so `^a|b$` is wrapped.
 - `secrecy::SecretString`, required when `#[domain(secret, ...)]` is present: validation
-  runs on the raw `&str` before wrapping.
+  runs on the raw `&str` before wrapping. Generates `DomainType` with `IS_SECRET = true`,
+  `DomainObject`, `FromStr`, redacted `Display` and `Debug`, `Deserialize` (via `parse`),
+  `JsonSchema`, and `expose(&self, &SinkToken) -> &str`. Generates no `Serialize`. Parse
+  errors never contain the input.
 - Any other inner type that implements `FromStr + Display + Clone + Eq` (such as
-  `WordList`): `parse` delegates to `FromStr`, then applies `max_len` to the `Display`
-  form; `Display`, `Serialize`, and the schema use the `Display` form. This is how the
-  `WordList` storage works, and it lets the derive be built and tested before `WordList`
-  exists. Generates `DomainType` with `IS_SECRET = true`,
-  `FromStr`, redacted `Display` and `Debug`, `Deserialize` (via `parse`), `JsonSchema`,
-  and `expose(&self, &SinkToken) -> &str`. Generates no `Serialize`.
+  `WordList`): `parse` delegates to `FromStr`, then applies `max_len`, `min_len` and
+  `pattern` to the `Display` form; `Display`, `Serialize`, and the schema use the `Display`
+  form. This is how the `WordList` storage works.
 
-Generated code reaches serde, schemars, and secrecy through `willikins_types::__private`
-re-exports so users of the derive need no extra dependencies. Compile-fail tests with
-`trybuild` live in `crates/willikins-types/tests/derive/`: `secret` on a `String` newtype,
-`pattern` that is not a valid regex, a non-newtype struct, a generic struct, and calling
-`serde_json::to_string` on a secret type.
+Generic structs, enums, and non-newtype structs are rejected with a spanned message.
+Generated code reaches serde, schemars, secrecy and regex through
+`willikins_types::__private` re-exports; `willikins-types` aliases itself with
+`extern crate self as willikins_types` so the derive works inside it. Compile-fail tests
+with `trybuild` live in `crates/willikins-types/tests/derive/fail/`.
 
 ### willikins-core
 
