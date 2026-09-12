@@ -101,6 +101,7 @@ pub mod github;
 pub mod name;
 pub mod naming;
 pub mod propose;
+pub mod registry;
 pub mod reserved;
 pub mod slug;
 pub mod text;
@@ -114,37 +115,35 @@ pub use github::{ActionsSecretName, GitHubOrg, GitHubRepo, HttpsUrl, RepoVisibil
 pub use name::ProjectName;
 pub use naming::NamingScheme;
 pub use propose::{ProposeError, propose_slug};
+pub use registry::{TypeName, TypeRef, TypeRegistry};
 pub use reserved::is_reserved;
 pub use slug::{ComponentSlug, EnvironmentSlug, ProjectSlug};
 pub use text::{TemplateSource, Text};
 pub use word::{Word, WordList};
 
-/// The beginning of the type catalog: every domain type this crate
-/// defines. Later milestone-1 tasks append the org, resource-identity,
-/// and credential types.
-#[must_use]
-pub fn type_infos() -> Vec<TypeInfo> {
-    vec![
-        TypeInfo::of::<WordList>(),
-        TypeInfo::of::<ProjectSlug>(),
-        TypeInfo::of::<ComponentSlug>(),
-        TypeInfo::of::<EnvironmentSlug>(),
-        TypeInfo::of::<ProjectName>(),
-        TypeInfo::of::<Text>(),
-        TypeInfo::of::<TemplateSource>(),
-        TypeInfo::of::<GitHubOrg>(),
-        TypeInfo::of::<RepoVisibility>(),
-        TypeInfo::of::<GitHubRepo>(),
-        TypeInfo::of::<HttpsUrl>(),
-        TypeInfo::of::<ActionsSecretName>(),
-        TypeInfo::of::<DopplerProject>(),
-        TypeInfo::of::<DopplerConfigName>(),
-        TypeInfo::of::<DopplerConfig>(),
-        TypeInfo::of::<DopplerTokenName>(),
-        TypeInfo::of::<SecretName>(),
-        TypeInfo::of::<DopplerServiceToken>(),
-        TypeInfo::of::<DopplerSecretValue>(),
-    ]
+// `type_infos()`, `registry()`, and `assert_all_examples_parse()` are
+// generated together from this one list, so the type catalog and the type
+// registry cannot drift apart. See `registry::domain_types!`.
+registry::domain_types! {
+    WordList,
+    ProjectSlug,
+    ComponentSlug,
+    EnvironmentSlug,
+    ProjectName,
+    Text,
+    TemplateSource,
+    GitHubOrg,
+    RepoVisibility,
+    GitHubRepo,
+    HttpsUrl,
+    ActionsSecretName,
+    DopplerProject,
+    DopplerConfigName,
+    DopplerConfig,
+    DopplerTokenName,
+    SecretName,
+    DopplerServiceToken,
+    DopplerSecretValue,
 }
 
 /// Assert that `T::example()` parses as `T`.
