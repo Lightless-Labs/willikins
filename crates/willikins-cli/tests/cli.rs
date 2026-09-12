@@ -114,6 +114,23 @@ fn describe_with_no_inputs_lists_slug_and_org_and_exits_1() {
 fn describe_labels_a_hostile_document_description_and_keeps_it_out_of_the_prompt() {
     let path = workflow("workflows/fixtures/hostile-description.yaml");
 
+    // The fixture's header claims it is "otherwise a normal, fully valid
+    // workflow": `validate` must exit 0 with no warning (in particular, no
+    // `UnusedInput` for `note`, which the fixture only reaches through a
+    // workflow output binding rather than a step).
+    let validate_output = run(&["validate", path.to_str().unwrap()]);
+    assert_eq!(
+        exit_code(&validate_output),
+        0,
+        "stderr: {}",
+        stderr(&validate_output)
+    );
+    assert!(
+        stdout(&validate_output).is_empty(),
+        "expected no warnings: {}",
+        stdout(&validate_output)
+    );
+
     let text_output = run(&["describe", path.to_str().unwrap()]);
     assert_eq!(exit_code(&text_output), 1);
     let text = stdout(&text_output);
