@@ -1,6 +1,6 @@
 # Acceptance test 3: a `with` key that is not one of the node's tool's
 # ports. `check` returns exactly one error:
-#   UnknownPort { node: names, tool: naming.v1, port: bogus }
+#   UnknownPort { site: Site::Port { node: names, port: bogus }, tool: naming.v1 }
 name: unknown-port
 description: An extra `with` key that naming.v1 has no port for.
 steps:

@@ -429,7 +429,7 @@ fn finding_02_an_output_referencing_a_step_named_outputs_resolves() {
     let checked = willikins_core::check(&workflow, &empty_catalog())
         .expect("finding 2: this document must check cleanly");
 
-    // The node's own port types are untouched by the output sentinel...
+    // The node's own port types are untouched by the workflow output...
     assert_eq!(
         checked.types[&willikins_core::NodeName::parse("outputs").unwrap()]
             [&willikins_core::PortName::parse("slug").unwrap()],
@@ -867,8 +867,8 @@ fn finding_06_a_huge_input_argument_is_not_echoed_in_full() {
 /// this pass attacked with. A generated document glues a `name` to a
 /// selection of these, so the generator explores real syntax (references,
 /// `for_each`, `item`, keyed references, list defaults, secret types, the
-/// `outputs`/`for_each` sentinel names) rather than random bytes, which
-/// would only ever exercise the YAML scanner.
+/// `outputs`/`for_each` names that used to be sentinels) rather than random
+/// bytes, which would only ever exercise the YAML scanner.
 const FRAGMENTS: &[&str] = &[
     "inputs:\n  slug: { type: ProjectSlug }\n",
     "inputs:\n  org: { type: GitHubOrg, default: lightless-labs }\n",

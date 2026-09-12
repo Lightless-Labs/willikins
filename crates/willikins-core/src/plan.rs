@@ -11,8 +11,8 @@
 //! (of the same `list<T>` type) the moment any instance's is not. A
 //! [`Binding::Keyed`] instead picks the one instance whose item's canonical
 //! string equals the given key, failing with [`PlanError::KeyNotInForEach`]
-//! naming the *referencing* node, not the `for_each` node itself, when no
-//! instance matches — this is what acceptance test 7 pins.
+//! naming the *referencing* site, not the `for_each` node it points at, when
+//! no instance matches — this is what acceptance test 7 pins.
 //!
 //! Because that canonical string is an instance's only identity — to a
 //! `Keyed` reference, and in [`PlannedNode::instance`] — a source list

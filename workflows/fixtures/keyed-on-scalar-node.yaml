@@ -1,6 +1,7 @@
 # Acceptance test 4: a `${{ steps.<node>[<key>].<port> }}` reference to a
 # node with no `for_each`. `check` returns exactly one error:
-#   KeyedOnScalarNode { node: token, port: config, referenced: doppler }
+#   KeyedOnScalarNode { site: Site::Port { node: token, port: config },
+#                       referenced: doppler }
 name: keyed-on-scalar-node
 description: A keyed reference to a node that never runs per item.
 steps:
