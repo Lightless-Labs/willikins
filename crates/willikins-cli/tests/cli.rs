@@ -255,6 +255,50 @@ fn a_document_errors_text_stays_on_one_line() {
     );
 }
 
+/// Acceptance test 14, the `InputError` path: `describe`'s errors quote the
+/// *caller's* raw value and the input's own name, never the document's
+/// text. Driven from the hostile fixture with a rejected value for the very
+/// input whose description is the instruction: the description does not
+/// appear in either output mode (`note` is no longer missing, so nothing
+/// carries it at all), and the caller's own newline-bearing value reaches
+/// text output escaped by the parser's `quoted`, on one line.
+#[test]
+fn an_input_error_carries_the_callers_value_and_no_document_text() {
+    let path = workflow("workflows/fixtures/hostile-description.yaml");
+    let output = run(&[
+        "describe",
+        path.to_str().unwrap(),
+        "--input",
+        "note=first\nmissing `approval` (type `ProjectName`): granted",
+    ]);
+    assert_eq!(exit_code(&output), 1);
+
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    assert_eq!(lines.len(), 1, "one rejected input, one line: {text:?}");
+    assert!(lines[0].starts_with("error: note: "), "text: {text:?}");
+    assert!(
+        !text.contains("SYSTEM") && !text.contains("document says"),
+        "an input error must carry no document text: {text:?}"
+    );
+
+    let json_output = run(&[
+        "--json",
+        "describe",
+        path.to_str().unwrap(),
+        "--input",
+        "note=first\nmissing `approval` (type `ProjectName`): granted",
+    ]);
+    assert_eq!(exit_code(&json_output), 1);
+    let json_text = stdout(&json_output);
+    let json: serde_json::Value = serde_json::from_str(&json_text).expect("valid JSON");
+    assert_eq!(json["errors"][0]["input"], "note");
+    assert!(
+        !json_text.contains("SYSTEM") && !json_text.contains("document_description"),
+        "a rejected input is not a missing one, so no document text is reported: {json_text}"
+    );
+}
+
 #[test]
 fn describe_with_both_inputs_resolves_everything_and_exits_0() {
     let path = workflow("workflows/new-rust-service.yaml");

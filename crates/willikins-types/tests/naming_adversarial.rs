@@ -224,6 +224,38 @@ fn swift_ownership_and_concurrency_keywords_added_2026_09_12_are_reserved() {
             "`propose_slug` must reject `{reserved}` as reserved"
         );
     }
+    // `ProjectSlug::parse` refuses an upper-case letter outright, so it
+    // cannot show that the reserved check *itself* ignores case: a slug
+    // whose word is `Borrowing` never reaches the check. `propose_slug`
+    // does, because a display name is where mixed case legitimately
+    // arrives, and a single capitalised word derives a single lower-case
+    // word. This is what pins the case folding for the three keywords
+    // added on 2026-09-12.
+    for reserved in [
+        "Borrowing",
+        "BORROWING",
+        "Consuming",
+        "CONSUMING",
+        "Nonisolated",
+        "NONISOLATED",
+    ] {
+        let name = ProjectName::parse(reserved).expect("valid ProjectName in test fixture");
+        assert!(
+            matches!(propose_slug(&name), Err(ProposeError::Reserved { .. })),
+            "`propose_slug` must reject `{reserved}` as reserved whatever its case"
+        );
+    }
+    // A capitalised *compound* is two words, not one: `NonIsolated` derives
+    // `non-isolated`, which collides with nothing, exactly as
+    // `borrowing-checker` does above. The reserved check applies to a
+    // single-word slug only, and this is the boundary of that rule.
+    let compound = ProjectName::parse("NonIsolated").expect("valid ProjectName in test fixture");
+    assert_eq!(
+        propose_slug(&compound)
+            .expect("a two-word slug collides with no keyword")
+            .to_string(),
+        "non-isolated"
+    );
 }
 
 #[test]
