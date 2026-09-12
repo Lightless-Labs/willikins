@@ -37,7 +37,7 @@ pub use document::{DefaultValue, Document, InputDecl, StepDecl};
 
 /// Where a [`DocumentError`] happened.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind")]
 pub enum DocumentErrorKind {
     /// A YAML-level failure: malformed syntax, a duplicate mapping key
     /// (see [`document`]'s module docs), a field of the wrong shape, or a
@@ -716,7 +716,7 @@ steps:
     fn document_error_serializes_with_an_adjacent_kind_tag() {
         let semantic = DocumentError::semantic("inputs.slug.default", "boom");
         let json = serde_json::to_value(&semantic).unwrap();
-        assert_eq!(json["kind"], "semantic");
+        assert_eq!(json["kind"], "Semantic");
         assert_eq!(json["path"], "inputs.slug.default");
         assert_eq!(json["message"], "boom");
     }
