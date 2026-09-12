@@ -271,6 +271,7 @@ These came up from memory during the conversation and have not been checked.
 1. Core with no real providers: domain types and derive macro, tool contract, graph checker
    with taint and approval classes, `describe` and `plan` against fake providers, one
    project-creation workflow as the test fixture. Plan: `docs/plans/2026-09-11-milestone-1-core.md`.
+   **Completed:** 2026-09-12.
 2. Real GitHub and Doppler providers, `apply`, run ledger, approval gate, MCP server over
    stdio and Streamable HTTP.
 3. Templates and versioned re-apply.
