@@ -102,12 +102,18 @@ impl std::str::FromStr for InputArg {
 pub struct InputError {
     /// The input name the raw value was supplied for — declared or not.
     pub input: InputName,
-    /// Why it was rejected. For a secret-typed input this can only ever be
-    /// the registry's cardinality-blind refusal, never an echo of the raw
-    /// text: `describe` calls the same [`Value::parse`] / [`Value::parse_list`]
-    /// that `check`'s literal handling does, and those never see a secret
-    /// declared type in a successfully [`Checked`] workflow (`check`
-    /// rejects one first).
+    /// Why it was rejected, exactly as the type's own parser reported it:
+    /// `describe` adds nothing and removes nothing. For a *non-secret*
+    /// type that message typically quotes the offending raw text, which is
+    /// intended — it is the caller's own value, and an agent needs to see
+    /// what it got wrong.
+    ///
+    /// A *secret* raw value can never be echoed here, and not because this
+    /// type filters one out: a secret-typed workflow input cannot exist in
+    /// a successfully [`Checked`] workflow at all (`check` reports
+    /// `SecretWorkflowInput` first), and the registry refuses a secret type
+    /// before it looks at the text, so [`Value::parse`] never hands one to
+    /// a parser.
     pub error: ParseError,
 }
 
@@ -162,7 +168,8 @@ pub struct Description {
 ///   (a [`RawInput::List`]) — either function's own cardinality check
 ///   reports a [`RawInput`] of the wrong shape for the declared type, so no
 ///   separate check is needed here; a parse failure becomes an
-///   [`InputError`] without ever echoing the raw text;
+///   [`InputError`] carrying that parser's own message (see
+///   [`InputError::error`] for what it may quote);
 /// - otherwise, a declared default fills [`Description::resolved`];
 /// - otherwise the input is [`MissingInput`].
 ///

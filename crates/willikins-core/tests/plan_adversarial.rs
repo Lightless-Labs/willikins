@@ -654,3 +654,42 @@ fn two_for_each_items_rendering_to_the_same_key_are_rejected() {
         other => panic!("expected DuplicateForEachKey, got {other:?}"),
     }
 }
+
+#[test]
+fn describe_echoes_a_rejected_non_secret_raw_value_and_never_sees_a_secret_one() {
+    // A non-secret domain type's own parser names the offending text, and
+    // `describe` passes that `ParseError` through untouched: the value is
+    // the caller's own, and an agent needs to see what it got wrong.
+    let checked = describe_checked();
+    let mut partial = PartialInputs::new();
+    partial.insert(
+        input("slug"),
+        RawInput::Scalar("Not A Slug At All!".to_string()),
+    );
+    let description = describe(&checked, &partial);
+    let error = &description.errors[0];
+    assert_eq!(error.input, input("slug"));
+    assert!(
+        error.error.to_string().contains("Not A Slug At All!"),
+        "{}",
+        error.error
+    );
+
+    // The safety of that echo rests on a secret-typed input never reaching
+    // a parser at all: `check` refuses to produce a `Checked` for one.
+    let secret_workflow = Workflow::new("secret-input")
+        .input(input("token"), InputSpec::new(ty("DopplerServiceToken")));
+    let errors = check(&secret_workflow, &Catalog::new(willikins_types::registry()))
+        .expect_err("a secret-typed workflow input is refused");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, willikins_core::CheckError::SecretWorkflowInput { .. })),
+        "{errors:?}"
+    );
+
+    // And the registry itself refuses a secret type before looking at the
+    // text, so even a direct parse cannot echo one.
+    let refusal = Value::parse(&ty("DopplerServiceToken"), "dp.st.prd.realtokenbytes").unwrap_err();
+    assert!(!refusal.to_string().contains("realtokenbytes"), "{refusal}");
+}
