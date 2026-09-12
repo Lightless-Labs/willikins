@@ -31,8 +31,8 @@ use indexmap::IndexMap;
 use willikins_core::describe::{PartialInputs, RawInput};
 use willikins_core::{
     Action, Catalog, CheckError, Class, InputName, Inputs, NodeName, Observation, OutputName,
-    Outputs, Plan, PlanError, PlannedNode, PortName, PortType, ToolError, ToolErrorKind, ToolName,
-    TypeName, TypeRef, Value, Workflow,
+    Outputs, Plan, PlanError, PlannedNode, PortName, PortType, Site, ToolError, ToolErrorKind,
+    ToolName, TypeName, TypeRef, Value, Workflow,
 };
 use willikins_providers_fake::FakeState;
 use willikins_types::DomainType;
@@ -111,6 +111,15 @@ fn output(name: &str) -> OutputName {
 
 fn tool_name(name: &str) -> ToolName {
     ToolName::parse(name).unwrap()
+}
+
+/// A [`Site::Port`] from two raw names, so an expected error stays on one
+/// line where it used to carry a bare `node`/`port` pair.
+fn port_site(node_name: &str, port_name: &str) -> Site {
+    Site::Port {
+        node: node(node_name),
+        port: port(port_name),
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -219,7 +228,7 @@ fn acceptance_01_taint_rejection() {
         errors,
         vec![CheckError::SecretToNonSecretSink {
             from: (node("token"), port("token")),
-            to: (node("readme"), port("value")),
+            to: port_site("readme", "value"),
         }],
         "acceptance test 1: expected exactly one SecretToNonSecretSink"
     );
@@ -267,8 +276,7 @@ fn acceptance_03_static_errors() {
     assert_eq!(
         willikins_core::check(&undeclared, &catalog).unwrap_err(),
         vec![CheckError::UndeclaredInput {
-            node: node("repo"),
-            port: port("repo"),
+            site: port_site("repo", "repo"),
             input: input("slug"),
         }],
         "acceptance test 3: UndeclaredInput"
@@ -338,9 +346,8 @@ fn acceptance_03_static_errors() {
     assert_eq!(
         willikins_core::check(&unknown_port, &catalog).unwrap_err(),
         vec![CheckError::UnknownPort {
-            node: node("names"),
+            site: port_site("names", "bogus"),
             tool: tool_name("naming.v1"),
-            port: port("bogus"),
         }],
         "acceptance test 3: UnknownPort"
     );
@@ -396,8 +403,7 @@ fn acceptance_04_for_each() {
     assert_eq!(
         willikins_core::check(&item_outside, &catalog).unwrap_err(),
         vec![CheckError::ItemOutsideForEach {
-            node: node("config"),
-            port: port("project"),
+            site: port_site("config", "project"),
         }],
         "acceptance test 4: ItemOutsideForEach"
     );
@@ -406,8 +412,7 @@ fn acceptance_04_for_each() {
     assert_eq!(
         willikins_core::check(&keyed_on_scalar, &catalog).unwrap_err(),
         vec![CheckError::KeyedOnScalarNode {
-            node: node("token"),
-            port: port("config"),
+            site: port_site("token", "config"),
             referenced: node("doppler"),
         }],
         "acceptance test 4: KeyedOnScalarNode"
@@ -744,7 +749,7 @@ fn acceptance_07_plan_against_seeded_state() {
     }
 
     // environments=[dev, qa] with configs[prd] referenced: KeyNotInForEach
-    // named at `token`, the referencing node, not `configs`.
+    // named at `token`.`config`, the referencing site, not `configs`.
     let catalog = empty_catalog();
     let checked = willikins_core::check(&workflow, &catalog)
         .expect("acceptance test 7: must check cleanly against the empty catalog");
@@ -763,8 +768,12 @@ fn acceptance_07_plan_against_seeded_state() {
     let err = willikins_core::plan(&checked, &inputs, &catalog)
         .expect_err("acceptance test 7: `prd` is not in [dev, qa]");
     match err {
-        PlanError::KeyNotInForEach { node: n, key } => {
-            assert_eq!(n, node("token"), "acceptance test 7: KeyNotInForEach node");
+        PlanError::KeyNotInForEach { site, key } => {
+            assert_eq!(
+                site,
+                port_site("token", "config"),
+                "acceptance test 7: KeyNotInForEach site"
+            );
             assert_eq!(key, "prd", "acceptance test 7: KeyNotInForEach key");
         }
         other => panic!("acceptance test 7: expected KeyNotInForEach, got {other:?}"),

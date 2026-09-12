@@ -1,0 +1,19 @@
+# Acceptance test 16: a step literally named `outputs`, alongside a
+# workflow output whose own binding is broken (it references a node that
+# does not exist). Before the `Site` enum, an output binding's own errors
+# were reported under the synthetic node name `outputs`; this fixture pins
+# that the real step named `outputs` never gets confused with that scope.
+# `check` returns exactly one error, whose JSON `site` is
+# `{"kind": "output", "name": "broken"}`, not `{"kind": "port", "node":
+# "outputs", ...}`:
+#   UnknownNode { site: Site::Output { name: broken }, referenced: ghost }
+name: output-binding-broken-with-step-named-outputs
+description: A step named `outputs`, plus a workflow output whose own reference is broken.
+steps:
+  outputs:
+    tool: naming.v1
+    with:
+      org: lightless-labs
+      slug: demo
+outputs:
+  broken: ${{ steps.ghost.repo }}

@@ -413,15 +413,16 @@ steps:
 /// workflow output that references one of that step's ports resolves
 /// against the step it actually names.
 ///
-/// `check` reports an output binding's own errors under the synthetic node
-/// name `outputs` (an output is not a node). Before the fix, the
-/// self-reference shortcut in `resolve_reference` compared that synthetic
-/// name against the referenced node's name, so an output referencing a
-/// real step named `outputs` looked like a node referencing itself and was
-/// dropped: no error, and no entry in `Checked::output_types`. `plan`
-/// resolves bindings itself and still produced a value for it, so `check`
-/// and `plan` disagreed about the workflow's output surface — the same
-/// class of bug as finding 1, reached from the other side.
+/// Before the `Site` enum (task 1b), `check` reported an output binding's
+/// own errors under the synthetic node name `outputs` (an output is not a
+/// node). Before *this* fix, the self-reference shortcut in
+/// `resolve_reference` compared that synthetic name against the referenced
+/// node's name, so an output referencing a real step named `outputs`
+/// looked like a node referencing itself and was dropped: no error, and no
+/// entry in `Checked::output_types`. `plan` resolves bindings itself and
+/// still produced a value for it, so `check` and `plan` disagreed about
+/// the workflow's output surface — the same class of bug as finding 1,
+/// reached from the other side.
 #[test]
 fn finding_02_an_output_referencing_a_step_named_outputs_resolves() {
     let workflow = load(&fixture("output-from-step-named-outputs.yaml"));

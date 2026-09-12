@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 use common::{input, list_ty, node, output, port, tool_name, ty};
 use willikins_core::{
     Action, Binding, Catalog, Class, InputSpec, Inputs, Node, Observation, Outputs, PlanError,
-    PortSpec, PortType, SinkToken, Tool, ToolError, ToolSpec, Value, Workflow, check, plan,
+    PortSpec, PortType, SinkToken, Site, Tool, ToolError, ToolSpec, Value, Workflow, check, plan,
 };
 use willikins_providers_fake::{FakeState, catalog, empty};
 use willikins_types::{
@@ -213,8 +213,14 @@ fn acceptance_7_environments_dev_qa_with_configs_prd_referenced_is_key_not_in_fo
     );
     let err = plan(&checked, &inputs, &fake_catalog).unwrap_err();
     match err {
-        PlanError::KeyNotInForEach { node: n, key } => {
-            assert_eq!(n, node("token"));
+        PlanError::KeyNotInForEach { site, key } => {
+            assert_eq!(
+                site,
+                Site::Port {
+                    node: node("token"),
+                    port: port("config"),
+                }
+            );
             assert_eq!(key, "prd");
         }
         other => panic!("expected KeyNotInForEach, got {other:?}"),
@@ -449,7 +455,10 @@ fn missing_input_when_a_binding_names_an_input_the_caller_did_not_supply() {
 #[test]
 fn plan_error_display_is_one_line() {
     let err = PlanError::KeyNotInForEach {
-        node: node("token"),
+        site: Site::Port {
+            node: node("token"),
+            port: port("config"),
+        },
         key: "prd".to_string(),
     };
     let message = err.to_string();

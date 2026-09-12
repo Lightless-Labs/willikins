@@ -24,7 +24,7 @@
 mod common;
 
 use common::{input, node, port, tool_name, ty};
-use willikins_core::{CheckError, Inputs, PlanError, PortType, Reported, Value};
+use willikins_core::{CheckError, Inputs, PlanError, PortType, Reported, Site, Value};
 use willikins_types::{DomainType, DopplerServiceToken, ParseError};
 
 /// A substring that must never appear in any rendering of a secret.
@@ -189,7 +189,10 @@ fn a_key_string_is_echoed_verbatim_and_a_redacted_one_stays_redacted() {
     ] {
         for error in [
             PlanError::KeyNotInForEach {
-                node: node("token"),
+                site: Site::Port {
+                    node: node("token"),
+                    port: port("config"),
+                },
                 key: key.clone(),
             },
             PlanError::DuplicateForEachKey {

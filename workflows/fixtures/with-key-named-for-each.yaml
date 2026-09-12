@@ -1,0 +1,17 @@
+# Acceptance test 16: a `with` key literally named `for_each` -- not the
+# node's own `for_each:` binding, an ordinary extra key in its `with` map.
+# Before the `Site` enum, a `for_each` binding's own errors were reported
+# under the synthetic port name `for_each`; this fixture pins that a real
+# `with` key of that name never gets confused with that scope. `check`
+# returns exactly one error, whose JSON `site` is `{"kind": "port", "node":
+# "names", "port": "for_each"}`, not `{"kind": "for_each", ...}`:
+#   UnknownPort { site: Site::Port { node: names, port: for_each }, tool: naming.v1 }
+name: with-key-named-for-each
+description: A `with` key named `for_each` that naming.v1 has no port for.
+steps:
+  names:
+    tool: naming.v1
+    with:
+      org: lightless-labs
+      slug: demo
+      for_each: oops

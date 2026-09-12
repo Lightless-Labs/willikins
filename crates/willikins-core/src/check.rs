@@ -46,20 +46,6 @@
 //!   it collapses into the map, and report it through this same error
 //!   type. Covered here by a single test that constructs the variant
 //!   directly and checks its `Display`.
-//! - A workflow output and the synthetic `"outputs"` node label used to
-//!   report an output binding's own errors collide if a real node happens
-//!   to be named `outputs`; likewise `for_each`'s synthetic port label
-//!   collides with a real port named `for_each`. Neither collision changes
-//!   which check fires, only which node/port name an error report for the
-//!   `outputs` pseudo-scope shares with a real, identically named node.
-//!   The adversarial pass (acceptance test 12, first pass) moved the one
-//!   consequence that was not merely cosmetic -- output types overwriting
-//!   a real `outputs` node's port types, which also made any consumer that
-//!   looked an entry of `types` up in `workflow.nodes` panic -- out of the
-//!   way by giving outputs their own [`Checked::output_types`] map. The
-//!   error-field collision remains, because removing it means changing the
-//!   plan's own field lists for `UnknownNode`, `ItemOutsideForEach` and
-//!   `UnknownPort`.
 //! - An unregistered type named in an [`InputSpec`](crate::workflow::InputSpec)
 //!   is now caught explicitly, at the declaration site, by
 //!   [`CheckError::UnregisteredInputType`] (added by task 8, alongside
@@ -87,6 +73,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::catalog::Catalog;
 use crate::class::Class;
+use crate::site::Site;
 use crate::tool::{PortName, PortSpec, ToolName, ToolSpec};
 use crate::value::{PortType, TypeRef, TypeRegistry, Value};
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
@@ -172,25 +159,24 @@ pub enum CheckError {
     /// A port name that does not exist on the tool it is checked against.
     ///
     /// Two situations share this variant: a `with` key that is not one of
-    /// `node`'s own tool's input ports (`node` is the binding's own node);
-    /// and a `Step` or `Keyed` binding naming an output port that does not
-    /// exist on the node it references (`node` is then the *referenced*
-    /// node, since the port that is missing is one of its outputs).
+    /// its own node's tool's input ports (`site` is the binding's own
+    /// location); and a `Step` or `Keyed` binding naming an output port
+    /// that does not exist on the node it references (`site` then names
+    /// the *referenced* node and the missing output port, not the binding's
+    /// own location).
     UnknownPort {
-        /// The node the missing port was looked up on.
-        node: NodeName,
+        /// The node the missing port was looked up on, and the port name
+        /// that does not exist there.
+        site: Site,
         /// That node's tool.
         tool: ToolName,
-        /// The port name that does not exist.
-        port: PortName,
     },
     /// A `Step`, `Keyed`, or `for_each` binding names a node that is not
     /// in the workflow.
     UnknownNode {
-        /// The node whose binding contains the bad reference.
-        node: NodeName,
-        /// The port (or the synthetic `for_each` port) holding the binding.
-        port: PortName,
+        /// The binding's own location: the node and port (or `for_each`
+        /// binding, or workflow output) that contains the bad reference.
+        site: Site,
         /// The node name it referenced, which does not exist.
         referenced: NodeName,
     },
@@ -203,10 +189,10 @@ pub enum CheckError {
     },
     /// A `Binding::Input` names a workflow input that is not declared.
     UndeclaredInput {
-        /// The node whose binding references the undeclared input.
-        node: NodeName,
-        /// The port holding the binding.
-        port: PortName,
+        /// The binding's own location: the node and port (or `for_each`
+        /// binding, or workflow output) that references the undeclared
+        /// input.
+        site: Site,
         /// The undeclared input name.
         input: InputName,
     },
@@ -246,8 +232,8 @@ pub enum CheckError {
     SecretToNonSecretSink {
         /// The node and output port the secret value came from.
         from: (NodeName, PortName),
-        /// The node and input port it was bound to.
-        to: (NodeName, PortName),
+        /// The binding's own location that it flowed into.
+        to: Site,
     },
     /// A workflow input's declared type is secret. A secret value must
     /// never enter a workflow this way; it can only be produced by a tool.
@@ -269,17 +255,13 @@ pub enum CheckError {
     },
     /// A `Binding::Item` was used outside any `for_each` node.
     ItemOutsideForEach {
-        /// The node the binding was found in.
-        node: NodeName,
-        /// The port (or synthetic port) holding the binding.
-        port: PortName,
+        /// The binding's own location the `item` binding was found in.
+        site: Site,
     },
     /// A `Binding::Keyed` referenced a node that has no `for_each`.
     KeyedOnScalarNode {
-        /// The node whose binding contains the keyed reference.
-        node: NodeName,
-        /// The port holding the binding.
-        port: PortName,
+        /// The binding's own location that contains the keyed reference.
+        site: Site,
         /// The referenced node, which has no `for_each`.
         referenced: NodeName,
     },
@@ -314,10 +296,8 @@ pub enum CheckError {
     ///
     /// Not one of the plan's sixteen variants; see the module docs.
     NestedList {
-        /// The node whose binding asks for the promotion.
-        node: NodeName,
-        /// The port holding the binding.
-        port: PortName,
+        /// The binding's own location that asks for the promotion.
+        site: Site,
         /// The `for_each` node whose output port is already a list.
         referenced: NodeName,
     },
@@ -382,27 +362,21 @@ impl fmt::Display for CheckError {
             Self::UnknownTool { node, tool } => {
                 write!(f, "node `{node}`: unknown tool `{tool}`")
             }
-            Self::UnknownPort { node, tool, port } => {
-                write!(f, "node `{node}` (tool `{tool}`): no such port `{port}`")
+            Self::UnknownPort { site, tool } => {
+                write!(f, "{site} (tool `{tool}`): no such port")
             }
-            Self::UnknownNode {
-                node,
-                port,
-                referenced,
-            } => write!(
-                f,
-                "node `{node}`, port `{port}`: references unknown node `{referenced}`"
-            ),
+            Self::UnknownNode { site, referenced } => {
+                write!(f, "{site}: references unknown node `{referenced}`")
+            }
             Self::UnboundInput { node, port } => {
                 write!(
                     f,
                     "node `{node}`, port `{port}`: required input is not bound"
                 )
             }
-            Self::UndeclaredInput { node, port, input } => write!(
-                f,
-                "node `{node}`, port `{port}`: references undeclared input `{input}`"
-            ),
+            Self::UndeclaredInput { site, input } => {
+                write!(f, "{site}: references undeclared input `{input}`")
+            }
             Self::InvalidLiteral { node, port, error } => {
                 write!(f, "node `{node}`, port `{port}`: invalid literal: {error}")
             }
@@ -421,8 +395,8 @@ impl fmt::Display for CheckError {
             ),
             Self::SecretToNonSecretSink { from, to } => write!(
                 f,
-                "secret value from node `{}`, port `{}` flows into non-secret sink at node `{}`, port `{}`",
-                from.0, from.1, to.0, to.1
+                "secret value from node `{}`, port `{}` flows into non-secret sink at `{to}`",
+                from.0, from.1
             ),
             Self::SecretForEachSource { node } => {
                 write!(f, "node `{node}`: for_each source is secret")
@@ -430,17 +404,12 @@ impl fmt::Display for CheckError {
             Self::ForEachOverScalar { node } => {
                 write!(f, "node `{node}`: for_each source is not a list")
             }
-            Self::ItemOutsideForEach { node, port } => write!(
+            Self::ItemOutsideForEach { site } => {
+                write!(f, "{site}: `item` is only valid inside a for_each node")
+            }
+            Self::KeyedOnScalarNode { site, referenced } => write!(
                 f,
-                "node `{node}`, port `{port}`: `item` is only valid inside a for_each node"
-            ),
-            Self::KeyedOnScalarNode {
-                node,
-                port,
-                referenced,
-            } => write!(
-                f,
-                "node `{node}`, port `{port}`: keyed reference to node `{referenced}`, which has no for_each"
+                "{site}: keyed reference to node `{referenced}`, which has no for_each"
             ),
             Self::Cycle { nodes } => {
                 let joined = nodes
@@ -454,13 +423,9 @@ impl fmt::Display for CheckError {
                 f,
                 "node `{node}`: input `{input}`'s default has two items both keyed `{key}`; for_each instances must be distinguishable"
             ),
-            Self::NestedList {
-                node,
-                port,
-                referenced,
-            } => write!(
+            Self::NestedList { site, referenced } => write!(
                 f,
-                "node `{node}`, port `{port}`: node `{referenced}` runs once per item and its port is already a list; there is no list-of-list type"
+                "{site}: node `{referenced}` runs once per item and its port is already a list; there is no list-of-list type"
             ),
             // Errors about a *declaration* rather than a node's port: see
             // `fmt_declaration_error`. Listed explicitly so this match
@@ -644,20 +609,6 @@ fn resolve_tool_specs<'c>(
     specs
 }
 
-/// The synthetic port name used to report a `for_each` binding's own
-/// errors, since `for_each` is not one of a node's `with` ports.
-fn for_each_port() -> PortName {
-    PortName::parse("for_each")
-        .unwrap_or_else(|err| unreachable!("`for_each` is a PortName: {err}"))
-}
-
-/// The synthetic node name used to report a workflow output binding's own
-/// errors, since an output is not itself a node. See the module docs'
-/// "Known gaps" section for the collision this admits.
-fn outputs_node() -> NodeName {
-    NodeName::parse("outputs").unwrap_or_else(|err| unreachable!("`outputs` is a NodeName: {err}"))
-}
-
 /// Whether `ty` is a secret type, per `registry`. An unregistered type
 /// name is treated as non-secret; see the module docs' "Known gaps".
 fn is_secret(ty: &TypeRef, registry: &TypeRegistry) -> bool {
@@ -735,9 +686,11 @@ impl<'a> Resolver<'a> {
         for (port, binding) in &node.with {
             if !seen.contains(port) {
                 errors.push(CheckError::UnknownPort {
-                    node: name.clone(),
+                    site: Site::Port {
+                        node: name.clone(),
+                        port: port.clone(),
+                    },
                     tool: node.tool.clone(),
-                    port: port.clone(),
                 });
                 self.record_extra(binding, name);
             }
@@ -756,7 +709,7 @@ impl<'a> Resolver<'a> {
         let Some(binding) = &node.for_each else {
             return ItemContext::NotInForEach;
         };
-        let port = for_each_port();
+        let site = Site::ForEach { node: name.clone() };
         if matches!(binding, Binding::Literal(_)) {
             errors.push(CheckError::ForEachOverScalar { node: name.clone() });
             return ItemContext::ForEachBroken;
@@ -764,8 +717,7 @@ impl<'a> Resolver<'a> {
 
         let site_idx = self.index_of.get(name).copied();
         let not_in_for_each = ItemContext::NotInForEach;
-        let Some((ty, _source)) =
-            self.resolve(site_idx, name, &port, &not_in_for_each, binding, errors)
+        let Some((ty, _source)) = self.resolve(site_idx, &site, &not_in_for_each, binding, errors)
         else {
             return ItemContext::ForEachBroken;
         };
@@ -846,8 +798,11 @@ impl<'a> Resolver<'a> {
         }
 
         let site_idx = self.index_of.get(node).copied();
-        let Some((found, source)) = self.resolve(site_idx, node, port, item_ctx, binding, errors)
-        else {
+        let site = Site::Port {
+            node: node.clone(),
+            port: port.clone(),
+        };
+        let Some((found, source)) = self.resolve(site_idx, &site, item_ctx, binding, errors) else {
             return;
         };
 
@@ -861,10 +816,7 @@ impl<'a> Resolver<'a> {
             // type a secret `for_each` source is already refused for)
             // falls through to the type check below, which cannot accept
             // it either -- so no binding is ever dropped without an error.
-            errors.push(CheckError::SecretToNonSecretSink {
-                from,
-                to: (node.clone(), port.clone()),
-            });
+            errors.push(CheckError::SecretToNonSecretSink { from, to: site });
             return;
         }
 
@@ -905,18 +857,17 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Check every workflow output. Errors are reported under the
-    /// synthetic `"outputs"` node name (an output is not a node); resolved
-    /// types go to [`Checked::output_types`], keyed by output name, so a
-    /// real node named `outputs` cannot have its port types overwritten.
-    /// A literal output has no target type to check against, so it is
-    /// refused ([`CheckError::LiteralOutput`]) rather than accepted and
-    /// dropped; a secret output is accepted, by decision -- see
+    /// Check every workflow output. Errors are reported under
+    /// [`Site::Output`] (an output is not a node); resolved types go to
+    /// [`Checked::output_types`], keyed by output name, so a real node
+    /// named `outputs` cannot have its port types overwritten. A literal
+    /// output has no target type to check against, so it is refused
+    /// ([`CheckError::LiteralOutput`]) rather than accepted and dropped; a
+    /// secret output is accepted, by decision -- see
     /// `tests/check_adversarial.rs`. Every output a successful `check`
     /// returns therefore has an entry in [`Checked::output_types`].
     fn check_outputs(&mut self, errors: &mut Vec<CheckError>) {
         let workflow = self.workflow;
-        let node = outputs_node();
         let not_in_for_each = ItemContext::NotInForEach;
         for (out_name, binding) in &workflow.outputs {
             if matches!(binding, Binding::Literal(_)) {
@@ -925,11 +876,11 @@ impl<'a> Resolver<'a> {
                 });
                 continue;
             }
-            let port = PortName::parse(out_name.as_str()).unwrap_or_else(|err| {
-                unreachable!("OutputName and PortName share a pattern: {err}")
-            });
+            let site = Site::Output {
+                name: out_name.clone(),
+            };
             if let Some((found, _source)) =
-                self.resolve(None, &node, &port, &not_in_for_each, binding, errors)
+                self.resolve(None, &site, &not_in_for_each, binding, errors)
             {
                 self.output_types.insert(out_name.clone(), found);
             }
@@ -944,8 +895,7 @@ impl<'a> Resolver<'a> {
     fn resolve(
         &mut self,
         site_idx: Option<NodeIndex>,
-        site_node: &NodeName,
-        site_port: &PortName,
+        site: &Site,
         item_ctx: &ItemContext,
         binding: &Binding,
         errors: &mut Vec<CheckError>,
@@ -956,10 +906,7 @@ impl<'a> Resolver<'a> {
             ),
             Binding::Item => match item_ctx {
                 ItemContext::NotInForEach => {
-                    errors.push(CheckError::ItemOutsideForEach {
-                        node: site_node.clone(),
-                        port: site_port.clone(),
-                    });
+                    errors.push(CheckError::ItemOutsideForEach { site: site.clone() });
                     None
                 }
                 ItemContext::ForEachBroken => None,
@@ -970,8 +917,7 @@ impl<'a> Resolver<'a> {
                 match self.workflow.inputs.get(input) {
                     None => {
                         errors.push(CheckError::UndeclaredInput {
-                            node: site_node.clone(),
-                            port: site_port.clone(),
+                            site: site.clone(),
                             input: input.clone(),
                         });
                         None
@@ -988,16 +934,12 @@ impl<'a> Resolver<'a> {
             Binding::Step {
                 node: referenced,
                 port,
-            } => self.resolve_reference(
-                site_idx, site_node, site_port, referenced, false, port, errors,
-            ),
+            } => self.resolve_reference(site_idx, site, referenced, false, port, errors),
             Binding::Keyed {
                 node: referenced,
                 port,
                 ..
-            } => self.resolve_reference(
-                site_idx, site_node, site_port, referenced, true, port, errors,
-            ),
+            } => self.resolve_reference(site_idx, site, referenced, true, port, errors),
         }
     }
 
@@ -1006,12 +948,10 @@ impl<'a> Resolver<'a> {
     /// `referenced` exists (even if the reference later turns out invalid),
     /// and suppressing further checks on a self-reference (left for
     /// [`find_cycles`] to report).
-    #[allow(clippy::too_many_arguments)]
     fn resolve_reference(
         &mut self,
         site_idx: Option<NodeIndex>,
-        site_node: &NodeName,
-        site_port: &PortName,
+        site: &Site,
         referenced: &NodeName,
         keyed: bool,
         port: &PortName,
@@ -1019,8 +959,7 @@ impl<'a> Resolver<'a> {
     ) -> Option<(TypeRef, Option<(NodeName, PortName)>)> {
         let Some(&ref_idx) = self.index_of.get(referenced) else {
             errors.push(CheckError::UnknownNode {
-                node: site_node.clone(),
-                port: site_port.clone(),
+                site: site.clone(),
                 referenced: referenced.clone(),
             });
             return None;
@@ -1031,13 +970,14 @@ impl<'a> Resolver<'a> {
         }
 
         // A node that references itself is left for `find_cycles` to
-        // report. Only a *real* node can do that: a workflow output's site
-        // is the synthetic `outputs` node name, which has no graph index,
-        // so comparing it against a real node named `outputs` would
-        // mistake an ordinary reference for a self-reference and drop it
-        // with no error and no recorded type (adversarial pass 2,
-        // finding 2). `site_idx` is `Some` exactly for a real node site.
-        if site_idx.is_some() && referenced == site_node {
+        // report. Only a real `Port` or `ForEach` site can be a self
+        // reference: a workflow output's site is [`Site::Output`], which
+        // names no node at all, so comparing it against a real node
+        // literally named `outputs` would mistake an ordinary reference
+        // for a self-reference and drop it with no error and no recorded
+        // type (adversarial pass 2, finding 2). `site.node()` is `Some`
+        // exactly for a real node site, matching `site_idx`.
+        if site.node() == Some(referenced) {
             return None;
         }
 
@@ -1047,8 +987,7 @@ impl<'a> Resolver<'a> {
 
         if keyed && target_node.for_each.is_none() {
             errors.push(CheckError::KeyedOnScalarNode {
-                node: site_node.clone(),
-                port: site_port.clone(),
+                site: site.clone(),
                 referenced: referenced.clone(),
             });
             return None;
@@ -1061,9 +1000,11 @@ impl<'a> Resolver<'a> {
 
         let Some(output_ty) = target_spec.outputs.get(port) else {
             errors.push(CheckError::UnknownPort {
-                node: referenced.clone(),
+                site: Site::Port {
+                    node: referenced.clone(),
+                    port: port.clone(),
+                },
                 tool: target_spec.name.clone(),
-                port: port.clone(),
             });
             return None;
         };
@@ -1071,8 +1012,7 @@ impl<'a> Resolver<'a> {
         let resolved_ty = if !keyed && target_node.for_each.is_some() {
             if output_ty.list {
                 errors.push(CheckError::NestedList {
-                    node: site_node.clone(),
-                    port: site_port.clone(),
+                    site: site.clone(),
                     referenced: referenced.clone(),
                 });
                 return None;
@@ -1266,6 +1206,15 @@ mod tests {
 
     fn tool_name(name: &str) -> ToolName {
         ToolName::parse(name).unwrap()
+    }
+
+    /// A [`Site::Port`] from two raw names, so a sample error stays on one
+    /// line where it used to carry a bare `node`/`port` pair.
+    fn port_site(node: &str, port_name: &str) -> Site {
+        Site::Port {
+            node: node_name(node),
+            port: port(port_name),
+        }
     }
 
     /// A tool whose spec is fixed at construction; `read` always reports
@@ -1477,9 +1426,8 @@ mod tests {
         assert_eq!(
             errors,
             vec![CheckError::UnknownPort {
-                node: node_name("names"),
+                site: port_site("names", "bogus"),
                 tool: tool_name("naming.v1"),
-                port: port("bogus"),
             }]
         );
     }
@@ -1510,9 +1458,8 @@ mod tests {
         assert_eq!(
             errors,
             vec![CheckError::UnknownPort {
-                node: node_name("names"),
+                site: port_site("names", "no_such_output"),
                 tool: tool_name("naming.v1"),
-                port: port("no_such_output"),
             }]
         );
     }
@@ -1536,8 +1483,7 @@ mod tests {
         assert_eq!(
             errors,
             vec![CheckError::UnknownNode {
-                node: node_name("repo"),
-                port: port("repo"),
+                site: port_site("repo", "repo"),
                 referenced: node_name("ghost"),
             }]
         );
@@ -1577,8 +1523,7 @@ mod tests {
         assert_eq!(
             errors,
             vec![CheckError::UndeclaredInput {
-                node: node_name("names"),
-                port: port("org"),
+                site: port_site("names", "org"),
                 input: input_name("org"),
             }]
         );
@@ -1815,17 +1760,15 @@ mod tests {
             ),
             (
                 CheckError::UnknownPort {
-                    node: node_name("n"),
+                    site: port_site("n", "p"),
                     tool: tool_name("t.t"),
-                    port: port("p"),
                 },
                 "n",
                 Some("p"),
             ),
             (
                 CheckError::UnknownNode {
-                    node: node_name("n"),
-                    port: port("p"),
+                    site: port_site("n", "p"),
                     referenced: node_name("ghost"),
                 },
                 "n",
@@ -1841,8 +1784,7 @@ mod tests {
             ),
             (
                 CheckError::UndeclaredInput {
-                    node: node_name("n"),
-                    port: port("p"),
+                    site: port_site("n", "p"),
                     input: input_name("x"),
                 },
                 "n",
@@ -1878,7 +1820,7 @@ mod tests {
             (
                 CheckError::SecretToNonSecretSink {
                     from: (node_name("src"), port("out")),
-                    to: (node_name("n"), port("p")),
+                    to: port_site("n", "p"),
                 },
                 "src",
                 Some("out"),
@@ -1907,16 +1849,14 @@ mod tests {
             ),
             (
                 CheckError::ItemOutsideForEach {
-                    node: node_name("n"),
-                    port: port("p"),
+                    site: port_site("n", "p"),
                 },
                 "n",
                 Some("p"),
             ),
             (
                 CheckError::KeyedOnScalarNode {
-                    node: node_name("n"),
-                    port: port("p"),
+                    site: port_site("n", "p"),
                     referenced: node_name("ghost"),
                 },
                 "n",
@@ -1931,8 +1871,7 @@ mod tests {
             ),
             (
                 CheckError::NestedList {
-                    node: node_name("n"),
-                    port: port("p"),
+                    site: port_site("n", "p"),
                     referenced: node_name("each"),
                 },
                 "n",
@@ -2112,13 +2051,11 @@ mod tests {
                 tool: tool_name("bogus.tool"),
             },
             CheckError::UnknownPort {
-                node: node_name("n"),
+                site: port_site("n", "p"),
                 tool: tool_name("bogus.tool"),
-                port: port("p"),
             },
             CheckError::UnknownNode {
-                node: node_name("n"),
-                port: port("p"),
+                site: port_site("n", "p"),
                 referenced: node_name("ghost"),
             },
             CheckError::UnboundInput {
@@ -2126,8 +2063,7 @@ mod tests {
                 port: port("p"),
             },
             CheckError::UndeclaredInput {
-                node: node_name("n"),
-                port: port("p"),
+                site: port_site("n", "p"),
                 input: input_name("i"),
             },
             CheckError::InvalidLiteral {
@@ -2147,7 +2083,7 @@ mod tests {
             },
             CheckError::SecretToNonSecretSink {
                 from: (node_name("a"), port("out")),
-                to: (node_name("b"), port("in")),
+                to: port_site("b", "in"),
             },
             CheckError::SecretWorkflowInput {
                 input: input_name("i"),
@@ -2160,12 +2096,10 @@ mod tests {
                 node: node_name("n"),
             },
             CheckError::ItemOutsideForEach {
-                node: node_name("n"),
-                port: port("p"),
+                site: port_site("n", "p"),
             },
             CheckError::KeyedOnScalarNode {
-                node: node_name("n"),
-                port: port("p"),
+                site: port_site("n", "p"),
                 referenced: node_name("ref"),
             },
             CheckError::Cycle {
@@ -2177,8 +2111,7 @@ mod tests {
                 found: ty("HttpsUrl"),
             },
             CheckError::NestedList {
-                node: node_name("n"),
-                port: port("p"),
+                site: port_site("n", "p"),
                 referenced: node_name("ref"),
             },
             CheckError::DuplicateNode {

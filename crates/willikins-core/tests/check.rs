@@ -17,7 +17,7 @@ use indexmap::IndexMap;
 
 use willikins_core::{
     Binding, Catalog, CheckError, CheckWarning, Class, InputSpec, Inputs, Node, NodeName,
-    Observation, Outputs, PortName, PortSpec, PortType, Tool, ToolError, ToolName, ToolSpec,
+    Observation, Outputs, PortName, PortSpec, PortType, Site, Tool, ToolError, ToolName, ToolSpec,
     TypeName, TypeRef, Value, Workflow, check,
 };
 use willikins_types::SinkToken;
@@ -289,7 +289,10 @@ fn acceptance_1_taint_rejection_reports_exactly_the_secret_to_non_secret_sink() 
         errors,
         vec![CheckError::SecretToNonSecretSink {
             from: (node("token"), port("token")),
-            to: (node("readme"), port("value")),
+            to: Site::Port {
+                node: node("readme"),
+                port: port("value"),
+            },
         }]
     );
 }
@@ -464,8 +467,10 @@ fn acceptance_4_item_outside_a_for_each_node_is_rejected() {
     assert_eq!(
         errors,
         vec![CheckError::ItemOutsideForEach {
-            node: node("names"),
-            port: port("slug"),
+            site: Site::Port {
+                node: node("names"),
+                port: port("slug"),
+            },
         }]
     );
 }
@@ -497,8 +502,10 @@ fn acceptance_4_keyed_reference_to_a_node_without_for_each_is_rejected() {
     assert_eq!(
         errors,
         vec![CheckError::KeyedOnScalarNode {
-            node: node("token"),
-            port: port("config"),
+            site: Site::Port {
+                node: node("token"),
+                port: port("config"),
+            },
             referenced: node("doppler"),
         }]
     );

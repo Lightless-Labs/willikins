@@ -19,8 +19,8 @@ use indexmap::IndexMap;
 use proptest::prelude::*;
 use willikins_core::{
     Binding, Catalog, CheckError, Checked, Class, InputName, InputSpec, Inputs, Node, NodeName,
-    Observation, OutputName, Outputs, PortName, PortSpec, PortType, Tool, ToolError, ToolName,
-    ToolSpec, TypeName, TypeRef, Value, Workflow, check,
+    Observation, OutputName, Outputs, PortName, PortSpec, PortType, Site, Tool, ToolError,
+    ToolName, ToolSpec, TypeName, TypeRef, Value, Workflow, check,
 };
 use willikins_types::{
     DomainType, DopplerServiceToken, EnvironmentSlug, RepoVisibility, SinkToken,
@@ -320,7 +320,10 @@ fn keyed_into_a_for_each_node_with_a_secret_list_output_cannot_feed_template_ren
         errors(&workflow),
         vec![CheckError::SecretToNonSecretSink {
             from: (node("secrets"), port("tokens")),
-            to: (node("readme"), port("value")),
+            to: Site::Port {
+                node: node("readme"),
+                port: port("value")
+            },
         }]
     );
 }
@@ -358,7 +361,10 @@ fn step_into_a_for_each_node_with_a_secret_element_cannot_feed_template_render()
         errors(&workflow),
         vec![CheckError::SecretToNonSecretSink {
             from: (node("tokens"), port("token")),
-            to: (node("readme"), port("value")),
+            to: Site::Port {
+                node: node("readme"),
+                port: port("value")
+            },
         }]
     );
 }
@@ -450,7 +456,10 @@ fn a_tainted_edge_reports_the_taint_violation_and_not_the_type_mismatch() {
         errors(&workflow),
         vec![CheckError::SecretToNonSecretSink {
             from: (node("api_key"), port("value")),
-            to: (node("repo"), port("repo")),
+            to: Site::Port {
+                node: node("repo"),
+                port: port("repo")
+            },
         }]
     );
 }
@@ -493,9 +502,11 @@ fn keyed_reference_to_a_missing_port_on_a_for_each_node_names_the_referenced_nod
     assert_eq!(
         errors(&workflow),
         vec![CheckError::UnknownPort {
-            node: node("configs"),
+            site: Site::Port {
+                node: node("configs"),
+                port: port("nope"),
+            },
             tool: tool_name("doppler.config.ensure"),
-            port: port("nope"),
         }]
     );
 }
@@ -572,8 +583,10 @@ fn a_required_port_bound_to_item_outside_for_each_is_not_also_unbound() {
     assert_eq!(
         errors(&workflow),
         vec![CheckError::ItemOutsideForEach {
-            node: node("configs"),
-            port: port("environment"),
+            site: Site::Port {
+                node: node("configs"),
+                port: port("environment"),
+            },
         }]
     );
 }
@@ -608,8 +621,10 @@ fn an_unknown_tool_suppresses_that_nodes_other_errors_deterministically() {
                 tool: tool_name("no.such.tool"),
             },
             CheckError::ItemOutsideForEach {
-                node: node("configs"),
-                port: port("environment"),
+                site: Site::Port {
+                    node: node("configs"),
+                    port: port("environment"),
+                },
             },
         ]
     );
@@ -902,8 +917,10 @@ fn step_on_a_for_each_node_with_a_list_output_is_rejected() {
     assert_eq!(
         errors(&workflow),
         vec![CheckError::NestedList {
-            node: node("sink"),
-            port: port("lines"),
+            site: Site::Port {
+                node: node("sink"),
+                port: port("lines"),
+            },
             referenced: node("lines"),
         }]
     );

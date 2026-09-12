@@ -81,11 +81,58 @@ fn validate_the_taint_fixture_exits_1_and_names_the_dotted_sites() {
     let json: serde_json::Value = serde_json::from_str(&json_text).expect("valid JSON array");
     assert!(json.is_array());
     assert_eq!(json.as_array().unwrap().len(), 1);
-    // The derived, internally tagged shape (via `Reported`) names the sites
-    // as structured `[node, port]` fields, not as a dotted substring.
+    // The derived, internally tagged shape (via `Reported`) names the
+    // sites as structured fields, not as a dotted substring: `from` stays
+    // a `[node, port]` pair, `to` is a `Site`, tagged `{"kind": "port", ...}`
+    // so it can never be confused with a `Site::ForEach` or `Site::Output`.
     assert_eq!(json[0]["kind"], "SecretToNonSecretSink");
     assert_eq!(json[0]["from"], serde_json::json!(["token", "token"]));
-    assert_eq!(json[0]["to"], serde_json::json!(["readme", "value"]));
+    assert_eq!(
+        json[0]["to"],
+        serde_json::json!({"kind": "port", "node": "readme", "port": "value"})
+    );
+}
+
+/// Acceptance test 16: a workflow output's own binding is broken (it
+/// references a node that does not exist), alongside a real step literally
+/// named `outputs`. The error's JSON `site` must read `{"kind": "output",
+/// "name": "broken"}` -- never `{"kind": "port", "node": "outputs", ...}`,
+/// which is what a synthetic-sentinel implementation would have produced
+/// for either this case or the real node's own errors.
+#[test]
+fn validate_output_binding_broken_with_step_named_outputs_names_the_output_site() {
+    let path = workflow("workflows/fixtures/output-binding-broken-with-step-named-outputs.yaml");
+    let output = run(&["--json", "validate", path.to_str().unwrap()]);
+    assert_eq!(exit_code(&output), 1, "stderr: {}", stderr(&output));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let errors = json.as_array().expect("an array of errors");
+    assert_eq!(errors.len(), 1, "json: {json}");
+    assert_eq!(errors[0]["kind"], "UnknownNode");
+    assert_eq!(
+        errors[0]["site"],
+        serde_json::json!({"kind": "output", "name": "broken"})
+    );
+    assert_eq!(errors[0]["referenced"], "ghost");
+}
+
+/// Acceptance test 16: a `with` key literally named `for_each` is an
+/// ordinary `UnknownPort`, sited at `{"kind": "port", ...}` -- never
+/// `{"kind": "for_each", ...}`, which is what a synthetic-sentinel
+/// implementation would have produced for the node's own `for_each`
+/// binding.
+#[test]
+fn validate_a_with_key_named_for_each_is_an_unknown_port_not_a_for_each_site() {
+    let path = workflow("workflows/fixtures/with-key-named-for-each.yaml");
+    let output = run(&["--json", "validate", path.to_str().unwrap()]);
+    assert_eq!(exit_code(&output), 1, "stderr: {}", stderr(&output));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let errors = json.as_array().expect("an array of errors");
+    assert_eq!(errors.len(), 1, "json: {json}");
+    assert_eq!(errors[0]["kind"], "UnknownPort");
+    assert_eq!(
+        errors[0]["site"],
+        serde_json::json!({"kind": "port", "node": "names", "port": "for_each"})
+    );
 }
 
 // ---------------------------------------------------------------------

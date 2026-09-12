@@ -48,6 +48,7 @@ use indexmap::IndexMap;
 use crate::catalog::Catalog;
 use crate::check::Checked;
 use crate::class::Class;
+use crate::site::Site;
 use crate::tool::{Inputs, Observation, Outputs, PortName, Tool, ToolError, ToolName, ToolSpec};
 use crate::value::{PortType, TypeName, TypeRef, Value};
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
@@ -145,9 +146,9 @@ pub enum PlanError {
     /// A `Binding::Keyed` reference named a key none of the referenced
     /// `for_each` node's instances have.
     KeyNotInForEach {
-        /// The node whose binding contains the keyed reference — the
-        /// referencing node, not the `for_each` node it points at.
-        node: NodeName,
+        /// The binding's own location that contains the keyed reference —
+        /// the referencing site, not the `for_each` node it points at.
+        site: Site,
         /// The key that matched no instance.
         key: String,
     },
@@ -195,8 +196,8 @@ impl std::fmt::Display for PlanError {
                 f,
                 "node `{node}`: two for_each items are both keyed `{key}`"
             ),
-            Self::KeyNotInForEach { node, key } => {
-                write!(f, "node `{node}`: no for_each instance is keyed `{key}`")
+            Self::KeyNotInForEach { site, key } => {
+                write!(f, "{site}: no for_each instance is keyed `{key}`")
             }
             Self::KeyUnknown { node, port } => {
                 write!(f, "node `{node}`, port `{port}`: key port is unknown")
@@ -237,13 +238,6 @@ struct ResolveCtx<'a> {
     inputs: &'a IndexMap<InputName, Value>,
     catalog: &'a Catalog,
     results: &'a HashMap<NodeName, NodeResult>,
-}
-
-/// The synthetic node name used to report a workflow output binding's own
-/// [`PlanError::KeyNotInForEach`], mirroring `check`'s own `"outputs"`
-/// sentinel for the same reason: an output is not itself a node.
-fn outputs_node() -> NodeName {
-    NodeName::parse("outputs").unwrap_or_else(|err| unreachable!("`outputs` is a NodeName: {err}"))
 }
 
 /// Plan `checked` against `catalog`, resolving its workflow inputs from
@@ -302,7 +296,8 @@ pub fn plan(
                 NodeResult::Scalar(outputs)
             }
             Some(source) => {
-                let source_value = resolve_binding(&ctx, name, source, None)?;
+                let site = Site::ForEach { node: name.clone() };
+                let source_value = resolve_binding(&ctx, &site, source, None)?;
                 let Some(items) = source_value.as_list() else {
                     return Err(PlanError::ForEachUnknown { node: name.clone() });
                 };
@@ -356,7 +351,10 @@ pub fn plan(
         if matches!(binding, Binding::Literal(_)) {
             continue;
         }
-        let value = resolve_binding(&ctx, &outputs_node(), binding, None)?;
+        let site = Site::Output {
+            name: out_name.clone(),
+        };
+        let value = resolve_binding(&ctx, &site, binding, None)?;
         outputs.insert(out_name.clone(), value);
     }
 
@@ -395,7 +393,11 @@ fn bind_ports(
                 unreachable!("`check` already validated this literal against its port type: {err}")
             })
         } else {
-            resolve_binding(ctx, node_name, binding, item)?
+            let site = Site::Port {
+                node: node_name.clone(),
+                port: port.clone(),
+            };
+            resolve_binding(ctx, &site, binding, item)?
         };
         inputs.insert(port.clone(), value);
     }
@@ -404,12 +406,11 @@ fn bind_ports(
 
 /// Resolve one non-literal binding to its [`Value`].
 ///
-/// `site_node` is only used to attribute [`PlanError::KeyNotInForEach`] to
-/// the node whose binding contains the keyed reference, never to the
-/// `for_each` node it points at.
+/// `site` is only used to attribute [`PlanError::KeyNotInForEach`] to the
+/// binding's own location, never to the `for_each` node it points at.
 fn resolve_binding(
     ctx: &ResolveCtx,
-    site_node: &NodeName,
+    site: &Site,
     binding: &Binding,
     item: Option<&Value>,
 ) -> Result<Value, PlanError> {
@@ -429,7 +430,7 @@ fn resolve_binding(
                 })
         }
         Binding::Step { node, port } => Ok(resolve_step(ctx, node, port)),
-        Binding::Keyed { node, key, port } => resolve_keyed(ctx, site_node, node, key, port),
+        Binding::Keyed { node, key, port } => resolve_keyed(ctx, site, node, key, port),
     }
 }
 
@@ -492,10 +493,10 @@ fn aggregate_for_each_port(
 
 /// Resolve a `Keyed` reference: the instance of `target`'s `for_each` node
 /// whose item renders to `key`, or [`PlanError::KeyNotInForEach`] attributed
-/// to `site_node` when none matches.
+/// to `site` when none matches.
 fn resolve_keyed(
     ctx: &ResolveCtx,
-    site_node: &NodeName,
+    site: &Site,
     target: &NodeName,
     key: &str,
     port: &PortName,
@@ -518,7 +519,7 @@ fn resolve_keyed(
                 .unwrap_or_else(|| unreachable!("`check` validated that this output port exists"))
         })
         .ok_or_else(|| PlanError::KeyNotInForEach {
-            node: site_node.clone(),
+            site: site.clone(),
             key: key.to_string(),
         })
 }

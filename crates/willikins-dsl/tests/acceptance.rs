@@ -61,10 +61,10 @@ fn secret_into_template_fails_check_with_exactly_one_taint_error() {
             );
             assert_eq!(
                 to,
-                &(
-                    node("readme"),
-                    willikins_core::PortName::parse("value").unwrap()
-                )
+                &willikins_core::Site::Port {
+                    node: node("readme"),
+                    port: willikins_core::PortName::parse("value").unwrap(),
+                }
             );
         }
         other => panic!("expected SecretToNonSecretSink, got {other:?}"),

@@ -115,19 +115,17 @@ fn check_error_detail(error: &CheckError) -> String {
         CheckError::UnknownTool { node, tool } => {
             format!("{node}: unknown tool `{tool}`")
         }
-        CheckError::UnknownPort { node, tool, port } => {
-            format!("{node}.{port}: no such port on tool `{tool}`")
+        CheckError::UnknownPort { site, tool } => {
+            format!("{site}: no such port on tool `{tool}`")
         }
-        CheckError::UnknownNode {
-            node,
-            port,
-            referenced,
-        } => format!("{node}.{port}: references unknown node `{referenced}`"),
+        CheckError::UnknownNode { site, referenced } => {
+            format!("{site}: references unknown node `{referenced}`")
+        }
         CheckError::UnboundInput { node, port } => {
             format!("{node}.{port}: required input is not bound")
         }
-        CheckError::UndeclaredInput { node, port, input } => {
-            format!("{node}.{port}: references undeclared input `{input}`")
+        CheckError::UndeclaredInput { site, input } => {
+            format!("{site}: references undeclared input `{input}`")
         }
         CheckError::InvalidLiteral { node, port, error } => {
             format!("{node}.{port}: invalid literal: {error}")
@@ -142,7 +140,7 @@ fn check_error_detail(error: &CheckError) -> String {
             format!("{node}.{port}: a literal cannot supply a secret value")
         }
         CheckError::SecretToNonSecretSink { from, to } => {
-            format!("{}.{} -> {}.{}", from.0, from.1, to.0, to.1)
+            format!("{}.{} -> {to}", from.0, from.1)
         }
         CheckError::SecretWorkflowInput { input, ty } => {
             format!("input `{input}` has secret type `{ty}`; a workflow input may not be secret")
@@ -153,14 +151,12 @@ fn check_error_detail(error: &CheckError) -> String {
         CheckError::ForEachOverScalar { node } => {
             format!("{node}: for_each source is not a list")
         }
-        CheckError::ItemOutsideForEach { node, port } => {
-            format!("{node}.{port}: `item` is only valid inside a for_each node")
+        CheckError::ItemOutsideForEach { site } => {
+            format!("{site}: `item` is only valid inside a for_each node")
         }
-        CheckError::KeyedOnScalarNode {
-            node,
-            port,
-            referenced,
-        } => format!("{node}.{port}: keyed reference to non-for_each node `{referenced}`"),
+        CheckError::KeyedOnScalarNode { site, referenced } => {
+            format!("{site}: keyed reference to non-for_each node `{referenced}`")
+        }
         CheckError::Cycle { nodes } => {
             let joined = nodes
                 .iter()
@@ -174,13 +170,9 @@ fn check_error_detail(error: &CheckError) -> String {
             expected,
             found,
         } => format!("input `{input}`: default value has type `{found}`, expected `{expected}`"),
-        CheckError::NestedList {
-            node,
-            port,
-            referenced,
-        } => format!(
-            "{node}.{port}: node `{referenced}` runs once per item and its port is already a list"
-        ),
+        CheckError::NestedList { site, referenced } => {
+            format!("{site}: node `{referenced}` runs once per item and its port is already a list")
+        }
         CheckError::DuplicateNode { node } => format!("duplicate node name `{node}`"),
         CheckError::UnregisteredInputType { input, ty } => {
             format!("input `{input}`: declared type `{ty}` is not a registered type")
@@ -351,10 +343,10 @@ mod tests {
                 NodeName::parse("token").unwrap(),
                 PortName::parse("token").unwrap(),
             ),
-            to: (
-                NodeName::parse("readme").unwrap(),
-                PortName::parse("value").unwrap(),
-            ),
+            to: willikins_core::Site::Port {
+                node: NodeName::parse("readme").unwrap(),
+                port: PortName::parse("value").unwrap(),
+            },
         };
         let text = check_errors_text(std::slice::from_ref(&error));
         assert!(text.contains("SecretToNonSecretSink"), "text: {text}");
@@ -362,13 +354,17 @@ mod tests {
         assert!(text.contains("readme.value"), "text: {text}");
 
         // JSON now comes from the derived, internally tagged shape (via
-        // `Reported`), not the hand-built dotted text above: it names the
-        // same sites as structured fields (`from`/`to`, each a
-        // `[node, port]` pair) rather than as a dotted substring.
+        // `Reported`), not the hand-built dotted text above: `from` stays a
+        // `[node, port]` pair, but `to` is a `Site`, tagged
+        // `{"kind": "port", "node", "port"}` so it can never be confused
+        // with a `Site::ForEach` or `Site::Output` on the wire.
         let json = check_errors_json(std::slice::from_ref(&error));
         assert_eq!(json[0]["kind"], "SecretToNonSecretSink");
         assert_eq!(json[0]["from"], serde_json::json!(["token", "token"]));
-        assert_eq!(json[0]["to"], serde_json::json!(["readme", "value"]));
+        assert_eq!(
+            json[0]["to"],
+            serde_json::json!({"kind": "port", "node": "readme", "port": "value"})
+        );
         assert!(
             json[0]["message"]
                 .as_str()

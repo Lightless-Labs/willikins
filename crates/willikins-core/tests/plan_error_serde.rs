@@ -11,7 +11,7 @@ mod common;
 use std::collections::HashSet;
 
 use common::{input, node, port, tool_name};
-use willikins_core::{Inputs, PlanError, ToolError, ToolErrorKind};
+use willikins_core::{Inputs, PlanError, Site, ToolError, ToolErrorKind};
 
 /// One instance of every [`PlanError`] variant.
 fn plan_error_samples() -> Vec<PlanError> {
@@ -23,7 +23,10 @@ fn plan_error_samples() -> Vec<PlanError> {
             key: "k".to_string(),
         },
         PlanError::KeyNotInForEach {
-            node: node("n"),
+            site: Site::Port {
+                node: node("n"),
+                port: port("p"),
+            },
             key: "k".to_string(),
         },
         PlanError::KeyUnknown {

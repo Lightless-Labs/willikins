@@ -14,8 +14,8 @@ use indexmap::IndexMap;
 use common::{input, list_ty, node, output, port, tool_name, ty};
 use willikins_core::{
     Action, Binding, Catalog, Class, InputSpec, Inputs, Node, Observation, Outputs, PartialInputs,
-    PlanError, PortSpec, PortType, RawInput, SinkToken, Tool, ToolError, ToolErrorKind, ToolSpec,
-    TypeRef, Value, Workflow, check, describe, plan,
+    PlanError, PortSpec, PortType, RawInput, SinkToken, Site, Tool, ToolError, ToolErrorKind,
+    ToolSpec, TypeRef, Value, Workflow, check, describe, plan,
 };
 use willikins_providers_fake::{FakeState, catalog, empty};
 use willikins_types::{
@@ -423,8 +423,14 @@ fn a_keyed_reference_into_an_empty_for_each_is_key_not_in_for_each() {
     );
     let err = plan(&checked, &inputs, &fake_catalog).unwrap_err();
     match err {
-        PlanError::KeyNotInForEach { node: n, key } => {
-            assert_eq!(n, node("token"));
+        PlanError::KeyNotInForEach { site, key } => {
+            assert_eq!(
+                site,
+                Site::Port {
+                    node: node("token"),
+                    port: port("config"),
+                }
+            );
             assert_eq!(key, "prd");
         }
         other => panic!("expected KeyNotInForEach, got {other:?}"),
