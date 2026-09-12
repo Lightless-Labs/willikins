@@ -25,6 +25,8 @@ shell, where that variable does not exist, after piping through `tee` and `tail`
 ## Fix
 
 - Run gates as `rtk proxy cargo ...`, which executes the raw command without filtering.
+  **Superseded 2026-09-12:** the RTK hook was removed from this machine (`rtk` is no longer
+  on the path), so gates run as bare `cargo ...` again. The rest of this note still applies.
 - Never pipe gate output. Redirect it to a file, echo `$?` on its own line, then read the
   file body. Grep the body for `error` and `test result` rather than trusting the exit line.
 - Put this in the repo's CLAUDE.md so every agent prompt inherits it.

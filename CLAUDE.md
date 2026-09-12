@@ -44,19 +44,17 @@ Read `docs/plans/2026-09-11-willikins-design.md` before changing anything in `cr
 ## Commands
 
 ```
-rtk proxy cargo fmt --all --check
-rtk proxy cargo clippy --workspace --all-targets -- -D warnings
-rtk proxy cargo test --workspace
-rtk proxy cargo check -p willikins-types
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo check -p willikins-types
 ```
 
 Run all four before every commit. The last one matters because `willikins-types` enables its
 own `executor` feature through a self dev-dependency, so `--all-targets` never builds the crate
 the way its dependents see it.
 
-Use `rtk proxy cargo ...`, not bare `cargo ...`. The RTK hook rewrites bare cargo commands and
-can summarize compiler output into "No issues found" while the build actually failed. Read the
-log body, never just a captured exit code. In zsh, `$?` after a pipe is the last command's
+Read the log body, never just a captured exit code. In zsh, `$?` after a pipe is the last command's
 status; do not pipe gate output through `tail` or `tee`. This host is slow: run cargo in the
 background with a 600000 ms timeout. The trybuild suite alone takes about 90 seconds.
 
