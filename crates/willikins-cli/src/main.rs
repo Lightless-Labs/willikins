@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use clap::{Parser, Subcommand};
 
 use willikins_core::describe::{InputArg, PartialInputs, RawInput};
-use willikins_core::{Catalog, Checked};
+use willikins_core::{Catalog, Checked, Reported};
 use willikins_dsl::DocumentError;
 use willikins_providers_fake::FakeState;
 use willikins_types::DomainType;
@@ -268,9 +268,14 @@ fn cmd_plan(file: &str, inputs: &[InputArg], fake_state: Option<&str>, json: boo
         }
         Err(err) => {
             if json {
+                // Through `Reported`, so the plan error carries `message`
+                // (its own `Display`) alongside the `kind` its internal tag
+                // gives it -- the one object shape every error an agent
+                // reads has, the same one `render::check_errors_json` emits.
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&err).unwrap_or_else(|_| "{}".to_string())
+                    serde_json::to_string_pretty(&Reported::new(&err))
+                        .unwrap_or_else(|_| "{}".to_string())
                 );
             } else {
                 println!("{err}");

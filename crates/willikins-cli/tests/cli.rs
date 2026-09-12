@@ -202,6 +202,16 @@ fn plan_against_a_foreign_repo_exits_1_with_name_taken() {
     // tagged `{"NameTaken": {"node": "repo", ...}}`.
     assert_eq!(json["kind"], "NameTaken");
     assert_eq!(json["node"], "repo");
+    // Every error object an agent reads carries `message` alongside `kind`
+    // (the plan's "Error serialization and result schemas" paragraph), so
+    // the plan error goes out through `Reported` like the check errors do.
+    let message = json["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("plan error JSON must carry a `message`: {json_text}"));
+    assert!(
+        message.contains("node `repo`") && message.contains("not ours"),
+        "message: {message}"
+    );
 }
 
 /// Acceptance test 8b: a `--fake-state` file seeds a Doppler secret; a
@@ -372,3 +382,4 @@ fn a_yaml_syntax_error_exits_2_with_line_and_column_on_stderr() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
