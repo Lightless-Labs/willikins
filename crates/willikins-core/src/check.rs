@@ -9,8 +9,10 @@
 //! Errors accumulate in this fixed sequence, so a workflow with many
 //! problems reports them the same way every run:
 //!
-//! 1. [`CheckError::SecretWorkflowInput`], one per declared input, in
-//!    declaration order.
+//! 1. Workflow input errors, one per declared input, in declaration
+//!    order: [`CheckError::SecretWorkflowInput`] for a secret declared
+//!    type, or else [`CheckError::DefaultTypeMismatch`] for a default
+//!    value whose type is not the declared one.
 //! 2. [`CheckError::UnknownTool`], one per node with an unrecognised tool,
 //!    in node declaration order. A node whose tool is unknown is skipped
 //!    for every later step (its ports cannot be checked against a spec
@@ -57,6 +59,12 @@
 //!   list-typed has no `list<list<T>>` representation to promote it to;
 //!   the resolved type keeps `list: true` rather than doubling up. No
 //!   milestone 1 tool has a list-typed output, so this never triggers here.
+//! - The plan lists sixteen [`CheckError`] variants. One more was added by
+//!   the adversarial pass, because the plan has no variant for the defect
+//!   it names: [`CheckError::DefaultTypeMismatch`], an input's default
+//!   value that is not of its declared type. The plan type-checks defaults
+//!   at document load, which leaves a `Workflow` built any other way
+//!   unchecked.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -247,6 +255,24 @@ pub enum CheckError {
         /// The nodes on the cycle, in declaration order.
         nodes: Vec<NodeName>,
     },
+    /// A workflow input's default value is not of the input's declared
+    /// type, in name or in cardinality.
+    ///
+    /// Not one of the plan's sixteen variants: the plan parses a default
+    /// against its declared type when a *document* is loaded, which leaves
+    /// a [`Workflow`] built any other way — the builder API, a future
+    /// composite — free to declare `Text` and default to a
+    /// `DopplerServiceToken`. `check` resolves an input binding from the
+    /// declared type, so without this the secret default would be the
+    /// value a later stage actually pushed into a non-secret sink.
+    DefaultTypeMismatch {
+        /// The input whose default does not match its declared type.
+        input: InputName,
+        /// The input's declared type.
+        expected: TypeRef,
+        /// The default value's own type.
+        found: TypeRef,
+    },
     /// Two nodes share the same name.
     ///
     /// Never produced by [`check`] itself — see the "Known gaps" section
@@ -338,6 +364,14 @@ impl fmt::Display for CheckError {
                 }
                 Ok(())
             }
+            Self::DefaultTypeMismatch {
+                input,
+                expected,
+                found,
+            } => write!(
+                f,
+                "input `{input}`: default value has type `{found}`, expected `{expected}`"
+            ),
             Self::DuplicateNode { node } => write!(f, "duplicate node name `{node}`"),
         }
     }
@@ -401,8 +435,11 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
     })
 }
 
-/// Push [`CheckError::SecretWorkflowInput`] for every declared input whose
-/// type is secret.
+/// Check every declared input: [`CheckError::SecretWorkflowInput`] when
+/// its type is secret, or else [`CheckError::DefaultTypeMismatch`] when
+/// its default value is not of the declared type. A secret declared type
+/// is the root cause and suppresses the default check, which could only
+/// repeat it.
 fn check_workflow_inputs(
     workflow: &Workflow,
     registry: &TypeRegistry,
@@ -413,6 +450,16 @@ fn check_workflow_inputs(
             errors.push(CheckError::SecretWorkflowInput {
                 input: name.clone(),
                 ty: spec.ty.clone(),
+            });
+            continue;
+        }
+        if let Some(default) = &spec.default
+            && default.ty() != &spec.ty
+        {
+            errors.push(CheckError::DefaultTypeMismatch {
+                input: name.clone(),
+                expected: spec.ty.clone(),
+                found: default.ty().clone(),
             });
         }
     }
@@ -1677,6 +1724,17 @@ mod tests {
                 None,
             ),
         ];
+        // `DefaultTypeMismatch` names an input rather than a node, so it
+        // is checked on its own rather than through the node/port loop.
+        assert_eq!(
+            CheckError::DefaultTypeMismatch {
+                input: input_name("visibility"),
+                expected: ty("RepoVisibility"),
+                found: ty("EnvironmentSlug"),
+            }
+            .to_string(),
+            "input `visibility`: default value has type `EnvironmentSlug`, expected `RepoVisibility`"
+        );
         for (error, node_needle, port_needle) in cases {
             let message = error.to_string();
             assert!(
