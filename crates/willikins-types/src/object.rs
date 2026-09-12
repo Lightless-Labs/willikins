@@ -11,7 +11,7 @@
 use std::any::Any;
 use std::fmt;
 
-use crate::SinkToken;
+use crate::{DomainType, SinkToken};
 
 /// A domain value rendered for display: either its plain canonical string,
 /// or a marker naming the type it redacts.
@@ -76,6 +76,13 @@ pub trait DomainObject: Send + Sync + fmt::Debug {
     fn dyn_eq(&self, other: &dyn DomainObject) -> bool;
     /// Clone into a fresh trait object.
     fn clone_box(&self) -> Box<dyn DomainObject>;
+}
+
+/// Recover the concrete type `T` from an object-safe [`DomainObject`]
+/// reference, or `None` when `obj` does not hold a `T`.
+#[must_use]
+pub fn downcast<T: DomainType + 'static>(obj: &dyn DomainObject) -> Option<&T> {
+    obj.as_any().downcast_ref::<T>()
 }
 
 /// Implement [`DomainObject`] for a hand-written, non-secret domain type,
@@ -156,6 +163,24 @@ mod tests {
             .to_string(),
             "[REDACTED SomeSecret]"
         );
+    }
+
+    #[test]
+    fn downcast_recovers_the_concrete_type() {
+        use crate::GitHubOrg;
+
+        let org = GitHubOrg::parse("lightless-labs").unwrap();
+        let obj: Box<dyn DomainObject> = Box::new(org.clone());
+        let recovered = downcast::<GitHubOrg>(&*obj).expect("obj holds a GitHubOrg");
+        assert_eq!(recovered, &org);
+    }
+
+    #[test]
+    fn downcast_returns_none_for_the_wrong_type() {
+        use crate::{GitHubOrg, HttpsUrl};
+
+        let obj: Box<dyn DomainObject> = Box::new(HttpsUrl::parse("https://example.com").unwrap());
+        assert!(downcast::<GitHubOrg>(&*obj).is_none());
     }
 
     #[test]

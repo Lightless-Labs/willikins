@@ -22,7 +22,7 @@ pub mod sink;
 /// Capability token gating access to secret values; see [`sink::SinkToken`].
 pub use sink::SinkToken;
 
-pub use object::{DomainObject, Rendered};
+pub use object::{DomainObject, Rendered, downcast};
 
 /// Error returned when a string does not parse as a domain type.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
