@@ -301,6 +301,19 @@ These came up from memory during the conversation and have not been checked.
   milestone 2; milestone 2 does not need it and it needs typed composite output ports and a
   `read` semantic over a sub-graph, so it gets a plan of its own once milestone 2 is
   complete.
+- **Approval channel narrowed for now** (refines "Web page plus push notification"). The
+  page ships in milestone 2; push notification is deferred because one operator polling a
+  page is enough to prove the gate and the notification service is a product choice not
+  yet made. The decision stands; only its second half waits. A pending plan may wait a day
+  for its human, and an approved plan must be applied within the hour, so the human's pace
+  and the plan's staleness are bounded separately.
+- **"One bootstrap token" lives in the platform, not the binary** (refines "Doppler as the
+  vault, one bootstrap token"). The butler's own provider credentials stay in Doppler, and
+  Doppler's native Railway integration syncs them into the service's environment; the
+  binary reads two environment variables and never holds a Doppler bootstrap token or
+  fetches its own credentials at runtime. Fewer moving parts at startup, and the vault
+  decision holds. Locally, the operator exports the same variables (from `doppler run` if
+  they like).
 
 ## Milestones
 

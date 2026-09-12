@@ -36,7 +36,10 @@ re-run clean, and been torn down.
   "Trust boundaries". Revisit when the authorization spec verification (see "Verify") says
   a bearer token is not acceptable for a private deployment.
 - Push notifications, chat integration, MCP elicitation. The approval channel is one
-  HTML page plus the CLI.
+  HTML page plus the CLI. The design decided "web page plus push notification"; the push
+  half is deferred because one operator polling a page is enough to prove the gate, and a
+  notification channel is a product decision (which service, which device) that the
+  operator has not made. Recorded in the design doc's "Milestone 2 decisions".
 - Org configuration as a binding source (`Binding::Org`), layer-gated inputs, `when` guards.
 - Native TLS termination. Railway terminates TLS at its edge; a self-hosted deployment puts
   the binary behind a reverse proxy. Recorded as a design addendum.
@@ -101,8 +104,14 @@ Two further rules bind a plan to what a human saw:
   inputs, per-node planned actions, class)` in the journal. `apply(plan_id)` reloads the
   document and refuses with `DocumentChanged` if the hash differs; re-plans against current
   provider state and refuses with `Drift { node, instance, planned, observed }` if any
-  node's action differs, executing nothing; refuses with `PlanExpired` after the plan TTL
-  (default 60 minutes). A refused apply is journaled.
+  node's action differs, executing nothing; refuses with `PlanExpired` outside the plan's
+  window. Two windows, because approval is human-paced by design and must not be raced by
+  a clock: a plan that needs approval may wait for it for the *approval window* (default
+  24 hours from `plan`, `WILLIKINS_APPROVAL_WINDOW_SECONDS`); once approved, or at once
+  when auto-approved, the *apply window* (default 60 minutes, `WILLIKINS_PLAN_TTL_SECONDS`)
+  starts. The apply window bounds how stale an approved plan can be; the drift check is
+  what protects against state that changed while a human was deciding. The approval page
+  shows each pending plan's age. A refused apply is journaled.
 - **Approval is typed at the call.** `apply` takes an `Approval` (`Auto` or `Human {
   approver, at }`) and returns `ApprovalRequired` before touching a provider when the plan
   requires approval and the approval is `Auto`. The server constructs `Human` only from a
@@ -184,7 +193,11 @@ and types. No crate other than `willikins-core` enables `willikins-types/executo
   `InputSpec::description`, and `Plan::workflow`. Closes
   `todos/2026-09-12-workflow-name-description-bounds.md`.
 - `reserved.rs`: verified on 2026-09-12 against the primary sources (research note,
-  section 5). Rust, Java, Kotlin hard keywords, and the Windows device names match exactly;
+  section 5): the Rust reference, JLS 21 section 3.9, kotlinlang.org's keyword reference,
+  Microsoft's file-naming page, and for Swift the `swiftlang/swift-book` DocC source that
+  docs.swift.org renders (the rendered page is a JavaScript shell to every fetcher; the
+  DocC file is its primary source, so this is a full verification, not a delta). Rust,
+  Java, Kotlin hard keywords, and the Windows device names match exactly;
   Swift's declarations group has gained `borrowing`, `consuming`, and `nonisolated` since
   the list was written. Task 0 adds those three test-first, extending the case-insensitivity
   test in `naming_adversarial.rs` and its multi-word "still accepted" list, and dates the
@@ -238,7 +251,14 @@ have to change, and the tool will not change it. `plan` turns it into
 the resource by hand or pass the current value; `ensure` on such a resource returns
 `ToolErrorKind::Conflict`. The first user is `github.repo.ensure`'s `visibility`: turning a
 private repository public is not a reversible act, and the class is static per tool, so the
-tool refuses rather than reconciles. Both the fake and the live tool implement it.
+tool refuses rather than reconciles. The refusal is deliberately symmetric, refusing the
+public-to-private direction too, for three reasons: the milestone has no `Action::Update`,
+so a plan cannot yet show an attribute change honestly; making a public repository private
+is not harmless either (forks detach, Pages go dark, clones break); and a rule whose
+behaviour depends on the current value is exactly the run-time non-determinism the design
+forbids in a plan. A directional reconcile arrives with `Action::Update` and the project
+record in milestone 3, if a real workflow needs it. Both the fake and the live tool
+implement the refusal.
 
 **Apply executor** (`apply` module; the only non-test `SinkToken::new` site, with the
 `#[allow(clippy::disallowed_methods)]` a reviewer greps for).
@@ -297,8 +317,10 @@ consumer (6b, second half).
 ### willikins-tools
 
 `naming.v1` and `template.render` move here from the fake crate, unchanged in name, ports,
-behaviour, and tests. Both catalogs include them. The fake catalog's tool count stays ten
-plus the new rotate tool.
+behaviour, and tests. Both catalogs include them. After the move the fake crate defines
+nine tools (its eight remaining ones plus the new rotate tool) and its catalog registers
+eleven (those nine plus the two from `willikins-tools`); the live catalog registers the two
+pure tools, the two GitHub tools, and the five Doppler tools.
 
 ### willikins-providers-http
 
@@ -473,15 +495,50 @@ principal to the request extensions, which rmcp exposes to tool handlers through
 request parts, so every journal event carries who called. This is the MCP specification's
 "custom authentication strategy" (authorization is optional in the spec and this server
 does not implement the OAuth 2.1 framework), so the 401 carries no `resource_metadata`
-challenge; recorded as a decision. Configuration comes from environment variables:
-`WILLIKINS_WORKFLOWS_DIR`,
+challenge; recorded as a decision.
+
+Browsers re-attach Basic credentials to any request for the same origin, so a form on
+another site could post to `/approvals/{plan_id}` with the approver's cached credentials.
+Two defences, both required: the `GET` page embeds a single-use nonce per pending plan
+(random, held in memory, expiring with the approval window) that the `POST` must carry, and
+the `POST` handler refuses any request whose `Origin` header (or `Referer`, when `Origin` is
+absent) is not one of the deployment's allowed hosts. A `POST` without a valid nonce or with
+a foreign origin is 403 and journaled as `AuthFailed`.
+
+The agent is the principal the approval gate exists to constrain, and `plan` calls live
+providers, so the `Butler` rate-limits per principal: `plan` at most 10 per minute and
+`describe` and `validate` at most 60 per minute by default (`WILLIKINS_PLAN_RATE_PER_MINUTE`,
+`WILLIKINS_READ_RATE_PER_MINUTE`), a token bucket keyed by the principal id, answering the
+MCP call with a `RateLimited { retry_after_seconds }` error result. This protects the org's
+shared GitHub and Doppler budgets from a looping agent; it is not a substitute for network
+rate limiting, which stays deferred.
+
+Revoking a credential means removing its hash from the environment and redeploying, which
+on Railway is a one-minute operation and is the documented procedure (task 12); there is
+no hot reload. Approving or rejecting a pending plan is unaffected by a redeploy because
+the journal is durable, but in-memory nonces are not, so the approval page is reloaded.
+
+Configuration comes from environment variables: `WILLIKINS_WORKFLOWS_DIR`,
 `WILLIKINS_JOURNAL_PATH`, `WILLIKINS_AGENT_TOKEN_HASHES` (comma-separated hex),
 `WILLIKINS_APPROVER_TOKEN_HASH`, `WILLIKINS_GITHUB_TOKEN`, `WILLIKINS_DOPPLER_TOKEN`,
-`WILLIKINS_ALLOWED_HOSTS`, `WILLIKINS_PLAN_TTL_SECONDS`, `PORT`. Startup refuses: no agent
-hash in http mode; approver hash among agent hashes; empty allowed hosts in http mode; a
-credential that fails its format regex; an unlockable journal; an unreadable workflow
-directory; a document that fails `check`. `tracing` in JSON to stderr, never a body or
-header value; the journal is the audit source of truth.
+`WILLIKINS_ALLOWED_HOSTS`, `WILLIKINS_PLAN_TTL_SECONDS`, `WILLIKINS_APPROVAL_WINDOW_SECONDS`,
+`WILLIKINS_PLAN_RATE_PER_MINUTE`, `WILLIKINS_READ_RATE_PER_MINUTE`, `PORT`. Startup refuses:
+no agent hash in http mode; approver hash among agent hashes; empty allowed hosts in http
+mode; a credential that fails its format regex; an unlockable journal; an unreadable
+workflow directory; a document that fails `check`. `tracing` in JSON to stderr, never a
+body or header value; the journal is the audit source of truth.
+
+**Credential blast radius, recorded.** The server holds one GitHub credential and one
+Doppler credential for one org and one workplace. GitHub's repository-creation permission
+cannot be scoped to repositories that do not exist yet, so the fine-grained token covers
+all repositories in the org at `Administration: write`; the Doppler service account covers
+the workplace. A compromise of the server process therefore reaches everything those two
+credentials reach, and no in-process gate (`SinkToken`, `Credential`) helps at that point;
+those gates are against *the agent* and *bugs*, not against a compromised host. What
+bounds the radius is the boundary around the process: bearer authentication, allowed
+hosts, no document execution from the network, a distroless image, and Railway's
+isolation. Whether the token can be narrowed further (a GitHub App installation with
+repository creation, per-project Doppler service accounts) is a milestone 3 question.
 
 ### willikins-cli (changes)
 
@@ -576,6 +633,14 @@ The milestone cannot ship without every one of these.
    `ci_secret` `Created`; the marker still appears nowhere. (c) Steady state: a third apply of
    the positive fixture is `Unchanged` everywhere except `ci_secret`, which is `Converged`,
    and the fake's `ensure_calls` for `github.actions_secret.ensure` did not increase.
+   (d) Property: over workflows generated by the milestone 1 generators in
+   `check_adversarial.rs`, restricted to the fake catalog's non-pure tools, inject one
+   failure at an arbitrary node instance, then plan and apply again; assert every node
+   whose inputs are all known ends `Created` or `Unchanged`, every node blocked by an
+   un-re-readable upstream output ends in `UnknownInput` naming that upstream, and no
+   `ensure` was called twice for the same key with the planned action `Create`. This is the
+   evidence for the goal's "every node" claim, in the same shape as milestone 1's totality
+   property test.
 7. **Approval gate.** `apply` with `Approval::Auto` on `workflows/fixtures/irreversible.yaml`
    returns `ApprovalRequired`; the journal has `ApplyRefused` and no `RunStarted`. With
    `Approval::Human` it runs. The positive fixture with `Auto` runs and the journal has
@@ -585,9 +650,13 @@ The milestone cannot ship without every one of these.
    `apply` refuse with `ApprovalRequired`.
 8. **Plan identity.** `apply(plan_id)` after the document's bytes changed ->
    `DocumentChanged`, no provider call; after fake state changed so `repo` reads `Present`
-   -> `Drift { node: repo, planned: create, observed: no_op }`, no provider call; after the
-   TTL -> `PlanExpired`; an unknown id -> `UnknownPlan`; a second `apply` of an already
-   applied plan -> `AlreadyApplied`. Each refusal is journaled.
+   -> `Drift { node: repo, planned: create, observed: no_op }`, no provider call; an
+   auto-approved plan after the apply window -> `PlanExpired`; a pending plan approved
+   after the approval window -> `PlanExpired` at approval; a plan approved in time and
+   applied after the apply window measured from approval -> `PlanExpired`; a plan
+   approved 23 hours after `plan` and applied 30 minutes later runs; an unknown id ->
+   `UnknownPlan`; a second `apply` of an already applied plan -> `AlreadyApplied`. Each
+   refusal is journaled.
 9. **Attribute mismatch.** Fake and live `github.repo.ensure` with the repository ours and
    public, requested private: `plan` returns `AttributeMismatch { node: repo, port:
    visibility }`; `ensure` returns `Conflict`; the mock server records no `PATCH`.
@@ -604,9 +673,13 @@ The milestone cannot ship without every one of these.
 12. **HTTP auth and limits.** No token -> 401 with `WWW-Authenticate: Bearer`; a wrong token
     -> 401; an agent token -> tools work; the approver credential on `/mcp` -> 403; a body
     over 1 MiB -> 413; a `validate` document with an alias -> the alias error at its line; a
-    request that takes longer than the timeout -> 504 or 408 as axum reports it. The server
-    refuses to start with no agent hash, with the approver hash among the agent hashes, and
-    with a credential failing its regex, each with a distinct message.
+    request that takes longer than the timeout -> 504 or 408 as axum reports it; the
+    eleventh `plan` within a minute from one principal -> `RateLimited` with
+    `retry_after_seconds`, while another principal's `plan` still runs; a `POST
+    /approvals/{plan_id}` with valid Basic credentials but no nonce, a reused nonce, or an
+    `Origin` outside the allowed hosts -> 403 and `AuthFailed` in the journal, plan still
+    pending. The server refuses to start with no agent hash, with the approver hash among
+    the agent hashes, and with a credential failing its regex, each with a distinct message.
 13. **Trusted directory.** `plan { workflow: "../x" }` is refused by `WorkflowName`'s grammar
     at parameter parsing; a name not in the directory -> `UnknownWorkflow`; the `plan`
     parameter schema has no `document` field; a directory holding a document that fails
@@ -664,14 +737,14 @@ separate worktrees; the coordinator merges on `main`.
 | 1d | Core: `document_*` fields and willikins-voiced prompts in `describe`; CLI text prefix | | A | sonnet |
 | 2 | `willikins-tools`: move `naming.v1` and `template.render`; both catalogs | 1a..1d | | sonnet |
 | 3 | Core and fake: `Observation::Mismatch`, `AttributeMismatch`, visibility mismatch in the fake | 2 | | sonnet |
-| 4 | Core: `apply`, `Approval`, `ApplyError`, `ApplyObserver`, `Plan::fingerprint`; fake: rotate tool, failure injection, call counters; second fixture; acceptance tests 5, 6, 7 (core level), 9 | 3 | B | sonnet, verified by opus |
+| 4 | Core: `apply`, `Approval`, `ApplyError`, `ApplyObserver`, `Plan::fingerprint`; fake: rotate tool, failure injection, call counters; second fixture; acceptance tests 5, 6 (including the 6d property test), 7 (core level), 9 | 3 | B | sonnet, verified by opus |
 | 5 | `willikins-journal`; acceptance test 10 | 1a | B | sonnet, verified by opus |
 | 6 | `willikins-providers-http`: `Credential`, client, retry, error mapping, test support; `clippy.toml` entry; derive `#[allow]`; acceptance test 4 | 1a | B | sonnet, verified by opus |
 | 7 | `willikins-providers-github`; acceptance tests 1 to 3 (its share), 9 (live) | 3, 6 | C | sonnet, verified by opus |
 | 8 | `willikins-providers-doppler`; acceptance tests 1, 2 (its share) | 3, 6 | C | sonnet, verified by opus |
 | 9 | Adversarial pass 1: executor, journal, approval (acceptance test 19, first pass) | 4, 5 | | opus |
 | 10a | `willikins-server` library: `Butler`, plan identity, startup checks; acceptance tests 7 (identity half), 8, 13, 14 | 4, 5, 7, 8 | | sonnet, verified by opus |
-| 10b | `willikins-server` binary: rmcp tools, stdio, Streamable HTTP, auth, approval page; acceptance tests 7 (HTTP half), 11, 12 | 10a | D | sonnet, verified by opus |
+| 10b | `willikins-server` binary: rmcp tools, stdio, Streamable HTTP, auth, nonce and origin checks on approvals, per-principal rate limit, approval page; an in-process rmcp client for tests (rmcp's `client` feature over a `tokio::io::duplex` pair, in the crate's `tests/`); acceptance tests 7 (HTTP half), 11, 12 | 10a | D | sonnet, verified by opus |
 | 11 | CLI: `apply`, `approve`, `reject`, `runs`, `run`, `serve`, `--live`; renderers; parity half of test 11 | 10a | D | sonnet |
 | 12 | Deployment: `deploy/Dockerfile`, `.railway/railway.ts` (service from the GitHub source with a Dockerfile build, `/healthz` healthcheck, one replica, a volume mounted for the journal; Railway allows one volume per service and no replicas with a volume), README "Deploy" (Railway edge TLS, `PORT`, Doppler's native Railway integration for the credentials, PR environments), environment variable reference, `deploy/teardown.sh`, `docs/solutions` entry for the credential gate | 10b | | sonnet |
 | 13 | Adversarial pass 2: end to end over HTTP (acceptance test 19, second pass) | 10b, 11 | | opus |
@@ -742,9 +815,63 @@ order the tasks need them.
 6. Task 12: whether a Railway PR environment gets its own volume or none (undocumented),
    which decides whether PR environments run with an in-memory journal; whether Railway's
    pipeline accepts a distroless runtime image; the Doppler integration's sync latency.
-7. Milestone 3, recorded here so it is not lost: whether `POST /v3/configs` expects the
-   caller to prefix a branch config's name with `<environment>_` or does it server-side.
+
+## Notes for milestone 3
+
+Recorded here so they are not lost; nothing in this milestone depends on them.
+
+- Whether `POST /v3/configs` expects the caller to prefix a branch config's name with
+  `<environment>_` or applies the prefix server-side (research note, section 3), which
+  decides the `naming::v2` row for branch configs.
+- Whether the GitHub credential can be narrowed below org-wide `Administration: write` (a
+  GitHub App installation, say) and whether Doppler service accounts can be scoped per
+  project, which decides the credential blast radius recorded above.
+- `Action::Update` and a directional visibility reconcile, if a real workflow needs one.
 
 ## Review resolutions
 
-Pending the document-review workflow.
+How each finding of the 2026-09-12 document review was resolved. Reviewers: coherence,
+feasibility, security-lens, scope-guardian, adversarial. Findings from two reviewers on the
+same point are merged; the reviewer in brackets is who raised it.
+
+1. **Approval POST had no CSRF defence** (security, P1). Browsers replay Basic credentials
+   cross-site. Added a single-use per-plan nonce embedded in the approval page and an
+   `Origin`/`Referer` check against the allowed hosts; a failure is 403 and journaled.
+   Acceptance test 12 pins both.
+2. **Plan TTL ran from `plan`, racing the human** (adversarial, P1). Split into an approval
+   window (24 hours from `plan`, for pending plans) and an apply window (60 minutes from
+   approval, or from `plan` when auto-approved). Trust boundaries, environment variables,
+   acceptance test 8, and the design addendum updated.
+3. **Keyword verification looked partial** (coherence, P1). It was not: Swift was checked
+   against the `swiftlang/swift-book` DocC source that docs.swift.org renders. The types
+   section now names every source and says the check is full.
+4. **Push notification dropped without a recorded decision** (scope-guardian and
+   adversarial, P2). Out-of-scope entry now carries the reason, and the design doc's
+   "Milestone 2 decisions" records the narrowing as the second half of a standing decision.
+5. **"One bootstrap token" replaced by two environment variables, unacknowledged**
+   (adversarial, P2). Recorded in the design doc: the vault decision holds, Doppler's
+   Railway integration supplies the variables, and the binary never holds a bootstrap
+   token.
+6. **Visibility refusal is symmetric while its justification was one-directional**
+   (adversarial, P2). Kept symmetric, with the three reasons now stated (no
+   `Action::Update` yet, public-to-private is not harmless, value-dependent behaviour is
+   the non-determinism the design forbids); the directional reconcile is a milestone 3 note.
+7. **"Every node converges" rested on two hand-picked fixtures** (adversarial, P2). Added
+   acceptance test 6d, a property test over generated workflows with a failure injected at
+   an arbitrary instance, in the shape of milestone 1's totality test; task 4 updated.
+8. **No rate limit on the agent's live calls** (security, P2). A per-principal token bucket
+   in the `Butler` for `plan`, `describe`, and `validate`, with a `RateLimited` error
+   result; network-level limiting stays deferred. Acceptance test 12 extended.
+9. **Credential blast radius unspecified** (security, P2). Recorded under the server
+   section: org-wide repository administration and a workplace-wide Doppler account, why
+   the in-process gates do not help against a compromised host, what bounds the radius,
+   and the milestone 3 question of narrowing it.
+10. **No revocation path for bearer credentials** (security, P3). Documented: remove the
+    hash and redeploy; the journal survives, nonces do not.
+11. **Fake catalog tool count was ambiguous** (coherence, P3). Recounted: nine tools in the
+    fake crate, eleven in its catalog, nine in the live catalog.
+12. **A milestone 3 item sat in the milestone 2 verify list** (coherence, P3). Moved to a
+    new "Notes for milestone 3" section, with two more items that belong there.
+13. **The in-process MCP test client had no home** (coherence, deferred question). Task 10b
+    now names it: rmcp's `client` feature over a `tokio::io::duplex` pair, in the server
+    crate's tests.

@@ -76,8 +76,11 @@ headers updated on review, addendum, and completion). Specific to this repo:
 - Parallel tasks that touch the same crate run in separate git worktrees and are merged on
   `main` by the coordinator; the worktree directory is gitignored.
 - Agents keep their own commit attribution; the coordinator's commits carry its model.
-- WebFetch is blocked for agents on this host. Facts that need a browser go into the plan's
-  "verify" list, not into frozen code.
+- WebFetch, WebSearch, context7, `curl`, and `gh api` all work for the main session and for
+  agents (verified 2026-09-12; an earlier hook that blocked WebFetch is gone). Prefer a
+  primary source fetched verbatim (an OpenAPI description, a docs repo's raw markdown,
+  Doppler's `<page>.md` twins) over a rendered page's paraphrase. A fact that could not be
+  fetched verbatim goes into the plan's "verify" list, not into frozen code.
 
 ## Conventions
 
