@@ -6,6 +6,10 @@
 //! from `Debug`, and never serializes through plain serde.
 //!
 //! See `docs/plans/2026-09-11-willikins-design.md` for the invariants.
+//!
+//! Derived provider names come from [`naming::v1`]: `github_repo`,
+//! `doppler_project`, and `doppler_root_config`. These are pure, total,
+//! and frozen — see [`NamingScheme`] for the freeze rule.
 
 extern crate self as willikins_types;
 
@@ -95,6 +99,7 @@ pub use willikins_derive::DomainType;
 pub mod doppler;
 pub mod github;
 pub mod name;
+pub mod naming;
 pub mod propose;
 pub mod reserved;
 pub mod slug;
@@ -107,6 +112,7 @@ pub use doppler::{
 };
 pub use github::{ActionsSecretName, GitHubOrg, GitHubRepo, HttpsUrl, RepoVisibility};
 pub use name::ProjectName;
+pub use naming::NamingScheme;
 pub use propose::{ProposeError, propose_slug};
 pub use reserved::is_reserved;
 pub use slug::{ComponentSlug, EnvironmentSlug, ProjectSlug};
