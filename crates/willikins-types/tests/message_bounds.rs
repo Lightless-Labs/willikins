@@ -16,7 +16,9 @@ use willikins_types::{MAX_QUOTED_INPUT, quoted, registry};
 /// The most a message may be: the longest constraint sentence any parser
 /// writes, plus one bounded quote, plus the "(N characters)" suffix.
 /// Deliberately loose — the point is that it does not grow with the input.
-const MESSAGE_CEILING: usize = 512;
+/// A quote is bounded at `MAX_QUOTED_INPUT` *input* characters, each of
+/// which may escape to as many as six.
+const MESSAGE_CEILING: usize = 1024;
 
 #[test]
 fn quoted_passes_short_input_through_verbatim() {
@@ -36,6 +38,33 @@ fn quoted_cuts_long_input_and_says_how_long_it_was() {
         rendered.chars().count()
     );
     assert!(rendered.contains("10000 characters"), "{rendered}");
+}
+
+/// A YAML double-quoted scalar can carry a real newline or an ANSI escape.
+/// Interpolating one raw would let a hostile document split one error line
+/// into two, or write terminal control sequences to the stdout an agent
+/// reads, so every character is escaped.
+#[test]
+fn quoted_escapes_control_characters() {
+    let hostile = format!("Foo{}Bar{}[2J", '\n', '\u{1b}');
+    let rendered = quoted(&hostile);
+    assert!(
+        !rendered.contains('\n'),
+        "a raw newline survived: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains('\u{1b}'),
+        "a raw escape survived: {rendered:?}"
+    );
+    assert!(rendered.contains("\\n"), "{rendered}");
+    assert!(rendered.contains("u{1b}"), "{rendered}");
+}
+
+/// Ordinary text, including non-ASCII letters, is left alone: escaping is
+/// for control characters, not for anything unfamiliar.
+#[test]
+fn quoted_leaves_printable_text_alone() {
+    assert_eq!(quoted("café-münster"), "`café-münster`");
 }
 
 #[test]
@@ -67,6 +96,23 @@ fn a_ten_megabyte_literal_does_not_reach_the_error_message() {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
+
+    /// No rejection message ever carries a raw control character,
+    /// whatever the input held.
+    #[test]
+    fn no_registry_rejection_carries_a_control_character(input in ".{0,200}") {
+        let registry = registry();
+        for entry in registry.iter() {
+            let name = TypeName::parse(entry.info.name).expect("a registered type name");
+            if let Err(err) = registry.parse(&name, &input) {
+                prop_assert!(
+                    !err.reason.chars().any(char::is_control),
+                    "{name}: a control character reached the message: {:?}",
+                    err.reason,
+                );
+            }
+        }
+    }
 
     /// For every registered non-secret type and any input at all, a
     /// rejection's message is bounded: it never grows with the input.

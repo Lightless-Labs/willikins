@@ -38,8 +38,9 @@ impl Word {
             return Err(ParseError::new(
                 "Word",
                 format!(
-                    "{} contains `{bad}`, which is not a lowercase ASCII letter or digit",
-                    crate::quoted(input)
+                    "{} contains {}, which is not a lowercase ASCII letter or digit",
+                    crate::quoted(input),
+                    crate::quoted(&bad.to_string())
                 ),
             ));
         }

@@ -7,7 +7,7 @@ private module, and no attack builds a `Workflow` with the builder API (pass 1 d
 see `docs/research/2026-09-12-check-adversarial-pass-1.md`).
 **Plan:** `docs/plans/2026-09-11-milestone-1-core.md`, sections "willikins-cli",
 "willikins-dsl", "willikins-providers-fake", "Acceptance tests"
-**Tests:** `crates/willikins-cli/tests/adversarial.rs` (24 tests, including three
+**Tests:** `crates/willikins-cli/tests/adversarial.rs` (25 tests, including three
 totality proptests), `crates/willikins-types/tests/message_bounds.rs`
 **Fixtures added:** `workflows/fixtures/{literal-output,output-from-step-named-outputs,duplicate-for-each-default}.yaml`
 
@@ -26,7 +26,7 @@ and all six are fixed.
 All four gates passed on the inherited tree (`9c31de5`) before any change was made:
 `rtk proxy cargo fmt --all --check`, `clippy --workspace --all-targets -- -D warnings`,
 `test --workspace` (666 tests), `check -p willikins-types`. The same four pass on the
-final tree, at 695 tests.
+final tree, at 699 tests.
 
 ## Findings
 
@@ -194,23 +194,39 @@ with megabytes of attacker-chosen bytes is a real hazard for an agent-facing CLI
 that text is a natural place to hide instructions aimed at whatever reads the output.
 The same door is open through `--input` and `propose-slug`.
 
-**Fix:** `willikins_types::quoted` quotes a rejected value at most `MAX_QUOTED_INPUT`
-(64) characters, cut on a *character* boundary and followed by the value's full length,
-so an agent still sees both what it got wrong and how big it was. Applied at every site
+A second half of the same hazard, found while reviewing the first fix: the quoted text
+was also interpolated **raw**. A YAML double-quoted scalar may carry escapes the scanner
+accepts, so `type: "Foo\nBar\u001b[2JEVIL"` put a real newline and an ANSI escape on
+stderr — one error line split into two, and terminal control sequences written to the
+stdout an agent reads:
+
+```
+$ willikins validate escape.yaml
+inputs.x.type: TypeRef: `Foo
+Bar^[[2JEVIL` must not contain whitespace        # two lines, one error
+```
+
+**Fix:** `willikins_types::quoted` is the single chokepoint for both halves. It quotes a
+rejected value at most `MAX_QUOTED_INPUT` (64) characters, cut on a *character* boundary
+and followed by the value's full length, and passes every character through
+`char::escape_debug`, so a control character prints as `\n` or `\u{1b}` and never as
+itself. Ordinary text, non-ASCII letters included, is untouched. Applied at every site
 that interpolated raw caller text: `Word`, `WordList`, the slug macro's length and
-reserved-word errors, `RepoVisibility`, `NamingScheme`, `TypeName`, `TypeRef`.
-`ProjectName` already reported length without echoing, and no secret type quotes its
-input at all — `quoted`'s own doc comment says so, and says never to call it on one.
-The 10 MB case now prints 186 bytes.
+reserved-word errors, `RepoVisibility`, `NamingScheme`, `TypeName`, `TypeRef`, and
+`ActionsSecretName`'s two single-character messages — the last found by the proptest
+below, not by hand. `ProjectName` already reported length without echoing and already
+used `{c:?}` for a character, and no secret type quotes its input at all — `quoted`'s own
+doc comment says so, and says never to call it on one. The 10 MB case now prints 186
+bytes.
 
 Not fixed in `ParseError::new`: truncating there would cut the *reason* off the end of
 the message, which is the useful half, and would break `InputError`'s documented
 contract that it carries the parser's own words.
 
-Tests: `crates/willikins-types/tests/message_bounds.rs`, including a proptest over every
-registered type asserting a rejection's message never grows with its input, plus
-`finding_06_a_huge_literal_is_not_echoed_in_full` and
-`finding_06_a_huge_input_argument_is_not_echoed_in_full` end to end.
+Tests: `crates/willikins-types/tests/message_bounds.rs`, including two proptests over
+every registered type — a rejection's message never grows with its input, and never
+carries a raw control character — plus `finding_06_a_huge_literal_is_not_echoed_in_full`
+and `finding_06_a_huge_input_argument_is_not_echoed_in_full` end to end.
 
 ## Attacks that found nothing (pinned)
 
@@ -222,7 +238,8 @@ Every row below is a test in `crates/willikins-cli/tests/adversarial.rs` unless 
 | 2 | A seeded secret whose bytes are *exactly* a repository name used elsewhere in the plan | **Accepted, deliberately.** The repository name still prints — it is a `GitHubRepo` the document supplies, and the secret's own `Value` is redacted as always. No implementation can tell "these bytes are also a secret" without comparing plaintext, which would mean exposing the secret to do it. Consequence pinned in the test: a `!contains(secret_bytes)` assertion is only meaningful when the bytes appear nowhere else, which is why every redaction test here seeds a distinctive marker |
 | 3 | Every `ToolError` construction in `willikins-providers-fake`, audited for an input value | Clean. `support::{invalid,not_found,conflict}` are the only constructors; their callers interpolate a port name, a `GitHubRepo`, a `DopplerProject`, or a `doppler_secret_key` (config + secret *name*) — never a value of a secret port. `doppler.secret.get`'s `NotFound` names the key it looked for, and there is no value to name in that case. `github.actions_secret.ensure`, the one tool with an `AnySecret` port, never mentions it |
 | 4 | `template.render` fed a secret through `value` | `SecretToNonSecretSink { from: (token, token), to: (readme, value) }`. The rendered-text error path quotes only `Text` — a non-secret type check already proved cannot be a secret |
-| 5 | A YAML alias bomb (9 levels × 9 aliases) in a field the format ignores | Returns immediately: serde skips the ignored value without resolving aliases. After finding 3 the same document is refused as an unknown field; the test accepts either, since the point is that the expansion never happens |
+| 5 | A YAML alias bomb (9 levels × 9 aliases) in a field the format ignores | Returns immediately. After finding 3 there is no ignored field to anchor a bomb in at all: serde refuses the unrecognised key *before* reading its value, so the expansion never happens. Pre-finding-3 it also returned immediately, because serde skips an ignored value without resolving its aliases |
+| 5b | A YAML **scalar** alias repeated into a known field — a 1 MB `description:` anchor referenced 2,000 times from a `list<Text>` default | **Amplifies; found, not fixed.** Peaked at 952 MB resident from a 1 MB document before `Text`'s 65,536-character bound rejected it. See "Found and not fixed" below |
 | 6 | A multi-document YAML stream (`---`) smuggling a second workflow | Refused: "deserializing from YAML containing more than one document is not supported", exit 2 |
 | 7 | 50,000-deep nested maps, in an ignored field and in a used one | No stack overflow. Ignored: parsed and skipped, exit 0. Used (`steps:`): `2:12: steps.k: missing field 'tool'`, exit 2 |
 | 8 | A `with` value that is a YAML integer, boolean, or null | Each refused with a line and column: `invalid type: integer '12345', expected a string`. `WithString`'s visitor handles only strings, sequences and maps, so every other scalar form falls through to serde's own message — which is precise enough |
@@ -243,6 +260,38 @@ where a full gate run already takes minutes, and it would slow every later gate 
 was skipped. `the_published_schema_matches_what_the_parser_accepts` checks the facts
 that actually matter — the `additionalProperties` flags finding 3 introduced, and that
 no shipped fixture uses a key the schema does not declare — structurally instead.
+
+## Found and not fixed
+
+### Scalar-alias memory amplification (quadratic in the document's size)
+
+A YAML scalar alias is materialised once per use, so a document can amplify its own size
+by repeating an alias to a long anchor — entirely within fields the format declares, so
+finding 3's `deny_unknown_fields` does not touch it. Measured with `/usr/bin/time -l`:
+
+```
+$ ls -la alias-amp.yaml          # 1 MB `description:` anchor, 2,000 aliases in a list<Text> default
+1008158
+$ willikins validate alias-amp.yaml
+inputs.t.default: must be at most 65536 characters long
+        1.00 real
+    952352768  maximum resident set size      # ~950x the document
+```
+
+Worst case is quadratic: aliases scale with the file size and so does the anchor.
+
+**Not fixed**, deliberately. The allocation happens inside the deserializer, before any
+domain type sees the value, so `Text`'s bound is applied far too late. A cap on the
+document's own size only trades one quadratic for a smaller one — 85,000 aliases into a
+256 KiB anchor is still tens of gigabytes — which would be security theatre rather than
+a fix. Closing it means either refusing aliases at the YAML event level (a parser the
+DSL does not own) or an OS resource limit around the process, and neither belongs in
+this pass. `known_gap_a_scalar_alias_is_materialised_once_per_use` guards only that the
+bounded case terminates and is rejected, and says in its own doc comment that it does
+not guard the amplification.
+
+Note this is a *resource* attack, not a disclosure one: nothing about it moves a secret
+byte anywhere, and `validate` still exits 2 with a correct message.
 
 ## Plan defects found (reported, not fixed — `docs/plans` is off limits to this pass)
 
@@ -297,4 +346,7 @@ no shipped fixture uses a key the schema does not declare — structurally inste
 - `f16a784` — finding 6: bound the rejected input a parse error quotes.
 - `c79f673` — the attacks that found nothing, pinned, plus the totality proptests and
   the schema-drift test.
-- This note itself, committed last.
+- `e331d08` — this note.
+- `87bce1e` — two follow-ups found reviewing the pass: finding 6's second half (escape
+  the quoted text, not just bound it), and the scalar-alias amplification measurement
+  plus the rewritten alias-bomb pin. This note updated in the same commit.

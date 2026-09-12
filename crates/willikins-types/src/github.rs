@@ -328,7 +328,10 @@ impl DomainType for ActionsSecretName {
         if !(first.is_ascii_uppercase() || first == '_') {
             return Err(ParseError::new(
                 Self::TYPE_NAME,
-                format!("must start with an uppercase ASCII letter or `_`, found `{first}`"),
+                format!(
+                    "must start with an uppercase ASCII letter or `_`, found {}",
+                    crate::quoted(&first.to_string())
+                ),
             ));
         }
         if let Some(bad) =
@@ -337,7 +340,8 @@ impl DomainType for ActionsSecretName {
             return Err(ParseError::new(
                 Self::TYPE_NAME,
                 format!(
-                    "must contain only uppercase ASCII letters, digits, and `_`, found `{bad}`"
+                    "must contain only uppercase ASCII letters, digits, and `_`, found {}",
+                    crate::quoted(&bad.to_string())
                 ),
             ));
         }

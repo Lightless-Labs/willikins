@@ -48,29 +48,41 @@ impl ParseError {
 /// message quotes; see [`quoted`].
 pub const MAX_QUOTED_INPUT: usize = 64;
 
-/// Quote `input` for a [`ParseError`] message, bounded to
-/// [`MAX_QUOTED_INPUT`] characters.
+/// Quote `input` for a [`ParseError`] message: bounded to
+/// [`MAX_QUOTED_INPUT`] characters, and escaped.
 ///
 /// A rejected non-secret value is the caller's own text, and quoting it is
 /// how an agent sees what it got wrong -- but the caller may be a hostile
 /// document, and every one of these messages is printed straight to the
-/// stdout an agent reads. A ten-megabyte literal used to be echoed whole.
-/// Longer input is cut at a character boundary and followed by its full
-/// length, so the message still says how big the value was. Adversarial
-/// pass 2, finding 6.
+/// stdout an agent reads. Two things follow, and this function is the one
+/// chokepoint for both (adversarial pass 2, finding 6):
+///
+/// - **Bounded.** A ten-megabyte literal used to be echoed whole. Longer
+///   input is cut at a character boundary and followed by its full length,
+///   so the message still says how big the value was.
+/// - **Escaped.** A YAML double-quoted scalar may carry a newline or an
+///   ANSI escape (`type: "Foo\nBar"`), and interpolating one raw lets a
+///   document split one error line into two, or style the agent's stdout.
+///   Every character goes through [`char::escape_debug`], so a control
+///   character prints as `\n` or `\u{1b}` and never as itself.
+///
+/// The bound counts *input* characters, not escaped ones, so the quote can
+/// be up to six times [`MAX_QUOTED_INPUT`] characters long -- still a
+/// constant, which is the whole point.
 ///
 /// Never call this on a secret value: a secret type's parser reports only
 /// its constraint, never its input, and nothing here would make quoting
 /// one safe.
 #[must_use]
 pub fn quoted(input: &str) -> String {
-    match input.char_indices().nth(MAX_QUOTED_INPUT) {
-        None => format!("`{input}`"),
-        Some((cut, _)) => format!(
-            "`{}`... ({} characters)",
-            &input[..cut],
-            input.chars().count()
-        ),
+    let cut = input
+        .char_indices()
+        .nth(MAX_QUOTED_INPUT)
+        .map(|(index, _)| index);
+    let head: String = input[..cut.unwrap_or(input.len())].escape_debug().collect();
+    match cut {
+        None => format!("`{head}`"),
+        Some(_) => format!("`{head}`... ({} characters)", input.chars().count()),
     }
 }
 

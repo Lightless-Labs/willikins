@@ -307,43 +307,79 @@ fn pinned_a_secret_equal_to_a_public_value_still_prints_the_public_one() {
     );
 }
 
-/// A YAML alias chain that expands exponentially ("billion laughs") in a
-/// field the document format does not declare is skipped, not expanded:
-/// `serde` walks the ignored value without resolving the aliases, so the
-/// document loads in ordinary time and `check` reports its ordinary
-/// errors.
+/// A YAML alias chain that expands exponentially ("billion laughs") has
+/// nowhere to hide: after finding 3 there is no ignored field to anchor it
+/// in, and `serde` refuses the unrecognised key *before* reading its
+/// value, so the expansion never happens. Pre-finding-3 the same document
+/// also returned immediately, because serde skips an ignored value without
+/// resolving its aliases; either way this returns rather than hanging.
 #[test]
-fn pinned_a_yaml_alias_bomb_in_an_ignored_field_does_not_expand() {
+fn pinned_a_yaml_alias_bomb_has_no_ignored_field_to_hide_in() {
     let mut lines = vec![
         "name: bomb".to_string(),
-        "steps:".to_string(),
-        "  a: { tool: naming.v1, with: { org: lightless-labs, slug: demo } }".to_string(),
-        "junk: &a0 [lol, lol, lol, lol, lol, lol, lol, lol, lol]".to_string(),
+        "junk0: &a0 [lol, lol, lol, lol, lol, lol, lol, lol, lol]".to_string(),
     ];
     for i in 1..10 {
         let prev = format!("*a{}", i - 1);
         let row = vec![prev; 9].join(", ");
-        lines.push(format!("j{i}: &a{i} [{row}]"));
+        lines.push(format!("junk{i}: &a{i} [{row}]"));
     }
-    lines.push("final: *a9".to_string());
+    lines.push("description: *a9".to_string());
+    lines.push("steps:".to_string());
+    lines.push("  a: { tool: naming.v1, with: { org: lightless-labs, slug: demo } }".to_string());
     let source = lines.join("\n");
 
-    // Before the unknown-field fix this parsed and checked cleanly; after
-    // it, it is refused as an unknown field. Either way the point stands:
-    // the expansion never happens, so this returns rather than hanging.
-    let result = willikins_dsl::parse_document(&source);
-    match result {
-        Ok(workflow) => {
-            willikins_core::check(&workflow, &empty_catalog()).expect("the bomb workflow checks");
-        }
-        Err(err) => {
-            let message = err.to_string();
-            assert!(
-                message.contains("junk") || message.contains("unknown field"),
-                "pinned: unexpected failure: {message}"
-            );
-        }
-    }
+    let Err(err) = willikins_dsl::parse_document(&source) else {
+        panic!("pinned: an unknown field must be refused");
+    };
+    assert!(
+        err.to_string().contains("unknown field `junk0`"),
+        "pinned: {err}"
+    );
+}
+
+/// **Known and unfixed:** a YAML *scalar* alias is materialised once per
+/// use, so a document can amplify its own size by repeating an alias to a
+/// long anchor — entirely within fields the format declares, so finding
+/// 3's `deny_unknown_fields` does not touch it. Measured: a 1 MB document
+/// (a 1 MB `description:` anchor, referenced 2,000 times from a
+/// `list<Text>` default) peaked at 952 MB of resident memory before
+/// `Text`'s own 65,536-character bound rejected it — the allocation
+/// happens inside the deserializer, before any domain type sees the value.
+/// Worst case is quadratic in the document's size.
+///
+/// Not fixed: no guard at the DSL layer closes it. `Text`'s bound is
+/// applied too late, and a cap on the document's own size only trades one
+/// quadratic for a smaller one (85,000 aliases into a 256 KiB anchor is
+/// still tens of gigabytes). The mitigation belongs in the YAML
+/// deserializer or in an OS resource limit around the process. See
+/// `docs/research/2026-09-12-e2e-adversarial-pass-2.md`.
+///
+/// What this test guards is only that the bounded case *terminates* and is
+/// rejected, not that the amplification is gone.
+#[test]
+fn known_gap_a_scalar_alias_is_materialised_once_per_use() {
+    let anchor = "z".repeat(100_000);
+    let aliases = vec!["*s"; 50].join(", ");
+    let source = format!(
+        "\
+name: alias-amplification
+description: &s \"{anchor}\"
+inputs:
+  t:
+    type: list<Text>
+    default: [{aliases}]
+steps:
+  a: {{ tool: naming.v1, with: {{ org: lightless-labs, slug: demo }} }}
+"
+    );
+    let Err(err) = willikins_dsl::parse_document(&source) else {
+        panic!("known gap: a 100,000-character Text must be rejected");
+    };
+    assert!(
+        err.to_string().contains("at most"),
+        "known gap: expected Text's length bound, got {err}"
+    );
 }
 
 /// A YAML stream holding more than one document is refused outright, so a
