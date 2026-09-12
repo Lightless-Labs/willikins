@@ -178,6 +178,9 @@ fn check_error_detail(error: &CheckError) -> String {
         CheckError::UnregisteredInputType { input, ty } => {
             format!("input `{input}`: declared type `{ty}` is not a registered type")
         }
+        CheckError::LiteralOutput { output } => {
+            format!("output `{output}`: a workflow output must be a reference, not a literal")
+        }
     }
 }
 
@@ -205,6 +208,7 @@ fn check_error_kind(error: &CheckError) -> &'static str {
         CheckError::NestedList { .. } => "NestedList",
         CheckError::DuplicateNode { .. } => "DuplicateNode",
         CheckError::UnregisteredInputType { .. } => "UnregisteredInputType",
+        CheckError::LiteralOutput { .. } => "LiteralOutput",
     }
 }
 

@@ -1147,6 +1147,16 @@ proptest! {
                         );
                     }
                 }
+                // Every declared workflow output has a resolved type:
+                // `check` never accepts an output it recorded nothing for,
+                // which is what let `plan` silently drop one (adversarial
+                // pass 2, finding 1).
+                for name in workflow.outputs.keys() {
+                    prop_assert!(
+                        checked.output_types.contains_key(name),
+                        "output {name} was accepted with no resolved type",
+                    );
+                }
                 // No secret landed on a port that does not accept secrets.
                 let registry = willikins_types::registry();
                 for (name, resolved) in &checked.types {

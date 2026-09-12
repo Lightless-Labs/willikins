@@ -1,0 +1,19 @@
+# Adversarial pass 2, finding 2: a workflow output that references a step
+# literally named `outputs` — the same name `check` uses as the synthetic
+# site for an output binding's own errors. `check` must accept this and
+# record the referenced port's type:
+#   output_types["github_repo"] == DopplerProject
+# Before the fix the synthetic site name compared equal to the real node's
+# name, so the reference was mistaken for a self-reference and dropped with
+# no error and no recorded type, while `plan` still resolved it: `check`
+# and `plan` disagreed about the workflow's own output surface.
+name: output-from-step-named-outputs
+description: A workflow output referencing a step named `outputs`.
+steps:
+  outputs:
+    tool: naming.v1
+    with:
+      org: lightless-labs
+      slug: demo
+outputs:
+  github_repo: ${{ steps.outputs.doppler_project }}

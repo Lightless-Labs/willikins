@@ -21,17 +21,17 @@
 //! instances is read, rather than silently planning two indistinguishable
 //! instances and letting `Keyed` pick the first.
 //!
-//! # Known gap: literal workflow outputs
+//! # Every declared output reaches the plan
 //!
-//! [`crate::check::check`] accepts a literal workflow output binding
-//! (`outputs: { x: some-raw-string }`) without ever resolving it to a
-//! declared type — [`Checked::output_types`] simply has no entry for it,
-//! since there is no port to parse a literal against outside a tool. `plan`
-//! inherits that gap rather than inventing a type for it: a literal
-//! workflow output is silently omitted from [`Plan::outputs`], the same way
-//! it is omitted from `output_types`. No acceptance test exercises a
-//! literal workflow output, and neither of the milestone's fixtures
-//! declares one.
+//! [`crate::check::check`] refuses a literal workflow output binding
+//! (`outputs: { x: some-raw-string }`) with
+//! [`crate::CheckError::LiteralOutput`], because there is no port to parse
+//! a literal against outside a tool and so no honest type to record. Every
+//! output a [`Checked`] workflow declares therefore has an entry in
+//! [`Checked::output_types`], and `plan` resolves every one of them into
+//! [`Plan::outputs`]: nothing a document declares is silently dropped
+//! between `check` and `plan`. Adversarial pass 2, finding 1, pinned by
+//! `willikins-cli/tests/adversarial.rs`.
 //!
 //! # `PlanError` is one error, not a list
 //!

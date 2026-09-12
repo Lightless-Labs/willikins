@@ -323,6 +323,20 @@ pub enum CheckError {
         /// Its unregistered declared type.
         ty: TypeRef,
     },
+    /// A workflow output was bound to a literal rather than a reference.
+    ///
+    /// A `with` literal is parsed against the port it is bound to; a
+    /// workflow output has no port, so there is nothing to parse it
+    /// against and no honest type to record for it. Accepting one meant
+    /// [`Checked::output_types`] — and, downstream, `Plan::outputs` —
+    /// silently omitted an output the document declares, so `plan`
+    /// reported a smaller output surface than the workflow has.
+    ///
+    /// Not one of the plan's variants; see the module docs.
+    LiteralOutput {
+        /// The output whose binding is a literal.
+        output: OutputName,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -373,10 +387,6 @@ impl fmt::Display for CheckError {
                 "secret value from node `{}`, port `{}` flows into non-secret sink at node `{}`, port `{}`",
                 from.0, from.1, to.0, to.1
             ),
-            Self::SecretWorkflowInput { input, ty } => write!(
-                f,
-                "input `{input}` has secret type `{ty}`; a workflow input may not be secret"
-            ),
             Self::SecretForEachSource { node } => {
                 write!(f, "node `{node}`: for_each source is secret")
             }
@@ -396,23 +406,13 @@ impl fmt::Display for CheckError {
                 "node `{node}`, port `{port}`: keyed reference to node `{referenced}`, which has no for_each"
             ),
             Self::Cycle { nodes } => {
-                write!(f, "cycle among nodes: ")?;
-                for (index, node) in nodes.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, " -> ")?;
-                    }
-                    write!(f, "`{node}`")?;
-                }
-                Ok(())
+                let joined = nodes
+                    .iter()
+                    .map(|node| format!("`{node}`"))
+                    .collect::<Vec<_>>()
+                    .join(" -> ");
+                write!(f, "cycle among nodes: {joined}")
             }
-            Self::DefaultTypeMismatch {
-                input,
-                expected,
-                found,
-            } => write!(
-                f,
-                "input `{input}`: default value has type `{found}`, expected `{expected}`"
-            ),
             Self::NestedList {
                 node,
                 port,
@@ -421,11 +421,46 @@ impl fmt::Display for CheckError {
                 f,
                 "node `{node}`, port `{port}`: node `{referenced}` runs once per item and its port is already a list; there is no list-of-list type"
             ),
-            Self::DuplicateNode { node } => write!(f, "duplicate node name `{node}`"),
+            // Errors about a *declaration* rather than a node's port: see
+            // `fmt_declaration_error`. Listed explicitly so this match
+            // stays exhaustive and a new variant is still a compile error.
+            Self::SecretWorkflowInput { .. }
+            | Self::DefaultTypeMismatch { .. }
+            | Self::UnregisteredInputType { .. }
+            | Self::DuplicateNode { .. }
+            | Self::LiteralOutput { .. } => self.fmt_declaration_error(f),
+        }
+    }
+}
+
+impl CheckError {
+    /// Render the errors that name a declaration -- a workflow input, a
+    /// node name, or a workflow output -- rather than a node's port.
+    /// Split out of [`fmt::Display`] so neither match runs long.
+    fn fmt_declaration_error(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SecretWorkflowInput { input, ty } => write!(
+                f,
+                "input `{input}` has secret type `{ty}`; a workflow input may not be secret"
+            ),
+            Self::DefaultTypeMismatch {
+                input,
+                expected,
+                found,
+            } => write!(
+                f,
+                "input `{input}`: default value has type `{found}`, expected `{expected}`"
+            ),
             Self::UnregisteredInputType { input, ty } => write!(
                 f,
                 "input `{input}`: declared type `{ty}` is not a registered type"
             ),
+            Self::DuplicateNode { node } => write!(f, "duplicate node name `{node}`"),
+            Self::LiteralOutput { output } => write!(
+                f,
+                "output `{output}`: a workflow output must be a reference, not a literal; there is no port to give a literal a type"
+            ),
+            other => unreachable!("not a declaration error: {other:?}"),
         }
     }
 }
@@ -799,14 +834,19 @@ impl<'a> Resolver<'a> {
     /// types go to [`Checked::output_types`], keyed by output name, so a
     /// real node named `outputs` cannot have its port types overwritten.
     /// A literal output has no target type to check against, so it is
-    /// accepted unconditionally; a secret output is accepted too, by
-    /// decision -- see `tests/check_adversarial.rs`.
+    /// refused ([`CheckError::LiteralOutput`]) rather than accepted and
+    /// dropped; a secret output is accepted, by decision -- see
+    /// `tests/check_adversarial.rs`. Every output a successful `check`
+    /// returns therefore has an entry in [`Checked::output_types`].
     fn check_outputs(&mut self, errors: &mut Vec<CheckError>) {
         let workflow = self.workflow;
         let node = outputs_node();
         let not_in_for_each = ItemContext::NotInForEach;
         for (out_name, binding) in &workflow.outputs {
             if matches!(binding, Binding::Literal(_)) {
+                errors.push(CheckError::LiteralOutput {
+                    output: out_name.clone(),
+                });
                 continue;
             }
             let port = PortName::parse(out_name.as_str()).unwrap_or_else(|err| {
@@ -914,7 +954,14 @@ impl<'a> Resolver<'a> {
             self.graph.add_edge(ref_idx, site_idx, ());
         }
 
-        if referenced == site_node {
+        // A node that references itself is left for `find_cycles` to
+        // report. Only a *real* node can do that: a workflow output's site
+        // is the synthetic `outputs` node name, which has no graph index,
+        // so comparing it against a real node named `outputs` would
+        // mistake an ordinary reference for a self-reference and drop it
+        // with no error and no recorded type (adversarial pass 2,
+        // finding 2). `site_idx` is `Some` exactly for a real node site.
+        if site_idx.is_some() && referenced == site_node {
             return None;
         }
 
