@@ -75,6 +75,24 @@ impl PortType {
     }
 }
 
+impl fmt::Display for PortType {
+    /// The port's type as an agent reads it: the type reference itself for
+    /// [`Self::Exact`], the literal `AnySecret` for [`Self::AnySecret`].
+    ///
+    /// Exists because a [`CheckError`](crate::CheckError) message names a
+    /// port's declared type, and `Reported` publishes that message verbatim
+    /// to every agent. Formatting a `PortType` with `Debug` there put
+    /// `Exact(TypeRef { name: TypeName("Text"), list: false })` in front of
+    /// the caller; this is the one rendering both that message and the
+    /// CLI's text renderer go through.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exact(ty) => write!(f, "{ty}"),
+            Self::AnySecret => f.write_str("AnySecret"),
+        }
+    }
+}
+
 /// What is known about a [`Value`]'s content.
 #[derive(Clone)]
 pub enum ValueState {

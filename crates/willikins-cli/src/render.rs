@@ -19,7 +19,7 @@
 //! wrappers over that, kept so `main.rs`'s call sites need no change.
 
 use willikins_core::{
-    Action, CheckError, CheckWarning, Description, Plan, PlannedNode, PortType, Reported, Value,
+    Action, CheckError, CheckWarning, Description, Plan, PlannedNode, Reported, Value,
 };
 
 /// Render a single [`Value`] for text output. The one and only place in
@@ -94,13 +94,6 @@ pub fn check_errors_json(errors: &[CheckError]) -> serde_json::Value {
     )
 }
 
-fn port_type_text(ty: &PortType) -> String {
-    match ty {
-        PortType::Exact(ty) => ty.to_string(),
-        PortType::AnySecret => "AnySecret".to_string(),
-    }
-}
-
 /// One line: `VariantName: <detail>`. The variant name matches
 /// [`CheckError`]'s own Rust identifier (`PascalCase`) and the `kind` value
 /// its JSON serialization carries (see [`check_errors_json`]), so an agent
@@ -144,10 +137,7 @@ fn check_error_detail(error: &CheckError) -> String {
             port,
             expected,
             found,
-        } => format!(
-            "{node}.{port}: expected {}, found `{found}`",
-            port_type_text(expected)
-        ),
+        } => format!("{node}.{port}: expected {expected}, found `{found}`"),
         CheckError::SecretLiteral { node, port } => {
             format!("{node}.{port}: a literal cannot supply a secret value")
         }

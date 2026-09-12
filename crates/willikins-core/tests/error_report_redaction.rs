@@ -113,6 +113,40 @@ fn type_mismatch_carries_type_names_and_no_value() {
     );
 }
 
+/// `Reported` publishes each error's own `Display` as the `message` an agent
+/// reads, in the CLI's JSON today and through `rmcp::Json` next. So a
+/// `Display` that formats one of its fields with `{:?}` is no longer a
+/// cosmetic slip: `TypeMismatch` used to render its `expected: PortType`
+/// with `Debug`, putting `Exact(TypeRef { name: TypeName("Text"), list:
+/// false })` into the message where the port's type name belongs. The CLI's
+/// text renderer had its own `port_type_text` and so never showed it, which
+/// is exactly how it survived milestone 1.
+#[test]
+fn type_mismatch_message_names_the_port_type_rather_than_its_debug() {
+    for (expected, wanted) in [
+        (PortType::Exact(ty("Text")), "Text"),
+        (PortType::AnySecret, "AnySecret"),
+    ] {
+        let check_error = CheckError::TypeMismatch {
+            node: node("readme"),
+            port: port("value"),
+            expected,
+            found: ty("DopplerServiceToken"),
+        };
+        let message = check_error.to_string();
+        assert!(
+            message.contains(&format!("expected {wanted}")),
+            "message: {message}"
+        );
+        for debris in ["TypeRef", "TypeName", "Exact(", "list:"] {
+            assert!(
+                !message.contains(debris),
+                "`{debris}` is Rust debug output, not an agent-readable message: {message}"
+            );
+        }
+    }
+}
+
 /// `PlanError::NameTaken`'s `key: Inputs` is the one error field in either
 /// error type that holds [`Value`]s. A key port is never secret in any
 /// milestone-2 tool, but nothing in the *type* says so, and `Inputs` is

@@ -413,7 +413,7 @@ impl fmt::Display for CheckError {
                 found,
             } => write!(
                 f,
-                "node `{node}`, port `{port}`: expected {expected:?}, found `{found}`"
+                "node `{node}`, port `{port}`: expected {expected}, found `{found}`"
             ),
             Self::SecretLiteral { node, port } => write!(
                 f,
