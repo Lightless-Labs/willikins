@@ -608,6 +608,61 @@ fn acceptance_4_keyed_reference_to_a_node_without_for_each_is_rejected() {
 }
 
 #[test]
+fn a_secret_list_bound_to_an_any_secret_port_is_a_type_mismatch_not_a_taint_violation() {
+    // `AnySecret` accepts a secret scalar but not a secret list (cardinality),
+    // so this is `TypeMismatch`, not `SecretToNonSecretSink`: the precedence
+    // rule is "secret flowing into a port that cannot accept a secret at
+    // all", and `AnySecret` *can* accept a secret, just not this shape of
+    // one.
+    let workflow = Workflow::new("w")
+        .input(input("config"), InputSpec::new(ty("DopplerConfig")))
+        .node(
+            node("secrets"),
+            Node::new(tool_name("fake.secret_list"))
+                .port(port("config"), Binding::Input(input("config"))),
+        )
+        .node(
+            node("repo"),
+            Node::new(tool_name("github.repo.ensure"))
+                .port(
+                    port("repo"),
+                    Binding::Literal("lightless-labs/demo".to_string()),
+                )
+                .port(port("visibility"), Binding::Literal("private".to_string())),
+        )
+        .node(
+            node("ci_secret"),
+            Node::new(tool_name("github.actions_secret.ensure"))
+                .port(
+                    port("repo"),
+                    Binding::Step {
+                        node: node("repo"),
+                        port: port("repo"),
+                    },
+                )
+                .port(port("name"), Binding::Literal("DOPPLER_TOKEN".to_string()))
+                .port(
+                    port("value"),
+                    Binding::Step {
+                        node: node("secrets"),
+                        port: port("tokens"),
+                    },
+                ),
+        );
+    let catalog = test_catalog();
+    let errors = check(&workflow, &catalog).expect_err("a secret list must not satisfy AnySecret");
+    assert_eq!(
+        errors,
+        vec![CheckError::TypeMismatch {
+            node: node("ci_secret"),
+            port: port("value"),
+            expected: PortType::AnySecret,
+            found: list_ty("DopplerServiceToken"),
+        }]
+    );
+}
+
+#[test]
 fn acceptance_6_a_workflow_with_an_irreversible_node_requires_approval() {
     let workflow = new_rust_service_workflow().node(
         node("danger"),

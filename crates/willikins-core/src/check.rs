@@ -1542,6 +1542,157 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn every_variants_display_names_its_node_and_port() {
+        let cases: Vec<(CheckError, &str, Option<&str>)> = vec![
+            (
+                CheckError::UnknownTool {
+                    node: node_name("n"),
+                    tool: tool_name("t.t"),
+                },
+                "n",
+                None,
+            ),
+            (
+                CheckError::UnknownPort {
+                    node: node_name("n"),
+                    tool: tool_name("t.t"),
+                    port: port("p"),
+                },
+                "n",
+                Some("p"),
+            ),
+            (
+                CheckError::UnknownNode {
+                    node: node_name("n"),
+                    port: port("p"),
+                    referenced: node_name("ghost"),
+                },
+                "n",
+                Some("p"),
+            ),
+            (
+                CheckError::UnboundInput {
+                    node: node_name("n"),
+                    port: port("p"),
+                },
+                "n",
+                Some("p"),
+            ),
+            (
+                CheckError::UndeclaredInput {
+                    node: node_name("n"),
+                    port: port("p"),
+                    input: input_name("x"),
+                },
+                "n",
+                Some("p"),
+            ),
+            (
+                CheckError::InvalidLiteral {
+                    node: node_name("n"),
+                    port: port("p"),
+                    error: ParseError::new("Binding", "bad"),
+                },
+                "n",
+                Some("p"),
+            ),
+            (
+                CheckError::TypeMismatch {
+                    node: node_name("n"),
+                    port: port("p"),
+                    expected: exact("GitHubOrg"),
+                    found: ty("ProjectSlug"),
+                },
+                "n",
+                Some("p"),
+            ),
+            (
+                CheckError::SecretLiteral {
+                    node: node_name("n"),
+                    port: port("p"),
+                },
+                "n",
+                Some("p"),
+            ),
+            (
+                CheckError::SecretToNonSecretSink {
+                    from: (node_name("src"), port("out")),
+                    to: (node_name("n"), port("p")),
+                },
+                "src",
+                Some("out"),
+            ),
+            (
+                CheckError::SecretWorkflowInput {
+                    input: input_name("x"),
+                    ty: ty("DopplerServiceToken"),
+                },
+                "x",
+                None,
+            ),
+            (
+                CheckError::SecretForEachSource {
+                    node: node_name("n"),
+                },
+                "n",
+                None,
+            ),
+            (
+                CheckError::ForEachOverScalar {
+                    node: node_name("n"),
+                },
+                "n",
+                None,
+            ),
+            (
+                CheckError::ItemOutsideForEach {
+                    node: node_name("n"),
+                    port: port("p"),
+                },
+                "n",
+                Some("p"),
+            ),
+            (
+                CheckError::KeyedOnScalarNode {
+                    node: node_name("n"),
+                    port: port("p"),
+                    referenced: node_name("ghost"),
+                },
+                "n",
+                Some("p"),
+            ),
+            (
+                CheckError::Cycle {
+                    nodes: vec![node_name("n")],
+                },
+                "n",
+                None,
+            ),
+            (
+                CheckError::DuplicateNode {
+                    node: node_name("n"),
+                },
+                "n",
+                None,
+            ),
+        ];
+        for (error, node_needle, port_needle) in cases {
+            let message = error.to_string();
+            assert!(
+                message.contains(node_needle),
+                "{error:?} display {message:?} does not name node `{node_needle}`"
+            );
+            if let Some(port_needle) = port_needle {
+                assert!(
+                    message.contains(port_needle),
+                    "{error:?} display {message:?} does not name port `{port_needle}`"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn check_warning_display_names_the_input() {
         let warning = CheckWarning::UnusedInput {
             input: input_name("slug"),
