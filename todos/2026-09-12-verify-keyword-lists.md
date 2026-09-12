@@ -11,6 +11,12 @@ related:
 
 # Verify the Swift and Kotlin reserved-word lists
 
+**2026-09-12: verified** against the primary sources (`docs/research/2026-09-12-m2-dependencies.md`,
+section 5). Rust, Java, Kotlin hard keywords, and the Windows device names match exactly
+(`com0`/`lpt0` correctly stay accepted). Swift's declarations group has gained `borrowing`,
+`consuming`, and `nonisolated`; adding them test-first is task 0 of the milestone 2 plan,
+which closes this todo.
+
 `crates/willikins-types/src/reserved.rs` holds the union of Rust, Java, Kotlin hard, and
 Swift keywords plus Windows device names. The Rust and Java lists are well established. The
 Swift and Kotlin lists were written from recall because WebFetch was blocked for every agent

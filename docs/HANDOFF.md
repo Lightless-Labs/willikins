@@ -3,24 +3,31 @@
 Current state of the project and active work. Read this at session start. Update before
 compaction, before handing off, after a milestone, and after a plan change or discovery.
 
-**Last updated:** 2026-09-12
+**Last updated:** 2026-09-12 (evening)
 
 ## Current Status
 
-### RESUME HERE (2026-09-12) — milestone 1 complete and verified; milestone 2 has no plan yet
+### RESUME HERE (2026-09-12) — milestone 2 plan written, researched, and reviewed; no milestone 2 code yet
 
-- **Live state:** `main` at 95 local commits, gates green, 699 tests. No remote is configured
-  and nothing has been pushed. Working tree clean apart from the gitignored `nohup.out`.
-- **What just happened:** the whole of milestone 1 was built in one session on 2026-09-11 and
-  2026-09-12 through nine Workflow runs (sonnet implementing, opus verifying). The plan record
-  is `docs/plans/2026-09-11-milestone-1-core.md`, marked Completed.
-- **Next action:** write the milestone 2 plan (`docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`)
-  following the tracking todo `todos/2026-09-12-milestone-2-plan.md`. Do not start milestone 2
-  code before the plan exists and has been reviewed with the document-review workflow.
-- **Before any real provisioning run:** verify the Swift and Kotlin reserved-word lists
-  (`todos/2026-09-12-verify-keyword-lists.md`). The slug grammar is frozen once a project exists.
-- **Before the MCP server accepts documents from agents:** fix YAML scalar-alias amplification
-  (`todos/2026-09-12-yaml-scalar-alias-amplification.md`).
+- **Live state:** `main` at 100 local commits, gates green at the last code change (699
+  tests; no code has changed since). No remote is configured and nothing has been pushed.
+- **What just happened:** the milestone 2 plan
+  `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md` was written, backed by
+  `docs/research/2026-09-12-m2-dependencies.md` (five parallel research passes with
+  verbatim sources), reviewed by the document-review workflow (coherence, feasibility,
+  security, scope, adversarial), and stamped Reviewed with 20 findings folded in. The design
+  doc gained a "Milestone 2 decisions" section. The keyword lists were verified: Swift is
+  missing `borrowing`, `consuming`, `nonisolated`; everything else matches its source.
+- **Next action:** dispatch implementation per the plan's task table. Task 0 (three Swift
+  keywords) and group A (1a+1b core serialization and the `Site` enum; 1c types and DSL
+  bounds plus the YAML pre-scan; 1d describe labelling) can start at once in separate
+  worktrees, sonnet implementing test-first and opus verifying, one Workflow per group as
+  in milestone 1. Every `CONTEXT` string names the four bare `cargo` gates.
+- **Ask the operator for** sandbox credentials (a throwaway GitHub org token and a Doppler
+  service-account token) before task 8, so the read-only probe settles the undocumented
+  Doppler facts early rather than at the live smoke run.
+- **Do not** start the MCP server task (10b) before 1c lands: the YAML pre-scan and byte
+  cap are what make accepting a document body over the network safe.
 
 ## Project State
 
@@ -57,9 +64,13 @@ research, with a correction block on its slug section),
 - **`cargo check -p willikins-types` is a real gate.** The crate enables its own `executor`
   feature through a self dev-dependency, so `--all-targets` never builds it the way its
   dependents see it. A cfg-gated bug slipped past the other three gates once.
-- **The RTK hook can summarize a failing cargo build into "No issues found".** Always
-  `rtk proxy cargo ...` and read the log body. `$?` after a pipe in zsh is the last command's
-  status.
+- **Read the log body, never a captured exit code.** The RTK hook that once rewrote cargo
+  commands is gone from this machine (2026-09-12); gates are bare `cargo`. `$?` after a pipe
+  in zsh is the last command's status, so never pipe gate output.
+- **Network tools work.** WebFetch, WebSearch, context7, `curl`, and `gh api` work for the
+  main session and for agents. Prefer verbatim primary sources: GitHub's OpenAPI description,
+  docs repos' raw markdown, Doppler's `<page>.md` twins, the `swiftlang/swift-book` DocC
+  source for docs.swift.org.
 - **`extern crate self as willikins_types`** in `willikins-types/src/lib.rs` exists so the
   derive's generated `::willikins_types::` paths resolve inside the crate itself.
 - **The type registry and `type_infos()` come from one `domain_types!` invocation** in
@@ -95,21 +106,25 @@ research, with a correction block on its slug section),
 
 ## Open TODOs
 
-| File | Priority | Gates |
+Every open todo except the last is now a numbered task in the milestone 2 plan; close each
+when its task lands.
+
+| File | Priority | Milestone 2 task |
 | --- | --- | --- |
-| `todos/2026-09-12-milestone-2-plan.md` | high | the next session's first action |
-| `todos/2026-09-12-verify-keyword-lists.md` | high | any real provisioning run |
-| `todos/2026-09-12-yaml-scalar-alias-amplification.md` | high | the MCP server accepting documents |
-| `todos/2026-09-12-prompt-text-from-documents.md` | medium | agent-facing output in milestone 2 |
-| `todos/2026-09-12-check-error-site-enum.md` | medium | composite output ports in milestone 2 |
-| `todos/2026-09-12-check-error-serialize.md` | medium | the MCP `validate` tool |
-| `todos/2026-09-12-workflow-name-description-bounds.md` | low | |
-| `todos/2026-09-12-fake-state-write-only.md` | low | |
-| `todos/2026-09-11-propose-slug-digit-letter-tokens.md` | low | |
+| `todos/2026-09-12-milestone-2-plan.md` | high | the tracking todo; plan written and reviewed, implementation next |
+| `todos/2026-09-12-verify-keyword-lists.md` | high | task 0 (verification done; three Swift words to add) |
+| `todos/2026-09-12-yaml-scalar-alias-amplification.md` | high | task 1c |
+| `todos/2026-09-12-prompt-text-from-documents.md` | medium | task 1d |
+| `todos/2026-09-12-check-error-site-enum.md` | medium | task 1b |
+| `todos/2026-09-12-check-error-serialize.md` | medium | task 1a |
+| `todos/2026-09-12-workflow-name-description-bounds.md` | low | task 1c |
+| `todos/2026-09-12-fake-state-write-only.md` | low | task 4 |
+| `todos/2026-09-11-propose-slug-digit-letter-tokens.md` | low | not scheduled |
 
 ## How Work Is Verified
 
-- Four gates before every commit, through `rtk proxy cargo`.
+- Four gates before every commit, bare `cargo`, in the background with a 600,000 ms
+  timeout, reading the log body.
 - Each task: sonnet implements test-first, opus attacks it with new tests and fixes what it
   breaks, one commit per fix. The Workflow scripts from this session are under the session's
   `workflows/scripts/` directory and follow one shape: `CONTEXT` string with gates and rules,
@@ -131,25 +146,19 @@ research, with a correction block on its slug section),
   `for_each` keys; a 10 MB rejected input echoed in full; unknown document fields silently
   ignored. No attack in either adversarial pass reached a secret byte.
 - Costs: nine Workflow runs, about thirty agents, roughly 5.7M subagent tokens.
+- 2026-09-12, second session: milestone 2 plan, research note, design addenda, and document
+  review (five research agents, five reviewer agents). Decisions worth knowing before
+  reading the plan: two kinds of secret (graph secrets behind `SinkToken`, provider
+  credentials behind one `authorize` function and a clippy entry); `Tool::ensure` returns
+  `Ensured { outputs, changed }` and every live `ensure` reads first; `apply` over MCP
+  returns a `run_id` and runs in the background; a plan has an approval window and an
+  apply window; the remote server plans and applies by workflow name only; visibility
+  mismatches are refused, not reconciled; composition moved to its own future plan.
 
 ## Next: Milestone 2 Runbook
 
-Write the plan first. Its scope, from the design doc's milestone list and this session's
-findings:
-
-1. Real GitHub and Doppler providers behind the same `Tool` contract as the fakes, with the
-   port table unchanged. Credentials held server-side; provider auth is execution context,
-   never an input.
-2. `apply`: the executor is the only non-test `SinkToken` site. Approval gate before any
-   node whose class is above `Reversible`. Run ledger with per-node status; re-running a
-   partially failed plan converges because every tool is idempotent.
-3. MCP server with `rmcp` 3 over stdio and Streamable HTTP: `validate`, `describe`, `plan`,
-   `apply`, `list_tools`, `propose_slug`. The CLI already mirrors these.
-4. Authentication, TLS, and an append-only audit log for the remote deployment (Railway).
-5. Prerequisites from the todos: scalar-alias amplification, `CheckError` serialization,
-   document-text labelling in agent-facing output, and the keyword-list verification.
-6. Composition: `Workflow` implements `Tool` with typed composite output ports, which is also
-   when the sentinel sites in `CheckError` get replaced by a site enum.
-
-Verify with a browser before relying on them: the current MCP authorization spec for HTTP
-transports, `rmcp` 3's Streamable HTTP server API, and the Swift and Kotlin keyword lists.
+The plan is the runbook: `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`, its
+"Tasks" table (groups A, B, C, D run in parallel worktrees), its 19 acceptance tests, and
+its "Verify before relying on them" list. Two adversarial passes are tasks 9 and 13 and get
+recorded under `docs/research/`. Task 14 (the live smoke run) needs the operator's sandbox
+credentials and is the completion gate.

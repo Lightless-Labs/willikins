@@ -1,6 +1,7 @@
 # Milestone 2: real providers, apply, run ledger, approval gate, MCP server
 
 **Created:** 2026-09-12
+**Reviewed:** 2026-09-12 (via document-review workflow: coherence, feasibility, security-lens, scope-guardian, adversarial personas). 20 findings folded in; see "Review resolutions" at the end.
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
 **Previous:** `docs/plans/2026-09-11-milestone-1-core.md`
 **Research:** `docs/research/2026-09-12-m2-dependencies.md`
@@ -224,11 +225,19 @@ required if it does not (see "Verify").
 
 ### willikins-core (changes)
 
-**Error serialization.** Every error and warning type that reaches an agent serializes as
-one JSON object shape: `{"kind": "<PascalCase variant>", "message": "<Display>", ...the
-variant's fields}`. `CheckError`, `CheckWarning`, `PlanError`, and the new `ApplyError`
-derive `Serialize` with `#[serde(tag = "kind")]`; a shared `Reported<T>` wrapper adds
-`message`. `DocumentError` already uses `tag = "kind"` in `snake_case` and changes to
+**Error serialization and result schemas.** Every error and warning type that reaches an
+agent serializes as one JSON object shape: `{"kind": "<PascalCase variant>", "message":
+"<Display>", ...the variant's fields}`. `CheckError`, `CheckWarning`, `PlanError`, and the
+new `ApplyError` derive `Serialize` with `#[serde(tag = "kind")]`; a shared `Reported<T>`
+wrapper adds `message`. Every result type the MCP surface returns through `rmcp::Json<T>`
+needs `schemars::JsonSchema` as well, which the core types do not have today: `Plan`,
+`PlannedNode`, `Action`, `Description`, `MissingInput`, `InputError`, `Inputs`, `Outputs`,
+and the new `Applied`, `AppliedNode`, `RunRecord` derive it; `Value` gets a hand-written
+`JsonSchema` that states the tagged object shape milestone 1 pinned by snapshot (`type`,
+`list`, `state`, optional `value` as a string or an array of strings, optional `redacted`),
+and `Inputs`/`Outputs` are maps of it. The derives are checked by a test that generates
+every result schema without panicking and by the insta snapshots of the published
+schemas. `DocumentError` already uses `tag = "kind"` in `snake_case` and changes to
 PascalCase for consistency. This changes `PlanError`'s JSON from externally tagged
 (`{"NameTaken": {...}}`) to `{"kind": "NameTaken", ...}`; the one CLI test that pins the old
 shape (`cli.rs`, the foreign-repo `NameTaken` assertion) is updated in the same commit, and
@@ -276,26 +285,45 @@ Rules, in order:
 1. `approved.requires_approval && approval == Auto` -> `ApplyError::ApprovalRequired`,
    before any provider call.
 2. Re-plan: `plan(checked, inputs, catalog)`. A `PlanError` -> `ApplyError::Plan`. Any node
-   instance whose `(name, instance, action)` differs from `approved` ->
-   `ApplyError::Drift { node, instance, planned, observed }`. Nothing has been executed.
-   `Plan::fingerprint()` returns the ordered `(name, instance, action)` list for this
-   comparison and for the journal.
+   instance whose fingerprint differs from `approved` -> `ApplyError::Drift { node,
+   instance, kind }` with `kind` either `Action { planned, observed }` or `Output { port,
+   planned, observed }`. Nothing has been executed. `Plan::fingerprint()` returns, per
+   instance in order, `(name, instance, action, rendered non-secret outputs)`; a secret
+   output contributes only its redaction marker, so a secret whose bytes changed between
+   `plan` and `apply` is *not* drift. That is deliberate: the fingerprint is journaled and
+   compared in the clear, and what a human approves is that the secret named in the plan
+   flows to the sink named in the plan, not its bytes; a `doppler.secret.get` value rotated
+   out of band propagates as the current value, which is the semantics of a secret
+   reference. Every non-secret observed value, including a live-reading pure tool's, is
+   part of the fingerprint, so a changed one is `Drift`.
 3. Mint one `SinkToken` for the run.
 4. Walk the fresh plan in order. For each node instance:
    - pure tool -> status `Computed`, outputs from the plan.
-   - every required input `Known` -> call `ensure(inputs, &token)`; status `Created` when
-     the planned action was `Create`, `Unchanged` when it was `NoOp`. On `Err` -> status
-     `Failed { error }`, every later instance `NotRun`, return `ApplyError::Tool { node,
-     instance, error }` alongside the partial `Applied`.
+   - every required input `Known` -> call `ensure(inputs, &token) -> Ensured { outputs,
+     changed }`; status `Created` when `changed`, `Unchanged` when not. The status comes
+     from the tool's answer, not from the planned action, because an earlier node in the
+     same run may have created this resource as a side effect (Doppler creates `dev`,
+     `stg`, `prd` with the project), so a planned `Create` can honestly finish `Unchanged`.
+     On `Err` -> status `Failed { error }`, every later instance `NotRun`, return
+     `ApplyError::Tool { node, instance, error }` alongside the partial `Applied`.
    - some required input `Unknown` and the planned action was `NoOp` -> status
      `Converged`, outputs from the plan's observation, no call.
    - some required input `Unknown` and the planned action was `Create` ->
      `ApplyError::UnknownInput { node, port, from: NodeName }`, where `from` is the node
      whose output cannot be re-read, and the message names the rotation workflow.
-   The `Unchanged` branch calls `ensure` on purpose: a tool with an `AnySecret` sink whose
+   `ensure` is called for a planned `NoOp` on purpose: a tool with an `AnySecret` sink whose
    upstream value has just been re-minted must be re-written, and every tool's `ensure` is
    idempotent by contract, so calling it on a resource that is already right is a no-op
    provider call at worst.
+
+**`Tool::ensure` returns `Ensured`.** The trait's `ensure` changes from returning `Outputs`
+to returning `Ensured { outputs: Outputs, changed: bool }`, and the contract gains a
+sentence: an `ensure` implementation first observes the resource itself (its own `read`
+logic, without a token) and creates or writes only what is missing, so it is safe to call
+on a resource that already exists and is ours; a resource that exists and is not ours is
+`Conflict`. Idempotence is the tool's job, not the executor's, because the executor's plan
+is a snapshot taken before any node ran. Every fake tool is updated and already behaves
+this way in substance (they insert into sets).
 5. Resolve workflow outputs from the ensure outputs. `Applied { nodes: Vec<AppliedNode>,
    outputs }`; secret outputs stay `Value`s and print redacted.
 6. `ApplyObserver::on(event)` is called with `NodeStarted` before and `NodeFinished` after
@@ -387,7 +415,7 @@ message saying which kind is needed.
 | Tool | `read` | `ensure` |
 | --- | --- | --- |
 | `doppler.project.ensure` | `GET /v3/projects/project?project=<name>`: 404 -> `Absent` (predicted); 200 with the marker in `description` -> `Present`; 200 without -> `Foreign`. The project object has `id`, `name`, `description`, `created_at`; `name` is the identifier every other endpoint takes | `POST /v3/projects` with `name` and the marker `description`; on an error after a possibly delivered create, re-`read` |
-| `doppler.config.ensure` | root config name from `naming::v1::doppler_root_config`; `GET /v3/configs/config?project&config=<name>`: 200 and `root: true` -> `Present`; 404 -> `Absent` (predicted) | `POST /v3/environments?project=` with body `name` and `slug` both equal to the config name (both are required; neither carries a documented character class); Doppler creates the root config with the environment |
+| `doppler.config.ensure` | root config name from `naming::v1::doppler_root_config`; `GET /v3/configs/config?project&config=<name>`: 200 and `root: true` -> `Present`; 404 -> `Absent` (predicted) | re-`read` first: `Present` -> `Ensured { changed: false }` (this is the path the first live apply takes for `dev`, `stg`, `prd`, which Doppler created with the project a moment earlier in the same run); `Absent` -> `POST /v3/environments?project=` with body `name` and `slug` both equal to the config name (both are required; neither carries a documented character class), Doppler creates the root config with the environment, `changed: true`; a conflict after a possibly delivered create -> re-`read` again |
 | `doppler.service_token.ensure` | `GET /v3/configs/config/tokens?project&config`; a listed token whose `name` matches -> `Present` with `token` `Unknown`; none -> `Absent` with `token` `Unknown`. The list omits `key` and `access` | `Present` -> no call, `Unknown`; `Absent` -> `POST /v3/configs/config/tokens` with `project`, `config`, `name`, `access: "read"`; parse the response's `token.key` into `DopplerServiceToken`; drop the response; return it `Known` |
 | `doppler.service_token.rotate` (new; inputs `config`, `name`; output `token`; key `config`, `name`; class `Destructive`) | as `ensure`'s read | for every listed token with that `name`, `DELETE /v3/configs/config/tokens/token` with body `project`, `config`, `slug`; then mint as above; `Known` output |
 | `doppler.secret.get` (pure) | `GET /v3/configs/config/secret?project&config&name`: the response is `{name, value: {raw, computed, note}}`; parse `value.computed` (references resolved, which is what a consumer needs) into `DopplerSecretValue` and return `Present` with it `Known`; 404 -> `ToolError::NotFound` naming the key | identity |
@@ -440,12 +468,21 @@ construction: every payload that can hold a value holds a `Value`, `Inputs`, `Ou
 journal, the plan TTL, and the approval lock. Operations, each journaled:
 `validate(source: DocumentSource)`, `describe(source, inputs)`, `plan(workflow, inputs,
 principal) -> PlanRecord`, `approve(plan_id, approver)`, `reject(plan_id, approver, reason)`,
-`apply(plan_id, principal) -> RunRecord`, `list_workflows()`, `run(run_id)`, `list_tools()`,
-`propose_slug(name)`. `DocumentSource::{Body(String), Name(WorkflowName)}`; `plan` and
-`apply` take a `WorkflowName` only. At startup the `Butler` loads every document in the
-directory, parses and `check`s it against the catalog, and refuses to start on the first
-failure, naming the file. One `apply` runs at a time; a second concurrent call waits.
-`plan` and `apply` run on `tokio::task::spawn_blocking`.
+`apply(plan_id, principal) -> RunHandle`, `list_workflows()`, `run(run_id) -> RunRecord`,
+`list_tools()`, `propose_slug(name)`. `DocumentSource::{Body(String), Name(WorkflowName)}`;
+`plan` and `apply` take a `WorkflowName` only. At startup the `Butler` loads every document
+in the directory, parses and `check`s it against the catalog, and refuses to start on the
+first failure, naming the file.
+
+`apply` does its refusal checks (identity, window, approval, drift, which include the
+re-plan's provider reads) synchronously, journals `RunStarted`, and returns `RunHandle {
+run_id }` at once; the run itself continues on a `spawn_blocking` thread, journaling each
+node as it goes, and `run(run_id)` returns the `RunRecord` with per-node statuses and the
+outcome so far. A run therefore never depends on the HTTP request that started it staying
+open, and a caller that lost its response still has a `run_id` in the journal to poll. One
+run at a time: a second `apply` while a run is in progress returns `RunInProgress { run_id }`
+rather than queueing, and the caller polls. `plan` runs on `spawn_blocking` and returns
+when done; its provider reads are a handful of sequential GETs.
 
 **MCP tools**, defined with rmcp's `#[tool]` macros on `Butler`, parameters as
 `schemars`-derived structs, results as the same `serde` types the CLI prints so the two
@@ -456,8 +493,8 @@ surfaces cannot drift:
 | `validate` | `document?: String` or `workflow?: WorkflowName` (exactly one) | `{ ok, errors: [CheckError], warnings: [CheckWarning] }` |
 | `describe` | as `validate`, plus `inputs: { name: string | [string] }` | `Description` with `document_description` fields and willikins-voiced prompts |
 | `plan` | `workflow: WorkflowName`, `inputs` | `{ plan_id, plan: Plan, requires_approval, approval: "automatic" | "pending", expires_at }` |
-| `apply` | `plan_id` | `{ run_id, nodes: [AppliedNode], outputs, outcome }` or an error result |
-| `run_status` | `run_id` | the run's `RunRecord` |
+| `apply` | `plan_id` | `{ run_id, state: "running" }` once the run is journaled, or an error result (`ApprovalRequired`, `Drift`, `RunInProgress { run_id }`, ...) |
+| `run_status` | `run_id` | the run's `RunRecord`: `{ run_id, plan_id, state: "running" | "succeeded" | "failed", nodes: [AppliedNode], outputs, error? }`; the CLI's `apply` polls this until the state is final |
 | `list_workflows` | none | `[{ name, document_description, inputs: [name, type, required] }]` |
 | `list_tools` | none | `Catalog::list_tools_json()` |
 | `propose_slug` | `name: String` | `{ slug }` or an error result |
@@ -485,7 +522,9 @@ the other way round; `json_response` has no effect until legacy mode is off), a 
 rmcp's DNS-rebinding defence; startup refuses an empty list in http mode). Also `/healthz`,
 `GET /approvals` (HTML: pending plans with their redacted plan text, one approve and one
 reject form each) and `POST /approvals/{plan_id}` (`decision`, `reason`). Middleware,
-outermost first: a 60-second request timeout (`tower-http`), bearer authentication for
+outermost first: a 30-second request timeout (`tower-http`; no MCP call blocks longer than
+a `plan`'s few sequential reads, because `apply` returns as soon as its run is journaled
+and the run itself is not bound by any request), bearer authentication for
 `/mcp` as an axum `from_fn_with_state` layer that hashes the presented token with SHA-256
 and compares against the configured agent hashes in constant time (`subtle`), and HTTP
 Basic authentication for `/approvals` whose password hashes to the approver hash. A missing
@@ -545,9 +584,10 @@ repository creation, per-project Doppler service accounts) is a milestone 3 ques
 - `plan` and `apply` gain `--live`: real providers with credentials from the same
   environment variables the server reads. Without `--live`, the fake providers, as today.
 - `apply <file> [--input ...] [--fake-state <json>] [--live] [--approve] [--journal <path>]`:
-  plans, prints the plan, and applies; a plan that requires approval is refused unless
-  `--approve` is given, in which case the local operator is journaled as the approver.
-  `--journal` defaults to an in-memory journal; with a path, the file journal.
+  plans, prints the plan, and applies, waiting for the run to finish and printing its
+  `RunRecord`; a plan that requires approval is refused unless `--approve` is given, in
+  which case the local operator is journaled as the approver. `--journal` defaults to an
+  in-memory journal; with a path, the file journal.
 - `approve <plan_id> --journal <path>`, `reject`, `runs --journal <path>`, `run <run_id>`.
 - `serve --stdio | --http --bind <addr>`, which is the `willikins-server` binary's entry
   point re-exported so there is one `willikins` binary.
@@ -574,6 +614,10 @@ repository creation, per-project Doppler service accounts) is a milestone 3 ques
 - Loses `naming.v1` and `template.render` to `willikins-tools`; gains
   `doppler.service_token.rotate` (Destructive; revokes and re-mints in memory; the minted
   value is `FakeState::next_token` when seeded, so a test can plant a distinctive marker).
+- Every fake `ensure` returns `Ensured { outputs, changed }` and reads its own state first,
+  so `changed` is truthful. `doppler.project.ensure` models Doppler and seeds the `dev`,
+  `stg`, and `prd` root configs when it creates a project, which is what makes acceptance
+  tests 5 and 6 rehearse the first live apply faithfully.
 - `github.repo.ensure` implements `Mismatch` on visibility, so the fake and the live tool
   agree (acceptance test 9).
 - `FakeState` gains `fail_ensure_once: Vec<String>` keyed `"<tool>#<key string>"`: the next
@@ -609,22 +653,27 @@ The milestone cannot ship without every one of these.
 3. **Sealed box.** Seal with a generated key pair and open with the private key in the
    test; the base64 form matches what GitHub documents; the public key is decoded from the
    base64 the `public-key` endpoint returns.
-4. **Credential exposure.** A test greps every `.rs` file in the workspace for
-   `expose_secret` and asserts the call sites are exactly the derive's codegen emitter,
-   `Credential::authorize`, and `#[cfg(test)]` items, mirroring the `SinkToken::new` grep;
-   `clippy.toml` carries the entry. `Credential`'s `Debug` prints the redacted marker; a
+4. **Credential exposure.** A test walks every `.rs` file in the workspace and asserts
+   that the call sites of `expose_secret` are exactly the derive's codegen emitter,
+   `Credential::authorize`, and `#[cfg(test)]` items, and that the call sites of
+   `SinkToken::new` are exactly the apply executor and `#[cfg(test)]` items. Milestone 1
+   relied on a reviewer grepping for the `#[allow]` comments; this makes both lists a
+   test. `clippy.toml` carries both entries. `Credential`'s `Debug` prints the redacted marker; a
    trybuild case shows `serde_json::to_string(&credential)` and `format!("{credential}")`
    do not compile. A `Credential` constructed from an environment variable holding a
    distinctive marker never leaks it through `Debug`, a `ProviderError`, a `ToolError`, or
    a mock server's recorded request other than in the `Authorization` header.
 5. **Executor happy path.** The positive fixture against empty fake state with
    `next_token` seeded to a distinctive marker: `names` `Computed`; `repo`, `doppler`,
-   `configs[dev|stg|prd]`, `token`, `ci_secret` `Created`; `repo_url` `Known`; the marker
+   `token`, `ci_secret` `Created`; `configs[dev|stg|prd]` `Unchanged`, because the fake
+   `doppler.project.ensure` models Doppler and creates the three default root configs with
+   the project, so the planned `Create` finds them present (a run with `environments`
+   including `qa` shows `configs[qa]` `Created`); `repo_url` `Known`; the marker
    appears in none of the `Applied` JSON, its `Debug`, the CLI text, the journal file, or
    captured `tracing` output; `ci_secret`'s `Inputs` in every journal event print the
    redaction marker.
 6. **Convergence.** (a) `fail_ensure_once` at `configs#third-thoughts/stg`: apply stops with
-   statuses `Created` up to `configs[dev]`, `Failed` at `configs[stg]`, `NotRun` after; a new
+   `repo` and `doppler` `Created`, `configs[dev]` `Unchanged`, `Failed` at `configs[stg]`, `NotRun` after; a new
    plan shows `NoOp` for the finished nodes and `Create` for the rest; the second apply
    finishes with `Unchanged` and `Created` accordingly. (b) `fail_ensure_once` at
    `ci_secret`: the new plan shows `token` `NoOp`; the second apply returns `UnknownInput {
@@ -655,8 +704,12 @@ The milestone cannot ship without every one of these.
    after the approval window -> `PlanExpired` at approval; a plan approved in time and
    applied after the apply window measured from approval -> `PlanExpired`; a plan
    approved 23 hours after `plan` and applied 30 minutes later runs; an unknown id ->
-   `UnknownPlan`; a second `apply` of an already applied plan -> `AlreadyApplied`. Each
-   refusal is journaled.
+   `UnknownPlan`; a second `apply` of an already applied plan -> `AlreadyApplied`; a
+   second `apply` while a run is in progress -> `RunInProgress { run_id }`. Output drift:
+   a unit test on `Plan::fingerprint` shows two plans that differ only in a non-secret
+   observed output are `Drift { kind: Output }`, and two that differ only in a seeded
+   `doppler.secret.get` value are equal (the secret-is-not-drift rule, pinned on purpose).
+   Each refusal is journaled.
 9. **Attribute mismatch.** Fake and live `github.repo.ensure` with the repository ours and
    public, requested private: `plan` returns `AttributeMismatch { node: repo, port:
    visibility }`; `ensure` returns `Conflict`; the mock server records no `PATCH`.
@@ -741,7 +794,7 @@ separate worktrees; the coordinator merges on `main`.
 | 5 | `willikins-journal`; acceptance test 10 | 1a | B | sonnet, verified by opus |
 | 6 | `willikins-providers-http`: `Credential`, client, retry, error mapping, test support; `clippy.toml` entry; derive `#[allow]`; acceptance test 4 | 1a | B | sonnet, verified by opus |
 | 7 | `willikins-providers-github`; acceptance tests 1 to 3 (its share), 9 (live) | 3, 6 | C | sonnet, verified by opus |
-| 8 | `willikins-providers-doppler`; acceptance tests 1, 2 (its share) | 3, 6 | C | sonnet, verified by opus |
+| 8 | `willikins-providers-doppler`; the opt-in read-only live probe for both providers; acceptance tests 1, 2 (its share) | 3, 6 | C | sonnet, verified by opus |
 | 9 | Adversarial pass 1: executor, journal, approval (acceptance test 19, first pass) | 4, 5 | | opus |
 | 10a | `willikins-server` library: `Butler`, plan identity, startup checks; acceptance tests 7 (identity half), 8, 13, 14 | 4, 5, 7, 8 | | sonnet, verified by opus |
 | 10b | `willikins-server` binary: rmcp tools, stdio, Streamable HTTP, auth, nonce and origin checks on approvals, per-principal rate limit, approval page; an in-process rmcp client for tests (rmcp's `client` feature over a `tokio::io::duplex` pair, in the crate's `tests/`); acceptance tests 7 (HTTP half), 11, 12 | 10a | D | sonnet, verified by opus |
@@ -782,8 +835,18 @@ sequential on `main`.
   build on this host. Features are kept minimal and every agent runs cargo in the
   background with the 600,000 ms timeout.
 - **Recorded fixtures drift from the real APIs.** The live smoke run refreshes them; until
-  it has run once, every live tool's behaviour rests on the documentation quoted in the
-  research note.
+  then, every live tool's behaviour rests on the documentation quoted in the research
+  note. To move that risk off the last task, task 8 includes a read-only probe
+  (`WILLIKINS_LIVE_PROBE=1`, `#[ignore]`) that, as soon as the operator supplies sandbox
+  credentials, records the real response bodies of the Doppler and GitHub read endpoints
+  (project, environments, configs, token list, secret, repository, public key) and fails
+  if a recorded fixture's shape disagrees. The undocumented Doppler facts (error body,
+  slug character class, duplicate token names) are settled there, not at task 14.
+- **Two YAML parsers over the same bytes.** The `saphyr-parser` pre-scan only ever
+  *rejects*; it never accepts on `serde_yaml_ng`'s behalf, so a disagreement between the
+  two can only produce a false rejection of a document `serde_yaml_ng` would have parsed,
+  never a document that slips past the scan. A false rejection of a shipped fixture would
+  fail the acceptance suite, which is the detector.
 
 ## Verify before relying on them
 
@@ -807,8 +870,8 @@ order the tasks need them.
 4. Task 8: the Doppler error-body shape (undocumented; the client treats it as opaque), the
    status of `POST /v3/projects` on a duplicate name, the environment slug's character class
    (undocumented beyond 2 to 50 characters), and whether two service tokens may share a
-   name in one config. All four are answered by the recorded fixtures from the first live
-   smoke run.
+   name in one config. All four are answered by task 8's read-only probe as soon as
+   sandbox credentials exist, and at the latest by the live smoke run.
 5. Task 10b: whether current MCP clients (Claude Code, the rmcp client used in test 11)
    negotiate `2026-07-28` or fall back to a legacy version that needs
    `legacy_session_mode: true`; test 11 runs the in-process client against both settings.
@@ -875,3 +938,27 @@ same point are merged; the reviewer in brackets is who raised it.
 13. **The in-process MCP test client had no home** (coherence, deferred question). Task 10b
     now names it: rmcp's `client` feature over a `tokio::io::duplex` pair, in the server
     crate's tests.
+14. **Drift could not see a live-reading pure tool's changed value** (feasibility, P1).
+    The fingerprint now includes every rendered non-secret output; a secret's bytes are
+    deliberately not part of it, and the reference semantics that justifies that are
+    stated. Acceptance test 8 pins both directions.
+15. **The first live apply would have tried to create Doppler's auto-created default
+    environments** (feasibility, P1). `Tool::ensure` now returns `Ensured { outputs,
+    changed }`, every `ensure` reads first, the executor's status comes from the tool's
+    answer, the fake models the auto-creation, and acceptance test 5 expects `Unchanged`
+    for the defaults.
+16. **A request timeout sat in front of a long-running apply** (feasibility, P2). `apply`
+    now returns a `run_id` once `RunStarted` is journaled and the run continues in the
+    background; `run_status` polls; a concurrent `apply` gets `RunInProgress`; the request
+    timeout drops to 30 seconds and binds no run.
+17. **`rmcp::Json<T>` needs `JsonSchema` the result types lack** (feasibility, P1).
+    Scoped into task 1a: derives on every result type and a hand-written schema for
+    `Value` matching its pinned JSON shape.
+18. **No `SinkToken::new` grep test existed to mirror** (feasibility, P3). Acceptance test
+    4 now makes both allow-lists a test.
+19. **Undocumented Doppler facts were left to the last task** (feasibility, residual).
+    Task 8 gains an opt-in read-only probe against the sandbox accounts, run as soon as
+    credentials exist.
+20. **Two YAML parsers might disagree** (feasibility, residual). Recorded under Risks: the
+    pre-scan can only reject, so a disagreement is a false rejection the fixture suite
+    catches, never a bypass.
