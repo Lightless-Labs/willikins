@@ -749,3 +749,75 @@ steps:
         stdout(&output)
     );
 }
+
+// ---------------------------------------------------------------------
+// finding 6: an unbounded echo of a hostile literal
+// ---------------------------------------------------------------------
+
+/// A hostile document could make `willikins validate` print an arbitrary
+/// amount of attacker-chosen text to the stdout an agent reads: a rejected
+/// literal was quoted in full, so a ten-megabyte `slug:` produced a
+/// ten-megabyte error line. Nothing secret leaked — the text is the
+/// document's own — but flooding an agent's context with attacker-chosen
+/// bytes is a real hazard for an agent-facing CLI, and that text is a
+/// natural place to hide instructions. Every quote is now bounded, and
+/// still says how long the value was.
+#[test]
+fn finding_06_a_huge_literal_is_not_echoed_in_full() {
+    let huge = "x".repeat(2_000_000);
+    let source = format!(
+        "\
+name: huge-literal
+steps:
+  a:
+    tool: naming.v1
+    with:
+      org: lightless-labs
+      slug: {huge}
+"
+    );
+    let path = temp_file("huge-literal.yaml", &source);
+    let output = willikins(&["validate", path.to_str().unwrap()]);
+
+    assert_eq!(exit_code(&output), 1, "finding 6: {}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.len() < 1_000,
+        "finding 6: the error echoed {} bytes of a {}-byte literal",
+        out.len(),
+        huge.len()
+    );
+    assert!(
+        out.contains("2000000 characters"),
+        "finding 6: the message should still say how long it was: {out}"
+    );
+}
+
+/// The same bound through `--input`, which is the other door caller text
+/// comes in by, and through `propose-slug`, which takes a bare argument.
+#[test]
+fn finding_06_a_huge_input_argument_is_not_echoed_in_full() {
+    let huge = format!("not a slug {}", "y".repeat(500_000));
+    let output = willikins(&[
+        "describe",
+        positive_fixture().to_str().unwrap(),
+        "--input",
+        &format!("slug={huge}"),
+        "--input",
+        "org=lightless-labs",
+    ]);
+    assert_eq!(exit_code(&output), 1, "finding 6: {}", stderr(&output));
+    assert!(
+        stdout(&output).len() < 1_000,
+        "finding 6: describe echoed {} bytes",
+        stdout(&output).len()
+    );
+
+    let output = willikins(&["propose-slug", &huge]);
+    assert_eq!(exit_code(&output), 1, "finding 6: {}", stderr(&output));
+    assert!(
+        stdout(&output).len() < 1_000,
+        "finding 6: propose-slug echoed {} bytes",
+        stdout(&output).len()
+    );
+}

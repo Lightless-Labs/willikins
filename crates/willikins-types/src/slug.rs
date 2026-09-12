@@ -70,7 +70,8 @@ macro_rules! define_slug {
                     return Err(ParseError::new(
                         Self::TYPE_NAME,
                         format!(
-                            "`{kebab}` is {} characters, the limit is {}",
+                            "{} is {} characters, the limit is {}",
+                            $crate::quoted(&kebab),
                             kebab.len(),
                             Self::MAX_LEN
                         ),
@@ -81,7 +82,7 @@ macro_rules! define_slug {
                 {
                     return Err(ParseError::new(
                         Self::TYPE_NAME,
-                        format!("`{only}` is a reserved word"),
+                        format!("{} is a reserved word", $crate::quoted(only.as_str())),
                     ));
                 }
                 Ok(Self(words))

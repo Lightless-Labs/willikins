@@ -40,7 +40,8 @@ impl TypeName {
             Err(ParseError::new(
                 "TypeName",
                 format!(
-                    "{input:?} is not a valid type name (expected to match `{TYPE_NAME_PATTERN}`)"
+                    "{} is not a valid type name (expected to match `{TYPE_NAME_PATTERN}`)",
+                    crate::quoted(input)
                 ),
             ))
         }
@@ -155,7 +156,7 @@ impl TypeRef {
         if input.chars().any(char::is_whitespace) {
             return Err(ParseError::new(
                 "TypeRef",
-                format!("{input:?} must not contain whitespace"),
+                format!("{} must not contain whitespace", crate::quoted(input)),
             ));
         }
         if let Some(inner) = input

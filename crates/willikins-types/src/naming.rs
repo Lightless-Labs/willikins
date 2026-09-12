@@ -61,7 +61,7 @@ impl FromStr for NamingScheme {
             "v1" => Ok(Self::V1),
             _ => Err(ParseError::new(
                 "NamingScheme",
-                format!("must be `v1`, found `{input}`"),
+                format!("must be `v1`, found {}", crate::quoted(input)),
             )),
         }
     }

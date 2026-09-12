@@ -44,6 +44,36 @@ impl ParseError {
     }
 }
 
+/// The greatest number of characters of rejected input a [`ParseError`]
+/// message quotes; see [`quoted`].
+pub const MAX_QUOTED_INPUT: usize = 64;
+
+/// Quote `input` for a [`ParseError`] message, bounded to
+/// [`MAX_QUOTED_INPUT`] characters.
+///
+/// A rejected non-secret value is the caller's own text, and quoting it is
+/// how an agent sees what it got wrong -- but the caller may be a hostile
+/// document, and every one of these messages is printed straight to the
+/// stdout an agent reads. A ten-megabyte literal used to be echoed whole.
+/// Longer input is cut at a character boundary and followed by its full
+/// length, so the message still says how big the value was. Adversarial
+/// pass 2, finding 6.
+///
+/// Never call this on a secret value: a secret type's parser reports only
+/// its constraint, never its input, and nothing here would make quoting
+/// one safe.
+#[must_use]
+pub fn quoted(input: &str) -> String {
+    match input.char_indices().nth(MAX_QUOTED_INPUT) {
+        None => format!("`{input}`"),
+        Some((cut, _)) => format!(
+            "`{}`... ({} characters)",
+            &input[..cut],
+            input.chars().count()
+        ),
+    }
+}
+
 /// A nominal domain type.
 ///
 /// Implemented by `#[derive(DomainType)]` from `willikins-derive` for newtypes,

@@ -78,7 +78,10 @@ impl DomainType for RepoVisibility {
             "public" => Ok(Self::Public),
             _ => Err(ParseError::new(
                 Self::TYPE_NAME,
-                format!("must be `private` or `public`, found `{input}`"),
+                format!(
+                    "must be `private` or `public`, found {}",
+                    crate::quoted(input)
+                ),
             )),
         }
     }

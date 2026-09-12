@@ -28,14 +28,18 @@ impl Word {
         if !first.is_ascii_lowercase() {
             return Err(ParseError::new(
                 "Word",
-                format!("`{input}` must start with a lowercase letter, or be all digits"),
+                format!(
+                    "{} must start with a lowercase letter, or be all digits",
+                    crate::quoted(input)
+                ),
             ));
         }
         if let Some(bad) = chars.find(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit())) {
             return Err(ParseError::new(
                 "Word",
                 format!(
-                    "`{input}` contains `{bad}`, which is not a lowercase ASCII letter or digit"
+                    "{} contains `{bad}`, which is not a lowercase ASCII letter or digit",
+                    crate::quoted(input)
                 ),
             ));
         }
@@ -95,31 +99,35 @@ impl WordList {
         if !input.is_ascii() {
             return Err(ParseError::new(
                 "WordList",
-                format!("`{input}` must be ASCII"),
+                format!("{} must be ASCII", crate::quoted(input)),
             ));
         }
         if input.starts_with('-') {
             return Err(ParseError::new(
                 "WordList",
-                format!("`{input}` must not start with a hyphen"),
+                format!("{} must not start with a hyphen", crate::quoted(input)),
             ));
         }
         if input.ends_with('-') {
             return Err(ParseError::new(
                 "WordList",
-                format!("`{input}` must not end with a hyphen"),
+                format!("{} must not end with a hyphen", crate::quoted(input)),
             ));
         }
         if input.contains("--") {
             return Err(ParseError::new(
                 "WordList",
-                format!("`{input}` must not contain a doubled hyphen"),
+                format!("{} must not contain a doubled hyphen", crate::quoted(input)),
             ));
         }
         let mut words = Vec::new();
         for segment in input.split('-') {
-            let word = Word::parse(segment)
-                .map_err(|e| ParseError::new("WordList", format!("in `{input}`: {}", e.reason)))?;
+            let word = Word::parse(segment).map_err(|e| {
+                ParseError::new(
+                    "WordList",
+                    format!("in {}: {}", crate::quoted(input), e.reason),
+                )
+            })?;
             words.push(word);
         }
         Self::new(words)
