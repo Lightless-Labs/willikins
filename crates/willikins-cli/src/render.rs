@@ -37,7 +37,7 @@
 //! secret value never touches — neither variant carries a `Value`).
 
 use willikins_core::{
-    Action, CheckError, CheckWarning, Description, Plan, PlannedNode, PortType, Value,
+    Action, CheckError, CheckWarning, Description, Plan, PlanError, PlannedNode, PortType, Value,
 };
 
 /// Escape `text` onto one line: every character that is not printable —
@@ -352,6 +352,27 @@ pub fn plan_text(plan: &Plan) -> String {
     lines.join("\n")
 }
 
+/// Render a [`PlanError`] as one line of text.
+///
+/// `plan`'s failures carry document-shaped strings of their own:
+/// `DuplicateForEachKey` and `KeyNotInForEach` each hold a *rendered item*
+/// as their key — the same kind of string `check`'s
+/// `DuplicateForEachDefault` holds, and a document's own default or literal
+/// is where the item came from — and `Tool` holds a provider's message
+/// (trust boundary 5). So the whole rendered error goes through
+/// [`single_line`] rather than one field of it: a variant added later is
+/// covered without anyone remembering to cover it, and none of `PlanError`'s
+/// own wording is duplicated here.
+///
+/// The cost is that an already-escaped message escapes twice — a `\n` that
+/// a provider's message carries as two characters prints as `\\n`. Noisy
+/// in a message no fixture produces today, and the alternative is a line a
+/// document could forge.
+#[must_use]
+pub fn plan_error_text(error: &PlanError) -> String {
+    single_line(&error.to_string())
+}
+
 fn planned_node_line(node: &PlannedNode) -> String {
     let action = action_text(node.action);
     match &node.instance {
@@ -576,6 +597,28 @@ mod tests {
         );
         assert!(
             text.ends_with(r"two items both keyed `dev\nUnknownTool: evil: unknown tool `rm``"),
+            "text: {text}"
+        );
+    }
+
+    /// `plan`'s own failures carry document-shaped strings too: a
+    /// colliding `for_each` key is a rendered item, exactly like the one
+    /// `check`'s `DuplicateForEachDefault` reports, and `plan` is where a
+    /// collision that `check` could not see surfaces.
+    #[test]
+    fn plan_error_text_keeps_a_colliding_for_each_key_on_one_line() {
+        let error = willikins_core::PlanError::DuplicateForEachKey {
+            node: NodeName::parse("configs").unwrap(),
+            key: "dev\nclass: Reversible".to_string(),
+        };
+        let text = plan_error_text(&error);
+        assert_eq!(
+            text.lines().count(),
+            1,
+            "a colliding key must not add a line: {text:?}"
+        );
+        assert!(
+            text.ends_with(r"both keyed `dev\nclass: Reversible`"),
             "text: {text}"
         );
     }

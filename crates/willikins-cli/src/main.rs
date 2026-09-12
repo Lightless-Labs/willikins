@@ -282,7 +282,10 @@ fn cmd_plan(file: &str, inputs: &[InputArg], fake_state: Option<&str>, json: boo
                     serde_json::to_string_pretty(&err).unwrap_or_else(|_| "{}".to_string())
                 );
             } else {
-                println!("{err}");
+                // Not `{err}`: a `PlanError` can carry a rendered item as
+                // a key, which a document shaped. See
+                // `render::plan_error_text`.
+                println!("{}", render::plan_error_text(&err));
             }
             ExitCode::from(1)
         }
