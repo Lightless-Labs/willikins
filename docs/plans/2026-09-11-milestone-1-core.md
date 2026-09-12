@@ -5,6 +5,7 @@
 **Reviewed:** 2026-09-11 (via document-review workflow: scope, feasibility, security, coherence, adversarial personas). 23 findings folded in; see "Review resolutions" at the end.
 **Addendum:** 2026-09-11 — `SinkToken` moved to `willikins-types` behind the `executor` feature; the derive's third storage generalised to any `FromStr + Display` inner type.
 **Addendum:** 2026-09-11 — tasks 2 and 3 done and merged. Pascal non-injectivity accepted in test 9; `cargo check -p willikins-types` added as a fourth gate; keyword-list verification listed under Risks.
+**Addendum:** 2026-09-12 — tasks 7 and 9 done; checker adversarial pass 1 recorded in `docs/research/2026-09-12-check-adversarial-pass-1.md`: default-value leak closed, output type map separated, nested lists rejected. Three error variants added; sentinel sites and secret outputs documented.
 **Addendum:** 2026-09-12 — tasks 5b and 6 done and verified: empty-list bypass of the secret refusal closed; `SinkToken` lint confirmed firing; gates go through `rtk proxy cargo`; `SecretToNonSecretSink` precedence stated; workflow-as-tool deferred to milestone 2.
 **Addendum:** 2026-09-12 — tasks 4 and 5 done and verified: `impl_domain_object_non_secret!` refuses secret types; `ProjectName` rejects U+2028/U+2029; `Text` limits are chars; root config names use the snake join. Derive section rewritten after its bullets were found merged.
 **Addendum:** 2026-09-11 — pre-task-6 review: feature unification defeats the `SinkToken` gate inside the workspace, so a `disallowed-methods` lint enforces it; `TypeRegistry` added (task 5b); `SecretLiteral` check error; `Absent { predicted }` and `KeyUnknown`; Value JSON shape specified.
@@ -261,9 +262,20 @@ with `trybuild` live in `crates/willikins-types/tests/derive/fail/`.
   `SecretWorkflowInput { input, ty }`, `SecretForEachSource { node }`,
   `ForEachOverScalar { node }`, `ItemOutsideForEach { node, port }`,
   `KeyedOnScalarNode { node, port, referenced }`, `Cycle { nodes }`,
-  `DuplicateNode { node }`. Warnings, returned alongside a successful check:
-  `UnusedInput { input }`. `Checked` carries the workflow, a topological order, and
-  `class: Class` (max over nodes, pure nodes excluded).
+  `DuplicateNode { node }` (produced by the DSL layer, since `Workflow::nodes` is a map),
+  `DefaultTypeMismatch { input, expected, found }` (an input's default value is checked
+  against its declared type, since `check` is the only gate a programmatically built
+  workflow passes), `NestedList { node, port }` (a `Step` on a `for_each` node whose output
+  is already a list would need `list<list<T>>`, which `TypeRef` cannot represent),
+  `UnregisteredInputType { input, ty }` (an input's declared type is not in the registry). Warnings, returned alongside a successful check:
+  `UnusedInput { input }`. `Checked` carries the workflow, a topological order (Kahn's
+  algorithm advancing the lowest declaration index, so a workflow written in dependency
+  order keeps its order), `class: Class` (max over nodes, pure nodes excluded), the
+  resolved type of every node binding, and a separate map for workflow outputs. Errors on
+  an output binding use the sentinel node name `outputs`; errors on a `for_each` binding
+  use the sentinel port name `for_each`. Accepted for milestone 1 and documented in the
+  module; milestone 2's composite output ports get a proper site enum. A workflow output
+  may be secret: outputs are not sinks, and every render path goes through `Value`.
 - `describe(&Checked, &PartialInputs) -> Description { errors: Vec<InputError>, missing:
   Vec<MissingInput>, resolved: Inputs }` with no provider calls. `MissingInput { name, ty,
   schema, description, default, example, prompt }`. Inputs with defaults are never
