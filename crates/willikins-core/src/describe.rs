@@ -17,7 +17,8 @@
 //! [`willikins_types::TypeInfo::description`], and the registry example. A
 //! document's description text is exposed to a caller only as
 //! `document_description`, quoted and labelled, and never folded into the
-//! prompt string itself.
+//! prompt string itself. A label is not enough on its own for a
+//! line-oriented rendering — see [`MissingInput::document_description`].
 
 use indexmap::IndexMap;
 
@@ -143,6 +144,13 @@ pub struct MissingInput {
     /// if it declared one. This is document text, not willikins' own
     /// words — see the module docs' "Document text is data" — so it is
     /// named `document_*` and never folds into [`Self::prompt`].
+    ///
+    /// Verbatim is what a caller reading JSON gets, where a string is a
+    /// string and cannot escape its field. A caller reading a
+    /// line-oriented rendering of this struct needs more than a label: the
+    /// CLI's text renderer prefixes the text `document says:` *and*
+    /// escapes it onto that one line, because a description carrying a
+    /// line terminator would otherwise forge a line of willikins' own.
     pub document_description: Option<String>,
     /// The input's default value, rendered — always `None` here: an input
     /// with a default is never missing (see [`describe`]). Kept as a field
