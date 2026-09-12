@@ -137,16 +137,29 @@ fn load_and_check(file: &str, catalog: &Catalog, json: bool) -> Result<Checked, 
 /// an argument naming an input `checked` does not declare is passed
 /// through as a scalar, since [`willikins_core::describe`] only needs its
 /// name to report it as unrecognised.
-fn build_partial_inputs(checked: &Checked, args: &[InputArg]) -> PartialInputs {
+///
+/// Two arguments naming the same input are refused (exit 2, on stderr).
+/// [`PartialInputs`] is keyed by name, so the second used to overwrite the
+/// first silently and the run continued against a value the caller never
+/// meant to send. The error names the input but never echoes either
+/// value: which one was dropped is not the point, and the caller has both
+/// in hand. Adversarial pass 2, finding 4.
+fn build_partial_inputs(checked: &Checked, args: &[InputArg]) -> Result<PartialInputs, ExitCode> {
     let mut partial = PartialInputs::new();
     for arg in args {
         let raw = match checked.workflow.inputs.get(&arg.name) {
             Some(spec) if spec.ty.list => RawInput::from_comma_separated(&arg.raw),
             _ => arg.value(),
         };
-        partial.insert(arg.name.clone(), raw);
+        if partial.insert(arg.name.clone(), raw).is_some() {
+            eprintln!(
+                "--input `{}` was given more than once; supply each input at most once",
+                arg.name
+            );
+            return Err(ExitCode::from(2));
+        }
     }
-    partial
+    Ok(partial)
 }
 
 fn cmd_validate(file: &str, json: bool) -> ExitCode {
@@ -184,7 +197,10 @@ fn cmd_describe(file: &str, inputs: &[InputArg], json: bool) -> ExitCode {
         Ok(checked) => checked,
         Err(code) => return code,
     };
-    let partial = build_partial_inputs(&checked, inputs);
+    let partial = match build_partial_inputs(&checked, inputs) {
+        Ok(partial) => partial,
+        Err(code) => return code,
+    };
     let description = willikins_core::describe(&checked, &partial);
     let ok = description.errors.is_empty() && description.missing.is_empty();
     print_description(&description, json);
@@ -228,7 +244,10 @@ fn cmd_plan(file: &str, inputs: &[InputArg], fake_state: Option<&str>, json: boo
         Err(code) => return code,
     };
 
-    let partial = build_partial_inputs(&checked, inputs);
+    let partial = match build_partial_inputs(&checked, inputs) {
+        Ok(partial) => partial,
+        Err(code) => return code,
+    };
     let description = willikins_core::describe(&checked, &partial);
     if !description.errors.is_empty() || !description.missing.is_empty() {
         print_description(&description, json);

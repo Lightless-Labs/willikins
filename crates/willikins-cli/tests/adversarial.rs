@@ -598,3 +598,70 @@ fn finding_03_the_shipped_state_fixtures_still_load() {
     }
     FakeState::from_json("{}").expect("finding 3: an empty state is still valid");
 }
+
+// ---------------------------------------------------------------------
+// finding 4: a repeated `--input` for the same name
+// ---------------------------------------------------------------------
+
+/// `--input slug=a --input slug=b` used to resolve silently to `b`: the
+/// partial-input map is keyed by name, so the second argument overwrote
+/// the first with nothing said. An agent assembling a command line by
+/// concatenation could therefore run against a value it never meant to
+/// send, and `describe` would report the whole thing as resolved. A
+/// repeated name is now refused before any input is parsed.
+#[test]
+fn finding_04_a_repeated_input_argument_is_refused() {
+    for command in ["describe", "plan"] {
+        let output = willikins(&[
+            command,
+            positive_fixture().to_str().unwrap(),
+            "--input",
+            "slug=widgets",
+            "--input",
+            "slug=something-else",
+            "--input",
+            "org=lightless-labs",
+        ]);
+        assert_eq!(
+            exit_code(&output),
+            2,
+            "finding 4: {command}: {}",
+            stdout(&output)
+        );
+        assert!(
+            stdout(&output).is_empty(),
+            "finding 4: {command}: nothing may reach stdout: {}",
+            stdout(&output)
+        );
+        assert!(
+            stderr(&output).contains("slug"),
+            "finding 4: {command}: the error must name the input: {}",
+            stderr(&output)
+        );
+        assert!(
+            !stderr(&output).contains("something-else"),
+            "finding 4: {command}: the error need not echo the value: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// The same name supplied once is of course still fine, and two *different*
+/// names are unaffected.
+#[test]
+fn finding_04_distinct_input_arguments_still_resolve() {
+    let output = willikins(&[
+        "describe",
+        positive_fixture().to_str().unwrap(),
+        "--input",
+        "slug=widgets",
+        "--input",
+        "org=lightless-labs",
+    ]);
+    assert_eq!(exit_code(&output), 0, "finding 4: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("widgets"),
+        "finding 4: {}",
+        stdout(&output)
+    );
+}
