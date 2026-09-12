@@ -8,12 +8,15 @@
 //! name the fix; attacks that found none pin the behaviour so a later
 //! refactor cannot quietly introduce one.
 //!
-//! The catalog mirrors `tests/check.rs`'s: the plan's fake-provider port
-//! table, one `DummyTool` per row.
+//! The catalog mirrors `tests/check.rs`'s (the plan's fake-provider port
+//! table), plus two tools that table has no row for and that only an
+//! adversary would reach for: `fake.text_list` (a *non-secret* list
+//! output) and `fake.text_sink` (a tool with a `list<Text>` input port).
 
 use std::sync::Arc;
 
 use indexmap::IndexMap;
+use proptest::prelude::*;
 use willikins_core::{
     Binding, Catalog, CheckError, Checked, Class, InputName, InputSpec, Inputs, Node, NodeName,
     Observation, OutputName, Outputs, PortName, PortSpec, PortType, Tool, ToolError, ToolName,
@@ -213,6 +216,27 @@ fn test_catalog() -> Catalog {
             &["key"],
             Class::Irreversible,
             false,
+        ),
+        // Not in the plan's port table: a non-secret *list* output, so the
+        // `Step`-on-a-`for_each`-node list promotion has something to
+        // double up on.
+        spec_of(
+            "fake.text_list",
+            &[("seed", exact("Text"), true)],
+            &[("lines", list_ty("Text"))],
+            &[],
+            Class::Reversible,
+            true,
+        ),
+        // Not in the plan's port table: a port that accepts a list, so a
+        // promoted `list<T>` has somewhere to land.
+        spec_of(
+            "fake.text_sink",
+            &[("lines", PortType::Exact(list_ty("Text")), true)],
+            &[],
+            &[],
+            Class::Reversible,
+            true,
         ),
         spec_of(
             "template.render",
@@ -844,4 +868,305 @@ fn a_secret_workflow_output_is_accepted_and_keeps_its_secret_type() {
     // And it is still redacted everywhere it can be printed.
     let rendered = format!("{:?}", checked.workflow);
     assert!(!rendered.contains("dp.st."));
+}
+
+// ---------------------------------------------------------------------
+// Attack: cardinality a later stage could not represent.
+// ---------------------------------------------------------------------
+
+/// `Step` on a `for_each` node promotes the port type to `list<T>`. When
+/// the port is *already* a list there is no `list<list<T>>` in the type
+/// model to promote it to, so the workflow is one no later stage could
+/// execute. Rejected by `CheckError::NestedList` (added by this pass).
+#[test]
+fn step_on_a_for_each_node_with_a_list_output_is_rejected() {
+    let workflow = Workflow::new("nested-list")
+        .input(input("seeds"), InputSpec::new(list_ty("Text")))
+        .node(
+            node("lines"),
+            Node::new(tool_name("fake.text_list"))
+                .for_each(Binding::Input(input("seeds")))
+                .port(port("seed"), Binding::Item),
+        )
+        .node(
+            node("sink"),
+            Node::new(tool_name("fake.text_sink")).port(
+                port("lines"),
+                Binding::Step {
+                    node: node("lines"),
+                    port: port("lines"),
+                },
+            ),
+        );
+
+    assert_eq!(
+        errors(&workflow),
+        vec![CheckError::NestedList {
+            node: node("sink"),
+            port: port("lines"),
+            referenced: node("lines"),
+        }]
+    );
+}
+/// The same list output reached without `for_each` in the way is fine:
+/// only the promotion is refused, not list-typed outputs themselves.
+#[test]
+fn a_list_output_on_a_plain_node_still_binds_to_a_list_port() {
+    let workflow = Workflow::new("plain-list")
+        .node(
+            node("lines"),
+            Node::new(tool_name("fake.text_list"))
+                .port(port("seed"), Binding::Literal("hello".to_string())),
+        )
+        .node(
+            node("sink"),
+            Node::new(tool_name("fake.text_sink")).port(
+                port("lines"),
+                Binding::Step {
+                    node: node("lines"),
+                    port: port("lines"),
+                },
+            ),
+        );
+
+    let checked = checked(&workflow);
+    assert_eq!(
+        checked.types[&node("sink")][&port("lines")],
+        list_ty("Text")
+    );
+}
+
+// ---------------------------------------------------------------------
+// Property: `check` never panics, is deterministic, and never accepts a
+// workflow whose invariants a later stage would need and not have.
+// ---------------------------------------------------------------------
+
+/// Every tool in the test catalog, with the ports a generated node may
+/// bind.
+const TOOLS: &[&str] = &[
+    "naming.v1",
+    "github.repo.ensure",
+    "github.actions_secret.ensure",
+    "doppler.project.ensure",
+    "doppler.config.ensure",
+    "doppler.service_token.ensure",
+    "doppler.secret.get",
+    "fake.secret_list",
+    "fake.irreversible.ensure",
+    "template.render",
+    "fake.text_list",
+    "fake.text_sink",
+    // One name the catalog does not have.
+    "no.such.tool",
+];
+
+const PORTS: &[&str] = &[
+    "org",
+    "slug",
+    "repo",
+    "visibility",
+    "name",
+    "value",
+    "project",
+    "environment",
+    "config",
+    "key",
+    "template",
+    "seed",
+    "lines",
+    "token",
+    "url",
+    "tokens",
+];
+
+const INPUT_NAMES: &[&str] = &["a", "b", "c"];
+const NODE_NAMES: &[&str] = &["n1", "n2", "n3"];
+
+const TYPE_NAMES: &[&str] = &[
+    "Text",
+    "GitHubOrg",
+    "ProjectSlug",
+    "GitHubRepo",
+    "RepoVisibility",
+    "EnvironmentSlug",
+    "DopplerProject",
+    "DopplerConfig",
+    "DopplerServiceToken",
+    // One name the registry does not have.
+    "NoSuchType",
+];
+
+const LITERALS: &[&str] = &[
+    "",
+    "private",
+    "prd",
+    "acme-web",
+    "lightless-labs/acme-web",
+    "dp.st.prd.hunter2",
+    "[REDACTED DopplerServiceToken]",
+];
+
+fn arb_binding() -> impl Strategy<Value = Binding> {
+    prop_oneof![
+        prop::sample::select(INPUT_NAMES).prop_map(|n| Binding::Input(input(n))),
+        (
+            prop::sample::select(NODE_NAMES),
+            prop::sample::select(PORTS)
+        )
+            .prop_map(|(n, p)| Binding::Step {
+                node: node(n),
+                port: port(p),
+            }),
+        (
+            prop::sample::select(NODE_NAMES),
+            prop::sample::select(LITERALS),
+            prop::sample::select(PORTS)
+        )
+            .prop_map(|(n, k, p)| Binding::Keyed {
+                node: node(n),
+                key: k.to_string(),
+                port: port(p),
+            }),
+        Just(Binding::Item),
+        prop::sample::select(LITERALS).prop_map(|l| Binding::Literal(l.to_string())),
+    ]
+}
+
+fn arb_node() -> impl Strategy<Value = Node> {
+    (
+        prop::sample::select(TOOLS),
+        prop::option::of(arb_binding()),
+        prop::collection::vec((prop::sample::select(PORTS), arb_binding()), 0..4),
+    )
+        .prop_map(|(tool, for_each, bindings)| {
+            let mut node = Node::new(tool_name(tool));
+            if let Some(binding) = for_each {
+                node = node.for_each(binding);
+            }
+            for (p, binding) in bindings {
+                node = node.port(port(p), binding);
+            }
+            node
+        })
+}
+
+fn arb_input_spec() -> impl Strategy<Value = InputSpec> {
+    (
+        prop::sample::select(TYPE_NAMES),
+        any::<bool>(),
+        any::<bool>(),
+    )
+        .prop_map(|(name, is_list, has_default)| {
+            let declared = if is_list { list_ty(name) } else { ty(name) };
+            let spec = InputSpec::new(declared.clone());
+            if has_default {
+                spec.with_default(Value::unknown(declared))
+            } else {
+                spec
+            }
+        })
+}
+
+fn arb_workflow() -> impl Strategy<Value = Workflow> {
+    (
+        prop::collection::vec((prop::sample::select(INPUT_NAMES), arb_input_spec()), 0..3),
+        prop::collection::vec((prop::sample::select(NODE_NAMES), arb_node()), 0..4),
+        prop::collection::vec((prop::sample::select(INPUT_NAMES), arb_binding()), 0..2),
+    )
+        .prop_map(|(inputs, nodes, outputs)| {
+            let mut workflow = Workflow::new("generated");
+            for (name, spec) in inputs {
+                workflow = workflow.input(input(name), spec);
+            }
+            for (name, n) in nodes {
+                workflow = workflow.node(node(name), n);
+            }
+            for (name, binding) in outputs {
+                workflow = workflow.output(output(name), binding);
+            }
+            workflow
+        })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    /// `check` is total (no panic), deterministic, and — when it accepts —
+    /// leaves a `Checked` a later stage can rely on: a complete
+    /// topological order, a resolved type for every bound port, and no
+    /// secret type on a port that does not accept secrets.
+    #[test]
+    fn check_is_total_deterministic_and_sound(workflow in arb_workflow()) {
+        let catalog = test_catalog();
+        let first = check(&workflow, &catalog);
+        let second = check(&workflow, &catalog);
+
+        match (&first, &second) {
+            (Ok(a), Ok(b)) => prop_assert_eq!(&a.order, &b.order),
+            (Err(a), Err(b)) => prop_assert_eq!(a, b),
+            _ => prop_assert!(false, "check disagreed with itself across two runs"),
+        }
+
+        match first {
+            Err(errors) => prop_assert!(!errors.is_empty(), "a rejection must name a reason"),
+            Ok(checked) => {
+                // The order is a permutation of the nodes.
+                prop_assert_eq!(checked.order.len(), workflow.nodes.len());
+                for name in workflow.nodes.keys() {
+                    prop_assert!(checked.order.contains(name));
+                }
+                // Every dependency comes before its dependent.
+                for (position, name) in checked.order.iter().enumerate() {
+                    let node = &workflow.nodes[name];
+                    let referenced = node
+                        .with
+                        .values()
+                        .chain(node.for_each.iter())
+                        .filter_map(|binding| match binding {
+                            Binding::Step { node, .. } | Binding::Keyed { node, .. } => Some(node),
+                            _ => None,
+                        });
+                    for dependency in referenced {
+                        let at = checked
+                            .order
+                            .iter()
+                            .position(|n| n == dependency)
+                            .expect("a resolved reference names a node in the order");
+                        prop_assert!(at < position, "{dependency} must run before {name}");
+                    }
+                }
+                // Every bound port has a resolved type: `check` never
+                // accepts a binding it silently dropped.
+                let empty = IndexMap::new();
+                for (name, node) in &workflow.nodes {
+                    let resolved = checked.types.get(name).unwrap_or(&empty);
+                    for bound in node.with.keys() {
+                        prop_assert!(
+                            resolved.contains_key(bound),
+                            "node {name}, port {bound} was accepted with no resolved type",
+                        );
+                    }
+                }
+                // No secret landed on a port that does not accept secrets.
+                let registry = willikins_types::registry();
+                for (name, resolved) in &checked.types {
+                    let spec = catalog.get(&workflow.nodes[name].tool).unwrap().spec();
+                    for (bound, found) in resolved {
+                        if registry.is_secret(&found.name) == Some(true) {
+                            let accepts = match &spec.inputs[bound].ty {
+                                PortType::AnySecret => true,
+                                PortType::Exact(expected) => {
+                                    registry.is_secret(&expected.name) == Some(true)
+                                }
+                            };
+                            prop_assert!(
+                                accepts,
+                                "secret {found} accepted on non-secret port {name}.{bound}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

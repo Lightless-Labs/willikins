@@ -63,16 +63,14 @@
 //!   is treated as non-secret (the registry has no secrecy answer for it);
 //!   the DSL is expected to reject an unregistered type name at load time,
 //!   before `check` ever sees it.
-//! - `Step` on a `for_each` node whose own output port is *already*
-//!   list-typed has no `list<list<T>>` representation to promote it to;
-//!   the resolved type keeps `list: true` rather than doubling up. No
-//!   milestone 1 tool has a list-typed output, so this never triggers here.
-//! - The plan lists sixteen [`CheckError`] variants. One more was added by
-//!   the adversarial pass, because the plan has no variant for the defect
-//!   it names: [`CheckError::DefaultTypeMismatch`], an input's default
-//!   value that is not of its declared type. The plan type-checks defaults
-//!   at document load, which leaves a `Workflow` built any other way
-//!   unchecked.
+//! - The plan lists sixteen [`CheckError`] variants. Two more were added
+//!   by the adversarial pass, because the plan has no variant for the
+//!   defects they name: [`CheckError::DefaultTypeMismatch`] (an input's
+//!   default value is not of its declared type -- the plan type-checks
+//!   defaults at document load, which leaves a `Workflow` built any other
+//!   way unchecked) and [`CheckError::NestedList`] (`Step` on a `for_each`
+//!   node whose own output port is *already* list-typed, which would need
+//!   a `list<list<T>>` the type model cannot represent).
 
 use std::collections::HashSet;
 use std::fmt;
@@ -285,6 +283,20 @@ pub enum CheckError {
         /// The default value's own type.
         found: TypeRef,
     },
+    /// A `Step` binding on a `for_each` node whose output port is already
+    /// list-typed. `Step` on a `for_each` node yields one value per
+    /// instance, which would be a `list<list<T>>`; [`TypeRef`] carries a
+    /// single cardinality flag and cannot represent one.
+    ///
+    /// Not one of the plan's sixteen variants; see the module docs.
+    NestedList {
+        /// The node whose binding asks for the promotion.
+        node: NodeName,
+        /// The port holding the binding.
+        port: PortName,
+        /// The `for_each` node whose output port is already a list.
+        referenced: NodeName,
+    },
     /// Two nodes share the same name.
     ///
     /// Never produced by [`check`] itself — see the "Known gaps" section
@@ -383,6 +395,14 @@ impl fmt::Display for CheckError {
             } => write!(
                 f,
                 "input `{input}`: default value has type `{found}`, expected `{expected}`"
+            ),
+            Self::NestedList {
+                node,
+                port,
+                referenced,
+            } => write!(
+                f,
+                "node `{node}`, port `{port}`: node `{referenced}` runs once per item and its port is already a list; there is no list-of-list type"
             ),
             Self::DuplicateNode { node } => write!(f, "duplicate node name `{node}`"),
         }
@@ -687,13 +707,20 @@ impl<'a> Resolver<'a> {
             return;
         };
 
-        if is_secret(&found, self.registry) && !port_accepts_secret(&port_spec.ty, self.registry) {
-            if let Some(from) = source {
-                errors.push(CheckError::SecretToNonSecretSink {
-                    from,
-                    to: (node.clone(), port.clone()),
-                });
-            }
+        if is_secret(&found, self.registry)
+            && !port_accepts_secret(&port_spec.ty, self.registry)
+            && let Some(from) = source
+        {
+            // A secret with an attributable source is a taint violation,
+            // reported in preference to the type mismatch it also is. A
+            // secret with *no* source (today only `Item`, whose element
+            // type a secret `for_each` source is already refused for)
+            // falls through to the type check below, which cannot accept
+            // it either -- so no binding is ever dropped without an error.
+            errors.push(CheckError::SecretToNonSecretSink {
+                from,
+                to: (node.clone(), port.clone()),
+            });
             return;
         }
 
@@ -886,6 +913,14 @@ impl<'a> Resolver<'a> {
         };
 
         let resolved_ty = if !keyed && target_node.for_each.is_some() {
+            if output_ty.list {
+                errors.push(CheckError::NestedList {
+                    node: site_node.clone(),
+                    port: site_port.clone(),
+                    referenced: referenced.clone(),
+                });
+                return None;
+            }
             TypeRef::list_of(output_ty.name.clone())
         } else {
             output_ty.clone()
@@ -1737,6 +1772,15 @@ mod tests {
                 },
                 "n",
                 None,
+            ),
+            (
+                CheckError::NestedList {
+                    node: node_name("n"),
+                    port: port("p"),
+                    referenced: node_name("each"),
+                },
+                "n",
+                Some("p"),
             ),
             (
                 CheckError::DuplicateNode {
