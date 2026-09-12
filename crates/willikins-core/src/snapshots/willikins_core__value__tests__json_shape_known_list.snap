@@ -1,0 +1,13 @@
+---
+source: crates/willikins-core/src/value.rs
+expression: value
+---
+{
+  "type": "GitHubOrg",
+  "list": true,
+  "state": "known",
+  "value": [
+    "a",
+    "b"
+  ]
+}

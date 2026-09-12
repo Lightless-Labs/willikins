@@ -1,0 +1,9 @@
+---
+source: crates/willikins-core/src/value.rs
+expression: value
+---
+{
+  "type": "DopplerServiceToken",
+  "list": false,
+  "state": "unknown"
+}

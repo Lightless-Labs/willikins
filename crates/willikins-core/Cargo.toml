@@ -9,13 +9,14 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-willikins-types.workspace = true
+willikins-types = { workspace = true, features = ["executor"] }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 thiserror.workspace = true
 petgraph.workspace = true
 indexmap.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

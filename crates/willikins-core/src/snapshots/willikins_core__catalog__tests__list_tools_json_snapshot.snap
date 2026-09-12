@@ -1,0 +1,46 @@
+---
+source: crates/willikins-core/src/catalog.rs
+expression: "json[\"tools\"]"
+---
+[
+  {
+    "class": "reversible",
+    "description": "A dummy pure tool.",
+    "inputs": {
+      "org": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubOrg"
+        }
+      }
+    },
+    "key": [],
+    "name": "test.pure",
+    "outputs": {
+      "repo": "GitHubRepo"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "A dummy stateful tool.",
+    "inputs": {
+      "repo": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubRepo"
+        }
+      }
+    },
+    "key": [
+      "repo"
+    ],
+    "name": "test.ensure",
+    "outputs": {
+      "repo": "GitHubRepo"
+    },
+    "pure": false
+  }
+]
