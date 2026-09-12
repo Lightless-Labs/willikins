@@ -250,6 +250,35 @@ impl Value {
         }
     }
 
+    /// The known scalar object as a shared, type-erased pointer, or `None`
+    /// when this value is a list or unknown. Cloning is a cheap `Arc`
+    /// clone, not a deep copy — used by `plan` to collect a `for_each`
+    /// node's per-instance outputs into a [`Self::known_dyn_list`] without
+    /// knowing the element's concrete Rust type.
+    #[must_use]
+    pub fn as_scalar_arc(&self) -> Option<Arc<dyn DomainObject>> {
+        match &self.state {
+            ValueState::Known(Known::Scalar(object)) => Some(Arc::clone(object)),
+            _ => None,
+        }
+    }
+
+    /// A known list of domain objects already behind type-erased pointers,
+    /// declared as `list<element>`.
+    ///
+    /// Unlike [`Self::known_list`], this does not require the element's
+    /// concrete Rust type at the call site: `plan` uses it to aggregate a
+    /// `for_each` node's per-instance scalar outputs (each recovered via
+    /// [`Self::as_scalar_arc`]) into one list value, without knowing which
+    /// domain type the tool's output port declares.
+    #[must_use]
+    pub fn known_dyn_list(element: TypeName, items: Vec<Arc<dyn DomainObject>>) -> Self {
+        Self {
+            ty: TypeRef::list_of(element),
+            state: ValueState::Known(Known::List(items)),
+        }
+    }
+
     /// Recover the concrete type `T` from this value's known scalar, or
     /// `None` when it is a list, unknown, or holds a different type.
     #[must_use]
@@ -559,6 +588,39 @@ mod tests {
         assert_ne!(
             Value::known(github_org("lightless-labs")),
             Value::unknown(ty)
+        );
+    }
+
+    #[test]
+    fn as_scalar_arc_recovers_the_shared_object() {
+        let value = Value::known(github_org("lightless-labs"));
+        let arc = value.as_scalar_arc().expect("a known scalar has an arc");
+        assert_eq!(arc.render().to_string(), "lightless-labs");
+    }
+
+    #[test]
+    fn as_scalar_arc_is_none_for_a_list_or_unknown_value() {
+        let list = Value::known_list(vec![github_org("a")]);
+        assert!(list.as_scalar_arc().is_none());
+        let ty = TypeRef::scalar(TypeName::parse("GitHubOrg").unwrap());
+        assert!(Value::unknown(ty).as_scalar_arc().is_none());
+    }
+
+    #[test]
+    fn known_dyn_list_builds_a_list_from_recovered_arcs() {
+        let a = Value::known(github_org("a"));
+        let b = Value::known(github_org("b"));
+        let element = TypeName::parse("GitHubOrg").unwrap();
+        let list = Value::known_dyn_list(
+            element,
+            vec![a.as_scalar_arc().unwrap(), b.as_scalar_arc().unwrap()],
+        );
+        assert!(list.ty().list);
+        assert_eq!(list.ty().name.as_str(), "GitHubOrg");
+        assert_eq!(list.as_list().unwrap().len(), 2);
+        assert_eq!(
+            list,
+            Value::known_list(vec![github_org("a"), github_org("b")])
         );
     }
 
