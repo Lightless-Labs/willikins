@@ -11,13 +11,15 @@
 //!
 //! JSON output, in contrast, is produced by each type's own
 //! [`serde::Serialize`] impl wherever one exists (`Plan`, `Description`,
-//! `PlanError`, ...); the two exceptions are [`CheckError`] and
-//! [`CheckWarning`], which derive no `Serialize` at all, so this module
-//! also builds their JSON shape by hand (from the same plain identifiers a
-//! secret value never touches — neither variant carries a `Value`).
+//! `PlanError`, [`CheckError`], [`CheckWarning`], ...). [`CheckError`] and
+//! [`CheckWarning`] serialize through [`willikins_core::Reported`], which
+//! adds a `message` field (the value's own [`std::fmt::Display`]) alongside
+//! whatever the derived `#[serde(tag = "kind")]` shape already carries;
+//! [`check_errors_json`] and [`check_warnings_json`] below are thin
+//! wrappers over that, kept so `main.rs`'s call sites need no change.
 
 use willikins_core::{
-    Action, CheckError, CheckWarning, Description, Plan, PlannedNode, PortType, Value,
+    Action, CheckError, CheckWarning, Description, Plan, PlannedNode, PortType, Reported, Value,
 };
 
 /// Render a single [`Value`] for text output. The one and only place in
@@ -47,18 +49,17 @@ fn check_warning_line(warning: &CheckWarning) -> String {
     }
 }
 
-/// `warnings` as a JSON array, one object per warning.
+/// `warnings` as a JSON array, one object per warning: each one's own
+/// derived `{"kind": "<Variant>", ...fields}` shape plus [`Reported`]'s
+/// `message` (the warning's own [`std::fmt::Display`]).
 #[must_use]
 pub fn check_warnings_json(warnings: &[CheckWarning]) -> serde_json::Value {
     serde_json::Value::Array(
         warnings
             .iter()
-            .map(|warning| match warning {
-                CheckWarning::UnusedInput { input } => serde_json::json!({
-                    "kind": "unused_input",
-                    "input": input.to_string(),
-                    "message": check_warning_line(warning),
-                }),
+            .map(|warning| {
+                serde_json::to_value(Reported::new(warning))
+                    .unwrap_or_else(|_| unreachable!("CheckWarning always serializes"))
             })
             .collect(),
     )
@@ -77,11 +78,20 @@ pub fn check_errors_text(errors: &[CheckError]) -> String {
         .join("\n")
 }
 
-/// `errors` as a JSON array; see the module docs for why this is built by
-/// hand rather than derived.
+/// `errors` as a JSON array: each one's own derived `{"kind": "<Variant>",
+/// ...fields}` shape plus [`Reported`]'s `message` (the error's own
+/// [`std::fmt::Display`]). See the module docs.
 #[must_use]
 pub fn check_errors_json(errors: &[CheckError]) -> serde_json::Value {
-    serde_json::Value::Array(errors.iter().map(check_error_json).collect())
+    serde_json::Value::Array(
+        errors
+            .iter()
+            .map(|error| {
+                serde_json::to_value(Reported::new(error))
+                    .unwrap_or_else(|_| unreachable!("CheckError always serializes"))
+            })
+            .collect(),
+    )
 }
 
 fn port_type_text(ty: &PortType) -> String {
@@ -92,12 +102,19 @@ fn port_type_text(ty: &PortType) -> String {
 }
 
 /// One line: `VariantName: <detail>`. The variant name matches
-/// [`CheckError`]'s own Rust identifier (`PascalCase`), the same
-/// externally-tagged convention `serde` gives [`willikins_core::PlanError`],
-/// so an agent can grep for either kind of failure by its type name in
-/// either output mode.
+/// [`CheckError`]'s own Rust identifier (`PascalCase`) and the `kind` value
+/// its JSON serialization carries (see [`check_errors_json`]), so an agent
+/// can grep for a failure by its type name in either output mode. This is a
+/// separate, hand-written rendering from [`CheckError`]'s own
+/// [`std::fmt::Display`] (used for JSON's `message` field instead, via
+/// [`willikins_core::Reported`]): the two need not agree word for word, only
+/// on the leading variant name.
 fn check_error_line(error: &CheckError) -> String {
-    format!("{}: {}", check_error_kind(error), check_error_detail(error))
+    format!(
+        "{}: {}",
+        check_error_variant_name(error),
+        check_error_detail(error)
+    )
 }
 
 fn check_error_detail(error: &CheckError) -> String {
@@ -187,10 +204,12 @@ fn check_error_detail(error: &CheckError) -> String {
     }
 }
 
-/// The `kind` tag for `error`: its own Rust variant name, `PascalCase`,
-/// matching how [`willikins_core::PlanError`] tags itself when serialized
-/// (serde's externally-tagged default).
-fn check_error_kind(error: &CheckError) -> &'static str {
+/// `error`'s own Rust variant name, for the leading `VariantName:` in
+/// [`check_error_line`]'s text rendering. Kept separate from the `kind`
+/// [`Reported`] produces in JSON output (see [`check_errors_json`]) even
+/// though the two strings are always equal, since text rendering has no
+/// other reason to depend on `CheckError`'s `Serialize` impl at all.
+fn check_error_variant_name(error: &CheckError) -> &'static str {
     match error {
         CheckError::UnknownTool { .. } => "UnknownTool",
         CheckError::UnknownPort { .. } => "UnknownPort",
@@ -214,13 +233,6 @@ fn check_error_kind(error: &CheckError) -> &'static str {
         CheckError::DuplicateForEachDefault { .. } => "DuplicateForEachDefault",
         CheckError::LiteralOutput { .. } => "LiteralOutput",
     }
-}
-
-fn check_error_json(error: &CheckError) -> serde_json::Value {
-    serde_json::json!({
-        "kind": check_error_kind(error),
-        "message": check_error_line(error),
-    })
 }
 
 // ---------------------------------------------------------------------
@@ -359,13 +371,21 @@ mod tests {
         assert!(text.contains("token.token"), "text: {text}");
         assert!(text.contains("readme.value"), "text: {text}");
 
+        // JSON now comes from the derived, internally tagged shape (via
+        // `Reported`), not the hand-built dotted text above: it names the
+        // same sites as structured fields (`from`/`to`, each a
+        // `[node, port]` pair) rather than as a dotted substring.
         let json = check_errors_json(std::slice::from_ref(&error));
-        let json_text = json.to_string();
+        assert_eq!(json[0]["kind"], "SecretToNonSecretSink");
+        assert_eq!(json[0]["from"], serde_json::json!(["token", "token"]));
+        assert_eq!(json[0]["to"], serde_json::json!(["readme", "value"]));
         assert!(
-            json_text.contains("SecretToNonSecretSink"),
-            "json: {json_text}"
+            json[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("node `token`, port `token`"),
+            "message: {}",
+            json[0]["message"]
         );
-        assert!(json_text.contains("token.token"), "json: {json_text}");
-        assert!(json_text.contains("readme.value"), "json: {json_text}");
     }
 }

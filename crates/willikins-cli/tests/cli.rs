@@ -78,11 +78,14 @@ fn validate_the_taint_fixture_exits_1_and_names_the_dotted_sites() {
         json_text.contains("SecretToNonSecretSink"),
         "json: {json_text}"
     );
-    assert!(json_text.contains("token.token"), "json: {json_text}");
-    assert!(json_text.contains("readme.value"), "json: {json_text}");
     let json: serde_json::Value = serde_json::from_str(&json_text).expect("valid JSON array");
     assert!(json.is_array());
     assert_eq!(json.as_array().unwrap().len(), 1);
+    // The derived, internally tagged shape (via `Reported`) names the sites
+    // as structured `[node, port]` fields, not as a dotted substring.
+    assert_eq!(json[0]["kind"], "SecretToNonSecretSink");
+    assert_eq!(json[0]["from"], serde_json::json!(["token", "token"]));
+    assert_eq!(json[0]["to"], serde_json::json!(["readme", "value"]));
 }
 
 // ---------------------------------------------------------------------
