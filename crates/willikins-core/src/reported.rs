@@ -100,7 +100,10 @@ mod tests {
     }
 
     /// A minimal internally tagged sample, standing in for `CheckError` and
-    /// friends without pulling in this crate's real ones.
+    /// friends without pulling in this crate's real ones. `Bare` covers the
+    /// zero-field case: a unit variant under `#[serde(tag = "kind")]`
+    /// serializes as a one-key object, and wrapping it must still produce
+    /// an object with both keys rather than a bare string.
     #[derive(serde::Serialize)]
     #[serde(tag = "kind")]
     enum Sample {
@@ -108,11 +111,15 @@ mod tests {
             #[allow(dead_code)]
             node: &'static str,
         },
+        Bare,
     }
 
     impl fmt::Display for Sample {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "sample display text")
+            match self {
+                Self::Detail { .. } => write!(f, "sample display text"),
+                Self::Bare => write!(f, "bare display text"),
+            }
         }
     }
 
@@ -127,6 +134,36 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["kind"], "Detail");
         assert_eq!(value["message"], "sample display text");
+    }
+
+    /// A variant with no fields of its own still yields an object with
+    /// exactly the two keys and nothing else -- the shape `ApplyError`'s
+    /// own unit-like variants will take.
+    #[test]
+    fn a_variant_with_no_fields_still_yields_kind_and_message() {
+        let json = serde_json::to_string(&Reported::new(&Sample::Bare)).unwrap();
+        let keys = top_level_keys(&json);
+        assert_eq!(keys, ["kind", "message"], "keys: {keys:?}");
+
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["kind"], "Bare");
+        assert_eq!(value["message"], "bare display text");
+    }
+
+    /// `message` is `T`'s own `Display` rendering, byte for byte -- not a
+    /// paraphrase of it, and not `Debug`. This is what lets every error type
+    /// keep one wording, rather than a JSON copy drifting from the text one.
+    #[test]
+    fn message_is_exactly_the_display_rendering() {
+        for sample in [Sample::Detail { node: "n" }, Sample::Bare] {
+            let json = serde_json::to_string(&Reported::new(&sample)).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                value["message"].as_str().expect("a string"),
+                sample.to_string(),
+                "json: {json}"
+            );
+        }
     }
 
     /// Proves [`top_level_keys`] actually detects a collision rather than
