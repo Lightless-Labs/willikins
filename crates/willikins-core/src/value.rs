@@ -183,9 +183,13 @@ impl Value {
             ));
         }
         let element = ty.element();
+        // Resolve the element type once, before looking at any input: an
+        // empty slice must be refused for a secret or unregistered element
+        // type just as a non-empty one is.
+        let entry = willikins_types::registry().literal_entry(&element.name)?;
         let items = inputs
             .iter()
-            .map(|input| willikins_types::registry().parse(&element.name, input))
+            .map(|input| (entry.parse)(input))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             ty: ty.clone(),
@@ -464,6 +468,31 @@ mod tests {
         let ty = TypeRef::list_of(TypeName::parse("GitHubOrg").unwrap());
         let value = Value::parse_list(&ty, &["a", "b"]).unwrap();
         assert_eq!(value.as_list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn parse_list_of_an_empty_slice_yields_a_known_empty_list() {
+        let ty = TypeRef::list_of(TypeName::parse("GitHubOrg").unwrap());
+        let value = Value::parse_list(&ty, &[]).unwrap();
+        assert!(value.is_known());
+        assert!(value.as_list().expect("a known list").is_empty());
+    }
+
+    #[test]
+    fn parse_list_refuses_a_secret_element_type_even_with_no_inputs() {
+        // The element type is resolved before any input is parsed, so an
+        // empty slice cannot smuggle a secret-typed literal list past the
+        // registry's refusal.
+        let ty = TypeRef::list_of(TypeName::parse("DopplerServiceToken").unwrap());
+        let err = Value::parse_list(&ty, &[]).unwrap_err();
+        assert!(err.reason.contains("cannot be supplied"), "{}", err.reason);
+    }
+
+    #[test]
+    fn parse_list_refuses_an_unregistered_element_type_even_with_no_inputs() {
+        let ty = TypeRef::list_of(TypeName::parse("NoSuchType").unwrap());
+        let err = Value::parse_list(&ty, &[]).unwrap_err();
+        assert!(err.reason.contains("NoSuchType"), "{}", err.reason);
     }
 
     #[test]

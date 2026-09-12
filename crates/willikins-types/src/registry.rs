@@ -291,6 +291,30 @@ impl TypeRegistry {
             .map(|&position| &self.entries[position])
     }
 
+    /// Resolve the entry for `name` for use as a literal: an unregistered
+    /// name and a secret type are both refused here, before any input is
+    /// looked at.
+    ///
+    /// Callers that parse a whole list of literals resolve the element type
+    /// through this once, so that a list with *no* elements is refused on
+    /// exactly the same grounds as a list with one — the map-over-inputs
+    /// shape would otherwise silently accept an empty secret-typed or
+    /// unregistered list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when `name` is not registered, or when it
+    /// names a secret type.
+    pub fn literal_entry(&self, name: &TypeName) -> Result<&TypeEntry, ParseError> {
+        let entry = self
+            .get(name)
+            .ok_or_else(|| ParseError::new("TypeRegistry", format!("unknown type `{name}`")))?;
+        if entry.info.secret {
+            return Err(ParseError::new(entry.info.name, SECRET_LITERAL_REFUSAL));
+        }
+        Ok(entry)
+    }
+
     /// Parse `input` as `name`.
     ///
     /// An unknown type name is a [`ParseError`] naming the type. A secret
@@ -302,13 +326,7 @@ impl TypeRegistry {
     /// Returns [`ParseError`] when `name` is not registered, or when the
     /// registered type refuses or fails to parse `input`.
     pub fn parse(&self, name: &TypeName, input: &str) -> Result<Arc<dyn DomainObject>, ParseError> {
-        match self.get(name) {
-            Some(entry) => (entry.parse)(input),
-            None => Err(ParseError::new(
-                "TypeRegistry",
-                format!("unknown type `{name}`"),
-            )),
-        }
+        (self.literal_entry(name)?.parse)(input)
     }
 
     /// Whether `name` is a secret type, or `None` if `name` is not
@@ -628,6 +646,36 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.reason, SECRET_LITERAL_REFUSAL);
         assert!(!err.reason.contains("MARKER"));
+    }
+
+    #[test]
+    fn literal_entry_resolves_a_non_secret_type() {
+        let name = TypeName::parse("GitHubOrg").unwrap();
+        let Ok(entry) = crate::registry().literal_entry(&name) else {
+            panic!("GitHubOrg is registered and not secret")
+        };
+        assert_eq!(entry.info.name, "GitHubOrg");
+    }
+
+    #[test]
+    fn literal_entry_refuses_a_secret_type_with_no_input_at_all() {
+        // The refusal must not depend on there being an input to reject:
+        // this is what stops an empty `list<Secret>` literal.
+        let name = TypeName::parse("DopplerServiceToken").unwrap();
+        let Err(err) = crate::registry().literal_entry(&name) else {
+            panic!("a secret type must be refused")
+        };
+        assert_eq!(err.reason, SECRET_LITERAL_REFUSAL);
+        assert_eq!(err.type_name, "DopplerServiceToken");
+    }
+
+    #[test]
+    fn literal_entry_refuses_an_unregistered_type() {
+        let name = TypeName::parse("NoSuchType").unwrap();
+        let Err(err) = crate::registry().literal_entry(&name) else {
+            panic!("an unregistered type must be refused")
+        };
+        assert!(err.reason.contains("NoSuchType"), "{}", err.reason);
     }
 
     #[test]
