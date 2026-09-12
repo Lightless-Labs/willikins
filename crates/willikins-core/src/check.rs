@@ -119,7 +119,16 @@ pub struct Checked {
 }
 
 /// A non-fatal observation returned alongside a successful [`check`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializes internally tagged (`#[serde(tag = "kind")]`): every variant is
+/// struct-like or unit, so the tag merges into the variant's own fields
+/// rather than failing at run time the way an internally tagged newtype
+/// variant would. No variant declares a field named `kind` or `message`,
+/// which would otherwise collide with the tag or with
+/// [`crate::Reported`]'s own added field; see
+/// `tests::every_check_warning_variant_serializes_with_its_kind`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind")]
 pub enum CheckWarning {
     /// A declared workflow input that no binding anywhere references.
     UnusedInput {
@@ -143,7 +152,15 @@ impl fmt::Display for CheckWarning {
 /// Every variant names the node (and, where relevant, the port) the
 /// problem concerns; see the module docs for exactly which node identifies
 /// which side of a two-node reference.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializes internally tagged (`#[serde(tag = "kind")]`): every variant is
+/// struct-like, so the tag merges into the variant's own fields rather than
+/// failing at run time the way an internally tagged newtype variant (or one
+/// whose payload is not a map) would. No variant declares a field named
+/// `kind` or `message`; see
+/// `tests::every_check_error_variant_serializes_with_its_kind`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind")]
 pub enum CheckError {
     /// A node's `tool` names a tool the catalog does not have.
     UnknownTool {
@@ -2053,5 +2070,188 @@ mod tests {
             warning.to_string(),
             "input `slug` is declared but never used"
         );
+    }
+
+    // -------------------------------------------------------------
+    // Serialization: internally tagged `{"kind": "<Variant>", ...}`
+    // -------------------------------------------------------------
+
+    /// One instance of every [`CheckError`] variant, paired with its
+    /// expected `kind` tag. Built through an exhaustive `match` on a
+    /// reference to each sample (`check_error_kind_of`, below) so that
+    /// adding a variant without adding a sample here is a compile error,
+    /// not a silently-passing test: the match has no wildcard arm, so a
+    /// forgotten sample leaves an index unreachable in the match, and the
+    /// length assertion in [`every_check_error_variant_serializes_with_its_kind`]
+    /// then fails instead.
+    fn check_error_samples() -> Vec<CheckError> {
+        vec![
+            CheckError::UnknownTool {
+                node: node_name("n"),
+                tool: tool_name("bogus.tool"),
+            },
+            CheckError::UnknownPort {
+                node: node_name("n"),
+                tool: tool_name("bogus.tool"),
+                port: port("p"),
+            },
+            CheckError::UnknownNode {
+                node: node_name("n"),
+                port: port("p"),
+                referenced: node_name("ghost"),
+            },
+            CheckError::UnboundInput {
+                node: node_name("n"),
+                port: port("p"),
+            },
+            CheckError::UndeclaredInput {
+                node: node_name("n"),
+                port: port("p"),
+                input: input_name("i"),
+            },
+            CheckError::InvalidLiteral {
+                node: node_name("n"),
+                port: port("p"),
+                error: ParseError::new("Test", "boom"),
+            },
+            CheckError::TypeMismatch {
+                node: node_name("n"),
+                port: port("p"),
+                expected: exact("GitHubOrg"),
+                found: ty("HttpsUrl"),
+            },
+            CheckError::SecretLiteral {
+                node: node_name("n"),
+                port: port("p"),
+            },
+            CheckError::SecretToNonSecretSink {
+                from: (node_name("a"), port("out")),
+                to: (node_name("b"), port("in")),
+            },
+            CheckError::SecretWorkflowInput {
+                input: input_name("i"),
+                ty: ty("DopplerServiceToken"),
+            },
+            CheckError::SecretForEachSource {
+                node: node_name("n"),
+            },
+            CheckError::ForEachOverScalar {
+                node: node_name("n"),
+            },
+            CheckError::ItemOutsideForEach {
+                node: node_name("n"),
+                port: port("p"),
+            },
+            CheckError::KeyedOnScalarNode {
+                node: node_name("n"),
+                port: port("p"),
+                referenced: node_name("ref"),
+            },
+            CheckError::Cycle {
+                nodes: vec![node_name("n")],
+            },
+            CheckError::DefaultTypeMismatch {
+                input: input_name("i"),
+                expected: ty("GitHubOrg"),
+                found: ty("HttpsUrl"),
+            },
+            CheckError::NestedList {
+                node: node_name("n"),
+                port: port("p"),
+                referenced: node_name("ref"),
+            },
+            CheckError::DuplicateNode {
+                node: node_name("n"),
+            },
+            CheckError::UnregisteredInputType {
+                input: input_name("i"),
+                ty: ty("NoSuchType"),
+            },
+            CheckError::DuplicateForEachDefault {
+                node: node_name("n"),
+                input: input_name("i"),
+                key: "k".to_string(),
+            },
+            CheckError::LiteralOutput {
+                output: OutputName::parse("o").unwrap(),
+            },
+        ]
+    }
+
+    /// The Rust variant identifier for `error` -- exhaustive, so a variant
+    /// added to [`CheckError`] without a matching arm here fails to compile.
+    fn check_error_kind_of(error: &CheckError) -> &'static str {
+        match error {
+            CheckError::UnknownTool { .. } => "UnknownTool",
+            CheckError::UnknownPort { .. } => "UnknownPort",
+            CheckError::UnknownNode { .. } => "UnknownNode",
+            CheckError::UnboundInput { .. } => "UnboundInput",
+            CheckError::UndeclaredInput { .. } => "UndeclaredInput",
+            CheckError::InvalidLiteral { .. } => "InvalidLiteral",
+            CheckError::TypeMismatch { .. } => "TypeMismatch",
+            CheckError::SecretLiteral { .. } => "SecretLiteral",
+            CheckError::SecretToNonSecretSink { .. } => "SecretToNonSecretSink",
+            CheckError::SecretWorkflowInput { .. } => "SecretWorkflowInput",
+            CheckError::SecretForEachSource { .. } => "SecretForEachSource",
+            CheckError::ForEachOverScalar { .. } => "ForEachOverScalar",
+            CheckError::ItemOutsideForEach { .. } => "ItemOutsideForEach",
+            CheckError::KeyedOnScalarNode { .. } => "KeyedOnScalarNode",
+            CheckError::Cycle { .. } => "Cycle",
+            CheckError::DefaultTypeMismatch { .. } => "DefaultTypeMismatch",
+            CheckError::NestedList { .. } => "NestedList",
+            CheckError::DuplicateNode { .. } => "DuplicateNode",
+            CheckError::UnregisteredInputType { .. } => "UnregisteredInputType",
+            CheckError::DuplicateForEachDefault { .. } => "DuplicateForEachDefault",
+            CheckError::LiteralOutput { .. } => "LiteralOutput",
+        }
+    }
+
+    /// The number of [`CheckError`] variants today. Kept in lockstep with
+    /// [`check_error_samples`] and [`check_error_kind_of`] by
+    /// [`every_check_error_variant_serializes_with_its_kind`]'s own length
+    /// and distinctness assertions, rather than trusted on its own.
+    const CHECK_ERROR_VARIANT_COUNT: usize = 21;
+
+    #[test]
+    fn every_check_error_variant_serializes_with_its_kind() {
+        let samples = check_error_samples();
+        assert_eq!(
+            samples.len(),
+            CHECK_ERROR_VARIANT_COUNT,
+            "check_error_samples must carry exactly one sample per CheckError variant"
+        );
+        let mut seen_kinds: HashSet<&'static str> = HashSet::new();
+        for sample in &samples {
+            let kind = check_error_kind_of(sample);
+            assert!(
+                seen_kinds.insert(kind),
+                "duplicate sample for CheckError::{kind}"
+            );
+            let json = serde_json::to_value(sample).expect("CheckError must serialize");
+            assert_eq!(json["kind"], kind, "sample: {sample:?}");
+            // No variant declares a field named `message`: if one did, this
+            // assertion -- run over every variant -- would catch it, since
+            // such a field would show up here even though `Reported` (which
+            // adds its own `message`) is not involved yet. A field literally
+            // named `kind` is refused at compile time by serde's derive
+            // under `#[serde(tag = "kind")]` (duplicate field), so that half
+            // of the invariant has a compiler backstop; this is the runtime
+            // half, for `message`.
+            assert!(
+                json.as_object().unwrap().get("message").is_none(),
+                "CheckError::{kind} must not have a field named `message`: {json}"
+            );
+        }
+        assert_eq!(seen_kinds.len(), CHECK_ERROR_VARIANT_COUNT);
+    }
+
+    #[test]
+    fn every_check_warning_variant_serializes_with_its_kind() {
+        let warning = CheckWarning::UnusedInput {
+            input: input_name("slug"),
+        };
+        let json = serde_json::to_value(&warning).expect("CheckWarning must serialize");
+        assert_eq!(json["kind"], "UnusedInput");
+        assert!(json.as_object().unwrap().get("message").is_none());
     }
 }

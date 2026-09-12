@@ -194,7 +194,11 @@ fn plan_against_a_foreign_repo_exits_1_with_name_taken() {
     let json_text = stdout(&output);
     assert!(json_text.contains("NameTaken"), "json: {json_text}");
     let json: serde_json::Value = serde_json::from_str(&json_text).expect("valid JSON");
-    assert_eq!(json["NameTaken"]["node"], "repo");
+    // `PlanError` is now internally tagged (`#[serde(tag = "kind")]`):
+    // `{"kind": "NameTaken", "node": "repo", ...}`, not the old externally
+    // tagged `{"NameTaken": {"node": "repo", ...}}`.
+    assert_eq!(json["kind"], "NameTaken");
+    assert_eq!(json["node"], "repo");
 }
 
 /// Acceptance test 8b: a `--fake-state` file seeds a Doppler secret; a

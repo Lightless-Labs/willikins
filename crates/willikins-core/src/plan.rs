@@ -53,7 +53,7 @@ use crate::value::{PortType, TypeName, TypeRef, Value};
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
 
 /// What `plan` decided to do for one node instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Action {
     /// A pure tool computed its outputs; there is no external state to
@@ -67,7 +67,7 @@ pub enum Action {
 
 /// One planned call to a tool: a whole node with no `for_each`, or one
 /// instance of a `for_each` node.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct PlannedNode {
     /// The node this instance belongs to.
     pub name: NodeName,
@@ -88,7 +88,7 @@ pub struct PlannedNode {
 }
 
 /// A concrete, approval-classified plan.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct Plan {
     /// The planned workflow's name.
     pub workflow: String,
@@ -108,7 +108,15 @@ pub struct Plan {
 }
 
 /// Why [`plan`] could not produce a [`Plan`].
+///
+/// Serializes internally tagged (`#[serde(tag = "kind")]`) as
+/// `{"kind": "<Variant>", ...the variant's own fields}`: every variant is
+/// struct-like, so the tag merges cleanly. No variant declares a field
+/// named `kind` or `message`; see `tests/plan_error_serde.rs`, which checks
+/// this at run time the same way `check.rs`'s own unit tests do for
+/// [`crate::CheckError`] and [`crate::CheckWarning`].
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind")]
 pub enum PlanError {
     /// A `Binding::Input` named a workflow input that was not in the
     /// supplied resolved-inputs map.
