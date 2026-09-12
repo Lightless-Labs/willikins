@@ -383,3 +383,76 @@ fn a_yaml_syntax_error_exits_2_with_line_and_column_on_stderr() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A temp directory holding one workflow document, cleaned up on drop so a
+/// failing assertion cannot leave it behind.
+struct TempWorkflow {
+    dir: PathBuf,
+    path: PathBuf,
+}
+
+impl TempWorkflow {
+    fn new(label: &str, contents: &str) -> Self {
+        let dir =
+            std::env::temp_dir().join(format!("willikins-cli-test-{}-{label}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("workflow.yaml");
+        std::fs::write(&path, contents).unwrap();
+        Self { dir, path }
+    }
+}
+
+impl Drop for TempWorkflow {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// `DocumentErrorKind`'s `kind` tag is `PascalCase`, matching every other
+/// error an agent reads (`CheckError`, `PlanError`), rather than the
+/// `snake_case` it carried in milestone 1. Both variants are covered: a
+/// YAML-level failure and a semantic one, each read off the *stderr* the
+/// document path writes to, at exit 2.
+#[test]
+fn document_error_json_carries_a_pascal_case_kind_for_both_variants() {
+    // A scanner-level failure: an unterminated quoted scalar.
+    let yaml = TempWorkflow::new("kind-yaml", "name: \"unterminated\n");
+    let output = run(&["--json", "validate", yaml.path.to_str().unwrap()]);
+    assert_eq!(exit_code(&output), 2);
+    let json: serde_json::Value =
+        serde_json::from_str(&stderr(&output)).expect("valid JSON on stderr");
+    assert_eq!(json["kind"], "Yaml", "json: {json}");
+    assert!(json["message"].is_string(), "json: {json}");
+
+    // A semantic failure: a well-formed document naming a type the registry
+    // has never heard of.
+    let semantic = TempWorkflow::new(
+        "kind-semantic",
+        "name: bad-type\ndescription: A type the registry does not have.\ninputs:\n  slug: { type: NoSuchTypeAtAll }\nsteps: {}\n",
+    );
+    let output = run(&["--json", "validate", semantic.path.to_str().unwrap()]);
+    assert_eq!(exit_code(&output), 2);
+    let json: serde_json::Value =
+        serde_json::from_str(&stderr(&output)).expect("valid JSON on stderr");
+    assert_eq!(json["kind"], "Semantic", "json: {json}");
+    assert!(json["path"].is_string(), "json: {json}");
+    assert!(json["message"].is_string(), "json: {json}");
+}
+
+/// A `check` failure's `--json` output is an array of objects each carrying
+/// `kind` and `message` at the top level -- the uniform shape the plan's
+/// "Error serialization and result schemas" paragraph states for every error
+/// an agent reads. Pinned here at the CLI boundary, where an agent actually
+/// sees it, rather than only at the `Reported` unit-test level.
+#[test]
+fn check_failure_json_objects_all_carry_kind_and_message() {
+    let path = workflow("workflows/fixtures/secret-into-template.yaml");
+    let output = run(&["--json", "validate", path.to_str().unwrap()]);
+    assert_eq!(exit_code(&output), 1, "stderr: {}", stderr(&output));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let errors = json.as_array().expect("an array of errors");
+    assert!(!errors.is_empty(), "json: {json}");
+    for error in errors {
+        assert!(error["kind"].is_string(), "no kind: {error}");
+        assert!(error["message"].is_string(), "no message: {error}");
+    }
+}
