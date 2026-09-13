@@ -1257,6 +1257,11 @@ steps: {{}}
     /// first cannot get past the permission error to the size, so it
     /// reports a failed read; one that asks the filesystem for the size
     /// first answers `TooLarge` without ever needing the bytes.
+    // Unix-only: the premise is a file mode that denies reading, which
+    // is how this test distinguishes "asked the filesystem for the size"
+    // from "read the bytes and measured them". The behaviour it pins is
+    // not platform-specific; the way of observing it is.
+    #[cfg(unix)]
     #[test]
     fn load_document_refuses_an_oversized_file_without_reading_its_contents() {
         use std::os::unix::fs::PermissionsExt;
