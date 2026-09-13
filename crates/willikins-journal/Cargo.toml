@@ -1,0 +1,29 @@
+[package]
+name = "willikins-journal"
+description = "Append-only JSONL journal: run ledger and audit events"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+willikins-types.workspace = true
+willikins-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+chrono.workspace = true
+indexmap.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+fd-lock.workspace = true
+
+[dev-dependencies]
+willikins-dsl.workspace = true
+willikins-providers-fake.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
