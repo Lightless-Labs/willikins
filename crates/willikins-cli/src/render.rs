@@ -39,7 +39,8 @@
 //! wrappers over that, kept so `main.rs`'s call sites need no change.
 
 use willikins_core::{
-    Action, CheckError, CheckWarning, Description, Plan, PlanError, PlannedNode, Reported, Value,
+    Action, Applied, AppliedNode, CheckError, CheckWarning, Description, NodeStatus, Plan,
+    PlanError, PlannedNode, Reported, Value,
 };
 
 /// Escape `text` onto one line: every character that is not printable —
@@ -390,6 +391,69 @@ fn action_text(action: Action) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------
+// apply
+// ---------------------------------------------------------------------
+
+/// Render an [`Applied`] result for text output: one line per attempted
+/// node instance (its instance key, tool, and status) followed by its
+/// outputs, then workflow outputs — the same shape [`plan_text`] uses.
+/// Every rendered value, and a [`NodeStatus::Failed`] error's message,
+/// goes through [`value_text`] / [`single_line`], so a secret prints only
+/// its redaction marker here exactly as it does in `plan_text` and in
+/// [`Applied`]'s own JSON.
+///
+/// Not yet called from `main.rs`: the CLI's own `apply` subcommand is
+/// task 11's job. Exercised today by this module's own tests (acceptance
+/// test 5's marker-redaction claim, for text output) so it exists ahead
+/// of its caller rather than being written twice.
+#[allow(dead_code)]
+#[must_use]
+pub fn applied_text(applied: &Applied) -> String {
+    let mut lines = Vec::new();
+    for node in &applied.nodes {
+        lines.push(applied_node_line(node));
+        for (port, value) in node.outputs.iter() {
+            lines.push(format!("    {port}: {}", value_text(value)));
+        }
+    }
+    lines.push("outputs:".to_string());
+    for (name, value) in &applied.outputs {
+        lines.push(format!("  {name}: {}", value_text(value)));
+    }
+    lines.join("\n")
+}
+
+#[allow(dead_code)] // see `applied_text`'s own doc: awaits task 11's caller
+fn applied_node_line(node: &AppliedNode) -> String {
+    let status = node_status_text(&node.status);
+    match &node.instance {
+        Some(instance) => format!(
+            "{}[{}] ({}): {status}",
+            node.name,
+            single_line(instance),
+            node.tool
+        ),
+        None => format!("{} ({}): {status}", node.name, node.tool),
+    }
+}
+
+/// A [`NodeStatus`]'s text label. [`NodeStatus::Failed`]'s error message
+/// is a provider's own text (trust boundary 5), so it goes through
+/// [`single_line`] the same way [`plan_error_text`] treats a tool
+/// failure.
+#[allow(dead_code)] // see `applied_text`'s own doc: awaits task 11's caller
+fn node_status_text(status: &NodeStatus) -> String {
+    match status {
+        NodeStatus::Computed => "Computed".to_string(),
+        NodeStatus::Created => "Created".to_string(),
+        NodeStatus::Unchanged => "Unchanged".to_string(),
+        NodeStatus::Converged => "Converged".to_string(),
+        NodeStatus::Failed { error } => format!("Failed: {}", single_line(&error.to_string())),
+        NodeStatus::NotRun => "NotRun".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,5 +751,102 @@ mod tests {
             "message: {}",
             json[0]["message"]
         );
+    }
+
+    // -------------------------------------------------------------
+    // apply / applied_text
+    // -------------------------------------------------------------
+
+    fn ty(name: &str) -> willikins_core::TypeRef {
+        willikins_core::TypeRef::scalar(willikins_core::TypeName::parse(name).unwrap())
+    }
+
+    /// Acceptance test 5's own claim, for the CLI's text output
+    /// specifically: a freshly minted secret must never print its bytes
+    /// through [`applied_text`], only the redaction marker, while the
+    /// node it was minted on still shows `Created`. Runs `apply` against
+    /// the real, unmodified fake catalog end to end (`check` -> `plan` ->
+    /// `apply`), the same pipeline the CLI itself will drive once `apply`
+    /// lands there (task 11).
+    #[test]
+    fn applied_text_redacts_a_freshly_minted_secret_and_still_shows_created() {
+        use std::sync::{Arc, Mutex};
+
+        use willikins_core::{
+            Approval, Binding, InputName, InputSpec, Node, NodeName, NoopObserver, OutputName,
+            PortName, ToolName, Value as CoreValue, Workflow, check, plan,
+        };
+        use willikins_providers_fake::{FakeState, catalog};
+        use willikins_types::{DomainType, DopplerConfig, DopplerProject, DopplerServiceToken};
+
+        let marker = DopplerServiceToken::parse(&format!("dp.st.prd.{}", "MARKER".repeat(7)))
+            .expect("a valid token literal");
+
+        let workflow = Workflow::new(willikins_types::WorkflowName::parse("token-only").unwrap())
+            .input(
+                InputName::parse("config").unwrap(),
+                InputSpec::new(ty("DopplerConfig")),
+            )
+            .input(
+                InputName::parse("name").unwrap(),
+                InputSpec::new(ty("DopplerTokenName")),
+            )
+            .node(
+                NodeName::parse("token").unwrap(),
+                Node::new(ToolName::parse("doppler.service_token.ensure").unwrap())
+                    .port(
+                        PortName::parse("config").unwrap(),
+                        Binding::Input(InputName::parse("config").unwrap()),
+                    )
+                    .port(
+                        PortName::parse("name").unwrap(),
+                        Binding::Input(InputName::parse("name").unwrap()),
+                    ),
+            )
+            .output(
+                OutputName::parse("token").unwrap(),
+                Binding::Step {
+                    node: NodeName::parse("token").unwrap(),
+                    port: PortName::parse("token").unwrap(),
+                },
+            );
+
+        let state = Arc::new(Mutex::new(FakeState::new().with_next_token(marker)));
+        let fake_catalog = catalog(state);
+        let checked = check(&workflow, &fake_catalog).expect("this workflow must check cleanly");
+
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            InputName::parse("config").unwrap(),
+            CoreValue::known(DopplerConfig::new(
+                DopplerProject::parse("third-thoughts").unwrap(),
+                willikins_types::DopplerConfigName::parse("prd").unwrap(),
+            )),
+        );
+        inputs.insert(
+            InputName::parse("name").unwrap(),
+            CoreValue::known(willikins_types::DopplerTokenName::parse("ci").unwrap()),
+        );
+
+        let approved =
+            plan(&checked, &inputs, &fake_catalog).expect("plan against empty state must succeed");
+        let mut observer = NoopObserver;
+        let applied = willikins_core::apply(
+            &checked,
+            &inputs,
+            &fake_catalog,
+            &approved,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect("apply against empty state must succeed");
+
+        let text = applied_text(&applied);
+        assert!(text.contains("Created"), "text: {text}");
+        assert!(
+            text.contains("[REDACTED DopplerServiceToken]"),
+            "text: {text}"
+        );
+        assert!(!text.contains("MARKERMARKER"), "text leaked: {text}");
     }
 }
