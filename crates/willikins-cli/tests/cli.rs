@@ -798,3 +798,59 @@ fn plan_against_the_reverse_visibility_mismatch_also_exits_1_with_attribute_mism
     assert_eq!(json["kind"], "AttributeMismatch", "json: {json}");
     assert_eq!(json["site"]["port"], "visibility", "json: {json}");
 }
+
+// ---------------------------------------------------------------------
+// milestone 2, task 4b: the second positive fixture, through the CLI
+// ---------------------------------------------------------------------
+
+/// Acceptance test 6b's own fixture: `validate` accepts
+/// `workflows/rotate-service-token.yaml` cleanly.
+#[test]
+fn validate_the_rotate_fixture_exits_0() {
+    let path = workflow("workflows/rotate-service-token.yaml");
+    let output = run(&["validate", path.to_str().unwrap()]);
+    assert_eq!(exit_code(&output), 0, "stderr: {}", stderr(&output));
+}
+
+/// With no inputs, `describe` lists `project` and `repo` as missing
+/// (neither has a default) and neither `environment`, `token_name`, nor
+/// `secret_name` (each does).
+#[test]
+fn describe_the_rotate_fixture_with_no_inputs_lists_project_and_repo() {
+    let path = workflow("workflows/rotate-service-token.yaml");
+    let output = run(&["describe", path.to_str().unwrap()]);
+    assert_eq!(exit_code(&output), 1);
+    let text = stdout(&output);
+    assert!(text.contains("missing `project`"), "text: {text}");
+    assert!(text.contains("missing `repo`"), "text: {text}");
+    assert!(!text.contains("missing `environment`"), "text: {text}");
+    assert!(!text.contains("missing `token_name`"), "text: {text}");
+    assert!(!text.contains("missing `secret_name`"), "text: {text}");
+}
+
+/// Planning the rotate fixture against empty state: three planned
+/// entries, `token`'s action is always `create` (see
+/// `doppler.service_token.rotate`'s own doc for why), and the plan's
+/// class is `destructive` with `requires_approval: true`.
+#[test]
+fn plan_the_rotate_fixture_against_empty_state_exits_0_and_requires_approval() {
+    let path = workflow("workflows/rotate-service-token.yaml");
+    let output = run(&[
+        "--json",
+        "plan",
+        path.to_str().unwrap(),
+        "--input",
+        "project=third-thoughts",
+        "--input",
+        "repo=lightless-labs/third-thoughts",
+    ]);
+    assert_eq!(exit_code(&output), 0, "stdout: {}", stdout(&output));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let nodes = json["nodes"].as_array().expect("nodes array");
+    assert_eq!(nodes.len(), 3, "nodes: {nodes:#?}");
+    for node in nodes {
+        assert_eq!(node["action"], "create", "node: {node:#?}");
+    }
+    assert_eq!(json["class"], "destructive");
+    assert_eq!(json["requires_approval"], true);
+}

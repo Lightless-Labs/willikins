@@ -61,7 +61,13 @@ enum Command {
         /// comma-separated.
         #[arg(long = "input", value_name = "NAME=VALUE")]
         inputs: Vec<InputArg>,
-        /// A JSON file seeding the fake providers' state.
+        /// A JSON file seeding the fake providers' state (see
+        /// `FakeState`). Read once, to build the starting state; never
+        /// written back to. A `FakeState` dump (its own `Serialize`) is a
+        /// one-way, redacted view for inspection, not an export/import
+        /// round trip: a seeded secret reserializes as its redaction
+        /// marker, never its bytes, and a seeded `next_token` marker is
+        /// not itself a valid token, so reloading such a dump fails.
         #[arg(long = "fake-state", value_name = "FILE")]
         fake_state: Option<String>,
     },
