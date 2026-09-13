@@ -22,7 +22,6 @@ use std::marker::PhantomData;
 
 use indexmap::IndexMap;
 use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
-use willikins_types::DomainType;
 
 /// The published schema for [`Document::name`]: [`willikins_types::WorkflowName`]'s
 /// own schema (pattern and length), even though the field is stored as a
@@ -31,16 +30,30 @@ use willikins_types::DomainType;
 /// `willikins_dsl::document_to_workflow`, the same way every other typed
 /// field in this format is checked, so a bad name is a located
 /// [`crate::DocumentErrorKind::Semantic`] rather than a `serde` error.
-fn workflow_name_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    willikins_types::WorkflowName::json_schema()
+///
+/// Generated through the `JsonSchema` impl rather than lifted from
+/// `DomainType::json_schema` (which is `schema_for!`, a standalone schema
+/// *document*): a subschema under `properties` must not carry its own
+/// `$schema` dialect declaration or a `title` that renames the field.
+fn workflow_name_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    <willikins_types::WorkflowName as schemars::JsonSchema>::json_schema(generator)
 }
 
 /// The published schema for a document's free-text `description:` field
 /// (on [`Document`] and [`InputDecl`]): [`willikins_types::Description`]'s
 /// own schema. See [`workflow_name_schema`] for why the Rust field type
-/// stays `Option<String>`.
-fn description_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    willikins_types::Description::json_schema()
+/// stays `Option<String>` and why this goes through `JsonSchema`.
+///
+/// The field is optional, so `null` is one of its values: `description:`
+/// with nothing after it is a document with no description, which the
+/// parser accepts and this schema must too. A `schema_with` function
+/// replaces whatever schema the field's own type would have produced, so
+/// the nullability `Option<String>` would have carried has to be restated
+/// here or the published schema refuses what the parser takes.
+fn description_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut schema = <willikins_types::Description as schemars::JsonSchema>::json_schema(generator);
+    schema.insert("type".to_string(), serde_json::json!(["string", "null"]));
+    schema
 }
 
 /// A workflow document: named inputs, a graph of tool-calling steps, and

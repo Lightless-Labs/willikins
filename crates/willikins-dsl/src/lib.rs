@@ -952,6 +952,67 @@ steps:
         insta::assert_snapshot!(json);
     }
 
+    /// The published schema is the only description of this format an
+    /// agent authoring a document ever sees, so it must not refuse what
+    /// [`parse_document`] accepts. `description:` with no value is a
+    /// document with no description — every caller treats it as absent —
+    /// and the schema said its type was `"string"` while also declaring
+    /// its default to be `null`, a pair no value can satisfy.
+    #[test]
+    fn the_published_schema_admits_every_description_the_parser_does() {
+        let schema = serde_json::to_value(document_schema()).unwrap();
+        for path in [
+            &["properties", "description"][..],
+            &["$defs", "InputDecl", "properties", "description"][..],
+        ] {
+            let mut node = &schema;
+            for segment in path {
+                node = &node[segment];
+            }
+            assert_eq!(
+                node["type"],
+                serde_json::json!(["string", "null"]),
+                "{path:?} does not admit the null the parser accepts: {node}"
+            );
+        }
+
+        // The parser's half of the same claim.
+        let source = "\
+name: demo
+description:
+inputs:
+  org: { type: GitHubOrg, description: }
+steps:
+  a: { tool: naming.v1, with: {} }
+";
+        parse_document(source).expect("a null description parses");
+    }
+
+    /// `$schema` declares the dialect of a schema *document*; a subschema
+    /// under `properties` is not one, and a nested declaration there
+    /// either reads as noise or, to a validator that honours it, opens a
+    /// new schema resource in the middle of this one. A field's schema
+    /// has to be generated as a subschema, not lifted from a standalone
+    /// `schema_for!`.
+    #[test]
+    fn no_subschema_redeclares_the_dialect_or_renames_a_field() {
+        fn walk(node: &serde_json::Value, path: &str, found: &mut Vec<String>) {
+            if let Some(object) = node.as_object() {
+                if !path.is_empty() && object.contains_key("$schema") {
+                    found.push(path.to_string());
+                }
+                for (key, value) in object {
+                    walk(value, &format!("{path}.{key}"), found);
+                }
+            }
+        }
+
+        let schema = serde_json::to_value(document_schema()).unwrap();
+        let mut found = Vec::new();
+        walk(&schema, "", &mut found);
+        assert!(found.is_empty(), "nested `$schema` at {found:?}");
+    }
+
     // -------------------------------------------------------------
     // MAX_DOCUMENT_BYTES (acceptance test 15)
     // -------------------------------------------------------------

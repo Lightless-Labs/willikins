@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-dsl/src/lib.rs
-assertion_line: 881
 expression: json
 ---
 {
@@ -10,10 +9,11 @@ expression: json
   "type": "object",
   "properties": {
     "description": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "Description",
       "description": "One-line description shown to an agent.",
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "default": null,
       "examples": [
         "Provision a GitHub repository and Doppler project for a Rust service."
@@ -28,8 +28,6 @@ expression: json
       }
     },
     "name": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "WorkflowName",
       "description": "The workflow's name.",
       "type": "string",
       "examples": [
@@ -92,10 +90,11 @@ expression: json
           ]
         },
         "description": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "title": "Description",
           "description": "One-line description shown to an agent.",
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "default": null,
           "examples": [
             "Provision a GitHub repository and Doppler project for a Rust service."
