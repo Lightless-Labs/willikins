@@ -20,7 +20,7 @@ use willikins_core::{
     Observation, Outputs, PortName, PortSpec, PortType, Site, Tool, ToolError, ToolName, ToolSpec,
     TypeName, TypeRef, Value, Workflow, check,
 };
-use willikins_types::SinkToken;
+use willikins_types::{DomainType, SinkToken};
 
 fn ty(name: &str) -> TypeRef {
     TypeRef::scalar(TypeName::parse(name).unwrap())
@@ -52,6 +52,10 @@ fn output(name: &str) -> willikins_core::OutputName {
 
 fn tool_name(name: &str) -> ToolName {
     ToolName::parse(name).unwrap()
+}
+
+fn workflow_name(name: &str) -> willikins_types::WorkflowName {
+    willikins_types::WorkflowName::parse(name).unwrap()
 }
 
 /// A tool whose spec is fixed at construction; `read` always reports
@@ -232,7 +236,7 @@ fn test_catalog() -> Catalog {
 /// `workflows/fixtures/secret-into-template.yaml`, built directly as a
 /// [`Workflow`].
 fn secret_into_template_workflow() -> Workflow {
-    Workflow::new("secret-into-template")
+    Workflow::new(workflow_name("secret-into-template"))
         .input(input("project"), InputSpec::new(ty("DopplerProject")))
         .node(
             node("doppler"),
@@ -299,8 +303,8 @@ fn acceptance_1_taint_rejection_reports_exactly_the_secret_to_non_secret_sink() 
 
 #[test]
 fn acceptance_2_secret_workflow_input_is_rejected() {
-    let workflow =
-        Workflow::new("bad").input(input("token"), InputSpec::new(ty("DopplerServiceToken")));
+    let workflow = Workflow::new(workflow_name("bad"))
+        .input(input("token"), InputSpec::new(ty("DopplerServiceToken")));
     let catalog = test_catalog();
     let errors = check(&workflow, &catalog).expect_err("a secret-typed input must be rejected");
     assert_eq!(
@@ -314,7 +318,7 @@ fn acceptance_2_secret_workflow_input_is_rejected() {
 
 #[test]
 fn acceptance_2_secret_workflow_input_is_rejected_for_a_secret_list_too() {
-    let workflow = Workflow::new("bad").input(
+    let workflow = Workflow::new(workflow_name("bad")).input(
         input("tokens"),
         InputSpec::new(list_ty("DopplerServiceToken")),
     );
@@ -393,7 +397,7 @@ fn acceptance_4_plain_step_reference_into_a_for_each_node_resolves_to_a_list() {
 
 #[test]
 fn acceptance_4_for_each_over_a_secret_source_is_rejected() {
-    let workflow = Workflow::new("secret-for-each")
+    let workflow = Workflow::new(workflow_name("secret-for-each"))
         .input(input("project"), InputSpec::new(ty("DopplerProject")))
         .node(
             node("config"),
@@ -434,7 +438,7 @@ fn acceptance_4_for_each_over_a_secret_source_is_rejected() {
 
 #[test]
 fn acceptance_4_for_each_over_a_scalar_input_is_rejected() {
-    let workflow = Workflow::new("scalar-for-each")
+    let workflow = Workflow::new(workflow_name("scalar-for-each"))
         .input(input("org"), InputSpec::new(ty("GitHubOrg")))
         .node(
             node("names"),
@@ -455,7 +459,7 @@ fn acceptance_4_for_each_over_a_scalar_input_is_rejected() {
 
 #[test]
 fn acceptance_4_item_outside_a_for_each_node_is_rejected() {
-    let workflow = Workflow::new("item-outside")
+    let workflow = Workflow::new(workflow_name("item-outside"))
         .input(input("org"), InputSpec::new(ty("GitHubOrg")))
         .node(
             node("names"),
@@ -478,7 +482,7 @@ fn acceptance_4_item_outside_a_for_each_node_is_rejected() {
 
 #[test]
 fn acceptance_4_keyed_reference_to_a_node_without_for_each_is_rejected() {
-    let workflow = Workflow::new("keyed-on-scalar")
+    let workflow = Workflow::new(workflow_name("keyed-on-scalar"))
         .input(input("project"), InputSpec::new(ty("DopplerProject")))
         .node(
             node("doppler"),
@@ -519,7 +523,7 @@ fn a_secret_list_bound_to_an_any_secret_port_is_a_type_mismatch_not_a_taint_viol
     // rule is "secret flowing into a port that cannot accept a secret at
     // all", and `AnySecret` *can* accept a secret, just not this shape of
     // one.
-    let workflow = Workflow::new("w")
+    let workflow = Workflow::new(workflow_name("w"))
         .input(input("config"), InputSpec::new(ty("DopplerConfig")))
         .node(
             node("secrets"),
@@ -583,7 +587,7 @@ fn acceptance_6_a_workflow_with_an_irreversible_node_requires_approval() {
 
 #[test]
 fn unused_input_produces_a_warning_not_an_error() {
-    let workflow = Workflow::new("unused")
+    let workflow = Workflow::new(workflow_name("unused"))
         .input(input("org"), InputSpec::new(ty("GitHubOrg")))
         .input(input("slug"), InputSpec::new(ty("ProjectSlug")))
         .node(
@@ -610,7 +614,7 @@ fn multiple_errors_are_all_reported_in_order() {
     // before any node's ports are checked), then per-node port errors in
     // node declaration order; see the module docs on `check` for the full
     // ordering rule.
-    let workflow = Workflow::new("multi-error")
+    let workflow = Workflow::new(workflow_name("multi-error"))
         .node(node("names"), Node::new(tool_name("naming.v1")))
         .node(
             node("mystery"),

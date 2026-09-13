@@ -13,7 +13,7 @@ use willikins_core::{
     Binding, InputName, InputSpec, Node, NodeName, OutputName, PortName, ToolName, TypeName,
     TypeRef, Value, Workflow,
 };
-use willikins_types::{DomainType, EnvironmentSlug, RepoVisibility};
+use willikins_types::{DomainType, EnvironmentSlug, RepoVisibility, WorkflowName};
 
 pub fn ty(name: &str) -> TypeRef {
     TypeRef::scalar(TypeName::parse(name).unwrap())
@@ -43,19 +43,30 @@ pub fn tool_name(name: &str) -> ToolName {
     ToolName::parse(name).unwrap()
 }
 
+pub fn workflow_name(name: &str) -> WorkflowName {
+    WorkflowName::parse(name).unwrap()
+}
+
+pub fn description(text: &str) -> willikins_types::Description {
+    willikins_types::Description::parse(text).unwrap()
+}
+
 /// `workflows/new-rust-service.yaml`, built directly as a [`Workflow`].
 #[allow(clippy::too_many_lines)]
 pub fn new_rust_service_workflow() -> Workflow {
-    Workflow::new("new-rust-service")
-        .with_description("Provision a GitHub repository and Doppler project for a Rust service.")
+    Workflow::new(workflow_name("new-rust-service"))
+        .with_description(description(
+            "Provision a GitHub repository and Doppler project for a Rust service.",
+        ))
         .input(
             input("slug"),
-            InputSpec::new(ty("ProjectSlug")).with_description("Canonical project slug"),
+            InputSpec::new(ty("ProjectSlug"))
+                .with_description(description("Canonical project slug")),
         )
         .input(
             input("org"),
             InputSpec::new(ty("GitHubOrg"))
-                .with_description("GitHub organization that owns the repository"),
+                .with_description(description("GitHub organization that owns the repository")),
         )
         .input(
             input("visibility"),

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use common::{input, list_ty, node, output, port, tool_name, ty};
+use common::{input, list_ty, node, output, port, tool_name, ty, workflow_name};
 use willikins_core::{
     Action, Binding, Catalog, Class, InputSpec, Inputs, Node, Observation, Outputs, PartialInputs,
     PlanError, PortSpec, PortType, RawInput, SinkToken, Site, Tool, ToolError, ToolErrorKind,
@@ -145,7 +145,7 @@ fn seeded_secret_state() -> Arc<Mutex<FakeState>> {
 /// `github.actions_secret.ensure`'s `value` port with a `Keyed` reference;
 /// and a workflow output aggregates all three into a secret list.
 fn secret_fan_out_workflow() -> Workflow {
-    let mut workflow = Workflow::new("secret-fan-out")
+    let mut workflow = Workflow::new(workflow_name("secret-fan-out"))
         .input(
             input("environments"),
             InputSpec::new(list_ty("EnvironmentSlug")),
@@ -259,7 +259,7 @@ fn a_tool_error_from_a_tool_handed_a_secret_never_shows_its_bytes() {
         }))
         .unwrap();
 
-    let workflow = Workflow::new("leaky")
+    let workflow = Workflow::new(workflow_name("leaky"))
         .node(
             node("get"),
             Node::new(tool_name("doppler.secret.get"))
@@ -314,7 +314,7 @@ fn name_taken_carries_only_key_ports_never_a_secret_non_key_port() {
         }))
         .unwrap();
 
-    let workflow = Workflow::new("foreign")
+    let workflow = Workflow::new(workflow_name("foreign"))
         .node(
             node("get"),
             Node::new(tool_name("doppler.secret.get"))
@@ -360,7 +360,7 @@ fn name_taken_carries_only_key_ports_never_a_secret_non_key_port() {
 /// into a workflow output — no `Keyed` reference, so an empty source is not
 /// an error here.
 fn configs_only_workflow() -> Workflow {
-    Workflow::new("configs-only")
+    Workflow::new(workflow_name("configs-only"))
         .input(
             input("environments"),
             InputSpec::new(list_ty("EnvironmentSlug")),
@@ -525,8 +525,8 @@ fn requires_approval_is_true_exactly_above_reversible() {
                 outcome: Outcome::Absent,
             }))
             .unwrap();
-        let workflow =
-            Workflow::new("classified").node(node("only"), Node::new(tool_name("test.classified")));
+        let workflow = Workflow::new(workflow_name("classified"))
+            .node(node("only"), Node::new(tool_name("test.classified")));
         let checked = check(&workflow, &fake_catalog).unwrap();
         let result = plan(&checked, &IndexMap::new(), &fake_catalog).unwrap();
         assert_eq!(result.class, class);
@@ -541,7 +541,7 @@ fn requires_approval_is_true_exactly_above_reversible() {
 /// Inputs only: `slug` (scalar, required), `environments`
 /// (`list<EnvironmentSlug>`, defaulted), `note` (`Text`, required).
 fn describe_workflow() -> Workflow {
-    Workflow::new("describe-adversarial")
+    Workflow::new(workflow_name("describe-adversarial"))
         .input(input("slug"), InputSpec::new(ty("ProjectSlug")))
         .input(
             input("environments"),
@@ -683,7 +683,7 @@ fn describe_echoes_a_rejected_non_secret_raw_value_and_never_sees_a_secret_one()
 
     // The safety of that echo rests on a secret-typed input never reaching
     // a parser at all: `check` refuses to produce a `Checked` for one.
-    let secret_workflow = Workflow::new("secret-input")
+    let secret_workflow = Workflow::new(workflow_name("secret-input"))
         .input(input("token"), InputSpec::new(ty("DopplerServiceToken")));
     let errors = check(&secret_workflow, &Catalog::new(willikins_types::registry()))
         .expect_err("a secret-typed workflow input is refused");
@@ -713,7 +713,7 @@ fn describe_echoes_a_rejected_non_secret_raw_value_and_never_sees_a_secret_one()
 fn check_refuses_the_for_each_sources_plan_treats_as_unreachable() {
     let (_state, fake_catalog) = empty();
     let over = |source: Binding| {
-        Workflow::new("fe").node(
+        Workflow::new(workflow_name("fe")).node(
             node("configs"),
             Node::new(tool_name("doppler.config.ensure"))
                 .for_each(source)

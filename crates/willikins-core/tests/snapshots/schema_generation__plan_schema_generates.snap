@@ -35,7 +35,7 @@ expression: schema
     },
     "workflow": {
       "description": "The planned workflow's name.",
-      "type": "string"
+      "$ref": "#/$defs/WorkflowName"
     }
   },
   "required": [
@@ -257,6 +257,15 @@ expression: schema
         "list",
         "state"
       ]
+    },
+    "WorkflowName": {
+      "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
+      "type": "string",
+      "examples": [
+        "new-rust-service"
+      ],
+      "maxLength": 64,
+      "pattern": "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$"
     }
   }
 }

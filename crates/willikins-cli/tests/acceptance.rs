@@ -829,7 +829,7 @@ fn acceptance_08a_redaction_by_construction() {
         outputs: outputs.clone(),
     };
     let whole_plan = Plan {
-        workflow: "acceptance-test-8a".to_string(),
+        workflow: willikins_types::WorkflowName::parse("acceptance-test-8a").unwrap(),
         nodes: vec![planned.clone()],
         outputs: IndexMap::new(),
         class: Class::Reversible,

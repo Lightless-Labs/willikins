@@ -1208,6 +1208,10 @@ mod tests {
         ToolName::parse(name).unwrap()
     }
 
+    fn workflow_name(name: &str) -> willikins_types::WorkflowName {
+        willikins_types::WorkflowName::parse(name).unwrap()
+    }
+
     /// A [`Site::Port`] from two raw names, so a sample error stays on one
     /// line where it used to carry a bare `node`/`port` pair.
     fn port_site(node: &str, port_name: &str) -> Site {
@@ -1395,8 +1399,8 @@ mod tests {
 
     #[test]
     fn unknown_tool_names_the_node_and_tool() {
-        let workflow =
-            Workflow::new("w").node(node_name("mystery"), Node::new(tool_name("no.such.tool")));
+        let workflow = Workflow::new(workflow_name("w"))
+            .node(node_name("mystery"), Node::new(tool_name("no.such.tool")));
         let catalog = test_catalog();
         let errors = check(&workflow, &catalog).unwrap_err();
         assert_eq!(
@@ -1414,7 +1418,7 @@ mod tests {
 
     #[test]
     fn unknown_port_for_a_with_key_that_is_not_one_of_the_tools_ports() {
-        let workflow = Workflow::new("w").node(
+        let workflow = Workflow::new(workflow_name("w")).node(
             node_name("names"),
             Node::new(tool_name("naming.v1"))
                 .port(port("org"), Binding::Literal("lightless-labs".to_string()))
@@ -1434,7 +1438,7 @@ mod tests {
 
     #[test]
     fn unknown_port_for_a_step_reference_to_a_missing_output_port() {
-        let workflow = Workflow::new("w")
+        let workflow = Workflow::new(workflow_name("w"))
             .node(
                 node_name("names"),
                 Node::new(tool_name("naming.v1"))
@@ -1466,7 +1470,7 @@ mod tests {
 
     #[test]
     fn unknown_node_for_a_step_reference_to_a_nonexistent_node() {
-        let workflow = Workflow::new("w").node(
+        let workflow = Workflow::new(workflow_name("w")).node(
             node_name("repo"),
             Node::new(tool_name("github.repo.ensure"))
                 .port(
@@ -1491,8 +1495,8 @@ mod tests {
 
     #[test]
     fn unbound_input_for_every_missing_required_port() {
-        let workflow =
-            Workflow::new("w").node(node_name("names"), Node::new(tool_name("naming.v1")));
+        let workflow = Workflow::new(workflow_name("w"))
+            .node(node_name("names"), Node::new(tool_name("naming.v1")));
         let catalog = test_catalog();
         let errors = check(&workflow, &catalog).unwrap_err();
         assert_eq!(
@@ -1512,7 +1516,7 @@ mod tests {
 
     #[test]
     fn undeclared_input_for_an_input_binding_with_no_matching_declaration() {
-        let workflow = Workflow::new("w").node(
+        let workflow = Workflow::new(workflow_name("w")).node(
             node_name("names"),
             Node::new(tool_name("naming.v1"))
                 .port(port("org"), Binding::Input(input_name("org")))
@@ -1531,7 +1535,7 @@ mod tests {
 
     #[test]
     fn invalid_literal_for_a_bad_scalar_literal() {
-        let workflow = Workflow::new("w")
+        let workflow = Workflow::new(workflow_name("w"))
             .node(
                 node_name("names"),
                 Node::new(tool_name("naming.v1"))
@@ -1590,7 +1594,7 @@ mod tests {
         let mut catalog = Catalog::new(willikins_types::registry());
         catalog.insert(Arc::new(DummyTool { spec })).unwrap();
 
-        let workflow = Workflow::new("w").node(
+        let workflow = Workflow::new(workflow_name("w")).node(
             node_name("n"),
             Node::new(tool_name("test.list_port"))
                 .port(port("items"), Binding::Literal("a,b".to_string())),
@@ -1608,7 +1612,7 @@ mod tests {
 
     #[test]
     fn type_mismatch_for_a_binding_of_the_wrong_type() {
-        let workflow = Workflow::new("w")
+        let workflow = Workflow::new(workflow_name("w"))
             .input(input_name("slug"), InputSpec::new(ty("ProjectSlug")))
             .node(
                 node_name("repo"),
@@ -1631,7 +1635,7 @@ mod tests {
 
     #[test]
     fn secret_literal_for_a_literal_bound_to_an_any_secret_port() {
-        let workflow = Workflow::new("w")
+        let workflow = Workflow::new(workflow_name("w"))
             .node(
                 node_name("names"),
                 Node::new(tool_name("naming.v1"))
@@ -1681,7 +1685,7 @@ mod tests {
 
     #[test]
     fn cycle_from_a_node_referencing_itself() {
-        let workflow = Workflow::new("w").node(
+        let workflow = Workflow::new(workflow_name("w")).node(
             node_name("a"),
             Node::new(tool_name("doppler.project.ensure")).port(
                 port("project"),
@@ -1704,7 +1708,7 @@ mod tests {
 
     #[test]
     fn cycle_from_two_nodes_referencing_each_other() {
-        let workflow = Workflow::new("w")
+        let workflow = Workflow::new(workflow_name("w"))
             .node(
                 node_name("a"),
                 Node::new(tool_name("doppler.project.ensure")).port(
@@ -1923,8 +1927,8 @@ mod tests {
 
     #[test]
     fn unregistered_input_type_for_a_scalar_input() {
-        let workflow =
-            Workflow::new("w").input(input_name("mystery"), InputSpec::new(ty("NoSuchType")));
+        let workflow = Workflow::new(workflow_name("w"))
+            .input(input_name("mystery"), InputSpec::new(ty("NoSuchType")));
         let catalog = test_catalog();
         let errors = check(&workflow, &catalog).unwrap_err();
         assert_eq!(
@@ -1942,8 +1946,8 @@ mod tests {
 
     #[test]
     fn unregistered_input_type_for_a_list_input() {
-        let workflow =
-            Workflow::new("w").input(input_name("mystery"), InputSpec::new(list_ty("NoSuchType")));
+        let workflow = Workflow::new(workflow_name("w"))
+            .input(input_name("mystery"), InputSpec::new(list_ty("NoSuchType")));
         let catalog = test_catalog();
         let errors = check(&workflow, &catalog).unwrap_err();
         assert_eq!(
@@ -1960,7 +1964,7 @@ mod tests {
         // An unregistered type has nothing to check a default against, so
         // only one error is reported for this input, same as the secret
         // case already covers for `SecretWorkflowInput`.
-        let workflow = Workflow::new("w").input(
+        let workflow = Workflow::new(workflow_name("w")).input(
             input_name("mystery"),
             InputSpec::new(ty("NoSuchType")).with_default(Value::known(
                 willikins_types::GitHubOrg::parse("lightless-labs").unwrap(),
@@ -1979,7 +1983,7 @@ mod tests {
 
     #[test]
     fn unregistered_input_type_is_reported_alongside_secret_workflow_input_in_declaration_order() {
-        let workflow = Workflow::new("w")
+        let workflow = Workflow::new(workflow_name("w"))
             .input(input_name("mystery"), InputSpec::new(ty("NoSuchType")))
             .input(
                 input_name("token"),

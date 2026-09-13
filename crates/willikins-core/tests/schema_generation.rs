@@ -78,3 +78,35 @@ fn missing_input_publishes_a_non_empty_schema_and_its_schema_field_round_trips()
     );
     assert!(!text.is_empty());
 }
+
+/// `Plan::workflow` is a `willikins_types::WorkflowName`, not a bare
+/// `String`; its generated schema must say so, not merely "a string",
+/// pinning task 1e's field-type change at the schema an MCP client
+/// actually reads. Compared against the type's own registered pattern
+/// (not a copied literal) so a grammar change to `WorkflowName` cannot
+/// silently stop being reflected here.
+#[test]
+fn plan_schema_embeds_workflow_names_own_pattern() {
+    let schema = schemars::schema_for!(Plan);
+    let json = schema.as_value();
+    let expected_pattern = <willikins_types::WorkflowName as willikins_types::DomainType>::json_schema()
+        .as_value()["pattern"]
+        .as_str()
+        .expect("WorkflowName's own schema publishes a pattern")
+        .to_string();
+
+    // schemars gives every named type its own `$defs` entry and refers to
+    // it by `$ref` from `properties.workflow`, the same way it already
+    // does for `NodeName` and `ToolName` elsewhere in this same schema.
+    let workflow_name_def = &json["$defs"]["WorkflowName"];
+    assert_eq!(
+        workflow_name_def["pattern"].as_str(),
+        Some(expected_pattern.as_str()),
+        "Plan's schema: {json}"
+    );
+    assert_eq!(
+        json["properties"]["workflow"]["$ref"].as_str(),
+        Some("#/$defs/WorkflowName"),
+        "Plan's schema: {json}"
+    );
+}

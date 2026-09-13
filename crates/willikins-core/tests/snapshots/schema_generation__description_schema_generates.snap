@@ -40,6 +40,14 @@ expression: schema
     "resolved"
   ],
   "$defs": {
+    "Description": {
+      "description": "A free-text description shown to an agent, at most 1,024 characters.",
+      "type": "string",
+      "examples": [
+        "Provision a GitHub repository and Doppler project for a Rust service."
+      ],
+      "maxLength": 1024
+    },
     "InputError": {
       "description": "Why one raw input, or one unrecognised input name, was rejected.",
       "type": "object",
@@ -75,9 +83,13 @@ expression: schema
         },
         "document_description": {
           "description": "The input's own one-line description, verbatim from the document,\nif it declared one. This is document text, not willikins' own\nwords — see the module docs' \"Document text is data\" — so it is\nnamed `document_*` and never folds into [`Self::prompt`].\n\nVerbatim is what a caller reading JSON gets, where a string is a\nstring and cannot escape its field. A caller reading a\nline-oriented rendering of this struct needs more than a label: the\nCLI's text renderer prefixes the text `document says:` *and*\nescapes it onto that one line, because a description carrying a\nline terminator would otherwise forge a line of willikins' own.",
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Description"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "example": {

@@ -370,11 +370,11 @@ pub fn document_schema() -> schemars::Schema {
 fn document_to_workflow(document: &Document) -> Result<Workflow, DocumentError> {
     let name = willikins_types::WorkflowName::parse(&document.name)
         .map_err(|err| DocumentError::semantic("name", err.reason))?;
-    let mut workflow = Workflow::new(name.to_string());
+    let mut workflow = Workflow::new(name);
     if let Some(description) = &document.description {
         let description = willikins_types::Description::parse(description)
             .map_err(|err| DocumentError::semantic("description", err.reason))?;
-        workflow = workflow.with_description(description.to_string());
+        workflow = workflow.with_description(description);
     }
 
     for (raw_name, decl) in &document.inputs {
@@ -387,7 +387,7 @@ fn document_to_workflow(document: &Document) -> Result<Workflow, DocumentError> 
             let description = willikins_types::Description::parse(description).map_err(|err| {
                 DocumentError::semantic(format!("{path}.description"), err.reason)
             })?;
-            spec = spec.with_description(description.to_string());
+            spec = spec.with_description(description);
         }
         if let Some(default) = &decl.default {
             let value = parse_default(&ty, default)

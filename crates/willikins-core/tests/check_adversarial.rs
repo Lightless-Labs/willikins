@@ -58,6 +58,10 @@ fn tool_name(name: &str) -> ToolName {
     ToolName::parse(name).unwrap()
 }
 
+fn workflow_name(name: &str) -> willikins_types::WorkflowName {
+    willikins_types::WorkflowName::parse(name).unwrap()
+}
+
 /// A secret value, constructed on the concrete type (the registry refuses
 /// to parse a secret type from a string, by design).
 fn secret_value() -> Value {
@@ -294,7 +298,7 @@ fn secret_source() -> Node {
 /// reach `template.render`'s non-secret `value`.
 #[test]
 fn keyed_into_a_for_each_node_with_a_secret_list_output_cannot_feed_template_render() {
-    let workflow = Workflow::new("keyed-secret-list")
+    let workflow = Workflow::new(workflow_name("keyed-secret-list"))
         .input(input("environments"), InputSpec::new(list_ty("Text")))
         .node(node("secrets"), {
             Node::new(tool_name("fake.secret_list"))
@@ -334,7 +338,7 @@ fn keyed_into_a_for_each_node_with_a_secret_list_output_cannot_feed_template_ren
 /// binding is promoted to `list<DopplerServiceToken>`, still secret.
 #[test]
 fn step_into_a_for_each_node_with_a_secret_element_cannot_feed_template_render() {
-    let workflow = Workflow::new("step-secret-elements")
+    let workflow = Workflow::new(workflow_name("step-secret-elements"))
         .input(input("environments"), InputSpec::new(list_ty("Text")))
         .node(
             node("tokens"),
@@ -380,7 +384,7 @@ fn step_into_a_for_each_node_with_a_secret_element_cannot_feed_template_render()
 /// research note.
 #[test]
 fn for_each_over_a_secret_workflow_input_reports_only_the_secret_input() {
-    let workflow = Workflow::new("secret-input-for-each")
+    let workflow = Workflow::new(workflow_name("secret-input-for-each"))
         .input(
             input("tokens"),
             InputSpec::new(list_ty("DopplerServiceToken")),
@@ -417,7 +421,7 @@ fn for_each_over_a_secret_workflow_input_reports_only_the_secret_input() {
 #[test]
 fn the_redaction_marker_string_is_an_ordinary_text_literal() {
     let marker = "[REDACTED DopplerServiceToken]";
-    let workflow = Workflow::new("marker-literal").node(
+    let workflow = Workflow::new(workflow_name("marker-literal")).node(
         node("readme"),
         Node::new(tool_name("template.render"))
             .port(
@@ -436,7 +440,7 @@ fn the_redaction_marker_string_is_an_ordinary_text_literal() {
 /// hidden behind a type error.
 #[test]
 fn a_tainted_edge_reports_the_taint_violation_and_not_the_type_mismatch() {
-    let workflow = Workflow::new("taint-beats-mismatch")
+    let workflow = Workflow::new(workflow_name("taint-beats-mismatch"))
         .node(node("api_key"), secret_source())
         .node(
             node("repo"),
@@ -475,7 +479,7 @@ fn a_tainted_edge_reports_the_taint_violation_and_not_the_type_mismatch() {
 /// whose spec is missing the port.
 #[test]
 fn keyed_reference_to_a_missing_port_on_a_for_each_node_names_the_referenced_node() {
-    let workflow = Workflow::new("keyed-missing-port")
+    let workflow = Workflow::new(workflow_name("keyed-missing-port"))
         .input(
             input("environments"),
             InputSpec::new(list_ty("EnvironmentSlug")),
@@ -538,7 +542,8 @@ fn a_duplicate_with_key_collapses_to_the_last_binding() {
         vec![&port("visibility"), &port("repo")]
     );
 
-    let workflow = Workflow::new("duplicate-with-key").node(node("repo"), node_with_duplicate);
+    let workflow =
+        Workflow::new(workflow_name("duplicate-with-key")).node(node("repo"), node_with_duplicate);
     let checked = checked(&workflow);
     assert_eq!(
         checked.types[&node("repo")][&port("visibility")],
@@ -551,7 +556,7 @@ fn a_duplicate_with_key_collapses_to_the_last_binding() {
 /// bindings it makes unresolvable.
 #[test]
 fn a_node_whose_for_each_reads_its_own_output_is_one_cycle_error() {
-    let workflow = Workflow::new("self-for-each").node(
+    let workflow = Workflow::new(workflow_name("self-for-each")).node(
         node("configs"),
         Node::new(tool_name("doppler.config.ensure"))
             .for_each(Binding::Step {
@@ -575,7 +580,7 @@ fn a_node_whose_for_each_reads_its_own_output_is_one_cycle_error() {
 /// `UnboundInput`.
 #[test]
 fn a_required_port_bound_to_item_outside_for_each_is_not_also_unbound() {
-    let workflow = Workflow::new("item-outside").node(
+    let workflow = Workflow::new(workflow_name("item-outside")).node(
         node("configs"),
         Node::new(tool_name("doppler.config.ensure"))
             .port(port("project"), Binding::Literal("acme-web".to_string()))
@@ -599,7 +604,7 @@ fn a_required_port_bound_to_item_outside_for_each_is_not_also_unbound() {
 /// documented order.
 #[test]
 fn an_unknown_tool_suppresses_that_nodes_other_errors_deterministically() {
-    let workflow = Workflow::new("unknown-tool-plus-garbage")
+    let workflow = Workflow::new(workflow_name("unknown-tool-plus-garbage"))
         .node(
             node("mystery"),
             Node::new(tool_name("no.such.tool"))
@@ -645,7 +650,7 @@ fn an_unknown_tool_suppresses_that_nodes_other_errors_deterministically() {
 /// (added by this pass; the plan lists no such variant).
 #[test]
 fn a_secret_default_on_a_non_secret_input_is_rejected() {
-    let workflow = Workflow::new("secret-default")
+    let workflow = Workflow::new(workflow_name("secret-default"))
         .input(
             input("motd"),
             InputSpec::new(ty("Text")).with_default(secret_value()),
@@ -674,7 +679,7 @@ fn a_secret_default_on_a_non_secret_input_is_rejected() {
 /// declared type is a workflow no later stage could execute.
 #[test]
 fn a_default_of_the_wrong_non_secret_type_is_rejected() {
-    let workflow = Workflow::new("wrong-default").input(
+    let workflow = Workflow::new(workflow_name("wrong-default")).input(
         input("visibility"),
         InputSpec::new(ty("RepoVisibility"))
             .with_default(Value::known(EnvironmentSlug::parse("prd").unwrap())),
@@ -694,7 +699,7 @@ fn a_default_of_the_wrong_non_secret_type_is_rejected() {
 /// reverse.
 #[test]
 fn a_default_of_the_right_type_but_the_wrong_cardinality_is_rejected() {
-    let scalar_default = Workflow::new("scalar-default-on-list").input(
+    let scalar_default = Workflow::new(workflow_name("scalar-default-on-list")).input(
         input("environments"),
         InputSpec::new(list_ty("EnvironmentSlug"))
             .with_default(Value::known(EnvironmentSlug::parse("prd").unwrap())),
@@ -708,7 +713,7 @@ fn a_default_of_the_right_type_but_the_wrong_cardinality_is_rejected() {
         }]
     );
 
-    let list_default = Workflow::new("list-default-on-scalar").input(
+    let list_default = Workflow::new(workflow_name("list-default-on-scalar")).input(
         input("environment"),
         InputSpec::new(ty("EnvironmentSlug")).with_default(Value::known_list(vec![
             EnvironmentSlug::parse("prd").unwrap(),
@@ -730,7 +735,7 @@ fn a_default_of_the_right_type_but_the_wrong_cardinality_is_rejected() {
 /// without asserting a value, which `describe` can still present.
 #[test]
 fn well_typed_defaults_including_unknown_are_accepted() {
-    let workflow = Workflow::new("good-defaults")
+    let workflow = Workflow::new(workflow_name("good-defaults"))
         .input(
             input("visibility"),
             InputSpec::new(ty("RepoVisibility"))
@@ -762,7 +767,7 @@ fn well_typed_defaults_including_unknown_are_accepted() {
 /// and both are accepted.
 #[test]
 fn one_for_each_node_referenced_by_both_step_and_keyed_resolves_to_list_and_scalar() {
-    let workflow = Workflow::new("step-and-keyed")
+    let workflow = Workflow::new(workflow_name("step-and-keyed"))
         .input(
             input("environments"),
             InputSpec::new(list_ty("EnvironmentSlug")),
@@ -810,7 +815,7 @@ fn one_for_each_node_referenced_by_both_step_and_keyed_resolves_to_list_and_scal
 /// The empty workflow is valid: nothing to order, nothing to approve.
 #[test]
 fn an_empty_workflow_is_accepted_with_an_empty_order_and_the_lowest_class() {
-    let checked = checked(&Workflow::new("empty"));
+    let checked = checked(&Workflow::new(workflow_name("empty")));
     assert!(checked.order.is_empty());
     assert_eq!(checked.class, Class::Reversible);
     assert!(checked.warnings.is_empty());
@@ -824,7 +829,7 @@ fn an_empty_workflow_is_accepted_with_an_empty_order_and_the_lowest_class() {
 /// port type. Output types now live in their own map.
 #[test]
 fn a_node_named_outputs_keeps_its_own_port_types() {
-    let workflow = Workflow::new("outputs-collision")
+    let workflow = Workflow::new(workflow_name("outputs-collision"))
         .node(
             node("outputs"),
             Node::new(tool_name("doppler.project.ensure"))
@@ -867,7 +872,7 @@ fn a_node_named_outputs_keeps_its_own_port_types() {
 /// decision is a choice, not an accident.
 #[test]
 fn a_secret_workflow_output_is_accepted_and_keeps_its_secret_type() {
-    let workflow = Workflow::new("secret-output")
+    let workflow = Workflow::new(workflow_name("secret-output"))
         .node(node("api_key"), secret_source())
         .output(
             output("leaked"),
@@ -897,7 +902,7 @@ fn a_secret_workflow_output_is_accepted_and_keeps_its_secret_type() {
 /// execute. Rejected by `CheckError::NestedList` (added by this pass).
 #[test]
 fn step_on_a_for_each_node_with_a_list_output_is_rejected() {
-    let workflow = Workflow::new("nested-list")
+    let workflow = Workflow::new(workflow_name("nested-list"))
         .input(input("seeds"), InputSpec::new(list_ty("Text")))
         .node(
             node("lines"),
@@ -931,7 +936,7 @@ fn step_on_a_for_each_node_with_a_list_output_is_rejected() {
 /// only the promotion is refused, not list-typed outputs themselves.
 #[test]
 fn a_list_output_on_a_plain_node_still_binds_to_a_list_port() {
-    let workflow = Workflow::new("plain-list")
+    let workflow = Workflow::new(workflow_name("plain-list"))
         .node(
             node("lines"),
             Node::new(tool_name("fake.text_list"))
@@ -1093,7 +1098,7 @@ fn arb_workflow() -> impl Strategy<Value = Workflow> {
         prop::collection::vec((prop::sample::select(INPUT_NAMES), arb_binding()), 0..2),
     )
         .prop_map(|(inputs, nodes, outputs)| {
-            let mut workflow = Workflow::new("generated");
+            let mut workflow = Workflow::new(workflow_name("generated"));
             for (name, spec) in inputs {
                 workflow = workflow.input(input(name), spec);
             }

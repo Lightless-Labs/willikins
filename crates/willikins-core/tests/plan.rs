@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use common::{input, list_ty, node, output, port, tool_name, ty};
+use common::{input, list_ty, node, output, port, tool_name, ty, workflow_name};
 use willikins_core::{
     Action, Binding, Catalog, Class, InputSpec, Inputs, Node, Observation, Outputs, PlanError,
     PortSpec, PortType, SinkToken, Site, Tool, ToolError, ToolSpec, Value, Workflow, check, plan,
@@ -31,9 +31,15 @@ fn acceptance_6_plan_against_empty_state() {
     let inputs = common::new_rust_service_inputs();
     let result = plan(&checked, &inputs, &fake_catalog).expect("empty state plans cleanly");
 
-    assert_eq!(result.workflow, "new-rust-service");
+    assert_eq!(result.workflow.as_str(), "new-rust-service");
     assert_eq!(result.class, Class::Reversible);
     assert!(!result.requires_approval);
+
+    // Wire pin: `Plan::workflow` still serializes as a plain JSON string
+    // under the same field name, so a caller that never sees the Rust
+    // type is unaffected by task 1e's core-side type change.
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["workflow"], "new-rust-service");
 
     let by_name = |name: &str, instance: Option<&str>| {
         result
@@ -241,7 +247,7 @@ fn acceptance_8b_a_known_secret_output_stays_redacted_in_json_and_debug() {
     ));
     let fake_catalog = catalog(state);
 
-    let workflow = Workflow::new("secret-get")
+    let workflow = Workflow::new(workflow_name("secret-get"))
         .input(input("config"), InputSpec::new(ty("DopplerConfig")))
         .node(
             node("get"),
@@ -359,7 +365,7 @@ fn key_unknown_when_a_tools_key_port_resolves_to_unknown() {
         }))
         .unwrap();
 
-    let workflow = Workflow::new("key-unknown")
+    let workflow = Workflow::new(workflow_name("key-unknown"))
         .node(
             node("producer"),
             Node::new(tool_name("test.produces_unknown")),
@@ -411,7 +417,7 @@ fn for_each_unknown_when_the_source_resolves_to_unknown() {
         }))
         .unwrap();
 
-    let workflow = Workflow::new("for-each-unknown")
+    let workflow = Workflow::new(workflow_name("for-each-unknown"))
         .node(
             node("producer"),
             Node::new(tool_name("test.produces_unknown_list")),

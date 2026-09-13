@@ -121,8 +121,10 @@ pub struct InputSpec {
     /// An input with a default is never [`crate::check::CheckWarning`]'s
     /// sibling concept of "missing" at the `describe` stage.
     pub default: Option<Value>,
-    /// One-line description shown to an agent.
-    pub description: Option<String>,
+    /// One-line description shown to an agent, verbatim from the
+    /// document. Bounded and control-character-free by construction — see
+    /// [`willikins_types::Description`].
+    pub description: Option<willikins_types::Description>,
 }
 
 impl InputSpec {
@@ -145,8 +147,8 @@ impl InputSpec {
 
     /// Attach a one-line description.
     #[must_use]
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
+    pub fn with_description(mut self, description: willikins_types::Description) -> Self {
+        self.description = Some(description);
         self
     }
 }
@@ -232,9 +234,10 @@ impl Node {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Workflow {
     /// The workflow's name.
-    pub name: String,
-    /// One-line description shown to an agent.
-    pub description: Option<String>,
+    pub name: willikins_types::WorkflowName,
+    /// One-line description shown to an agent, verbatim from the
+    /// document.
+    pub description: Option<willikins_types::Description>,
     /// The workflow's declared inputs, in declaration order.
     pub inputs: IndexMap<InputName, InputSpec>,
     /// The workflow's nodes, in declaration order.
@@ -247,9 +250,9 @@ impl Workflow {
     /// An empty workflow named `name`, with no description, inputs, nodes,
     /// or outputs.
     #[must_use]
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(name: willikins_types::WorkflowName) -> Self {
         Self {
-            name: name.into(),
+            name,
             description: None,
             inputs: IndexMap::new(),
             nodes: IndexMap::new(),
@@ -259,8 +262,8 @@ impl Workflow {
 
     /// Attach a one-line description.
     #[must_use]
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
+    pub fn with_description(mut self, description: willikins_types::Description) -> Self {
+        self.description = Some(description);
         self
     }
 
@@ -289,6 +292,7 @@ impl Workflow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use willikins_types::DomainType;
 
     #[test]
     fn input_name_accepts_snake_case_and_rejects_uppercase() {
@@ -350,10 +354,18 @@ mod tests {
         );
     }
 
+    fn workflow_name(name: &str) -> willikins_types::WorkflowName {
+        willikins_types::WorkflowName::parse(name).unwrap()
+    }
+
+    fn description(text: &str) -> willikins_types::Description {
+        willikins_types::Description::parse(text).unwrap()
+    }
+
     #[test]
     fn workflow_builder_round_trips_into_the_expected_shape() {
-        let workflow = Workflow::new("demo")
-            .with_description("A demo workflow.")
+        let workflow = Workflow::new(workflow_name("demo"))
+            .with_description(description("A demo workflow."))
             .input(
                 InputName::parse("org").unwrap(),
                 InputSpec::new(TypeRef::scalar(
@@ -375,14 +387,21 @@ mod tests {
                 },
             );
 
-        assert_eq!(workflow.name, "demo");
-        assert_eq!(workflow.description.as_deref(), Some("A demo workflow."));
+        assert_eq!(workflow.name.as_str(), "demo");
+        assert_eq!(
+            workflow
+                .description
+                .as_ref()
+                .map(willikins_types::Description::as_str),
+            Some("A demo workflow.")
+        );
         assert_eq!(workflow.inputs.len(), 1);
         assert_eq!(workflow.nodes.len(), 1);
         assert_eq!(workflow.outputs.len(), 1);
 
         let json = serde_json::to_value(&workflow).unwrap();
         assert_eq!(json["name"], "demo");
+        assert_eq!(json["description"], "A demo workflow.");
         assert_eq!(json["inputs"]["org"]["ty"], "GitHubOrg");
         assert_eq!(json["nodes"]["names"]["tool"], "naming.v1");
         assert_eq!(json["outputs"]["repo"]["kind"], "step");

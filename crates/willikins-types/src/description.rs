@@ -11,7 +11,7 @@ use crate::{DomainType, ParseError};
 const MAX_LEN: usize = 1_024;
 
 /// A free-text description: a workflow's own `description:`, an input's
-/// `description:`, and (once task 1e applies this crate's types to
+/// `description:`, and (task 1e applied this crate's types to
 /// `willikins-core`) `Workflow::description` and `InputSpec::description`.
 ///
 /// At most 1,024 characters. No control character other than space —

@@ -92,7 +92,7 @@ pub struct PlannedNode {
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct Plan {
     /// The planned workflow's name.
-    pub workflow: String,
+    pub workflow: willikins_types::WorkflowName,
     /// Every planned node, in [`Checked::order`]; a `for_each` node
     /// contributes one entry per instance, in its source list's order.
     pub nodes: Vec<PlannedNode>,
