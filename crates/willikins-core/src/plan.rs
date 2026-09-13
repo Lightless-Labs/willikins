@@ -70,7 +70,16 @@ use crate::value::{PortType, TypeName, TypeRef, Value};
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
 
 /// What `plan` decided to do for one node instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Action {
     /// A pure tool computed its outputs; there is no external state to
@@ -148,7 +157,22 @@ const SECRET_FINGERPRINT_MARKER: &str = "<secret>";
 ///
 /// See [`SECRET_FINGERPRINT_MARKER`] for why a secret output's actual
 /// value is never part of this.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Derives `Serialize`/`Deserialize` (unlike most types [`crate::apply`]
+/// builds a plan around) because it never holds a raw [`crate::value::Value`]
+/// -- every output here is already rendered to a `String`, with a secret
+/// port's contribution fixed to [`SECRET_FINGERPRINT_MARKER`] regardless of
+/// content -- so round-tripping it cannot resurrect anything redaction
+/// hid. `willikins-journal` stores a `PlanRecorded` event's `fingerprint`
+/// field as this type directly, unwrapped, so a journal's replayed
+/// `PlanRecord` keeps a typed, comparable fingerprint even though the
+/// `Plan` it came from is otherwise stored as opaque redacted JSON.
+/// Derives `JsonSchema` too, since `willikins-journal`'s `PlanRecord`
+/// (which the server publishes) carries a `Vec<InstanceFingerprint>`
+/// directly.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct InstanceFingerprint {
     /// The node this instance belongs to.
     pub name: NodeName,

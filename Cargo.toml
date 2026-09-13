@@ -7,6 +7,7 @@ members = [
   "crates/willikins-dsl",
   "crates/willikins-tools",
   "crates/willikins-providers-fake",
+  "crates/willikins-journal",
   "crates/willikins-cli",
 ]
 
@@ -25,6 +26,7 @@ willikins-core = { path = "crates/willikins-core" }
 willikins-dsl = { path = "crates/willikins-dsl" }
 willikins-tools = { path = "crates/willikins-tools" }
 willikins-providers-fake = { path = "crates/willikins-providers-fake" }
+willikins-journal = { path = "crates/willikins-journal" }
 
 chrono = { version = "0.4", default-features = false, features = ["now", "serde"] }
 serde = { version = "1", features = ["derive"] }
@@ -48,6 +50,9 @@ trybuild = "1"
 insta = { version = "1", features = ["json", "yaml"] }
 jsonschema = { version = "0.56", default-features = false }
 saphyr-parser = "0.0.12"
+uuid = { version = "1", features = ["v7", "std"] }
+fd-lock = "4"
+tempfile = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

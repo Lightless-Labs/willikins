@@ -78,7 +78,16 @@ pub enum Approval {
 }
 
 /// What happened to one planned node instance during [`apply`].
-#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+///
+/// Derives [`serde::Deserialize`] as well as `Serialize`: unlike most
+/// types in this module, a `NodeStatus` never holds a [`crate::value::Value`]
+/// (its only payload, [`ToolError`], is a plain message with no secret
+/// obligation of its own — see that type's doc), so round-tripping it
+/// through JSON cannot resurrect anything redaction hid. `willikins-journal`
+/// relies on this to store a `NodeFinished` event's `status` field
+/// untouched, rather than behind its `Redacted` wrapper the way `outputs`
+/// (which does carry [`Value`]s) must be.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NodeStatus {
     /// A pure tool computed its outputs; there was nothing to create or

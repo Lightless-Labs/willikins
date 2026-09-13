@@ -45,7 +45,7 @@ expression: schema
       "pattern": "^[a-z][a-z0-9_]*$"
     },
     "NodeStatus": {
-      "description": "What happened to one planned node instance during [`apply`].",
+      "description": "What happened to one planned node instance during [`apply`].\n\nDerives [`serde::Deserialize`] as well as `Serialize`: unlike most\ntypes in this module, a `NodeStatus` never holds a [`crate::value::Value`]\n(its only payload, [`ToolError`], is a plain message with no secret\nobligation of its own — see that type's doc), so round-tripping it\nthrough JSON cannot resurrect anything redaction hid. `willikins-journal`\nrelies on this to store a `NodeFinished` event's `status` field\nuntouched, rather than behind its `Redacted` wrapper the way `outputs`\n(which does carry [`Value`]s) must be.",
       "oneOf": [
         {
           "description": "A pure tool computed its outputs; there was nothing to create or\nleave alone.",
