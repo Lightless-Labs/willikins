@@ -995,14 +995,14 @@ fn a_for_each_node_minting_secrets_redacts_them_everywhere_including_the_output_
 /// naming the port and carrying both values — and nothing runs.
 #[test]
 fn a_changed_observed_non_secret_output_is_output_drift() {
-    let observed = Arc::new(Mutex::new(
+    let live_value = Arc::new(Mutex::new(
         willikins_types::GitHubOrg::parse("lightless-labs").unwrap(),
     ));
     let mut catalog = Catalog::new(willikins_types::registry());
     catalog
         .insert(Arc::new(common::MutableOutputTool::new(
             "test.live",
-            Arc::clone(&observed),
+            Arc::clone(&live_value),
         )))
         .unwrap();
 
@@ -1013,7 +1013,7 @@ fn a_changed_observed_non_secret_output_is_output_drift() {
     let approved = plan(&checked, &inputs, &catalog).expect("plans");
 
     // The provider's own state changes under us between approval and run.
-    *observed.lock().unwrap() = willikins_types::GitHubOrg::parse("other-org").unwrap();
+    *live_value.lock().unwrap() = willikins_types::GitHubOrg::parse("other-org").unwrap();
 
     let mut observer = RecordingObserver::new();
     let err = apply(
@@ -1045,4 +1045,130 @@ fn a_changed_observed_non_secret_output_is_output_drift() {
     assert_eq!(planned.render().to_string(), "lightless-labs");
     assert_eq!(now.render().to_string(), "other-org");
     assert!(observer.events.is_empty(), "nothing ran");
+}
+/// An `Unknown` value supplied for a required input that the tool's own
+/// `read` never consults (the fake `github.repo.ensure` does not look at
+/// `visibility` when the repository is absent) reaches the walk with a
+/// plan that says `Create`. The executor refuses it —
+/// [`ApplyError::UnknownRequiredInput`], naming the port and the workflow
+/// input — rather than panicking or calling `ensure` without the value.
+#[test]
+fn an_unknown_value_for_a_required_input_is_refused_and_never_calls_ensure() {
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let catalog = apply_test_catalog(Arc::clone(&state));
+    let workflow = Workflow::new(workflow_name("unknown-input"))
+        .input(input("repo"), InputSpec::new(ty("GitHubRepo")))
+        .input(input("visibility"), InputSpec::new(ty("RepoVisibility")))
+        .node(
+            node("repo"),
+            Node::new(tool_name("github.repo.ensure"))
+                .port(port("repo"), Binding::Input(input("repo")))
+                .port(port("visibility"), Binding::Input(input("visibility"))),
+        );
+    let checked = check(&workflow, &catalog).expect("checks cleanly");
+
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("repo"),
+        Value::known(willikins_types::GitHubRepo::parse("lightless-labs/third-thoughts").unwrap()),
+    );
+    inputs.insert(input("visibility"), Value::unknown(ty("RepoVisibility")));
+
+    // `plan` itself is happy: `github.repo.ensure`'s `read` only needs the
+    // repository's own name to see that it is absent.
+    let approved = plan(&checked, &inputs, &catalog).expect("plans with an unknown visibility");
+    assert_eq!(approved.nodes[0].action, Action::Create);
+
+    let mut observer = RecordingObserver::new();
+    let err = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("a required input with no known value must refuse");
+
+    let ApplyError::UnknownRequiredInput {
+        node: blocked,
+        port: blocked_port,
+        input: blocked_input,
+        applied,
+        ..
+    } = err
+    else {
+        panic!("expected UnknownRequiredInput, got {err:?}");
+    };
+    assert_eq!(blocked.as_str(), "repo");
+    assert_eq!(blocked_port.as_str(), "visibility");
+    assert_eq!(blocked_input.as_str(), "visibility");
+    assert!(applied.nodes.is_empty(), "nothing was attempted");
+    assert!(observer.events.is_empty(), "and nothing was reported");
+    assert!(
+        state.lock().unwrap().ensure_calls.is_empty(),
+        "`ensure` must never be called without a required value"
+    );
+}
+
+/// The same shape as the test above, with the resource already present:
+/// the fresh plan says `NoOp`, so rule 4's `NoOp` branch answers
+/// `Converged` without a provider call instead of refusing. Where the
+/// `Unknown` came from — a workflow input rather than an un-re-readable
+/// upstream output — makes no difference there, which is the one
+/// behaviour [`ApplyError::UnknownRequiredInput`]'s new branch could have
+/// changed and must not.
+#[test]
+fn an_unknown_required_input_on_a_planned_no_op_converges_without_a_call() {
+    let repo = naming::v1::github_repo(
+        &GitHubOrg::parse("lightless-labs").unwrap(),
+        &ProjectSlug::parse("third-thoughts").unwrap(),
+    );
+    let state = Arc::new(Mutex::new(FakeState::new().with_repo(
+        &repo,
+        RepoVisibility::Private,
+        true,
+    )));
+    let catalog = apply_test_catalog(Arc::clone(&state));
+    let workflow = Workflow::new(workflow_name("converged-unknown-input"))
+        .input(input("repo"), InputSpec::new(ty("GitHubRepo")))
+        .input(input("visibility"), InputSpec::new(ty("RepoVisibility")))
+        .node(
+            node("repo"),
+            Node::new(tool_name("github.repo.ensure"))
+                .port(port("repo"), Binding::Input(input("repo")))
+                .port(port("visibility"), Binding::Input(input("visibility"))),
+        );
+    let checked = check(&workflow, &catalog).expect("checks cleanly");
+
+    let mut inputs = IndexMap::new();
+    inputs.insert(input("repo"), Value::known(repo.clone()));
+    inputs.insert(input("visibility"), Value::unknown(ty("RepoVisibility")));
+
+    // The repository is present and its visibility is not knowably
+    // different, so the fresh plan has nothing to do here.
+    let approved = plan(&checked, &inputs, &catalog).expect("plans with an unknown visibility");
+    assert_eq!(approved.nodes[0].action, Action::NoOp);
+
+    let mut observer = RecordingObserver::new();
+    let applied = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect("a planned no-op with an unknown input converges");
+
+    assert!(matches!(applied.nodes[0].status, NodeStatus::Converged));
+    assert_eq!(
+        started_finished_pairs(&observer.events),
+        vec![("repo".to_string(), None)],
+        "a converged instance is still reported to the observer"
+    );
+    assert!(
+        state.lock().unwrap().ensure_calls.is_empty(),
+        "`Converged` means no provider call was made"
+    );
 }

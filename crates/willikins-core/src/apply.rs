@@ -252,6 +252,32 @@ pub enum ApplyError {
         /// order is [`NodeStatus::NotRun`].
         applied: Box<Applied>,
     },
+    /// A required input port of `node` is
+    /// [`crate::value::ValueState::Unknown`] and does *not* come from
+    /// another node's output: it is bound to the workflow input `input`,
+    /// for which the caller supplied no usable value.
+    ///
+    /// `plan` cannot catch this for the caller — a tool's `read` need not
+    /// consult every one of its required ports (the fake
+    /// `github.repo.ensure`'s `read` does not look at `visibility` when
+    /// the repository is absent), so a plan can be produced without the
+    /// value — and rule 4 will not call `ensure` without it. The run
+    /// therefore stops here, with the same partial shape
+    /// [`Self::UnknownInput`] carries: this instance was not attempted,
+    /// and every instance after it in plan order is
+    /// [`NodeStatus::NotRun`].
+    UnknownRequiredInput {
+        /// The blocked node.
+        node: NodeName,
+        /// Its `for_each` instance key, if any.
+        instance: Option<String>,
+        /// The port whose value is unknown.
+        port: PortName,
+        /// The workflow input that port is bound to.
+        input: InputName,
+        /// The partial result.
+        applied: Box<Applied>,
+    },
     /// `node`'s `ensure` returned an error.
     Tool {
         /// The failed node.
@@ -320,6 +346,23 @@ impl std::fmt::Display for ApplyError {
                  planned action was a no-op); if this is a secret that was already consumed, \
                  run `workflows/rotate-service-token.yaml` to mint and re-store a new one"
             ),
+            Self::UnknownRequiredInput {
+                node,
+                instance,
+                port,
+                input,
+                ..
+            } => {
+                let where_ = match instance {
+                    Some(key) => format!("{node}[{key}]"),
+                    None => node.to_string(),
+                };
+                write!(
+                    f,
+                    "{where_}.{port}: the workflow input `{input}` has no known value, so this \
+                     step cannot run; supply it and plan again"
+                )
+            }
             Self::Tool {
                 node,
                 instance,
@@ -527,7 +570,7 @@ pub fn apply(
                 continue;
             }
 
-            match find_upstream_unknown(spec, node, &resolved_inputs) {
+            match first_unknown_required_input(spec, node, &resolved_inputs) {
                 None => {
                     observer.on(ApplyEvent::NodeStarted {
                         node: name.clone(),
@@ -588,7 +631,7 @@ pub fn apply(
                         }
                     }
                 }
-                Some((_port, _from)) if matches!(planned.action, Action::NoOp) => {
+                Some(_) if matches!(planned.action, Action::NoOp) => {
                     let outputs = planned.outputs.clone();
                     observer.on(ApplyEvent::NodeStarted {
                         node: name.clone(),
@@ -610,12 +653,25 @@ pub fn apply(
                     });
                     group_outputs.push((planned.instance.clone(), outputs));
                 }
-                Some((port, from)) => {
+                Some(UnknownRequired::Upstream { port, from }) => {
                     applied_nodes.extend(not_run_tail(&fresh.nodes[group_end + 1..]));
                     return Err(ApplyError::UnknownInput {
                         node: name.clone(),
                         port,
                         from,
+                        applied: Box::new(Applied {
+                            nodes: applied_nodes,
+                            outputs: IndexMap::new(),
+                        }),
+                    });
+                }
+                Some(UnknownRequired::WorkflowInput { port, input }) => {
+                    applied_nodes.extend(not_run_tail(&fresh.nodes[group_end + 1..]));
+                    return Err(ApplyError::UnknownRequiredInput {
+                        node: name.clone(),
+                        instance: planned.instance.clone(),
+                        port,
+                        input,
                         applied: Box::new(Applied {
                             nodes: applied_nodes,
                             outputs: IndexMap::new(),
@@ -726,24 +782,46 @@ fn resolve_instance_inputs(
     Ok(resolved)
 }
 
+/// Where an unknown required input's value was supposed to come from.
+enum UnknownRequired {
+    /// From an upstream node's output, which could not be re-read (the
+    /// design's own convergence gap).
+    Upstream {
+        /// The unknown port.
+        port: PortName,
+        /// The upstream node that supplies it.
+        from: NodeName,
+    },
+    /// From a workflow input the caller supplied no known value for.
+    WorkflowInput {
+        /// The unknown port.
+        port: PortName,
+        /// The workflow input it is bound to.
+        input: InputName,
+    },
+}
+
 /// The first required input port of `spec` that is
-/// [`crate::value::ValueState::Unknown`] in `resolved`, alongside the
-/// upstream node its binding names — or `None` when every required port is
+/// [`crate::value::ValueState::Unknown`] in `resolved`, and where its
+/// value was supposed to come from — or `None` when every required port is
 /// known.
 ///
 /// # Panics
 ///
-/// Panics if an unknown required port is bound by anything other than
-/// [`Binding::Step`] or [`Binding::Keyed`]: `check` guarantees a
-/// [`Binding::Literal`], [`Binding::Input`], or [`Binding::Item`] port is
-/// always known by the time it reaches here, so finding one unknown would
-/// mean `checked` and `catalog` disagree with what `apply` was given — the
-/// same caller contract [`plan`] itself relies on.
-fn find_upstream_unknown(
+/// Panics if an unknown required port is bound by a [`Binding::Literal`]
+/// or [`Binding::Item`], or is not bound at all: a literal is parsed into
+/// a known value, a `for_each` item is an element of a known list, and
+/// `check` refuses an unbound required port
+/// ([`crate::CheckError::UnboundInput`]), so none of the three can be
+/// unknown here. A [`Binding::Input`] *can* be — it carries whatever the
+/// caller supplied, and a tool's `read` need not consult every required
+/// port, so the re-plan in rule 2 does not always catch it — which is why
+/// that case is a value of its own rather than a panic.
+fn first_unknown_required_input(
     spec: &crate::tool::ToolSpec,
     node: &Node,
     resolved: &Inputs,
-) -> Option<(PortName, NodeName)> {
+) -> Option<UnknownRequired> {
     for (port, port_spec) in &spec.inputs {
         if !port_spec.required {
             continue;
@@ -754,12 +832,19 @@ fn find_upstream_unknown(
         }
         return match node.with.get(port) {
             Some(Binding::Step { node: upstream, .. } | Binding::Keyed { node: upstream, .. }) => {
-                Some((port.clone(), upstream.clone()))
+                Some(UnknownRequired::Upstream {
+                    port: port.clone(),
+                    from: upstream.clone(),
+                })
             }
-            _ => unreachable!(
-                "a required port can only be Unknown via a Step or Keyed binding to an \
-                 upstream node whose output cannot be re-read; `check` guarantees every other \
-                 binding kind is always known"
+            Some(Binding::Input(input)) => Some(UnknownRequired::WorkflowInput {
+                port: port.clone(),
+                input: input.clone(),
+            }),
+            Some(Binding::Literal(_) | Binding::Item) | None => unreachable!(
+                "a literal is parsed into a known value, a for_each item is an element of a \
+                 known list, and `check` refuses an unbound required port, so none of them can \
+                 be Unknown here"
             ),
         };
     }

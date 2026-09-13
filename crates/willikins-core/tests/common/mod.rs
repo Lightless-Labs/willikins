@@ -747,6 +747,8 @@ pub fn status_of<'a>(
         .find(|applied_node| {
             applied_node.name == node(name) && applied_node.instance.as_deref() == instance
         })
-        .map(|applied_node| &applied_node.status)
-        .unwrap_or_else(|| panic!("no instance {name}{instance:?} in the result"))
+        .map_or_else(
+            || panic!("no instance {name}{instance:?} in the result"),
+            |applied_node| &applied_node.status,
+        )
 }

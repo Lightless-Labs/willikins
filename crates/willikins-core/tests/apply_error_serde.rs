@@ -47,6 +47,13 @@ fn apply_error_samples() -> Vec<ApplyError> {
             from: node("upstream"),
             applied: Box::new(empty_applied()),
         },
+        ApplyError::UnknownRequiredInput {
+            node: node("n"),
+            instance: None,
+            port: port("p"),
+            input: willikins_core::InputName::parse("i").unwrap(),
+            applied: Box::new(empty_applied()),
+        },
         ApplyError::Tool {
             node: node("n"),
             instance: None,
@@ -82,6 +89,7 @@ variant_kinds!(
     Plan,
     Drift,
     UnknownInput,
+    UnknownRequiredInput,
     Tool,
 );
 
