@@ -192,9 +192,9 @@ impl std::error::Error for DocumentError {}
 /// # Errors
 ///
 /// Returns [`DocumentErrorKind::TooLarge`] when `source` is over
-/// [`MAX_DOCUMENT_BYTES`]; a [`DocumentErrorKind::Yaml`] naming an anchor's
-/// or alias's line and column when the source has one (see the module
-/// docs); a [`DocumentErrorKind::Yaml`] when `source` is otherwise not
+/// [`MAX_DOCUMENT_BYTES`]; a [`DocumentErrorKind::Yaml`] naming a leading
+/// byte-order mark, or naming an anchor's or alias's line and column when
+/// the source has one (see the module docs); a [`DocumentErrorKind::Yaml`] when `source` is otherwise not
 /// valid YAML or does not match [`Document`]'s shape (including a
 /// duplicate mapping key or a `with` value that is a YAML list or map);
 /// or a [`DocumentErrorKind::Semantic`] when a name, type, default value,
@@ -208,6 +208,18 @@ pub fn parse_document(source: &str) -> Result<Workflow, DocumentError> {
                 bytes: source.len(),
             },
         });
+    }
+    if source.starts_with('\u{FEFF}') {
+        // `serde_yaml_ng` reads a leading BOM as a document separator, so
+        // the source becomes a two-document stream and the failure it
+        // reports is about whichever field landed in the wrong half --
+        // never about the mark itself. Saying which character it is is
+        // the whole value of this check; it is not a safety one.
+        return Err(DocumentError::yaml_at(
+            "a byte-order mark is not supported",
+            1,
+            1,
+        ));
     }
     refuse_anchors_and_aliases(source)?;
     let document: Document =
@@ -1027,6 +1039,55 @@ steps:
             !matches!(err.kind, DocumentErrorKind::TooLarge { .. }),
             "a source at exactly the limit must not be TooLarge: {err:?}"
         );
+    }
+
+    /// A leading U+FEFF used to reach `serde_yaml_ng`, which treats it as
+    /// a document separator: the source became a two-document stream and
+    /// the report was `missing field `steps`` — a message about the one
+    /// part of the document that was plainly there, sending whoever read
+    /// it to look in the wrong place. An editor that writes a BOM is the
+    /// only way this happens, and the fix is to say so.
+    #[test]
+    fn a_leading_byte_order_mark_is_refused_by_name() {
+        let source = "\
+\u{FEFF}name: demo
+steps:
+  a: { tool: naming.v1, with: {} }
+";
+        let err = parse_document(source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Yaml {
+                message,
+                line,
+                column,
+            } => {
+                assert_eq!(message, "a byte-order mark is not supported");
+                assert_eq!(line, Some(1));
+                assert_eq!(column, Some(1));
+            }
+            other => panic!("expected a Yaml error, got {other:?}"),
+        }
+    }
+
+    /// U+FEFF anywhere else is `serde_yaml_ng`'s business (it is a
+    /// zero-width no-break space there, not a mark), and where it lands
+    /// in text this format types, `Description` refuses it.
+    #[test]
+    fn a_byte_order_mark_inside_a_description_is_refused_as_an_invisible() {
+        let source = "\
+name: demo
+description: \"a\u{FEFF}b\"
+steps:
+  a: { tool: naming.v1, with: {} }
+";
+        let err = parse_document(source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Semantic { path, message } => {
+                assert_eq!(path, "description");
+                assert!(message.contains("invisible"), "{message}");
+            }
+            other => panic!("expected a Semantic error, got {other:?}"),
+        }
     }
 
     #[test]
