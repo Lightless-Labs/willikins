@@ -570,3 +570,31 @@ fn walker_exempts_a_macro_invocation_inside_a_cfg_test_function() {
     );
     assert!(violations.is_empty(), "{violations:?}");
 }
+
+/// `#[cfg(not(test))]` is not `#[cfg(test)]`: an item that exists only in
+/// a *non*-test build is exactly the place a real call site could hide, so
+/// [`has_cfg_test`] must not treat it as test-only. (It does not today,
+/// because its nested-meta walk looks for the literal path `test` and
+/// `not(test)`'s own path is `not` — but a future rewrite of that function
+/// as a substring check over the attribute's tokens would silently exempt
+/// this, which is what this test is here to catch.)
+#[test]
+fn walker_catches_a_call_inside_a_cfg_not_test_item() {
+    let violations = violations_in("#[cfg(not(test))] fn f() { SinkToken::new(); }", false);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+}
+
+/// A `macro_rules!` *definition*'s body is a token stream too, not just a
+/// macro *invocation*'s: a call written inside one is expanded at every
+/// call site and must be found.
+#[test]
+fn walker_catches_a_call_inside_a_macro_rules_definition() {
+    let violations = violations_in(
+        "macro_rules! mint { () => { SinkToken::new() }; } fn f() { let _ = mint!(); }",
+        false,
+    );
+    assert!(
+        !violations.is_empty(),
+        "a macro_rules! body must be scanned: {violations:?}"
+    );
+}
