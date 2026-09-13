@@ -1151,3 +1151,47 @@ fn milestone_2_acceptance_09_attribute_mismatch_visibility() {
         other => panic!("milestone 2 acceptance test 9: expected AttributeMismatch, got {other:?}"),
     }
 }
+
+/// The other half of acceptance test 9, through the same fixture: `ensure`
+/// on the mismatching repository is `Conflict`, and the state it was asked
+/// to change is byte-identical afterwards — the mock server's "records no
+/// `PATCH`" for the fake provider. `plan`'s refusal is what a caller sees
+/// first, but the tool must refuse on its own too: task 4's executor calls
+/// `ensure` from a plan taken before any node ran.
+#[test]
+fn milestone_2_acceptance_09_ensure_on_the_mismatch_conflicts_and_writes_nothing() {
+    let json = std::fs::read_to_string(state_fixture("repo-ours-public.json"))
+        .expect("the acceptance test 9 state fixture is readable");
+    let state = Arc::new(Mutex::new(
+        FakeState::from_json(&json).expect("the acceptance test 9 state fixture is valid"),
+    ));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let tool = catalog
+        .get(&tool_name("github.repo.ensure"))
+        .expect("the fake catalog holds `github.repo.ensure`");
+
+    let mut inputs = Inputs::new();
+    inputs.insert(
+        port("repo"),
+        Value::known(
+            willikins_types::GitHubRepo::parse("lightless-labs/third-thoughts")
+                .expect("the fixture's repository parses"),
+        ),
+    );
+    inputs.insert(
+        port("visibility"),
+        // The positive fixture's own default, which is what makes this a
+        // mismatch against the fixture's `public`.
+        Value::known(willikins_types::RepoVisibility::Private),
+    );
+
+    let before = serde_json::to_value(&*state.lock().unwrap()).expect("FakeState serializes");
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    let token = willikins_core::SinkToken::new();
+    let err = tool
+        .ensure(&inputs, &token)
+        .expect_err("milestone 2 acceptance test 9: ensure must refuse a visibility mismatch");
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    let after = serde_json::to_value(&*state.lock().unwrap()).expect("FakeState serializes");
+    assert_eq!(before, after, "a refused ensure must write nothing");
+}
