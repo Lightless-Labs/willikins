@@ -39,6 +39,22 @@
 //! walking `Checked::order`: there is no cascade-suppression story to tell,
 //! since planning one node can depend on another node's own plan already
 //! having succeeded.
+//!
+//! # `AttributeMismatch` is deliberately symmetric
+//!
+//! [`Observation::Mismatch`] — the resource at a node's natural key is
+//! ours, but a non-key input's requested value does not match its actual
+//! one — becomes [`PlanError::AttributeMismatch`], next to
+//! [`PlanError::NameTaken`] as the other case where a node's resource
+//! exists but `plan` refuses to proceed rather than silently reconciling
+//! it. The first user is `github.repo.ensure`'s `visibility`: turning a
+//! private repository public is not a reversible act, and the tool
+//! refuses the reverse direction too, on purpose — this milestone has no
+//! `Action::Update`, so a plan cannot yet show an attribute change
+//! honestly, and a rule whose behaviour depends on the current value is
+//! exactly the run-time non-determinism a plan is meant to rule out. A
+//! directional reconcile can arrive with `Action::Update`, if a real
+//! workflow ever needs one.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -174,6 +190,15 @@ pub enum PlanError {
         /// here.
         key: Inputs,
     },
+    /// A resource already exists at this node's natural key and is ours,
+    /// but a non-key input's requested value does not match the
+    /// resource's actual one, and the tool will not change it:
+    /// [`Observation::Mismatch`]. The caller must change the resource by
+    /// hand, or pass its current value instead.
+    AttributeMismatch {
+        /// The mismatched port's location: the node and the port.
+        site: Site,
+    },
     /// A tool's `read` itself failed.
     Tool {
         /// The node whose tool failed.
@@ -205,6 +230,12 @@ impl std::fmt::Display for PlanError {
             Self::NameTaken { node, tool, .. } => write!(
                 f,
                 "node `{node}` (tool `{tool}`): a resource already exists at this name and is not ours"
+            ),
+            Self::AttributeMismatch { site } => write!(
+                f,
+                "{site}: the resource is ours, but its current value does not match what was \
+                 requested and this tool will not change it; change the resource by hand, or \
+                 pass its current value instead"
             ),
             Self::Tool { node, error } => write!(f, "node `{node}`: {error}"),
         }
@@ -555,6 +586,15 @@ fn plan_one(
         });
     }
 
+    if let Observation::Mismatch { port } = &observation {
+        return Err(PlanError::AttributeMismatch {
+            site: Site::Port {
+                node: name.clone(),
+                port: port.clone(),
+            },
+        });
+    }
+
     let action = if spec.pure {
         Action::Compute
     } else if matches!(observation, Observation::Absent { .. }) {
@@ -566,7 +606,7 @@ fn plan_one(
     let outputs = match &observation {
         Observation::Absent { predicted } => fill_outputs(spec, predicted),
         Observation::Present(present) => fill_outputs(spec, present),
-        Observation::Foreign => unreachable!("handled above"),
+        Observation::Foreign | Observation::Mismatch { .. } => unreachable!("handled above"),
     };
 
     Ok(PlannedNode {

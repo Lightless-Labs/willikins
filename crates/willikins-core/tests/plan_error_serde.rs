@@ -38,6 +38,12 @@ fn plan_error_samples() -> Vec<PlanError> {
             tool: tool_name("bogus.tool"),
             key: Inputs::new(),
         },
+        PlanError::AttributeMismatch {
+            site: Site::Port {
+                node: node("n"),
+                port: port("p"),
+            },
+        },
         PlanError::Tool {
             node: node("n"),
             error: ToolError {
@@ -79,6 +85,7 @@ variant_kinds!(
     KeyNotInForEach,
     KeyUnknown,
     NameTaken,
+    AttributeMismatch,
     Tool,
 );
 

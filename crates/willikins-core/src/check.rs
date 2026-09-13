@@ -1175,7 +1175,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use crate::tool::{Inputs, Observation, Outputs, Tool, ToolError};
+    use crate::tool::{Ensured, Inputs, Observation, Outputs, Tool, ToolError};
     use crate::value::TypeName;
     use crate::workflow::InputSpec;
     use willikins_types::{DomainType, SinkToken};
@@ -1238,8 +1238,11 @@ mod tests {
             })
         }
 
-        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
-            Ok(Outputs::new())
+        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
         }
     }
 

@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 
 use willikins_core::tool::helpers::{exact, get, port, require_present, scalar, tool_name};
 use willikins_core::{
-    Class, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::naming;
 
@@ -68,8 +68,11 @@ impl Tool for NamingV1 {
         self.compute(inputs).map(Observation::Present)
     }
 
-    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
-        self.compute(inputs)
+    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: self.compute(inputs)?,
+            changed: false,
+        })
     }
 }
 
@@ -146,11 +149,16 @@ mod tests {
         #[allow(clippy::disallowed_methods)] // a test mints its own token
         let token = SinkToken::new();
         let via_ensure = tool().ensure(&full_inputs(), &token).unwrap();
+        assert!(
+            !via_ensure.changed,
+            "a pure tool's ensure never changes anything"
+        );
         let Observation::Present(via_read) = tool().read(&full_inputs()).unwrap() else {
             panic!("naming.v1 always reports Present");
         };
         assert_eq!(
             via_ensure
+                .outputs
                 .get(&PortName::parse("github_repo").unwrap())
                 .unwrap(),
             via_read

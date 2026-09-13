@@ -16,7 +16,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Binding, Catalog, CheckError, CheckWarning, Class, InputSpec, Inputs, Node, NodeName,
+    Binding, Catalog, CheckError, CheckWarning, Class, Ensured, InputSpec, Inputs, Node, NodeName,
     Observation, Outputs, PortName, PortSpec, PortType, Site, Tool, ToolError, ToolName, ToolSpec,
     TypeName, TypeRef, Value, Workflow, check,
 };
@@ -76,8 +76,11 @@ impl Tool for DummyTool {
         })
     }
 
-    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
-        Ok(Outputs::new())
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: Outputs::new(),
+            changed: true,
+        })
     }
 }
 

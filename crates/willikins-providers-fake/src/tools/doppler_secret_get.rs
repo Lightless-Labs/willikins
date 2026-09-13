@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Class, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{DopplerConfig, SecretName};
 
@@ -72,8 +72,11 @@ impl Tool for DopplerSecretGet {
         self.lookup(inputs).map(Observation::Present)
     }
 
-    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
-        self.lookup(inputs)
+    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: self.lookup(inputs)?,
+            changed: false,
+        })
     }
 }
 

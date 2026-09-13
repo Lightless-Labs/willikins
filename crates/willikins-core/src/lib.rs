@@ -35,8 +35,8 @@ pub use site::Site;
 /// `willikins-core`; see [`tool::helpers`] for the full set.
 pub use tool::helpers;
 pub use tool::{
-    Inputs, Observation, Outputs, PortName, PortSpec, SpecError, Tool, ToolError, ToolErrorKind,
-    ToolName, ToolSpec,
+    Ensured, Inputs, Observation, Outputs, PortName, PortSpec, SpecError, Tool, ToolError,
+    ToolErrorKind, ToolName, ToolSpec,
 };
 pub use value::{Known, PortType, TypeName, TypeRef, TypeRegistry, Value, ValueState};
 pub use workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};

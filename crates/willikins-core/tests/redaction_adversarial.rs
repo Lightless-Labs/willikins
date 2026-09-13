@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use willikins_core::tool::{Observation, Outputs, PortSpec};
+use willikins_core::tool::{Ensured, Observation, Outputs, PortSpec};
 use willikins_core::{
     Catalog, CatalogError, Class, PortName, PortType, SpecError, ToolError, ToolErrorKind,
     ToolName, ToolSpec, TypeName, TypeRef, Value,
@@ -298,8 +298,11 @@ impl willikins_core::Tool for SpecOnlyTool {
         &self,
         _inputs: &willikins_core::Inputs,
         _token: &willikins_core::SinkToken,
-    ) -> Result<Outputs, ToolError> {
-        Ok(Outputs::new())
+    ) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: Outputs::new(),
+            changed: true,
+        })
     }
 }
 

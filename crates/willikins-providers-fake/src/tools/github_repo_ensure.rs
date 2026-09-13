@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Class, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{GitHubRepo, RepoVisibility};
 
@@ -50,6 +50,41 @@ impl GitHubRepoEnsure {
         outputs.insert(port("url"), Value::known(repo.url()));
         outputs
     }
+
+    /// The requested `visibility` input, when it is bound and
+    /// [`Value::is_known`]. A tool whose static `plan_one` guarantee only
+    /// covers key ports may see this port `Unknown`; treated as "no
+    /// mismatch determinable from here" rather than an error, matching
+    /// `github.actions_secret.ensure`'s own treatment of a not-yet-known
+    /// `value` in `read`.
+    fn requested_visibility(inputs: &Inputs) -> Option<RepoVisibility> {
+        inputs
+            .get(&port("visibility"))
+            .filter(|value| value.is_known())
+            .and_then(|value| value.downcast::<RepoVisibility>())
+            .copied()
+    }
+
+    /// This tool's own read logic, without a token: the resource at
+    /// `repo`'s key, observed against `state` and `inputs`' requested
+    /// `visibility`. Shared by `read` (which locks `self.state` and calls
+    /// this) and `ensure` (which locks once, calls this, then mutates) —
+    /// `ensure` must never call `self.read()` directly, since that would
+    /// try to lock `self.state` a second time and deadlock.
+    fn observe(state: &FakeState, repo: &GitHubRepo, inputs: &Inputs) -> Observation {
+        match state.github_repos.get(&repo_key(repo)) {
+            None => Observation::Absent {
+                predicted: Self::outputs_for(repo),
+            },
+            Some(record) if !record.ours => Observation::Foreign,
+            Some(record) => match Self::requested_visibility(inputs) {
+                Some(requested) if requested != record.visibility => Observation::Mismatch {
+                    port: port("visibility"),
+                },
+                _ => Observation::Present(Self::outputs_for(repo)),
+            },
+        }
+    }
 }
 
 impl Tool for GitHubRepoEnsure {
@@ -61,33 +96,41 @@ impl Tool for GitHubRepoEnsure {
         require_present(&self.spec, inputs)?;
         let repo: GitHubRepo = get(inputs, "repo")?;
         let state = self.state.lock().unwrap();
-        match state.github_repos.get(&repo_key(&repo)) {
-            None => Ok(Observation::Absent {
-                predicted: Self::outputs_for(&repo),
-            }),
-            Some(record) if record.ours => Ok(Observation::Present(Self::outputs_for(&repo))),
-            Some(_) => Ok(Observation::Foreign),
-        }
+        Ok(Self::observe(&state, &repo, inputs))
     }
 
-    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
+    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         require_present(&self.spec, inputs)?;
         let repo: GitHubRepo = get(inputs, "repo")?;
         let visibility: RepoVisibility = get(inputs, "visibility")?;
         let mut state = self.state.lock().unwrap();
-        if let Some(existing) = state.github_repos.get(&repo_key(&repo))
-            && !existing.ours
-        {
-            return Err(conflict(format!("`{repo}` already exists and is not ours")));
+        match Self::observe(&state, &repo, inputs) {
+            Observation::Foreign => {
+                Err(conflict(format!("`{repo}` already exists and is not ours")))
+            }
+            Observation::Mismatch { .. } => Err(conflict(format!(
+                "`{repo}` is ours, but its visibility does not match what was requested and \
+                 this tool will not change it; change it by hand, or pass its current value \
+                 instead"
+            ))),
+            Observation::Present(_) => Ok(Ensured {
+                outputs: Self::outputs_for(&repo),
+                changed: false,
+            }),
+            Observation::Absent { .. } => {
+                state.github_repos.insert(
+                    repo_key(&repo),
+                    GitHubRepoRecord {
+                        visibility,
+                        ours: true,
+                    },
+                );
+                Ok(Ensured {
+                    outputs: Self::outputs_for(&repo),
+                    changed: true,
+                })
+            }
         }
-        state.github_repos.insert(
-            repo_key(&repo),
-            GitHubRepoRecord {
-                visibility,
-                ours: true,
-            },
-        );
-        Ok(Self::outputs_for(&repo))
     }
 }
 
@@ -213,5 +256,98 @@ mod tests {
             url.render().to_string(),
             "https://github.com/lightless-labs/third-thoughts"
         );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_reports_changed_true_on_creation_and_false_on_a_second_call() {
+        let tool = tool();
+        let token = SinkToken::new();
+        let first = tool
+            .ensure(&inputs(RepoVisibility::Public), &token)
+            .unwrap();
+        assert!(first.changed, "creating the repo must report changed");
+        let second = tool
+            .ensure(&inputs(RepoVisibility::Public), &token)
+            .unwrap();
+        assert!(
+            !second.changed,
+            "ensure on an already-matching repo must report changed: false"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_on_a_visibility_mismatch_conflicts_and_does_not_change_state() {
+        let state = Arc::new(Mutex::new(FakeState::new().with_repo(
+            &repo(),
+            RepoVisibility::Public,
+            true,
+        )));
+        let tool = GitHubRepoEnsure::new(state);
+        let token = SinkToken::new();
+        let err = tool
+            .ensure(&inputs(RepoVisibility::Private), &token)
+            .unwrap_err();
+        assert_eq!(err.kind, willikins_core::ToolErrorKind::Conflict);
+        // The state must be untouched: still `Public`, still ours.
+        let observation = tool.read(&inputs(RepoVisibility::Public)).unwrap();
+        assert!(matches!(observation, Observation::Present(_)));
+    }
+
+    /// The refusal is symmetric: private-to-public is refused too, not
+    /// just public-to-private.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_on_the_reverse_visibility_mismatch_also_conflicts() {
+        let state = Arc::new(Mutex::new(FakeState::new().with_repo(
+            &repo(),
+            RepoVisibility::Private,
+            true,
+        )));
+        let tool = GitHubRepoEnsure::new(state);
+        let token = SinkToken::new();
+        let err = tool
+            .ensure(&inputs(RepoVisibility::Public), &token)
+            .unwrap_err();
+        assert_eq!(err.kind, willikins_core::ToolErrorKind::Conflict);
+    }
+
+    #[test]
+    fn read_reports_mismatch_when_ours_but_visibility_differs() {
+        let state = Arc::new(Mutex::new(FakeState::new().with_repo(
+            &repo(),
+            RepoVisibility::Public,
+            true,
+        )));
+        let tool = GitHubRepoEnsure::new(state);
+        let observation = tool.read(&inputs(RepoVisibility::Private)).unwrap();
+        assert!(matches!(
+            observation,
+            Observation::Mismatch { port } if port == PortName::parse("visibility").unwrap()
+        ));
+    }
+
+    /// A present-and-ours repository whose `visibility` input is bound but
+    /// not yet [`Value::is_known`] cannot be statically compared, so
+    /// `read` reports `Present` rather than guessing at a mismatch;
+    /// `ensure` still enforces the real value once it is known.
+    #[test]
+    fn read_reports_present_when_ours_and_visibility_is_unknown() {
+        let state = Arc::new(Mutex::new(FakeState::new().with_repo(
+            &repo(),
+            RepoVisibility::Public,
+            true,
+        )));
+        let tool = GitHubRepoEnsure::new(state);
+        let mut inputs = inputs(RepoVisibility::Public);
+        inputs.insert(
+            PortName::parse("visibility").unwrap(),
+            Value::unknown(willikins_core::TypeRef::scalar(
+                willikins_core::TypeName::parse("RepoVisibility").unwrap(),
+            )),
+        );
+        let observation = tool.read(&inputs).unwrap();
+        assert!(matches!(observation, Observation::Present(_)));
     }
 }

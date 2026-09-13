@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use willikins_core::{
-    Catalog, Class, Inputs, Observation, Outputs, PortName, PortSpec, PortType, Tool, ToolError,
-    ToolErrorKind, ToolName, ToolSpec, Value,
+    Catalog, Class, Ensured, Inputs, Observation, Outputs, PortName, PortSpec, PortType, Tool,
+    ToolError, ToolErrorKind, ToolName, ToolSpec, Value,
 };
 use willikins_types::{DomainType, DopplerServiceToken};
 
@@ -83,7 +83,7 @@ impl Tool for CarelessTool {
         &self,
         _inputs: &Inputs,
         _token: &willikins_types::SinkToken,
-    ) -> Result<Outputs, ToolError> {
+    ) -> Result<Ensured, ToolError> {
         unimplemented!("not exercised by this test")
     }
 }

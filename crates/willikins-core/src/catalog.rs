@@ -111,7 +111,7 @@ fn to_json_value<T: serde::Serialize>(value: &T) -> serde_json::Value {
 mod tests {
     use super::*;
     use crate::class::Class;
-    use crate::tool::{Inputs, Observation, Outputs, PortName, PortSpec, ToolError};
+    use crate::tool::{Ensured, Inputs, Observation, Outputs, PortName, PortSpec, ToolError};
     use crate::value::{PortType, TypeName, TypeRef};
     use willikins_types::SinkToken;
 
@@ -158,8 +158,11 @@ mod tests {
             Ok(Observation::Present(Outputs::new()))
         }
 
-        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
-            Ok(Outputs::new())
+        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: false,
+            })
         }
     }
 
@@ -208,8 +211,11 @@ mod tests {
             })
         }
 
-        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
-            Ok(Outputs::new())
+        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
         }
     }
 

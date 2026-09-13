@@ -6,6 +6,26 @@
 //! live in the `willikins-tools` crate; [`catalog`] registers them
 //! alongside this crate's own eight tools, so the catalog this crate
 //! produces is unchanged: still ten tools, in the same order.
+//!
+//! # Every `ensure` reads its own state first
+//!
+//! Every fake tool's [`Tool::ensure`](willikins_core::Tool::ensure) looks
+//! its own resource up before writing, the same lookup its own `read`
+//! would do, so `changed` is truthful: `false` when the resource already
+//! matched, `true` when this call created or minted it. The one exception
+//! is `github.actions_secret.ensure`, whose value can never be read back:
+//! it always writes and always reports `changed: true`. A resource that
+//! exists and is not ours is `Conflict`; `github.repo.ensure` also treats
+//! a `visibility` mismatch on an owned repository as `Conflict` — see its
+//! own module doc.
+//!
+//! `doppler.project.ensure` models Doppler's own defaults: creating a
+//! project also seeds its `dev`, `stg`, and `prd` root configs (the same
+//! keys `doppler.config.ensure` computes), so a following
+//! `doppler.config.ensure` for one of those three finds it already
+//! present (`changed: false`) while any other environment, such as `qa`,
+//! is still created fresh. A project that is already present and ours is
+//! left alone: `ensure` never re-seeds its configs.
 
 pub mod state;
 mod support;

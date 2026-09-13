@@ -313,6 +313,19 @@ pub enum Observation {
     Present(Outputs),
     /// A resource exists at this natural key, but it is not ours.
     Foreign,
+    /// The resource exists at this natural key and is ours, but a
+    /// non-key input differs from what the tool would have to change to
+    /// match it, and the tool will not change it. [`crate::plan::plan`]
+    /// turns this into `PlanError::AttributeMismatch`; `ensure` on such a
+    /// resource returns [`ToolErrorKind::Conflict`]. The first (and, this
+    /// milestone, only) user is `github.repo.ensure`'s `visibility`: see
+    /// `crate::plan`'s module docs for why the refusal is deliberately
+    /// symmetric.
+    Mismatch {
+        /// The non-key input port whose requested value does not match
+        /// the resource's actual one.
+        port: PortName,
+    },
 }
 
 /// The kind of failure a [`Tool`] reported.
@@ -344,6 +357,19 @@ pub struct ToolError {
     pub message: String,
 }
 
+/// What [`Tool::ensure`] reports after bringing a resource to the state
+/// its inputs describe.
+#[derive(Debug, Clone)]
+pub struct Ensured {
+    /// The tool's declared output ports, filled the same way
+    /// [`Observation::Present`]'s would be.
+    pub outputs: Outputs,
+    /// Whether this call changed the resource's state. `false` means the
+    /// resource already matched `inputs` before this call ran — the
+    /// executor reports such a node `Unchanged` rather than `Created`.
+    pub changed: bool,
+}
+
 /// A provisioning tool: one node kind in a workflow graph.
 ///
 /// Object-safe, so a [`crate::catalog::Catalog`] can hold many different
@@ -364,13 +390,28 @@ pub trait Tool: Send + Sync {
 
     /// Bring the resource `inputs` identify to the state `inputs`
     /// describes, minting or consuming secrets through `token` as needed.
-    /// Unused until milestone 2's apply executor.
+    ///
+    /// # Contract
+    ///
+    /// An implementation first observes the resource itself — its own
+    /// `read` logic, without a token — so it is safe to call `ensure` on a
+    /// resource that already exists and is ours: a resource that exists
+    /// and is not ours is [`ToolErrorKind::Conflict`], and one whose
+    /// natural key is ours but a non-key input mismatches (see
+    /// [`Observation::Mismatch`]) is `Conflict` too. A tool whose resource
+    /// has a comparable state (a repository, a project, a config, a
+    /// token's existence) creates only what is missing and reports
+    /// [`Ensured::changed`] `false` when the resource already matched. A
+    /// sink whose value cannot be read back (`github.actions_secret.ensure`)
+    /// always writes when called and always reports `changed: true`. A
+    /// pure tool's `ensure` is its `read` and always reports `changed:
+    /// false`: there is no external state to change.
     ///
     /// # Errors
     ///
     /// Returns [`ToolError`] when the underlying provider cannot satisfy
     /// the request.
-    fn ensure(&self, inputs: &Inputs, token: &SinkToken) -> Result<Outputs, ToolError>;
+    fn ensure(&self, inputs: &Inputs, token: &SinkToken) -> Result<Ensured, ToolError>;
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Class, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{DopplerConfig, DopplerProject, EnvironmentSlug, naming};
 
@@ -74,12 +74,18 @@ impl Tool for DopplerConfigEnsure {
         }
     }
 
-    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
+    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         let (project, environment) = self.key_ports(inputs)?;
         let config = naming::v1::doppler_root_config(&project, &environment);
         let mut state = self.state.lock().unwrap();
-        state.doppler_configs.insert(doppler_config_key(&config));
-        Ok(Self::outputs_for(&config))
+        // Read its own state first, so `changed` is truthful: a config
+        // `doppler.project.ensure` already seeded (see its own module
+        // doc) is not created a second time here.
+        let changed = state.doppler_configs.insert(doppler_config_key(&config));
+        Ok(Ensured {
+            outputs: Self::outputs_for(&config),
+            changed,
+        })
     }
 }
 
@@ -161,5 +167,51 @@ mod tests {
         tool.ensure(&full_inputs(), &token).unwrap();
         let observation = tool.read(&full_inputs()).unwrap();
         assert!(matches!(observation, Observation::Present(_)));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_reports_changed_true_on_creation_and_false_on_a_second_call() {
+        let tool = tool();
+        let token = SinkToken::new();
+        let first = tool.ensure(&full_inputs(), &token).unwrap();
+        assert!(first.changed, "creating the config must report changed");
+        let second = tool.ensure(&full_inputs(), &token).unwrap();
+        assert!(
+            !second.changed,
+            "ensure on an already-present config must report changed: false"
+        );
+    }
+
+    /// Acceptance test 5's own claim: `doppler.project.ensure` seeds the
+    /// `dev`/`stg`/`prd` root configs when it creates the project, so a
+    /// following `doppler.config.ensure` for one of those finds it present
+    /// (`changed: false`), while an environment outside that set (`qa`)
+    /// is still created fresh (`changed: true`).
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn a_default_environment_is_unchanged_after_project_ensure_but_qa_is_created() {
+        let state = Arc::new(Mutex::new(FakeState::new()));
+        let project_tool = crate::tools::DopplerProjectEnsure::new(Arc::clone(&state));
+        let token = SinkToken::new();
+        let mut project_inputs = Inputs::new();
+        project_inputs.insert(PortName::parse("project").unwrap(), Value::known(project()));
+        project_tool.ensure(&project_inputs, &token).unwrap();
+
+        let config_tool = DopplerConfigEnsure::new(Arc::clone(&state));
+        let prd = config_tool.ensure(&full_inputs(), &token).unwrap();
+        assert!(
+            !prd.changed,
+            "prd was already seeded by doppler.project.ensure"
+        );
+
+        let mut qa_inputs = Inputs::new();
+        qa_inputs.insert(PortName::parse("project").unwrap(), Value::known(project()));
+        qa_inputs.insert(
+            PortName::parse("environment").unwrap(),
+            Value::known(EnvironmentSlug::parse("qa").unwrap()),
+        );
+        let qa = config_tool.ensure(&qa_inputs, &token).unwrap();
+        assert!(qa.changed, "qa is not one of the seeded defaults");
     }
 }

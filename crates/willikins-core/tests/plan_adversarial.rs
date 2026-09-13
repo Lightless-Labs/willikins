@@ -13,9 +13,9 @@ use indexmap::IndexMap;
 
 use common::{input, list_ty, node, output, port, tool_name, ty, workflow_name};
 use willikins_core::{
-    Action, Binding, Catalog, Class, InputSpec, Inputs, Node, Observation, Outputs, PartialInputs,
-    PlanError, PortSpec, PortType, RawInput, SinkToken, Site, Tool, ToolError, ToolErrorKind,
-    ToolSpec, TypeRef, Value, Workflow, check, describe, plan,
+    Action, Binding, Catalog, Class, Ensured, InputSpec, Inputs, Node, Observation, Outputs,
+    PartialInputs, PlanError, PortSpec, PortType, RawInput, SinkToken, Site, Tool, ToolError,
+    ToolErrorKind, ToolSpec, TypeRef, Value, Workflow, check, describe, plan,
 };
 use willikins_providers_fake::{FakeState, catalog, empty};
 use willikins_types::{
@@ -63,8 +63,11 @@ impl Tool for Fixed {
         }
     }
 
-    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
-        Ok(Outputs::new())
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: Outputs::new(),
+            changed: true,
+        })
     }
 }
 

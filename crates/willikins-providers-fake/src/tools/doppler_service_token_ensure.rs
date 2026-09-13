@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Class, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{DopplerConfig, DopplerTokenName};
 
@@ -78,13 +78,19 @@ impl Tool for DopplerServiceTokenEnsure {
         }
     }
 
-    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
+    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         let (config, name) = self.key_ports(inputs)?;
         let mut state = self.state.lock().unwrap();
-        state
+        // Read its own state first via `HashSet::insert`'s own return
+        // value, so `changed` is truthful: a token that already exists is
+        // never re-minted (its value is unreadable either way).
+        let changed = state
             .doppler_service_tokens
             .insert(doppler_service_token_key(&config, &name));
-        Ok(Self::unknown_outputs())
+        Ok(Ensured {
+            outputs: Self::unknown_outputs(),
+            changed,
+        })
     }
 }
 
@@ -176,5 +182,19 @@ mod tests {
             panic!("expected Present, got {observation:?}");
         };
         assert!(!token_value(&outputs).is_known());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_reports_changed_true_on_creation_and_false_on_a_second_call() {
+        let tool = tool();
+        let token = SinkToken::new();
+        let first = tool.ensure(&full_inputs(), &token).unwrap();
+        assert!(first.changed, "minting the token must report changed");
+        let second = tool.ensure(&full_inputs(), &token).unwrap();
+        assert!(
+            !second.changed,
+            "ensure on an already-minted token must report changed: false, never re-minting"
+        );
     }
 }

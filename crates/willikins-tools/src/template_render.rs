@@ -7,7 +7,7 @@ use willikins_core::tool::helpers::{
     exact, get, invalid, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
-    Class, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{DomainType, TemplateSource, Text};
 
@@ -71,8 +71,11 @@ impl Tool for TemplateRender {
         self.compute(inputs).map(Observation::Present)
     }
 
-    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
-        self.compute(inputs)
+    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: self.compute(inputs)?,
+            changed: false,
+        })
     }
 }
 

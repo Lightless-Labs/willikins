@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use willikins_core::{Class, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec};
+use willikins_core::{
+    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec,
+};
 use willikins_types::ProjectSlug;
 
 use crate::state::{FakeState, irreversible_key};
@@ -61,11 +63,14 @@ impl Tool for FakeIrreversibleEnsure {
         }
     }
 
-    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
+    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         let slug = self.key_port(inputs)?;
         let mut state = self.state.lock().unwrap();
-        state.irreversible.insert(irreversible_key(&slug));
-        Ok(Outputs::new())
+        let changed = state.irreversible.insert(irreversible_key(&slug));
+        Ok(Ensured {
+            outputs: Outputs::new(),
+            changed,
+        })
     }
 }
 
@@ -139,5 +144,16 @@ mod tests {
         tool.ensure(&full_inputs(), &token).unwrap();
         let observation = tool.read(&full_inputs()).unwrap();
         assert!(matches!(observation, Observation::Present(_)));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_reports_changed_true_on_creation_and_false_on_a_second_call() {
+        let tool = tool();
+        let token = SinkToken::new();
+        let first = tool.ensure(&full_inputs(), &token).unwrap();
+        assert!(first.changed);
+        let second = tool.ensure(&full_inputs(), &token).unwrap();
+        assert!(!second.changed);
     }
 }

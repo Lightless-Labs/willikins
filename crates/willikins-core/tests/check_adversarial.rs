@@ -18,9 +18,9 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use proptest::prelude::*;
 use willikins_core::{
-    Binding, Catalog, CheckError, Checked, Class, InputName, InputSpec, Inputs, Node, NodeName,
-    Observation, OutputName, Outputs, PortName, PortSpec, PortType, Site, Tool, ToolError,
-    ToolName, ToolSpec, TypeName, TypeRef, Value, Workflow, check,
+    Binding, Catalog, CheckError, Checked, Class, Ensured, InputName, InputSpec, Inputs, Node,
+    NodeName, Observation, OutputName, Outputs, PortName, PortSpec, PortType, Site, Tool,
+    ToolError, ToolName, ToolSpec, TypeName, TypeRef, Value, Workflow, check,
 };
 use willikins_types::{
     DomainType, DopplerServiceToken, EnvironmentSlug, RepoVisibility, SinkToken,
@@ -87,8 +87,11 @@ impl Tool for DummyTool {
         })
     }
 
-    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
-        Ok(Outputs::new())
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: Outputs::new(),
+            changed: true,
+        })
     }
 }
 

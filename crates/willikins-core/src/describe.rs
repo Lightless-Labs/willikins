@@ -317,7 +317,7 @@ mod tests {
     use super::*;
     use crate::catalog::Catalog;
     use crate::check::check;
-    use crate::tool::{Inputs, Observation, Outputs, Tool, ToolError};
+    use crate::tool::{Ensured, Inputs, Observation, Tool, ToolError};
     use crate::value::TypeName;
     use crate::workflow::{Node, NodeName, Workflow};
     use willikins_types::{DomainType, SinkToken};
@@ -382,7 +382,7 @@ mod tests {
             panic!("describe must never call Tool::read")
         }
 
-        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
+        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
             panic!("describe must never call Tool::ensure")
         }
     }

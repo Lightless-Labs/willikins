@@ -709,3 +709,92 @@ fn check_failure_json_objects_all_carry_kind_and_message() {
         assert!(error["message"].is_string(), "no message: {error}");
     }
 }
+
+/// Milestone 2 acceptance test 9 (see also
+/// `crates/willikins-cli/tests/acceptance.rs`'s
+/// `milestone_2_acceptance_09_attribute_mismatch_visibility`, which pins
+/// the same case at the library level): the repository is ours and
+/// `public`; `workflows/new-rust-service.yaml`'s `visibility` input
+/// defaults to `private`, so `plan` must return `AttributeMismatch` at
+/// site `repo.visibility`, in both text and `--json`, with a message
+/// naming the remedy (change the resource by hand, or pass its current
+/// value). The state fixture is
+/// `workflows/fixtures/state/repo-ours-public.json`.
+#[test]
+fn plan_against_a_visibility_mismatch_exits_1_with_attribute_mismatch() {
+    let path = workflow("workflows/new-rust-service.yaml");
+    let fake_state = workflow("workflows/fixtures/state/repo-ours-public.json");
+    let args = [
+        "plan",
+        path.to_str().unwrap(),
+        "--input",
+        "slug=third-thoughts",
+        "--input",
+        "org=lightless-labs",
+        "--fake-state",
+        fake_state.to_str().unwrap(),
+    ];
+
+    let text_output = run(&args);
+    assert_eq!(
+        exit_code(&text_output),
+        1,
+        "stderr: {}",
+        stderr(&text_output)
+    );
+    let text = stdout(&text_output);
+    assert!(text.contains("repo.visibility"), "text: {text}");
+    assert!(
+        text.contains("change the resource by hand") || text.contains("pass its current value"),
+        "text must name the remedy: {text}"
+    );
+
+    let mut json_args = vec!["--json"];
+    json_args.extend_from_slice(&args);
+    let json_output = run(&json_args);
+    assert_eq!(
+        exit_code(&json_output),
+        1,
+        "stderr: {}",
+        stderr(&json_output)
+    );
+    let json_text = stdout(&json_output);
+    let json: serde_json::Value = serde_json::from_str(&json_text).expect("valid JSON");
+    assert_eq!(json["kind"], "AttributeMismatch", "json: {json_text}");
+    assert_eq!(json["site"]["kind"], "port", "json: {json_text}");
+    assert_eq!(json["site"]["node"], "repo", "json: {json_text}");
+    assert_eq!(json["site"]["port"], "visibility", "json: {json_text}");
+    let message = json["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("AttributeMismatch JSON must carry a `message`: {json_text}"));
+    assert!(
+        message.contains("change the resource by hand") || message.contains("current value"),
+        "message must name the remedy: {message}"
+    );
+}
+
+/// The reverse direction is refused too: private-and-ours, requesting
+/// `public`, is still `AttributeMismatch` -- the refusal is deliberately
+/// symmetric (see `willikins_core::plan`'s module docs).
+#[test]
+fn plan_against_the_reverse_visibility_mismatch_also_exits_1_with_attribute_mismatch() {
+    let path = workflow("workflows/new-rust-service.yaml");
+    let fake_state = workflow("workflows/fixtures/state/repo-ours.json");
+    let output = run(&[
+        "--json",
+        "plan",
+        path.to_str().unwrap(),
+        "--input",
+        "slug=third-thoughts",
+        "--input",
+        "org=lightless-labs",
+        "--input",
+        "visibility=public",
+        "--fake-state",
+        fake_state.to_str().unwrap(),
+    ]);
+    assert_eq!(exit_code(&output), 1, "stderr: {}", stderr(&output));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(json["kind"], "AttributeMismatch", "json: {json}");
+    assert_eq!(json["site"]["port"], "visibility", "json: {json}");
+}

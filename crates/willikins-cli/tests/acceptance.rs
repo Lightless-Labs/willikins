@@ -1111,3 +1111,43 @@ fn acceptance_11_compile_time_guarantees() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// milestone 2 acceptance test 9: attribute mismatch
+// (docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md, "Acceptance
+// tests" #9 — distinct from this file's own, milestone-1-numbered
+// `acceptance_09_naming` above.)
+//
+// The state fixture, `workflows/fixtures/state/repo-ours-public.json`,
+// seeds `lightless-labs/third-thoughts` as ours and `public`. Unlike the
+// `.yaml` fixtures under `workflows/fixtures/`, a `--fake-state` JSON file
+// carries no header comment of its own (JSON has none, and `FakeState`'s
+// `deny_unknown_fields` refuses an extra `_comment` key); this doc comment
+// is that fixture's header, naming this test and the exact error:
+// `plan` against the positive fixture (`visibility` defaults to
+// `private`) must return
+// `PlanError::AttributeMismatch { site: Site::Port { node: repo, port:
+// visibility } }`.
+// ---------------------------------------------------------------------
+
+#[test]
+fn milestone_2_acceptance_09_attribute_mismatch_visibility() {
+    let workflow = load(&positive_fixture());
+    let catalog = seeded_catalog(&state_fixture("repo-ours-public.json"));
+    let checked = willikins_core::check(&workflow, &catalog).expect(
+        "milestone 2 acceptance test 9: must check cleanly against the ours-public catalog",
+    );
+    let inputs = positive_inputs("milestone 2 acceptance test 9", &checked);
+    let err = willikins_core::plan(&checked, &inputs, &catalog)
+        .expect_err("milestone 2 acceptance test 9: a public-vs-private mismatch must not plan");
+    match err {
+        PlanError::AttributeMismatch { site } => {
+            assert_eq!(
+                site,
+                port_site("repo", "visibility"),
+                "milestone 2 acceptance test 9: AttributeMismatch site"
+            );
+        }
+        other => panic!("milestone 2 acceptance test 9: expected AttributeMismatch, got {other:?}"),
+    }
+}

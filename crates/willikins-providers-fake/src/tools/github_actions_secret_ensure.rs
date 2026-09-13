@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use willikins_core::{Class, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec};
+use willikins_core::{
+    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec,
+};
 use willikins_types::{ActionsSecretName, GitHubRepo};
 
 use crate::state::{FakeState, actions_secret_key};
@@ -68,13 +70,19 @@ impl Tool for GitHubActionsSecretEnsure {
         }
     }
 
-    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Outputs, ToolError> {
+    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         let (repo, name) = self.key_ports(inputs)?;
         let mut state = self.state.lock().unwrap();
+        // A sink whose value cannot be read back always writes when
+        // called, whether or not the secret already exists: `changed` is
+        // always `true`, matching GitHub's own 201-or-204 (both success).
         state
             .github_actions_secrets
             .insert(actions_secret_key(&repo, &name));
-        Ok(Outputs::new())
+        Ok(Ensured {
+            outputs: Outputs::new(),
+            changed: true,
+        })
     }
 }
 
@@ -173,5 +181,23 @@ mod tests {
         tool.ensure(&full_inputs(), &token).unwrap();
         let observation = tool.read(&full_inputs()).unwrap();
         assert!(matches!(observation, Observation::Present(_)));
+    }
+
+    /// Unlike every other fake `ensure`, this one reports `changed: true`
+    /// on *every* call, not just the first: its value can never be read
+    /// back, so a call that finds the secret already present still wrote
+    /// (a rotation propagating a fresh value that must land).
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_reports_changed_true_both_times() {
+        let tool = tool();
+        let token = SinkToken::new();
+        let first = tool.ensure(&full_inputs(), &token).unwrap();
+        assert!(first.changed);
+        let second = tool.ensure(&full_inputs(), &token).unwrap();
+        assert!(
+            second.changed,
+            "an unreadable-back sink always reports changed: true"
+        );
     }
 }
