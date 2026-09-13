@@ -27,6 +27,13 @@ const MAX_LEN: usize = 1_024;
 /// Free text is not trimmed and an empty description is accepted: unlike
 /// [`crate::ProjectName`], there is no display-label reason to demand
 /// non-empty content, and the field is optional everywhere it appears.
+/// For the same reason U+00A0 is kept as written rather than folded to a
+/// space the way `ProjectName` folds it: `ProjectName` folds because it
+/// trims and is a label, where a no-break space at an edge would survive
+/// trimming invisibly. A description is quoted document text that is
+/// never trimmed and never compared, so folding would be a silent edit
+/// of the document's own words for no gain. A no-break space is visible
+/// as a space, hides nothing, and is left alone.
 ///
 /// A workflow document is privileged content, run only from a trusted
 /// ref, but the *text* of a description is not: it is quoted document
@@ -286,6 +293,15 @@ mod tests {
     #[test]
     fn accepts_a_variation_selector() {
         assert!(Description::parse("a\u{FE0F}b").is_ok());
+    }
+
+    /// Pins the divergence from [`crate::ProjectName`], which folds
+    /// U+00A0 to a space: see this type's doc comment for why quoted
+    /// document text is kept as written instead.
+    #[test]
+    fn accepts_a_no_break_space_as_written() {
+        let value = Description::parse("a\u{00A0}b").unwrap();
+        assert_eq!(value.as_str(), "a\u{00A0}b");
     }
 
     #[test]

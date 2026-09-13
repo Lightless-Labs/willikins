@@ -1739,6 +1739,62 @@ steps:
         }
     }
 
+    /// A `description:` is a single line, and the DSL does not trim a
+    /// block scalar's trailing newline before handing the text to
+    /// [`willikins_types::Description`]. Trimming would put the DSL and
+    /// the type into disagreement about the same string — the type would
+    /// refuse text the format quietly rewrote into something it accepts —
+    /// and a document is privileged content whose words are quoted to an
+    /// agent verbatim, not edited on the way past. `|` and `>` keep a
+    /// final newline by definition, so both are refused, and the message
+    /// names the character; `|-` and `>-` strip it and are accepted. A
+    /// block scalar with a newline *inside* it is refused whichever
+    /// chomping indicator it carries, which is the "single line" rule
+    /// itself rather than a quirk of trailing newlines.
+    #[test]
+    fn a_block_scalar_description_keeps_its_newlines_and_is_refused_for_them() {
+        let refused = [
+            ("| keeps a trailing newline", "|\n  a line"),
+            ("> keeps a trailing newline", ">\n  a line"),
+            ("|- still has an inner newline", "|-\n  first\n  second"),
+        ];
+        for (label, scalar) in refused {
+            let source = format!(
+                "\
+name: demo
+description: {scalar}
+steps:
+  a: {{ tool: naming.v1, with: {{}} }}
+"
+            );
+            let err = parse_document(&source).map(|_| ()).expect_err(label);
+            match err.kind {
+                DocumentErrorKind::Semantic { path, message } => {
+                    assert_eq!(path, "description", "{label}");
+                    assert!(message.contains("control character"), "{label}: {message}");
+                }
+                other => panic!("{label}: expected a Semantic error, got {other:?}"),
+            }
+        }
+
+        let accepted = [
+            ("|- strips the trailing newline", "|-\n  a line"),
+            (">- strips the trailing newline", ">-\n  a line"),
+        ];
+        for (label, scalar) in accepted {
+            let source = format!(
+                "\
+name: demo
+description: {scalar}
+steps:
+  a: {{ tool: naming.v1, with: {{}} }}
+"
+            );
+            let json = workflow_json(&source);
+            assert_eq!(json["description"], "a line", "{label}");
+        }
+    }
+
     #[test]
     fn a_valid_name_and_description_convert_via_to_string_into_the_core_workflow() {
         // `Workflow::name`/`description` stay `String` in this task (task
