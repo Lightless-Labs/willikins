@@ -394,6 +394,53 @@ mod tests {
         assert!(DopplerServiceToken::parse("dp.st.short").is_err());
     }
 
+    /// The two token shapes Doppler's own documentation prints, taken
+    /// verbatim from `docs/research/2026-09-12-m2-dependencies.md`
+    /// section 3: one with the optional environment-like segment and one
+    /// without. The pattern this type carries was written from that
+    /// documentation rather than from a token, so the documentation's
+    /// own examples are the one check that it was read correctly.
+    #[test]
+    fn doppler_service_token_accepts_dopplers_documented_examples() {
+        for token in [
+            "dp.st.dev.bAqhcVzrhy5cRHkOlNTc0Ve6w5NUDCpcutm8vGE9myi",
+            "dp.st.gJ23agW5s09x4TKLMJMc4OPIr9fCm3bIs0QAC2L5",
+        ] {
+            assert!(
+                DopplerServiceToken::parse(token).is_ok(),
+                "Doppler's own example was rejected"
+            );
+        }
+    }
+
+    /// The pattern this type carried before milestone 2 was
+    /// `dp\.st\.[A-Za-z0-9._-]{8,}`, which accepted an eight-character
+    /// suffix, a suffix with dots or hyphens inside it, and an uppercase
+    /// environment segment — none of which Doppler ever issues. A type
+    /// whose parse error never quotes its input cannot tell anyone which
+    /// of these it refused, so the shapes are named here instead.
+    #[test]
+    fn doppler_service_token_rejects_what_only_the_old_loose_pattern_allowed() {
+        for token in [
+            // Eight characters was the old minimum; the real suffix is
+            // 40 to 44.
+            "dp.st.aaaaaaaa",
+            // Dots inside the suffix.
+            "dp.st.aaaaaaaaaa.aaaaaaaaaa.aaaaaaaaaa.aaaaaaaaaa",
+            // Hyphens inside the suffix.
+            "dp.st.aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa",
+            // An uppercase environment segment.
+            "dp.st.PRD.exampleexampleexampleexampleexampleexample",
+            // 45 characters, one past the longest Doppler issues.
+            "dp.st.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert!(
+                DopplerServiceToken::parse(token).is_err(),
+                "a shape only the old pattern allowed was accepted"
+            );
+        }
+    }
+
     #[test]
     fn doppler_service_token_rejects_a_missing_prefix() {
         assert!(DopplerServiceToken::parse("hunter2hunter2hunter2").is_err());
