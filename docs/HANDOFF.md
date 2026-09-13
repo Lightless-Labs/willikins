@@ -19,7 +19,19 @@ compaction, before handing off, after a milestone, and after a plan change or di
   security, scope, adversarial), and stamped Reviewed with 20 findings folded in. The design
   doc gained a "Milestone 2 decisions" section. The keyword lists were verified: Swift is
   missing `borrowing`, `consuming`, `nonisolated`; everything else matches its source.
-- **Next action:** dispatch implementation per the plan's task table. Task 0 (three Swift
+- **Group A landed (2026-09-12, late evening):** Workflow `wf_c7a1d060-cec` ran three
+  worktree lanes. Lane 1 (1a, 1b) and lane 3 (task 0, 1d) merged onto `main` with gates
+  green. Lane 2 (1c) was lost: the coordinator's stop message meant for a duplicate agent
+  was read by the real one, which halted with an uncommitted partial diff; that diff is
+  saved as `lane2-partial-1c.patch` in the session scratchpad (two finished type files,
+  `WorkflowName` and `Description`, plus token-literal reshaping) and 1c is re-run on
+  `main`. Tasks 1c, 1e, 2 and 3 run sequentially on `main`, one Workflow. Operator
+  credentials are in
+  `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is a
+  config-scoped service token (`dp.st.`), enough for auth and `doppler.secret.get`
+  against `willikins-test/dev`, not for creating projects, environments or tokens; task
+  8's create-side probe and task 14 need a `dp.sa.` or `dp.pt.` token from the operator.
+- **Next action (when nothing is in flight):** dispatch implementation per the plan's task table. Task 0 (three Swift
   keywords) and group A (1a+1b core serialization and the `Site` enum; 1c types and DSL
   bounds plus the YAML pre-scan; 1d describe labelling) can start at once in separate
   worktrees, sonnet implementing test-first and opus verifying, one Workflow per group as
@@ -70,6 +82,10 @@ research, with a correction block on its slug section),
 - **`cargo check -p willikins-types` is a real gate.** The crate enables its own `executor`
   feature through a self dev-dependency, so `--all-targets` never builds it the way its
   dependents see it. A cfg-gated bug slipped past the other three gates once.
+- **This host has 11 GB of RAM and 6 CPUs, shared with other sessions.** Three parallel
+  worktree lanes each building their own `target/` took 6.2 hours on 2026-09-12 and the
+  coordinator's gate run was killed for memory. Run cargo with `-j 2`, one lane at a time
+  on `main`; parallel groups are at most two lanes, both with `-j 2` in their prompts.
 - **Read the log body, never a captured exit code.** The RTK hook that once rewrote cargo
   commands is gone from this machine (2026-09-12); gates are bare `cargo`. `$?` after a pipe
   in zsh is the last command's status, so never pipe gate output.

@@ -2,6 +2,7 @@
 
 **Created:** 2026-09-12
 **Reviewed:** 2026-09-12 (via document-review workflow: coherence, feasibility, security-lens, scope-guardian, adversarial personas). 20 findings folded in; see "Review resolutions" at the end.
+**Addendum:** 2026-09-12 (evening) — task 1c no longer flips the four core `String` fields; task 1e does, sequentially after group A merges, because 1a/1b and 1c would otherwise restructure the same core test files in parallel worktrees.
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
 **Previous:** `docs/plans/2026-09-11-milestone-1-core.md`
 **Research:** `docs/research/2026-09-12-m2-dependencies.md`
@@ -190,9 +191,10 @@ and types. No crate other than `willikins-core` enables `willikins-types/executo
 - `WorkflowName`: `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`, max 64 characters. `Description`:
   free text, max 1,024 characters, no control characters other than space, refuses
   U+2028 and U+2029 the way `ProjectName` does. Both non-secret, both in the registry so
-  `describe`'s schema can name them. Applied to `Workflow::name`, `Workflow::description`,
-  `InputSpec::description`, and `Plan::workflow`. Closes
-  `todos/2026-09-12-workflow-name-description-bounds.md`.
+  `describe`'s schema can name them. Task 1c parses documents into them and converts to
+  `String` at the core boundary; task 1e (sequential, after group A merges) applies them to
+  `Workflow::name`, `Workflow::description`, `InputSpec::description`, and `Plan::workflow`.
+  Closes `todos/2026-09-12-workflow-name-description-bounds.md`.
 - `reserved.rs`: verified on 2026-09-12 against the primary sources (research note,
   section 5): the Rust reference, JLS 21 section 3.9, kotlinlang.org's keyword reference,
   Microsoft's file-naming page, and for Swift the `swiftlang/swift-book` DocC source that
@@ -793,8 +795,9 @@ separate worktrees; the coordinator merges on `main`.
 | 1a | Core: `Serialize` on every error with the `{kind, message}` shape; `Reported<T>`; `JsonSchema` on the existing result types and a hand-written one for `Value`; CLI adopts the error shape and drops the hand-built JSON | | A | sonnet, verified by opus |
 | 1b | Core: `Site` enum across `CheckError` and `PlanError`; update every sentinel test | 1a | A | sonnet, verified by opus |
 | 1c | Types and DSL: `WorkflowName`, `Description`; byte cap; anchor and alias pre-scan; schema snapshot; format docs | | A | sonnet, verified by opus |
-| 1d | Core: `document_*` fields and willikins-voiced prompts in `describe`; CLI text prefix | | A | sonnet |
-| 2 | `willikins-tools`: move `naming.v1` and `template.render`; both catalogs | 1a..1d | | sonnet |
+| 1d | Core: `document_*` fields and willikins-voiced prompts in `describe`; CLI text prefix | | A | sonnet, verified by opus |
+| 1e | Core: `Workflow::name`, `Workflow::description`, `InputSpec::description`, `Plan::workflow` become `WorkflowName` / `Description`; every core test that builds a `Workflow` follows | 1a..1d merged | | sonnet |
+| 2 | `willikins-tools`: move `naming.v1` and `template.render`; both catalogs | 1a..1e | | sonnet |
 | 3 | Core and fake: `Tool::ensure -> Ensured { outputs, changed }` with every fake `ensure` reading first and the fake project ensure seeding the default configs; `Observation::Mismatch`, `AttributeMismatch`, visibility mismatch in the fake | 2 | | sonnet, verified by opus |
 | 4 | Core: `apply`, `Approval`, `ApplyError`, `ApplyObserver`, `Plan::fingerprint`; fake: rotate tool, failure injection, call counters; second fixture; acceptance tests 5, 6 (including the 6d property test), 7 (core level), 9 | 3 | B | sonnet, verified by opus |
 | 5 | `willikins-journal`; acceptance test 10 | 1a | B | sonnet, verified by opus |
