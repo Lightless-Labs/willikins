@@ -17,10 +17,14 @@ use crate::{DomainType, ParseError};
 pub struct DopplerProject(String);
 
 /// A Doppler config name, such as an environment's root config.
+///
+/// Max 60 characters: Doppler's own "Config Slug" platform limit, which
+/// counts the environment-slug prefix (research note
+/// `docs/research/2026-09-12-m2-dependencies.md`, section 3).
 #[derive(willikins_derive::DomainType)]
 #[domain(
     pattern = "[a-z0-9_]+",
-    max_len = 64,
+    max_len = 60,
     description = "A Doppler config name.",
     example = "prd"
 )]
@@ -37,22 +41,33 @@ pub struct DopplerConfigName(String);
 pub struct DopplerTokenName(String);
 
 /// A secret's name within a Doppler config.
+///
+/// Max 200 characters: Doppler's own "Secret Name" platform limit
+/// (research note `docs/research/2026-09-12-m2-dependencies.md`,
+/// section 3).
 #[derive(willikins_derive::DomainType)]
 #[domain(
     pattern = "[A-Z_][A-Z0-9_]*",
-    max_len = 256,
+    max_len = 200,
     description = "A secret's name within a Doppler config.",
     example = "DATABASE_URL"
 )]
 pub struct SecretName(String);
 
 /// A Doppler service token value. Secret.
+///
+/// The pattern matches Doppler's documented token format exactly: an
+/// optional lowercase environment-like segment (2-35 characters of
+/// `[a-z0-9_-]`), then a dot, then the random suffix -- always 40-44
+/// plain alphanumeric characters, no dots or hyphens inside it (research
+/// note `docs/research/2026-09-12-m2-dependencies.md`, section 3, citing
+/// `https://docs.doppler.com/reference/auth-token-formats`).
 #[derive(willikins_derive::DomainType)]
 #[domain(
-    pattern = r"dp\.st\.[A-Za-z0-9._-]{8,}",
+    pattern = r"dp\.st\.(?:[a-z0-9\-_]{2,35}\.)?[a-zA-Z0-9]{40,44}",
     secret,
     description = "A Doppler service token value.",
-    example = "dp.st.prd.exampleexampleexample"
+    example = "dp.st.prd.exampleexampleexampleexampleexampleexample"
 )]
 pub struct DopplerServiceToken(secrecy::SecretString);
 
@@ -77,8 +92,9 @@ pub struct DopplerConfig {
     name: DopplerConfigName,
 }
 
-/// `project/name`, both parts bounded by 64 characters, plus the separator.
-const DOPPLER_CONFIG_MAX_LEN: usize = 64 + 1 + 64;
+/// `project/name`: [`DopplerProject`] (64) plus the separator plus
+/// [`DopplerConfigName`] (60).
+const DOPPLER_CONFIG_MAX_LEN: usize = 64 + 1 + 60;
 
 /// The published schema pattern: [`DopplerProject`]'s pattern, a literal
 /// slash, then [`DopplerConfigName`]'s pattern, unanchored individually so
@@ -263,8 +279,14 @@ mod tests {
 
     #[test]
     fn doppler_config_name_rejects_over_max_len() {
-        let too_long = "a".repeat(65);
+        let too_long = "a".repeat(61);
         assert!(DopplerConfigName::parse(&too_long).is_err());
+    }
+
+    #[test]
+    fn doppler_config_name_accepts_exactly_max_len() {
+        let at_limit = "a".repeat(60);
+        assert!(DopplerConfigName::parse(&at_limit).is_ok());
     }
 
     #[test]
@@ -333,13 +355,13 @@ mod tests {
 
     #[test]
     fn secret_name_rejects_over_max_len() {
-        let too_long = "A".repeat(257);
+        let too_long = "A".repeat(201);
         assert!(SecretName::parse(&too_long).is_err());
     }
 
     #[test]
     fn secret_name_accepts_exactly_max_len() {
-        let at_limit = "A".repeat(256);
+        let at_limit = "A".repeat(200);
         assert!(SecretName::parse(&at_limit).is_ok());
     }
 
@@ -358,10 +380,12 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn doppler_service_token_accepts_a_valid_token() {
-        let value = DopplerServiceToken::parse("dp.st.prd.exampleexampleexample").unwrap();
+        let value =
+            DopplerServiceToken::parse("dp.st.prd.exampleexampleexampleexampleexampleexample")
+                .unwrap();
         assert_eq!(
             value.expose(&SinkToken::new()),
-            "dp.st.prd.exampleexampleexample"
+            "dp.st.prd.exampleexampleexampleexampleexampleexample"
         );
     }
 
@@ -377,7 +401,9 @@ mod tests {
 
     #[test]
     fn doppler_service_token_debug_and_display_are_redacted_and_never_echo_input() {
-        let value = DopplerServiceToken::parse("dp.st.prd.exampleexampleexample").unwrap();
+        let value =
+            DopplerServiceToken::parse("dp.st.prd.exampleexampleexampleexampleexampleexample")
+                .unwrap();
         assert_eq!(format!("{value:?}"), "[REDACTED DopplerServiceToken]");
         assert_eq!(value.to_string(), "[REDACTED DopplerServiceToken]");
 
@@ -393,11 +419,12 @@ mod tests {
     #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn doppler_service_token_deserialize_works_and_stays_redacted() {
         let value: DopplerServiceToken =
-            serde_json::from_str("\"dp.st.prd.exampleexampleexample\"").unwrap();
+            serde_json::from_str("\"dp.st.prd.exampleexampleexampleexampleexampleexample\"")
+                .unwrap();
         assert_eq!(format!("{value:?}"), "[REDACTED DopplerServiceToken]");
         assert_eq!(
             value.expose(&SinkToken::new()),
-            "dp.st.prd.exampleexampleexample"
+            "dp.st.prd.exampleexampleexampleexampleexampleexample"
         );
 
         let err = serde_json::from_str::<DopplerServiceToken>("\"dp.st.short\"").unwrap_err();
@@ -519,7 +546,7 @@ mod tests {
     fn doppler_config_schema_shape() {
         let schema = serde_json::to_value(DopplerConfig::json_schema()).unwrap();
         assert_eq!(schema["type"], "string");
-        assert_eq!(schema["maxLength"], 129);
+        assert_eq!(schema["maxLength"], 125);
         let config = DopplerConfig::parse("third-thoughts/prd").unwrap();
         let pattern = regex::Regex::new(schema["pattern"].as_str().unwrap()).unwrap();
         assert!(pattern.is_match(&config.to_string()));

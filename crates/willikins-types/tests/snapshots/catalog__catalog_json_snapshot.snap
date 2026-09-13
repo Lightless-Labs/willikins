@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-types/tests/catalog.rs
-assertion_line: 73
+assertion_line: 74
 expression: json
 ---
 [
@@ -237,7 +237,7 @@ expression: json
       "examples": [
         "prd"
       ],
-      "maxLength": 64,
+      "maxLength": 60,
       "pattern": "^(?:[a-z0-9_]+)$"
     }
   },
@@ -254,7 +254,7 @@ expression: json
       "examples": [
         "third-thoughts/prd"
       ],
-      "maxLength": 129,
+      "maxLength": 125,
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9_]+$"
     }
   },
@@ -288,7 +288,7 @@ expression: json
       "examples": [
         "DATABASE_URL"
       ],
-      "maxLength": 256,
+      "maxLength": 200,
       "pattern": "^(?:[A-Z_][A-Z0-9_]*)$"
     }
   },
@@ -296,16 +296,16 @@ expression: json
     "name": "DopplerServiceToken",
     "secret": true,
     "description": "A Doppler service token value.",
-    "example": "dp.st.prd.exampleexampleexample",
+    "example": "dp.st.prd.exampleexampleexampleexampleexampleexample",
     "schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "DopplerServiceToken",
       "description": "A Doppler service token value.",
       "type": "string",
       "examples": [
-        "dp.st.prd.exampleexampleexample"
+        "dp.st.prd.exampleexampleexampleexampleexampleexample"
       ],
-      "pattern": "^(?:dp\\.st\\.[A-Za-z0-9._-]{8,})$"
+      "pattern": "^(?:dp\\.st\\.(?:[a-z0-9\\-_]{2,35}\\.)?[a-zA-Z0-9]{40,44})$"
     }
   },
   {
