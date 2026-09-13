@@ -18,6 +18,8 @@ pub mod describe;
 pub mod plan;
 pub mod reported;
 pub mod site;
+#[cfg(feature = "test-support")]
+pub mod testing;
 pub mod tool;
 pub mod value;
 pub mod workflow;

@@ -8,6 +8,15 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Generated-`Workflow` test helpers (`willikins_core::testing`), used by
+# this crate's own `tests/check_adversarial.rs` and by
+# `willikins-providers-fake`'s convergence property test. Never enabled
+# by a non-dev dependent: see `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s
+# task E, "never a core dev-dependency on the fake crate" — the fake
+# crate enables this feature from *its own* dev-dependency on core.
+test-support = ["dep:proptest"]
+
 [dependencies]
 willikins-types = { workspace = true, features = ["executor"] }
 chrono.workspace = true
@@ -18,16 +27,22 @@ thiserror.workspace = true
 petgraph.workspace = true
 indexmap.workspace = true
 regex.workspace = true
+proptest = { workspace = true, optional = true }
 
 [dev-dependencies]
 insta.workspace = true
 jsonschema.workspace = true
 proc-macro2.workspace = true
-proptest.workspace = true
 quote.workspace = true
 syn = { workspace = true, features = ["visit"] }
 willikins-providers-fake.workspace = true
 willikins-tools.workspace = true
+# Self dev-dependency enabling `test-support` for this crate's own
+# `tests/`, the same trick `willikins-types` uses for its `executor`
+# feature: `--all-targets` never builds a crate the way its dependents
+# see it, so the feature must come from somewhere `cargo test` actually
+# unifies against.
+willikins-core = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

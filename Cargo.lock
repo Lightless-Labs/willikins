@@ -1315,6 +1315,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.119",
  "thiserror",
+ "willikins-core",
  "willikins-providers-fake",
  "willikins-tools",
  "willikins-types",

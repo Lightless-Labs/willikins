@@ -20,6 +20,14 @@ indexmap.workspace = true
 [dev-dependencies]
 insta.workspace = true
 proptest.workspace = true
+# `willikins-core`'s generated-`Workflow` test helpers
+# (`willikins_core::testing`), for `tests/convergence_property.rs`. This
+# crate's own `[dependencies]` entry above stays feature-plain; only this
+# dev-dependency asks for `test-support`, per
+# `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s task E
+# ("never a core dev-dependency on the fake crate" — the direction runs
+# the other way: the fake crate's dev-dependency on core).
+willikins-core = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

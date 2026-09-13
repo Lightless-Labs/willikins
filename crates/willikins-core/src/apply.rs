@@ -293,7 +293,14 @@ impl std::error::Error for ApplyError {}
 
 /// One event [`apply`] reports as it runs, so a caller (a journal, a CLI
 /// progress line) can see a run's shape even if the process dies mid-run.
-#[derive(Debug, Clone)]
+///
+/// Serializes internally tagged (`#[serde(tag = "kind", rename_all =
+/// "snake_case")]`), the same convention as [`NodeStatus`] and every
+/// other tagged enum in this crate: task 5's journal records these
+/// events, so their JSON shape matters starting now, not only once the
+/// journal lands.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ApplyEvent {
     /// About to process this instance.
     NodeStarted {

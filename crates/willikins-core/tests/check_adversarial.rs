@@ -1033,86 +1033,26 @@ const LITERALS: &[&str] = &[
     "[REDACTED DopplerServiceToken]",
 ];
 
-fn arb_binding() -> impl Strategy<Value = Binding> {
-    prop_oneof![
-        prop::sample::select(INPUT_NAMES).prop_map(|n| Binding::Input(input(n))),
-        (
-            prop::sample::select(NODE_NAMES),
-            prop::sample::select(PORTS)
-        )
-            .prop_map(|(n, p)| Binding::Step {
-                node: node(n),
-                port: port(p),
-            }),
-        (
-            prop::sample::select(NODE_NAMES),
-            prop::sample::select(LITERALS),
-            prop::sample::select(PORTS)
-        )
-            .prop_map(|(n, k, p)| Binding::Keyed {
-                node: node(n),
-                key: k.to_string(),
-                port: port(p),
-            }),
-        Just(Binding::Item),
-        prop::sample::select(LITERALS).prop_map(|l| Binding::Literal(l.to_string())),
-    ]
-}
-
-fn arb_node() -> impl Strategy<Value = Node> {
-    (
-        prop::sample::select(TOOLS),
-        prop::option::of(arb_binding()),
-        prop::collection::vec((prop::sample::select(PORTS), arb_binding()), 0..4),
-    )
-        .prop_map(|(tool, for_each, bindings)| {
-            let mut node = Node::new(tool_name(tool));
-            if let Some(binding) = for_each {
-                node = node.for_each(binding);
-            }
-            for (p, binding) in bindings {
-                node = node.port(port(p), binding);
-            }
-            node
-        })
-}
-
-fn arb_input_spec() -> impl Strategy<Value = InputSpec> {
-    (
-        prop::sample::select(TYPE_NAMES),
-        any::<bool>(),
-        any::<bool>(),
-    )
-        .prop_map(|(name, is_list, has_default)| {
-            let declared = if is_list { list_ty(name) } else { ty(name) };
-            let spec = InputSpec::new(declared.clone());
-            if has_default {
-                spec.with_default(Value::unknown(declared))
-            } else {
-                spec
-            }
-        })
-}
-
+// The generators themselves moved to `willikins_core::testing` (task E of
+// `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s task 4b),
+// parameterized by the name universes above, so
+// `willikins-providers-fake`'s convergence property test can reuse them
+// with its own, catalog-restricted universe instead of this file's
+// deliberately adversarial one (which includes `no.such.tool` and
+// `NoSuchType`, names this file's own property wants to draw and this
+// crate's own `check` to reject). Only `arb_workflow`'s own composition
+// is called from here; `willikins_core::testing::{arb_binding, arb_node,
+// arb_input_spec}` are exercised transitively through it (and directly by
+// `willikins-providers-fake`'s own property test).
 fn arb_workflow() -> impl Strategy<Value = Workflow> {
-    (
-        prop::collection::vec((prop::sample::select(INPUT_NAMES), arb_input_spec()), 0..3),
-        prop::collection::vec((prop::sample::select(NODE_NAMES), arb_node()), 0..4),
-        prop::collection::vec((prop::sample::select(INPUT_NAMES), arb_binding()), 0..2),
+    willikins_core::testing::arb_workflow(
+        TOOLS,
+        PORTS,
+        INPUT_NAMES,
+        NODE_NAMES,
+        LITERALS,
+        TYPE_NAMES,
     )
-        .prop_map(|(inputs, nodes, outputs)| {
-            let mut workflow = Workflow::new(workflow_name("generated"));
-            for (name, spec) in inputs {
-                workflow = workflow.input(input(name), spec);
-            }
-            for (name, n) in nodes {
-                workflow = workflow.node(node(name), n);
-            }
-            for (name, binding) in outputs {
-                workflow = workflow.output(output(name), binding);
-            }
-            workflow
-        })
 }
 
 proptest! {
