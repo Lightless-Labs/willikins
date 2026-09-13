@@ -67,11 +67,15 @@ pub use document::{DefaultValue, Document, InputDecl, StepDecl};
 /// and the pre-scan and is deserialized in full (here, a 256 KiB
 /// `description:` plain scalar, refused only afterwards by
 /// `Description`'s own 1,024-character bound). That run's "maximum
-/// resident set size" was 6,422,528 bytes (about 6.1 MiB) — the whole
-/// test-binary process's peak RSS, harness and allocator baseline
-/// included, not an isolated measurement of `parse_document` alone; still
-/// a small, bounded multiple of the 256 KiB source, not the quadratic
-/// blow-up an unbounded anchor/alias amplification produces.
+/// resident set size" was 6,422,528 bytes (about 6.1 MiB); the same
+/// binary running one trivial test instead peaked at 2,998,272 bytes
+/// (about 2.9 MiB), so the parse itself accounts for about 3.4 MiB —
+/// roughly thirteen times the 256 KiB source, a small bounded multiple
+/// rather than the quadratic blow-up an unbounded anchor/alias
+/// amplification produces. Both numbers are whole-process peaks, harness
+/// and allocator baseline included; the difference between them is the
+/// closest this measurement gets to isolating `parse_document`.
+/// Re-measured 2026-09-13 and unchanged.
 pub const MAX_DOCUMENT_BYTES: usize = 256 * 1024;
 
 /// Where a [`DocumentError`] happened.
@@ -1098,6 +1102,111 @@ steps:
             DocumentErrorKind::TooLarge { bytes } => assert_eq!(bytes, 257 * 1024),
             other => panic!("expected TooLarge, got {other:?}"),
         }
+    }
+
+    /// The cap is a byte count, not a character count: a source that is
+    /// comfortably inside 256 KiB *characters* can be well over 256 KiB
+    /// of memory, and memory is what the bound is about. The two numbers
+    /// only disagree when the source is not ASCII, so the test says so
+    /// in multibyte characters or it says nothing.
+    #[test]
+    fn the_cap_counts_bytes_not_characters() {
+        let prefix = "name: demo\ndescription: ";
+        let suffix = "\nsteps:\n  a: { tool: naming.v1, with: {} }\n";
+        let filler_bytes = MAX_DOCUMENT_BYTES - prefix.len() - suffix.len();
+        assert_eq!(
+            filler_bytes % 3,
+            0,
+            "the filler must divide into 3-byte characters"
+        );
+
+        // Exactly at the cap: about a third as many characters as bytes,
+        // and not refused by the cap.
+        let at_cap = format!("{prefix}{}{suffix}", "\u{4E00}".repeat(filler_bytes / 3));
+        assert_eq!(at_cap.len(), MAX_DOCUMENT_BYTES);
+        assert!(at_cap.chars().count() < MAX_DOCUMENT_BYTES / 2);
+        let err = parse_document(&at_cap).unwrap_err();
+        assert!(
+            !matches!(err.kind, DocumentErrorKind::TooLarge { .. }),
+            "a source at exactly the limit must not be TooLarge: {err:?}"
+        );
+
+        // One character further: three bytes over, still nowhere near
+        // the cap in characters, and refused.
+        let over = format!(
+            "{prefix}{}{suffix}",
+            "\u{4E00}".repeat(filler_bytes / 3 + 1)
+        );
+        assert!(over.chars().count() < MAX_DOCUMENT_BYTES / 2);
+        match parse_document(&over).unwrap_err().kind {
+            DocumentErrorKind::TooLarge { bytes } => {
+                assert_eq!(bytes, MAX_DOCUMENT_BYTES + 3);
+            }
+            other => panic!("expected TooLarge, got {other:?}"),
+        }
+    }
+
+    /// Nesting depth is the one dimension a byte cap does not obviously
+    /// bound: 10,000 nested flow sequences cost two bytes each, so the
+    /// source is tiny while the structure is not. Neither parser recurses
+    /// on the stack for it — `saphyr_parser` counts flow levels in a
+    /// `u8` and refuses past 255 with a scan error the pre-scan then
+    /// reports, and `serde_yaml_ng` carries its own depth budget of 128
+    /// — so this is an ordinary refusal rather than the stack overflow
+    /// it would be under a recursive-descent parser. A stack overflow
+    /// aborts the process, which no `Result` can express and no caller
+    /// can catch, so it is worth a test that would die rather than fail.
+    #[test]
+    fn deeply_nested_flow_collections_are_refused_rather_than_overflowing_the_stack() {
+        for depth in [100_usize, 255, 256, 10_000] {
+            let nested = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+            let source = format!(
+                "\
+name: demo
+inputs:
+  a: {{ type: list<Text>, default: {nested} }}
+steps: {{}}
+"
+            );
+            assert!(source.len() < MAX_DOCUMENT_BYTES);
+            let err = parse_document(&source).unwrap_err();
+            assert!(
+                matches!(err.kind, DocumentErrorKind::Yaml { .. }),
+                "depth {depth}: expected a Yaml error, got {err:?}"
+            );
+        }
+    }
+
+    /// The block-style half of the same claim. Block nesting costs two
+    /// characters of indentation per level *per line*, so the deepest
+    /// nesting that fits inside the cap is quadratically shallower than
+    /// the flow-style one — the cap bounds depth here on its own — and
+    /// what is left still has to be refused rather than recursed.
+    #[test]
+    fn deeply_nested_block_collections_inside_the_cap_do_not_overflow_the_stack() {
+        let depth = 400;
+        let mut nested = String::new();
+        for level in 0..depth {
+            nested.push_str(&" ".repeat(level * 2));
+            nested.push_str("- \n");
+        }
+        let source = format!(
+            "\
+name: demo
+inputs:
+  a:
+    type: list<Text>
+    default:
+{nested}
+steps: {{}}
+"
+        );
+        assert!(source.len() < MAX_DOCUMENT_BYTES, "{}", source.len());
+        let err = parse_document(&source).unwrap_err();
+        assert!(
+            matches!(err.kind, DocumentErrorKind::Yaml { .. }),
+            "expected a Yaml error, got {err:?}"
+        );
     }
 
     /// Not run by the gates: builds the worst case the module doc's
