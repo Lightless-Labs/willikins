@@ -459,3 +459,102 @@ fn a_re_plan_failure_surfaces_as_apply_error_plan() {
     assert_eq!(json["kind"], "Plan");
     assert_eq!(json["error"]["kind"], "MissingInput");
 }
+
+/// Acceptance test 6c's `Converged` half: applying the positive fixture a
+/// second time, against the state the first apply left behind, must
+/// leave every reversible node `Unchanged` and `ci_secret` `Converged` --
+/// its own `value` input (`token`'s `token` output) is `Unknown` in *this*
+/// run (the token already exists, so `FixedTokenService`'s `ensure`, like
+/// the real fake tool, cannot report its value back), and `ci_secret`'s
+/// own fresh `read` reports it `Present` (so its planned action is
+/// `NoOp`): exactly the "required input Unknown, planned NoOp" branch
+/// (`NodeStatus::Converged`), the one status none of this file's other
+/// tests exercise.
+#[test]
+fn a_second_apply_against_the_first_ones_state_converges_the_unreadable_secret_consumer() {
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let catalog = apply_test_catalog(Arc::clone(&state));
+    let workflow = common::new_rust_service_workflow();
+    let checked = check(&workflow, &catalog).expect("checks cleanly");
+    let inputs = common::new_rust_service_inputs();
+
+    let first_plan = plan(&checked, &inputs, &catalog).expect("first plan succeeds");
+    apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &first_plan,
+        &Approval::Auto,
+        &mut RecordingObserver::new(),
+    )
+    .expect("first apply creates everything");
+
+    let second_plan = plan(&checked, &inputs, &catalog).expect("re-plan against populated state");
+    let mut observer = RecordingObserver::new();
+    let applied = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &second_plan,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect("second apply converges");
+
+    let by_name = |name: &str, instance: Option<&str>| {
+        applied
+            .nodes
+            .iter()
+            .find(|n| n.name.as_str() == name && n.instance.as_deref() == instance)
+            .unwrap_or_else(|| panic!("no applied node `{name}` (instance {instance:?})"))
+    };
+    assert!(matches!(
+        by_name("repo", None).status,
+        NodeStatus::Unchanged
+    ));
+    assert!(matches!(
+        by_name("doppler", None).status,
+        NodeStatus::Unchanged
+    ));
+    for key in ["dev", "stg", "prd"] {
+        assert!(
+            matches!(by_name("configs", Some(key)).status, NodeStatus::Unchanged),
+            "configs[{key}]: {:?}",
+            by_name("configs", Some(key)).status
+        );
+    }
+    assert!(
+        matches!(by_name("token", None).status, NodeStatus::Unchanged),
+        "token: {:?}",
+        by_name("token", None).status
+    );
+    assert!(
+        matches!(by_name("ci_secret", None).status, NodeStatus::Converged),
+        "ci_secret: {:?}",
+        by_name("ci_secret", None).status
+    );
+
+    // `ci_secret`'s Converged instance still got a Started/Finished pair
+    // (rule 6: every attempted instance, not just the ones that call a
+    // tool).
+    let saw_ci_secret_converged_pair = observer.events.windows(2).any(|pair| {
+        matches!(&pair[0], ApplyEvent::NodeStarted { node, .. } if node.as_str() == "ci_secret")
+            && matches!(
+                &pair[1],
+                ApplyEvent::NodeFinished { node, status, .. }
+                    if node.as_str() == "ci_secret" && matches!(status, NodeStatus::Converged)
+            )
+    });
+    assert!(
+        saw_ci_secret_converged_pair,
+        "expected a Started/Finished pair for ci_secret's Converged instance: {:?}",
+        observer.events
+    );
+
+    // No second GitHub Actions secret was written: the fake state's
+    // membership set is still exactly the one entry the first apply
+    // created (task 4b's `ensure_calls` counter would pin this more
+    // directly; this is the signal available without it).
+    let locked = state.lock().unwrap();
+    assert_eq!(locked.github_actions_secrets.len(), 1);
+}

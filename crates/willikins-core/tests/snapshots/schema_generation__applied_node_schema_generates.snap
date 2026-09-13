@@ -51,52 +51,52 @@ expression: schema
           "description": "A pure tool computed its outputs; there was nothing to create or\nleave alone.",
           "type": "object",
           "properties": {
-            "status": {
+            "kind": {
               "type": "string",
               "const": "computed"
             }
           },
           "required": [
-            "status"
+            "kind"
           ]
         },
         {
           "description": "`ensure` reported [`Ensured::changed`] `true`.",
           "type": "object",
           "properties": {
-            "status": {
+            "kind": {
               "type": "string",
               "const": "created"
             }
           },
           "required": [
-            "status"
+            "kind"
           ]
         },
         {
           "description": "`ensure` reported [`Ensured::changed`] `false`.",
           "type": "object",
           "properties": {
-            "status": {
+            "kind": {
               "type": "string",
               "const": "unchanged"
             }
           },
           "required": [
-            "status"
+            "kind"
           ]
         },
         {
           "description": "A required input was [`crate::value::ValueState::Unknown`] and the\nplanned action was [`Action::NoOp`]: the resource already matches,\nby the plan's own observation, and nothing was called.",
           "type": "object",
           "properties": {
-            "status": {
+            "kind": {
               "type": "string",
               "const": "converged"
             }
           },
           "required": [
-            "status"
+            "kind"
           ]
         },
         {
@@ -107,13 +107,13 @@ expression: schema
               "description": "The failure `ensure` reported.",
               "$ref": "#/$defs/ToolError"
             },
-            "status": {
+            "kind": {
               "type": "string",
               "const": "failed"
             }
           },
           "required": [
-            "status",
+            "kind",
             "error"
           ]
         },
@@ -121,13 +121,13 @@ expression: schema
           "description": "This instance was never attempted: an earlier instance in the same\nrun failed or was blocked first.",
           "type": "object",
           "properties": {
-            "status": {
+            "kind": {
               "type": "string",
               "const": "not_run"
             }
           },
           "required": [
-            "status"
+            "kind"
           ]
         }
       ]

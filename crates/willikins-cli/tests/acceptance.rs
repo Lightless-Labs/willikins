@@ -1195,3 +1195,60 @@ fn milestone_2_acceptance_09_ensure_on_the_mismatch_conflicts_and_writes_nothing
     let after = serde_json::to_value(&*state.lock().unwrap()).expect("FakeState serializes");
     assert_eq!(before, after, "a refused ensure must write nothing");
 }
+
+/// Task 4a's acceptance test 7, the `ApprovalRequired` half, through a
+/// real parsed document (`workflows/fixtures/irreversible.yaml`) against
+/// the real, unmodified fake catalog. The refusal happens at `apply`'s
+/// rule 1 -- before the re-plan and before any `ensure` call -- so it
+/// holds even though this fixture's `ci_secret` node would otherwise run
+/// into the fake `doppler.service_token.ensure` gap that
+/// `willikins-core`'s own `tests/common::FixedTokenService` works around
+/// (see that type's doc comment, and this task's notes): rule 1 refuses
+/// before the walk ever reaches that node, so the unmodified fake catalog
+/// is exactly right for this half. The `Human`-approval half (which does
+/// reach that node) is covered at the core level instead, against the
+/// substitute catalog.
+#[test]
+fn milestone_2_acceptance_07_auto_on_the_irreversible_fixture_refuses_before_any_provider_call() {
+    let workflow = load(&fixture("irreversible.yaml"));
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let checked = willikins_core::check(&workflow, &catalog)
+        .expect("milestone 2 acceptance test 7: irreversible.yaml must check cleanly");
+    let inputs = resolve_inputs(
+        "milestone 2 acceptance test 7",
+        &checked,
+        &[
+            ("slug", RawInput::Scalar("third-thoughts".to_string())),
+            ("org", RawInput::Scalar("lightless-labs".to_string())),
+        ],
+    );
+    let approved = willikins_core::plan(&checked, &inputs, &catalog)
+        .expect("milestone 2 acceptance test 7: plan against empty state succeeds");
+    assert_eq!(approved.class, Class::Irreversible);
+    assert!(approved.requires_approval);
+
+    let mut observer = willikins_core::NoopObserver;
+    let err = willikins_core::apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &willikins_core::Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("milestone 2 acceptance test 7: Auto must refuse an Irreversible plan");
+    match err {
+        willikins_core::ApplyError::ApprovalRequired { class } => {
+            assert_eq!(class, Class::Irreversible);
+        }
+        other => panic!("milestone 2 acceptance test 7: expected ApprovalRequired, got {other:?}"),
+    }
+
+    let locked = state.lock().unwrap();
+    assert!(locked.github_repos.is_empty(), "no provider call was made");
+    assert!(
+        locked.doppler_projects.is_empty(),
+        "no provider call was made"
+    );
+}

@@ -111,6 +111,53 @@ fn collect_sink_token_aliases(file: &syn::File) -> HashSet<String> {
     collector.aliases
 }
 
+/// Flatten `stream` into its leaf tokens (idents and puncts), recursing
+/// into every [`proc_macro2::Group`] rather than stopping at it: `syn`
+/// does not parse a macro invocation's body as Rust syntax at all (it is
+/// an opaque [`proc_macro2::TokenStream`] on [`syn::Macro::tokens`]), so a
+/// call to `SinkToken::new()` written inside one (`vec![SinkToken::new()]`,
+/// `assert_eq!(x, SinkToken::new())`) is invisible to [`FileWalker`]'s
+/// `syn`-AST-only visitor unless this file scans the raw tokens itself.
+fn flatten_tokens(stream: proc_macro2::TokenStream, out: &mut Vec<proc_macro2::TokenTree>) {
+    for tt in stream {
+        if let proc_macro2::TokenTree::Group(group) = &tt {
+            flatten_tokens(group.stream(), out);
+        } else {
+            out.push(tt);
+        }
+    }
+}
+
+/// Every `<alias>::new` occurrence found in `tokens` (a macro invocation's
+/// body), as a rendered `"<alias>::new"` string, for any `alias` in
+/// `aliases`.
+fn scan_tokens_for_sink_token_new(
+    tokens: proc_macro2::TokenStream,
+    aliases: &HashSet<String>,
+) -> Vec<String> {
+    let mut flat = Vec::new();
+    flatten_tokens(tokens, &mut flat);
+    let mut hits = Vec::new();
+    let mut i = 0;
+    while i + 3 < flat.len() {
+        if let (
+            proc_macro2::TokenTree::Ident(owner),
+            proc_macro2::TokenTree::Punct(colon1),
+            proc_macro2::TokenTree::Punct(colon2),
+            proc_macro2::TokenTree::Ident(new_ident),
+        ) = (&flat[i], &flat[i + 1], &flat[i + 2], &flat[i + 3])
+            && colon1.as_char() == ':'
+            && colon2.as_char() == ':'
+            && new_ident == "new"
+            && aliases.contains(&owner.to_string())
+        {
+            hits.push(format!("{owner}::{new_ident}"));
+        }
+        i += 1;
+    }
+    hits
+}
+
 /// Whether `path` (optionally qualified via `qself`, the `<Type>::` of a
 /// fully qualified call) names `<alias>::new` for some `alias` in
 /// `aliases`.
@@ -237,6 +284,16 @@ impl<'ast> Visit<'ast> for FileWalker<'_> {
             self.violations.push(rendered);
         }
         syn::visit::visit_expr_path(self, node);
+    }
+
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        if !self.test_only {
+            for hit in scan_tokens_for_sink_token_new(node.tokens.clone(), self.aliases) {
+                self.violations
+                    .push(format!("(inside a macro invocation) {hit}"));
+            }
+        }
+        syn::visit::visit_macro(self, node);
     }
 }
 
@@ -372,12 +429,13 @@ fn every_sink_token_new_call_site_is_the_executor_a_test_item_or_a_tests_file() 
 /// the exemption were actually enforced against `tests/` files.
 #[test]
 fn a_tests_directory_file_calling_sink_token_new_is_not_itself_a_failure() {
-    let path = crates_root().join("willikins-providers-fake/src/tools/doppler_project_ensure.rs");
+    let path = crates_root().join("willikins-cli/tests/acceptance.rs");
     let source = std::fs::read_to_string(&path).unwrap();
     assert!(
         source.contains("SinkToken::new()"),
-        "expected {} to still call SinkToken::new in its own #[cfg(test)] module \
-         (this test's premise), but it did not: update this test if that file changed",
+        "expected {} (a file under a `tests/` directory, never walked by \
+         `walk_crate` at all) to still call SinkToken::new (this test's premise), \
+         but it did not: update this test if that file changed",
         path.display()
     );
 }
@@ -406,16 +464,109 @@ fn probe_rs_calls_sink_token_new_and_is_exempt_via_its_parent_declaration() {
     );
 }
 
-/// The executor's own call site is asserted to be exactly one.
+/// The executor's own call site is asserted to be exactly one, through
+/// the same `walk_crate` machinery the main guard test uses (not a text
+/// search): walking `apply.rs` with a never-matching exempt path (so its
+/// own call site is *not* filtered out this time) must find exactly one
+/// violation. `apply.rs` declares `mod principal; mod timestamp;`, both
+/// walked too as a side effect; neither calls `SinkToken::new`, so this
+/// still isolates the count to `apply.rs`'s own site.
 #[test]
 fn the_executor_has_exactly_one_sink_token_new_call_site() {
     let path = crates_root().join("willikins-core/src/apply.rs");
-    let source = std::fs::read_to_string(&path).unwrap();
-    let count = source.matches("SinkToken::new()").count();
+    let mut violations = Vec::new();
+    walk_crate(&path, Path::new("__no_exempt_module__"), &mut violations);
     assert_eq!(
-        count,
+        violations.len(),
         1,
-        "expected exactly one `SinkToken::new()` call site in {}",
+        "expected exactly one non-test SinkToken::new call site starting from {}: {violations:?}",
         path.display()
     );
+}
+
+// -------------------------------------------------------------
+// `FileWalker` unit tests: proof the guard actually catches something.
+//
+// Every test above this point passes vacuously if `path_is_sink_token_new`
+// returned `false` unconditionally -- the workspace has zero violations
+// today, so an always-empty `violations` list would look identical to a
+// working guard. These tests run `FileWalker` directly over small,
+// hand-written sources and assert on what it finds, independent of
+// anything in the real workspace tree.
+// -------------------------------------------------------------
+
+/// Every violation `FileWalker` finds walking `source` as a whole file,
+/// starting `test_only` as given.
+fn violations_in(source: &str, test_only: bool) -> Vec<String> {
+    let file =
+        syn::parse_file(source).unwrap_or_else(|err| panic!("{source:?} failed to parse: {err}"));
+    let aliases = collect_sink_token_aliases(&file);
+    let mut walker = FileWalker::new(&aliases);
+    walker.test_only = test_only;
+    for item in &file.items {
+        walker.visit_item(item);
+    }
+    walker.violations
+}
+
+#[test]
+fn walker_catches_a_bare_unqualified_call() {
+    let violations = violations_in("fn f() { SinkToken::new(); }", false);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+}
+
+#[test]
+fn walker_exempts_a_call_inside_a_cfg_test_function() {
+    let violations = violations_in("#[cfg(test)] fn f() { SinkToken::new(); }", false);
+    assert!(violations.is_empty(), "{violations:?}");
+}
+
+#[test]
+fn walker_exempts_a_call_inside_a_cfg_test_inline_module() {
+    let violations = violations_in("#[cfg(test)] mod t { fn f() { SinkToken::new(); } }", false);
+    assert!(violations.is_empty(), "{violations:?}");
+}
+
+#[test]
+fn walker_catches_a_call_through_a_renamed_import() {
+    let violations = violations_in(
+        "use willikins_types::SinkToken as T; fn f() { T::new(); }",
+        false,
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+}
+
+#[test]
+fn walker_catches_a_fully_qualified_call() {
+    let violations = violations_in("fn f() { <SinkToken>::new(); }", false);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+}
+
+#[test]
+fn walker_treats_the_whole_file_as_test_only_when_told_to() {
+    // Mirrors how `walk_crate` treats a file reached only through a
+    // `#[cfg(test)] mod foo;` declaration in its parent (`probe.rs`'s own
+    // situation): the file itself carries no `#[cfg(test)]`, but the
+    // caller starts the walk with `test_only: true`.
+    let violations = violations_in("fn f() { SinkToken::new(); }", true);
+    assert!(violations.is_empty(), "{violations:?}");
+}
+
+#[test]
+fn walker_catches_a_call_inside_a_macro_invocation() {
+    let violations = violations_in("fn f() { let _ = vec![SinkToken::new()]; }", false);
+    assert_eq!(
+        violations.len(),
+        1,
+        "a macro invocation's body is opaque to syn's AST and needs the token scan: {violations:?}"
+    );
+}
+
+#[test]
+fn walker_exempts_a_macro_invocation_inside_a_cfg_test_function() {
+    let violations = violations_in(
+        "#[cfg(test)] fn f() { let _ = vec![SinkToken::new()]; }",
+        false,
+    );
+    assert!(violations.is_empty(), "{violations:?}");
 }

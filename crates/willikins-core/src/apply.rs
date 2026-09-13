@@ -76,7 +76,7 @@ pub enum Approval {
 
 /// What happened to one planned node instance during [`apply`].
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
-#[serde(tag = "status", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NodeStatus {
     /// A pure tool computed its outputs; there was nothing to create or
     /// leave alone.

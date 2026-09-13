@@ -22,6 +22,7 @@ regex.workspace = true
 [dev-dependencies]
 insta.workspace = true
 jsonschema.workspace = true
+proc-macro2.workspace = true
 proptest.workspace = true
 quote.workspace = true
 syn = { workspace = true, features = ["visit"] }
