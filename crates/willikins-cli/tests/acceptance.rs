@@ -2183,6 +2183,19 @@ fn milestone_2_acceptance_06_every_instance_of_both_fixtures_converges_after_a_f
             matches!(err, ApplyError::Tool { .. }),
             "{label}: expected ApplyError::Tool, got {err:?}"
         );
+        // The rotation mints the marker token before it can fail at
+        // `ci_secret`, so the partial `Applied` this error carries holds a
+        // `Known` secret: it must still render redacted everywhere.
+        for rendering in [
+            err.to_string(),
+            format!("{err:?}"),
+            serde_json::to_string(&err).expect("ApplyError serializes"),
+        ] {
+            assert!(
+                !rendering.contains(MARKER_BYTES),
+                "{label}: a failed rotation leaked the marker: {rendering}"
+            );
+        }
 
         let second_plan = willikins_core::plan(&checked, &inputs, &catalog)
             .unwrap_or_else(|err| panic!("{label}: second plan must succeed: {err}"));
