@@ -54,7 +54,9 @@ pub use timestamp::Timestamp;
 /// Who, or what policy, approved a plan for [`apply`].
 ///
 /// `Auto` is the caller asserting no human looked at this plan; `apply`
-/// itself decides whether that is good enough (`Plan::requires_approval`).
+/// itself decides whether that is good enough, from the checked
+/// workflow's own [`Class`] rather than from the plan's
+/// `requires_approval` flag (see `apply`'s rule 1).
 /// A server only ever constructs `Human` from a journaled
 /// `ApprovalGranted` event for the plan's own id — never from a bare
 /// caller claim — but that binding is `willikins-server`'s job; this type
@@ -467,8 +469,13 @@ impl ApplyObserver for RecordingObserver {
 ///
 /// Implements the design's six numbered rules in order:
 ///
-/// 1. `approved.requires_approval && approval == Auto` refuses with
-///    [`ApplyError::ApprovalRequired`], before any provider call.
+/// 1. `approval == Auto` on work that needs a human refuses with
+///    [`ApplyError::ApprovalRequired`], before any provider call. Whether
+///    it needs one is read from `checked`'s own
+///    [`Class`] — a property of the workflow and the tools it uses, which
+///    a caller cannot forge — as well as from `approved.requires_approval`,
+///    so neither a cleared flag nor a weaker workflow's plan can open the
+///    gate.
 /// 2. Re-plans via [`plan`]; a [`PlanError`] becomes [`ApplyError::Plan`].
 ///    Compares [`Plan::fingerprint`] per instance, in order; the first
 ///    difference is [`ApplyError::Drift`]. Nothing has been executed yet.
@@ -503,10 +510,20 @@ pub fn apply(
     approval: &Approval,
     observer: &mut dyn ApplyObserver,
 ) -> Result<Applied, ApplyError> {
-    // Rule 1.
-    if approved.requires_approval && matches!(approval, Approval::Auto) {
+    // Rule 1. The class of the work about to run is read from `checked`,
+    // not from `approved`: `Plan`'s fields are public, so its
+    // `requires_approval` can arrive cleared (rebuilt from a journal line,
+    // handed across a process boundary) or belong to another, weaker
+    // workflow whose instances fingerprint identically — and rule 2's
+    // drift check compares actions and outputs, never a class. `checked`
+    // is what the run actually executes, and its class is derived from the
+    // tools it uses. The approved plan's own flag still refuses on its
+    // own, so a plan is never treated as less privileged than it claims.
+    if (checked.class.requires_approval() || approved.requires_approval)
+        && matches!(approval, Approval::Auto)
+    {
         return Err(ApplyError::ApprovalRequired {
-            class: approved.class,
+            class: checked.class,
         });
     }
 

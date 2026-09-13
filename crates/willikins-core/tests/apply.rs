@@ -1174,3 +1174,60 @@ fn an_unknown_required_input_on_a_planned_no_op_converges_without_a_call() {
         "`Converged` means no provider call was made"
     );
 }
+
+/// Rule 1 must not take the approved plan's own word for whether approval
+/// is needed. [`willikins_core::Plan`] is a plain struct with public
+/// fields, reconstructed from a journal line or handed across a process
+/// boundary, so its `requires_approval` can arrive cleared; and a plan
+/// legitimately made for a `Reversible` workflow whose instances happen to
+/// fingerprint identically would pass the drift check too. The class of
+/// the work about to run is a property of the *checked workflow*, which
+/// the caller cannot forge, so that is what the gate reads.
+#[test]
+fn a_cleared_approval_flag_does_not_bypass_the_gate() {
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let catalog = apply_test_catalog(Arc::clone(&state));
+    let workflow = common::irreversible_workflow();
+    let checked = check(&workflow, &catalog).expect("irreversible workflow checks cleanly");
+    assert_eq!(checked.class, Class::Irreversible);
+    let inputs = common::new_rust_service_inputs();
+
+    let mut forged = plan(&checked, &inputs, &catalog).expect("plan against empty state succeeds");
+    forged.requires_approval = false;
+    forged.class = Class::Reversible;
+
+    // `plan` reads; only what `apply` does from here on counts.
+    {
+        let mut locked = state.lock().unwrap();
+        locked.read_calls.clear();
+        locked.ensure_calls.clear();
+    }
+
+    let mut observer = RecordingObserver::new();
+    let err = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &forged,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("the checked workflow's class decides, not the plan's flag");
+    match err {
+        ApplyError::ApprovalRequired { class } => assert_eq!(class, Class::Irreversible),
+        other => panic!("expected ApprovalRequired, got {other:?}"),
+    }
+
+    assert!(observer.events.is_empty(), "nothing ran before the refusal");
+    let locked = state.lock().unwrap();
+    assert!(
+        locked.read_calls.is_empty(),
+        "a refused apply must not even re-plan: {:?}",
+        locked.read_calls
+    );
+    assert!(
+        locked.ensure_calls.is_empty(),
+        "and must call no ensure: {:?}",
+        locked.ensure_calls
+    );
+}
