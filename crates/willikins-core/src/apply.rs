@@ -188,9 +188,12 @@ pub enum ApplyError {
         instance: Option<String>,
         /// How it drifted. Renamed on the wire to `detail`: a field
         /// literally named `kind` would collide with this enum's own
-        /// internal tag.
+        /// internal tag. Boxed (`Box<T>` serializes exactly as `T` would)
+        /// so this variant does not dominate `ApplyError`'s overall size
+        /// the way an inline [`DriftKind::Output`] -- two [`Value`]s wide
+        /// -- otherwise would (`clippy::result_large_err`).
         #[serde(rename = "detail")]
-        kind: DriftKind,
+        kind: Box<DriftKind>,
     },
     /// A [`Binding::Step`] or [`Binding::Keyed`] port required by `node`
     /// resolved to [`crate::value::ValueState::Unknown`] because `from`'s
@@ -245,7 +248,7 @@ impl std::fmt::Display for ApplyError {
                     Some(key) => format!("{node}[{key}]"),
                     None => node.to_string(),
                 };
-                match kind {
+                match kind.as_ref() {
                     DriftKind::Action { planned, observed } => write!(
                         f,
                         "{where_}: planned action {planned:?} no longer matches the current \
@@ -728,10 +731,10 @@ fn check_drift(approved: &Plan, fresh: &Plan) -> Result<(), ApplyError> {
                     return Err(ApplyError::Drift {
                         node: a.name.clone(),
                         instance: a.instance.clone(),
-                        kind: DriftKind::Action {
+                        kind: Box::new(DriftKind::Action {
                             planned: a.action,
                             observed: b.action,
-                        },
+                        }),
                     });
                 }
                 if let Some(diff_idx) = (0..a.outputs.len().min(b.outputs.len()))
@@ -755,11 +758,11 @@ fn check_drift(approved: &Plan, fresh: &Plan) -> Result<(), ApplyError> {
                     return Err(ApplyError::Drift {
                         node: a.name.clone(),
                         instance: a.instance.clone(),
-                        kind: DriftKind::Output {
+                        kind: Box::new(DriftKind::Output {
                             port,
                             planned: planned_value,
                             observed: observed_value,
-                        },
+                        }),
                     });
                 }
             }
@@ -767,20 +770,20 @@ fn check_drift(approved: &Plan, fresh: &Plan) -> Result<(), ApplyError> {
                 return Err(ApplyError::Drift {
                     node: a.name.clone(),
                     instance: a.instance.clone(),
-                    kind: DriftKind::Action {
+                    kind: Box::new(DriftKind::Action {
                         planned: a.action,
                         observed: a.action,
-                    },
+                    }),
                 });
             }
             (None, Some(b)) => {
                 return Err(ApplyError::Drift {
                     node: b.name.clone(),
                     instance: b.instance.clone(),
-                    kind: DriftKind::Action {
+                    kind: Box::new(DriftKind::Action {
                         planned: b.action,
                         observed: b.action,
-                    },
+                    }),
                 });
             }
             (None, None) => unreachable!("idx < len = max(approved_fp.len(), fresh_fp.len())"),

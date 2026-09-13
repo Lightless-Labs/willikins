@@ -291,7 +291,7 @@ impl FixedTokenService {
         }
     }
 
-    fn key_ports(&self, inputs: &Inputs) -> (DopplerConfig, DopplerTokenName) {
+    fn key_ports(inputs: &Inputs) -> (DopplerConfig, DopplerTokenName) {
         let config = inputs
             .get(&port("config"))
             .and_then(Value::downcast::<DopplerConfig>)
@@ -318,7 +318,7 @@ impl Tool for FixedTokenService {
     }
 
     fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
-        let (config, name) = self.key_ports(inputs);
+        let (config, name) = Self::key_ports(inputs);
         let state = self.state.lock().unwrap();
         if state
             .doppler_service_tokens
@@ -333,7 +333,7 @@ impl Tool for FixedTokenService {
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
-        let (config, name) = self.key_ports(inputs);
+        let (config, name) = Self::key_ports(inputs);
         let mut state = self.state.lock().unwrap();
         let key = doppler_service_token_key(&config, &name);
         if state.doppler_service_tokens.contains(&key) {

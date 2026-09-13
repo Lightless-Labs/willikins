@@ -34,10 +34,10 @@ fn apply_error_samples() -> Vec<ApplyError> {
         ApplyError::Drift {
             node: node("n"),
             instance: None,
-            kind: DriftKind::Action {
+            kind: Box::new(DriftKind::Action {
                 planned: Action::Create,
                 observed: Action::NoOp,
-            },
+            }),
         },
         ApplyError::UnknownInput {
             node: node("n"),
@@ -117,10 +117,10 @@ fn drift_renames_its_inner_kind_field_to_avoid_the_outer_tag() {
     let error = ApplyError::Drift {
         node: node("n"),
         instance: Some("k".to_string()),
-        kind: DriftKind::Action {
+        kind: Box::new(DriftKind::Action {
             planned: Action::Create,
             observed: Action::NoOp,
-        },
+        }),
     };
     let json = serde_json::to_value(&error).unwrap();
     assert_eq!(json["kind"], "Drift");

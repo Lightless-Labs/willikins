@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use syn::visit::Visit;
-use syn::{Attribute, Ident, Item, ItemUse, UseTree};
+use syn::{Attribute, Ident, ItemUse, UseTree};
 
 /// The workspace's `crates/` directory, from this crate's own manifest
 /// directory.
@@ -171,7 +171,7 @@ impl<'a> FileWalker<'a> {
     }
 }
 
-impl<'a, 'ast> Visit<'ast> for FileWalker<'a> {
+impl<'ast> Visit<'ast> for FileWalker<'_> {
     fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
         let was = self.test_only;
         if has_cfg_test(&node.attrs) {
@@ -284,8 +284,8 @@ fn resolve_mod_file(parent_file: &Path, mod_name: &str) -> PathBuf {
 /// `root` (`lib.rs` or `main.rs`), collecting every non-test call site of
 /// `SinkToken::new` under `crate_name::exempt_module_path` treated as the
 /// one allowed executor site.
-fn walk_crate(root: PathBuf, exempt_relative_path: &Path, violations: &mut Vec<Violation>) {
-    let mut queue: Vec<(PathBuf, bool)> = vec![(root.clone(), false)];
+fn walk_crate(root: &Path, exempt_relative_path: &Path, violations: &mut Vec<Violation>) {
+    let mut queue: Vec<(PathBuf, bool)> = vec![(root.to_path_buf(), false)];
     let mut visited: HashSet<PathBuf> = HashSet::new();
 
     while let Some((path, inherited_test_only)) = queue.pop() {
@@ -347,7 +347,7 @@ fn every_sink_token_new_call_site_is_the_executor_a_test_item_or_a_tests_file() 
             // uniform.
             PathBuf::from("__no_exempt_module__")
         };
-        walk_crate(root, &exempt, &mut violations);
+        walk_crate(&root, &exempt, &mut violations);
     }
 
     assert!(

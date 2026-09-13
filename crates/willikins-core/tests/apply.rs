@@ -191,10 +191,13 @@ fn drift_on_action_stops_before_any_provider_call() {
         ApplyError::Drift {
             node,
             instance,
-            kind: DriftKind::Action { planned, observed },
+            kind,
         } => {
             assert_eq!(node.as_str(), "repo");
             assert_eq!(instance, None);
+            let DriftKind::Action { planned, observed } = *kind else {
+                panic!("expected Drift on Action for `repo`, got {kind:?}");
+            };
             assert_eq!(planned, Action::Create);
             assert_eq!(observed, Action::NoOp);
         }
