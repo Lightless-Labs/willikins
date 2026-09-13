@@ -1390,6 +1390,133 @@ steps:
         }
     }
 
+    /// Every syntactic shape an anchor or an alias can take, pinned in
+    /// one place. The pre-scan works on the event stream rather than on
+    /// the source text, so none of these is a separate code path — which
+    /// is exactly the claim worth pinning, since a text-level check
+    /// would need a case for each and would miss at least one.
+    #[test]
+    fn pre_scan_refuses_every_shape_an_anchor_or_alias_can_take() {
+        let cases = [
+            // An alias used as a flow mapping's value.
+            (
+                "alias in a flow mapping",
+                "\
+name: demo
+inputs: { a: { type: Text, default: &s q }, b: { type: Text, default: *s } }
+steps: {}
+",
+            ),
+            // An alias used as a flow sequence's item.
+            (
+                "alias in a flow sequence",
+                "\
+name: demo
+inputs:
+  a: { type: Text, default: &s q }
+  b: { type: list<Text>, default: [*s] }
+steps: {}
+",
+            ),
+            // An anchor on a mapping *key* rather than on a value.
+            (
+                "anchor on a mapping key",
+                "\
+name: demo
+&k description: hi
+steps: {}
+",
+            ),
+            // An anchor on an explicitly empty scalar.
+            (
+                "anchor on an empty quoted scalar",
+                "\
+name: demo
+description: &s \"\"
+steps: {}
+",
+            ),
+            // An anchor on an *implicit* empty scalar: the anchored node
+            // is the nothing between the colon and the next line.
+            (
+                "anchor on an implicit empty scalar",
+                "\
+name: demo
+description: &s
+steps: {}
+",
+            ),
+            // A merge key. `serde` never applies one to a struct, so
+            // before the pre-scan this was caught only by
+            // `deny_unknown_fields` refusing the `<<` key itself; it is
+            // now refused for carrying an alias at all, which holds even
+            // in a world where `<<` were a field this format declares.
+            (
+                "a merge key",
+                "\
+name: demo
+inputs:
+  a: &base { type: Text }
+  b: { <<: *base }
+steps: {}
+",
+            ),
+            // A tag on an anchored node: the tag is not what is refused,
+            // the anchor riding along with it is.
+            (
+                "a tag on an anchored node",
+                "\
+name: demo
+description: !!str &s hello
+steps: {}
+",
+            ),
+        ];
+
+        for (label, source) in cases {
+            let Err(err) = refuse_anchors_and_aliases(source) else {
+                panic!("{label}: was accepted");
+            };
+            match err.kind {
+                DocumentErrorKind::Yaml {
+                    message,
+                    line,
+                    column,
+                } => {
+                    assert_eq!(message, "anchors and aliases are not supported", "{label}");
+                    assert!(line.is_some_and(|line| line >= 1), "{label}: {line:?}");
+                    assert!(column.is_some_and(|col| col >= 1), "{label}: {column:?}");
+                }
+                other => panic!("{label}: expected a Yaml error, got {other:?}"),
+            }
+        }
+    }
+
+    /// A tag on its own is not an anchor and is left to `serde_yaml_ng`,
+    /// so the pre-scan is not quietly refusing every document that uses
+    /// YAML's type syntax.
+    #[test]
+    fn pre_scan_does_not_refuse_a_bare_tag() {
+        assert!(refuse_anchors_and_aliases("name: !!str demo\nsteps: {}\n").is_ok());
+    }
+
+    /// A source whose anchors sit *after* a point `saphyr_parser`'s own
+    /// scanner cannot get past: the pre-scan's fail-closed path reports
+    /// that scan error rather than reaching the anchor, and in
+    /// particular never panics or silently returns `Ok`.
+    #[test]
+    fn a_yaml_error_before_an_anchor_surfaces_as_an_error_not_a_panic() {
+        let source = "name: demo\n\tbad: [\ndescription: &s hi\n";
+        let err = refuse_anchors_and_aliases(source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Yaml { line, column, .. } => {
+                assert!(line.is_some());
+                assert!(column.is_some_and(|col| col >= 1));
+            }
+            other => panic!("expected a Yaml error, got {other:?}"),
+        }
+    }
+
     /// Acceptance test 15: the milestone 1 pass 2 amplification shape (a
     /// large anchored scalar referenced many times) is refused by the
     /// pre-scan alone, called directly rather than through
