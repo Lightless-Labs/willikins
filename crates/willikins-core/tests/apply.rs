@@ -214,6 +214,54 @@ fn drift_on_action_stops_before_any_provider_call() {
         1,
         "only the manually seeded repo"
     );
+    // Drift is found by *reading* (the re-plan reads every node) and
+    // refused before the first write: `read_calls` moved, `ensure_calls`
+    // did not.
+    assert!(
+        !locked.read_calls.is_empty(),
+        "the re-plan must have read the current state"
+    );
+    assert!(
+        locked.ensure_calls.is_empty(),
+        "drift must be refused before any ensure: {:?}",
+        locked.ensure_calls
+    );
+}
+
+/// `Approval::Human` is accepted for a plan that does not require
+/// approval at all: the gate is "approval is at least as strong as the
+/// class demands", not "the approval kind must match the class".
+#[test]
+fn human_approval_is_accepted_for_a_reversible_plan() {
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let catalog = apply_test_catalog(Arc::clone(&state));
+    let workflow = common::new_rust_service_workflow();
+    let checked = check(&workflow, &catalog).expect("the positive fixture checks cleanly");
+    let inputs = common::new_rust_service_inputs();
+    let approved = plan(&checked, &inputs, &catalog).expect("empty state plans cleanly");
+    assert!(
+        !approved.requires_approval,
+        "the positive fixture is Reversible"
+    );
+
+    let approval = Approval::Human {
+        approver: principal("operator"),
+        at: timestamp("2026-09-13T09:00:00Z"),
+    };
+    let mut observer = RecordingObserver::new();
+    let applied = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &approval,
+        &mut observer,
+    )
+    .expect("a human-approved Reversible plan runs");
+    assert!(matches!(
+        common::status_of(&applied, "repo", None),
+        NodeStatus::Created
+    ));
 }
 
 #[test]
@@ -557,4 +605,444 @@ fn a_second_apply_against_the_first_ones_state_converges_the_unreadable_secret_c
     // directly; this is the signal available without it).
     let locked = state.lock().unwrap();
     assert_eq!(locked.github_actions_secrets.len(), 1);
+}
+
+// ---------------------------------------------------------------------
+// Drift: identity, not only position
+//
+// `check_drift` walks the approved and fresh fingerprints together. These
+// three tests pin that it compares *which instance* sits at each position,
+// not only that position's action and rendered outputs: an approved plan
+// that does not describe the same instances as the fresh one must be
+// refused as `Drift`, never silently accepted and never a panic.
+// ---------------------------------------------------------------------
+
+/// An approved plan built from a *different* workflow, whose node happens
+/// to share a name and a planned action but declares a different output
+/// port, must be refused rather than panicking inside the output
+/// comparison (which used to look the approved side's port up in the fresh
+/// side's outputs and `unreachable!` when it was missing).
+#[test]
+fn an_approved_plan_from_another_workflow_is_drift_not_a_panic() {
+    let mut catalog = Catalog::new(willikins_types::registry());
+    catalog
+        .insert(Arc::new(common::FixedOutputTool::new(
+            "test.alpha",
+            "alpha",
+            "lightless-labs",
+        )))
+        .unwrap();
+    catalog
+        .insert(Arc::new(common::FixedOutputTool::new(
+            "test.beta",
+            "beta",
+            "other-org",
+        )))
+        .unwrap();
+
+    let workflow_a = Workflow::new(workflow_name("alpha-workflow"))
+        .node(node("solo"), Node::new(tool_name("test.alpha")));
+    let workflow_b = Workflow::new(workflow_name("beta-workflow"))
+        .node(node("solo"), Node::new(tool_name("test.beta")));
+    let checked_a = check(&workflow_a, &catalog).expect("workflow A checks");
+    let checked_b = check(&workflow_b, &catalog).expect("workflow B checks");
+    let inputs = IndexMap::new();
+    let approved = plan(&checked_a, &inputs, &catalog).expect("workflow A plans");
+
+    let mut observer = RecordingObserver::new();
+    let err = apply(
+        &checked_b,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("an approved plan describing another workflow must be refused");
+
+    let ApplyError::Drift {
+        node: name, kind, ..
+    } = err
+    else {
+        panic!("expected Drift, got {err:?}");
+    };
+    assert_eq!(name.as_str(), "solo");
+    assert!(
+        matches!(*kind, DriftKind::Instance { .. }),
+        "expected Instance drift for two plans that do not share an output port, got {kind:?}"
+    );
+    assert!(observer.events.is_empty(), "nothing ran");
+}
+
+/// Two plans whose `for_each` instances carry the same keys in a different
+/// *order*, with every instance's action and rendered outputs identical,
+/// still differ: the approved plan said "dev first, then stg". Comparing
+/// by position alone would accept it.
+#[test]
+fn for_each_instances_are_compared_by_key_not_only_by_position() {
+    let mut catalog = Catalog::new(willikins_types::registry());
+    catalog
+        .insert(Arc::new(common::ConstantForEachTool::new("test.each")))
+        .unwrap();
+
+    let workflow = Workflow::new(workflow_name("each-workflow"))
+        .input(
+            input("environments"),
+            InputSpec::new(common::list_ty("EnvironmentSlug")),
+        )
+        .node(
+            node("each"),
+            Node::new(tool_name("test.each"))
+                .for_each(Binding::Input(input("environments")))
+                .port(port("key"), Binding::Item),
+        );
+    let checked = check(&workflow, &catalog).expect("the for_each workflow checks");
+
+    let environments = |first: &str, second: &str| {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            input("environments"),
+            Value::known_list(vec![
+                willikins_types::EnvironmentSlug::parse(first).unwrap(),
+                willikins_types::EnvironmentSlug::parse(second).unwrap(),
+            ]),
+        );
+        inputs
+    };
+
+    let approved = plan(&checked, &environments("dev", "stg"), &catalog).expect("plans");
+    let swapped = environments("stg", "dev");
+
+    let mut observer = RecordingObserver::new();
+    let err = apply(
+        &checked,
+        &swapped,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("a plan whose instances were re-ordered must be refused");
+
+    let ApplyError::Drift {
+        node: name, kind, ..
+    } = err
+    else {
+        panic!("expected Drift, got {err:?}");
+    };
+    assert_eq!(name.as_str(), "each");
+    let DriftKind::Instance { planned, observed } = *kind else {
+        panic!("expected Instance drift, got {kind:?}");
+    };
+    assert_eq!(
+        planned
+            .expect("the approved side has this instance")
+            .instance,
+        Some("dev".to_string())
+    );
+    assert_eq!(
+        observed.expect("the fresh side has this instance").instance,
+        Some("stg".to_string())
+    );
+    assert!(observer.events.is_empty(), "nothing ran");
+}
+
+/// An approved plan with *more* instances than the fresh one is drift too,
+/// reported as the instance the fresh plan no longer has — not as an
+/// action that "no longer matches" itself.
+#[test]
+fn an_approved_plan_with_an_extra_instance_is_instance_drift() {
+    let mut catalog = Catalog::new(willikins_types::registry());
+    catalog
+        .insert(Arc::new(common::ConstantForEachTool::new("test.each")))
+        .unwrap();
+
+    let workflow = Workflow::new(workflow_name("each-workflow"))
+        .input(
+            input("environments"),
+            InputSpec::new(common::list_ty("EnvironmentSlug")),
+        )
+        .node(
+            node("each"),
+            Node::new(tool_name("test.each"))
+                .for_each(Binding::Input(input("environments")))
+                .port(port("key"), Binding::Item),
+        );
+    let checked = check(&workflow, &catalog).expect("the for_each workflow checks");
+
+    let slugs = |names: &[&str]| {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            input("environments"),
+            Value::known_list(
+                names
+                    .iter()
+                    .map(|name| willikins_types::EnvironmentSlug::parse(name).unwrap())
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        inputs
+    };
+
+    let approved = plan(&checked, &slugs(&["dev", "stg"]), &catalog).expect("plans");
+
+    let mut observer = RecordingObserver::new();
+    let err = apply(
+        &checked,
+        &slugs(&["dev"]),
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("a plan with an instance the fresh plan lacks must be refused");
+
+    let ApplyError::Drift { kind, .. } = &err else {
+        panic!("expected Drift, got {err:?}");
+    };
+    let DriftKind::Instance { planned, observed } = kind.as_ref() else {
+        panic!("expected Instance drift, got {kind:?}");
+    };
+    assert_eq!(
+        planned
+            .as_ref()
+            .expect("approved has the extra instance")
+            .instance,
+        Some("stg".to_string())
+    );
+    assert!(observed.is_none(), "the fresh plan has no such instance");
+    assert!(
+        !err.to_string().contains("no longer matches"),
+        "an identity mismatch must not be described as an action mismatch: {err}"
+    );
+    assert!(observer.events.is_empty(), "nothing ran");
+}
+
+// ---------------------------------------------------------------------
+// Secrets: a for_each node that mints one, and a workflow output that
+// carries the whole list of them
+// ---------------------------------------------------------------------
+
+/// A `for_each` node whose tool mints a secret, with a workflow output
+/// bound to that node's secret port — so the output is a *list* of
+/// secrets, the widest shape a secret can reach `Applied` in. Nothing in
+/// `Applied` (JSON, `Debug`), in any observer event (JSON, `Debug`), or in
+/// the resolved workflow outputs may carry the minted bytes; every one of
+/// them must show the redaction marker instead.
+///
+/// `check` does not refuse a secret-valued workflow output (a workflow
+/// output has no port spec to be a non-secret sink), so redaction by
+/// construction is the only thing standing between a minted token and the
+/// caller here. This test is that claim, stated as a test.
+#[test]
+#[allow(clippy::too_many_lines)] // one workflow built, run, and swept for the marker end to end
+fn a_for_each_node_minting_secrets_redacts_them_everywhere_including_the_output_list() {
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let catalog = apply_test_catalog(Arc::clone(&state));
+
+    let workflow = Workflow::new(workflow_name("for-each-secrets"))
+        .input(input("project"), InputSpec::new(ty("DopplerProject")))
+        .input(
+            input("environments"),
+            InputSpec::new(common::list_ty("EnvironmentSlug")),
+        )
+        .node(
+            node("doppler"),
+            Node::new(tool_name("doppler.project.ensure"))
+                .port(port("project"), Binding::Input(input("project"))),
+        )
+        .node(
+            node("configs"),
+            Node::new(tool_name("doppler.config.ensure"))
+                .for_each(Binding::Input(input("environments")))
+                .port(
+                    port("project"),
+                    Binding::Step {
+                        node: node("doppler"),
+                        port: port("project"),
+                    },
+                )
+                .port(port("environment"), Binding::Item),
+        )
+        .node(
+            node("tokens"),
+            Node::new(tool_name("doppler.service_token.ensure"))
+                .for_each(Binding::Step {
+                    node: node("configs"),
+                    port: port("config"),
+                })
+                .port(port("config"), Binding::Item)
+                .port(port("name"), Binding::Literal("ci".to_string())),
+        )
+        .output(
+            common::output("minted"),
+            Binding::Step {
+                node: node("tokens"),
+                port: port("token"),
+            },
+        );
+
+    let checked = check(&workflow, &catalog).expect("the for_each secret workflow checks cleanly");
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("project"),
+        Value::known(willikins_types::DopplerProject::parse("third-thoughts").unwrap()),
+    );
+    inputs.insert(
+        input("environments"),
+        Value::known_list(vec![
+            willikins_types::EnvironmentSlug::parse("stg").unwrap(),
+            willikins_types::EnvironmentSlug::parse("qa").unwrap(),
+        ]),
+    );
+
+    let approved = plan(&checked, &inputs, &catalog).expect("plans against empty state");
+    let mut observer = RecordingObserver::new();
+    let applied = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect("applies against empty state");
+
+    // The same bytes `common::distinctive_token` is built from; a secret
+    // type never hands them back, so the test holds its own copy.
+    let raw_marker = "MARKER".repeat(7);
+
+    // Both token instances minted, and the workflow output aggregated
+    // them into one list value.
+    for instance in ["third-thoughts/stg", "third-thoughts/qa"] {
+        let found = applied
+            .nodes
+            .iter()
+            .find(|applied_node| {
+                applied_node.name == node("tokens")
+                    && applied_node.instance.as_deref() == Some(instance)
+            })
+            .unwrap_or_else(|| panic!("no tokens[{instance}] instance"));
+        assert!(matches!(found.status, NodeStatus::Created));
+    }
+    let minted = applied
+        .outputs
+        .get(&common::output("minted"))
+        .expect("the `minted` workflow output resolves");
+    assert!(minted.is_known(), "both instances minted a known value");
+    assert!(minted.is_secret(), "a list of tokens is still a secret");
+    assert_eq!(
+        minted.render().to_string(),
+        "[REDACTED DopplerServiceToken]",
+        "a secret list renders as one marker"
+    );
+
+    // Every `NodeStarted` carries *that instance's* own resolved inputs:
+    // `configs[stg]` is started with `environment = stg`, and
+    // `tokens[third-thoughts/qa]` with `config = third-thoughts/qa`.
+    for event in &observer.events {
+        let ApplyEvent::NodeStarted {
+            node: started,
+            instance: Some(key),
+            inputs: started_inputs,
+        } = event
+        else {
+            continue;
+        };
+        if *started == node("configs") {
+            let environment = started_inputs
+                .get(&port("environment"))
+                .expect("configs binds `environment` to `item`");
+            assert_eq!(
+                environment.render().to_string(),
+                *key,
+                "configs[{key}] was started with another instance's inputs"
+            );
+        } else if *started == node("tokens") {
+            let config = started_inputs
+                .get(&port("config"))
+                .expect("tokens binds `config` to `item`");
+            assert_eq!(
+                config.render().to_string(),
+                *key,
+                "tokens[{key}] was started with another instance's inputs"
+            );
+        }
+    }
+
+    // And the bytes appear nowhere.
+    let applied_json = serde_json::to_string(&applied).expect("Applied serializes");
+    assert!(
+        !applied_json.contains(&raw_marker),
+        "Applied JSON leaked: {applied_json}"
+    );
+    assert!(applied_json.contains("REDACTED"), "{applied_json}");
+    let applied_debug = format!("{applied:?}");
+    assert!(
+        !applied_debug.contains(&raw_marker),
+        "Applied Debug leaked: {applied_debug}"
+    );
+    for event in &observer.events {
+        let json = serde_json::to_string(event).expect("ApplyEvent serializes");
+        assert!(!json.contains(&raw_marker), "event JSON leaked: {json}");
+        let debug = format!("{event:?}");
+        assert!(!debug.contains(&raw_marker), "event Debug leaked: {debug}");
+    }
+}
+
+/// A live-reading tool whose observed non-secret output changed between
+/// the approved plan and `apply`'s own re-plan is `DriftKind::Output`,
+/// naming the port and carrying both values — and nothing runs.
+#[test]
+fn a_changed_observed_non_secret_output_is_output_drift() {
+    let observed = Arc::new(Mutex::new(
+        willikins_types::GitHubOrg::parse("lightless-labs").unwrap(),
+    ));
+    let mut catalog = Catalog::new(willikins_types::registry());
+    catalog
+        .insert(Arc::new(common::MutableOutputTool::new(
+            "test.live",
+            Arc::clone(&observed),
+        )))
+        .unwrap();
+
+    let workflow = Workflow::new(workflow_name("live-read"))
+        .node(node("live"), Node::new(tool_name("test.live")));
+    let checked = check(&workflow, &catalog).expect("checks");
+    let inputs = IndexMap::new();
+    let approved = plan(&checked, &inputs, &catalog).expect("plans");
+
+    // The provider's own state changes under us between approval and run.
+    *observed.lock().unwrap() = willikins_types::GitHubOrg::parse("other-org").unwrap();
+
+    let mut observer = RecordingObserver::new();
+    let err = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("a changed observed value must refuse");
+
+    let ApplyError::Drift {
+        node: name, kind, ..
+    } = err
+    else {
+        panic!("expected Drift, got {err:?}");
+    };
+    assert_eq!(name.as_str(), "live");
+    let DriftKind::Output {
+        port: drifted_port,
+        planned,
+        observed: now,
+    } = *kind
+    else {
+        panic!("expected Output drift, got {kind:?}");
+    };
+    assert_eq!(drifted_port.as_str(), "observed");
+    assert_eq!(planned.render().to_string(), "lightless-labs");
+    assert_eq!(now.render().to_string(), "other-org");
+    assert!(observer.events.is_empty(), "nothing ran");
 }

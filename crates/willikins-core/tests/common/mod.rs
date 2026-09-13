@@ -546,3 +546,207 @@ impl Tool for RequiresKnownInputTool {
         })
     }
 }
+
+/// A minimal, keyless, non-pure test tool with exactly one output port,
+/// whose value is a fixed, known [`willikins_types::GitHubOrg`]. Two
+/// instances of this tool with *different* port names let a test build two
+/// plans whose fingerprints differ in their output *ports*, not merely in
+/// their values — the shape a mismatched approved plan has (see
+/// `tests/apply.rs`'s drift tests). `read` always reports `Absent`, so
+/// every plan of it is an [`willikins_core::Action::Create`].
+pub struct FixedOutputTool {
+    spec: ToolSpec,
+    out_port: PortName,
+    value: willikins_types::GitHubOrg,
+}
+
+impl FixedOutputTool {
+    /// A tool named `name` whose single output port `out_port` always
+    /// carries `value` (parsed as a `GitHubOrg`).
+    #[must_use]
+    pub fn new(name: &str, out_port: &str, value: &str) -> Self {
+        let mut outputs = IndexMap::new();
+        outputs.insert(port(out_port), ty("GitHubOrg"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name(name),
+                description: "Test tool: one fixed, known output.".to_string(),
+                inputs: IndexMap::new(),
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+            out_port: port(out_port),
+            value: willikins_types::GitHubOrg::parse(value).unwrap(),
+        }
+    }
+
+    fn outputs(&self) -> Outputs {
+        let mut outputs = Outputs::new();
+        outputs.insert(self.out_port.clone(), Value::known(self.value.clone()));
+        outputs
+    }
+}
+
+impl Tool for FixedOutputTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Absent {
+            predicted: self.outputs(),
+        })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: self.outputs(),
+            changed: true,
+        })
+    }
+}
+
+/// A minimal non-pure test tool for a `for_each` node: it takes one
+/// required `key` input (an `EnvironmentSlug`, bound to `item`) and
+/// reports one output whose value is the *same* fixed
+/// [`willikins_types::GitHubOrg`] for every instance. Two plans over the
+/// same items in a different *order* therefore have identical per-instance
+/// actions and rendered outputs, and differ only in their instance keys —
+/// which is exactly what `apply`'s drift check must still notice.
+pub struct ConstantForEachTool {
+    spec: ToolSpec,
+}
+
+impl ConstantForEachTool {
+    #[must_use]
+    pub fn new(name: &str) -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("key"),
+            willikins_core::PortSpec {
+                ty: willikins_core::PortType::Exact(ty("EnvironmentSlug")),
+                required: true,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("fixed"), ty("GitHubOrg"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name(name),
+                description: "Test tool: one constant output per for_each instance.".to_string(),
+                inputs,
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+        }
+    }
+
+    fn outputs() -> Outputs {
+        let mut outputs = Outputs::new();
+        outputs.insert(
+            port("fixed"),
+            Value::known(willikins_types::GitHubOrg::parse("lightless-labs").unwrap()),
+        );
+        outputs
+    }
+}
+
+impl Tool for ConstantForEachTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Absent {
+            predicted: Self::outputs(),
+        })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: Self::outputs(),
+            changed: true,
+        })
+    }
+}
+
+/// A non-pure test tool that always reports its resource `Present`, with
+/// one output port whose value is read from shared, *mutable* state — a
+/// live-reading tool whose observed non-secret output can change between
+/// two `plan` calls, which is exactly what `DriftKind::Output` is for.
+pub struct MutableOutputTool {
+    spec: ToolSpec,
+    observed: Arc<Mutex<willikins_types::GitHubOrg>>,
+}
+
+impl MutableOutputTool {
+    #[must_use]
+    pub fn new(name: &str, observed: Arc<Mutex<willikins_types::GitHubOrg>>) -> Self {
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("observed"), ty("GitHubOrg"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name(name),
+                description: "Test tool: one live-read, mutable output.".to_string(),
+                inputs: IndexMap::new(),
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+            observed,
+        }
+    }
+
+    fn outputs(&self) -> Outputs {
+        let mut outputs = Outputs::new();
+        outputs.insert(
+            port("observed"),
+            Value::known(self.observed.lock().unwrap().clone()),
+        );
+        outputs
+    }
+}
+
+impl Tool for MutableOutputTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Present(self.outputs()))
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: self.outputs(),
+            changed: false,
+        })
+    }
+}
+
+/// One instance's [`willikins_core::NodeStatus`] in an
+/// [`willikins_core::Applied`], by node name and instance key.
+///
+/// # Panics
+///
+/// Panics when no such instance is present.
+#[must_use]
+pub fn status_of<'a>(
+    applied: &'a willikins_core::Applied,
+    name: &str,
+    instance: Option<&str>,
+) -> &'a willikins_core::NodeStatus {
+    applied
+        .nodes
+        .iter()
+        .find(|applied_node| {
+            applied_node.name == node(name) && applied_node.instance.as_deref() == instance
+        })
+        .map(|applied_node| &applied_node.status)
+        .unwrap_or_else(|| panic!("no instance {name}{instance:?} in the result"))
+}

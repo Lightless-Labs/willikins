@@ -25,8 +25,8 @@ pub mod value;
 pub mod workflow;
 
 pub use apply::{
-    Applied, AppliedNode, ApplyError, ApplyEvent, ApplyObserver, Approval, DriftKind, NodeStatus,
-    NoopObserver, PrincipalId, RecordingObserver, Timestamp, apply,
+    Applied, AppliedNode, ApplyError, ApplyEvent, ApplyObserver, Approval, DriftKind, InstanceRef,
+    NodeStatus, NoopObserver, PrincipalId, RecordingObserver, Timestamp, apply,
 };
 pub use catalog::{Catalog, CatalogError};
 pub use check::{CheckError, CheckWarning, Checked, check};

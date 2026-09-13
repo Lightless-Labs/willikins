@@ -31,7 +31,8 @@ use crate::check::Checked;
 use crate::class::Class;
 use crate::plan::{Action, Plan, PlannedNode};
 use crate::plan::{
-    ForEachInstance, NodeResult, PlanError, ResolveCtx, fill_outputs, plan, resolve_binding,
+    ForEachInstance, InstanceFingerprint, NodeResult, PlanError, ResolveCtx, fill_outputs, plan,
+    resolve_binding,
 };
 use crate::site::Site;
 use crate::tool::{Ensured, Inputs, Outputs, PortName, ToolError};
@@ -128,6 +129,29 @@ pub struct Applied {
     pub outputs: IndexMap<OutputName, Value>,
 }
 
+/// One node instance's identity — the `(node, instance)` pair a
+/// [`Plan`]'s own walk is ordered by.
+///
+/// Carried by [`DriftKind::Instance`], which is the only place two
+/// fingerprints can disagree about *which* instance sits at a position
+/// rather than about that instance's content.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct InstanceRef {
+    /// The node.
+    pub node: NodeName,
+    /// Its `for_each` instance key, if any.
+    pub instance: Option<String>,
+}
+
+impl std::fmt::Display for InstanceRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.instance {
+            Some(key) => write!(f, "{}[{key}]", self.node),
+            None => write!(f, "{}", self.node),
+        }
+    }
+}
+
 /// Why a [`DriftKind::Action`]'s or [`DriftKind::Output`]'s planned and
 /// observed values differ.
 ///
@@ -135,6 +159,20 @@ pub struct Applied {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DriftKind {
+    /// The two plans do not describe the same instance at this position
+    /// of the walk at all: a different node or `for_each` key, a
+    /// different set of output ports (so they cannot be the same tool),
+    /// or an instance one side has and the other does not. Either the
+    /// approved plan was not a plan of this workflow and these inputs, or
+    /// a `for_each` source has changed shape; in both cases the approved
+    /// plan does not describe the run that is about to happen, so nothing
+    /// runs.
+    Instance {
+        /// The instance the approved plan has at this position, if any.
+        planned: Option<InstanceRef>,
+        /// The instance the fresh re-plan has there, if any.
+        observed: Option<InstanceRef>,
+    },
     /// The instance's planned action itself differs from what a fresh
     /// re-plan now observes.
     Action {
@@ -249,6 +287,19 @@ impl std::fmt::Display for ApplyError {
                     None => node.to_string(),
                 };
                 match kind.as_ref() {
+                    DriftKind::Instance { planned, observed } => {
+                        let render = |side: &Option<InstanceRef>| match side {
+                            Some(reference) => reference.to_string(),
+                            None => "nothing".to_string(),
+                        };
+                        write!(
+                            f,
+                            "{where_}: the approved plan and the current one describe \
+                             different work here (approved {}, now {}); nothing was run",
+                            render(planned),
+                            render(observed)
+                        )
+                    }
                     DriftKind::Action { planned, observed } => write!(
                         f,
                         "{where_}: planned action {planned:?} no longer matches the current \
@@ -718,14 +769,20 @@ fn find_upstream_unknown(
 /// Compare `approved`'s and `fresh`'s fingerprints, instance by instance in
 /// order, and return the first [`ApplyError::Drift`] found, if any.
 ///
-/// A structural mismatch (the two plans have a different number of
-/// instances — not exercised by any workflow this milestone's tools can
-/// produce, since neither a `for_each` source nor a tool's own key
-/// membership changes shape between two `plan` calls against the same
-/// checked workflow and inputs) is treated as drift on the side that has
-/// the extra entry, comparing its own planned action against itself: there
-/// is no matching entry on the other side to compare against, so this is
-/// a defensive fallback rather than a claim about what actually happened.
+/// Two fingerprints at the same position are compared in three steps,
+/// widest first: *identity* (the `(node, instance)` pair, and the output
+/// ports that pair declares), then the planned *action*, then each
+/// non-secret output's rendered *value*. An identity mismatch —  a
+/// different node, a different `for_each` key, a different set of output
+/// ports, or an instance one side has and the other does not —  is
+/// [`DriftKind::Instance`]: the approved plan does not describe the run
+/// that is about to happen at all, which is not the same claim as "this
+/// instance's action changed" and must not be reported as one. Comparing
+/// by position alone would let an approved plan whose instances were
+/// re-ordered (or which belongs to another workflow entirely) through
+/// whenever the actions and rendered values happened to line up, and
+/// would look the approved side's output port up in the fresh side's
+/// outputs, which need not have it.
 fn check_drift(approved: &Plan, fresh: &Plan) -> Result<(), ApplyError> {
     let approved_fp = approved.fingerprint();
     let fresh_fp = fresh.fingerprint();
@@ -734,6 +791,9 @@ fn check_drift(approved: &Plan, fresh: &Plan) -> Result<(), ApplyError> {
     for idx in 0..len {
         match (approved_fp.get(idx), fresh_fp.get(idx)) {
             (Some(a), Some(b)) => {
+                if a.name != b.name || a.instance != b.instance {
+                    return Err(instance_drift(Some(a), Some(b)));
+                }
                 if a.action != b.action {
                     return Err(ApplyError::Drift {
                         node: a.name.clone(),
@@ -744,57 +804,98 @@ fn check_drift(approved: &Plan, fresh: &Plan) -> Result<(), ApplyError> {
                         }),
                     });
                 }
-                if let Some(diff_idx) = (0..a.outputs.len().min(b.outputs.len()))
-                    .find(|&i| a.outputs[i].1 != b.outputs[i].1)
-                {
-                    let port = a.outputs[diff_idx].0.clone();
-                    let planned_node = &approved.nodes[idx];
-                    let observed_node = &fresh.nodes[idx];
-                    let planned_value =
-                        planned_node.outputs.get(&port).cloned().unwrap_or_else(|| {
-                            unreachable!("fingerprint and PlannedNode outputs share every port")
+                match first_output_difference(a, b) {
+                    None => {}
+                    Some(OutputDifference::Shape) => {
+                        return Err(instance_drift(Some(a), Some(b)));
+                    }
+                    Some(OutputDifference::Value(port)) => {
+                        // Both sides declare this port (`Shape` above
+                        // covers every other case), so both `PlannedNode`s
+                        // have a value for it: a fingerprint entry is
+                        // built from its own `PlannedNode`'s outputs, in
+                        // that map's order. A missing one would mean the
+                        // two are not the same instance after all, which
+                        // is `Instance` drift rather than a panic.
+                        let planned = approved.nodes[idx].outputs.get(&port).cloned();
+                        let observed = fresh.nodes[idx].outputs.get(&port).cloned();
+                        let (Some(planned), Some(observed)) = (planned, observed) else {
+                            return Err(instance_drift(Some(a), Some(b)));
+                        };
+                        return Err(ApplyError::Drift {
+                            node: a.name.clone(),
+                            instance: a.instance.clone(),
+                            kind: Box::new(DriftKind::Output {
+                                port,
+                                planned,
+                                observed,
+                            }),
                         });
-                    let observed_value =
-                        observed_node
-                            .outputs
-                            .get(&port)
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                unreachable!("fingerprint and PlannedNode outputs share every port")
-                            });
-                    return Err(ApplyError::Drift {
-                        node: a.name.clone(),
-                        instance: a.instance.clone(),
-                        kind: Box::new(DriftKind::Output {
-                            port,
-                            planned: planned_value,
-                            observed: observed_value,
-                        }),
-                    });
+                    }
                 }
             }
-            (Some(a), None) => {
-                return Err(ApplyError::Drift {
-                    node: a.name.clone(),
-                    instance: a.instance.clone(),
-                    kind: Box::new(DriftKind::Action {
-                        planned: a.action,
-                        observed: a.action,
-                    }),
-                });
-            }
-            (None, Some(b)) => {
-                return Err(ApplyError::Drift {
-                    node: b.name.clone(),
-                    instance: b.instance.clone(),
-                    kind: Box::new(DriftKind::Action {
-                        planned: b.action,
-                        observed: b.action,
-                    }),
-                });
-            }
+            (Some(a), None) => return Err(instance_drift(Some(a), None)),
+            (None, Some(b)) => return Err(instance_drift(None, Some(b))),
             (None, None) => unreachable!("idx < len = max(approved_fp.len(), fresh_fp.len())"),
         }
     }
     Ok(())
+}
+
+/// The [`ApplyError::Drift`] for a position whose two sides do not
+/// describe the same instance, attributed to whichever side has one (the
+/// approved plan's, when both do).
+///
+/// # Panics
+///
+/// Panics if both sides are `None`, which its only caller never does.
+fn instance_drift(
+    planned: Option<&InstanceFingerprint>,
+    observed: Option<&InstanceFingerprint>,
+) -> ApplyError {
+    fn reference(fingerprint: &InstanceFingerprint) -> InstanceRef {
+        InstanceRef {
+            node: fingerprint.name.clone(),
+            instance: fingerprint.instance.clone(),
+        }
+    }
+    let anchor = planned
+        .or(observed)
+        .unwrap_or_else(|| unreachable!("a drift always has at least one side"));
+    ApplyError::Drift {
+        node: anchor.name.clone(),
+        instance: anchor.instance.clone(),
+        kind: Box::new(DriftKind::Instance {
+            planned: planned.map(reference),
+            observed: observed.map(reference),
+        }),
+    }
+}
+
+/// How two [`InstanceFingerprint`]s' output lists differ.
+enum OutputDifference {
+    /// They do not declare the same output ports, in the same order: the
+    /// two entries cannot describe the same tool's instance at all.
+    Shape,
+    /// They declare the same ports, and this one's rendered value differs.
+    Value(PortName),
+}
+
+/// The first difference between `a`'s and `b`'s output lists, if any.
+fn first_output_difference(
+    a: &InstanceFingerprint,
+    b: &InstanceFingerprint,
+) -> Option<OutputDifference> {
+    if a.outputs.len() != b.outputs.len() {
+        return Some(OutputDifference::Shape);
+    }
+    for ((a_port, a_rendered), (b_port, b_rendered)) in a.outputs.iter().zip(&b.outputs) {
+        if a_port != b_port {
+            return Some(OutputDifference::Shape);
+        }
+        if a_rendered != b_rendered {
+            return Some(OutputDifference::Value(a_port.clone()));
+        }
+    }
+    None
 }

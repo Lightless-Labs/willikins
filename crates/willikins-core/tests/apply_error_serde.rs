@@ -10,8 +10,10 @@ use std::collections::HashSet;
 
 use common::{node, port};
 use willikins_core::{
-    Action, Applied, ApplyError, Class, DriftKind, PlanError, ToolError, ToolErrorKind,
+    Action, Applied, ApplyError, Class, DriftKind, InstanceRef, PlanError, ToolError,
+    ToolErrorKind, Value,
 };
+use willikins_types::DomainType;
 
 fn empty_applied() -> Applied {
     Applied {
@@ -165,4 +167,76 @@ fn every_variant_displays_a_non_empty_message() {
         let message = sample.to_string();
         assert!(!message.is_empty(), "{sample:?} displayed an empty message");
     }
+}
+
+/// Every [`DriftKind`] variant serializes internally tagged too, nested
+/// under `Drift`'s `detail` key, with its own `snake_case` tag. The
+/// wildcard-free `match` is the exhaustiveness guard: a new variant fails
+/// to compile until it is listed here with a sample of its own.
+#[test]
+fn every_drift_kind_variant_serializes_with_its_own_snake_case_tag() {
+    let samples = vec![
+        DriftKind::Instance {
+            planned: Some(InstanceRef {
+                node: node("n"),
+                instance: Some("dev".to_string()),
+            }),
+            observed: None,
+        },
+        DriftKind::Action {
+            planned: Action::Create,
+            observed: Action::NoOp,
+        },
+        DriftKind::Output {
+            port: port("p"),
+            planned: Value::known(willikins_types::GitHubOrg::parse("lightless-labs").unwrap()),
+            observed: Value::known(willikins_types::GitHubOrg::parse("other-org").unwrap()),
+        },
+    ];
+
+    for kind in samples {
+        let tag = match &kind {
+            DriftKind::Instance { .. } => "instance",
+            DriftKind::Action { .. } => "action",
+            DriftKind::Output { .. } => "output",
+        };
+        let error = ApplyError::Drift {
+            node: node("n"),
+            instance: None,
+            kind: Box::new(kind),
+        };
+        let json: serde_json::Value = serde_json::to_value(&error).expect("ApplyError serializes");
+        assert_eq!(json["kind"], "Drift", "{json}");
+        assert_eq!(json["detail"]["kind"], tag, "{json}");
+    }
+}
+
+/// `DriftKind::Output` holds two [`Value`]s, and a `Value` renders through
+/// its own redaction whatever it holds — so even a `Drift` hand-built
+/// around a secret (which `Plan::fingerprint` never produces, since a
+/// secret port contributes a fixed marker instead of its value) cannot
+/// print one.
+#[test]
+fn a_drift_kind_output_holding_a_secret_still_serializes_redacted() {
+    let token =
+        willikins_types::DopplerServiceToken::parse(&format!("dp.st.prd.{}", "MARKER".repeat(7)))
+            .expect("a valid token literal");
+    let error = ApplyError::Drift {
+        node: node("n"),
+        instance: None,
+        kind: Box::new(DriftKind::Output {
+            port: port("value"),
+            planned: Value::known(token.clone()),
+            observed: Value::known(token),
+        }),
+    };
+    let json = serde_json::to_string(&error).expect("ApplyError serializes");
+    assert!(!json.contains(&"MARKER".repeat(7)), "leaked: {json}");
+    assert!(json.contains("REDACTED"), "{json}");
+    let debug = format!("{error:?}");
+    assert!(!debug.contains(&"MARKER".repeat(7)), "leaked: {debug}");
+    assert!(
+        !error.to_string().contains(&"MARKER".repeat(7)),
+        "Display leaked: {error}"
+    );
 }
