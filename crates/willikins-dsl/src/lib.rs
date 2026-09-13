@@ -1043,7 +1043,7 @@ steps:
 
     /// A leading U+FEFF used to reach `serde_yaml_ng`, which treats it as
     /// a document separator: the source became a two-document stream and
-    /// the report was `missing field `steps`` — a message about the one
+    /// the report named a missing `steps` field — a message about the one
     /// part of the document that was plainly there, sending whoever read
     /// it to look in the wrong place. An editor that writes a BOM is the
     /// only way this happens, and the fix is to say so.
