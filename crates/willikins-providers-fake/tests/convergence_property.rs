@@ -1,11 +1,15 @@
 //! Acceptance test 6d (property): over generated workflows built from the
-//! fake catalog's own non-pure tools, `check` them, `plan` and `apply`
-//! against empty state, inject one `fail_ensure_once` at an arbitrary
-//! node instance, `plan` and `apply` again, and assert every node whose
-//! inputs are all known ends `Created`/`Unchanged`/`Converged`, every
-//! node blocked by an un-re-readable upstream ends in `UnknownInput`
-//! naming that upstream, and no key's `ensure_calls` count exceeds "once
-//! per round this scenario could plan a fresh `Create` for it".
+//! fake catalog's own non-pure tools, `check` them, queue one
+//! `fail_ensure_once` at an arbitrary node instance, `plan` and `apply`
+//! against empty state — which stops at exactly that instance — then
+//! `plan` and `apply` again and assert the second round converges: every
+//! node whose inputs are all known ends `Created`/`Unchanged`, every node
+//! blocked by an un-re-readable upstream ends in `UnknownInput` naming
+//! that upstream, a finished node is `NoOp` in the fresh plan and an
+//! unfinished one `Create`, and every key's `ensure_calls` count equals
+//! exactly the number of rounds its instance was attempted in — so a
+//! `Converged` instance is proven to make no call, a `NotRun` one none
+//! either, and nothing already created is created again.
 //!
 //! **Deviation from a literal reuse of `willikins_core::testing`'s
 //! generic `arb_workflow`, recorded here rather than silently**: that
@@ -28,18 +32,48 @@
 //! which node instance the injected failure lands on. `for_each` is not
 //! exercised (deferred, per task 4b's own scope note).
 //!
-//! Run at the default case count; also run once by hand at
-//! `PROPTEST_CASES=1024` (proptest reads that environment variable itself
-//! — see the module's own doc for the result).
+//! The one injected failure is always queued *before* the first round,
+//! which is what makes the second round a convergence test rather than a
+//! second failure: round one stops at the injected instance, and round
+//! two re-plans against the state round one did reach and either settles
+//! everything or stops at the single documented gap — a token minted in
+//! round one but not yet consumed, whose value can never be re-read
+//! (`ApplyError::UnknownInput` naming `token`). Which of the two happens
+//! is a property of where the failure landed, and is asserted as one: the
+//! gap appears exactly when round one created `token` and did not store
+//! `ci_secret`. A counter asserts the gap branch was reached at least
+//! once across the whole run, rather than trusting that the generator can
+//! still produce it.
+//!
+//! (An earlier shape queued the failure *between* the two rounds. That
+//! made round two the failing round, so the property never observed a run
+//! converging at all, and its call accounting asserted a lower bound of
+//! one call for every node — which is wrong for any node the stopped run
+//! never reached, and is how it failed on a scenario whose
+//! `fake.irreversible.ensure` node sits after the blocked one.)
+//!
+//! Driven through a `TestRunner` directly rather than the `proptest!`
+//! macro, for exactly that reason: the macro's body sees one case at a
+//! time and can assert nothing about the run as a whole. `source_file` is
+//! set the way the macro sets it, so failure persistence
+//! (`.proptest-regressions`) still works.
+//!
+//! Run at the default case count; also run by hand at
+//! `PROPTEST_CASES=1024` (proptest reads that environment variable
+//! itself), which took 1.2 seconds of test time on this host on
+//! 2026-09-13 — the fakes are in-memory, so the build dominates.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 use proptest::prelude::*;
+use proptest::test_runner::{Config as ProptestConfig, TestCaseError, TestRunner};
 
 use willikins_core::{
-    ApplyError, Approval, Binding, InputName, InputSpec, Node, NodeName, NodeStatus, NoopObserver,
-    OutputName, PortName, ToolName, TypeName, TypeRef, Value, Workflow, apply, check, plan,
+    Action, AppliedNode, ApplyError, Approval, Binding, InputName, InputSpec, Node, NodeName,
+    NodeStatus, NoopObserver, OutputName, PortName, ToolName, TypeName, TypeRef, Value, Workflow,
+    apply, check, plan,
 };
 use willikins_providers_fake::state::{
     actions_secret_key, call_key, doppler_config_key, doppler_project_key,
@@ -114,40 +148,43 @@ impl Scenario {
         naming::v1::doppler_root_config(&self.project, &self.environment)
     }
 
-    /// `(tool, key)` for every node this scenario's workflow contains,
-    /// except `github.actions_secret.ensure` (see [`Self::ci_secret_key`]
-    /// and this file's own module doc for why it is excluded from
-    /// injection candidates).
-    fn candidates(&self) -> Vec<(&'static str, String)> {
+    /// `(node, tool, key)` for every node this scenario's workflow has:
+    /// the universe the single injected failure is drawn from, and the
+    /// table the call accounting at the end of a case reads.
+    fn instances(&self) -> Vec<(NodeName, &'static str, String)> {
         let mut out = vec![
-            ("doppler.project.ensure", doppler_project_key(&self.project)),
-            ("doppler.config.ensure", doppler_config_key(&self.config())),
             (
+                node("project"),
+                "doppler.project.ensure",
+                doppler_project_key(&self.project),
+            ),
+            (
+                node("config"),
+                "doppler.config.ensure",
+                doppler_config_key(&self.config()),
+            ),
+            (
+                node("token"),
                 "doppler.service_token.ensure",
                 doppler_service_token_key(&self.config(), &self.token_name),
             ),
         ];
         if let Some(repo) = &self.repo {
-            out.push(("github.repo.ensure", repo_key(repo)));
+            out.push((node("repo"), "github.repo.ensure", repo_key(repo)));
+            out.push((
+                node("ci_secret"),
+                "github.actions_secret.ensure",
+                actions_secret_key(repo, &self.secret_name),
+            ));
         }
         if let Some(slug) = &self.irreversible {
-            out.push(("fake.irreversible.ensure", irreversible_key(slug)));
+            out.push((
+                node("irreversible"),
+                "fake.irreversible.ensure",
+                irreversible_key(slug),
+            ));
         }
         out
-    }
-
-    /// `github.actions_secret.ensure`'s own key, when `repo` is present.
-    /// Excluded from injection candidates: unlike every other node here,
-    /// its `ensure` is *not* called on a converged second round (its
-    /// `value` input resolves `Unknown` from `token`, and its own fresh
-    /// `read` is already `Present`), so a failure queued at its key would
-    /// simply never fire — a genuine scenario (round 2 skips the call
-    /// entirely), just not an interesting one for "the injected failure
-    /// actually fires" runs. It is still asserted on below, structurally.
-    fn ci_secret_key(&self) -> Option<String> {
-        self.repo
-            .as_ref()
-            .map(|repo| actions_secret_key(repo, &self.secret_name))
     }
 
     fn workflow(&self) -> Workflow {
@@ -251,8 +288,23 @@ impl Scenario {
     }
 }
 
-#[allow(clippy::type_complexity)]
-fn scenario() -> impl Strategy<Value = (Scenario, (&'static str, String))> {
+/// One generated injection: the node whose `ensure` the single
+/// `fail_ensure_once` entry stops on its first round-one call, and the
+/// `(tool, key)` pair `FakeState` keys that entry by.
+#[derive(Debug, Clone)]
+struct Injection {
+    node: NodeName,
+    tool: &'static str,
+    key: String,
+}
+
+/// How many cases took the `ApplyError::UnknownInput` branch, across the
+/// whole run: the property asserts this is non-zero afterwards, so the
+/// branch cannot quietly become unreachable — it was, under the earlier
+/// between-the-rounds injection shape this file's module doc describes.
+static UNKNOWN_INPUT_HITS: AtomicUsize = AtomicUsize::new(0);
+
+fn scenario() -> impl Strategy<Value = (Scenario, Injection)> {
     (
         NAME_PATTERN,
         NAME_PATTERN,
@@ -265,7 +317,7 @@ fn scenario() -> impl Strategy<Value = (Scenario, (&'static str, String))> {
         NAME_PATTERN,
     )
         .prop_filter_map(
-            "every drawn name parses as its domain type",
+            "every drawn name parses as its domain type, and the environment is not a seeded one",
             |(
                 project,
                 environment,
@@ -282,9 +334,19 @@ fn scenario() -> impl Strategy<Value = (Scenario, (&'static str, String))> {
                 } else {
                     None
                 };
+                let environment = EnvironmentSlug::parse(&environment).ok()?;
+                // `doppler.project.ensure` seeds the `dev`, `stg` and
+                // `prd` root configs with a project it creates, so a
+                // generated environment spelling one of them would make
+                // round one's `config` node `Unchanged` rather than
+                // `Created` — a real fake behaviour (acceptance test 5
+                // pins it) but not this property's subject.
+                if ["dev", "stg", "prd"].contains(&environment.words().snake().as_str()) {
+                    return None;
+                }
                 Some(Scenario {
                     project: DopplerProject::parse(&project).ok()?,
-                    environment: EnvironmentSlug::parse(&environment).ok()?,
+                    environment,
                     token_name: DopplerTokenName::parse(&token_name).ok()?,
                     secret_name: ActionsSecretName::parse("DOPPLER_TOKEN")
                         .expect("a fixed, valid secret name"),
@@ -303,146 +365,250 @@ fn scenario() -> impl Strategy<Value = (Scenario, (&'static str, String))> {
             },
         )
         .prop_flat_map(|scenario| {
-            let candidates = scenario.candidates();
-            (Just(scenario), proptest::sample::select(candidates))
+            let injections: Vec<Injection> = scenario
+                .instances()
+                .into_iter()
+                .map(|(node, tool, key)| Injection { node, tool, key })
+                .collect();
+            (Just(scenario), proptest::sample::select(injections))
         })
 }
 
-proptest! {
-    /// See this file's own module doc for the generator's shape and the
-    /// deliberate deviation from `willikins_core::testing::arb_workflow`.
-    #[test]
-    fn convergence_holds_after_one_injected_failure((scenario, (fail_tool, fail_key)) in scenario()) {
-        let workflow = scenario.workflow();
-        let state = Arc::new(Mutex::new(FakeState::new()));
-        let fake_catalog = catalog(Arc::clone(&state));
-        let checked = check(&workflow, &fake_catalog)
-            .unwrap_or_else(|errors| panic!("generated workflow must check cleanly: {errors:?}"));
-        let inputs = scenario.inputs();
+/// The number of `ensure` calls one round's result implies for `name`:
+/// an instance that ended `Created`, `Unchanged` or `Failed` was called,
+/// while `Computed` (a pure tool), `Converged` (a planned `NoOp` whose
+/// inputs are not all known) and `NotRun` are each "no call". Comparing
+/// the sum over both rounds against `FakeState::ensure_calls` is what
+/// pins those three to a call count of exactly zero.
+fn calls_implied(nodes: &[AppliedNode], name: &NodeName) -> u32 {
+    let called = nodes.iter().filter(|applied| {
+        applied.name == *name
+            && matches!(
+                applied.status,
+                NodeStatus::Created | NodeStatus::Unchanged | NodeStatus::Failed { .. }
+            )
+    });
+    u32::try_from(called.count()).expect("a generated workflow has at most six nodes")
+}
 
-        // Round 1: fresh empty state, nothing injected yet -- must fully
-        // succeed, and every attempted node was created (nothing
-        // pre-existed).
-        let plan1 = plan(&checked, &inputs, &fake_catalog)
-            .unwrap_or_else(|err| panic!("round 1 plan must succeed: {err}"));
-        let approval1 = approval_for(&plan1);
-        let mut observer1 = NoopObserver;
-        let applied1 = apply(
-            &checked,
-            &inputs,
-            &fake_catalog,
-            &plan1,
-            &approval1,
-            &mut observer1,
-        )
-        .unwrap_or_else(|err| panic!("round 1 apply must succeed: {err:?}"));
-        for applied_node in &applied1.nodes {
-            prop_assert!(
-                matches!(applied_node.status, NodeStatus::Created | NodeStatus::Computed),
-                "round 1: {:?} ended {:?}, expected Created against empty state",
-                applied_node.name,
-                applied_node.status
-            );
-        }
+/// Whether `nodes` shows `name` finished — created or already right — in
+/// the round that produced it.
+fn finished(nodes: &[AppliedNode], name: &NodeName) -> bool {
+    nodes.iter().any(|applied| {
+        applied.name == *name
+            && matches!(
+                applied.status,
+                NodeStatus::Created | NodeStatus::Unchanged | NodeStatus::Converged
+            )
+    })
+}
 
-        // Inject one failure at the chosen node instance.
-        state
-            .lock()
-            .unwrap()
-            .fail_ensure_once
-            .push(call_key(fail_tool, &fail_key));
+/// The action `plan` gave `name`'s single instance (every node this
+/// generator builds is a scalar node).
+fn action_of(planned: &willikins_core::Plan, name: &NodeName) -> Option<Action> {
+    planned
+        .nodes
+        .iter()
+        .find(|instance| instance.name == *name)
+        .map(|instance| instance.action)
+}
 
-        // Round 2: fresh re-plan and apply.
-        let plan2 = plan(&checked, &inputs, &fake_catalog)
-            .unwrap_or_else(|err| panic!("round 2 plan must succeed: {err}"));
-        let approval2 = approval_for(&plan2);
-        let mut observer2 = NoopObserver;
-        let result2 = apply(
-            &checked,
-            &inputs,
-            &fake_catalog,
-            &plan2,
-            &approval2,
-            &mut observer2,
+/// One case of the property: see this file's own module doc for the
+/// generator's shape and the deliberate deviation from
+/// `willikins_core::testing::arb_workflow`.
+#[allow(clippy::too_many_lines)] // two rounds walked end to end; splitting scatters the sequence
+fn convergence_case(scenario: &Scenario, injection: &Injection) -> Result<(), TestCaseError> {
+    let workflow = scenario.workflow();
+    let state = Arc::new(Mutex::new(
+        FakeState::new().with_fail_ensure_once(injection.tool, &injection.key),
+    ));
+    let fake_catalog = catalog(Arc::clone(&state));
+    let checked = check(&workflow, &fake_catalog)
+        .unwrap_or_else(|errors| panic!("generated workflow must check cleanly: {errors:?}"));
+    let inputs = scenario.inputs();
+
+    // Round 1, against empty state with the failure already queued: every
+    // node is a fresh `Create`, and the run stops at exactly the injected
+    // instance.
+    let plan1 = plan(&checked, &inputs, &fake_catalog)
+        .unwrap_or_else(|err| panic!("round 1 plan must succeed: {err}"));
+    for instance in &plan1.nodes {
+        prop_assert_eq!(
+            instance.action,
+            Action::Create,
+            "round 1 plans Create for every node against empty state, not for {}",
+            instance.name
         );
-
-        match result2 {
-            Ok(applied2) => {
-                // Every node this scenario has is either the secret-chain
-                // consumer (which converges without a call once its
-                // upstream token exists) or a node whose ensure was
-                // called again this round and reported unchanged.
-                for applied_node in &applied2.nodes {
-                    prop_assert!(
-                        matches!(
-                            applied_node.status,
-                            NodeStatus::Unchanged | NodeStatus::Converged | NodeStatus::Computed
-                        ),
-                        "round 2 (no injected call fired): {:?} ended {:?}",
-                        applied_node.name,
-                        applied_node.status
-                    );
-                }
-            }
-            Err(ApplyError::Tool { applied: partial, .. }) => {
-                // The injected failure fired: every attempted instance is
-                // Unchanged/Converged except exactly the failed one, and
-                // nothing after it was more than NotRun.
-                let mut saw_failure = false;
-                for applied_node in &partial.nodes {
-                    match &applied_node.status {
-                        NodeStatus::Failed { .. } => saw_failure = true,
-                        NodeStatus::NotRun
-                        | NodeStatus::Unchanged
-                        | NodeStatus::Converged
-                        | NodeStatus::Computed
-                        | NodeStatus::Created => {}
-                    }
-                }
-                prop_assert!(saw_failure, "an ApplyError::Tool must show a Failed node");
-            }
-            Err(ApplyError::UnknownInput { node: blocked, from, .. }) => {
-                // Only reachable if the queued failure happened to block
-                // `token` itself in a way that still let `plan` observe
-                // it as `NoOp` (not constructed by this generator's own
-                // candidates, which never target `ci_secret`); if it ever
-                // is reached, it must still name the one un-re-readable
-                // chain this catalog has.
-                prop_assert_eq!(blocked, node("ci_secret"));
-                prop_assert_eq!(from, node("token"));
-            }
-            Err(other) => {
-                prop_assert!(false, "round 2: unexpected ApplyError: {other}");
-            }
-        }
-
-        // No `ensure` was called twice for the same key with the planned
-        // action `Create`: round 1 plans `Create` for every node against
-        // empty state and calls `ensure` exactly once per key; round 2's
-        // fresh re-plan never plans `Create` again for anything (nothing
-        // was removed between rounds), so every key's `ensure_calls` is
-        // exactly 1 (called once, in round 1 only -- e.g. the secret
-        // chain's consumer when it converges without a round 2 call) or 2
-        // (round 1's success plus one round 2 attempt, whether that
-        // attempt succeeded or was the injected failure).
-        let locked = state.lock().unwrap();
-        for (tool, key) in scenario.candidates() {
-            let count = locked.ensure_calls.get(&call_key(tool, &key)).copied().unwrap_or(0);
-            prop_assert!(
-                (1..=2).contains(&count),
-                "{tool}#{key}: ensure_calls was {count}, expected 1 or 2"
-            );
-        }
-        if let Some(key) = scenario.ci_secret_key() {
-            let count = locked
-                .ensure_calls
-                .get(&call_key("github.actions_secret.ensure", &key))
-                .copied()
-                .unwrap_or(0);
-            prop_assert!(
-                (1..=2).contains(&count),
-                "github.actions_secret.ensure#{key}: ensure_calls was {count}, expected 1 or 2"
-            );
-        }
     }
+    let approval1 = approval_for(&plan1);
+    let mut observer1 = NoopObserver;
+    let nodes1 = match apply(
+        &checked,
+        &inputs,
+        &fake_catalog,
+        &plan1,
+        &approval1,
+        &mut observer1,
+    ) {
+        Err(ApplyError::Tool {
+            node: failed,
+            applied,
+            ..
+        }) => {
+            prop_assert_eq!(
+                &failed,
+                &injection.node,
+                "round 1 must stop at the injected node"
+            );
+            applied.nodes
+        }
+        Ok(applied) => {
+            return Err(TestCaseError::fail(format!(
+                "round 1 must stop at {}, but it finished: {:?}",
+                injection.node, applied.nodes
+            )));
+        }
+        Err(other) => {
+            return Err(TestCaseError::fail(format!(
+                "round 1: expected the injected failure, got {other}"
+            )));
+        }
+    };
+    for applied_node in &nodes1 {
+        prop_assert!(
+            matches!(
+                applied_node.status,
+                NodeStatus::Created | NodeStatus::Failed { .. } | NodeStatus::NotRun
+            ),
+            "round 1: {} ended {:?}, expected Created against empty state",
+            applied_node.name,
+            applied_node.status
+        );
+    }
+
+    // The one documented convergence gap: round one minted the token and
+    // did not get as far as storing it, so its value is gone for good and
+    // round two cannot supply `ci_secret`'s `value`.
+    let expects_gap = scenario.repo.is_some()
+        && finished(&nodes1, &node("token"))
+        && !finished(&nodes1, &node("ci_secret"));
+
+    // Round 2: a fresh plan shows every finished node `NoOp` and the rest
+    // `Create`, and the apply either settles everything or stops at the
+    // gap.
+    let plan2 = plan(&checked, &inputs, &fake_catalog)
+        .unwrap_or_else(|err| panic!("round 2 plan must succeed: {err}"));
+    for (name, _, _) in scenario.instances() {
+        let expected = if finished(&nodes1, &name) {
+            Action::NoOp
+        } else {
+            Action::Create
+        };
+        prop_assert_eq!(
+            action_of(&plan2, &name),
+            Some(expected),
+            "round 2's fresh plan for {}",
+            name
+        );
+    }
+    let approval2 = approval_for(&plan2);
+    let mut observer2 = NoopObserver;
+    let nodes2 = match apply(
+        &checked,
+        &inputs,
+        &fake_catalog,
+        &plan2,
+        &approval2,
+        &mut observer2,
+    ) {
+        Ok(applied) => {
+            prop_assert!(
+                !expects_gap,
+                "a token minted but not stored in round 1 must block its consumer, not settle"
+            );
+            for applied_node in &applied.nodes {
+                prop_assert!(
+                    matches!(
+                        applied_node.status,
+                        NodeStatus::Created | NodeStatus::Unchanged | NodeStatus::Converged
+                    ),
+                    "round 2: {} ended {:?}, expected a settled status",
+                    applied_node.name,
+                    applied_node.status
+                );
+            }
+            prop_assert!(
+                finished(&applied.nodes, &injection.node),
+                "round 2 must finish the node round 1 failed at: {:?}",
+                applied.nodes
+            );
+            applied.nodes
+        }
+        Err(ApplyError::UnknownInput {
+            node: blocked,
+            port: blocked_port,
+            from,
+            applied,
+        }) => {
+            UNKNOWN_INPUT_HITS.fetch_add(1, Ordering::Relaxed);
+            prop_assert!(
+                expects_gap,
+                "only a token minted in round 1 and never stored can block a second round"
+            );
+            prop_assert_eq!(blocked, node("ci_secret"));
+            prop_assert_eq!(blocked_port, port("value"));
+            prop_assert_eq!(from, node("token"));
+            applied.nodes
+        }
+        Err(other) => {
+            return Err(TestCaseError::fail(format!(
+                "round 2: the one-shot injection fires in round 1 only, got {other}"
+            )));
+        }
+    };
+
+    // Call accounting: every key's `ensure_calls` is exactly the number of
+    // rounds its instance was attempted in — no `Converged` or `NotRun`
+    // instance was called, no created resource was created twice, and the
+    // failed one was retried exactly once.
+    let locked = state.lock().unwrap();
+    for (name, tool, key) in scenario.instances() {
+        let calls = locked
+            .ensure_calls
+            .get(&call_key(tool, &key))
+            .copied()
+            .unwrap_or(0);
+        prop_assert_eq!(
+            calls,
+            calls_implied(&nodes1, &name) + calls_implied(&nodes2, &name),
+            "{}#{}: ensure_calls",
+            tool,
+            key
+        );
+    }
+    Ok(())
+}
+
+/// Acceptance test 6d. Driven through a [`TestRunner`] rather than
+/// `proptest!` so the run as a whole can be asserted on: the
+/// `UnknownInput` branch must be reached at least once, not merely
+/// tolerated if it happens.
+#[test]
+fn convergence_holds_after_one_injected_failure() {
+    let config = ProptestConfig {
+        source_file: Some(file!()),
+        ..ProptestConfig::default()
+    };
+    let mut runner = TestRunner::new(config);
+    runner
+        .run(&scenario(), |(scenario, injection)| {
+            convergence_case(&scenario, &injection)
+        })
+        .expect("convergence must hold for every generated scenario");
+    assert!(
+        UNKNOWN_INPUT_HITS.load(Ordering::Relaxed) > 0,
+        "no generated case reached ApplyError::UnknownInput: the generator can no longer \
+         produce a workflow whose blocked node is downstream of an un-re-readable output, \
+         so the branch above is untested"
+    );
 }
