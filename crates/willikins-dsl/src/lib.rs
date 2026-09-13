@@ -4,15 +4,34 @@
 //! See `docs/plans/2026-09-11-milestone-1-core.md`'s `willikins-dsl`
 //! section for the document format this crate parses.
 //!
+//! **A workflow document is privileged content, run only from a trusted
+//! ref.** Everything free-text a document carries — a workflow's own
+//! `description:`, an input's `description:` — is quoted document text
+//! shown to whatever agent reads it, never an instruction to that agent;
+//! see `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s
+//! "Document text is data" trust boundary.
+//!
 //! [`parse_document`] and [`load_document`] are the entry points; both
 //! return [`DocumentError`], which distinguishes a YAML-level failure
-//! (bad syntax, a duplicate mapping key, a field of the wrong shape) from
-//! a semantic one rooted in one place in an otherwise well-formed document
-//! (an invalid identifier, an unregistered type, a default that fails to
+//! (bad syntax, a duplicate mapping key, a field of the wrong shape, a
+//! source over [`MAX_DOCUMENT_BYTES`], an anchor or alias) from a semantic
+//! one rooted in one place in an otherwise well-formed document (an
+//! invalid identifier, an unregistered type, a default that fails to
 //! parse against its declared type, a malformed `${{ ... }}` reference).
 //! Every error names where it happened: a `line:column` pair for the
 //! former, a dotted `path` such as `"steps.token.with.config"` for the
 //! latter.
+//!
+//! [`parse_document`] refuses a source over [`MAX_DOCUMENT_BYTES`] before
+//! doing anything else, then runs a YAML event pre-scan (via
+//! `saphyr-parser`) that refuses the first anchor or alias at its line and
+//! column, before `serde_yaml_ng` ever deserializes the source. A YAML
+//! scalar alias is materialised once per use by a conventional
+//! deserializer, so a document could otherwise amplify its own size —
+//! entirely within fields the format declares, so no `deny_unknown_fields`
+//! check touches it. See `docs/research/2026-09-12-e2e-adversarial-pass-2.md`
+//! for the original measurement and
+//! `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md` for the fix.
 //!
 //! This crate is also where an input's declared type is checked against
 //! the type registry. `willikins_core::check` does not do this itself —
@@ -32,8 +51,28 @@ use willikins_core::{
     Binding, InputName, InputSpec, Node, NodeName, OutputName, PortName, ToolName, TypeRef, Value,
     Workflow,
 };
+use willikins_types::DomainType;
 
 pub use document::{DefaultValue, Document, InputDecl, StepDecl};
+
+/// The greatest size, in bytes, of a document source [`parse_document`]
+/// will attempt to parse at all.
+///
+/// Measured once by hand (`docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`,
+/// acceptance test 15), via `tests::measure_worst_case_resident_memory_at_max_document_bytes`
+/// (`#[ignore]`d; run it under `/usr/bin/time -l` against the compiled
+/// test binary to reproduce): the *worst case for this bound* is not an
+/// anchored source, which the pre-scan below refuses after one event —
+/// it is a source at exactly this limit that passes both the size cap
+/// and the pre-scan and is deserialized in full (here, a 256 KiB
+/// `description:` plain scalar, refused only afterwards by
+/// `Description`'s own 1,024-character bound). That run's "maximum
+/// resident set size" was 6,422,528 bytes (about 6.1 MiB) — the whole
+/// test-binary process's peak RSS, harness and allocator baseline
+/// included, not an isolated measurement of `parse_document` alone; still
+/// a small, bounded multiple of the 256 KiB source, not the quadratic
+/// blow-up an unbounded anchor/alias amplification produces.
+pub const MAX_DOCUMENT_BYTES: usize = 256 * 1024;
 
 /// Where a [`DocumentError`] happened.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -64,6 +103,13 @@ pub enum DocumentErrorKind {
         /// Why it was rejected.
         message: String,
     },
+    /// The source was larger than [`MAX_DOCUMENT_BYTES`]. Refused before
+    /// any YAML parsing is attempted, so this is the one [`DocumentError`]
+    /// variant that never comes with a location.
+    TooLarge {
+        /// The source's actual size, in bytes.
+        bytes: usize,
+    },
 }
 
 /// Everything that can go wrong loading or parsing a workflow document.
@@ -81,6 +127,20 @@ impl DocumentError {
             kind: DocumentErrorKind::Semantic {
                 path: path.into(),
                 message: message.into(),
+            },
+        }
+    }
+
+    /// Build a [`DocumentErrorKind::Yaml`] error at a known `line`/`column`,
+    /// for the anchor/alias pre-scan, which never goes through
+    /// `serde_yaml_ng` and so never has a `serde_yaml_ng::Error` to build
+    /// [`Self::from_yaml`] from.
+    fn yaml_at(message: impl Into<String>, line: usize, column: usize) -> Self {
+        Self {
+            kind: DocumentErrorKind::Yaml {
+                message: message.into(),
+                line: Some(line),
+                column: Some(column),
             },
         }
     }
@@ -117,6 +177,10 @@ impl fmt::Display for DocumentError {
             } => write!(f, "{line}:{column}: {message}"),
             DocumentErrorKind::Yaml { message, .. } => write!(f, "{message}"),
             DocumentErrorKind::Semantic { path, message } => write!(f, "{path}: {message}"),
+            DocumentErrorKind::TooLarge { bytes } => write!(
+                f,
+                "document is {bytes} bytes, the limit is {MAX_DOCUMENT_BYTES}"
+            ),
         }
     }
 }
@@ -127,14 +191,86 @@ impl std::error::Error for DocumentError {}
 ///
 /// # Errors
 ///
-/// Returns [`DocumentError`] when `source` is not valid YAML, when it
-/// does not match [`Document`]'s shape (including a duplicate mapping key
-/// or a `with` value that is a YAML list or map), or when a name, type,
-/// default value, or `${{ ... }}` reference inside it fails to resolve.
+/// Returns [`DocumentErrorKind::TooLarge`] when `source` is over
+/// [`MAX_DOCUMENT_BYTES`]; a [`DocumentErrorKind::Yaml`] naming an anchor's
+/// or alias's line and column when the source has one (see the module
+/// docs); a [`DocumentErrorKind::Yaml`] when `source` is otherwise not
+/// valid YAML or does not match [`Document`]'s shape (including a
+/// duplicate mapping key or a `with` value that is a YAML list or map);
+/// or a [`DocumentErrorKind::Semantic`] when a name, type, default value,
+/// or `${{ ... }}` reference inside it fails to resolve. Both of the first
+/// two checks run before any deserialization is attempted, so neither ever
+/// constructs a [`Document`] from a source that fails them.
 pub fn parse_document(source: &str) -> Result<Workflow, DocumentError> {
+    if source.len() > MAX_DOCUMENT_BYTES {
+        return Err(DocumentError {
+            kind: DocumentErrorKind::TooLarge {
+                bytes: source.len(),
+            },
+        });
+    }
+    refuse_anchors_and_aliases(source)?;
     let document: Document =
         serde_yaml_ng::from_str(source).map_err(|err| DocumentError::from_yaml(&err))?;
     document_to_workflow(&document)
+}
+
+/// Walk `source`'s YAML event stream and refuse the first anchor
+/// definition or alias reference found, naming its line and column.
+///
+/// This runs before `serde_yaml_ng` deserializes anything. A conventional
+/// deserializer materialises a YAML alias's target once per use, so a
+/// small document can amplify its own size by repeating an alias to a
+/// large anchor — see the module docs and
+/// `docs/research/2026-09-12-e2e-adversarial-pass-2.md`. Refusing at the
+/// event level, before any `Document` is built, means the amplification
+/// never happens at all rather than being merely bounded.
+///
+/// A `saphyr_parser::ScanError` here is reported as a `DocumentError` too,
+/// with `saphyr_parser`'s own message and location, rather than swallowed
+/// to let `serde_yaml_ng` have the only say: this pre-scan is a security
+/// boundary (a workflow document reaches this crate over the network once
+/// the MCP server exists), and failing open on anything `saphyr_parser`
+/// itself cannot make sense of would let a source crafted to trip *only*
+/// `saphyr_parser`'s scanner -- and not `serde_yaml_ng`'s -- skip the
+/// anchor/alias check entirely and reach the deserializer regardless. A
+/// document that is simply malformed YAML still ends up a
+/// [`DocumentErrorKind::Yaml`] either way, just attributed to whichever
+/// parser saw it first; no currently-passing test pins the *exact*
+/// message of a low-level syntax error, only that it carries a location.
+fn refuse_anchors_and_aliases(source: &str) -> Result<(), DocumentError> {
+    for event in saphyr_parser::Parser::new_from_str(source) {
+        let (event, span) = event.map_err(|err| {
+            DocumentError::yaml_at(err.info(), err.marker().line(), err.marker().col())
+        })?;
+        if is_anchored_or_aliased(&event) {
+            return Err(DocumentError::yaml_at(
+                "anchors and aliases are not supported",
+                span.start.line(),
+                span.start.col(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether `event` defines or uses a YAML anchor.
+///
+/// `saphyr_parser`'s anchor id `0` means "this event carries no anchor":
+/// `Parser`'s `anchor_id_count` starts at `1` and only advances when an
+/// anchor is actually registered (`saphyr-parser-0.0.12/src/parser.rs`,
+/// `Parser::new` and `Parser::register_anchor`), so `!= 0` on a `Scalar`,
+/// `SequenceStart`, or `MappingStart` is exactly "this event defines an
+/// anchor". Every `Alias` refers to one by construction, so it is always
+/// refused regardless of its id.
+fn is_anchored_or_aliased(event: &saphyr_parser::Event<'_>) -> bool {
+    match event {
+        saphyr_parser::Event::Scalar(_, _, anchor_id, _)
+        | saphyr_parser::Event::SequenceStart(anchor_id, _)
+        | saphyr_parser::Event::MappingStart(anchor_id, _) => *anchor_id != 0,
+        saphyr_parser::Event::Alias(_) => true,
+        _ => false,
+    }
 }
 
 /// Load and parse a workflow document from a file.
@@ -163,9 +299,13 @@ pub fn document_schema() -> schemars::Schema {
 /// Convert a deserialized [`Document`] into a [`Workflow`], resolving
 /// every name, type, default, and reference along the way.
 fn document_to_workflow(document: &Document) -> Result<Workflow, DocumentError> {
-    let mut workflow = Workflow::new(document.name.clone());
+    let name = willikins_types::WorkflowName::parse(&document.name)
+        .map_err(|err| DocumentError::semantic("name", err.reason))?;
+    let mut workflow = Workflow::new(name.to_string());
     if let Some(description) = &document.description {
-        workflow = workflow.with_description(description.clone());
+        let description = willikins_types::Description::parse(description)
+            .map_err(|err| DocumentError::semantic("description", err.reason))?;
+        workflow = workflow.with_description(description.to_string());
     }
 
     for (raw_name, decl) in &document.inputs {
@@ -175,7 +315,10 @@ fn document_to_workflow(document: &Document) -> Result<Workflow, DocumentError> 
         let ty = parse_input_type(&decl.ty, &format!("{path}.type"))?;
         let mut spec = InputSpec::new(ty.clone());
         if let Some(description) = &decl.description {
-            spec = spec.with_description(description.clone());
+            let description = willikins_types::Description::parse(description).map_err(|err| {
+                DocumentError::semantic(format!("{path}.description"), err.reason)
+            })?;
+            spec = spec.with_description(description.to_string());
         }
         if let Some(default) = &decl.default {
             let value = parse_default(&ty, default)
@@ -356,7 +499,9 @@ steps:
         .unwrap_err();
         match err.kind {
             DocumentErrorKind::Semantic { path, .. } => assert_eq!(path, "inputs.Bad"),
-            DocumentErrorKind::Yaml { .. } => panic!("expected a semantic error"),
+            DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a semantic error")
+            }
         }
     }
 
@@ -377,7 +522,9 @@ steps:
                 assert_eq!(path, "inputs.x.type");
                 assert!(message.contains("Bogus"), "{message}");
             }
-            DocumentErrorKind::Yaml { .. } => panic!("expected a semantic error"),
+            DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a semantic error")
+            }
         }
     }
 
@@ -412,7 +559,9 @@ steps:
             DocumentErrorKind::Semantic { path, .. } => {
                 assert_eq!(path, "inputs.visibility.default");
             }
-            DocumentErrorKind::Yaml { .. } => panic!("expected a semantic error"),
+            DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a semantic error")
+            }
         }
     }
 
@@ -422,7 +571,7 @@ steps:
             "\
 name: demo
 inputs:
-  token: { type: DopplerServiceToken, default: dp.st.prd.exampleexampleexample }
+  token: { type: DopplerServiceToken, default: dp.st.prd.exampleexampleexampleexampleexampleexample }
 steps:
   a: { tool: naming.v1, with: {} }
 ",
@@ -431,9 +580,14 @@ steps:
         match err.kind {
             DocumentErrorKind::Semantic { path, message } => {
                 assert_eq!(path, "inputs.token.default");
-                assert!(!message.contains("exampleexampleexample"), "{message}");
+                assert!(
+                    !message.contains("exampleexampleexampleexampleexampleexample"),
+                    "{message}"
+                );
             }
-            DocumentErrorKind::Yaml { .. } => panic!("expected a semantic error"),
+            DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a semantic error")
+            }
         }
     }
 
@@ -455,7 +609,9 @@ steps:
                 assert_eq!(path, "steps.a.with.org");
                 assert!(message.contains("org.x"), "{message}");
             }
-            DocumentErrorKind::Yaml { .. } => panic!("expected a semantic error"),
+            DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a semantic error")
+            }
         }
     }
 
@@ -469,6 +625,9 @@ steps:
             } => panic!(
                 "expected a semantic error, got a YAML error at {line:?}:{column:?}: {message}"
             ),
+            DocumentErrorKind::TooLarge { bytes } => {
+                panic!("expected a semantic error, got TooLarge {{ bytes: {bytes} }}")
+            }
         }
     }
 
@@ -641,7 +800,9 @@ steps:
                 assert!(line.is_some());
                 assert!(column.is_some());
             }
-            DocumentErrorKind::Semantic { .. } => panic!("expected a YAML error"),
+            DocumentErrorKind::Semantic { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a YAML error")
+            }
         }
     }
 
@@ -666,7 +827,9 @@ steps:
                 assert!(line.is_some());
                 assert!(column.is_some());
             }
-            DocumentErrorKind::Semantic { .. } => panic!("expected a YAML error"),
+            DocumentErrorKind::Semantic { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a YAML error")
+            }
         }
     }
 
@@ -687,7 +850,9 @@ steps:
                 assert!(line.is_some());
                 assert!(column.is_some());
             }
-            DocumentErrorKind::Semantic { .. } => panic!("expected a YAML error"),
+            DocumentErrorKind::Semantic { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a YAML error")
+            }
         }
     }
 
@@ -732,5 +897,322 @@ steps:
         let schema = document_schema();
         let json = serde_json::to_string_pretty(&schema).unwrap();
         insta::assert_snapshot!(json);
+    }
+
+    // -------------------------------------------------------------
+    // MAX_DOCUMENT_BYTES (acceptance test 15)
+    // -------------------------------------------------------------
+
+    #[test]
+    fn a_document_at_exactly_max_document_bytes_is_not_too_large() {
+        // Not valid YAML, but `TooLarge` is a byte-count check that runs
+        // before any parsing is attempted, so its content never matters.
+        let source = "a".repeat(MAX_DOCUMENT_BYTES);
+        let err = parse_document(&source).unwrap_err();
+        assert!(
+            !matches!(err.kind, DocumentErrorKind::TooLarge { .. }),
+            "a source at exactly the limit must not be TooLarge: {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_257_kib_document_is_too_large_before_any_parsing_is_attempted() {
+        let source = "a".repeat(257 * 1024);
+        let err = parse_document(&source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::TooLarge { bytes } => assert_eq!(bytes, 257 * 1024),
+            other => panic!("expected TooLarge, got {other:?}"),
+        }
+    }
+
+    /// Not run by the gates: builds the worst case the module doc's
+    /// resident-memory measurement is about (a source at exactly
+    /// [`MAX_DOCUMENT_BYTES`] that passes the size cap and the pre-scan
+    /// and reaches the deserializer in full, rather than being refused
+    /// after one event the way an anchored source is). Run by hand under
+    /// `/usr/bin/time -l` against the compiled test binary -- see the
+    /// module doc for the recorded number.
+    #[test]
+    #[ignore = "run by hand under /usr/bin/time -l; see MAX_DOCUMENT_BYTES's doc"]
+    fn measure_worst_case_resident_memory_at_max_document_bytes() {
+        let prefix = "name: demo\ndescription: ";
+        let suffix = "\nsteps:\n  a: { tool: naming.v1, with: {} }\n";
+        let filler_len = MAX_DOCUMENT_BYTES - prefix.len() - suffix.len();
+        let source = format!("{prefix}{}{suffix}", "a".repeat(filler_len));
+        assert_eq!(source.len(), MAX_DOCUMENT_BYTES);
+        let err = parse_document(&source).unwrap_err();
+        match err.kind {
+            // Reaching `Description`'s own bound (rather than `TooLarge`
+            // or the pre-scan) is the proof this source made it all the
+            // way through: past the size cap, past the pre-scan, through
+            // `serde_yaml_ng`, into a real `Document`, into
+            // `document_to_workflow`.
+            DocumentErrorKind::Semantic { path, .. } => assert_eq!(path, "description"),
+            other => panic!("expected a Semantic error at `description`, got {other:?}"),
+        }
+    }
+
+    // -------------------------------------------------------------
+    // The anchor/alias pre-scan: `saphyr_parser`'s anchor id 0 means
+    // "this event carries no anchor" (`anchor_id_count` starts at 1 and
+    // only advances when an anchor is actually registered -- see
+    // `saphyr-parser-0.0.12/src/parser.rs`), so `!= 0` is exactly "this
+    // event defines or uses an anchor".
+    // -------------------------------------------------------------
+
+    /// Pins `saphyr_parser`'s anchor id `0` meaning "no anchor" directly
+    /// against synthetic events, independent of whether the full parser
+    /// pipeline can ever actually produce every one of these
+    /// combinations (an `Alias` in particular is only ever emitted after
+    /// its anchor was already registered, so its own id argument does not
+    /// matter -- it is always refused).
+    #[test]
+    fn is_anchored_or_aliased_settles_the_anchor_id_zero_question() {
+        use saphyr_parser::{Event, ScalarStyle};
+
+        assert!(!is_anchored_or_aliased(&Event::Scalar(
+            "x".into(),
+            ScalarStyle::Plain,
+            0,
+            None
+        )));
+        assert!(is_anchored_or_aliased(&Event::Scalar(
+            "x".into(),
+            ScalarStyle::Plain,
+            1,
+            None
+        )));
+        assert!(!is_anchored_or_aliased(&Event::SequenceStart(0, None)));
+        assert!(is_anchored_or_aliased(&Event::SequenceStart(1, None)));
+        assert!(!is_anchored_or_aliased(&Event::MappingStart(0, None)));
+        assert!(is_anchored_or_aliased(&Event::MappingStart(1, None)));
+        // An alias is refused regardless of the anchor id it names.
+        assert!(is_anchored_or_aliased(&Event::Alias(1)));
+        // Structural events never carry an anchor.
+        assert!(!is_anchored_or_aliased(&Event::StreamStart));
+        assert!(!is_anchored_or_aliased(&Event::DocumentStart(false)));
+    }
+
+    #[test]
+    fn pre_scan_accepts_a_plain_document_with_no_anchors() {
+        let source = "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: {} }
+";
+        assert!(refuse_anchors_and_aliases(source).is_ok());
+    }
+
+    #[test]
+    fn pre_scan_refuses_an_anchored_scalar_at_its_location() {
+        let source = "\
+name: demo
+description: &s a
+steps:
+  a: { tool: naming.v1, with: {} }
+";
+        let err = refuse_anchors_and_aliases(source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Yaml {
+                message,
+                line,
+                column,
+            } => {
+                assert_eq!(message, "anchors and aliases are not supported");
+                assert!(line.is_some());
+                assert!(column.is_some());
+            }
+            DocumentErrorKind::Semantic { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a Yaml error")
+            }
+        }
+    }
+
+    #[test]
+    fn pre_scan_refuses_an_anchored_mapping_at_its_location() {
+        let source = "\
+name: demo
+steps:
+  a: &s { tool: naming.v1, with: {} }
+";
+        let err = refuse_anchors_and_aliases(source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Yaml { message, .. } => {
+                assert_eq!(message, "anchors and aliases are not supported");
+            }
+            other => panic!("expected a Yaml error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pre_scan_refuses_an_anchored_sequence_at_its_location() {
+        let source = "\
+name: demo
+inputs:
+  environments:
+    type: list<EnvironmentSlug>
+    default: &s [dev, stg]
+steps:
+  a: { tool: naming.v1, with: {} }
+";
+        let err = refuse_anchors_and_aliases(source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Yaml { message, .. } => {
+                assert_eq!(message, "anchors and aliases are not supported");
+            }
+            other => panic!("expected a Yaml error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pre_scan_refuses_an_alias() {
+        // The anchor definition comes first in document order, so the
+        // pre-scan trips on it before it ever reaches the alias -- proof
+        // that no anchored value can survive long enough to be aliased.
+        let source = "\
+name: demo
+inputs:
+  a: { type: Text, default: &s x }
+  b: { type: Text, default: *s }
+steps:
+  a: { tool: naming.v1, with: {} }
+";
+        let err = refuse_anchors_and_aliases(source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Yaml { message, .. } => {
+                assert_eq!(message, "anchors and aliases are not supported");
+            }
+            other => panic!("expected a Yaml error, got {other:?}"),
+        }
+    }
+
+    /// Acceptance test 15: the milestone 1 pass 2 amplification shape (a
+    /// large anchored scalar referenced many times) is refused by the
+    /// pre-scan alone, called directly rather than through
+    /// [`parse_document`] -- a document this large is already over
+    /// [`MAX_DOCUMENT_BYTES`] and would be refused as `TooLarge` first,
+    /// which is a *different* guarantee (tested above) from the one this
+    /// test pins: that the pre-scan mechanism itself refuses this exact
+    /// historic attack shape, naming a location, and never so much as
+    /// looks at `Document` to do it -- no `Document` is even in scope in
+    /// this test.
+    #[test]
+    fn acceptance_15_the_pass_2_amplification_document_is_refused_by_the_pre_scan() {
+        let anchor = "z".repeat(1_000_000);
+        let aliases = vec!["*s"; 2_000].join(", ");
+        let source = format!(
+            "\
+name: alias-amplification
+description: &s \"{anchor}\"
+inputs:
+  t:
+    type: list<Text>
+    default: [{aliases}]
+steps:
+  a: {{ tool: naming.v1, with: {{}} }}
+"
+        );
+        let err = refuse_anchors_and_aliases(&source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Yaml {
+                message,
+                line,
+                column,
+            } => {
+                assert_eq!(message, "anchors and aliases are not supported");
+                // The anchor definition is on line 2; the pre-scan must
+                // trip there, well before any of the 2,000 aliases.
+                assert_eq!(line, Some(2));
+                assert!(column.is_some());
+            }
+            other => panic!("expected a Yaml error, got {other:?}"),
+        }
+    }
+
+    // -------------------------------------------------------------
+    // WorkflowName / Description bounds (acceptance test 14, bounds half)
+    // -------------------------------------------------------------
+
+    #[test]
+    fn a_name_over_64_characters_is_refused_at_parse_with_a_bounded_message() {
+        let source = format!(
+            "\
+name: {}
+steps:
+  a: {{ tool: naming.v1, with: {{}} }}
+",
+            "a".repeat(65)
+        );
+        let err = parse_document(&source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Semantic { path, message } => {
+                assert_eq!(path, "name");
+                assert!(!message.contains(&"a".repeat(65)), "{message}");
+                assert!(message.len() < 100, "message was {} bytes", message.len());
+            }
+            other => panic!("expected a Semantic error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_description_over_1024_characters_is_refused_at_parse_with_a_bounded_message() {
+        let too_long = "a".repeat(1_025);
+        let source = format!(
+            "\
+name: demo
+description: {too_long}
+steps:
+  a: {{ tool: naming.v1, with: {{}} }}
+"
+        );
+        let err = parse_document(&source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Semantic { path, message } => {
+                assert_eq!(path, "description");
+                assert!(!message.contains(&too_long), "{message}");
+                assert!(message.len() < 100, "message was {} bytes", message.len());
+            }
+            other => panic!("expected a Semantic error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_input_description_over_1024_characters_is_refused_at_parse_with_a_bounded_message() {
+        let too_long = "a".repeat(1_025);
+        let source = format!(
+            "\
+name: demo
+inputs:
+  org: {{ type: GitHubOrg, description: {too_long} }}
+steps:
+  a: {{ tool: naming.v1, with: {{}} }}
+"
+        );
+        let err = parse_document(&source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Semantic { path, message } => {
+                assert_eq!(path, "inputs.org.description");
+                assert!(!message.contains(&too_long), "{message}");
+                assert!(message.len() < 100, "message was {} bytes", message.len());
+            }
+            other => panic!("expected a Semantic error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_valid_name_and_description_convert_via_to_string_into_the_core_workflow() {
+        // `Workflow::name`/`description` stay `String` in this task (task
+        // 1e flips them); the DSL validates through `WorkflowName` and
+        // `Description` and converts with `to_string()`.
+        let json = workflow_json(
+            "\
+name: new-rust-service
+description: Provision a Rust service.
+steps:
+  a: { tool: naming.v1, with: {} }
+",
+        );
+        assert_eq!(json["name"], "new-rust-service");
+        assert_eq!(json["description"], "Provision a Rust service.");
     }
 }

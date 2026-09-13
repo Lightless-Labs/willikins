@@ -313,6 +313,13 @@ fn pinned_a_secret_equal_to_a_public_value_still_prints_the_public_one() {
 /// value, so the expansion never happens. Pre-finding-3 the same document
 /// also returned immediately, because serde skips an ignored value without
 /// resolving its aliases; either way this returns rather than hanging.
+///
+/// **Updated** (task 1c, milestone 2): `willikins_dsl::parse_document`'s
+/// anchor/alias pre-scan now refuses this document before `serde` ever
+/// gets to see -- let alone reject -- the unknown `junk0` field, which is
+/// a strictly stronger guarantee than finding 3's `deny_unknown_fields`
+/// alone: this shape is refused even in a hypothetical future where every
+/// one of these junk keys happened to be a real, accepted field.
 #[test]
 fn pinned_a_yaml_alias_bomb_has_no_ignored_field_to_hide_in() {
     let mut lines = vec![
@@ -330,35 +337,35 @@ fn pinned_a_yaml_alias_bomb_has_no_ignored_field_to_hide_in() {
     let source = lines.join("\n");
 
     let Err(err) = willikins_dsl::parse_document(&source) else {
-        panic!("pinned: an unknown field must be refused");
+        panic!("pinned: an anchor-bearing document must be refused");
     };
     assert!(
-        err.to_string().contains("unknown field `junk0`"),
+        err.to_string()
+            .contains("anchors and aliases are not supported"),
         "pinned: {err}"
     );
 }
 
-/// **Known and unfixed:** a YAML *scalar* alias is materialised once per
-/// use, so a document can amplify its own size by repeating an alias to a
-/// long anchor — entirely within fields the format declares, so finding
-/// 3's `deny_unknown_fields` does not touch it. Measured: a 1 MB document
-/// (a 1 MB `description:` anchor, referenced 2,000 times from a
-/// `list<Text>` default) peaked at 952 MB of resident memory before
-/// `Text`'s own 65,536-character bound rejected it — the allocation
-/// happens inside the deserializer, before any domain type sees the value.
-/// Worst case is quadratic in the document's size.
+/// **Fixed** (task 1c, milestone 2): a YAML scalar alias used to be
+/// materialised once per use, so a document could amplify its own size by
+/// repeating an alias to a long anchor — entirely within fields the format
+/// declares, so finding 3's `deny_unknown_fields` never touched it.
+/// Measured: a 1 MB document (a 1 MB `description:` anchor, referenced
+/// 2,000 times from a `list<Text>` default) used to peak at 952 MB of
+/// resident memory before `Text`'s own 65,536-character bound rejected it
+/// — the allocation happened inside the deserializer, before any domain
+/// type saw the value.
 ///
-/// Not fixed: no guard at the DSL layer closes it. `Text`'s bound is
-/// applied too late, and a cap on the document's own size only trades one
-/// quadratic for a smaller one (85,000 aliases into a 256 KiB anchor is
-/// still tens of gigabytes). The mitigation belongs in the YAML
-/// deserializer or in an OS resource limit around the process. See
-/// `docs/research/2026-09-12-e2e-adversarial-pass-2.md`.
-///
-/// What this test guards is only that the bounded case *terminates* and is
-/// rejected, not that the amplification is gone.
+/// `willikins_dsl::parse_document` now runs a YAML event pre-scan that
+/// refuses the first anchor or alias before deserializing at all, so this
+/// exact amplification shape (a 100,000-character anchor referenced 50
+/// times, well under `MAX_DOCUMENT_BYTES`) is refused by the pre-scan, not
+/// by `Text`'s bound. See
+/// `docs/research/2026-09-12-e2e-adversarial-pass-2.md` for the original
+/// measurement and `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`
+/// for the fix.
 #[test]
-fn known_gap_a_scalar_alias_is_materialised_once_per_use() {
+fn fixed_a_scalar_alias_is_refused_by_the_pre_scan_before_it_can_amplify() {
     let anchor = "z".repeat(100_000);
     let aliases = vec!["*s"; 50].join(", ");
     let source = format!(
@@ -374,11 +381,16 @@ steps:
 "
     );
     let Err(err) = willikins_dsl::parse_document(&source) else {
-        panic!("known gap: a 100,000-character Text must be rejected");
+        panic!("an anchored document must be refused before deserialization");
     };
     assert!(
-        err.to_string().contains("at most"),
-        "known gap: expected Text's length bound, got {err}"
+        err.to_string()
+            .contains("anchors and aliases are not supported"),
+        "expected the pre-scan's refusal, got {err}"
+    );
+    assert!(
+        !err.to_string().contains("at most"),
+        "the pre-scan should refuse before Text's bound is ever consulted: {err}"
     );
 }
 
@@ -546,6 +558,12 @@ steps:
 /// `serde` never applies one when deserializing into a struct. Silently
 /// ignoring it meant a document written with merge-key defaults lost them
 /// without a word; it is now refused like any other unknown field.
+///
+/// **Updated** (task 1c, milestone 2): a merge key's value is always an
+/// alias (`*base`), so `willikins_dsl::parse_document`'s anchor/alias
+/// pre-scan now refuses this document before `serde` ever gets to the
+/// unknown-field check -- a stronger guarantee, since it holds even if
+/// `<<` were ever a recognised field.
 #[test]
 fn finding_03_a_yaml_merge_key_is_refused() {
     let source = "\
@@ -561,7 +579,8 @@ steps:
         panic!("finding 3: a merge key must not be silently dropped");
     };
     assert!(
-        err.to_string().contains("base") || err.to_string().contains("<<"),
+        err.to_string()
+            .contains("anchors and aliases are not supported"),
         "finding 3: {err}"
     );
 }
@@ -801,7 +820,10 @@ steps:
 /// still says how long the value was.
 #[test]
 fn finding_06_a_huge_literal_is_not_echoed_in_full() {
-    let huge = "x".repeat(2_000_000);
+    // Bounded well under `willikins_dsl::MAX_DOCUMENT_BYTES` (task 1c) so
+    // this test still exercises the original hazard -- an unbounded quote
+    // of a rejected literal -- rather than the document-size cap.
+    let huge = "x".repeat(200_000);
     let source = format!(
         "\
 name: huge-literal
@@ -825,7 +847,7 @@ steps:
         huge.len()
     );
     assert!(
-        out.contains("2000000 characters"),
+        out.contains("200000 characters"),
         "finding 6: the message should still say how long it was: {out}"
     );
 }

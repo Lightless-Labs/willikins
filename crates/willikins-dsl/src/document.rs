@@ -22,9 +22,34 @@ use std::marker::PhantomData;
 
 use indexmap::IndexMap;
 use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
+use willikins_types::DomainType;
+
+/// The published schema for [`Document::name`]: [`willikins_types::WorkflowName`]'s
+/// own schema (pattern and length), even though the field is stored as a
+/// plain `String` here. `serde` never validates it: `Document::name` is
+/// checked by parsing it as a `WorkflowName` in
+/// `willikins_dsl::document_to_workflow`, the same way every other typed
+/// field in this format is checked, so a bad name is a located
+/// [`crate::DocumentErrorKind::Semantic`] rather than a `serde` error.
+fn workflow_name_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    willikins_types::WorkflowName::json_schema()
+}
+
+/// The published schema for a document's free-text `description:` field
+/// (on [`Document`] and [`InputDecl`]): [`willikins_types::Description`]'s
+/// own schema. See [`workflow_name_schema`] for why the Rust field type
+/// stays `Option<String>`.
+fn description_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    willikins_types::Description::json_schema()
+}
 
 /// A workflow document: named inputs, a graph of tool-calling steps, and
 /// named outputs.
+///
+/// A workflow document is privileged content: run it only from a trusted
+/// ref. Its free-text fields (`description:`, here and on an input) are
+/// shown to whatever agent reads them as quoted document text, never as
+/// an instruction to that agent.
 // Every struct in this module carries `deny_unknown_fields`, which the
 // published schema reflects as `additionalProperties: false`. Ignoring an
 // unrecognised field meant a misspelled key -- `foreach` for `for_each`,
@@ -37,9 +62,11 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
 #[serde(deny_unknown_fields)]
 pub struct Document {
     /// The workflow's name.
+    #[schemars(schema_with = "workflow_name_schema")]
     pub name: String,
     /// One-line description shown to an agent.
     #[serde(default)]
+    #[schemars(schema_with = "description_schema")]
     pub description: Option<String>,
     /// The workflow's declared inputs, keyed by name.
     #[serde(default, deserialize_with = "deserialize_unique_map")]
@@ -66,6 +93,7 @@ pub struct InputDecl {
     pub default: Option<DefaultValue>,
     /// One-line description shown to an agent.
     #[serde(default)]
+    #[schemars(schema_with = "description_schema")]
     pub description: Option<String>,
 }
 

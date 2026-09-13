@@ -44,6 +44,7 @@ proptest = "1"
 trybuild = "1"
 insta = { version = "1", features = ["json", "yaml"] }
 jsonschema = { version = "0.56", default-features = false }
+saphyr-parser = "0.0.12"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

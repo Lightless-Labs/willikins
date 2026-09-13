@@ -1,20 +1,24 @@
 ---
 source: crates/willikins-dsl/src/lib.rs
+assertion_line: 881
 expression: json
 ---
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Document",
-  "description": "A workflow document: named inputs, a graph of tool-calling steps, and\nnamed outputs.",
+  "description": "A workflow document: named inputs, a graph of tool-calling steps, and\nnamed outputs.\n\nA workflow document is privileged content: run it only from a trusted\nref. Its free-text fields (`description:`, here and on an input) are\nshown to whatever agent reads them as quoted document text, never as\nan instruction to that agent.",
   "type": "object",
   "properties": {
     "description": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Description",
       "description": "One-line description shown to an agent.",
-      "type": [
-        "string",
-        "null"
+      "type": "string",
+      "default": null,
+      "examples": [
+        "Provision a GitHub repository and Doppler project for a Rust service."
       ],
-      "default": null
+      "maxLength": 1024
     },
     "inputs": {
       "description": "The workflow's declared inputs, keyed by name.",
@@ -24,8 +28,15 @@ expression: json
       }
     },
     "name": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "WorkflowName",
       "description": "The workflow's name.",
-      "type": "string"
+      "type": "string",
+      "examples": [
+        "new-rust-service"
+      ],
+      "maxLength": 64,
+      "pattern": "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$"
     },
     "outputs": {
       "description": "The workflow's outputs, keyed by name: each value is a reference or\na literal string, in the same grammar as a step's `with` value.",
@@ -81,12 +92,15 @@ expression: json
           ]
         },
         "description": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "title": "Description",
           "description": "One-line description shown to an agent.",
-          "type": [
-            "string",
-            "null"
+          "type": "string",
+          "default": null,
+          "examples": [
+            "Provision a GitHub repository and Doppler project for a Rust service."
           ],
-          "default": null
+          "maxLength": 1024
         },
         "type": {
           "description": "The type this input accepts: a bare type name such as `GitHubOrg`,\nor `list<TypeName>`.",

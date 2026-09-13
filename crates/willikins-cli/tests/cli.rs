@@ -651,8 +651,9 @@ impl Drop for TempWorkflow {
 
 /// `DocumentErrorKind`'s `kind` tag is `PascalCase`, matching every other
 /// error an agent reads (`CheckError`, `PlanError`), rather than the
-/// `snake_case` it carried in milestone 1. Both variants are covered: a
-/// YAML-level failure and a semantic one, each read off the *stderr* the
+/// `snake_case` it carried in milestone 1. All three variants are covered
+/// (task 1c added the third, `TooLarge`): a YAML-level failure, a
+/// semantic one, and a too-large one, each read off the *stderr* the
 /// document path writes to, at exit 2.
 #[test]
 fn document_error_json_carries_a_pascal_case_kind_for_both_variants() {
@@ -678,6 +679,16 @@ fn document_error_json_carries_a_pascal_case_kind_for_both_variants() {
     assert_eq!(json["kind"], "Semantic", "json: {json}");
     assert!(json["path"].is_string(), "json: {json}");
     assert!(json["message"].is_string(), "json: {json}");
+
+    // A `TooLarge` failure: a source over `willikins_dsl::MAX_DOCUMENT_BYTES`
+    // (256 KiB), refused before any YAML parsing is attempted.
+    let huge = TempWorkflow::new("kind-too-large", &"a".repeat(257 * 1024));
+    let output = run(&["--json", "validate", huge.path.to_str().unwrap()]);
+    assert_eq!(exit_code(&output), 2);
+    let json: serde_json::Value =
+        serde_json::from_str(&stderr(&output)).expect("valid JSON on stderr");
+    assert_eq!(json["kind"], "TooLarge", "json: {json}");
+    assert!(json["bytes"].is_number(), "json: {json}");
 }
 
 /// A `check` failure's `--json` output is an array of objects each carrying
