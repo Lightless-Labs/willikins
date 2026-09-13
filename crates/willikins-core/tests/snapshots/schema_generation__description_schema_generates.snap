@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 26
 expression: schema
 ---
 {
@@ -72,8 +73,8 @@ expression: schema
             "null"
           ]
         },
-        "description": {
-          "description": "The input's own one-line description, if it declared one.",
+        "document_description": {
+          "description": "The input's own one-line description, verbatim from the document,\nif it declared one. This is document text, not willikins' own\nwords — see the module docs' \"Document text is data\" — so it is\nnamed `document_*` and never folds into [`Self::prompt`].\n\nVerbatim is what a caller reading JSON gets, where a string is a\nstring and cannot escape its field. A caller reading a\nline-oriented rendering of this struct needs more than a label: the\nCLI's text renderer prefixes the text `document says:` *and*\nescapes it onto that one line, because a description carrying a\nline terminator would otherwise forge a line of willikins' own.",
           "type": [
             "string",
             "null"
@@ -88,7 +89,7 @@ expression: schema
           "$ref": "#/$defs/InputName"
         },
         "prompt": {
-          "description": "A one-sentence question an agent could ask a human to fill this\ninput in, built from the name, description, and example.",
+          "description": "A one-sentence question an agent could ask a human to fill this\ninput in, built from the name, the type's own registry\ndescription, and the example — willikins' own words only; see the\nmodule docs. Never contains [`Self::document_description`].",
           "type": "string"
         },
         "schema": {

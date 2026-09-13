@@ -51,7 +51,7 @@ fn missing_input_publishes_a_non_empty_schema_and_its_schema_field_round_trips()
         "name",
         "ty",
         "schema",
-        "description",
+        "document_description",
         "default",
         "example",
         "prompt",
