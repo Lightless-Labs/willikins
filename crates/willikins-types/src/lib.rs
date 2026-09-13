@@ -138,6 +138,7 @@ impl TypeInfo {
 
 pub use willikins_derive::DomainType;
 
+pub mod description;
 pub mod doppler;
 pub mod github;
 pub mod name;
@@ -148,7 +149,9 @@ pub mod reserved;
 pub mod slug;
 pub mod text;
 pub mod word;
+pub mod workflow_name;
 
+pub use description::Description;
 pub use doppler::{
     DopplerConfig, DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken,
     DopplerTokenName, SecretName,
@@ -162,6 +165,7 @@ pub use reserved::is_reserved;
 pub use slug::{ComponentSlug, EnvironmentSlug, ProjectSlug};
 pub use text::{TemplateSource, Text};
 pub use word::{Word, WordList};
+pub use workflow_name::WorkflowName;
 
 // `type_infos()`, `registry()`, and `assert_all_examples_parse()` are
 // generated together from this one list, so the type catalog and the type
@@ -186,6 +190,8 @@ registry::domain_types! {
     SecretName,
     DopplerServiceToken,
     DopplerSecretValue,
+    WorkflowName,
+    Description,
 }
 
 /// Assert that `T::example()` parses as `T`.

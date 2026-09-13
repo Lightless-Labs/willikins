@@ -27,7 +27,7 @@ const MAX_LEN: usize = 100;
 /// renderer a `ProjectName` reaches — a rendered `CLAUDE.md` included. A
 /// display name is a single line by definition, so they are rejected with
 /// the invisibles rather than left to the control-character check.
-fn is_invisible_or_bidi_control(c: char) -> bool {
+pub(crate) fn is_invisible_or_bidi_control(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'

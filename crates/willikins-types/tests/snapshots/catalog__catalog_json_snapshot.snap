@@ -324,5 +324,38 @@ expression: json
       "maxLength": 65536,
       "minLength": 1
     }
+  },
+  {
+    "name": "WorkflowName",
+    "secret": false,
+    "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
+    "example": "new-rust-service",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "WorkflowName",
+      "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
+      "type": "string",
+      "examples": [
+        "new-rust-service"
+      ],
+      "maxLength": 64,
+      "pattern": "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$"
+    }
+  },
+  {
+    "name": "Description",
+    "secret": false,
+    "description": "A free-text description shown to an agent, at most 1,024 characters.",
+    "example": "Provision a GitHub repository and Doppler project for a Rust service.",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Description",
+      "description": "A free-text description shown to an agent, at most 1,024 characters.",
+      "type": "string",
+      "examples": [
+        "Provision a GitHub repository and Doppler project for a Rust service."
+      ],
+      "maxLength": 1024
+    }
   }
 ]
