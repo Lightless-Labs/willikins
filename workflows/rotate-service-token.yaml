@@ -1,0 +1,31 @@
+# The second positive fixture: rotate a Doppler service token and re-store
+# it as a GitHub Actions secret, independent of the repository and Doppler
+# project themselves (this workflow only ensures its own root config).
+# `doppler.service_token.rotate` always revokes and re-mints, so its own
+# planned action is always Create and this workflow's class is always
+# Destructive, needing approval. Acceptance test 6b.
+name: rotate-service-token
+description: Rotate a Doppler service token and re-store it as a GitHub Actions secret.
+inputs:
+  project: { type: DopplerProject, description: Doppler project holding the token }
+  environment: { type: EnvironmentSlug, default: prd }
+  token_name: { type: DopplerTokenName, default: ci }
+  repo: { type: GitHubRepo, description: GitHub repository to store the rotated token in }
+  secret_name: { type: ActionsSecretName, default: DOPPLER_TOKEN }
+steps:
+  config:
+    tool: doppler.config.ensure
+    with:
+      project: ${{ inputs.project }}
+      environment: ${{ inputs.environment }}
+  token:
+    tool: doppler.service_token.rotate
+    with:
+      config: ${{ steps.config.config }}
+      name: ${{ inputs.token_name }}
+  ci_secret:
+    tool: github.actions_secret.ensure
+    with:
+      repo: ${{ inputs.repo }}
+      name: ${{ inputs.secret_name }}
+      value: ${{ steps.token.token }}
