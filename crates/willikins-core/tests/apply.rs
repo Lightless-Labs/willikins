@@ -3,13 +3,15 @@
 //! fake-provider changes), 7 (core half), and 8 (the fingerprint unit
 //! half lives in `crates/willikins-core/src/plan.rs`'s own test module).
 //!
-//! See `common::FixedTokenService`'s own doc for why these tests build
-//! their own catalog (via `common::apply_test_catalog`) rather than
-//! `willikins_providers_fake::catalog` unchanged: today's
-//! `doppler.service_token.ensure` reports its `token` output `Unknown` on
-//! every `ensure` call, including a freshly minting one, which would make
-//! `ci_secret` hit `ApplyError::UnknownInput` on the very first run —
-//! task 4b's job is to fix that in the shared fake crate itself.
+//! These tests build their own catalog (via `common::apply_test_catalog`)
+//! rather than using `willikins_providers_fake::catalog` unchanged: when
+//! they were written, `doppler.service_token.ensure` reported its `token`
+//! output `Unknown` on every `ensure` call, including a freshly minting
+//! one, which would have made `ci_secret` hit `ApplyError::UnknownInput`
+//! on the very first run. Task 4b has since fixed the shared fake, so the
+//! substitute is no longer load-bearing; swapping these tests onto the
+//! real catalog is tracked in
+//! `todos/2026-09-13-apply-tests-on-the-real-fake-catalog.md`.
 
 mod common;
 

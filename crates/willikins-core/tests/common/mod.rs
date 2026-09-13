@@ -227,8 +227,9 @@ pub fn distinctive_token() -> DopplerServiceToken {
 /// ports, key, class) and its own state map, differing only in what
 /// `ensure` returns on creation.
 ///
-/// The real fake tool (as it stands before task 4b adds
-/// `FakeState::next_token`) always reports the `token` output
+/// The real fake tool, as it stood before task 4b added
+/// `FakeState::next_token` and the `Known` create path, always reported
+/// the `token` output
 /// [`Value::unknown`], on both `read` and `ensure` alike — correct for
 /// `read` (a service token's value can never be re-read once issued), but
 /// wrong for a freshly minted `ensure` call: the milestone plan's own
@@ -248,10 +249,11 @@ pub fn distinctive_token() -> DopplerServiceToken {
 ///   `UnknownInput` gap the design describes, since a `Present` token's
 ///   value is still `Unknown` here, exactly like the real fake tool.
 ///
-/// This is a test-local stand-in, not an edit to `willikins-providers-fake`
-/// (task 4b's own job): see the task notes for why the acceptance
-/// tests this crate's own `tests/apply.rs` implements cannot pass against
-/// the shared fake catalog as it stands today.
+/// This is a test-local stand-in rather than an edit to
+/// `willikins-providers-fake`, which was task 4b's own job. Task 4b has
+/// since made the real tool behave this way, so the stand-in is no longer
+/// load-bearing; swapping these tests onto the real catalog is tracked in
+/// `todos/2026-09-13-apply-tests-on-the-real-fake-catalog.md`.
 pub struct FixedTokenService {
     spec: ToolSpec,
     state: Arc<Mutex<FakeState>>,
