@@ -252,13 +252,22 @@ fn type_name_is_the_struct_identifier() {
     assert_eq!(TestKebab::TYPE_NAME, "TestKebab");
 }
 
+/// A synthetic secret with a prefixed pattern, for exercising the derive
+/// macro's `secret` + `pattern` behaviour generically.
+///
+/// Its prefix is deliberately not `dp.st.`: these literals are not
+/// Doppler service tokens and must not read as claims about the shape of
+/// one. `DopplerServiceToken`'s real pattern is far tighter (a 40-44
+/// character alphanumeric suffix), and a token-shaped literal that the
+/// real type would reject is exactly the kind of stale example someone
+/// later copies.
 #[derive(DomainType)]
 #[domain(
-    pattern = "dp\\.st\\.[a-z0-9-]+",
+    pattern = "tp\\.xx\\.[a-z0-9-]+",
     min_len = 10,
     secret,
     description = "A prefixed test secret",
-    example = "dp.st.example-token"
+    example = "tp.xx.example-token"
 )]
 struct TestPrefixedSecret(secrecy::SecretString);
 
@@ -294,10 +303,10 @@ fn secret_deserialize_failure_never_echoes_the_input() {
 #[test]
 #[allow(clippy::disallowed_methods)] // a test mints its own token
 fn secret_deserialized_from_json_is_redacted_afterwards() {
-    let value: TestPrefixedSecret = serde_json::from_str("\"dp.st.hunter2-token\"").unwrap();
+    let value: TestPrefixedSecret = serde_json::from_str("\"tp.xx.hunter2-token\"").unwrap();
     assert_eq!(format!("{value:?}"), "[REDACTED TestPrefixedSecret]");
     assert_eq!(value.to_string(), "[REDACTED TestPrefixedSecret]");
-    assert_eq!(value.expose(&SinkToken::new()), "dp.st.hunter2-token");
+    assert_eq!(value.expose(&SinkToken::new()), "tp.xx.hunter2-token");
 }
 
 #[derive(DomainType)]
