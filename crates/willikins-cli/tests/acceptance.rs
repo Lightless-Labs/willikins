@@ -37,6 +37,11 @@ use willikins_core::{
 use willikins_providers_fake::FakeState;
 use willikins_types::DomainType;
 
+/// A `DopplerServiceToken`-shaped literal (real shape does not matter here:
+/// the registry refuses every secret literal before looking at its text),
+/// used by [`acceptance_03_static_errors`]'s last check.
+const SECRET_LITERAL_TOKEN: &str = "dp.st.prd.hunter2hunter2hunter2hunter2hunter2hunter2";
+
 // ---------------------------------------------------------------------
 // paths and loading
 // ---------------------------------------------------------------------
@@ -369,7 +374,7 @@ fn acceptance_03_static_errors() {
     // `acceptance_3_the_registry_refuses_a_secret_literal_input_value`;
     // re-verified here since it is this acceptance test's own last
     // sentence.
-    let err = Value::parse(&ty("DopplerServiceToken"), "dp.st.prd.hunter2").unwrap_err();
+    let err = Value::parse(&ty("DopplerServiceToken"), SECRET_LITERAL_TOKEN).unwrap_err();
     assert!(
         err.reason.contains("cannot be supplied"),
         "acceptance test 3: registry must refuse a secret literal: {}",
@@ -799,8 +804,8 @@ fn acceptance_07_plan_against_seeded_state() {
 /// `to_string()` case (a `ToolError`'s own `Display`).
 #[test]
 fn acceptance_08a_redaction_by_construction() {
-    const SECRET_TAIL: &str = "acceptance08afakesecretbytes";
-    const TOKEN: &str = "dp.st.prd.acceptance08afakesecretbytes";
+    const SECRET_TAIL: &str = "acceptance08afakesecretbytesaaaaaaaaaaaaaa";
+    const TOKEN: &str = "dp.st.prd.acceptance08afakesecretbytesaaaaaaaaaaaaaa";
     const MARKER: &str = "[REDACTED DopplerServiceToken]";
 
     let value = Value::known(willikins_types::DopplerServiceToken::parse(TOKEN).unwrap());

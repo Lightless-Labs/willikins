@@ -93,7 +93,7 @@ mod tests {
     }
 
     fn value() -> DopplerServiceToken {
-        DopplerServiceToken::parse("dp.st.prd.exampleexampleexample").unwrap()
+        DopplerServiceToken::parse("dp.st.prd.exampleexampleexampleexampleexampleexample").unwrap()
     }
 
     fn full_inputs() -> Inputs {

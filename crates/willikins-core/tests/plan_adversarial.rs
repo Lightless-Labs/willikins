@@ -696,7 +696,11 @@ fn describe_echoes_a_rejected_non_secret_raw_value_and_never_sees_a_secret_one()
 
     // And the registry itself refuses a secret type before looking at the
     // text, so even a direct parse cannot echo one.
-    let refusal = Value::parse(&ty("DopplerServiceToken"), "dp.st.prd.realtokenbytes").unwrap_err();
+    let refusal = Value::parse(
+        &ty("DopplerServiceToken"),
+        "dp.st.prd.realtokenbytesaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .unwrap_err();
     assert!(!refusal.to_string().contains("realtokenbytes"), "{refusal}");
 }
 

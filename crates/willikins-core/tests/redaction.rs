@@ -18,10 +18,10 @@ use willikins_core::{
 use willikins_types::{DomainType, DopplerServiceToken};
 
 /// The distinctive bytes a leak would reveal.
-const SECRET_TAIL: &str = "fakesecretbytes0001";
+const SECRET_TAIL: &str = "fakesecretbytes0001aaaaaaaaaaaaaaaaaaaaaaa";
 
 /// The full token string, matching `DopplerServiceToken`'s pattern.
-const TOKEN: &str = "dp.st.prd.fakesecretbytes0001";
+const TOKEN: &str = "dp.st.prd.fakesecretbytes0001aaaaaaaaaaaaaaaaaaaaaaa";
 
 /// The marker every redaction is expected to show instead.
 const MARKER: &str = "[REDACTED DopplerServiceToken]";

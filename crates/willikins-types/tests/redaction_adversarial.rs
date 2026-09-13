@@ -17,11 +17,11 @@ use willikins_types::{
 
 /// A token whose bytes are distinctive enough that any appearance in any
 /// rendering is unmistakable.
-const SECRET_BYTES: &str = "dp.st.fake-secret-bytes-aaaaaaaa";
+const SECRET_BYTES: &str = "dp.st.fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 /// The distinctive tail of [`SECRET_BYTES`], so a check also catches a
 /// partial leak that drops the `dp.st.` prefix.
-const SECRET_TAIL: &str = "fake-secret-bytes-aaaaaaaa";
+const SECRET_TAIL: &str = "fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn boxed_token() -> Box<dyn DomainObject> {
     Box::new(DopplerServiceToken::parse(SECRET_BYTES).expect("the fixture token parses"))
@@ -103,7 +103,8 @@ fn dyn_eq_is_true_for_two_secrets_with_the_same_bytes() {
 fn dyn_eq_is_false_across_secret_values_and_types_without_leaking() {
     let one = boxed_token();
     let other: Box<dyn DomainObject> = Box::new(
-        DopplerServiceToken::parse("dp.st.some-other-token-bbbbbbbb").expect("fixture parses"),
+        DopplerServiceToken::parse("dp.st.someothertokenbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            .expect("fixture parses"),
     );
     assert!(!one.dyn_eq(other.as_ref()));
 
@@ -111,7 +112,7 @@ fn dyn_eq_is_false_across_secret_values_and_types_without_leaking() {
     // print both operands, so pin that both Debugs stay redacted.
     let both = format!("{one:?} vs {other:?}");
     assert_no_secret("Debug of an unequal pair", &both);
-    assert!(!both.contains("some-other-token"), "leaked: {both}");
+    assert!(!both.contains("someothertoken"), "leaked: {both}");
 
     // A different secret type with the same bytes is still not equal.
     let same_bytes_other_type: Box<dyn DomainObject> =

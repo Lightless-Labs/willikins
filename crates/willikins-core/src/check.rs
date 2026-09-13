@@ -1663,7 +1663,9 @@ mod tests {
                     .port(port("name"), Binding::Literal("DOPPLER_TOKEN".to_string()))
                     .port(
                         port("value"),
-                        Binding::Literal("dp.st.prd.hunter2hunter2".to_string()),
+                        Binding::Literal(
+                            "dp.st.prd.hunter2hunter2hunter2hunter2hunter2hunter2".to_string(),
+                        ),
                     ),
             );
         let catalog = test_catalog();

@@ -61,7 +61,9 @@ fn tool_name(name: &str) -> ToolName {
 /// A secret value, constructed on the concrete type (the registry refuses
 /// to parse a secret type from a string, by design).
 fn secret_value() -> Value {
-    Value::known(DopplerServiceToken::parse("dp.st.fake-secret-bytes").unwrap())
+    Value::known(
+        DopplerServiceToken::parse("dp.st.fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+    )
 }
 
 /// A tool whose spec is fixed at construction; `check` never calls either
@@ -1019,7 +1021,7 @@ const LITERALS: &[&str] = &[
     "prd",
     "acme-web",
     "lightless-labs/acme-web",
-    "dp.st.prd.hunter2",
+    "dp.st.prd.hunter2hunter2hunter2hunter2hunter2hunter2",
     "[REDACTED DopplerServiceToken]",
 ];
 

@@ -26,9 +26,10 @@ use willikins_types::{DomainType, DopplerServiceToken, ProjectSlug, Rendered};
 /// A substring that must never appear in any rendering of a secret.
 const CANARY: &str = "leakcanary7f3a";
 
-/// A well-formed `DopplerServiceToken` carrying [`CANARY`].
+/// A well-formed `DopplerServiceToken` carrying [`CANARY`], padded out to
+/// the 40-44 character alphanumeric suffix Doppler's real tokens use.
 fn token_text() -> String {
-    format!("dp.st.prd.{CANARY}")
+    format!("dp.st.prd.{CANARY}bbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 }
 
 fn secret_value() -> Value {

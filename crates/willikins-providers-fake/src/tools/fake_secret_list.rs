@@ -12,9 +12,9 @@ use willikins_types::{DomainType, DopplerConfig, DopplerServiceToken};
 use crate::support::{exact, get, list, port, require_present, tool_name};
 
 /// The first constant token `fake.secret_list` always reports.
-const TOKEN_ONE: &str = "dp.st.fake-secret-list-one";
+const TOKEN_ONE: &str = "dp.st.fakesecretlistoneaaaaaaaaaaaaaaaaaaaaaaaaa";
 /// The second constant token `fake.secret_list` always reports.
-const TOKEN_TWO: &str = "dp.st.fake-secret-list-two";
+const TOKEN_TWO: &str = "dp.st.fakesecretlisttwoaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 /// `fake.secret_list`.
 pub struct FakeSecretList {

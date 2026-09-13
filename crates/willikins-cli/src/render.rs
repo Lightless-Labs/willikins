@@ -402,7 +402,10 @@ mod tests {
     /// instead — the same guarantee acceptance test 8 pins for JSON.
     #[test]
     fn plan_text_redacts_a_known_secret_output() {
-        let token = willikins_types::DopplerServiceToken::parse("dp.st.fake-secret-bytes").unwrap();
+        let token = willikins_types::DopplerServiceToken::parse(
+            "dp.st.fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
         let mut outputs = Outputs::new();
         outputs.insert(PortName::parse("token").unwrap(), Value::known(token));
 

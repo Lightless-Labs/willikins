@@ -579,7 +579,8 @@ mod tests {
     #[test]
     fn parse_propagates_secret_refusal() {
         let ty = TypeRef::scalar(TypeName::parse("DopplerServiceToken").unwrap());
-        let err = Value::parse(&ty, "dp.st.prd.exampleexampleexample").unwrap_err();
+        let err =
+            Value::parse(&ty, "dp.st.prd.exampleexampleexampleexampleexampleexample").unwrap_err();
         assert!(err.reason.contains("cannot be supplied"), "{}", err.reason);
     }
 
@@ -624,8 +625,10 @@ mod tests {
 
     #[test]
     fn is_secret_is_true_for_a_known_secret_scalar() {
-        let value =
-            Value::known(DopplerServiceToken::parse("dp.st.prd.exampleexampleexample").unwrap());
+        let value = Value::known(
+            DopplerServiceToken::parse("dp.st.prd.exampleexampleexampleexampleexampleexample")
+                .unwrap(),
+        );
         assert!(value.is_secret());
     }
 
@@ -638,11 +641,13 @@ mod tests {
 
     #[test]
     fn debug_of_a_secret_value_shows_only_the_marker() {
-        let value =
-            Value::known(DopplerServiceToken::parse("dp.st.prd.exampleexampleexample").unwrap());
+        let value = Value::known(
+            DopplerServiceToken::parse("dp.st.prd.exampleexampleexampleexampleexampleexample")
+                .unwrap(),
+        );
         assert_eq!(format!("{value:?}"), "[REDACTED DopplerServiceToken]");
         assert_eq!(format!("{value:#?}"), "[REDACTED DopplerServiceToken]");
-        assert!(!format!("{value:?}").contains("exampleexampleexample"));
+        assert!(!format!("{value:?}").contains("exampleexampleexampleexampleexampleexample"));
     }
 
     #[test]
@@ -734,8 +739,10 @@ mod tests {
 
     #[test]
     fn json_shape_known_secret() {
-        let value =
-            Value::known(DopplerServiceToken::parse("dp.st.prd.exampleexampleexample").unwrap());
+        let value = Value::known(
+            DopplerServiceToken::parse("dp.st.prd.exampleexampleexampleexampleexampleexample")
+                .unwrap(),
+        );
         insta::assert_json_snapshot!(value);
     }
 
@@ -825,8 +832,10 @@ mod tests {
         let validator =
             jsonschema::validator_for(schema.as_value()).expect("Value's schema is itself valid");
 
-        let secret_token =
-            || DopplerServiceToken::parse("dp.st.prd.exampleexampleexample").unwrap();
+        let secret_token = || {
+            DopplerServiceToken::parse("dp.st.prd.exampleexampleexampleexampleexampleexample")
+                .unwrap()
+        };
 
         let known_scalar =
             serde_json::to_value(Value::known(github_org("lightless-labs"))).unwrap();
