@@ -71,14 +71,7 @@ use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
 
 /// What `plan` decided to do for one node instance.
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Action {

@@ -330,14 +330,7 @@ pub enum Observation {
 
 /// The kind of failure a [`Tool`] reported.
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 pub enum ToolErrorKind {
     /// The resource `ensure` was asked to act on does not exist.

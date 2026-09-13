@@ -5,7 +5,9 @@
 
 use indexmap::IndexMap;
 
-use willikins_core::{Class, InstanceFingerprint, NodeName, NodeStatus, OutputName, Outputs, Value};
+use willikins_core::{
+    Class, InstanceFingerprint, NodeName, NodeStatus, OutputName, Outputs, Value,
+};
 use willikins_types::WorkflowName;
 
 use crate::event::{Entry, Event, Outcome};

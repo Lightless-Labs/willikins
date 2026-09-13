@@ -43,7 +43,10 @@ impl Reason {
 
 /// Why [`Reason::parse`] refused its input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("a rejection reason must be at most {} characters, got {len}", Reason::MAX_CHARS)]
+#[error(
+    "a rejection reason must be at most {} characters, got {len}",
+    Reason::MAX_CHARS
+)]
 pub struct ReasonError {
     /// The rejected input's character count.
     pub len: usize,

@@ -41,10 +41,16 @@ fn events_carrying_the_secret() -> Vec<Event> {
     outputs_with_secret.insert(port("token"), secret_value());
 
     let mut resolved_inputs: IndexMap<willikins_core::InputName, Value> = IndexMap::new();
-    resolved_inputs.insert(willikins_core::InputName::parse("token").unwrap(), secret_value());
+    resolved_inputs.insert(
+        willikins_core::InputName::parse("token").unwrap(),
+        secret_value(),
+    );
 
     let mut resolved_outputs: IndexMap<willikins_core::OutputName, Value> = IndexMap::new();
-    resolved_outputs.insert(willikins_core::OutputName::parse("token").unwrap(), secret_value());
+    resolved_outputs.insert(
+        willikins_core::OutputName::parse("token").unwrap(),
+        secret_value(),
+    );
 
     let plan_with_secret = willikins_core::Plan {
         workflow: workflow_name("wf"),

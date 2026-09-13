@@ -33,15 +33,22 @@ use willikins_providers_fake::FakeState;
 use willikins_types::DomainType;
 
 fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
 }
 
 fn fixture(name: &str) -> PathBuf {
-    workspace_root().join("workflows").join("fixtures").join(name)
+    workspace_root()
+        .join("workflows")
+        .join("fixtures")
+        .join(name)
 }
 
 fn positive_fixture() -> PathBuf {
-    workspace_root().join("workflows").join("new-rust-service.yaml")
+    workspace_root()
+        .join("workflows")
+        .join("new-rust-service.yaml")
 }
 
 fn load(path: &Path) -> Workflow {
@@ -116,7 +123,9 @@ fn acceptance_10_journal_records_two_runs_without_leaking_either_secret() {
 
     // --- Run 1: the positive fixture, `next_token` seeded to a marker. ---
     let workflow = load(&positive_fixture());
-    let state = Arc::new(Mutex::new(FakeState::new().with_next_token(distinctive_token())));
+    let state = Arc::new(Mutex::new(
+        FakeState::new().with_next_token(distinctive_token()),
+    ));
     let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
     let checked = check(&workflow, &catalog).expect("positive fixture must check cleanly");
     let inputs = resolve_inputs(
@@ -165,8 +174,12 @@ fn acceptance_10_journal_records_two_runs_without_leaking_either_secret() {
         &secret_checked,
         &[("project", RawInput::Scalar("widgets".to_string()))],
     );
-    let (plan_id_2, approved_2) =
-        record_plan(&mut journal, &secret_checked, &secret_inputs, &seeded_catalog);
+    let (plan_id_2, approved_2) = record_plan(
+        &mut journal,
+        &secret_checked,
+        &secret_inputs,
+        &seeded_catalog,
+    );
 
     let (result_2, journal_error_2) = run_and_journal(
         &mut journal,
@@ -245,7 +258,10 @@ fn acceptance_10_journal_records_two_runs_without_leaking_either_secret() {
 
     // --- A second open while the (reopened) journal is held is refused. ---
     let second = FileJournal::open(&journal_path);
-    assert!(matches!(second, Err(willikins_journal::JournalError::Locked { .. })));
+    assert!(matches!(
+        second,
+        Err(willikins_journal::JournalError::Locked { .. })
+    ));
 
     drop(reopened);
 

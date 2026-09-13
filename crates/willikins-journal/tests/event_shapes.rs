@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, HashSet};
 use common::{node, port, principal, reason, tool_name, workflow_name};
 use willikins_core::{Class, InstanceFingerprint, NodeStatus, ToolError, ToolErrorKind};
 use willikins_journal::{
-    ApplyRefusedReason, AuthFailedReason, DriftReasonKind, Event, Outcome, PlanId, Redacted,
-    RunId, Transport,
+    ApplyRefusedReason, AuthFailedReason, DriftReasonKind, Event, Outcome, PlanId, Redacted, RunId,
+    Transport,
 };
 
 macro_rules! variant_kinds {
@@ -70,7 +70,10 @@ fn event_samples() -> Vec<Event> {
         Event::ServerStarted {
             version: "0.1.0".to_string(),
             workflows_dir: "/workflows".to_string(),
-            workflow_hashes: BTreeMap::from([("new-rust-service.yaml".to_string(), "abc".to_string())]),
+            workflow_hashes: BTreeMap::from([(
+                "new-rust-service.yaml".to_string(),
+                "abc".to_string(),
+            )]),
         },
         Event::ToolCalled {
             principal: principal("agent"),
@@ -164,9 +167,8 @@ fn every_event_variant_serializes_with_its_kind() {
 fn every_event_variant_round_trips_through_json() {
     for sample in event_samples() {
         let json = serde_json::to_string(&sample).unwrap();
-        let back: Event = serde_json::from_str(&json).unwrap_or_else(|err| {
-            panic!("failed to round-trip {sample:?}: {err}\njson: {json}")
-        });
+        let back: Event = serde_json::from_str(&json)
+            .unwrap_or_else(|err| panic!("failed to round-trip {sample:?}: {err}\njson: {json}"));
         let back_json = serde_json::to_string(&back).unwrap();
         assert_eq!(json, back_json, "round trip changed the wire shape");
     }

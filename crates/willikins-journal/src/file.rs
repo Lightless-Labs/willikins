@@ -144,9 +144,8 @@ impl Journal for FileJournal {
             at,
             event,
         };
-        let mut line = serde_json::to_string(&entry).unwrap_or_else(|err| {
-            unreachable!("an `Entry` always serializes to JSON: {err}")
-        });
+        let mut line = serde_json::to_string(&entry)
+            .unwrap_or_else(|err| unreachable!("an `Entry` always serializes to JSON: {err}"));
         line.push('\n');
         self.file
             .write_all(line.as_bytes())

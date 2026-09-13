@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Class, InputName, InstanceFingerprint, Inputs, NodeName, NodeStatus, OutputName, PortName,
+    Class, InputName, Inputs, InstanceFingerprint, NodeName, NodeStatus, OutputName, PortName,
     ToolError, ToolName, Value,
 };
 use willikins_types::WorkflowName;
