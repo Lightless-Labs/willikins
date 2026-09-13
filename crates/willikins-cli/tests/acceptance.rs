@@ -1886,3 +1886,495 @@ fn milestone_2_acceptance_09_core_apply_refuses_a_visibility_mismatch_via_the_re
         "no provider call was made: the re-plan refused before rule 3 minted a token"
     );
 }
+
+// ---------------------------------------------------------------------
+// milestone 2 acceptance test 6, generalised: every node, both fixtures
+// ---------------------------------------------------------------------
+
+/// Every non-pure node instance of `workflows/new-rust-service.yaml` for
+/// `slug = third-thoughts`, `org = lightless-labs`, as the `(tool, key)`
+/// pair `FakeState::with_fail_ensure_once` takes.
+const POSITIVE_FIXTURE_INSTANCES: &[(&str, &str)] = &[
+    ("github.repo.ensure", "lightless-labs/third-thoughts"),
+    ("doppler.project.ensure", "third-thoughts"),
+    ("doppler.config.ensure", "third-thoughts/dev"),
+    ("doppler.config.ensure", "third-thoughts/stg"),
+    ("doppler.config.ensure", "third-thoughts/prd"),
+    ("doppler.service_token.ensure", "third-thoughts/prd#ci"),
+    (
+        "github.actions_secret.ensure",
+        "lightless-labs/third-thoughts#DOPPLER_TOKEN",
+    ),
+];
+
+/// The same for `workflows/rotate-service-token.yaml`.
+const ROTATE_FIXTURE_INSTANCES: &[(&str, &str)] = &[
+    ("doppler.config.ensure", "third-thoughts/prd"),
+    ("doppler.service_token.rotate", "third-thoughts/prd#ci"),
+    (
+        "github.actions_secret.ensure",
+        "lightless-labs/third-thoughts#DOPPLER_TOKEN",
+    ),
+];
+
+/// Every `(node, instance)` an observer saw a `NodeStarted` for, in order,
+/// asserting each is immediately followed by its own `NodeFinished`.
+fn attempted_instances(observer: &RecordingObserver) -> Vec<(String, Option<String>)> {
+    let mut attempted = Vec::new();
+    let mut index = 0;
+    while index < observer.events.len() {
+        let ApplyEvent::NodeStarted {
+            node: started,
+            instance,
+            ..
+        } = &observer.events[index]
+        else {
+            panic!(
+                "event {index} is not a NodeStarted: {:?}",
+                observer.events[index]
+            );
+        };
+        let ApplyEvent::NodeFinished {
+            node: finished,
+            instance: finished_instance,
+            ..
+        } = &observer.events[index + 1]
+        else {
+            panic!(
+                "event {} is not the matching NodeFinished: {:?}",
+                index + 1,
+                observer.events[index + 1]
+            );
+        };
+        assert_eq!(started, finished, "a Started/Finished pair must agree");
+        assert_eq!(instance, finished_instance);
+        attempted.push((started.to_string(), instance.clone()));
+        index += 2;
+    }
+    attempted
+}
+
+/// The inputs `workflows/rotate-service-token.yaml` needs for the same
+/// resources the positive fixture provisions.
+fn rotate_inputs(label: &str, checked: &willikins_core::Checked) -> IndexMap<InputName, Value> {
+    resolve_inputs(
+        label,
+        checked,
+        &[
+            ("project", RawInput::Scalar("third-thoughts".to_string())),
+            (
+                "repo",
+                RawInput::Scalar("lightless-labs/third-thoughts".to_string()),
+            ),
+        ],
+    )
+}
+
+/// `Approval::Human`, which every class accepts.
+fn human_approval() -> Approval {
+    Approval::Human {
+        approver: willikins_core::PrincipalId::parse("operator").unwrap(),
+        at: willikins_core::Timestamp::now(),
+    }
+}
+
+/// Assert `applied` finished with nothing left to do: no instance is
+/// `Failed` or `NotRun`.
+fn assert_settled(label: &str, applied: &Applied) {
+    for applied_node in &applied.nodes {
+        assert!(
+            matches!(
+                applied_node.status,
+                NodeStatus::Computed
+                    | NodeStatus::Created
+                    | NodeStatus::Unchanged
+                    | NodeStatus::Converged
+            ),
+            "{label}: {}{} ended {:?}",
+            applied_node.name,
+            match &applied_node.instance {
+                Some(key) => format!("[{key}]"),
+                None => String::new(),
+            },
+            applied_node.status
+        );
+    }
+}
+
+/// Acceptance test 6, generalised from 6a and 6b's two hand-picked
+/// injection points to *every* non-pure node instance of both positive
+/// fixtures, one at a time: inject a single `fail_ensure_once` there, run
+/// the workflow, and assert the run stops exactly there (that instance
+/// `Failed`, everything after it `NotRun` with no observer events at all,
+/// the failed one with exactly its own `NodeStarted`/`NodeFinished` pair),
+/// then that a fresh plan and a second apply either settle everything or
+/// stop at the one documented gap — `ci_secret` blocked on a `token` whose
+/// value cannot be re-read — which `workflows/rotate-service-token.yaml`
+/// then converges. The rotation fixture itself has no such gap: its
+/// `doppler.service_token.rotate` always re-mints, so a failure at any of
+/// its own nodes converges on the second run.
+#[test]
+#[allow(clippy::too_many_lines)] // one scenario walked twice per injection point; splitting scatters it
+fn milestone_2_acceptance_06_every_instance_of_both_fixtures_converges_after_a_failure() {
+    for (tool, key) in POSITIVE_FIXTURE_INSTANCES {
+        let label = format!("positive fixture, failure injected at {tool}#{key}");
+        let workflow = load(&positive_fixture());
+        let state = Arc::new(Mutex::new(
+            FakeState::new()
+                .with_next_token(distinctive_token())
+                .with_fail_ensure_once(tool, key),
+        ));
+        let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+        let checked = willikins_core::check(&workflow, &catalog)
+            .unwrap_or_else(|errors| panic!("{label}: must check cleanly: {errors:?}"));
+        let inputs = positive_inputs(&label, &checked);
+
+        let first_plan = willikins_core::plan(&checked, &inputs, &catalog)
+            .unwrap_or_else(|err| panic!("{label}: first plan must succeed: {err}"));
+        let mut observer = RecordingObserver::new();
+        let Err(err) = apply(
+            &checked,
+            &inputs,
+            &catalog,
+            &first_plan,
+            &Approval::Auto,
+            &mut observer,
+        ) else {
+            panic!("{label}: the injected failure must stop the first apply")
+        };
+        // The failure the fake shaped (`ToolErrorKind::Provider`, message
+        // built from the tool and its key) reaches the caller without the
+        // minted token's bytes, in the error and in the partial result.
+        for rendering in [
+            err.to_string(),
+            format!("{err:?}"),
+            serde_json::to_string(&err).expect("ApplyError serializes"),
+        ] {
+            assert!(
+                !rendering.contains(MARKER_BYTES),
+                "{label}: a failed apply leaked the marker: {rendering}"
+            );
+        }
+        let ApplyError::Tool {
+            applied: partial, ..
+        } = err
+        else {
+            panic!("{label}: expected ApplyError::Tool, got {err:?}");
+        };
+
+        // The run stopped exactly at the injected instance: it is the one
+        // `Failed`, everything after it is `NotRun`, and the attempted
+        // instances the observer saw are exactly the ones that are not.
+        let failed_position = partial
+            .nodes
+            .iter()
+            .position(|applied_node| matches!(applied_node.status, NodeStatus::Failed { .. }))
+            .unwrap_or_else(|| panic!("{label}: no Failed instance in {:?}", partial.nodes));
+        for applied_node in &partial.nodes[failed_position + 1..] {
+            assert!(
+                matches!(applied_node.status, NodeStatus::NotRun),
+                "{label}: {} after the failure is {:?}",
+                applied_node.name,
+                applied_node.status
+            );
+        }
+        let attempted = attempted_instances(&observer);
+        let expected: Vec<(String, Option<String>)> = partial.nodes[..=failed_position]
+            .iter()
+            .map(|applied_node| (applied_node.name.to_string(), applied_node.instance.clone()))
+            .collect();
+        assert_eq!(
+            attempted, expected,
+            "{label}: a NotRun instance must produce no observer event"
+        );
+
+        // Round two: a fresh plan, and either everything settles or the
+        // one documented gap appears.
+        let second_plan = willikins_core::plan(&checked, &inputs, &catalog)
+            .unwrap_or_else(|err| panic!("{label}: second plan must succeed: {err}"));
+        let mut observer2 = willikins_core::NoopObserver;
+        match apply(
+            &checked,
+            &inputs,
+            &catalog,
+            &second_plan,
+            &Approval::Auto,
+            &mut observer2,
+        ) {
+            Ok(applied) => assert_settled(&label, &applied),
+            Err(ApplyError::UnknownInput {
+                node: blocked,
+                port: blocked_port,
+                from,
+                ..
+            }) => {
+                assert_eq!(
+                    *tool, "github.actions_secret.ensure",
+                    "{label}: only the token's consumer may be blocked"
+                );
+                assert_eq!(blocked, node("ci_secret"));
+                assert_eq!(blocked_port, port("value"));
+                assert_eq!(from, node("token"));
+
+                // The remedy: the rotation workflow, which needs approval.
+                let rotate_workflow = load(&rotate_fixture());
+                let rotate_checked = willikins_core::check(&rotate_workflow, &catalog)
+                    .unwrap_or_else(|errors| panic!("{label}: rotate must check: {errors:?}"));
+                let rotate_resolved = rotate_inputs(&label, &rotate_checked);
+                let rotate_plan = willikins_core::plan(&rotate_checked, &rotate_resolved, &catalog)
+                    .unwrap_or_else(|err| panic!("{label}: rotate plan: {err}"));
+                let mut rotate_observer = willikins_core::NoopObserver;
+                let rotated = apply(
+                    &rotate_checked,
+                    &rotate_resolved,
+                    &catalog,
+                    &rotate_plan,
+                    &human_approval(),
+                    &mut rotate_observer,
+                )
+                .unwrap_or_else(|err| panic!("{label}: the rotation must converge it: {err}"));
+                assert_settled(&format!("{label} (rotation)"), &rotated);
+
+                // And the original workflow now settles too.
+                let third_plan = willikins_core::plan(&checked, &inputs, &catalog)
+                    .unwrap_or_else(|err| panic!("{label}: third plan: {err}"));
+                let mut observer3 = willikins_core::NoopObserver;
+                let settled = apply(
+                    &checked,
+                    &inputs,
+                    &catalog,
+                    &third_plan,
+                    &Approval::Auto,
+                    &mut observer3,
+                )
+                .unwrap_or_else(|err| panic!("{label}: third apply: {err}"));
+                assert_settled(&format!("{label} (after rotation)"), &settled);
+            }
+            Err(other) => panic!("{label}: unexpected second-apply failure: {other:?}"),
+        }
+    }
+
+    for (tool, key) in ROTATE_FIXTURE_INSTANCES {
+        let label = format!("rotation fixture, failure injected at {tool}#{key}");
+        let workflow = load(&rotate_fixture());
+        let state = Arc::new(Mutex::new(
+            FakeState::new()
+                .with_next_token(distinctive_token())
+                .with_fail_ensure_once(tool, key),
+        ));
+        let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+        let checked = willikins_core::check(&workflow, &catalog)
+            .unwrap_or_else(|errors| panic!("{label}: must check cleanly: {errors:?}"));
+        let inputs = rotate_inputs(&label, &checked);
+
+        let first_plan = willikins_core::plan(&checked, &inputs, &catalog)
+            .unwrap_or_else(|err| panic!("{label}: first plan must succeed: {err}"));
+        let mut observer = willikins_core::NoopObserver;
+        let err = apply(
+            &checked,
+            &inputs,
+            &catalog,
+            &first_plan,
+            &human_approval(),
+            &mut observer,
+        )
+        .expect_err("the injected failure must stop the first apply");
+        assert!(
+            matches!(err, ApplyError::Tool { .. }),
+            "{label}: expected ApplyError::Tool, got {err:?}"
+        );
+
+        let second_plan = willikins_core::plan(&checked, &inputs, &catalog)
+            .unwrap_or_else(|err| panic!("{label}: second plan must succeed: {err}"));
+        let mut observer2 = willikins_core::NoopObserver;
+        let applied = apply(
+            &checked,
+            &inputs,
+            &catalog,
+            &second_plan,
+            &human_approval(),
+            &mut observer2,
+        )
+        .unwrap_or_else(|err| {
+            panic!("{label}: the rotation workflow has no un-re-readable gap: {err:?}")
+        });
+        assert_settled(&label, &applied);
+
+        // The distinctive marker the rotation minted never surfaces.
+        let json = serde_json::to_string(&applied).expect("Applied serializes");
+        assert!(!json.contains(MARKER_BYTES), "{label}: Applied JSON leaked");
+        assert!(!format!("{applied:?}").contains(MARKER_BYTES));
+    }
+}
+
+/// Rule 1 of the executor runs before rule 2's re-plan: a plan that needs
+/// approval, applied with `Approval::Auto`, makes no provider call at all —
+/// not even the `read`s a re-plan would do. Acceptance test 7's "before
+/// touching a provider" clause, asserted through the fake's own call
+/// counters rather than by inspection.
+#[test]
+fn milestone_2_acceptance_07_approval_required_makes_no_read_and_no_ensure_call() {
+    let workflow = load(&rotate_fixture());
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let checked = willikins_core::check(&workflow, &catalog)
+        .expect("rotate-service-token.yaml must check cleanly");
+    let inputs = rotate_inputs("milestone 2 acceptance test 7", &checked);
+    let approved = willikins_core::plan(&checked, &inputs, &catalog).expect("rotate plans");
+    assert!(approved.requires_approval, "the rotation is Destructive");
+
+    // `plan` itself reads; clear the counters so what follows is only
+    // `apply`'s own doing.
+    {
+        let mut locked = state.lock().unwrap();
+        locked.read_calls.clear();
+        locked.ensure_calls.clear();
+    }
+
+    let mut observer = RecordingObserver::new();
+    let err = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("a Destructive plan must refuse Approval::Auto");
+    assert!(
+        matches!(
+            err,
+            ApplyError::ApprovalRequired {
+                class: Class::Destructive
+            }
+        ),
+        "expected ApprovalRequired, got {err:?}"
+    );
+
+    let locked = state.lock().unwrap();
+    assert!(
+        locked.read_calls.is_empty(),
+        "a refused apply must not even re-plan: {:?}",
+        locked.read_calls
+    );
+    assert!(
+        locked.ensure_calls.is_empty(),
+        "a refused apply must call no ensure: {:?}",
+        locked.ensure_calls
+    );
+    assert!(observer.events.is_empty(), "and report no events");
+}
+
+/// `apply` re-plans before it runs, so one `plan` + one `apply` of the
+/// positive fixture reads every node's resource exactly twice (the
+/// caller's plan, then the executor's own) and calls each `ensure` exactly
+/// once. Pins the call accounting the convergence tests above rely on.
+#[test]
+fn milestone_2_acceptance_06_one_plan_and_one_apply_read_twice_and_ensure_once() {
+    let workflow = load(&positive_fixture());
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let checked = willikins_core::check(&workflow, &catalog).expect("checks cleanly");
+    let inputs = positive_inputs("milestone 2 call accounting", &checked);
+    let approved = willikins_core::plan(&checked, &inputs, &catalog).expect("plans");
+    let mut observer = willikins_core::NoopObserver;
+    apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect("applies");
+
+    let locked = state.lock().unwrap();
+    for (tool, key) in POSITIVE_FIXTURE_INSTANCES {
+        let counter_key = willikins_providers_fake::state::call_key(tool, key);
+        assert_eq!(
+            locked.read_calls.get(&counter_key).copied(),
+            Some(2),
+            "{counter_key}: one read per plan, and `apply` re-plans"
+        );
+        assert_eq!(
+            locked.ensure_calls.get(&counter_key).copied(),
+            Some(1),
+            "{counter_key}: exactly one ensure"
+        );
+    }
+}
+
+/// Acceptance test 8's "secret-is-not-drift" rule, end to end rather than
+/// as a `Plan::fingerprint` unit test: a `doppler.secret.get` value
+/// rotated out of band between `plan` and `apply` propagates as the current
+/// value instead of refusing the run, because a secret port contributes
+/// only its redaction marker to the fingerprint. Neither the old nor the
+/// new bytes appear in the result.
+#[test]
+fn milestone_2_acceptance_08_a_secret_rotated_between_plan_and_apply_is_not_drift() {
+    let config = willikins_types::DopplerConfig::parse("third-thoughts/prd").unwrap();
+    let secret_name = willikins_types::SecretName::parse("DATABASE_URL").unwrap();
+    let before = "before-rotation-bytes";
+    let after = "after-rotation-bytes";
+
+    let workflow = load(&fixture("secret-get.yaml"));
+    let state = Arc::new(Mutex::new(
+        FakeState::new()
+            .with_doppler_config(&config)
+            .with_doppler_secret(
+                &config,
+                &secret_name,
+                willikins_types::DopplerSecretValue::parse(before).unwrap(),
+            ),
+    ));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let checked = willikins_core::check(&workflow, &catalog).expect("secret-get.yaml checks");
+    let inputs = resolve_inputs(
+        "milestone 2 acceptance test 8 (secret drift)",
+        &checked,
+        &[("project", RawInput::Scalar("third-thoughts".to_string()))],
+    );
+    let approved = willikins_core::plan(&checked, &inputs, &catalog).expect("plans");
+
+    // Rotate the secret out of band, between approval and apply.
+    {
+        let mut locked = state.lock().unwrap();
+        let taken = std::mem::take(&mut *locked);
+        *locked = taken.with_doppler_secret(
+            &config,
+            &secret_name,
+            willikins_types::DopplerSecretValue::parse(after).unwrap(),
+        );
+    }
+
+    let mut observer = RecordingObserver::new();
+    let applied = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect("a secret's bytes changing is not drift");
+    assert!(matches!(
+        node_status(&applied, "ci_secret", None),
+        NodeStatus::Created
+    ));
+
+    let json = serde_json::to_string(&applied).expect("Applied serializes");
+    let debug = format!("{applied:?}");
+    for bytes in [before, after] {
+        assert!(!json.contains(bytes), "Applied JSON leaked {bytes}: {json}");
+        assert!(!debug.contains(bytes), "Applied Debug leaked {bytes}");
+        for event in &observer.events {
+            assert!(!format!("{event:?}").contains(bytes), "event Debug leaked");
+            assert!(
+                !serde_json::to_string(event)
+                    .expect("ApplyEvent serializes")
+                    .contains(bytes),
+                "event JSON leaked"
+            );
+        }
+    }
+}
