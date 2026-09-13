@@ -286,7 +286,7 @@ document's own size only trades one quadratic for a smaller one — 85,000 alias
 256 KiB anchor is still tens of gigabytes — which would be security theatre rather than
 a fix. Closing it means either refusing aliases at the YAML event level (a parser the
 DSL does not own) or an OS resource limit around the process, and neither belongs in
-this pass. `known_gap_a_scalar_alias_is_materialised_once_per_use` guards only that the
+this pass. `fixed_a_scalar_alias_is_refused_by_the_pre_scan_before_it_can_amplify` (renamed by milestone 2 task 1c, which refuses anchors and aliases before deserialization) guards only that the
 bounded case terminates and is rejected, and says in its own doc comment that it does
 not guard the amplification.
 

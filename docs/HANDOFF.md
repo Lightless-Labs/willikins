@@ -7,18 +7,18 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-12) — milestone 2 plan written, researched, and reviewed; no milestone 2 code yet
+### RESUME HERE (2026-09-13) — milestone 2 tasks 0 through 3 landed; task 4 (the apply executor) is next
 
-- **Live state:** `main` at 102 local commits, gates green (699 tests) at the last commit;
-  every commit since the milestone 1 code is documentation. No remote is configured and
-  nothing has been pushed.
-- **What just happened:** the milestone 2 plan
-  `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md` was written, backed by
-  `docs/research/2026-09-12-m2-dependencies.md` (five parallel research passes with
-  verbatim sources), reviewed by the document-review workflow (coherence, feasibility,
-  security, scope, adversarial), and stamped Reviewed with 20 findings folded in. The design
-  doc gained a "Milestone 2 decisions" section. The keyword lists were verified: Swift is
-  missing `borrowing`, `consuming`, `nonisolated`; everything else matches its source.
+- **Live state:** `main` at 156 local commits, gates green at HEAD (875 tests, 2 ignored by-hand measurements). No remote
+  is configured and nothing has been pushed.
+- **What just happened:** milestone 2 tasks 0, 1a, 1b, 1c, 1d, 1e, 2 and 3 landed on
+  `main` through two Workflows (`wf_c7a1d060-cec`, three parallel worktree lanes, and
+  `wf_ce96efa9-e31`, sequential on `main`). Every task except 1e and 2 was opus-verified;
+  the 1c verifier alone fixed thirteen findings (a BOM misreported as a two-document
+  stream, Unicode tag characters passing as text, `load_document` reading an unbounded
+  file, 0-based pre-scan columns, a published schema the parser disagreed with) and the
+  task 3 verifier found nothing to fix and added property tests. Plan addenda dated
+  2026-09-13 record the deviations.
 - **Group A landed (2026-09-12, late evening):** Workflow `wf_c7a1d060-cec` ran three
   worktree lanes. Lane 1 (1a, 1b) and lane 3 (task 0, 1d) merged onto `main` with gates
   green. Lane 2 (1c) was lost: the coordinator's stop message meant for a duplicate agent
@@ -31,16 +31,14 @@ compaction, before handing off, after a milestone, and after a plan change or di
   config-scoped service token (`dp.st.`), enough for auth and `doppler.secret.get`
   against `willikins-test/dev`, not for creating projects, environments or tokens; task
   8's create-side probe and task 14 need a `dp.sa.` or `dp.pt.` token from the operator.
-- **Next action (when nothing is in flight):** dispatch implementation per the plan's task table. Task 0 (three Swift
-  keywords) and group A (1a+1b core serialization and the `Site` enum; 1c types and DSL
-  bounds plus the YAML pre-scan; 1d describe labelling) can start at once in separate
-  worktrees, sonnet implementing test-first and opus verifying, one Workflow per group as
-  in milestone 1. Every `CONTEXT` string names the four bare `cargo` gates. The Workflow
-  tool needs the operator's opt-in per session ("use a workflow" or "ultracode"); without
-  it, dispatch the same groups through plain Agent calls.
-- **Late plan edit (same evening):** the `Tool::ensure -> Ensured` trait change lives in
-  task 3, before groups B and C; the `ensure` contract separates comparable-state
-  resources from write-only sinks (the GitHub secret always writes when called).
+- **Next action:** task 4 (apply executor, `Approval`, `ApplyError`, `Plan::fingerprint`,
+  the fake's rotate tool and failure injection, the second fixture; acceptance tests 5, 6,
+  7 core, 9), then 5 (journal) and 6 (providers-http), one sequential Workflow on `main`,
+  sonnet implementing test-first and opus verifying each, every `CONTEXT` string naming
+  the four bare `cargo` gates with `-j 2`. Then 7 and 8 (C), 9, 10a, 10b and 11 (D), 12,
+  13, 14. The plan's parallel groups are now run one lane at a time (memory, below). The
+  Workflow tool needs the operator's opt-in per session ("use a workflow" or
+  "ultracode"); without it, dispatch through plain Agent calls.
 - **Ask the operator for** sandbox credentials (a throwaway GitHub org token and a Doppler
   service-account token) before task 8, so the read-only probe settles the undocumented
   Doppler facts early rather than at the live smoke run.
@@ -49,16 +47,17 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Project State
 
-Six crates, dependencies flowing downward only:
+Seven crates, dependencies flowing downward only:
 
 | Crate | Holds | State |
 | --- | --- | --- |
-| `willikins-types` | `DomainType`, `DomainObject`, the derive, slug grammar, 19 domain types, `TypeRegistry`, `naming::v1`, `propose_slug`, `SinkToken` | done, verified |
+| `willikins-types` | `DomainType`, `DomainObject`, the derive, slug grammar, 21 domain types (now `WorkflowName`, `Description`), `TypeRegistry`, `naming::v1`, `propose_slug`, `SinkToken` | done, verified |
 | `willikins-derive` | `#[derive(DomainType)]` for `String`, `SecretString`, and `FromStr + Display` storages | done, verified |
-| `willikins-core` | `Value` with its JSON shape, `Tool` contract, `Catalog`, `Workflow`, `check` (21 error kinds), `describe`, `plan` | done, two adversarial passes |
-| `willikins-providers-fake` | `FakeState` (JSON-seedable), ten tools per the port table | done |
-| `willikins-dsl` | YAML document to `Workflow`, reference grammar, located errors, published document schema | done |
-| `willikins-cli` | `validate`, `describe`, `plan`, `schema`, `propose-slug`; `--json`; text renders only through `Value::render()` | done, acceptance suite |
+| `willikins-core` | `Value` with its JSON shape, `Tool` contract (`ensure -> Ensured`, `Observation::Mismatch`), `tool::helpers`, `Catalog`, `Workflow` (typed name and description), `check` (21 error kinds, `Site`), `describe` (`document_description`), `plan` (`AttributeMismatch`), `Reported`, JSON schemas for the MCP result types | done through task 3 |
+| `willikins-tools` | `naming.v1` and `template.render`, pure, moved out of the fake crate; `register(&mut Catalog)` | done |
+| `willikins-providers-fake` | `FakeState` (JSON-seedable), eight tools plus the two from `willikins-tools`; every `ensure` reads first, `doppler.project.ensure` seeds `dev`/`stg`/`prd`, `github.repo.ensure` refuses a visibility mismatch | done through task 3 |
+| `willikins-dsl` | YAML document to `Workflow`, reference grammar, located errors, published document schema, 256 KiB cap, anchor/alias/BOM pre-scan, typed `name`/`description` | done through task 1c |
+| `willikins-cli` | `validate`, `describe`, `plan`, `schema`, `propose-slug`; `--json` through `Reported`; text renders only through `Value::render()` and `single_line` escaping; `document says:` prefix | done, acceptance suite |
 
 The CLI's first four subcommands are the milestone 2 MCP tools one to one. Nothing talks to a
 real API. `apply` exists on the `Tool` trait but nothing calls it.
@@ -105,15 +104,34 @@ research, with a correction block on its slug section),
 - **`naming::v1` is frozen.** Adding a provider adds rows; changing a row is `v2`. Pascal is
   not injective for digit-only words (`foundry-2` and `foundry2` both give `Foundry2`);
   accepted because pascal never feeds a natural key.
-- **`check` uses sentinel sites:** errors on a workflow output use the node name `outputs`,
-  errors on a `for_each` binding use the port name `for_each`. Three bugs came from the
-  collision; see `todos/2026-09-12-check-error-site-enum.md`.
+- **Error locations are a `Site`** (`Port { node, port }`, `ForEach { node }`, `Output { name }`),
+  serialized as `{"kind": "port" | "for_each" | "output", ...}` and displayed as
+  `node.port`, `node[for_each]`, `workflow.outputs.name`. The old `outputs`/`for_each`
+  sentinels are gone; no test may compare against them.
+- **Every error serializes as `{"kind", "message", ...fields}`** through `Reported<T>`; the
+  `variant_kinds!` list in the core tests is the exhaustiveness guard (a new variant fails
+  to compile until it is listed). Gaps that remain are in
+  `todos/2026-09-12-error-json-uniformity-gaps.md`.
+- **`AttributeMismatch` carries a `Site` and no instance key**, so a `for_each` node cannot
+  say which instance mismatched; milestone 3 with `Action::Update`.
+- **The YAML pre-scan** (`saphyr-parser`) refuses anchors, aliases and a leading BOM before
+  `serde_yaml_ng` runs, fails closed on its own scan errors, and compensates for
+  `Marker::col` being 0-based despite its docs. It is a second full parse of the document,
+  bounded by the 256 KiB cap that `load_document` applies to the file read as well.
+- **`willikins_types::Description` and `willikins_core::describe::Description` share a name**
+  on purpose; use qualified paths.
 - **`for_each` expands at plan time**, keyed by each item's canonical string. `check` can only
   verify shapes; `plan` reports `KeyNotInForEach`, `ForEachUnknown`, `DuplicateForEachKey`.
   Duplicates in a statically known default are caught by `check` as `DuplicateForEachDefault`.
 - **`Observation::Absent { predicted }`**: a tool fills every output it can derive from its
   inputs so downstream nodes can still `read` at plan time. A token's value is `Unknown` on
-  both `Absent` and `Present` because Doppler cannot re-read it.
+  both `Absent` and `Present` because Doppler cannot re-read it. `Observation::Mismatch
+  { port }` is ours-but-different; `plan` refuses it symmetrically.
+- **`Tool::ensure` returns `Ensured { outputs, changed }` and reads first.** Comparable-state
+  resources create only what is missing; the GitHub Actions secret always writes; pure
+  tools answer `ensure` exactly as `read`. The fake `doppler.project.ensure` seeds the three
+  default configs, so the positive fixture's `configs[dev|stg|prd]` are `Unchanged` on a
+  first apply.
 - **serde_yaml_ng keeps the last duplicate mapping key silently.** The DSL deserializes every
   map through a unique-map visitor; duplicate keys surface as YAML errors with a location.
 - **`#[serde(deny_unknown_fields)]`** is on documents and fake state. The published document
@@ -121,25 +139,15 @@ research, with a correction block on its slug section),
   if that changes.
 - **The trybuild `.stderr` files** quote rustc diagnostics and are toolchain-sensitive.
   Regenerate with `TRYBUILD=overwrite` on a toolchain bump rather than hand-editing.
-- **`CheckError` and `CheckWarning` derive no `Serialize`**; the CLI hand-builds their JSON.
-  Milestone 2's MCP surface needs the derive; see `todos/2026-09-12-check-error-serialize.md`.
-- **Workflow-as-tool (composition) is deferred to milestone 2.** Nothing in milestone 1
-  exercises it, and it needs typed composite output ports.
+- **Workflow-as-tool (composition) is milestone 2b**, its own plan; nothing in milestone 2
+  exercises it.
 
 ## Open TODOs
 
-Every open todo except the last is now a numbered task in the milestone 2 plan; close each
-when its task lands.
-
-| File | Priority | Milestone 2 task |
+| File | Priority | Owner |
 | --- | --- | --- |
-| `todos/2026-09-12-milestone-2-plan.md` | high | the tracking todo; plan written and reviewed, implementation next |
-| `todos/2026-09-12-verify-keyword-lists.md` | high | task 0 (verification done; three Swift words to add) |
-| `todos/2026-09-12-yaml-scalar-alias-amplification.md` | high | task 1c |
-| `todos/2026-09-12-prompt-text-from-documents.md` | medium | task 1d |
-| `todos/2026-09-12-check-error-site-enum.md` | medium | task 1b |
-| `todos/2026-09-12-check-error-serialize.md` | medium | task 1a |
-| `todos/2026-09-12-workflow-name-description-bounds.md` | low | task 1c |
+| `todos/2026-09-12-milestone-2-plan.md` | high | the tracking todo; tasks 0–3 done, task 4 next |
+| `todos/2026-09-12-error-json-uniformity-gaps.md` | medium | task 10a (`InputError`, `DocumentError` shapes) and 10b |
 | `todos/2026-09-12-fake-state-write-only.md` | low | task 4 |
 | `todos/2026-09-11-propose-slug-digit-letter-tokens.md` | low | not scheduled |
 

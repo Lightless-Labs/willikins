@@ -3,6 +3,7 @@
 **Created:** 2026-09-12
 **Reviewed:** 2026-09-12 (via document-review workflow: coherence, feasibility, security-lens, scope-guardian, adversarial personas). 20 findings folded in; see "Review resolutions" at the end.
 **Addendum:** 2026-09-12 (evening) — task 1c no longer flips the four core `String` fields; task 1e does, sequentially after group A merges, because 1a/1b and 1c would otherwise restructure the same core test files in parallel worktrees.
+**Addendum:** 2026-09-13 — tasks 0, 1a–1e, 2 and 3 landed. `PlanError::AttributeMismatch` carries a `Site` (not `{ node, port }`); the YAML pre-scan compensates for `saphyr-parser`'s 0-based `Marker::col`; `load_document` bounds the file read, not only the parse; Unicode tag characters (U+E0000..U+E007F) and U+061C, U+180E, U+FFF9..U+FFFB are refused in agent-facing text; the fake `github.repo.ensure` treats a bound-but-`Unknown` visibility as not comparable. Known gap for milestone 3: `AttributeMismatch` cannot name which `for_each` instance mismatched.
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
 **Previous:** `docs/plans/2026-09-11-milestone-1-core.md`
 **Research:** `docs/research/2026-09-12-m2-dependencies.md`
@@ -214,8 +215,8 @@ and types. No crate other than `willikins-core` enables `willikins-types/executo
   `dp\.st\.(?:[a-z0-9\-_]{2,35}\.)?[a-zA-Z0-9]{40,44}`. Every real token already matched the
   old pattern, so this is a tightening, not a fix on the idempotence path: none of the three
   is a natural key, `naming::v1` emits config names of at most 16 characters, and a secret
-  type's parse error never quotes its input. Fixture tokens in tests and under
-  `workflows/fixtures/state/` are regenerated to the real shape.
+  type's parse error never quotes its input. Token literals in tests are regenerated to
+  the real shape (the three JSON state fixtures hold no token).
 - No credential type is added here. Credentials must never be able to become a port type.
 
 ### willikins-derive (change)
@@ -259,7 +260,7 @@ whose JSON site is unambiguous. Closes `todos/2026-09-12-check-error-site-enum.m
 **Observation::Mismatch.** `Observation` gains `Mismatch { port: PortName }`: the resource
 at the natural key exists and is ours, but a non-key input differs from what the tool would
 have to change, and the tool will not change it. `plan` turns it into
-`PlanError::AttributeMismatch { node, port }` with a message telling the caller to change
+`PlanError::AttributeMismatch { site: Site }` with a message telling the caller to change
 the resource by hand or pass the current value; `ensure` on such a resource returns
 `ToolErrorKind::Conflict`. The first user is `github.repo.ensure`'s `visibility`: turning a
 private repository public is not a reversible act, and the class is static per tool, so the
@@ -719,8 +720,7 @@ The milestone cannot ship without every one of these.
    `doppler.secret.get` value are equal (the secret-is-not-drift rule, pinned on purpose).
    Each refusal is journaled.
 9. **Attribute mismatch.** Fake and live `github.repo.ensure` with the repository ours and
-   public, requested private: `plan` returns `AttributeMismatch { node: repo, port:
-   visibility }`; `ensure` returns `Conflict`; the mock server records no `PATCH`.
+   public, requested private: `plan` returns `AttributeMismatch { site: repo.visibility }`; `ensure` returns `Conflict`; the mock server records no `PATCH`.
 10. **Journal.** After test 5 and a run of `workflows/fixtures/secret-get.yaml` with a
     seeded value, the JSONL file contains the redaction markers and none of the seeded
     bytes; reopening replays to equal views; sequence numbers are contiguous; a second
@@ -751,7 +751,9 @@ The milestone cannot ship without every one of these.
     does not contain it; the CLI text prints `document says: ...`; a `name` over 64
     characters or a description over 1,024 is refused at parse with a bounded message.
 15. **YAML bounds.** The pass 2 amplification document (a 1 MB anchor referenced 2,000
-    times) is refused by the pre-scan before deserialization; the test asserts the error
+    times) is refused by the pre-scan before deserialization (through `parse_document` a 1 MB
+    source is `TooLarge` first, so the test calls the pre-scan directly and the CLI variant
+    stays under 256 KiB); the test asserts the error
     names the alias and its line and that `Document` was never constructed. A 257 KiB
     document -> `TooLarge`. The 256 KiB bound is measured once by hand for resident memory
     and the number recorded in the module doc.
@@ -865,7 +867,11 @@ sealed-box API, the Doppler endpoints and limits, and the Railway deployment mod
 remains is either an implementation-time check or a fact only a live call answers, in the
 order the tasks need them.
 
-1. Task 1c: whether `saphyr-parser` uses anchor id `0` as "no anchor" on `Scalar`,
+1. Task 1c (answered): `saphyr-parser` uses anchor id `0` as "no anchor" on `Scalar`,
+   `SequenceStart`, and `MappingStart`, confirmed from its source; and its `Marker::col`
+   counts from zero despite its own doc comment, which the pre-scan's `column_of`
+   compensates for (a dependency swap would silently reintroduce the off-by-one). The
+   original question: whether `saphyr-parser` uses anchor id `0` as "no anchor" on `Scalar`,
    `SequenceStart`, and `MappingStart` events (read the crate source before writing the
    reject condition; the pre-scan test with an anchored scalar settles it either way).
 2. Task 6: whether clippy's `disallowed-methods` fires inside proc-macro expansions, which
