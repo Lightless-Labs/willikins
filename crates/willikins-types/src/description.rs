@@ -238,6 +238,56 @@ mod tests {
         assert!(Description::parse("a\u{FEFF}b").is_err());
     }
 
+    /// The Unicode Tags block is the plain-text channel an attacker uses
+    /// to carry ASCII a human reader cannot see: U+E0041 is "A" tagged
+    /// invisible, and a run of them spells out arbitrary text that this
+    /// crate's own length check counts and every renderer draws as
+    /// nothing. A `Description` is rendered straight into an agent's
+    /// prompt, so a codepoint that can carry hidden text there is exactly
+    /// the thing the type exists to refuse.
+    #[test]
+    fn rejects_unicode_tag_characters() {
+        for c in ['\u{E0001}', '\u{E0020}', '\u{E0041}', '\u{E007F}'] {
+            let input = format!("a{c}b");
+            let Err(err) = Description::parse(&input) else {
+                panic!("U+{:05X} was accepted", c as u32);
+            };
+            assert!(
+                err.reason
+                    .contains("invisible or bidirectional control character"),
+                "U+{:05X}: reason was {:?}",
+                c as u32,
+                err.reason
+            );
+        }
+    }
+
+    /// The invisible format characters outside the ranges the type
+    /// already named: the Arabic letter mark is a bidi control in its own
+    /// right, the Mongolian vowel separator is a zero-width format
+    /// character, and the interlinear annotation controls delimit text a
+    /// renderer is meant to hide.
+    #[test]
+    fn rejects_the_remaining_invisible_format_characters() {
+        for c in ['\u{061C}', '\u{180E}', '\u{FFF9}', '\u{FFFA}', '\u{FFFB}'] {
+            let input = format!("a{c}b");
+            assert!(
+                Description::parse(&input).is_err(),
+                "U+{:04X} was accepted",
+                c as u32
+            );
+        }
+    }
+
+    /// A visible codepoint that merely *looks* like something else is not
+    /// this type's business: it carries no hidden text and refusing it
+    /// would start an unwinnable confusable-detection fight. U+FE0F in
+    /// particular is load-bearing for ordinary emoji.
+    #[test]
+    fn accepts_a_variation_selector() {
+        assert!(Description::parse("a\u{FE0F}b").is_ok());
+    }
+
     #[test]
     fn accepts_punctuation_and_unicode() {
         assert!(Description::parse("Étoile — “quoted”, 100% done.").is_ok());

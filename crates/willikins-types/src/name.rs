@@ -15,22 +15,37 @@ const MAX_LEN: usize = 100;
 /// [`ProjectName`] ends up in rendered templates such as `CLAUDE.md`, so
 /// these are rejected outright rather than merely trimmed.
 ///
-/// Covers soft hyphen, the zero-width space family, the explicit
-/// bidirectional embedding/override controls, the word-joiner family, the
-/// isolate controls, the byte-order mark / zero-width no-break space, and
-/// the Unicode line and paragraph separators. Not an exhaustive Unicode
-/// category-Cf sweep, but every codepoint this crate is asked to reject by
-/// name.
+/// Covers soft hyphen, the Arabic letter mark, the Mongolian vowel
+/// separator, the zero-width space family, the explicit bidirectional
+/// embedding/override controls, the word-joiner family, the isolate
+/// controls, the interlinear annotation controls, the byte-order mark /
+/// zero-width no-break space, the Unicode Tags block, and the Unicode
+/// line and paragraph separators. Not an exhaustive Unicode category-Cf
+/// sweep, but every codepoint this crate is asked to reject by name.
 ///
 /// U+2028 and U+2029 are categories Zl and Zp rather than Cc, so
 /// [`char::is_control`] does not see them, yet they break a line in every
 /// renderer a `ProjectName` reaches — a rendered `CLAUDE.md` included. A
 /// display name is a single line by definition, so they are rejected with
 /// the invisibles rather than left to the control-character check.
+///
+/// The Tags block, U+E0000..=U+E007F, is the one range here that is not
+/// about display at all: each tag character mirrors one printable ASCII
+/// character, renders as nothing, and survives copy and paste, so a run
+/// of them is arbitrary text hidden inside a string that looks short and
+/// innocuous. [`crate::Description`] is rendered straight into an agent's
+/// prompt, which is exactly where hidden text must not reach.
+///
+/// Codepoints that merely *look* like other codepoints are deliberately
+/// not here: a confusable is visible, carries no hidden payload, and
+/// chasing them is an unwinnable fight that would take ordinary emoji
+/// (U+FE0F) and ordinary scripts with it.
 pub(crate) fn is_invisible_or_bidi_control(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
             | '\u{200B}'..='\u{200F}'
             | '\u{2028}'
             | '\u{2029}'
@@ -38,6 +53,8 @@ pub(crate) fn is_invisible_or_bidi_control(c: char) -> bool {
             | '\u{2060}'..='\u{2064}'
             | '\u{2066}'..='\u{2069}'
             | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0000}'..='\u{E007F}'
     )
 }
 
@@ -216,17 +233,19 @@ mod tests {
 
     #[test]
     fn rejects_every_listed_invisible_or_bidi_control_character() {
-        let codepoints: Vec<char> = ['\u{00AD}']
+        let codepoints: Vec<char> = ['\u{00AD}', '\u{061C}', '\u{180E}']
             .into_iter()
             .chain('\u{200B}'..='\u{200F}')
             .chain('\u{202A}'..='\u{202E}')
             .chain('\u{2060}'..='\u{2064}')
             .chain('\u{2066}'..='\u{2069}')
             .chain(['\u{FEFF}'])
+            .chain('\u{FFF9}'..='\u{FFFB}')
+            .chain('\u{E0000}'..='\u{E007F}')
             .collect();
         assert_eq!(
             codepoints.len(),
-            1 + 5 + 5 + 5 + 4 + 1,
+            3 + 5 + 5 + 5 + 4 + 1 + 3 + 128,
             "the ranges in this test no longer match the ones the reason names"
         );
         for c in codepoints {
