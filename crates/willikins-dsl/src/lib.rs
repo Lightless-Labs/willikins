@@ -289,17 +289,56 @@ fn is_anchored_or_aliased(event: &saphyr_parser::Event<'_>) -> bool {
 
 /// Load and parse a workflow document from a file.
 ///
+/// The file's size is judged before its contents are: a file the
+/// filesystem already reports as larger than [`MAX_DOCUMENT_BYTES`] is
+/// refused as [`DocumentErrorKind::TooLarge`] without being opened, and
+/// the read that follows is itself bounded at one byte past the cap, so
+/// nothing the filesystem misreports its size for — a FIFO, a character
+/// device, a file that grows between the two calls — can make this
+/// function allocate more than the cap either. [`parse_document`]'s own
+/// cap would otherwise be the second bound on a read that had no first
+/// one.
+///
 /// # Errors
 ///
-/// Returns [`DocumentError`] when `path` cannot be read, or for any
-/// reason [`parse_document`] would.
+/// Returns [`DocumentErrorKind::TooLarge`] when the file is larger than
+/// [`MAX_DOCUMENT_BYTES`], a [`DocumentErrorKind::Semantic`] at `path`
+/// when the file cannot be read or is not UTF-8, or any error
+/// [`parse_document`] would return.
 pub fn load_document(path: &Path) -> Result<Workflow, DocumentError> {
-    let source = std::fs::read_to_string(path).map_err(|err| {
+    use std::io::Read;
+
+    let read_error = |err: &dyn fmt::Display| {
         DocumentError::semantic(
             path.display().to_string(),
             format!("failed to read document: {err}"),
         )
-    })?;
+    };
+    let too_large = |bytes: usize| DocumentError {
+        kind: DocumentErrorKind::TooLarge { bytes },
+    };
+
+    // For a regular file this is the exact size, which is what
+    // `TooLarge` promises to report; for anything it under-reports, the
+    // bounded read below is the backstop.
+    if let Ok(metadata) = std::fs::metadata(path)
+        && metadata.len() > MAX_DOCUMENT_BYTES as u64
+    {
+        return Err(too_large(
+            usize::try_from(metadata.len()).unwrap_or(usize::MAX),
+        ));
+    }
+
+    let file = std::fs::File::open(path).map_err(|err| read_error(&err))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_DOCUMENT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| read_error(&err))?;
+    if bytes.len() > MAX_DOCUMENT_BYTES {
+        return Err(too_large(bytes.len()));
+    }
+
+    let source = String::from_utf8(bytes).map_err(|err| read_error(&err))?;
     parse_document(&source)
 }
 
@@ -961,6 +1000,69 @@ steps:
             // way through: past the size cap, past the pre-scan, through
             // `serde_yaml_ng`, into a real `Document`, into
             // `document_to_workflow`.
+            DocumentErrorKind::Semantic { path, .. } => assert_eq!(path, "description"),
+            other => panic!("expected a Semantic error at `description`, got {other:?}"),
+        }
+    }
+
+    /// Write `contents` to a uniquely named file in this test binary's
+    /// own temp directory and return its path.
+    fn temp_file(name: &str, contents: &[u8]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("willikins-dsl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("failed to create the temp directory");
+        let path = dir.join(name);
+        std::fs::write(&path, contents).expect("failed to write the temp file");
+        path
+    }
+
+    /// [`load_document`] used to hand the whole file to
+    /// `std::fs::read_to_string` and only then let [`parse_document`]
+    /// measure it, so a file of any size was fully resident before the
+    /// cap was ever consulted — the cap bounded the parser but not the
+    /// read that feeds it, which is the same claim one step earlier.
+    ///
+    /// Making the file unreadable is how a test states "the size was
+    /// judged before the contents were": a reader that opens the file
+    /// first cannot get past the permission error to the size, so it
+    /// reports a failed read; one that asks the filesystem for the size
+    /// first answers `TooLarge` without ever needing the bytes.
+    #[test]
+    fn load_document_refuses_an_oversized_file_without_reading_its_contents() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let size = MAX_DOCUMENT_BYTES + 1;
+        let path = temp_file("oversized-unreadable.yaml", &vec![b'a'; size]);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+            .expect("failed to drop the file's permissions");
+        if std::fs::File::open(&path).is_ok() {
+            // Running as a user permissions do not apply to (root, or a
+            // filesystem that ignores the mode); the premise is gone, so
+            // the test would prove nothing either way.
+            std::fs::remove_file(&path).ok();
+            return;
+        }
+
+        let err = load_document(&path).unwrap_err();
+        std::fs::remove_file(&path).ok();
+        match err.kind {
+            DocumentErrorKind::TooLarge { bytes } => assert_eq!(bytes, size),
+            other => panic!("expected TooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_document_still_parses_a_file_at_the_cap() {
+        let prefix = "name: demo\ndescription: ";
+        let suffix = "\nsteps:\n  a: { tool: naming.v1, with: {} }\n";
+        let filler = MAX_DOCUMENT_BYTES - prefix.len() - suffix.len();
+        let source = format!("{prefix}{}{suffix}", "a".repeat(filler));
+        assert_eq!(source.len(), MAX_DOCUMENT_BYTES);
+        let path = temp_file("at-the-cap.yaml", source.as_bytes());
+        let err = load_document(&path).unwrap_err();
+        std::fs::remove_file(&path).ok();
+        // Refused by `Description`'s own bound, not by the size cap: the
+        // file was read and parsed in full.
+        match err.kind {
             DocumentErrorKind::Semantic { path, .. } => assert_eq!(path, "description"),
             other => panic!("expected a Semantic error at `description`, got {other:?}"),
         }
