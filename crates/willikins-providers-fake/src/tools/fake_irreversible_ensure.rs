@@ -20,6 +20,11 @@ pub struct FakeIrreversibleEnsure {
 }
 
 impl FakeIrreversibleEnsure {
+    /// This tool's own name, shared between its [`ToolSpec`] and the
+    /// `"<tool>#<key>"` strings [`FakeState`]'s call counters and
+    /// injected failures use.
+    const TOOL_NAME: &'static str = "fake.irreversible.ensure";
+
     /// Build the tool against `state`, constructing its spec.
     #[must_use]
     pub fn new(state: Arc<Mutex<FakeState>>) -> Self {
@@ -27,7 +32,7 @@ impl FakeIrreversibleEnsure {
         inputs.insert(port("key"), exact("ProjectSlug", true));
         Self {
             spec: ToolSpec {
-                name: tool_name("fake.irreversible.ensure"),
+                name: tool_name(Self::TOOL_NAME),
                 description: "Test tool: an irreversible resource, keyed by a project slug."
                     .to_string(),
                 inputs,
@@ -53,8 +58,10 @@ impl Tool for FakeIrreversibleEnsure {
 
     fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
         let slug = self.key_port(inputs)?;
-        let state = self.state.lock().unwrap();
-        if state.irreversible.contains(&irreversible_key(&slug)) {
+        let key = irreversible_key(&slug);
+        let mut state = self.state.lock().unwrap();
+        state.record_read_call(Self::TOOL_NAME, &key);
+        if state.irreversible.contains(&key) {
             Ok(Observation::Present(Outputs::new()))
         } else {
             Ok(Observation::Absent {
@@ -65,8 +72,13 @@ impl Tool for FakeIrreversibleEnsure {
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         let slug = self.key_port(inputs)?;
+        let key = irreversible_key(&slug);
         let mut state = self.state.lock().unwrap();
-        let changed = state.irreversible.insert(irreversible_key(&slug));
+        state.record_ensure_call(Self::TOOL_NAME, &key);
+        if let Some(err) = state.take_fail_ensure_once(Self::TOOL_NAME, &key) {
+            return Err(err);
+        }
+        let changed = state.irreversible.insert(key);
         Ok(Ensured {
             outputs: Outputs::new(),
             changed,

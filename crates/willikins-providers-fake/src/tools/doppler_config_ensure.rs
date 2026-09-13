@@ -20,6 +20,11 @@ pub struct DopplerConfigEnsure {
 }
 
 impl DopplerConfigEnsure {
+    /// This tool's own name, shared between its [`ToolSpec`] and the
+    /// `"<tool>#<key>"` strings [`FakeState`]'s call counters and
+    /// injected failures use.
+    const TOOL_NAME: &'static str = "doppler.config.ensure";
+
     /// Build the tool against `state`, constructing its spec.
     #[must_use]
     pub fn new(state: Arc<Mutex<FakeState>>) -> Self {
@@ -30,7 +35,7 @@ impl DopplerConfigEnsure {
         outputs.insert(port("config"), scalar("DopplerConfig"));
         Self {
             spec: ToolSpec {
-                name: tool_name("doppler.config.ensure"),
+                name: tool_name(Self::TOOL_NAME),
                 description: "Ensure an environment's root Doppler config exists.".to_string(),
                 inputs,
                 outputs,
@@ -64,8 +69,10 @@ impl Tool for DopplerConfigEnsure {
     fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
         let (project, environment) = self.key_ports(inputs)?;
         let config = naming::v1::doppler_root_config(&project, &environment);
-        let state = self.state.lock().unwrap();
-        if state.doppler_configs.contains(&doppler_config_key(&config)) {
+        let key = doppler_config_key(&config);
+        let mut state = self.state.lock().unwrap();
+        state.record_read_call(Self::TOOL_NAME, &key);
+        if state.doppler_configs.contains(&key) {
             Ok(Observation::Present(Self::outputs_for(&config)))
         } else {
             Ok(Observation::Absent {
@@ -77,11 +84,16 @@ impl Tool for DopplerConfigEnsure {
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         let (project, environment) = self.key_ports(inputs)?;
         let config = naming::v1::doppler_root_config(&project, &environment);
+        let key = doppler_config_key(&config);
         let mut state = self.state.lock().unwrap();
+        state.record_ensure_call(Self::TOOL_NAME, &key);
+        if let Some(err) = state.take_fail_ensure_once(Self::TOOL_NAME, &key) {
+            return Err(err);
+        }
         // Read its own state first, so `changed` is truthful: a config
         // `doppler.project.ensure` already seeded (see its own module
         // doc) is not created a second time here.
-        let changed = state.doppler_configs.insert(doppler_config_key(&config));
+        let changed = state.doppler_configs.insert(key);
         Ok(Ensured {
             outputs: Self::outputs_for(&config),
             changed,

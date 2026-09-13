@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
+assertion_line: 133
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -166,6 +167,35 @@ expression: "catalog.list_tools_json()[\"tools\"]"
       "name"
     ],
     "name": "doppler.service_token.ensure",
+    "outputs": {
+      "token": "DopplerServiceToken"
+    },
+    "pure": false
+  },
+  {
+    "class": "destructive",
+    "description": "Revoke and re-mint a Doppler service token.",
+    "inputs": {
+      "config": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerConfig"
+        }
+      },
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerTokenName"
+        }
+      }
+    },
+    "key": [
+      "config",
+      "name"
+    ],
+    "name": "doppler.service_token.rotate",
     "outputs": {
       "token": "DopplerServiceToken"
     },

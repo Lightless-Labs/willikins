@@ -4,8 +4,9 @@
 //!
 //! `naming.v1` and `template.render` — pure and provider-independent —
 //! live in the `willikins-tools` crate; [`catalog`] registers them
-//! alongside this crate's own eight tools, so the catalog this crate
-//! produces is unchanged: still ten tools, in the same order.
+//! alongside this crate's own nine tools (task 4b added
+//! `doppler.service_token.rotate`), so the catalog this crate produces
+//! holds eleven tools, in the order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
 //!
@@ -60,6 +61,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::DopplerProjectEnsure::new(state.clone()));
     insert!(tools::DopplerConfigEnsure::new(state.clone()));
     insert!(tools::DopplerServiceTokenEnsure::new(state.clone()));
+    insert!(tools::DopplerServiceTokenRotate::new(state.clone()));
     insert!(tools::DopplerSecretGet::new(state.clone()));
     insert!(tools::FakeSecretList::new());
     // The last use of `state`: moved rather than cloned, so this
@@ -94,6 +96,7 @@ mod tests {
             "doppler.project.ensure",
             "doppler.config.ensure",
             "doppler.service_token.ensure",
+            "doppler.service_token.rotate",
             "doppler.secret.get",
             "fake.secret_list",
             "fake.irreversible.ensure",
@@ -101,7 +104,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 10);
+        assert_eq!(names.len(), 11);
     }
 
     #[test]

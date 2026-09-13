@@ -46,10 +46,21 @@ fn port(name: &str) -> PortName {
 /// The state, serialized and normalized so two snapshots compare by
 /// content alone: `FakeState`'s sets serialize as JSON arrays whose order
 /// is a `HashSet`'s, so every array of strings is sorted first.
+///
+/// `ensure_calls` and `read_calls` are stripped before comparison: they
+/// are call-count bookkeeping, not resource state, and change on every
+/// call regardless of whether `changed` is true — task 4b's own contract
+/// (record the call, *then* decide) means an idempotent second `ensure`
+/// still bumps its counter, which this file's "`changed` says exactly
+/// whether the state moved" invariant is not about.
 fn snapshot(state: &Arc<Mutex<FakeState>>) -> serde_json::Value {
     let mut value =
         serde_json::to_value(&*state.lock().expect("no test panics while holding the lock"))
             .expect("FakeState serializes");
+    if let serde_json::Value::Object(map) = &mut value {
+        map.remove("ensure_calls");
+        map.remove("read_calls");
+    }
     normalize(&mut value);
     value
 }

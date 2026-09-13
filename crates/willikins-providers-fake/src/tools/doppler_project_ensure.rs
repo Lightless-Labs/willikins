@@ -26,6 +26,11 @@ pub struct DopplerProjectEnsure {
 }
 
 impl DopplerProjectEnsure {
+    /// This tool's own name, shared between its [`ToolSpec`] and the
+    /// `"<tool>#<key>"` strings [`FakeState`]'s call counters and
+    /// injected failures use.
+    const TOOL_NAME: &'static str = "doppler.project.ensure";
+
     /// Build the tool against `state`, constructing its spec.
     #[must_use]
     pub fn new(state: Arc<Mutex<FakeState>>) -> Self {
@@ -35,7 +40,7 @@ impl DopplerProjectEnsure {
         outputs.insert(port("project"), scalar("DopplerProject"));
         Self {
             spec: ToolSpec {
-                name: tool_name("doppler.project.ensure"),
+                name: tool_name(Self::TOOL_NAME),
                 description: "Ensure a Doppler project exists.".to_string(),
                 inputs,
                 outputs,
@@ -75,7 +80,8 @@ impl Tool for DopplerProjectEnsure {
     fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
         require_present(&self.spec, inputs)?;
         let project: DopplerProject = get(inputs, "project")?;
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        state.record_read_call(Self::TOOL_NAME, &doppler_project_key(&project));
         match state.doppler_projects.get(&doppler_project_key(&project)) {
             None => Ok(Observation::Absent {
                 predicted: Self::outputs_for(&project),
@@ -89,6 +95,11 @@ impl Tool for DopplerProjectEnsure {
         require_present(&self.spec, inputs)?;
         let project: DopplerProject = get(inputs, "project")?;
         let mut state = self.state.lock().unwrap();
+        let key = doppler_project_key(&project);
+        state.record_ensure_call(Self::TOOL_NAME, &key);
+        if let Some(err) = state.take_fail_ensure_once(Self::TOOL_NAME, &key) {
+            return Err(err);
+        }
         match state.doppler_projects.get(&doppler_project_key(&project)) {
             Some(existing) if !existing.ours => Err(conflict(format!(
                 "`{project}` already exists and is not ours"

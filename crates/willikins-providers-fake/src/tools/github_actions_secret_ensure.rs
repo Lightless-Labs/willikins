@@ -20,6 +20,11 @@ pub struct GitHubActionsSecretEnsure {
 }
 
 impl GitHubActionsSecretEnsure {
+    /// This tool's own name, shared between its [`ToolSpec`] and the
+    /// `"<tool>#<key>"` strings [`FakeState`]'s call counters and
+    /// injected failures use.
+    const TOOL_NAME: &'static str = "github.actions_secret.ensure";
+
     /// Build the tool against `state`, constructing its spec.
     #[must_use]
     pub fn new(state: Arc<Mutex<FakeState>>) -> Self {
@@ -29,7 +34,7 @@ impl GitHubActionsSecretEnsure {
         inputs.insert(port("value"), any_secret(true));
         Self {
             spec: ToolSpec {
-                name: tool_name("github.actions_secret.ensure"),
+                name: tool_name(Self::TOOL_NAME),
                 description: "Ensure a GitHub Actions repository secret exists. Never reads or stores its value.".to_string(),
                 inputs,
                 outputs: IndexMap::new(),
@@ -57,11 +62,10 @@ impl Tool for GitHubActionsSecretEnsure {
 
     fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
         let (repo, name) = self.key_ports(inputs)?;
-        let state = self.state.lock().unwrap();
-        if state
-            .github_actions_secrets
-            .contains(&actions_secret_key(&repo, &name))
-        {
+        let key = actions_secret_key(&repo, &name);
+        let mut state = self.state.lock().unwrap();
+        state.record_read_call(Self::TOOL_NAME, &key);
+        if state.github_actions_secrets.contains(&key) {
             Ok(Observation::Present(Outputs::new()))
         } else {
             Ok(Observation::Absent {
@@ -72,13 +76,16 @@ impl Tool for GitHubActionsSecretEnsure {
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         let (repo, name) = self.key_ports(inputs)?;
+        let key = actions_secret_key(&repo, &name);
         let mut state = self.state.lock().unwrap();
+        state.record_ensure_call(Self::TOOL_NAME, &key);
+        if let Some(err) = state.take_fail_ensure_once(Self::TOOL_NAME, &key) {
+            return Err(err);
+        }
         // A sink whose value cannot be read back always writes when
         // called, whether or not the secret already exists: `changed` is
         // always `true`, matching GitHub's own 201-or-204 (both success).
-        state
-            .github_actions_secrets
-            .insert(actions_secret_key(&repo, &name));
+        state.github_actions_secrets.insert(key);
         Ok(Ensured {
             outputs: Outputs::new(),
             changed: true,

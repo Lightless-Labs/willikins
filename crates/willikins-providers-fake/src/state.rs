@@ -11,9 +11,10 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use willikins_core::{ToolError, ToolErrorKind};
 use willikins_types::{
-    ActionsSecretName, DopplerConfig, DopplerProject, DopplerSecretValue, DopplerTokenName,
-    GitHubRepo, ProjectSlug, RepoVisibility, SecretName,
+    ActionsSecretName, DomainType, DopplerConfig, DopplerProject, DopplerSecretValue,
+    DopplerServiceToken, DopplerTokenName, GitHubRepo, ProjectSlug, RepoVisibility, SecretName,
 };
 
 /// A GitHub repository record: enough to answer `github.repo.ensure`'s
@@ -93,6 +94,100 @@ impl<'de> Deserialize<'de> for SecretsMap {
     }
 }
 
+/// A single, optionally seeded [`DopplerServiceToken`], consumed by
+/// whichever mint reaches it first: [`FakeState::mint_token`], called
+/// from `doppler.service_token.ensure`'s create path and from
+/// `doppler.service_token.rotate`. [`Self::take`] clears it, so a second
+/// mint in the same run never reuses a seeded marker.
+///
+/// Serializes the same one-way, redacted way [`SecretsMap`] does: `Some`
+/// writes the value's own redaction marker (`"[REDACTED
+/// DopplerServiceToken]"`), never its bytes; `None` writes JSON `null`.
+/// Because the marker is not itself a valid `DopplerServiceToken` (its
+/// pattern is `dp\.st\....`, not `[REDACTED ...]`), reloading a dump that
+/// had a seeded `next_token` fails deserialization outright rather than
+/// silently resurrecting the marker string as a "seeded" token — stricter
+/// than [`SecretsMap`], whose value type ([`DopplerSecretValue`]) accepts
+/// any non-empty string and so *would* reload the marker as if it were a
+/// real seeded secret. Closes `todos/2026-09-12-fake-state-write-only.md`:
+/// `FakeState`'s serialization is a one-way, redacted view, never an
+/// export/import round trip, and this field makes that literally true for
+/// at least one field rather than merely documented.
+#[derive(Debug, Clone, Default)]
+pub struct NextToken(Option<DopplerServiceToken>);
+
+impl NextToken {
+    /// Take the seeded value, if any, leaving `None` behind.
+    fn take(&mut self) -> Option<DopplerServiceToken> {
+        self.0.take()
+    }
+}
+
+impl Serialize for NextToken {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match &self.0 {
+            Some(value) => serializer.serialize_str(&value.to_string()),
+            None => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NextToken {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let inner = Option::<DopplerServiceToken>::deserialize(deserializer)?;
+        Ok(Self(inner))
+    }
+}
+
+/// The key [`FakeState::fail_ensure_once`], [`FakeState::ensure_calls`],
+/// and [`FakeState::read_calls`] all share: `"<tool>#<key>"`, where `<key>`
+/// is the same key string the tool's own state map already uses (so a
+/// caller who knows, say, [`doppler_service_token_key`] builds the same
+/// string here without a second encoding).
+#[must_use]
+pub fn call_key(tool: &str, key: &str) -> String {
+    format!("{tool}#{key}")
+}
+
+/// A generated [`DopplerServiceToken`] matching its own pattern (`dp.st.`
+/// plus 40-44 alphanumeric characters), varied by `seed` so two mints in
+/// the same run produce different values without needing a real random
+/// number generator. Never `unwrap`s: a parse failure here would be this
+/// function's own bug, not a caller's, so it panics with a clear message
+/// the same way `doppler_project_ensure`'s `seed_default_configs` does for
+/// its own always-valid input.
+fn generate_token(seed: &str) -> DopplerServiceToken {
+    use std::collections::hash_map::DefaultHasher;
+    use std::fmt::Write as _;
+    use std::hash::{Hash, Hasher};
+
+    let mut body = String::with_capacity(48);
+    for salt in 0u8..3 {
+        let mut hasher = DefaultHasher::new();
+        seed.hash(&mut hasher);
+        salt.hash(&mut hasher);
+        let _ = write!(body, "{:016x}", hasher.finish());
+    }
+    body.truncate(42);
+    DopplerServiceToken::parse(&format!("dp.st.{body}")).unwrap_or_else(|err| {
+        unreachable!("a generated fake token must match its own pattern: {err}")
+    })
+}
+
+/// Bump `map`'s counter at `tool`/`key` by one, returning the count after
+/// this call (including it).
+fn record_call(map: &mut HashMap<String, u32>, tool: &str, key: &str) -> u32 {
+    let entry = map.entry(call_key(tool, key)).or_insert(0);
+    *entry += 1;
+    *entry
+}
+
 /// The shared, in-memory state behind every fake tool.
 ///
 /// Cheap to construct empty ([`Self::new`]) or seed from a JSON file
@@ -105,6 +200,14 @@ impl<'de> Deserialize<'de> for SecretsMap {
 /// misspelled key used to leave the resource it meant to seed absent, so
 /// `plan` reported `Create` where the author had asked for `NoOp` and
 /// nothing anywhere said why. Adversarial pass 2, finding 3.
+///
+/// Serialization is a one-way, redacted view, never an export/import
+/// round trip: every seeded secret ([`Self::doppler_secrets`],
+/// [`Self::next_token`]) prints only its redaction marker, and a dump
+/// holding a seeded [`Self::next_token`] fails to reload at all (see
+/// [`NextToken`]'s own doc). A `--fake-state` file is written by hand or
+/// generated from a template, never round-tripped through a running
+/// state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FakeState {
@@ -128,6 +231,22 @@ pub struct FakeState {
     /// The [`ProjectSlug`] canonical strings `fake.irreversible.ensure`
     /// has created.
     pub irreversible: HashSet<String>,
+    /// A token to hand out the next time something mints one
+    /// (`doppler.service_token.ensure`'s create path, or
+    /// `doppler.service_token.rotate`), consumed on first use. See
+    /// [`NextToken`]'s own doc for why this seeds but never round-trips.
+    pub next_token: NextToken,
+    /// Pending injected failures, each `"<tool>#<key>"` ([`call_key`]).
+    /// The next `ensure` matching an entry returns
+    /// [`willikins_core::ToolErrorKind::Provider`] and consumes the entry
+    /// (that one call only); state is left untouched by a failed call.
+    pub fail_ensure_once: Vec<String>,
+    /// How many times each `"<tool>#<key>"` has had `ensure` called
+    /// against it, including calls an injected failure turned away.
+    pub ensure_calls: HashMap<String, u32>,
+    /// How many times each `"<tool>#<key>"` has had `read` called against
+    /// it.
+    pub read_calls: HashMap<String, u32>,
 }
 
 /// The key `github.repo.ensure` looks a [`GitHubRepo`] up by: its own
@@ -255,6 +374,64 @@ impl FakeState {
         self.irreversible.insert(irreversible_key(slug));
         self
     }
+
+    /// Seed the next token a mint will hand out (see [`NextToken`]).
+    #[must_use]
+    pub fn with_next_token(mut self, token: DopplerServiceToken) -> Self {
+        self.next_token = NextToken(Some(token));
+        self
+    }
+
+    /// Seed a one-shot injected failure for the next `ensure` at
+    /// `tool`/`key` ([`call_key`]).
+    #[must_use]
+    pub fn with_fail_ensure_once(mut self, tool: &str, key: &str) -> Self {
+        self.fail_ensure_once.push(call_key(tool, key));
+        self
+    }
+
+    /// Record one `read` call against `tool`/`key` ([`call_key`]).
+    pub fn record_read_call(&mut self, tool: &str, key: &str) {
+        record_call(&mut self.read_calls, tool, key);
+    }
+
+    /// Record one `ensure` call against `tool`/`key` ([`call_key`]),
+    /// returning the count so far, including this one. Called
+    /// unconditionally at the top of every non-pure fake tool's `ensure`,
+    /// before checking [`Self::take_fail_ensure_once`], so an injected
+    /// failure still counts as a call.
+    pub fn record_ensure_call(&mut self, tool: &str, key: &str) -> u32 {
+        record_call(&mut self.ensure_calls, tool, key)
+    }
+
+    /// If `tool`/`key` has a pending [`Self::fail_ensure_once`] entry,
+    /// consume it and return the [`ToolError`] the caller should return
+    /// instead of observing or mutating anything: an injected failure
+    /// fires exactly once and leaves no other trace.
+    #[must_use]
+    pub fn take_fail_ensure_once(&mut self, tool: &str, key: &str) -> Option<ToolError> {
+        let target = call_key(tool, key);
+        let position = self
+            .fail_ensure_once
+            .iter()
+            .position(|entry| entry == &target)?;
+        self.fail_ensure_once.remove(position);
+        Some(ToolError {
+            kind: ToolErrorKind::Provider,
+            message: format!("injected failure for `{tool}` at `{key}`"),
+        })
+    }
+
+    /// Mint a fresh [`DopplerServiceToken`] for `tool`/`key`
+    /// ([`call_key`]): [`Self::next_token`] if seeded (consumed, so a
+    /// second mint in the same run never reuses it), else a generated
+    /// value varied by `call_count` so two mints for the same key differ.
+    #[must_use]
+    pub fn mint_token(&mut self, tool: &str, key: &str, call_count: u32) -> DopplerServiceToken {
+        self.next_token
+            .take()
+            .unwrap_or_else(|| generate_token(&format!("{}#{call_count}", call_key(tool, key))))
+    }
 }
 
 #[cfg(test)]
@@ -351,6 +528,96 @@ mod tests {
         assert!(
             back.github_actions_secrets
                 .contains(&actions_secret_key(&repo, &name))
+        );
+    }
+
+    fn distinctive_token() -> DopplerServiceToken {
+        DopplerServiceToken::parse(&format!("dp.st.prd.{}", "MARKER".repeat(7))).unwrap()
+    }
+
+    #[test]
+    fn unseeded_mint_generates_a_validly_shaped_token_and_varies_by_call_count() {
+        let mut state = FakeState::new();
+        let first = state.mint_token("doppler.service_token.ensure", "cfg#ci", 1);
+        let second = state.mint_token("doppler.service_token.ensure", "cfg#ci", 2);
+        assert_ne!(first, second, "two mints of the same key must differ");
+        assert_ne!(first, distinctive_token());
+    }
+
+    #[test]
+    fn seeded_next_token_is_minted_once_then_generated() {
+        let mut state = FakeState::new().with_next_token(distinctive_token());
+        let first = state.mint_token("doppler.service_token.ensure", "cfg#ci", 1);
+        assert_eq!(first, distinctive_token());
+        let second = state.mint_token("doppler.service_token.ensure", "cfg#ci", 2);
+        assert_ne!(
+            second, first,
+            "a second mint must never reuse the seeded marker"
+        );
+    }
+
+    /// [`NextToken`]'s own doc: seeding it prints only the redaction
+    /// marker, never the seeded bytes, and reloading that dump fails
+    /// outright rather than resurrecting the marker as a "real" token.
+    #[test]
+    fn next_token_never_reserializes_its_value_and_its_dump_does_not_reload() {
+        let state = FakeState::new().with_next_token(distinctive_token());
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains("MARKERMARKER"), "json leaked: {json}");
+        assert!(json.contains("REDACTED"), "json: {json}");
+        let reloaded = FakeState::from_json(&json);
+        assert!(
+            reloaded.is_err(),
+            "a dumped `next_token` marker is not itself a valid DopplerServiceToken"
+        );
+    }
+
+    #[test]
+    fn next_token_is_null_when_unseeded() {
+        let state = FakeState::new();
+        let json = serde_json::to_string(&state).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["next_token"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn ensure_calls_and_read_calls_count_per_key() {
+        let mut state = FakeState::new();
+        state.record_read_call("github.repo.ensure", "acme/x");
+        assert_eq!(state.record_ensure_call("github.repo.ensure", "acme/x"), 1);
+        assert_eq!(state.record_ensure_call("github.repo.ensure", "acme/x"), 2);
+        assert_eq!(
+            state.ensure_calls[&call_key("github.repo.ensure", "acme/x")],
+            2
+        );
+        assert_eq!(
+            state.read_calls[&call_key("github.repo.ensure", "acme/x")],
+            1
+        );
+    }
+
+    #[test]
+    fn fail_ensure_once_fires_exactly_once() {
+        let mut state = FakeState::new().with_fail_ensure_once("doppler.config.ensure", "p/stg");
+        let first = state.take_fail_ensure_once("doppler.config.ensure", "p/stg");
+        assert!(first.is_some());
+        assert_eq!(first.unwrap().kind, willikins_core::ToolErrorKind::Provider);
+        let second = state.take_fail_ensure_once("doppler.config.ensure", "p/stg");
+        assert!(second.is_none(), "an injected failure fires exactly once");
+    }
+
+    #[test]
+    fn fail_ensure_once_never_matches_a_different_key_or_tool() {
+        let mut state = FakeState::new().with_fail_ensure_once("doppler.config.ensure", "p/stg");
+        assert!(
+            state
+                .take_fail_ensure_once("doppler.config.ensure", "p/prd")
+                .is_none()
+        );
+        assert!(
+            state
+                .take_fail_ensure_once("doppler.project.ensure", "p/stg")
+                .is_none()
         );
     }
 }

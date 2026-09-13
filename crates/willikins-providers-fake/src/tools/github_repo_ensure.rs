@@ -19,6 +19,11 @@ pub struct GitHubRepoEnsure {
 }
 
 impl GitHubRepoEnsure {
+    /// This tool's own name, shared between its [`ToolSpec`] and the
+    /// `"<tool>#<key>"` strings [`FakeState`]'s call counters and
+    /// injected failures use.
+    const TOOL_NAME: &'static str = "github.repo.ensure";
+
     /// Build the tool against `state`, constructing its spec.
     #[must_use]
     pub fn new(state: Arc<Mutex<FakeState>>) -> Self {
@@ -30,7 +35,7 @@ impl GitHubRepoEnsure {
         outputs.insert(port("url"), scalar("HttpsUrl"));
         Self {
             spec: ToolSpec {
-                name: tool_name("github.repo.ensure"),
+                name: tool_name(Self::TOOL_NAME),
                 description: "Ensure a GitHub repository exists.".to_string(),
                 inputs,
                 outputs,
@@ -95,7 +100,8 @@ impl Tool for GitHubRepoEnsure {
     fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
         require_present(&self.spec, inputs)?;
         let repo: GitHubRepo = get(inputs, "repo")?;
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        state.record_read_call(Self::TOOL_NAME, &repo_key(&repo));
         Ok(Self::observe(&state, &repo, inputs))
     }
 
@@ -104,6 +110,11 @@ impl Tool for GitHubRepoEnsure {
         let repo: GitHubRepo = get(inputs, "repo")?;
         let visibility: RepoVisibility = get(inputs, "visibility")?;
         let mut state = self.state.lock().unwrap();
+        let key = repo_key(&repo);
+        state.record_ensure_call(Self::TOOL_NAME, &key);
+        if let Some(err) = state.take_fail_ensure_once(Self::TOOL_NAME, &key) {
+            return Err(err);
+        }
         match Self::observe(&state, &repo, inputs) {
             Observation::Foreign => {
                 Err(conflict(format!("`{repo}` already exists and is not ours")))
