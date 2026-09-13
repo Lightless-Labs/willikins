@@ -467,7 +467,7 @@ fn a_re_plan_failure_surfaces_as_apply_error_plan() {
 /// run (the token already exists, so `FixedTokenService`'s `ensure`, like
 /// the real fake tool, cannot report its value back), and `ci_secret`'s
 /// own fresh `read` reports it `Present` (so its planned action is
-/// `NoOp`): exactly the "required input Unknown, planned NoOp" branch
+/// `NoOp`): exactly the "required input Unknown, planned `NoOp`" branch
 /// (`NodeStatus::Converged`), the one status none of this file's other
 /// tests exercise.
 #[test]
