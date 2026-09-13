@@ -69,9 +69,9 @@ pub use document::{DefaultValue, Document, InputDecl, StepDecl};
 /// `Description`'s own 1,024-character bound). That run's "maximum
 /// resident set size" was 6,422,528 bytes (about 6.1 MiB); the same
 /// binary running one trivial test instead peaked at 2,998,272 bytes
-/// (about 2.9 MiB), so the parse itself accounts for about 3.4 MiB —
-/// roughly thirteen times the 256 KiB source, a small bounded multiple
-/// rather than the quadratic blow-up an unbounded anchor/alias
+/// (about 2.9 MiB), so the parse itself accounts for 3,424,256 bytes
+/// (about 3.3 MiB) — thirteen times the 256 KiB source, a small bounded
+/// multiple rather than the quadratic blow-up an unbounded anchor/alias
 /// amplification produces. Both numbers are whole-process peaks, harness
 /// and allocator baseline included; the difference between them is the
 /// closest this measurement gets to isolating `parse_document`.
