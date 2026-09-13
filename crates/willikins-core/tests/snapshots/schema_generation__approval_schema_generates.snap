@@ -1,0 +1,58 @@
+---
+source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 33
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Approval",
+  "description": "Who, or what policy, approved a plan for [`apply`].\n\n`Auto` is the caller asserting no human looked at this plan; `apply`\nitself decides whether that is good enough (`Plan::requires_approval`).\nA server only ever constructs `Human` from a journaled\n`ApprovalGranted` event for the plan's own id — never from a bare\ncaller claim — but that binding is `willikins-server`'s job; this type\nonly carries the two shapes.",
+  "oneOf": [
+    {
+      "description": "No human approved this run.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "auto"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "description": "A human approved this run.",
+      "type": "object",
+      "properties": {
+        "approver": {
+          "description": "The approving principal.",
+          "$ref": "#/$defs/PrincipalId"
+        },
+        "at": {
+          "description": "When they approved it.",
+          "$ref": "#/$defs/Timestamp"
+        },
+        "kind": {
+          "type": "string",
+          "const": "human"
+        }
+      },
+      "required": [
+        "kind",
+        "approver",
+        "at"
+      ]
+    }
+  ],
+  "$defs": {
+    "PrincipalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

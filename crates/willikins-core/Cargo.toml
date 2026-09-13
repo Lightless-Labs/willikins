@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 willikins-types = { workspace = true, features = ["executor"] }
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
@@ -22,7 +23,10 @@ regex.workspace = true
 insta.workspace = true
 jsonschema.workspace = true
 proptest.workspace = true
+quote.workspace = true
+syn = { workspace = true, features = ["visit"] }
 willikins-providers-fake.workspace = true
+willikins-tools.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,11 @@
+---
+source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 38
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Timestamp",
+  "type": "string",
+  "format": "date-time"
+}

@@ -4,7 +4,8 @@
 //! these public shapes is a reviewed diff, not a silent one.
 
 use willikins_core::{
-    Action, Description, InputError, Inputs, MissingInput, Outputs, Plan, PlannedNode,
+    Action, Applied, AppliedNode, Approval, Description, InputError, Inputs, MissingInput,
+    NodeStatus, Outputs, Plan, PlannedNode, PrincipalId, Timestamp,
 };
 
 /// Generate and snapshot `T`'s schema, panicking with `T`'s name in the
@@ -28,6 +29,13 @@ schema_snapshot!(missing_input_schema_generates, MissingInput);
 schema_snapshot!(input_error_schema_generates, InputError);
 schema_snapshot!(inputs_schema_generates, Inputs);
 schema_snapshot!(outputs_schema_generates, Outputs);
+// Task 4a's new apply-executor result types.
+schema_snapshot!(approval_schema_generates, Approval);
+schema_snapshot!(node_status_schema_generates, NodeStatus);
+schema_snapshot!(applied_node_schema_generates, AppliedNode);
+schema_snapshot!(applied_schema_generates, Applied);
+schema_snapshot!(principal_id_schema_generates, PrincipalId);
+schema_snapshot!(timestamp_schema_generates, Timestamp);
 
 /// [`MissingInput`] holds a `schemars::Schema` (the registry's schema for
 /// the missing input's own type) in a field that is itself published through

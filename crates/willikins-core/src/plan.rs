@@ -124,6 +124,74 @@ pub struct Plan {
     pub requires_approval: bool,
 }
 
+/// The fixed string every secret output port contributes to
+/// [`InstanceFingerprint::outputs`], in place of the value's own rendering.
+///
+/// A secret's rendering already collapses every *known* value of a given
+/// type to the same marker (redaction is by type, not by content), but an
+/// *unknown* value renders as the different string `"<unknown>"` (see
+/// [`crate::value::Value::render`]). Using `Value::render()` directly here
+/// would therefore report drift the moment a secret output that was
+/// unknown when a plan was approved becomes known by the time
+/// `willikins-core::apply::apply` re-plans — exactly the token-minting
+/// case the design's "secret-is-not-drift" rule exists to rule out. This
+/// constant is used instead, for a secret port only, regardless of
+/// [`crate::value::ValueState`], so a secret port's contribution to a
+/// fingerprint never varies.
+const SECRET_FINGERPRINT_MARKER: &str = "<secret>";
+
+/// One planned node instance's identity and observable content, used by
+/// `willikins-core::apply::apply` to detect drift between an approved
+/// [`Plan`] and one freshly re-planned inside the apply executor: two
+/// fingerprints from the same workflow and inputs are equal exactly when
+/// nothing has been executed yet that the executor needs to notice.
+///
+/// See [`SECRET_FINGERPRINT_MARKER`] for why a secret output's actual
+/// value is never part of this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceFingerprint {
+    /// The node this instance belongs to.
+    pub name: NodeName,
+    /// The `for_each` instance key, if any; `None` for a node with no
+    /// `for_each`.
+    pub instance: Option<String>,
+    /// The planned action.
+    pub action: Action,
+    /// Every output port's rendered value, in declaration order: the
+    /// value's own canonical rendering ([`crate::value::Value::render`])
+    /// for a non-secret port, or [`SECRET_FINGERPRINT_MARKER`] for a
+    /// secret one.
+    pub outputs: Vec<(PortName, String)>,
+}
+
+impl Plan {
+    /// This plan's [`InstanceFingerprint`]s, one per entry of
+    /// [`Self::nodes`], in the same order.
+    #[must_use]
+    pub fn fingerprint(&self) -> Vec<InstanceFingerprint> {
+        self.nodes
+            .iter()
+            .map(|node| InstanceFingerprint {
+                name: node.name.clone(),
+                instance: node.instance.clone(),
+                action: node.action,
+                outputs: node
+                    .outputs
+                    .iter()
+                    .map(|(port, value)| {
+                        let rendered = if value.is_secret() {
+                            SECRET_FINGERPRINT_MARKER.to_string()
+                        } else {
+                            value.render().to_string()
+                        };
+                        (port.clone(), rendered)
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+}
+
 /// Why [`plan`] could not produce a [`Plan`].
 ///
 /// Serializes internally tagged (`#[serde(tag = "kind")]`) as
@@ -246,14 +314,14 @@ impl std::error::Error for PlanError {}
 
 /// One instance of a `for_each` node: its item's canonical string (the key
 /// a [`Binding::Keyed`] matches against) and its planned outputs.
-struct ForEachInstance {
-    key: String,
-    outputs: Outputs,
+pub(crate) struct ForEachInstance {
+    pub(crate) key: String,
+    pub(crate) outputs: Outputs,
 }
 
 /// What a node resolved to, once planned: a single set of outputs for a
 /// node with no `for_each`, or one set per instance for one that has it.
-enum NodeResult {
+pub(crate) enum NodeResult {
     /// A node with no `for_each`.
     Scalar(Outputs),
     /// A `for_each` node's instances, in source-list order.
@@ -264,11 +332,11 @@ enum NodeResult {
 /// its node and input declarations), the caller's resolved workflow
 /// inputs, the catalog (to re-derive a referenced node's tool spec), and
 /// every already-planned node's result.
-struct ResolveCtx<'a> {
-    workflow: &'a Workflow,
-    inputs: &'a IndexMap<InputName, Value>,
-    catalog: &'a Catalog,
-    results: &'a HashMap<NodeName, NodeResult>,
+pub(crate) struct ResolveCtx<'a> {
+    pub(crate) workflow: &'a Workflow,
+    pub(crate) inputs: &'a IndexMap<InputName, Value>,
+    pub(crate) catalog: &'a Catalog,
+    pub(crate) results: &'a HashMap<NodeName, NodeResult>,
 }
 
 /// Plan `checked` against `catalog`, resolving its workflow inputs from
@@ -439,7 +507,7 @@ fn bind_ports(
 ///
 /// `site` is only used to attribute [`PlanError::KeyNotInForEach`] to the
 /// binding's own location, never to the `for_each` node it points at.
-fn resolve_binding(
+pub(crate) fn resolve_binding(
     ctx: &ResolveCtx,
     site: &Site,
     binding: &Binding,
@@ -468,7 +536,7 @@ fn resolve_binding(
 /// Resolve a `Step` reference to `node`'s `port`: that node's own output
 /// value when it has no `for_each`, or the aggregation across every
 /// instance described in the module docs when it does.
-fn resolve_step(ctx: &ResolveCtx, node: &NodeName, port: &PortName) -> Value {
+pub(crate) fn resolve_step(ctx: &ResolveCtx, node: &NodeName, port: &PortName) -> Value {
     match ctx
         .results
         .get(node)
@@ -485,7 +553,7 @@ fn resolve_step(ctx: &ResolveCtx, node: &NodeName, port: &PortName) -> Value {
 /// Aggregate every instance of a `for_each` node's `port` into one list
 /// value: known when every instance's value there is known, unknown (at
 /// `list<element>`) the moment one is not.
-fn aggregate_for_each_port(
+pub(crate) fn aggregate_for_each_port(
     ctx: &ResolveCtx,
     node: &NodeName,
     port: &PortName,
@@ -525,7 +593,7 @@ fn aggregate_for_each_port(
 /// Resolve a `Keyed` reference: the instance of `target`'s `for_each` node
 /// whose item renders to `key`, or [`PlanError::KeyNotInForEach`] attributed
 /// to `site` when none matches.
-fn resolve_keyed(
+pub(crate) fn resolve_keyed(
     ctx: &ResolveCtx,
     site: &Site,
     target: &NodeName,
@@ -632,7 +700,7 @@ fn restrict_to_key(inputs: &Inputs, key: &[PortName]) -> Inputs {
 
 /// Every one of `spec`'s declared output ports: `provided`'s value where it
 /// has one, [`Value::unknown`] otherwise.
-fn fill_outputs(spec: &ToolSpec, provided: &Outputs) -> Outputs {
+pub(crate) fn fill_outputs(spec: &ToolSpec, provided: &Outputs) -> Outputs {
     let mut outputs = Outputs::new();
     for (port, ty) in &spec.outputs {
         let value = provided
@@ -642,4 +710,105 @@ fn fill_outputs(spec: &ToolSpec, provided: &Outputs) -> Outputs {
         outputs.insert(port.clone(), value);
     }
     outputs
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for [`Plan::fingerprint`] -- task 4a's acceptance test 8,
+    //! the unit half. The rest of `plan`'s own behaviour is exercised by
+    //! `tests/plan.rs` and `tests/plan_adversarial.rs` against the fake
+    //! catalog; these two tests need nothing beyond a hand-built `Plan`, so
+    //! they live here instead.
+
+    use super::*;
+    use willikins_types::DomainType;
+
+    fn node(name: &str) -> NodeName {
+        NodeName::parse(name).unwrap()
+    }
+
+    fn tool(name: &str) -> ToolName {
+        ToolName::parse(name).unwrap()
+    }
+
+    fn port(name: &str) -> PortName {
+        PortName::parse(name).unwrap()
+    }
+
+    fn workflow_name(name: &str) -> willikins_types::WorkflowName {
+        willikins_types::WorkflowName::parse(name).unwrap()
+    }
+
+    /// A one-node plan whose single output port (`url`, a non-secret
+    /// [`willikins_types::HttpsUrl`]) is bound to `value`.
+    fn plan_with_url(value: &str) -> Plan {
+        let mut outputs = Outputs::new();
+        outputs.insert(
+            port("url"),
+            Value::known(willikins_types::HttpsUrl::parse(value).unwrap()),
+        );
+        Plan {
+            workflow: workflow_name("fingerprint-test"),
+            nodes: vec![PlannedNode {
+                name: node("repo"),
+                instance: None,
+                tool: tool("test.tool"),
+                action: Action::Create,
+                inputs: Inputs::new(),
+                outputs,
+            }],
+            outputs: IndexMap::new(),
+            class: Class::Reversible,
+            requires_approval: false,
+        }
+    }
+
+    /// A one-node plan whose single output port (`value`, a secret
+    /// [`willikins_types::DopplerSecretValue`]) holds `secret`.
+    fn plan_with_secret(secret: &str) -> Plan {
+        let mut outputs = Outputs::new();
+        outputs.insert(
+            port("value"),
+            Value::known(willikins_types::DopplerSecretValue::parse(secret).unwrap()),
+        );
+        Plan {
+            workflow: workflow_name("fingerprint-test"),
+            nodes: vec![PlannedNode {
+                name: node("secret_get"),
+                instance: None,
+                tool: tool("test.tool"),
+                action: Action::Compute,
+                inputs: Inputs::new(),
+                outputs,
+            }],
+            outputs: IndexMap::new(),
+            class: Class::Reversible,
+            requires_approval: false,
+        }
+    }
+
+    #[test]
+    fn two_plans_differing_only_in_a_non_secret_observed_output_have_different_fingerprints() {
+        let a = plan_with_url("https://example.com/a");
+        let b = plan_with_url("https://example.com/b");
+        assert_ne!(a.fingerprint(), b.fingerprint());
+    }
+
+    #[test]
+    fn two_plans_agreeing_on_a_non_secret_observed_output_have_equal_fingerprints() {
+        let a = plan_with_url("https://example.com/a");
+        let b = plan_with_url("https://example.com/a");
+        assert_eq!(a.fingerprint(), b.fingerprint());
+    }
+
+    /// The secret-is-not-drift rule, pinned on purpose: two plans whose
+    /// only difference is a seeded `doppler.secret.get`-shaped secret
+    /// value must fingerprint identically, so `apply`'s drift check never
+    /// treats a rotated-out-of-band secret as drift.
+    #[test]
+    fn two_plans_differing_only_in_a_seeded_secret_value_have_equal_fingerprints() {
+        let a = plan_with_secret("first-secret-value");
+        let b = plan_with_secret("second-secret-value-entirely");
+        assert_eq!(a.fingerprint(), b.fingerprint());
+    }
 }

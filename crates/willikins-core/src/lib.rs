@@ -10,6 +10,7 @@
 //! enables it; the workspace `clippy.toml` `disallowed-methods` entry is
 //! what actually keeps every other call site honest.
 
+pub mod apply;
 pub mod catalog;
 pub mod check;
 pub mod class;
@@ -21,13 +22,17 @@ pub mod tool;
 pub mod value;
 pub mod workflow;
 
+pub use apply::{
+    Applied, AppliedNode, ApplyError, ApplyEvent, ApplyObserver, Approval, DriftKind, NodeStatus,
+    NoopObserver, PrincipalId, RecordingObserver, Timestamp, apply,
+};
 pub use catalog::{Catalog, CatalogError};
 pub use check::{CheckError, CheckWarning, Checked, check};
 pub use class::Class;
 pub use describe::{
     Description, InputArg, InputError, MissingInput, PartialInputs, RawInput, describe,
 };
-pub use plan::{Action, Plan, PlanError, PlannedNode, plan};
+pub use plan::{Action, InstanceFingerprint, Plan, PlanError, PlannedNode, plan};
 pub use reported::Reported;
 pub use site::Site;
 /// Generic tool-authoring helpers (port/type construction, input checks,

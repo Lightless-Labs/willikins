@@ -1,0 +1,11 @@
+---
+source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 37
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PrincipalId",
+  "type": "string",
+  "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$"
+}

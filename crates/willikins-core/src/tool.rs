@@ -329,7 +329,7 @@ pub enum Observation {
 }
 
 /// The kind of failure a [`Tool`] reported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub enum ToolErrorKind {
     /// The resource `ensure` was asked to act on does not exist.
     NotFound,
@@ -348,7 +348,7 @@ pub enum ToolErrorKind {
 /// from the tool's own state and provider response, not from the
 /// [`Inputs`] it was given, so this type carries no obligation for callers
 /// to redact it themselves.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema, thiserror::Error)]
 #[error("{kind:?}: {message}")]
 pub struct ToolError {
     /// The kind of failure.

@@ -1,0 +1,140 @@
+---
+source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 34
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NodeStatus",
+  "description": "What happened to one planned node instance during [`apply`].",
+  "oneOf": [
+    {
+      "description": "A pure tool computed its outputs; there was nothing to create or\nleave alone.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "computed"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    {
+      "description": "`ensure` reported [`Ensured::changed`] `true`.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "created"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    {
+      "description": "`ensure` reported [`Ensured::changed`] `false`.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "unchanged"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    {
+      "description": "A required input was [`crate::value::ValueState::Unknown`] and the\nplanned action was [`Action::NoOp`]: the resource already matches,\nby the plan's own observation, and nothing was called.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "converged"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    {
+      "description": "`ensure` returned an error.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "The failure `ensure` reported.",
+          "$ref": "#/$defs/ToolError"
+        },
+        "status": {
+          "type": "string",
+          "const": "failed"
+        }
+      },
+      "required": [
+        "status",
+        "error"
+      ]
+    },
+    {
+      "description": "This instance was never attempted: an earlier instance in the same\nrun failed or was blocked first.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "not_run"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    }
+  ],
+  "$defs": {
+    "ToolError": {
+      "description": "A tool's failure to `read` or `ensure`.\n\nNever includes an input value: an implementation must build `message`\nfrom the tool's own state and provider response, not from the\n[`Inputs`] it was given, so this type carries no obligation for callers\nto redact it themselves.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "The kind of failure.",
+          "$ref": "#/$defs/ToolErrorKind"
+        },
+        "message": {
+          "description": "A human-readable explanation. Never a secret value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    "ToolErrorKind": {
+      "description": "The kind of failure a [`Tool`] reported.",
+      "oneOf": [
+        {
+          "description": "The resource `ensure` was asked to act on does not exist.",
+          "type": "string",
+          "const": "NotFound"
+        },
+        {
+          "description": "The resource exists but not in the state the tool was asked to\nbring it to, and the tool will not overwrite it.",
+          "type": "string",
+          "const": "Conflict"
+        },
+        {
+          "description": "The underlying provider reported a failure.",
+          "type": "string",
+          "const": "Provider"
+        },
+        {
+          "description": "The tool's inputs are not valid, independent of any provider.",
+          "type": "string",
+          "const": "Invalid"
+        }
+      ]
+    }
+  }
+}
