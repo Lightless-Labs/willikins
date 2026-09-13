@@ -30,9 +30,10 @@ use indexmap::IndexMap;
 
 use willikins_core::describe::{PartialInputs, RawInput};
 use willikins_core::{
-    Action, Catalog, CheckError, Class, InputName, Inputs, NodeName, Observation, OutputName,
-    Outputs, Plan, PlanError, PlannedNode, PortName, PortType, Site, ToolError, ToolErrorKind,
-    ToolName, TypeName, TypeRef, Value, Workflow,
+    Action, Applied, ApplyError, ApplyEvent, Approval, Catalog, CheckError, Class, InputName,
+    Inputs, NodeName, NodeStatus, Observation, OutputName, Outputs, Plan, PlanError, PlannedNode,
+    PortName, PortType, RecordingObserver, Site, ToolError, ToolErrorKind, ToolName, TypeName,
+    TypeRef, Value, Workflow, apply,
 };
 use willikins_providers_fake::FakeState;
 use willikins_types::DomainType;
@@ -570,6 +571,28 @@ fn find_planned<'a>(plan: &'a Plan, name: &str, instance: Option<&str>) -> &'a P
         .iter()
         .find(|planned| planned.name == node(name) && planned.instance.as_deref() == instance)
         .unwrap_or_else(|| panic!("no planned node `{name}` (instance {instance:?})"))
+}
+
+/// The [`NodeStatus`] of one attempted node instance in an [`Applied`]
+/// result, shared by every task 4 acceptance test below. Panics (with the
+/// instance named) if `applied` has no such node — an absent instance
+/// (blocked by [`ApplyError::UnknownInput`] before it ever started) is a
+/// distinct case tests check for separately, never confused with a
+/// present one.
+fn node_status<'a>(applied: &'a Applied, name: &str, instance: Option<&str>) -> &'a NodeStatus {
+    &applied
+        .nodes
+        .iter()
+        .find(|n| n.name == node(name) && n.instance.as_deref() == instance)
+        .unwrap_or_else(|| panic!("no applied node `{name}` (instance {instance:?})"))
+        .status
+}
+
+/// The path to the second positive fixture, `workflows/rotate-service-token.yaml`.
+fn rotate_fixture() -> PathBuf {
+    workspace_root()
+        .join("workflows")
+        .join("rotate-service-token.yaml")
 }
 
 #[test]
@@ -1153,11 +1176,18 @@ fn milestone_2_acceptance_09_attribute_mismatch_visibility() {
 }
 
 /// The other half of acceptance test 9, through the same fixture: `ensure`
-/// on the mismatching repository is `Conflict`, and the state it was asked
-/// to change is byte-identical afterwards — the mock server's "records no
-/// `PATCH`" for the fake provider. `plan`'s refusal is what a caller sees
-/// first, but the tool must refuse on its own too: task 4's executor calls
-/// `ensure` from a plan taken before any node ran.
+/// on the mismatching repository is `Conflict`, and the *resource* state
+/// it was asked to change is byte-identical afterwards — the mock
+/// server's "records no `PATCH`" for the fake provider. `plan`'s refusal
+/// is what a caller sees first, but the tool must refuse on its own too:
+/// task 4's executor calls `ensure` from a plan taken before any node
+/// ran.
+///
+/// `ensure_calls`/`read_calls` are excluded from the before/after
+/// comparison: task 4b's own contract is "record the call, then decide",
+/// so a refused call still bumps its counter (a test can otherwise never
+/// tell "never called" from "called and refused" apart) — that bookkeeping
+/// is not the resource state this test is about.
 #[test]
 fn milestone_2_acceptance_09_ensure_on_the_mismatch_conflicts_and_writes_nothing() {
     let json = std::fs::read_to_string(state_fixture("repo-ours-public.json"))
@@ -1185,6 +1215,15 @@ fn milestone_2_acceptance_09_ensure_on_the_mismatch_conflicts_and_writes_nothing
         Value::known(willikins_types::RepoVisibility::Private),
     );
 
+    let resource_state = |value: &serde_json::Value| -> serde_json::Value {
+        let mut value = value.clone();
+        if let serde_json::Value::Object(map) = &mut value {
+            map.remove("ensure_calls");
+            map.remove("read_calls");
+        }
+        value
+    };
+
     let before = serde_json::to_value(&*state.lock().unwrap()).expect("FakeState serializes");
     #[allow(clippy::disallowed_methods)] // a test mints its own token
     let token = willikins_core::SinkToken::new();
@@ -1193,7 +1232,19 @@ fn milestone_2_acceptance_09_ensure_on_the_mismatch_conflicts_and_writes_nothing
         .expect_err("milestone 2 acceptance test 9: ensure must refuse a visibility mismatch");
     assert_eq!(err.kind, ToolErrorKind::Conflict);
     let after = serde_json::to_value(&*state.lock().unwrap()).expect("FakeState serializes");
-    assert_eq!(before, after, "a refused ensure must write nothing");
+    assert_eq!(
+        resource_state(&before),
+        resource_state(&after),
+        "a refused ensure must write no resource state"
+    );
+    assert_eq!(
+        state.lock().unwrap().ensure_calls[&willikins_providers_fake::state::call_key(
+            "github.repo.ensure",
+            "lightless-labs/third-thoughts"
+        )],
+        1,
+        "a refused call must still count as an attempt"
+    );
 }
 
 /// Task 4a's acceptance test 7, the `ApprovalRequired` half, through a
@@ -1250,5 +1301,588 @@ fn milestone_2_acceptance_07_auto_on_the_irreversible_fixture_refuses_before_any
     assert!(
         locked.doppler_projects.is_empty(),
         "no provider call was made"
+    );
+}
+
+// ---------------------------------------------------------------------
+// milestone 2 acceptance test 5: executor happy path
+// ---------------------------------------------------------------------
+
+/// A [`willikins_types::DopplerServiceToken`]-shaped literal distinctive
+/// enough that its bytes are unmistakable in any leaked output. Same
+/// construction as `willikins-core`'s own `tests/common::distinctive_token`.
+fn distinctive_token() -> willikins_types::DopplerServiceToken {
+    willikins_types::DopplerServiceToken::parse(&format!("dp.st.prd.{}", "MARKER".repeat(7)))
+        .expect("a valid token literal")
+}
+
+const MARKER_BYTES: &str = "MARKERMARKERMARKERMARKERMARKERMARKERMARKER";
+
+/// Acceptance test 5: the positive fixture against empty fake state, with
+/// `next_token` seeded to a distinctive marker. Every status the plan
+/// lists, `repo_url` `Known`, and the marker absent from `Applied`'s JSON,
+/// its `Debug`, and every observer event's `Debug` and JSON — while
+/// `ci_secret`'s `NodeStarted` inputs still print the general redaction
+/// marker (it binds a secret port). The CLI text half of the same claim
+/// lives in `render.rs`'s own tests (no `main.rs` caller for `apply` yet;
+/// see `applied_text`'s doc). The journal and `tracing` halves are
+/// deferred to tasks 5 and 10b, which do not exist yet.
+#[test]
+#[allow(clippy::too_many_lines)] // one scenario, walked start to end; splitting scatters it
+fn milestone_2_acceptance_05_executor_happy_path_with_marker_and_qa_environment() {
+    let workflow = load(&positive_fixture());
+    let state = Arc::new(Mutex::new(
+        FakeState::new().with_next_token(distinctive_token()),
+    ));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let checked = willikins_core::check(&workflow, &catalog)
+        .expect("milestone 2 acceptance test 5: positive fixture must check cleanly");
+
+    let inputs = resolve_inputs(
+        "milestone 2 acceptance test 5",
+        &checked,
+        &[
+            ("slug", RawInput::Scalar("third-thoughts".to_string())),
+            ("org", RawInput::Scalar("lightless-labs".to_string())),
+            (
+                "environments",
+                RawInput::List(vec![
+                    "dev".to_string(),
+                    "stg".to_string(),
+                    "prd".to_string(),
+                    "qa".to_string(),
+                ]),
+            ),
+        ],
+    );
+
+    let approved = willikins_core::plan(&checked, &inputs, &catalog)
+        .expect("milestone 2 acceptance test 5: plan against empty state must succeed");
+
+    let mut observer = RecordingObserver::new();
+    let applied = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect("milestone 2 acceptance test 5: apply against empty state must succeed");
+
+    assert!(matches!(
+        node_status(&applied, "names", None),
+        NodeStatus::Computed
+    ));
+    assert!(matches!(
+        node_status(&applied, "repo", None),
+        NodeStatus::Created
+    ));
+    assert!(matches!(
+        node_status(&applied, "doppler", None),
+        NodeStatus::Created
+    ));
+    assert!(matches!(
+        node_status(&applied, "token", None),
+        NodeStatus::Created
+    ));
+    assert!(matches!(
+        node_status(&applied, "ci_secret", None),
+        NodeStatus::Created
+    ));
+    for env in ["dev", "stg", "prd"] {
+        assert!(
+            matches!(
+                node_status(&applied, "configs", Some(env)),
+                NodeStatus::Unchanged
+            ),
+            "configs[{env}] must be Unchanged: doppler.project.ensure already seeded it"
+        );
+    }
+    assert!(
+        matches!(
+            node_status(&applied, "configs", Some("qa")),
+            NodeStatus::Created
+        ),
+        "configs[qa] is outside the seeded defaults and must be Created"
+    );
+
+    let repo_url = applied
+        .outputs
+        .get(&output("repo_url"))
+        .expect("repo_url must be resolved");
+    assert!(repo_url.is_known(), "repo_url must be Known");
+
+    let applied_json = serde_json::to_string(&applied).expect("Applied serializes");
+    assert!(
+        !applied_json.contains(MARKER_BYTES),
+        "Applied JSON leaked: {applied_json}"
+    );
+    let applied_debug = format!("{applied:?}");
+    assert!(
+        !applied_debug.contains(MARKER_BYTES),
+        "Applied Debug leaked: {applied_debug}"
+    );
+
+    for event in &observer.events {
+        let debug = format!("{event:?}");
+        assert!(!debug.contains(MARKER_BYTES), "event Debug leaked: {debug}");
+        let json = serde_json::to_string(event).expect("ApplyEvent serializes");
+        assert!(!json.contains(MARKER_BYTES), "event JSON leaked: {json}");
+    }
+
+    let ci_secret_started_inputs = observer
+        .events
+        .iter()
+        .find_map(|event| match event {
+            ApplyEvent::NodeStarted {
+                node: n, inputs, ..
+            } if *n == node("ci_secret") => Some(inputs),
+            _ => None,
+        })
+        .expect("a NodeStarted event for ci_secret must exist");
+    let ci_secret_inputs_json =
+        serde_json::to_string(ci_secret_started_inputs).expect("Inputs serializes");
+    assert!(
+        ci_secret_inputs_json.contains("REDACTED"),
+        "ci_secret's secret input must print the redaction marker: {ci_secret_inputs_json}"
+    );
+    assert!(!ci_secret_inputs_json.contains(MARKER_BYTES));
+}
+
+// ---------------------------------------------------------------------
+// milestone 2 acceptance test 6: convergence
+// ---------------------------------------------------------------------
+
+/// Acceptance test 6a: `fail_ensure_once` at
+/// `doppler.config.ensure#third-thoughts/stg`. The first apply stops with
+/// `repo` and `doppler` `Created`, `configs[dev]` `Unchanged` (seeded by
+/// `doppler.project.ensure`), `configs[stg]` `Failed` (the injection fires
+/// before the tool ever observes that `stg` is already present too), and
+/// everything after `NotRun`. A fresh plan and a second apply then
+/// converge: `stg` was never actually mutated by the failed attempt, so it
+/// (like `dev` and `prd`) reports `Unchanged`; `token` and `ci_secret`,
+/// never reached the first time, are `Created`.
+#[test]
+fn milestone_2_acceptance_06a_convergence_after_a_config_failure() {
+    let workflow = load(&positive_fixture());
+    let state = Arc::new(Mutex::new(
+        FakeState::new().with_fail_ensure_once("doppler.config.ensure", "third-thoughts/stg"),
+    ));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let checked = willikins_core::check(&workflow, &catalog)
+        .expect("milestone 2 acceptance test 6a: positive fixture must check cleanly");
+    let inputs = positive_inputs("milestone 2 acceptance test 6a", &checked);
+
+    let first_plan = willikins_core::plan(&checked, &inputs, &catalog)
+        .expect("milestone 2 acceptance test 6a: first plan against empty state must succeed");
+    let mut observer = willikins_core::NoopObserver;
+    let first_err = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &first_plan,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("the injected failure must stop the first apply");
+    let ApplyError::Tool {
+        node: failed_node,
+        instance,
+        applied: first_applied,
+        ..
+    } = first_err
+    else {
+        panic!("milestone 2 acceptance test 6a: expected ApplyError::Tool");
+    };
+    assert_eq!(failed_node, node("configs"));
+    assert_eq!(instance.as_deref(), Some("stg"));
+    assert!(matches!(
+        node_status(&first_applied, "repo", None),
+        NodeStatus::Created
+    ));
+    assert!(matches!(
+        node_status(&first_applied, "doppler", None),
+        NodeStatus::Created
+    ));
+    assert!(matches!(
+        node_status(&first_applied, "configs", Some("dev")),
+        NodeStatus::Unchanged
+    ));
+    assert!(matches!(
+        node_status(&first_applied, "configs", Some("stg")),
+        NodeStatus::Failed { .. }
+    ));
+    assert!(matches!(
+        node_status(&first_applied, "configs", Some("prd")),
+        NodeStatus::NotRun
+    ));
+    assert!(matches!(
+        node_status(&first_applied, "token", None),
+        NodeStatus::NotRun
+    ));
+    assert!(matches!(
+        node_status(&first_applied, "ci_secret", None),
+        NodeStatus::NotRun
+    ));
+
+    let second_plan = willikins_core::plan(&checked, &inputs, &catalog)
+        .expect("milestone 2 acceptance test 6a: a fresh plan must succeed after the failure");
+    let mut observer2 = willikins_core::NoopObserver;
+    let second_applied = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &second_plan,
+        &Approval::Auto,
+        &mut observer2,
+    )
+    .expect("milestone 2 acceptance test 6a: the second apply must converge");
+    assert!(matches!(
+        node_status(&second_applied, "repo", None),
+        NodeStatus::Unchanged
+    ));
+    assert!(matches!(
+        node_status(&second_applied, "doppler", None),
+        NodeStatus::Unchanged
+    ));
+    for env in ["dev", "stg", "prd"] {
+        assert!(
+            matches!(
+                node_status(&second_applied, "configs", Some(env)),
+                NodeStatus::Unchanged
+            ),
+            "configs[{env}] must be Unchanged on the second apply"
+        );
+    }
+    assert!(matches!(
+        node_status(&second_applied, "token", None),
+        NodeStatus::Created
+    ));
+    assert!(matches!(
+        node_status(&second_applied, "ci_secret", None),
+        NodeStatus::Created
+    ));
+}
+
+/// Acceptance test 6b: `fail_ensure_once` at `ci_secret`
+/// (`github.actions_secret.ensure#lightless-labs/third-thoughts#DOPPLER_TOKEN`).
+/// The first apply mints `token` (`Created`) but fails storing it; a fresh
+/// plan shows `token` `NoOp` (its value can never be re-read); the second
+/// apply is blocked by `ApplyError::UnknownInput` naming `token`, with no
+/// further call to `github.actions_secret.ensure` (its `ensure_calls`
+/// count stays at the one failed attempt). Running the rotation workflow
+/// with `Approval::Human` mints a fresh token and stores it, converging
+/// the consumer: both `token` and `ci_secret` report `Created`. The
+/// marker seeded for this second part never appears anywhere.
+#[test]
+#[allow(clippy::too_many_lines)] // one scenario, walked start to end; splitting scatters it
+fn milestone_2_acceptance_06b_unknown_input_gap_and_rotation_workflow_converges_it() {
+    let workflow = load(&positive_fixture());
+    let ci_secret_key = "lightless-labs/third-thoughts#DOPPLER_TOKEN";
+    let state = Arc::new(Mutex::new(
+        FakeState::new().with_fail_ensure_once("github.actions_secret.ensure", ci_secret_key),
+    ));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let checked = willikins_core::check(&workflow, &catalog)
+        .expect("milestone 2 acceptance test 6b: positive fixture must check cleanly");
+    let inputs = positive_inputs("milestone 2 acceptance test 6b", &checked);
+
+    let first_plan = willikins_core::plan(&checked, &inputs, &catalog)
+        .expect("milestone 2 acceptance test 6b: first plan must succeed");
+    let mut observer = willikins_core::NoopObserver;
+    let first_err = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &first_plan,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("the injected ci_secret failure must stop the first apply");
+    let ApplyError::Tool {
+        node: failed_node,
+        applied: first_applied,
+        ..
+    } = first_err
+    else {
+        panic!("milestone 2 acceptance test 6b: expected ApplyError::Tool");
+    };
+    assert_eq!(failed_node, node("ci_secret"));
+    assert!(matches!(
+        node_status(&first_applied, "token", None),
+        NodeStatus::Created
+    ));
+    assert!(matches!(
+        node_status(&first_applied, "ci_secret", None),
+        NodeStatus::Failed { .. }
+    ));
+
+    let second_plan = willikins_core::plan(&checked, &inputs, &catalog)
+        .expect("milestone 2 acceptance test 6b: a fresh plan must succeed after the failure");
+    assert_eq!(
+        find_planned(&second_plan, "token", None).action,
+        Action::NoOp,
+        "token already exists and cannot be re-read, so it plans NoOp"
+    );
+
+    let ensure_calls_key =
+        willikins_providers_fake::state::call_key("github.actions_secret.ensure", ci_secret_key);
+    let calls_before = state
+        .lock()
+        .unwrap()
+        .ensure_calls
+        .get(&ensure_calls_key)
+        .copied();
+    let mut observer2 = willikins_core::NoopObserver;
+    let second_err = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &second_plan,
+        &Approval::Auto,
+        &mut observer2,
+    )
+    .expect_err("token's value cannot be re-read, so the second apply must be blocked");
+    match second_err {
+        ApplyError::UnknownInput { node: n, from, .. } => {
+            assert_eq!(n, node("ci_secret"));
+            assert_eq!(from, node("token"));
+        }
+        other => panic!("milestone 2 acceptance test 6b: expected UnknownInput, got {other:?}"),
+    }
+    let calls_after = state
+        .lock()
+        .unwrap()
+        .ensure_calls
+        .get(&ensure_calls_key)
+        .copied();
+    assert_eq!(
+        calls_before, calls_after,
+        "ci_secret must not be called again while blocked"
+    );
+
+    // Seed a fresh distinctive marker for the rotation run, in place,
+    // under the same `Arc`.
+    {
+        let mut locked = state.lock().unwrap();
+        let taken = std::mem::take(&mut *locked);
+        *locked = taken.with_next_token(distinctive_token());
+    }
+
+    let rotate_workflow = load(&rotate_fixture());
+    let rotate_checked = willikins_core::check(&rotate_workflow, &catalog)
+        .expect("milestone 2 acceptance test 6b: rotate-service-token.yaml must check cleanly");
+    let rotate_inputs = resolve_inputs(
+        "milestone 2 acceptance test 6b (rotate)",
+        &rotate_checked,
+        &[
+            ("project", RawInput::Scalar("third-thoughts".to_string())),
+            (
+                "repo",
+                RawInput::Scalar("lightless-labs/third-thoughts".to_string()),
+            ),
+        ],
+    );
+    let rotate_plan = willikins_core::plan(&rotate_checked, &rotate_inputs, &catalog)
+        .expect("milestone 2 acceptance test 6b: rotate plan must succeed");
+    assert!(rotate_plan.requires_approval, "rotate is Destructive");
+
+    let mut rotate_observer = RecordingObserver::new();
+    let approval = Approval::Human {
+        approver: willikins_core::PrincipalId::parse("operator").unwrap(),
+        at: willikins_core::Timestamp::now(),
+    };
+    let rotate_applied = apply(
+        &rotate_checked,
+        &rotate_inputs,
+        &catalog,
+        &rotate_plan,
+        &approval,
+        &mut rotate_observer,
+    )
+    .expect("milestone 2 acceptance test 6b: the rotation must converge the consumer");
+    assert!(matches!(
+        node_status(&rotate_applied, "token", None),
+        NodeStatus::Created
+    ));
+    assert!(matches!(
+        node_status(&rotate_applied, "ci_secret", None),
+        NodeStatus::Created
+    ));
+
+    let rotate_json = serde_json::to_string(&rotate_applied).expect("Applied serializes");
+    assert!(
+        !rotate_json.contains(MARKER_BYTES),
+        "rotation Applied JSON leaked: {rotate_json}"
+    );
+    assert!(!format!("{rotate_applied:?}").contains(MARKER_BYTES));
+    for event in &rotate_observer.events {
+        assert!(!format!("{event:?}").contains(MARKER_BYTES));
+        assert!(
+            !serde_json::to_string(event)
+                .expect("ApplyEvent serializes")
+                .contains(MARKER_BYTES)
+        );
+    }
+}
+
+/// Acceptance test 6c: three applies of the positive fixture in a row,
+/// with no failure injected. The first creates everything (`configs`
+/// `Unchanged` where seeded by `doppler.project.ensure`, everything else
+/// `Created`). By the second, `ci_secret`'s `value` input resolves to
+/// `Unknown` (`token` already exists and cannot be re-read), and
+/// `ci_secret`'s own fresh `read` reports `Present` (it was stored on the
+/// first apply), so it converges without a call: `Converged`, not
+/// `Unchanged`. The third apply repeats the second exactly, and
+/// `github.actions_secret.ensure`'s own call count does not move between
+/// them — proof `Converged` never calls the tool.
+#[test]
+fn milestone_2_acceptance_06c_steady_state_third_apply_converges_without_a_call() {
+    let workflow = load(&positive_fixture());
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let checked = willikins_core::check(&workflow, &catalog)
+        .expect("milestone 2 acceptance test 6c: positive fixture must check cleanly");
+    let inputs = positive_inputs("milestone 2 acceptance test 6c", &checked);
+
+    let run = |label: &str| -> Applied {
+        let plan = willikins_core::plan(&checked, &inputs, &catalog)
+            .unwrap_or_else(|err| panic!("{label}: plan must succeed: {err}"));
+        let mut observer = willikins_core::NoopObserver;
+        apply(
+            &checked,
+            &inputs,
+            &catalog,
+            &plan,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .unwrap_or_else(|err| panic!("{label}: apply must succeed: {err}"))
+    };
+
+    let first = run("milestone 2 acceptance test 6c, first apply");
+    assert!(matches!(
+        node_status(&first, "ci_secret", None),
+        NodeStatus::Created
+    ));
+
+    let ci_secret_calls_key = willikins_providers_fake::state::call_key(
+        "github.actions_secret.ensure",
+        "lightless-labs/third-thoughts#DOPPLER_TOKEN",
+    );
+
+    let second = run("milestone 2 acceptance test 6c, second apply");
+    assert!(matches!(
+        node_status(&second, "repo", None),
+        NodeStatus::Unchanged
+    ));
+    assert!(matches!(
+        node_status(&second, "doppler", None),
+        NodeStatus::Unchanged
+    ));
+    for env in ["dev", "stg", "prd"] {
+        assert!(matches!(
+            node_status(&second, "configs", Some(env)),
+            NodeStatus::Unchanged
+        ));
+    }
+    assert!(matches!(
+        node_status(&second, "token", None),
+        NodeStatus::Unchanged
+    ));
+    assert!(matches!(
+        node_status(&second, "ci_secret", None),
+        NodeStatus::Converged
+    ));
+    let calls_after_second = state
+        .lock()
+        .unwrap()
+        .ensure_calls
+        .get(&ci_secret_calls_key)
+        .copied();
+
+    let third = run("milestone 2 acceptance test 6c, third apply");
+    assert!(matches!(
+        node_status(&third, "repo", None),
+        NodeStatus::Unchanged
+    ));
+    for env in ["dev", "stg", "prd"] {
+        assert!(matches!(
+            node_status(&third, "configs", Some(env)),
+            NodeStatus::Unchanged
+        ));
+    }
+    assert!(matches!(
+        node_status(&third, "token", None),
+        NodeStatus::Unchanged
+    ));
+    assert!(matches!(
+        node_status(&third, "ci_secret", None),
+        NodeStatus::Converged
+    ));
+    let calls_after_third = state
+        .lock()
+        .unwrap()
+        .ensure_calls
+        .get(&ci_secret_calls_key)
+        .copied();
+    assert_eq!(
+        calls_after_second, calls_after_third,
+        "a Converged node must never call ensure"
+    );
+}
+
+// ---------------------------------------------------------------------
+// milestone 2 acceptance test 9 (core half): apply refuses drift via re-plan
+// ---------------------------------------------------------------------
+
+/// Acceptance test 9's core-level half: a plan approved against empty
+/// state, then applied after the fake state changed underneath it so
+/// `repo` now reads `Mismatch` — `apply`'s re-plan (rule 2) refuses with
+/// `ApplyError::Plan { AttributeMismatch }` before minting a token or
+/// calling any tool.
+#[test]
+fn milestone_2_acceptance_09_core_apply_refuses_a_visibility_mismatch_via_the_replan() {
+    let workflow = load(&positive_fixture());
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let checked = willikins_core::check(&workflow, &catalog)
+        .expect("milestone 2 acceptance test 9 core: positive fixture must check cleanly");
+    let inputs = positive_inputs("milestone 2 acceptance test 9 core", &checked);
+    let approved = willikins_core::plan(&checked, &inputs, &catalog)
+        .expect("milestone 2 acceptance test 9 core: plan against empty state must succeed");
+
+    let json = std::fs::read_to_string(state_fixture("repo-ours-public.json"))
+        .expect("the acceptance test 9 state fixture is readable");
+    let mismatched = FakeState::from_json(&json)
+        .expect("the acceptance test 9 state fixture is a valid FakeState");
+    *state.lock().unwrap() = mismatched;
+
+    let mut observer = willikins_core::NoopObserver;
+    let err = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err(
+        "milestone 2 acceptance test 9 core: a visibility mismatch must refuse via re-plan",
+    );
+    match err {
+        ApplyError::Plan {
+            error: PlanError::AttributeMismatch { site },
+        } => {
+            assert_eq!(site, port_site("repo", "visibility"));
+        }
+        other => panic!(
+            "milestone 2 acceptance test 9 core: expected ApplyError::Plan{{AttributeMismatch}}, got {other:?}"
+        ),
+    }
+    assert!(
+        state.lock().unwrap().ensure_calls.is_empty(),
+        "no provider call was made: the re-plan refused before rule 3 minted a token"
     );
 }
