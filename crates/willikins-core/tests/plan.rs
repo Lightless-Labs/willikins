@@ -476,3 +476,130 @@ fn plan_error_display_is_one_line() {
     assert!(message.contains("token"));
     assert!(message.contains("prd"));
 }
+
+// -------------------------------------------------------------
+// AttributeMismatch, with a dummy tool
+// -------------------------------------------------------------
+
+/// A tool whose `read` always reports [`Observation::Mismatch`] at a fixed
+/// port — including, deliberately, a port the node never bound and one the
+/// tool does not even declare, which is how a buggy provider would behave.
+/// `ensure` refuses the same way every fake tool does, so nothing can run
+/// past the refusal.
+struct AlwaysMismatch {
+    spec: ToolSpec,
+    mismatched: willikins_core::PortName,
+}
+
+impl Tool for AlwaysMismatch {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Mismatch {
+            port: self.mismatched.clone(),
+        })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Err(ToolError {
+            kind: willikins_core::ToolErrorKind::Conflict,
+            message: "the resource is ours but does not match".to_string(),
+        })
+    }
+}
+
+/// A catalog holding one `AlwaysMismatch` tool that reports `mismatched`.
+fn mismatching_catalog(mismatched: &str) -> Catalog {
+    let mut fake_catalog = Catalog::new(willikins_types::registry());
+    fake_catalog
+        .insert(Arc::new(AlwaysMismatch {
+            spec: dummy_spec(
+                "test.always_mismatch",
+                &[("value", exact("GitHubOrg"), true)],
+                &[],
+                &["value"],
+                false,
+            ),
+            mismatched: port(mismatched),
+        }))
+        .unwrap();
+    fake_catalog
+}
+
+/// A `for_each` node's instance mismatching is still refused, and the site
+/// names the node the instance belongs to. `Site::Port` carries no
+/// instance key, so an error from a three-instance node names the node and
+/// the port only — see the report accompanying this test.
+#[test]
+fn attribute_mismatch_reaches_plan_through_a_for_each_instance() {
+    let fake_catalog = mismatching_catalog("value");
+    let workflow = Workflow::new(workflow_name("for-each-mismatch"))
+        .input(input("orgs"), InputSpec::new(list_ty("GitHubOrg")))
+        .node(
+            node("consumer"),
+            Node::new(tool_name("test.always_mismatch"))
+                .for_each(Binding::Input(input("orgs")))
+                .port(port("value"), Binding::Item),
+        );
+    let checked = check(&workflow, &fake_catalog).expect("the dummy tool checks cleanly");
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("orgs"),
+        Value::known_list(vec![
+            willikins_types::GitHubOrg::parse("first-org").unwrap(),
+            willikins_types::GitHubOrg::parse("second-org").unwrap(),
+        ]),
+    );
+    let err = plan(&checked, &inputs, &fake_catalog).unwrap_err();
+    match err {
+        PlanError::AttributeMismatch { site } => assert_eq!(
+            site,
+            Site::Port {
+                node: node("consumer"),
+                port: port("value"),
+            }
+        ),
+        other => panic!("expected AttributeMismatch, got {other:?}"),
+    }
+}
+
+/// A tool that names a port the node never bound — and that the tool does
+/// not declare as an input at all — is a bug in that tool. `plan` must
+/// still report it as a `PlanError`, naming the port the tool named,
+/// rather than panicking on a lookup that cannot succeed.
+#[test]
+fn attribute_mismatch_on_a_port_the_node_never_bound_is_an_error_not_a_panic() {
+    let fake_catalog = mismatching_catalog("ghost");
+    let workflow = Workflow::new(workflow_name("ghost-mismatch")).node(
+        node("only"),
+        Node::new(tool_name("test.always_mismatch")).port(
+            port("value"),
+            Binding::Literal("lightless-labs".to_string()),
+        ),
+    );
+    let checked = check(&workflow, &fake_catalog).expect("the dummy tool checks cleanly");
+    let err = plan(&checked, &IndexMap::new(), &fake_catalog).unwrap_err();
+    match err {
+        PlanError::AttributeMismatch { site } => {
+            assert_eq!(
+                site,
+                Site::Port {
+                    node: node("only"),
+                    port: port("ghost"),
+                }
+            );
+            assert!(err_mentions(
+                &PlanError::AttributeMismatch { site },
+                "only.ghost"
+            ));
+        }
+        other => panic!("expected AttributeMismatch, got {other:?}"),
+    }
+}
+
+/// Whether `error`'s one-line `Display` contains `needle`.
+fn err_mentions(error: &PlanError, needle: &str) -> bool {
+    error.to_string().contains(needle)
+}
