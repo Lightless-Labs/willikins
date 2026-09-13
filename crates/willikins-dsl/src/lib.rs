@@ -241,17 +241,31 @@ pub fn parse_document(source: &str) -> Result<Workflow, DocumentError> {
 fn refuse_anchors_and_aliases(source: &str) -> Result<(), DocumentError> {
     for event in saphyr_parser::Parser::new_from_str(source) {
         let (event, span) = event.map_err(|err| {
-            DocumentError::yaml_at(err.info(), err.marker().line(), err.marker().col())
+            DocumentError::yaml_at(err.info(), err.marker().line(), column_of(err.marker()))
         })?;
         if is_anchored_or_aliased(&event) {
             return Err(DocumentError::yaml_at(
                 "anchors and aliases are not supported",
                 span.start.line(),
-                span.start.col(),
+                column_of(&span.start),
             ));
         }
     }
     Ok(())
+}
+
+/// `marker`'s column, converted to the 1-indexed column
+/// [`DocumentErrorKind::Yaml`] documents and `serde_yaml_ng` produces.
+///
+/// `saphyr_parser::Marker` documents its column as 1-indexed but counts
+/// from zero: its scanner starts each line at `col: 0`
+/// (`saphyr-parser-0.0.12/src/scanner.rs`), so an anchor at the very start
+/// of a line reports column `0` — a value the documented contract cannot
+/// express. Every location this crate hands out must mean the same thing
+/// whichever parser produced it, so the pre-scan's columns are shifted
+/// here rather than at each call site.
+fn column_of(marker: &saphyr_parser::Marker) -> usize {
+    marker.col() + 1
 }
 
 /// Whether `event` defines or uses a YAML anchor.
@@ -1025,6 +1039,72 @@ steps:
             DocumentErrorKind::Semantic { .. } | DocumentErrorKind::TooLarge { .. } => {
                 panic!("expected a Yaml error")
             }
+        }
+    }
+
+    /// `DocumentErrorKind::Yaml`'s `line` and `column` are documented as
+    /// 1-indexed, which is what `serde_yaml_ng` produces. `saphyr_parser`'s
+    /// `Marker` documents its column as 1-indexed too but actually counts
+    /// from zero (its scanner starts a line at `col: 0`), so the pre-scan
+    /// has to add one or it reports a column one to the left of the token
+    /// — and `column: Some(0)`, which the documented contract cannot
+    /// express at all.
+    #[test]
+    fn pre_scan_locations_are_one_indexed_like_serde_yaml_ngs() {
+        // "description: &s a": the anchored scalar `a` is the 17th
+        // character of line 2.
+        let source = "\
+name: demo
+description: &s a
+steps:
+  a: { tool: naming.v1, with: {} }
+";
+        let err = refuse_anchors_and_aliases(source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Yaml { line, column, .. } => {
+                assert_eq!(line, Some(2));
+                assert_eq!(column, Some(17));
+            }
+            other => panic!("expected a Yaml error, got {other:?}"),
+        }
+
+        // An anchor on an implicit empty scalar: the scalar's span starts
+        // at the first column of the following line, which is column 1,
+        // never column 0.
+        let empty = "\
+name: demo
+description: &x
+steps:
+  a: { tool: naming.v1, with: {} }
+";
+        let err = refuse_anchors_and_aliases(empty).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Yaml { line, column, .. } => {
+                assert_eq!(line, Some(3));
+                assert_eq!(column, Some(1));
+            }
+            other => panic!("expected a Yaml error, got {other:?}"),
+        }
+    }
+
+    /// Pins that the pre-scan's fail-closed `ScanError` path reports its
+    /// location on the same 1-indexed footing as its anchor refusal, so a
+    /// reader never has to know which of the two parsers spoke.
+    #[test]
+    fn a_scan_error_from_the_pre_scan_is_also_one_indexed() {
+        // A tab where a plain scalar's indentation must be: only
+        // `saphyr_parser`'s scanner is consulted.
+        let source = "name: demo\nsteps:\tx: y\n";
+        let err = refuse_anchors_and_aliases(source).unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Yaml { line, column, .. } => {
+                assert_eq!(line, Some(2));
+                assert!(
+                    column.is_some_and(|column| column >= 1),
+                    "a 1-indexed column is never 0: {column:?}"
+                );
+            }
+            other => panic!("expected a Yaml error, got {other:?}"),
         }
     }
 
