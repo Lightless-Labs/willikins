@@ -3,12 +3,13 @@
 
 use indexmap::IndexMap;
 
+use willikins_core::tool::helpers::{
+    exact, get, invalid, port, require_present, scalar, tool_name,
+};
 use willikins_core::{
     Class, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{DomainType, TemplateSource, Text};
-
-use crate::support::{exact, get, port, require_present, scalar, tool_name};
 
 /// The exact placeholder `template.render` replaces.
 const PLACEHOLDER: &str = "{{ value }}";
@@ -47,9 +48,8 @@ impl TemplateRender {
         let template: TemplateSource = get(inputs, "template")?;
         let value: Text = get(inputs, "value")?;
         let rendered_text = template.as_str().replace(PLACEHOLDER, value.as_str());
-        let rendered = Text::parse(&rendered_text).map_err(|err| {
-            crate::support::invalid(format!("rendered text is invalid: {}", err.reason))
-        })?;
+        let rendered = Text::parse(&rendered_text)
+            .map_err(|err| invalid(format!("rendered text is invalid: {}", err.reason)))?;
         let mut outputs = Outputs::new();
         outputs.insert(port("rendered"), Value::known(rendered));
         Ok(outputs)

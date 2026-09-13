@@ -30,6 +30,10 @@ pub use describe::{
 pub use plan::{Action, Plan, PlanError, PlannedNode, plan};
 pub use reported::Reported;
 pub use site::Site;
+/// Generic tool-authoring helpers (port/type construction, input checks,
+/// `ToolError` constructors) shared by every tool crate downstream of
+/// `willikins-core`; see [`tool::helpers`] for the full set.
+pub use tool::helpers;
 pub use tool::{
     Inputs, Observation, Outputs, PortName, PortSpec, SpecError, Tool, ToolError, ToolErrorKind,
     ToolName, ToolSpec,

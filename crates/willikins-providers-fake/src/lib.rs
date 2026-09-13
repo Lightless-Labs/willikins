@@ -1,6 +1,11 @@
 //! In-memory GitHub and Doppler tools for tests and the milestone 1 CLI.
 //!
 //! See `docs/plans/2026-09-11-milestone-1-core.md` for the crate contract.
+//!
+//! `naming.v1` and `template.render` — pure and provider-independent —
+//! live in the `willikins-tools` crate; [`catalog`] registers them
+//! alongside this crate's own eight tools, so the catalog this crate
+//! produces is unchanged: still ten tools, in the same order.
 
 pub mod state;
 mod support;
@@ -29,7 +34,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
                 .unwrap_or_else(|err| unreachable!("fake tool spec is invalid: {err}"));
         };
     }
-    insert!(tools::NamingV1::new());
+    insert!(willikins_tools::NamingV1::new());
     insert!(tools::GitHubRepoEnsure::new(state.clone()));
     insert!(tools::GitHubActionsSecretEnsure::new(state.clone()));
     insert!(tools::DopplerProjectEnsure::new(state.clone()));
@@ -40,7 +45,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     // The last use of `state`: moved rather than cloned, so this
     // function's own `state` parameter is genuinely consumed.
     insert!(tools::FakeIrreversibleEnsure::new(state));
-    insert!(tools::TemplateRender::new());
+    insert!(willikins_tools::TemplateRender::new());
     catalog
 }
 

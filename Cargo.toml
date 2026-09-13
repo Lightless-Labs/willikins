@@ -5,6 +5,7 @@ members = [
   "crates/willikins-derive",
   "crates/willikins-core",
   "crates/willikins-dsl",
+  "crates/willikins-tools",
   "crates/willikins-providers-fake",
   "crates/willikins-cli",
 ]
@@ -22,6 +23,7 @@ willikins-types = { path = "crates/willikins-types" }
 willikins-derive = { path = "crates/willikins-derive" }
 willikins-core = { path = "crates/willikins-core" }
 willikins-dsl = { path = "crates/willikins-dsl" }
+willikins-tools = { path = "crates/willikins-tools" }
 willikins-providers-fake = { path = "crates/willikins-providers-fake" }
 
 serde = { version = "1", features = ["derive"] }

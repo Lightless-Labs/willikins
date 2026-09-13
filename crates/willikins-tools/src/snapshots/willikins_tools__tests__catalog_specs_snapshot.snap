@@ -1,0 +1,59 @@
+---
+source: crates/willikins-tools/src/lib.rs
+expression: specs
+---
+[
+  {
+    "name": "naming.v1",
+    "description": "Derive this project's GitHub repository and Doppler project identities from its org and slug.",
+    "inputs": {
+      "org": {
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubOrg"
+        },
+        "required": true
+      },
+      "slug": {
+        "ty": {
+          "kind": "exact",
+          "type": "ProjectSlug"
+        },
+        "required": true
+      }
+    },
+    "outputs": {
+      "github_repo": "GitHubRepo",
+      "doppler_project": "DopplerProject"
+    },
+    "key": [],
+    "class": "reversible",
+    "pure": true
+  },
+  {
+    "name": "template.render",
+    "description": "Render a template, replacing every `{{ value }}` with a plain-text value.",
+    "inputs": {
+      "template": {
+        "ty": {
+          "kind": "exact",
+          "type": "TemplateSource"
+        },
+        "required": true
+      },
+      "value": {
+        "ty": {
+          "kind": "exact",
+          "type": "Text"
+        },
+        "required": true
+      }
+    },
+    "outputs": {
+      "rendered": "Text"
+    },
+    "key": [],
+    "class": "reversible",
+    "pure": true
+  }
+]

@@ -1346,6 +1346,17 @@ dependencies = [
  "serde_json",
  "thiserror",
  "willikins-core",
+ "willikins-tools",
+ "willikins-types",
+]
+
+[[package]]
+name = "willikins-tools"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "insta",
+ "willikins-core",
  "willikins-types",
 ]
 

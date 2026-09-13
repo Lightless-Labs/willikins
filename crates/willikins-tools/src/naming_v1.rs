@@ -3,12 +3,11 @@
 
 use indexmap::IndexMap;
 
+use willikins_core::tool::helpers::{exact, get, port, require_present, scalar, tool_name};
 use willikins_core::{
     Class, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::naming;
-
-use crate::support::{exact, get, port, require_present, scalar, tool_name};
 
 /// `naming.v1`.
 pub struct NamingV1 {

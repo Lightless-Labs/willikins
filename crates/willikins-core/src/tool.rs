@@ -12,6 +12,8 @@ use crate::class::Class;
 use crate::value::{PortType, TypeRef, TypeRegistry, Value};
 use willikins_types::SinkToken;
 
+pub mod helpers;
+
 /// The pattern every [`PortName`] must match: `snake_case`, starting with a
 /// letter.
 const PORT_NAME_PATTERN: &str = "^[a-z][a-z0-9_]*$";

@@ -1,6 +1,10 @@
 //! One fake [`Tool`](willikins_core::Tool) implementation per module, one
 //! module per row of the fake-provider port table in
 //! `docs/plans/2026-09-11-milestone-1-core.md`.
+//!
+//! `naming.v1` and `template.render` — pure, provider-independent — moved
+//! to the `willikins-tools` crate; [`crate::catalog`](crate::catalog())
+//! registers them from there alongside this crate's own eight tools.
 
 pub mod doppler_config_ensure;
 pub mod doppler_project_ensure;
@@ -10,8 +14,6 @@ pub mod fake_irreversible_ensure;
 pub mod fake_secret_list;
 pub mod github_actions_secret_ensure;
 pub mod github_repo_ensure;
-pub mod naming_v1;
-pub mod template_render;
 
 pub use doppler_config_ensure::DopplerConfigEnsure;
 pub use doppler_project_ensure::DopplerProjectEnsure;
@@ -21,5 +23,3 @@ pub use fake_irreversible_ensure::FakeIrreversibleEnsure;
 pub use fake_secret_list::FakeSecretList;
 pub use github_actions_secret_ensure::GitHubActionsSecretEnsure;
 pub use github_repo_ensure::GitHubRepoEnsure;
-pub use naming_v1::NamingV1;
-pub use template_render::TemplateRender;
