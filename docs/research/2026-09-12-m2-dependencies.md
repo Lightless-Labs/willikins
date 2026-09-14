@@ -703,6 +703,48 @@ of GitHub/Buildkite/Railway/Apple either.
 - `DopplerTokenName`'s pattern `[a-z0-9]+(?:-[a-z0-9]+)*` (lowercase-kebab only) is a willikins-internal convention, not a Doppler requirement: Doppler's own example token name is `"AWS Lambda"` (mixed case, a space), and the `service_tokens-create` schema's `name` property has no pattern at all.
 - `naming::v1::doppler_root_config` only produces root-config names (the environment's own snake join, e.g. `"prd"`). Doppler's config-creation endpoint (`POST /v3/configs`) is for *branch* configs exclusively and always takes a separate `environment` identifier plus `name` — milestone 2 needs a new naming row (a `v2` addition, since `v1` is frozen) for branch-config names once the auto-prefix question above is resolved.
 
+### 3.x Config Inheritance (added 2026-09-14, for milestone 3)
+
+Doppler's docs page (`https://docs.doppler.com/docs/config-inheritance.md`, fetched
+2026-09-14): "Config Inheritance allows you to share the secrets stored in one config with
+another config. Once this inheritance is setup, whenever secrets in the child config are
+fetched, they will include the secrets from the inherited configs" and "This feature is
+available with our Team and Enterprise plans." Two endpoints, request schemas quoted from
+`https://docs.doppler.com/reference/configs-inheritable.md` and
+`https://docs.doppler.com/reference/configs-inherits.md` (same fetch):
+
+`POST /v3/configs/config/inheritable`, required `project`, `config`, `inheritable`:
+
+```json
+"inheritable": {
+  "type": "boolean",
+  "description": "Boolean determining if the config is inheritable or not.",
+  "default": false
+}
+```
+
+`POST /v3/configs/config/inherits`, required `project`, `config`, `inherits`:
+
+```json
+"inherits": {
+  "type": "array",
+  "description": "Array of objects indicating which configs are being inherited.",
+  "items": {
+    "properties": {
+      "project": { "type": "string", "description": "Unique identifier for the project object of the config being inherited." },
+      "config": { "type": "string", "description": "Name of the config object being inherited." }
+    },
+    "required": ["project", "config"],
+    "type": "object"
+  }
+}
+```
+
+Both answer `200` with the config object, whose `inheritable`, `inheriting`, `inherits` and
+`inheritedBy` fields the live write cycle observed on every config `GET` the same day (the
+example in the reference shows `"name": "prd_gcp", "root": false, "inheritable": true`).
+The `project` values in these bodies are project names, per the correction above.
+
 ## 4. Supporting crates, Railway, and the container image
 
 

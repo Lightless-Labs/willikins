@@ -924,6 +924,20 @@ Recorded here so they are not lost; nothing in this milestone depends on them.
   GitHub App installation, say) and whether Doppler service accounts can be scoped per
   project, which decides the credential blast radius recorded above.
 - `Action::Update` and a directional visibility reconcile, if a real workflow needs one.
+- Doppler layout (operator, 2026-09-14): secrets shared by many projects (App Store Connect
+  keys, Apple distribution certificates) live once, in base configs, one per shared service,
+  marked inheritable; each real project keeps its own Doppler project, and its configs
+  inherit the base configs they need through Doppler Config Inheritance (a Team and
+  Enterprise feature per docs.doppler.com/docs/config-inheritance, fetched 2026-09-14).
+  Recommended as best practice in the workflow guide, never mandated: the layout is
+  workflow content. Milestone 3 adds two tools for it, `doppler.config.inheritable.ensure`
+  (`POST /v3/configs/config/inheritable`, body `project`, `config`, `inheritable`) and
+  `doppler.config.inherits.ensure` (`POST /v3/configs/config/inherits`, body `project`,
+  `config`, `inherits: [{ project, config }]`), both quoted verbatim in the research note,
+  section 3; the config object already carries `inheritable`, `inheriting`, `inherits` and
+  `inheritedBy`, which `read` compares. The rejected alternative, one Doppler project with
+  environments as vertical slices and a branch config per project, loses the stage axis and
+  the per-project blast radius.
 - CI (operator, 2026-09-14): the org runs Buildkite with self-hosted agents, not GitHub
   Actions; every secret lives in Doppler and Buildkite holds one CI/CD Doppler
   service-account token. So `github.actions_secret.ensure` is this milestone's proof of the

@@ -55,7 +55,11 @@ compaction, before handing off, after a milestone, and after a plan change or di
   willikins must be able to provision the pipeline when a workflow asks for it, and their
   workflows do); whether provisioning also grants the CI service account access to the
   new Doppler project is a milestone 3 design question. A Buildkite API token for a test
-  org is needed when that work starts. App Store Connect is a
+  org is needed when that work starts. Doppler layout decided the same evening: one Doppler
+  project per real project plus inheritable base configs (one per shared service, such as
+  Apple distribution certificates) that project configs inherit through Config Inheritance;
+  recommended, not mandated; two milestone 3 tools (`config.inheritable.ensure`,
+  `config.inherits.ensure`, endpoints quoted in the research note). App Store Connect is a
   candidate provider after that.
 - **Group A landed (2026-09-12, late evening):** Workflow `wf_c7a1d060-cec` ran three
   worktree lanes. Lane 1 (1a, 1b) and lane 3 (task 0, 1d) merged onto `main` with gates
