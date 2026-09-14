@@ -187,9 +187,9 @@ fn known_secret_renders_redacted_in_outputs_debug_and_json() {
 /// string at all is a `Provider` error that names the key it was reading
 /// — never a panic, and never an echo of the body. The numeric case is
 /// the sharp one: `serde_json`'s own `Display` for a type mismatch quotes
-/// the offending value (`invalid type: integer \`123\`, expected a
-/// string`), and `Http::finish` discards that text in favour of a
-/// line/column position precisely so it cannot become a message.
+/// the offending value verbatim, and `Http::finish` discards that text in
+/// favour of a line/column position precisely so it cannot become a
+/// message.
 #[test]
 fn a_computed_that_is_missing_null_empty_or_not_a_string_names_the_key_and_echoes_nothing() {
     for body in [
