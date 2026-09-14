@@ -22,10 +22,21 @@ use willikins_providers_http::testing::load_fixture;
 /// `raw` and `computed` are redacted as individual leaf fields — not by
 /// replacing their parent `value` object wholesale — so a secret
 /// response's `{raw, computed, note}` sub-shape survives the key-set
-/// comparison intact; only the two fields capable of carrying a real
-/// secret's bytes are blanked.
+/// comparison intact; only the fields capable of carrying a real secret's
+/// bytes are blanked.
+///
+/// `token_preview` was added on 2026-09-14, when the live write cycle's
+/// first run recorded a real `GET /v3/configs/config/tokens` response:
+/// every listed token carries `"token_preview": "dp.st…<six characters>"`,
+/// a partial service token. The research note (section 3, citing
+/// `service_tokens-list`) says the list omits `key`, which is true, and
+/// Doppler's own documented example carries no preview at all — so
+/// nothing in the authored material named this field. It is six real
+/// characters of a live credential, and it is redacted for the same
+/// reason `key` is.
 pub const REDACTED_FIELD_NAMES: &[&str] = &[
     "token",
+    "token_preview",
     "key",
     "secret",
     "password",

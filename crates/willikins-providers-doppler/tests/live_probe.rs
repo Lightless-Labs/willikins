@@ -315,7 +315,7 @@ fn redact_strips_every_secret_bearing_field_at_every_depth() {
 /// endpoint in the research note actually returns a secret under.
 #[test]
 fn redaction_is_by_field_name_and_the_covered_names_are_the_documented_ones() {
-    for name in ["key", "raw", "computed"] {
+    for name in ["key", "raw", "computed", "token_preview"] {
         let live = serde_json::json!({ name: "whatever" });
         assert_eq!(
             common::redact(live)[name],
