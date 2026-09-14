@@ -2405,8 +2405,10 @@ dependencies = [
  "serde",
  "serde_json",
  "willikins-core",
+ "willikins-dsl",
  "willikins-providers-fake",
  "willikins-providers-http",
+ "willikins-tools",
  "willikins-types",
 ]
 
