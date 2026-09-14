@@ -13,6 +13,7 @@ mod config;
 mod document;
 mod drift;
 mod error;
+mod mcp;
 mod rate_limit;
 mod read_ops;
 mod startup;
@@ -23,6 +24,10 @@ pub use catalog::{LIVE_TOOL_NAMES, live_catalog_with};
 pub use config::{ConfigError, ServerConfig};
 pub use drift::DriftDetail;
 pub use error::{ButlerError, ExpiryWindow};
+pub use mcp::{
+    ApplyParams, ApplyStarted, DescribeParams, InputValueDto, PlanParams, ProposeSlugParams,
+    RunStatusParams, ServeError, ValidateParams, WillikinsHandler, serve_stdio,
+};
 pub use read_ops::{DocumentSource, ProposeSlugResponse, ValidateResponse};
 pub use startup::{InputSummary, StartupError, WorkflowSummary};
 pub use types::{ApprovalRequirement, PlanResponse, RunHandle};

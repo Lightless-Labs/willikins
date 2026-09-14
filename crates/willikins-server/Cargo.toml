@@ -25,10 +25,15 @@ schemars.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
 chrono.workspace = true
+rmcp = { workspace = true, features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync"] }
+clap = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 tempfile.workspace = true
 insta.workspace = true
+rmcp = { workspace = true, features = ["client", "transport-io"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync"] }
 # Enables `Credential::for_testing` for this crate's own tests (cargo
 # unifies features across the build, so this reaches every target, the
 # same gotcha `willikins-types`' own self dev-dependency documents).

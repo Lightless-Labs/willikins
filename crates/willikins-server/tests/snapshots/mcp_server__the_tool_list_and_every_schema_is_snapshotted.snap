@@ -1,0 +1,1942 @@
+---
+source: crates/willikins-server/tests/mcp_server.rs
+assertion_line: 164
+expression: snapshot
+---
+[
+  {
+    "description": "Apply a plan recorded by `plan`. Refuses (naming the reason) if the plan needs approval and has none, has drifted from the current state, has expired, was already applied, or a run is already in progress. On success returns at once, before the run necessarily finishes -- poll `run_status` with the returned `run_id`.",
+    "input_schema": {
+      "$defs": {
+        "PlanId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "plan_id": {
+          "$ref": "#/$defs/PlanId",
+          "description": "The plan to apply."
+        }
+      },
+      "required": [
+        "plan_id"
+      ],
+      "type": "object"
+    },
+    "name": "apply",
+    "output_schema": {
+      "$defs": {
+        "RunId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/RunId",
+          "description": "The started run's id. Poll [`WillikinsHandler::run_status`] with it."
+        },
+        "state": {
+          "description": "Always `\"running\"`: `apply` returns as soon as the run is\njournaled, before it necessarily finishes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "state"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "As `validate`, plus `inputs`: report which of the document's declared inputs are still missing or were rejected, given the ones supplied. Never calls a provider.",
+    "input_schema": {
+      "$defs": {
+        "InputValueDto": {
+          "anyOf": [
+            {
+              "description": "A scalar input's raw text.",
+              "type": "string"
+            },
+            {
+              "description": "A list-typed input's raw items, in order.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "description": "One raw input value as an MCP tool argument: a bare JSON string for a\nscalar input, or a JSON array of strings for a list-typed one --\nexactly the `inputs: { name: string | [string] }` shape the plan's\n`describe`/`plan` tool table declares. Unlike the CLI's own\n`--input name=value` (which always hands over a scalar and lets\n[`willikins_core::describe`] or a comma-split decide), an MCP caller\nalready sees each input's declared cardinality (from `describe`'s own\nprior response, or `list_workflows`), so it sends the right shape\ndirectly."
+        },
+        "WorkflowName": {
+          "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
+          "examples": [
+            "new-rust-service"
+          ],
+          "maxLength": 64,
+          "pattern": "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "document": {
+          "default": null,
+          "description": "An inline document body. Mutually exclusive with `workflow`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inputs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/InputValueDto"
+          },
+          "description": "Raw values for some subset of the document's declared inputs, by\nname.",
+          "type": "object"
+        },
+        "workflow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A workflow name to resolve in the trusted directory. Mutually\nexclusive with `document`."
+        }
+      },
+      "type": "object"
+    },
+    "name": "describe",
+    "output_schema": {
+      "$defs": {
+        "Description": {
+          "description": "A free-text description shown to an agent, at most 1,024 characters.",
+          "examples": [
+            "Provision a GitHub repository and Doppler project for a Rust service."
+          ],
+          "maxLength": 1024,
+          "type": "string"
+        },
+        "InputError": {
+          "description": "Why one raw input, or one unrecognised input name, was rejected.",
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/ParseError",
+              "description": "Why it was rejected, exactly as the type's own parser reported it:\n`describe` adds nothing and removes nothing. For a *non-secret*\ntype that message typically quotes the offending raw text, which is\nintended — it is the caller's own value, and an agent needs to see\nwhat it got wrong.\n\nA *secret* raw value can never be echoed here, and not because this\ntype filters one out: a secret-typed workflow input cannot exist in\na successfully [`Checked`] workflow at all (`check` reports\n`SecretWorkflowInput` first), and the registry refuses a secret type\nbefore it looks at the text, so [`Value::parse`] never hands one to\na parser."
+            },
+            "input": {
+              "$ref": "#/$defs/InputName",
+              "description": "The input name the raw value was supplied for — declared or not."
+            }
+          },
+          "required": [
+            "input",
+            "error"
+          ],
+          "type": "object"
+        },
+        "InputName": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
+        "MissingInput": {
+          "description": "A declared input `describe` found neither a raw value nor a default for.",
+          "properties": {
+            "default": {
+              "description": "The input's default value, rendered — always `None` here: an input\nwith a default is never missing (see [`describe`]). Kept as a field\nrather than dropped so `MissingInput` carries the same shape as an\n[`InputSpec`] would, in case a future revision reports an input as\n\"missing but defaulted\" for some other reason; a plan defect, not\nexercised by any test today.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "document_description": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Description"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The input's own one-line description, verbatim from the document,\nif it declared one. This is document text, not willikins' own\nwords — see the module docs' \"Document text is data\" — so it is\nnamed `document_*` and never folds into [`Self::prompt`].\n\nVerbatim is what a caller reading JSON gets, where a string is a\nstring and cannot escape its field. A caller reading a\nline-oriented rendering of this struct needs more than a label: the\nCLI's text renderer prefixes the text `document says:` *and*\nescapes it onto that one line, because a description carrying a\nline terminator would otherwise forge a line of willikins' own."
+            },
+            "example": {
+              "description": "A valid example value for the type, from the registry.",
+              "type": "string"
+            },
+            "name": {
+              "$ref": "#/$defs/InputName",
+              "description": "The missing input's name."
+            },
+            "prompt": {
+              "description": "A one-sentence question an agent could ask a human to fill this\ninput in, built from the name, the type's own registry\ndescription, and the example — willikins' own words only; see the\nmodule docs. Never contains [`Self::document_description`].",
+              "type": "string"
+            },
+            "schema": {
+              "description": "JSON schema for the type, from the registry's [`willikins_types::TypeInfo`].",
+              "type": "object"
+            },
+            "ty": {
+              "$ref": "#/$defs/TypeRef",
+              "description": "Its declared type."
+            }
+          },
+          "required": [
+            "name",
+            "ty",
+            "schema",
+            "example",
+            "prompt"
+          ],
+          "type": "object"
+        },
+        "ParseError": {
+          "description": "Error returned when a string does not parse as a domain type.",
+          "properties": {
+            "reason": {
+              "description": "Why it was rejected. Never contains the rejected value of a secret type.",
+              "type": "string"
+            },
+            "type_name": {
+              "description": "The domain type that rejected the input.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type_name",
+            "reason"
+          ],
+          "type": "object"
+        },
+        "TypeRef": {
+          "pattern": "^(?:[A-Z][A-Za-z0-9]*|list<[A-Z][A-Za-z0-9]*>)$",
+          "type": "string"
+        },
+        "Value": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "else": {
+                "required": [
+                  "value"
+                ]
+              },
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "unknown"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              "then": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "value"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "redacted"
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "else": {
+                "properties": {
+                  "value": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                }
+              },
+              "if": {
+                "properties": {
+                  "list": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "list"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ],
+          "properties": {
+            "list": {
+              "type": "boolean"
+            },
+            "redacted": {
+              "const": true
+            },
+            "state": {
+              "enum": [
+                "known",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "list",
+            "state"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "errors": {
+          "description": "Every rejected raw value or unrecognised input name, in the order\ndocumented on [`describe`].",
+          "items": {
+            "$ref": "#/$defs/InputError"
+          },
+          "type": "array"
+        },
+        "missing": {
+          "description": "Every declared input with neither a raw value nor a default, in\ndeclaration order.",
+          "items": {
+            "$ref": "#/$defs/MissingInput"
+          },
+          "type": "array"
+        },
+        "resolved": {
+          "additionalProperties": false,
+          "description": "Every input that resolved to a concrete [`Value`]: a parsed raw\nvalue, or a declared default. In declaration order.",
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/Value"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "errors",
+        "missing",
+        "resolved"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "The full tool and type catalog this server's `plan`/`apply` runs against -- the same JSON `willikins schema --catalog` prints.",
+    "input_schema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "list_tools",
+    "output_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    }
+  },
+  {
+    "description": "Every workflow currently in the trusted directory: its name, its own document description, and its declared inputs (name, type, whether required).",
+    "input_schema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "list_workflows",
+    "output_schema": {
+      "$defs": {
+        "Description": {
+          "description": "A free-text description shown to an agent, at most 1,024 characters.",
+          "examples": [
+            "Provision a GitHub repository and Doppler project for a Rust service."
+          ],
+          "maxLength": 1024,
+          "type": "string"
+        },
+        "InputName": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
+        "InputSummary": {
+          "description": "One declared input, summarised for [`WorkflowSummary::inputs`].",
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/InputName",
+              "description": "The input's name."
+            },
+            "required": {
+              "description": "Whether a caller must supply it (it has no declared default).",
+              "type": "boolean"
+            },
+            "type": {
+              "$ref": "#/$defs/TypeRef",
+              "description": "Its declared type."
+            }
+          },
+          "required": [
+            "name",
+            "type",
+            "required"
+          ],
+          "type": "object"
+        },
+        "TypeRef": {
+          "pattern": "^(?:[A-Z][A-Za-z0-9]*|list<[A-Z][A-Za-z0-9]*>)$",
+          "type": "string"
+        },
+        "WorkflowName": {
+          "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
+          "examples": [
+            "new-rust-service"
+          ],
+          "maxLength": 64,
+          "pattern": "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$",
+          "type": "string"
+        },
+        "WorkflowSummary": {
+          "description": "One entry of [`crate::Butler::list_workflows`]'s result: enough to let\nan agent pick a workflow and see what it needs, without loading the\ndocument itself.",
+          "properties": {
+            "document_description": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Description"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Its own one-line description, verbatim from the document -- see\nthe \"Document text is data\" trust boundary; this is document text,\nnot willikins' own words."
+            },
+            "inputs": {
+              "description": "Every declared input, in declaration order.",
+              "items": {
+                "$ref": "#/$defs/InputSummary"
+              },
+              "type": "array"
+            },
+            "name": {
+              "$ref": "#/$defs/WorkflowName",
+              "description": "The workflow's name."
+            }
+          },
+          "required": [
+            "name",
+            "inputs"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "items": {
+        "$ref": "#/$defs/WorkflowSummary"
+      },
+      "type": "array"
+    }
+  },
+  {
+    "description": "Compute a plan for a workflow already in the trusted directory (never an inline document -- `plan` names workflows, it does not accept document text) against the live catalog's current state. Returns the plan, its id, and whether it auto-approved or needs a human decision.",
+    "input_schema": {
+      "$defs": {
+        "InputValueDto": {
+          "anyOf": [
+            {
+              "description": "A scalar input's raw text.",
+              "type": "string"
+            },
+            {
+              "description": "A list-typed input's raw items, in order.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "description": "One raw input value as an MCP tool argument: a bare JSON string for a\nscalar input, or a JSON array of strings for a list-typed one --\nexactly the `inputs: { name: string | [string] }` shape the plan's\n`describe`/`plan` tool table declares. Unlike the CLI's own\n`--input name=value` (which always hands over a scalar and lets\n[`willikins_core::describe`] or a comma-split decide), an MCP caller\nalready sees each input's declared cardinality (from `describe`'s own\nprior response, or `list_workflows`), so it sends the right shape\ndirectly."
+        },
+        "WorkflowName": {
+          "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
+          "examples": [
+            "new-rust-service"
+          ],
+          "maxLength": 64,
+          "pattern": "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "inputs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/InputValueDto"
+          },
+          "description": "Raw values for some subset of the document's declared inputs, by\nname.",
+          "type": "object"
+        },
+        "workflow": {
+          "$ref": "#/$defs/WorkflowName",
+          "description": "The workflow to plan, resolved in the trusted directory."
+        }
+      },
+      "required": [
+        "workflow"
+      ],
+      "type": "object"
+    },
+    "name": "plan",
+    "output_schema": {
+      "$defs": {
+        "Action": {
+          "description": "What `plan` decided to do for one node instance.",
+          "oneOf": [
+            {
+              "const": "compute",
+              "description": "A pure tool computed its outputs; there is no external state to\ncreate or leave alone, whatever [`Observation`] its `read` reported.",
+              "type": "string"
+            },
+            {
+              "const": "create",
+              "description": "The resource does not exist yet: `ensure` would create it.",
+              "type": "string"
+            },
+            {
+              "const": "noop",
+              "description": "The resource already exists and is ours: `ensure` would be a no-op.",
+              "type": "string"
+            }
+          ]
+        },
+        "ApprovalRequirement": {
+          "description": "Whether a plan's approval was automatic (its class did not require\none) or is still pending a human decision.",
+          "oneOf": [
+            {
+              "const": "automatic",
+              "description": "The plan's class does not require approval; it auto-approved.",
+              "type": "string"
+            },
+            {
+              "const": "pending",
+              "description": "The plan requires a human decision before it can run.",
+              "type": "string"
+            }
+          ]
+        },
+        "Class": {
+          "description": "How much a tool's `ensure` should be trusted to run unattended.\n\nOrdered `Reversible < Irreversible < Destructive`, so\n[`Class::max_of`] over every node in a plan gives the plan's own class.",
+          "oneOf": [
+            {
+              "const": "reversible",
+              "description": "Can be undone by another `ensure` call: creating a resource that can\nsimply be deleted again.",
+              "type": "string"
+            },
+            {
+              "const": "irreversible",
+              "description": "Cannot be trivially undone, but is not destructive: minting a\nservice token that cannot be re-read once issued, say.",
+              "type": "string"
+            },
+            {
+              "const": "destructive",
+              "description": "Destroys or overwrites something. The highest class.",
+              "type": "string"
+            }
+          ]
+        },
+        "Inputs": {
+          "additionalProperties": false,
+          "description": "The typed values bound to a tool's input ports.\n\nA newtype over an ordered map so a tool always sees its inputs in\ndeclaration order. `Debug` and `Serialize` both come from [`Value`]'s\nown redacting implementations, so a secret input never leaks through\neither.",
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/Value"
+            }
+          },
+          "type": "object"
+        },
+        "NodeName": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
+        "Outputs": {
+          "additionalProperties": false,
+          "description": "The typed values produced by a tool's output ports.\n\nSee [`Inputs`]: same shape, same redaction guarantee, opposite\ndirection.",
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/Value"
+            }
+          },
+          "type": "object"
+        },
+        "Plan": {
+          "description": "A concrete, approval-classified plan.",
+          "properties": {
+            "class": {
+              "$ref": "#/$defs/Class",
+              "description": "The plan's approval class: [`Checked::class`], a static property of\nthe checked workflow's tools, unaffected by anything `plan`\nobserves at runtime."
+            },
+            "nodes": {
+              "description": "Every planned node, in [`Checked::order`]; a `for_each` node\ncontributes one entry per instance, in its source list's order.",
+              "items": {
+                "$ref": "#/$defs/PlannedNode"
+              },
+              "type": "array"
+            },
+            "outputs": {
+              "additionalProperties": false,
+              "description": "Every workflow output's resolved value. A literal output binding has\nno entry here; see the module docs.",
+              "patternProperties": {
+                "^[a-z][a-z0-9_]*$": {
+                  "$ref": "#/$defs/Value"
+                }
+              },
+              "type": "object"
+            },
+            "requires_approval": {
+              "description": "Whether this plan should require human approval before running:\n`class.requires_approval()`.",
+              "type": "boolean"
+            },
+            "workflow": {
+              "$ref": "#/$defs/WorkflowName",
+              "description": "The planned workflow's name."
+            }
+          },
+          "required": [
+            "workflow",
+            "nodes",
+            "outputs",
+            "class",
+            "requires_approval"
+          ],
+          "type": "object"
+        },
+        "PlanId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "PlannedNode": {
+          "description": "One planned call to a tool: a whole node with no `for_each`, or one\ninstance of a `for_each` node.",
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/Action",
+              "description": "What `plan` decided to do for this instance."
+            },
+            "inputs": {
+              "$ref": "#/$defs/Inputs",
+              "description": "The values bound to this instance's input ports."
+            },
+            "instance": {
+              "description": "For a `for_each` node, the current instance's item rendered as its\ncanonical string — the same string a [`Binding::Keyed`] matches\nagainst. `None` for a node with no `for_each`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "$ref": "#/$defs/NodeName",
+              "description": "The node this instance belongs to."
+            },
+            "outputs": {
+              "$ref": "#/$defs/Outputs",
+              "description": "Every one of this tool's declared output ports: the predicted or\nobserved value where the tool supplied one, [`Value::unknown`]\notherwise."
+            },
+            "tool": {
+              "$ref": "#/$defs/ToolName",
+              "description": "The tool this node calls."
+            }
+          },
+          "required": [
+            "name",
+            "tool",
+            "action",
+            "inputs",
+            "outputs"
+          ],
+          "type": "object"
+        },
+        "Timestamp": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "ToolName": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "type": "string"
+        },
+        "Value": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "else": {
+                "required": [
+                  "value"
+                ]
+              },
+              "if": {
+                "properties": {
+                  "state": {
+                    "const": "unknown"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              "then": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "value"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "redacted"
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "else": {
+                "properties": {
+                  "value": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                }
+              },
+              "if": {
+                "properties": {
+                  "list": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "list"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ],
+          "properties": {
+            "list": {
+              "type": "boolean"
+            },
+            "redacted": {
+              "const": true
+            },
+            "state": {
+              "enum": [
+                "known",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "list",
+            "state"
+          ],
+          "type": "object"
+        },
+        "WorkflowName": {
+          "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
+          "examples": [
+            "new-rust-service"
+          ],
+          "maxLength": 64,
+          "pattern": "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalRequirement",
+          "description": "Whether it auto-approved, or is waiting on one."
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp",
+          "description": "When this plan stops being runnable: the approval window's end\nfor a pending plan, the apply window's end for an automatically\napproved one."
+        },
+        "plan": {
+          "$ref": "#/$defs/Plan",
+          "description": "The plan itself."
+        },
+        "plan_id": {
+          "$ref": "#/$defs/PlanId",
+          "description": "This plan's fresh id."
+        },
+        "requires_approval": {
+          "description": "Whether this plan's class requires human approval.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "plan_id",
+        "plan",
+        "requires_approval",
+        "approval",
+        "expires_at"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Propose a project slug from a free-form display name, the same derivation `willikins propose-slug` uses.",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "name": {
+          "description": "The free-form display name to derive a slug from.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "propose_slug",
+    "output_schema": {
+      "$defs": {
+        "ProjectSlug": {
+          "description": "The canonical, immutable slug identifying a project.",
+          "examples": [
+            "third-thoughts"
+          ],
+          "maxLength": 32,
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "slug": {
+          "$ref": "#/$defs/ProjectSlug",
+          "description": "The proposed slug."
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "The current state (running, succeeded, or failed) and per-node outcomes of a run started by `apply`.",
+    "input_schema": {
+      "$defs": {
+        "RunId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/RunId",
+          "description": "The run to look up."
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "type": "object"
+    },
+    "name": "run_status",
+    "output_schema": {
+      "$defs": {
+        "NodeName": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
+        "NodeStatus": {
+          "description": "What happened to one planned node instance during [`apply`].\n\nDerives [`serde::Deserialize`] as well as `Serialize`: unlike most\ntypes in this module, a `NodeStatus` never holds a [`crate::value::Value`]\n(its only payload, [`ToolError`], is a plain message with no secret\nobligation of its own — see that type's doc), so round-tripping it\nthrough JSON cannot resurrect anything redaction hid. `willikins-journal`\nrelies on this to store a `NodeFinished` event's `status` field\nuntouched, rather than behind its `Redacted` wrapper the way `outputs`\n(which does carry [`Value`]s) must be.",
+          "oneOf": [
+            {
+              "description": "A pure tool computed its outputs; there was nothing to create or\nleave alone.",
+              "properties": {
+                "kind": {
+                  "const": "computed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "`ensure` reported [`Ensured::changed`] `true`.",
+              "properties": {
+                "kind": {
+                  "const": "created",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "`ensure` reported [`Ensured::changed`] `false`.",
+              "properties": {
+                "kind": {
+                  "const": "unchanged",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A required input was [`crate::value::ValueState::Unknown`] and the\nplanned action was [`Action::NoOp`]: the resource already matches,\nby the plan's own observation, and nothing was called.",
+              "properties": {
+                "kind": {
+                  "const": "converged",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "`ensure` returned an error.",
+              "properties": {
+                "error": {
+                  "$ref": "#/$defs/ToolError",
+                  "description": "The failure `ensure` reported."
+                },
+                "kind": {
+                  "const": "failed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "error"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "This instance was never attempted: an earlier instance in the same\nrun failed or was blocked first.",
+              "properties": {
+                "kind": {
+                  "const": "not_run",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "PlanId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "PrincipalId": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$",
+          "type": "string"
+        },
+        "RedactedApplyError": {},
+        "RedactedOutputs": {},
+        "RedactedResolvedOutputs": {},
+        "RunId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "RunNode": {
+          "description": "One node instance's outcome within a [`RunRecord`], folded from a\n[`Event::NodeFinished`] event -- or synthesized as\n[`NodeStatus::NotRun`] for a planned instance the run never reached,\nwhen the plan is known (see [`RunRecord::nodes`]'s own doc).",
+          "properties": {
+            "instance": {
+              "description": "Its `for_each` instance key, if any.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "node": {
+              "$ref": "#/$defs/NodeName",
+              "description": "The node."
+            },
+            "outputs": {
+              "$ref": "#/$defs/RedactedOutputs",
+              "description": "This instance's final outputs."
+            },
+            "status": {
+              "$ref": "#/$defs/NodeStatus",
+              "description": "What happened."
+            }
+          },
+          "required": [
+            "node",
+            "status",
+            "outputs"
+          ],
+          "type": "object"
+        },
+        "RunState": {
+          "description": "Whether a run is still going, or how it ended.",
+          "oneOf": [
+            {
+              "const": "running",
+              "description": "Started; no `RunFinished` seen yet (including a run whose process\ndied mid-way, which looks the same from the journal's own point of\nview -- it has no way to distinguish \"still running\" from \"will\nnever finish\").",
+              "type": "string"
+            },
+            {
+              "const": "succeeded",
+              "description": "Finished successfully.",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "description": "Finished with a failure.",
+              "type": "string"
+            }
+          ]
+        },
+        "Timestamp": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "ToolError": {
+          "description": "A tool's failure to `read` or `ensure`.\n\nNever includes an input value: an implementation must build `message`\nfrom the tool's own state and provider response, not from the\n[`Inputs`] it was given, so this type carries no obligation for callers\nto redact it themselves.",
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/ToolErrorKind",
+              "description": "The kind of failure."
+            },
+            "message": {
+              "description": "A human-readable explanation. Never a secret value.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ],
+          "type": "object"
+        },
+        "ToolErrorKind": {
+          "description": "The kind of failure a [`Tool`] reported.",
+          "oneOf": [
+            {
+              "const": "NotFound",
+              "description": "The resource `ensure` was asked to act on does not exist.",
+              "type": "string"
+            },
+            {
+              "const": "Conflict",
+              "description": "The resource exists but not in the state the tool was asked to\nbring it to, and the tool will not overwrite it.",
+              "type": "string"
+            },
+            {
+              "const": "Provider",
+              "description": "The underlying provider reported a failure.",
+              "type": "string"
+            },
+            {
+              "const": "Invalid",
+              "description": "The tool's inputs are not valid, independent of any provider.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RedactedApplyError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The failure the run ended with, if any."
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When it finished, if it has."
+        },
+        "nodes": {
+          "description": "Every node instance the run reached, in the applied plan's own\norder when that plan's `PlanRecorded` event is in this journal\n(with [`NodeStatus::NotRun`] filling in any instance the run never\nstarted); in the order `NodeFinished` events arrived otherwise.",
+          "items": {
+            "$ref": "#/$defs/RunNode"
+          },
+          "type": "array"
+        },
+        "outputs": {
+          "$ref": "#/$defs/RedactedResolvedOutputs",
+          "description": "Every workflow output's resolved value. Empty until (and unless)\nthe run's `RunFinished` reports [`Outcome::Succeeded`]."
+        },
+        "plan_id": {
+          "$ref": "#/$defs/PlanId",
+          "description": "The plan it applied."
+        },
+        "principal": {
+          "$ref": "#/$defs/PrincipalId",
+          "description": "Who started it."
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId",
+          "description": "This run's id."
+        },
+        "started_at": {
+          "$ref": "#/$defs/Timestamp",
+          "description": "When it started."
+        },
+        "state": {
+          "$ref": "#/$defs/RunState",
+          "description": "Its current state."
+        }
+      },
+      "required": [
+        "run_id",
+        "plan_id",
+        "principal",
+        "started_at",
+        "state",
+        "nodes",
+        "outputs"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Parse and statically check a workflow document (`document`) or a workflow already in the trusted directory (`workflow`); exactly one of the two. Never calls a provider.",
+    "input_schema": {
+      "$defs": {
+        "WorkflowName": {
+          "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
+          "examples": [
+            "new-rust-service"
+          ],
+          "maxLength": 64,
+          "pattern": "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "document": {
+          "default": null,
+          "description": "An inline document body to validate directly -- the authoring\nloop. Mutually exclusive with `workflow`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A workflow name to resolve in the trusted directory. Mutually\nexclusive with `document`."
+        }
+      },
+      "type": "object"
+    },
+    "name": "validate",
+    "output_schema": {
+      "$defs": {
+        "CheckError": {
+          "description": "Everything [`check`] can find wrong with a [`Workflow`].\n\nEvery variant names the node (and, where relevant, the port) the\nproblem concerns; see the module docs for exactly which node identifies\nwhich side of a two-node reference.\n\nSerializes internally tagged (`#[serde(tag = \"kind\")]`): every variant is\nstruct-like, so the tag merges into the variant's own fields rather than\nfailing at run time the way an internally tagged newtype variant (or one\nwhose payload is not a map) would. No variant declares a field named\n`kind` or `message`; see\n`tests::every_check_error_variant_serializes_with_its_kind`.",
+          "oneOf": [
+            {
+              "description": "A node's `tool` names a tool the catalog does not have.",
+              "properties": {
+                "kind": {
+                  "const": "UnknownTool",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node whose tool is unrecognised."
+                },
+                "tool": {
+                  "$ref": "#/$defs/ToolName",
+                  "description": "The unrecognised tool name."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "tool"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A port name that does not exist on the tool it is checked against.\n\nTwo situations share this variant: a `with` key that is not one of\nits own node's tool's input ports (`site` is the binding's own\nlocation); and a `Step` or `Keyed` binding naming an output port\nthat does not exist on the node it references (`site` then names\nthe *referenced* node and the missing output port, not the binding's\nown location).",
+              "properties": {
+                "kind": {
+                  "const": "UnknownPort",
+                  "type": "string"
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "The node the missing port was looked up on, and the port name\nthat does not exist there."
+                },
+                "tool": {
+                  "$ref": "#/$defs/ToolName",
+                  "description": "That node's tool."
+                }
+              },
+              "required": [
+                "kind",
+                "site",
+                "tool"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `Step`, `Keyed`, or `for_each` binding names a node that is not\nin the workflow.",
+              "properties": {
+                "kind": {
+                  "const": "UnknownNode",
+                  "type": "string"
+                },
+                "referenced": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node name it referenced, which does not exist."
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "The binding's own location: the node and port (or `for_each`\nbinding, or workflow output) that contains the bad reference."
+                }
+              },
+              "required": [
+                "kind",
+                "site",
+                "referenced"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A tool's required input port has no binding.",
+              "properties": {
+                "kind": {
+                  "const": "UnboundInput",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node with the unbound port."
+                },
+                "port": {
+                  "$ref": "#/$defs/PortName",
+                  "description": "The unbound required port."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "port"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `Binding::Input` names a workflow input that is not declared.",
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The undeclared input name."
+                },
+                "kind": {
+                  "const": "UndeclaredInput",
+                  "type": "string"
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "The binding's own location: the node and port (or `for_each`\nbinding, or workflow output) that references the undeclared\ninput."
+                }
+              },
+              "required": [
+                "kind",
+                "site",
+                "input"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `Binding::Literal` failed to parse against its port's scalar\ntype, or named a list-typed port (which no literal can supply).",
+              "properties": {
+                "error": {
+                  "$ref": "#/$defs/ParseError",
+                  "description": "Why the literal was rejected."
+                },
+                "kind": {
+                  "const": "InvalidLiteral",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node whose binding is the bad literal."
+                },
+                "port": {
+                  "$ref": "#/$defs/PortName",
+                  "description": "The port holding the binding."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "port",
+                "error"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A binding resolved to a type its port does not accept.",
+              "properties": {
+                "expected": {
+                  "$ref": "#/$defs/PortType",
+                  "description": "The port's declared type."
+                },
+                "found": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "The binding's resolved type."
+                },
+                "kind": {
+                  "const": "TypeMismatch",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node whose binding does not type-check."
+                },
+                "port": {
+                  "$ref": "#/$defs/PortName",
+                  "description": "The port holding the binding."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "port",
+                "expected",
+                "found"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `Binding::Literal` bound to a port whose type is secret or\n[`PortType::AnySecret`]. Reported before the literal is ever handed\nto a parser.",
+              "properties": {
+                "kind": {
+                  "const": "SecretLiteral",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node whose binding is the literal."
+                },
+                "port": {
+                  "$ref": "#/$defs/PortName",
+                  "description": "The secret-accepting port it was bound to."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "port"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A secret value, read from another node's output, was bound to a\nport that does not accept secrets. Takes precedence over\n[`Self::TypeMismatch`] for the same edge.",
+              "properties": {
+                "from": {
+                  "description": "The node and output port the secret value came from.",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/NodeName"
+                    },
+                    {
+                      "$ref": "#/$defs/PortName"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "kind": {
+                  "const": "SecretToNonSecretSink",
+                  "type": "string"
+                },
+                "to": {
+                  "$ref": "#/$defs/Site",
+                  "description": "The binding's own location that it flowed into."
+                }
+              },
+              "required": [
+                "kind",
+                "from",
+                "to"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A workflow input's declared type is secret. A secret value must\nnever enter a workflow this way; it can only be produced by a tool.",
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The offending input."
+                },
+                "kind": {
+                  "const": "SecretWorkflowInput",
+                  "type": "string"
+                },
+                "ty": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "Its secret type."
+                }
+              },
+              "required": [
+                "kind",
+                "input",
+                "ty"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `for_each` binding resolved to a secret list.",
+              "properties": {
+                "kind": {
+                  "const": "SecretForEachSource",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node whose `for_each` source is secret."
+                }
+              },
+              "required": [
+                "kind",
+                "node"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `for_each` binding resolved to a scalar (non-list) type.",
+              "properties": {
+                "kind": {
+                  "const": "ForEachOverScalar",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node whose `for_each` source is not a list."
+                }
+              },
+              "required": [
+                "kind",
+                "node"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `Binding::Item` was used outside any `for_each` node.",
+              "properties": {
+                "kind": {
+                  "const": "ItemOutsideForEach",
+                  "type": "string"
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "The binding's own location the `item` binding was found in."
+                }
+              },
+              "required": [
+                "kind",
+                "site"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `Binding::Keyed` referenced a node that has no `for_each`.",
+              "properties": {
+                "kind": {
+                  "const": "KeyedOnScalarNode",
+                  "type": "string"
+                },
+                "referenced": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The referenced node, which has no `for_each`."
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "The binding's own location that contains the keyed reference."
+                }
+              },
+              "required": [
+                "kind",
+                "site",
+                "referenced"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A dependency cycle. One variant covers a single self-referencing\nnode (`nodes` has one entry) and a multi-node cycle alike.",
+              "properties": {
+                "kind": {
+                  "const": "Cycle",
+                  "type": "string"
+                },
+                "nodes": {
+                  "description": "The nodes on the cycle, in declaration order.",
+                  "items": {
+                    "$ref": "#/$defs/NodeName"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "kind",
+                "nodes"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A workflow input's default value is not of the input's declared\ntype, in name or in cardinality.\n\nNot one of the plan's sixteen variants: the plan parses a default\nagainst its declared type when a *document* is loaded, which leaves\na [`Workflow`] built any other way — the builder API, a future\ncomposite — free to declare `Text` and default to a\n`DopplerServiceToken`. `check` resolves an input binding from the\ndeclared type, so without this the secret default would be the\nvalue a later stage actually pushed into a non-secret sink.",
+              "properties": {
+                "expected": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "The input's declared type."
+                },
+                "found": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "The default value's own type."
+                },
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The input whose default does not match its declared type."
+                },
+                "kind": {
+                  "const": "DefaultTypeMismatch",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "input",
+                "expected",
+                "found"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `Step` binding on a `for_each` node whose output port is already\nlist-typed. `Step` on a `for_each` node yields one value per\ninstance, which would be a `list<list<T>>`; [`TypeRef`] carries a\nsingle cardinality flag and cannot represent one.\n\nNot one of the plan's sixteen variants; see the module docs.",
+              "properties": {
+                "kind": {
+                  "const": "NestedList",
+                  "type": "string"
+                },
+                "referenced": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `for_each` node whose output port is already a list."
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "The binding's own location that asks for the promotion."
+                }
+              },
+              "required": [
+                "kind",
+                "site",
+                "referenced"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Two nodes share the same name.\n\nNever produced by [`check`] itself — see the \"Known gaps\" section\nof the module docs. Exists so the future DSL parser can report a\nduplicate `steps:` key through this same error type.",
+              "properties": {
+                "kind": {
+                  "const": "DuplicateNode",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The name two nodes shared."
+                }
+              },
+              "required": [
+                "kind",
+                "node"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A workflow input's declared type is not in the type registry at\nall — neither secret nor non-secret, because the registry has never\nheard of the name. Reported alongside [`Self::SecretWorkflowInput`],\nin input declaration order.",
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The offending input."
+                },
+                "kind": {
+                  "const": "UnregisteredInputType",
+                  "type": "string"
+                },
+                "ty": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "Its unregistered declared type."
+                }
+              },
+              "required": [
+                "kind",
+                "input",
+                "ty"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `for_each` source is a workflow input whose declared *default*\nholds two items with the same canonical string.\n\n`plan` expands a `for_each` node into one instance per item, keyed\nby that string, and refuses a collision\n(`PlanError::DuplicateForEachKey`) because the instances would be\nindistinguishable. A default is known statically, so a document\nwhose own defaults cannot run is reported here rather than only at\nplan time -- the same reason [`Self::DefaultTypeMismatch`] exists,\nand unaffected by whether a caller could override the input.\n\nNot one of the plan's variants; see the module docs.",
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The input whose default holds the collision."
+                },
+                "key": {
+                  "description": "The canonical string two of its default's items share.",
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "DuplicateForEachDefault",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `for_each` node whose source is the offending input."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "input",
+                "key"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A workflow output was bound to a literal rather than a reference.\n\nA `with` literal is parsed against the port it is bound to; a\nworkflow output has no port, so there is nothing to parse it\nagainst and no honest type to record for it. Accepting one meant\n[`Checked::output_types`] — and, downstream, `Plan::outputs` —\nsilently omitted an output the document declares, so `plan`\nreported a smaller output surface than the workflow has.\n\nNot one of the plan's variants; see the module docs.",
+              "properties": {
+                "kind": {
+                  "const": "LiteralOutput",
+                  "type": "string"
+                },
+                "output": {
+                  "$ref": "#/$defs/OutputName",
+                  "description": "The output whose binding is a literal."
+                }
+              },
+              "required": [
+                "kind",
+                "output"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "CheckWarning": {
+          "description": "A non-fatal observation returned alongside a successful [`check`].\n\nSerializes internally tagged (`#[serde(tag = \"kind\")]`): every variant is\nstruct-like or unit, so the tag merges into the variant's own fields\nrather than failing at run time the way an internally tagged newtype\nvariant would. No variant declares a field named `kind` or `message`,\nwhich would otherwise collide with the tag or with\n[`crate::Reported`]'s own added field; see\n`tests::every_check_warning_variant_serializes_with_its_kind`.",
+          "oneOf": [
+            {
+              "description": "A declared workflow input that no binding anywhere references.",
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The unused input's name."
+                },
+                "kind": {
+                  "const": "UnusedInput",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "input"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "InputName": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
+        "NodeName": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
+        "OutputName": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
+        "ParseError": {
+          "description": "Error returned when a string does not parse as a domain type.",
+          "properties": {
+            "reason": {
+              "description": "Why it was rejected. Never contains the rejected value of a secret type.",
+              "type": "string"
+            },
+            "type_name": {
+              "description": "The domain type that rejected the input.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type_name",
+            "reason"
+          ],
+          "type": "object"
+        },
+        "PortName": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
+        "PortType": {
+          "description": "The type a tool port accepts.\n\n`AnySecret` exists only for sinks such as\n`github.actions_secret.ensure`'s `value` port, which must take any\nsecret scalar type without naming one in particular. Serialized as an\nadjacently tagged object (`{\"kind\":\"exact\",\"type\":\"T\"}` or\n`{\"kind\":\"any_secret\"}`) rather than a bare string, so a `PortType`\nvalue can never be confused with a domain type literally named\n`AnySecret`.",
+          "oneOf": [
+            {
+              "description": "Accepts exactly this type reference: same name, same list-ness.",
+              "properties": {
+                "kind": {
+                  "const": "exact",
+                  "type": "string"
+                },
+                "type": {
+                  "$ref": "#/$defs/TypeRef"
+                }
+              },
+              "required": [
+                "kind",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Accepts any secret scalar type. Rejects a non-secret value and a\nlist of secrets alike.",
+              "properties": {
+                "kind": {
+                  "const": "any_secret",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "Site": {
+          "description": "Where a binding that `check` or `plan` reported an error about lives.\n\nSerializes internally tagged (`#[serde(tag = \"kind\", rename_all =\n\"snake_case\")]`) as `{\"kind\": \"port\" | \"for_each\" | \"output\", ...}`.",
+          "oneOf": [
+            {
+              "description": "A node's `with`-bound port -- either the binding's own location, or\n(for [`crate::CheckError::UnknownPort`]'s referenced-node form) the\nport that was looked up on the node a `Step` or `Keyed` binding\nnamed.",
+              "properties": {
+                "kind": {
+                  "const": "port",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node."
+                },
+                "port": {
+                  "$ref": "#/$defs/PortName",
+                  "description": "The port."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "port"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A node's own `for_each` binding.",
+              "properties": {
+                "kind": {
+                  "const": "for_each",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node."
+                }
+              },
+              "required": [
+                "kind",
+                "node"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A workflow output's binding.",
+              "properties": {
+                "kind": {
+                  "const": "output",
+                  "type": "string"
+                },
+                "name": {
+                  "$ref": "#/$defs/OutputName",
+                  "description": "The output."
+                }
+              },
+              "required": [
+                "kind",
+                "name"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ToolName": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "type": "string"
+        },
+        "TypeRef": {
+          "pattern": "^(?:[A-Z][A-Za-z0-9]*|list<[A-Z][A-Za-z0-9]*>)$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "errors": {
+          "description": "Every `check` failure, when `ok` is `false`. Each element\nserializes as [`CheckError`]'s own `{\"kind\", ...fields}` shape plus\n`message` -- see the struct's own doc.",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/CheckError"
+              },
+              {
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "ok": {
+          "description": "Whether the document checked cleanly (no errors; warnings are\nstill allowed).",
+          "type": "boolean"
+        },
+        "warnings": {
+          "description": "Every `check` warning, when `ok` is `true` (a document that fails\n`check` reports its failures as `errors`, not warnings, so the two\nlists are never both non-empty). Each element carries `message`\ntoo, the same way `errors` does.",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/CheckWarning"
+              },
+              {
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "ok",
+        "errors",
+        "warnings"
+      ],
+      "type": "object"
+    }
+  }
+]
