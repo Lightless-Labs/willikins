@@ -140,9 +140,20 @@ fn validate_parity_for_both_positive_fixtures() {
         assert!(response.ok, "{name}: {response:?}");
 
         // The CLI prints the bare warnings array on a clean check;
-        // `ValidateResponse.warnings` is the same list.
-        let butler_json = serde_json::to_value(&response.warnings).unwrap();
-        assert_eq!(cli_json, butler_json, "{name}: validate parity");
+        // `ValidateResponse.warnings` is the same list. `response.warnings`
+        // on its own would serialize as plain `CheckWarning` JSON
+        // (`serialize_with` only fires through `ValidateResponse`'s own
+        // derived `Serialize`), so the whole response is serialized here
+        // and `warnings` is read back out of it -- see
+        // `check_failure_parity`'s own comment below for why. Both
+        // positive fixtures carry no warnings today, so this only proves
+        // `[] == []`; a fixture that gains one would exercise the
+        // `message` field too.
+        let response_json = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            cli_json, response_json["warnings"],
+            "{name}: validate parity"
+        );
     }
 }
 
