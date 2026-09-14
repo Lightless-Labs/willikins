@@ -251,3 +251,72 @@ fn a_malformed_key_in_the_response_is_a_provider_error_that_echoes_nothing() {
         err.message
     );
 }
+
+/// Every other way a create response can fail to yield a token: the
+/// `key` missing entirely, empty, `null`, or not a string at all. All
+/// four are `Provider` errors that echo nothing — the numeric one
+/// matters most, because `serde_json`'s own `Display` for a type
+/// mismatch quotes the offending value verbatim, and `Http::finish`
+/// throws that text away in favour of a line/column position.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_key_that_is_missing_empty_null_or_not_a_string_errors_and_echoes_nothing() {
+    for token in [
+        serde_json::json!({"name": "ci", "slug": "abc"}),
+        serde_json::json!({"name": "ci", "slug": "abc", "key": ""}),
+        serde_json::json!({"name": "ci", "slug": "abc", "key": null}),
+        serde_json::json!({"name": "ci", "slug": "abc", "key": 123}),
+    ] {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", LIST_PATH)
+            .with_status(200)
+            .with_body(fixture("service_tokens_list_absent").to_string())
+            .create();
+        provider
+            .mock("POST", CREATE_PATH)
+            .with_status(200)
+            .with_body(serde_json::json!({"token": token}).to_string())
+            .create();
+        let (client, _sleeper) = client_against(provider.url());
+        let tool = DopplerServiceTokenEnsure::new(client);
+        let sink = SinkToken::new();
+        let err = tool
+            .ensure(&inputs(), &sink)
+            .err()
+            .unwrap_or_else(|| panic!("token {token} must not yield a minted token"));
+        assert_eq!(err.kind, ToolErrorKind::Provider, "token {token}");
+        assert!(
+            !err.message.contains("123") && !err.message.contains("key"),
+            "token {token}: the error echoed the response: {}",
+            err.message
+        );
+    }
+}
+
+/// `Present` means *no call at all* beyond the listing `GET`: not the
+/// mint, and not a stray `DELETE` either (the sibling `rotate` tool's
+/// `DELETE` path must never be reachable from `ensure`).
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_on_a_present_token_makes_no_call_but_the_listing_get() {
+    let mut provider = MockProvider::start();
+    let list = provider
+        .mock("GET", LIST_PATH)
+        .with_status(200)
+        .with_body(fixture("service_tokens_list_present").to_string())
+        .expect(1)
+        .create();
+    let post = provider.mock("POST", CREATE_PATH).expect(0).create();
+    let delete = provider
+        .mock("DELETE", "/v3/configs/config/tokens/token")
+        .expect(0)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerServiceTokenEnsure::new(client);
+    let sink = SinkToken::new();
+    tool.ensure(&inputs(), &sink).unwrap();
+    list.assert();
+    post.assert();
+    delete.assert();
+}
