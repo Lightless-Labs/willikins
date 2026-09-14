@@ -18,7 +18,9 @@ use ureq::Agent;
 use ureq::http::header::RETRY_AFTER;
 
 use crate::credential::Credential;
-use crate::error::{MISSING_PERMISSION, ProviderError, bounded_message, provider_says};
+use crate::error::{
+    MISSING_PERMISSION, ProviderError, ProviderFacts, bounded_message, provider_says,
+};
 use crate::retry_after;
 use crate::sleeper::{self, Sleeper};
 
@@ -114,11 +116,11 @@ impl Http {
     /// where applicable) or a transport failure that outlasted retrying.
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ProviderError> {
         let url = self.url(path);
-        let (status, body) = self.run_retrying(true, || {
+        let (status, body, facts) = self.run_retrying(true, || {
             let builder = self.apply_headers(self.agent.get(url.as_str()));
             self.credential.authorize(builder).call()
         })?;
-        Self::finish(status, &body)
+        Self::finish(status, &body, facts)
     }
 
     /// `PUT path` with a JSON-serialized `body`, retried.
@@ -132,11 +134,34 @@ impl Http {
         body: &impl Serialize,
     ) -> Result<T, ProviderError> {
         let url = self.url(path);
-        let (status, response_body) = self.run_retrying(true, || {
+        let (status, response_body, facts) = self.run_retrying(true, || {
             let builder = self.apply_headers(self.agent.put(url.as_str()));
             self.credential.authorize(builder).send_json(body)
         })?;
-        Self::finish(status, &response_body)
+        Self::finish(status, &response_body, facts)
+    }
+
+    /// `PUT path` with a JSON-serialized `body`, retried, for an endpoint
+    /// documented to answer success with no body at all (or with a body a
+    /// caller has no typed shape for and does not need — GitHub's Actions
+    /// secret `PUT` answers `201` on creation and `204`, genuinely
+    /// bodyless, on update, and a caller only cares that one of the two
+    /// happened). Any 2xx succeeds; the body, if any, is never parsed.
+    ///
+    /// # Errors
+    ///
+    /// See [`Http::get`].
+    pub fn put_empty(&self, path: &str, body: &impl Serialize) -> Result<(), ProviderError> {
+        let url = self.url(path);
+        let (status, response_body, facts) = self.run_retrying(true, || {
+            let builder = self.apply_headers(self.agent.put(url.as_str()));
+            self.credential.authorize(builder).send_json(body)
+        })?;
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(provider_error_from_body(status, &response_body).with_facts(facts))
+        }
     }
 
     /// `POST path` with a JSON-serialized `body`. Never retried: a `POST`
@@ -153,11 +178,11 @@ impl Http {
         body: &impl Serialize,
     ) -> Result<T, ProviderError> {
         let url = self.url(path);
-        let (status, response_body) = self.run_retrying(false, || {
+        let (status, response_body, facts) = self.run_retrying(false, || {
             let builder = self.apply_headers(self.agent.post(url.as_str()));
             self.credential.authorize(builder).send_json(body)
         })?;
-        Self::finish(status, &response_body)
+        Self::finish(status, &response_body, facts)
     }
 
     /// `DELETE path`, retried. Any response body is ignored on success:
@@ -169,20 +194,25 @@ impl Http {
     /// See [`Http::get`].
     pub fn delete(&self, path: &str) -> Result<(), ProviderError> {
         let url = self.url(path);
-        let (status, body) = self.run_retrying(true, || {
+        let (status, body, facts) = self.run_retrying(true, || {
             let builder = self.apply_headers(self.agent.delete(url.as_str()));
             self.credential.authorize(builder).call()
         })?;
         if (200..300).contains(&status) {
             Ok(())
         } else {
-            Err(provider_error_from_body(status, &body))
+            Err(provider_error_from_body(status, &body).with_facts(facts))
         }
     }
 
-    /// Turn a `(status, body)` pair that already survived retrying into
-    /// either the caller's typed success value or a [`ProviderError`].
-    fn finish<T: DeserializeOwned>(status: u16, body: &str) -> Result<T, ProviderError> {
+    /// Turn a `(status, body, facts)` triple that already survived
+    /// retrying into either the caller's typed success value or a
+    /// [`ProviderError`] carrying `facts`.
+    fn finish<T: DeserializeOwned>(
+        status: u16,
+        body: &str,
+        facts: ProviderFacts,
+    ) -> Result<T, ProviderError> {
         if (200..300).contains(&status) {
             // `serde_json::Error`'s `Display` quotes the offending value
             // (`invalid type: string "...", expected u64`) and, under
@@ -200,41 +230,43 @@ impl Http {
                         err.column()
                     ),
                 )
+                .with_facts(facts)
             })
         } else {
-            Err(provider_error_from_body(status, body))
+            Err(provider_error_from_body(status, body).with_facts(facts))
         }
     }
 
     /// Run `attempt` (one fully-built request send) up to
     /// [`MAX_RETRIES`] additional times when `retryable` and the response
-    /// (or transport failure) says to. Returns the final `(status,
-    /// body_text)` pair for any response actually received — 2xx or
+    /// (or transport failure) says to. A `401`/`403` is never retried,
+    /// regardless of `retryable` — see [`is_retryable_status`] — so a
+    /// provider crate whose API layers a soft, retriable rate limit on
+    /// top of a `403` (GitHub's secondary rate limit) does its own
+    /// retrying on top of this method, using the [`ProviderFacts`] this
+    /// returns to decide. Returns the final `(status, body_text,
+    /// header_facts)` triple for any response actually received — 2xx or
     /// not — or a [`ProviderError`] only when every attempt failed at the
-    /// transport level.
+    /// transport level (which carries no header facts at all).
     fn run_retrying(
         &self,
         retryable: bool,
         mut attempt: impl FnMut() -> Result<ureq::http::Response<ureq::Body>, ureq::Error>,
-    ) -> Result<(u16, String), ProviderError> {
+    ) -> Result<(u16, String, ProviderFacts), ProviderError> {
         let max_attempts = if retryable { MAX_RETRIES + 1 } else { 1 };
         for attempt_index in 0..max_attempts {
             let is_last = attempt_index + 1 == max_attempts;
             match attempt() {
                 Ok(mut response) => {
                     let status = response.status().as_u16();
+                    let facts = response_facts(&response);
                     let body = response.body_mut().read_to_string().unwrap_or_default();
                     if !is_last && is_retryable_status(status) {
-                        let retry_after = response
-                            .headers()
-                            .get(RETRY_AFTER)
-                            .and_then(|value| value.to_str().ok())
-                            .and_then(|value| retry_after::parse(value, SystemTime::now()));
                         self.sleeper
-                            .sleep(backoff_delay(attempt_index, retry_after));
+                            .sleep(backoff_delay(attempt_index, facts.retry_after));
                         continue;
                     }
-                    return Ok((status, body));
+                    return Ok((status, body, facts));
                 }
                 Err(err) => {
                     if !is_last {
@@ -246,6 +278,31 @@ impl Http {
             }
         }
         unreachable!("the loop above always returns on its last iteration")
+    }
+}
+
+/// Extract [`ProviderFacts`] from a response's headers: `Retry-After`
+/// (parsed the way a retryable status's own backoff already was),
+/// `x-ratelimit-remaining`, and `x-ratelimit-reset`, each `None` when
+/// absent or not a plain integer. Read for every response, 2xx included
+/// (a 2xx never keeps them — [`Http::finish`] discards `facts` on
+/// success), so a caller need not special-case which statuses might carry
+/// them.
+fn response_facts(response: &ureq::http::Response<ureq::Body>) -> ProviderFacts {
+    let headers = response.headers();
+    let header_u64 = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    };
+    ProviderFacts {
+        retry_after: headers
+            .get(RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| retry_after::parse(value, SystemTime::now())),
+        rate_limit_remaining: header_u64("x-ratelimit-remaining"),
+        rate_limit_reset: header_u64("x-ratelimit-reset"),
     }
 }
 
@@ -324,16 +381,29 @@ fn provider_error_from_body(status: u16, body: &str) -> ProviderError {
         .as_ref()
         .and_then(|value| value.get("errors"))
         .and_then(|value| value.as_array())
-        .is_some_and(|errors| {
-            errors.iter().any(|error| {
-                error.get("code").and_then(serde_json::Value::as_str) == Some("already_exists")
-            })
-        });
+        .is_some_and(|errors| errors.iter().any(is_already_exists_error));
 
     if already_exists {
         ProviderError::already_exists(Some(status), message)
     } else {
         ProviderError::new(Some(status), message)
+    }
+}
+
+/// Whether one `errors[]` entry (the shared `validation-error` shape) says
+/// "this name is already taken": GitHub uses two different shapes for the
+/// same fact — a plain `code: "already_exists"`, or `code: "custom"` on
+/// `field: "name"` (a real captured example: `{"resource":"Repository",
+/// "code":"custom","field":"name","message":"name already exists on this
+/// account"}`, research note section 2). Generic on purpose: any provider
+/// that reports a naming conflict as a "custom" error on its `name` field
+/// gets the same treatment, not only GitHub.
+fn is_already_exists_error(error: &serde_json::Value) -> bool {
+    let code = error.get("code").and_then(serde_json::Value::as_str);
+    match code {
+        Some("already_exists") => true,
+        Some("custom") => error.get("field").and_then(serde_json::Value::as_str) == Some("name"),
+        _ => false,
     }
 }
 
@@ -642,5 +712,196 @@ mod tests {
         let thing: Thing = http.get("/thing").expect("succeeds");
         assert_eq!(thing.name, "widget");
         mock.assert();
+    }
+
+    #[test]
+    fn a_403_is_never_retried_regardless_of_headers() {
+        // Retrying a 403 at all is a provider crate's own decision (task
+        // 7's GitHub secondary-rate-limit handling): this crate's own
+        // retry loop only ever acts on 429/5xx, so even a 403 carrying a
+        // `Retry-After` gets exactly one attempt here.
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/thing")
+            .with_status(403)
+            .with_header("Retry-After", "1")
+            .with_body("{}")
+            .expect(1)
+            .create();
+        let (http, _sleeper) = client(server.url());
+        let err = http.get::<Thing>("/thing").expect_err("403 is a failure");
+        assert_eq!(err.status, Some(403));
+        assert_eq!(err.message, MISSING_PERMISSION);
+        mock.assert();
+    }
+
+    #[test]
+    fn a_bare_403_carries_no_rate_limit_facts() {
+        let mut server = mockito::Server::new();
+        server.mock("GET", "/thing").with_status(403).create();
+        let (http, _sleeper) = client(server.url());
+        let err = http.get::<Thing>("/thing").expect_err("403 is a failure");
+        assert_eq!(err.retry_after, None);
+        assert_eq!(err.rate_limit_remaining, None);
+        assert_eq!(err.rate_limit_reset, None);
+        assert!(!err.looks_rate_limited());
+    }
+
+    #[test]
+    fn a_403_with_retry_after_carries_it_and_looks_rate_limited() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/thing")
+            .with_status(403)
+            .with_header("Retry-After", "30")
+            .create();
+        let (http, _sleeper) = client(server.url());
+        let err = http.get::<Thing>("/thing").expect_err("403 is a failure");
+        assert_eq!(err.retry_after, Some(Duration::from_secs(30)));
+        assert!(err.looks_rate_limited());
+    }
+
+    #[test]
+    fn a_403_with_rate_limit_remaining_zero_carries_the_reset_and_looks_rate_limited() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/thing")
+            .with_status(403)
+            .with_header("x-ratelimit-remaining", "0")
+            .with_header("x-ratelimit-reset", "1700000000")
+            .create();
+        let (http, _sleeper) = client(server.url());
+        let err = http.get::<Thing>("/thing").expect_err("403 is a failure");
+        assert_eq!(err.retry_after, None);
+        assert_eq!(err.rate_limit_remaining, Some(0));
+        assert_eq!(err.rate_limit_reset, Some(1_700_000_000));
+        assert!(err.looks_rate_limited());
+    }
+
+    #[test]
+    fn a_403_with_rate_limit_remaining_nonzero_does_not_look_rate_limited() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/thing")
+            .with_status(403)
+            .with_header("x-ratelimit-remaining", "12")
+            .create();
+        let (http, _sleeper) = client(server.url());
+        let err = http.get::<Thing>("/thing").expect_err("403 is a failure");
+        assert_eq!(err.rate_limit_remaining, Some(12));
+        assert!(!err.looks_rate_limited());
+    }
+
+    #[test]
+    fn a_2xx_response_never_carries_facts_through_to_the_caller() {
+        // `finish` discards `facts` on the success path; this pins that
+        // there is no way to observe them from a successful call at all
+        // (they simply have nowhere to go — `T` is the caller's own type).
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/thing")
+            .with_status(200)
+            .with_header("x-ratelimit-remaining", "0")
+            .with_body(r#"{"name":"widget"}"#)
+            .create();
+        let (http, _sleeper) = client(server.url());
+        let thing: Thing = http.get("/thing").expect("succeeds");
+        assert_eq!(thing.name, "widget");
+    }
+
+    #[test]
+    fn a_transport_failure_carries_no_facts() {
+        let (http, _sleeper) = client("http://127.0.0.1:1".to_string());
+        let err = http.get::<Thing>("/thing").expect_err("connection refused");
+        assert_eq!(err.retry_after, None);
+        assert_eq!(err.rate_limit_remaining, None);
+        assert_eq!(err.rate_limit_reset, None);
+    }
+
+    #[test]
+    fn put_empty_succeeds_on_201_and_on_204_without_parsing_a_body() {
+        let mut server = mockito::Server::new();
+        let created = server.mock("PUT", "/secrets/one").with_status(201).create();
+        let updated = server.mock("PUT", "/secrets/two").with_status(204).create();
+        let (http, _sleeper) = client(server.url());
+        http.put_empty("/secrets/one", &serde_json::json!({"k": "v"}))
+            .expect("201 succeeds with no body to parse");
+        http.put_empty("/secrets/two", &serde_json::json!({"k": "v"}))
+            .expect("204 succeeds with no body to parse");
+        created.assert();
+        updated.assert();
+    }
+
+    #[test]
+    fn put_empty_is_retried_on_503_then_succeeds() {
+        let mut server = mockito::Server::new();
+        let failing = server
+            .mock("PUT", "/secrets/one")
+            .with_status(503)
+            .with_body("{}")
+            .expect(1)
+            .create();
+        let succeeding = server
+            .mock("PUT", "/secrets/one")
+            .with_status(204)
+            .expect(1)
+            .create();
+        let (http, _sleeper) = client(server.url());
+        http.put_empty("/secrets/one", &serde_json::json!({}))
+            .expect("succeeds after one retry");
+        failing.assert();
+        succeeding.assert();
+    }
+
+    #[test]
+    fn put_empty_fails_with_the_provider_error_on_a_client_error() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("PUT", "/secrets/one")
+            .with_status(422)
+            .with_body(r#"{"message":"bad shape"}"#)
+            .create();
+        let (http, _sleeper) = client(server.url());
+        let err = http
+            .put_empty("/secrets/one", &serde_json::json!({}))
+            .expect_err("422 is a failure");
+        assert_eq!(err.status, Some(422));
+    }
+
+    #[test]
+    fn a_custom_error_on_field_name_is_treated_as_already_exists() {
+        // GitHub's second shape for "this name is taken", a real captured
+        // 422 body (research note section 2): `code: "custom"` on
+        // `field: "name"`, distinct from the plain `already_exists` code.
+        let mut server = mockito::Server::new();
+        server
+            .mock("POST", "/orgs/acme/repos")
+            .with_status(422)
+            .with_body(
+                r#"{"message":"Repository creation failed.","errors":[{"resource":"Repository","code":"custom","field":"name","message":"name already exists on this account"}]}"#,
+            )
+            .create();
+        let (http, _sleeper) = client(server.url());
+        let err = http
+            .post::<Thing>("/orgs/acme/repos", &serde_json::json!({"name": "x"}))
+            .expect_err("422");
+        assert!(err.already_exists);
+    }
+
+    #[test]
+    fn a_custom_error_on_a_different_field_is_not_already_exists() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("POST", "/orgs/acme/repos")
+            .with_status(422)
+            .with_body(
+                r#"{"message":"bad","errors":[{"code":"custom","field":"visibility","message":"nope"}]}"#,
+            )
+            .create();
+        let (http, _sleeper) = client(server.url());
+        let err = http
+            .post::<Thing>("/orgs/acme/repos", &serde_json::json!({"name": "x"}))
+            .expect_err("422");
+        assert!(!err.already_exists);
     }
 }

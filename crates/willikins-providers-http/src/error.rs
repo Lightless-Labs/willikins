@@ -8,6 +8,8 @@
 //! escaped, never from the raw body, and never with the request URL or
 //! headers.
 
+use std::time::Duration;
+
 use willikins_core::{ToolError, ToolErrorKind};
 
 /// What a `401` or `403` says instead of anything the provider sent.
@@ -61,29 +63,92 @@ pub struct ProviderError {
     /// raw body is gone. Defaults to `false`; a provider crate (task 7)
     /// sets it while parsing an error body it recognises the shape of.
     pub already_exists: bool,
+    /// The delay a `Retry-After` response header named, parsed the same
+    /// way a retryable status's own backoff is (plain seconds or an
+    /// `IMF-fixdate`). Never itself a reason to retry inside this crate —
+    /// `willikins-providers-http` never retries a `401`/`403` — but a
+    /// provider crate whose API distinguishes "missing permission" from
+    /// "temporarily rate limited" through exactly this header (GitHub's
+    /// secondary rate limit is a `403` carrying one) needs it to decide.
+    /// `None` when the response carried no such header, including every
+    /// transport-level failure.
+    pub retry_after: Option<Duration>,
+    /// The response's `x-ratelimit-remaining` header, parsed as a plain
+    /// integer, when present. A convention several REST APIs (GitHub's
+    /// among them) use to say how many requests are left in the current
+    /// window; `Some(0)` on a `403` is GitHub's secondary-rate-limit
+    /// signal in the absence of `Retry-After`. Never interpreted by this
+    /// crate itself.
+    pub rate_limit_remaining: Option<u64>,
+    /// The response's `x-ratelimit-reset` header (a Unix epoch second),
+    /// parsed as a plain integer, when present. Paired with
+    /// [`Self::rate_limit_remaining`].
+    pub rate_limit_reset: Option<u64>,
+}
+
+/// The three rate-limit-adjacent header facts [`crate::http::Http`]
+/// captures off the final response for any request, success or failure,
+/// and attaches to a [`ProviderError`] via [`ProviderError::with_facts`].
+/// See [`ProviderError::retry_after`], [`ProviderError::rate_limit_remaining`],
+/// and [`ProviderError::rate_limit_reset`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProviderFacts {
+    /// See [`ProviderError::retry_after`].
+    pub retry_after: Option<Duration>,
+    /// See [`ProviderError::rate_limit_remaining`].
+    pub rate_limit_remaining: Option<u64>,
+    /// See [`ProviderError::rate_limit_reset`].
+    pub rate_limit_reset: Option<u64>,
 }
 
 impl ProviderError {
-    /// Build a `ProviderError` carrying no already-exists signal — the
-    /// common case for a status this crate does not special-case.
+    /// Build a `ProviderError` carrying no already-exists signal and no
+    /// rate-limit facts — the common case for a status this crate does
+    /// not special-case.
     #[must_use]
     pub fn new(status: Option<u16>, message: impl Into<String>) -> Self {
         Self {
             status,
             message: message.into(),
             already_exists: false,
+            retry_after: None,
+            rate_limit_remaining: None,
+            rate_limit_reset: None,
         }
     }
 
     /// Build a `ProviderError` for a `409` or `422` whose body named
-    /// `errors[].code: "already_exists"`.
+    /// `errors[].code: "already_exists"` (or, GitHub's other shape for the
+    /// same fact, `code: "custom"` on `field: "name"`).
     #[must_use]
     pub fn already_exists(status: Option<u16>, message: impl Into<String>) -> Self {
         Self {
-            status,
-            message: message.into(),
             already_exists: true,
+            ..Self::new(status, message)
         }
+    }
+
+    /// Attach header-derived facts captured off the response that produced
+    /// this error. A provider crate consults these to distinguish, for
+    /// example, a bare permission failure from a rate limit that also
+    /// answers `403`; this crate's own `401`/`403` handling never retries
+    /// either way.
+    #[must_use]
+    pub fn with_facts(mut self, facts: ProviderFacts) -> Self {
+        self.retry_after = facts.retry_after;
+        self.rate_limit_remaining = facts.rate_limit_remaining;
+        self.rate_limit_reset = facts.rate_limit_reset;
+        self
+    }
+
+    /// Whether this looks like a provider's secondary/soft rate limit
+    /// rather than a genuine permission failure: a `403` accompanied by a
+    /// `Retry-After` header or an exhausted `x-ratelimit-remaining: 0`.
+    /// This crate never acts on the answer itself — callers do.
+    #[must_use]
+    pub fn looks_rate_limited(&self) -> bool {
+        self.status == Some(403)
+            && (self.retry_after.is_some() || self.rate_limit_remaining == Some(0))
     }
 }
 
