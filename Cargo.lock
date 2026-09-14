@@ -2362,7 +2362,9 @@ dependencies = [
  "thiserror",
  "willikins-core",
  "willikins-dsl",
+ "willikins-journal",
  "willikins-providers-fake",
+ "willikins-server",
  "willikins-types",
 ]
 

@@ -25,6 +25,12 @@ thiserror.workspace = true
 indexmap.workspace = true
 proptest.workspace = true
 serde_yaml_ng.workspace = true
+# Acceptance test 11's library half: the parity test drives the built
+# `willikins` binary and `willikins_server::Butler` side by side and
+# compares their JSON. `willikins-server` never depends on this crate, so
+# this is an ordinary (one-directional) dev-dependency, not a cycle.
+willikins-server.workspace = true
+willikins-journal.workspace = true
 
 [lints]
 workspace = true
