@@ -430,10 +430,7 @@ impl Butler {
     }
 
     fn elapsed_since(&self, since: willikins_journal::Timestamp) -> Duration {
-        let now = self.clock.now();
-        (*now.as_datetime() - *since.as_datetime())
-            .to_std()
-            .unwrap_or(Duration::ZERO)
+        elapsed_between(since, self.clock.now())
     }
 
     // -------------------------------------------------------------
@@ -593,9 +590,32 @@ impl Butler {
         result
     }
 
+    /// Record a decision for `plan_id`, atomically with the check that it
+    /// is still undecided.
+    ///
+    /// **The journal lock is held across the whole read-check-append**,
+    /// which is what makes "a decision is final" true under concurrency
+    /// rather than only in a single-threaded test. Two callers deciding
+    /// the same pending plan at once would otherwise both fold it as
+    /// `Pending`, both append, and leave the plan carrying two decision
+    /// events -- and the fold takes the *last* one, so an `approve`
+    /// racing a `reject` would revive a rejected plan (adversarial pass
+    /// 1, item 4, which is a journal-level fact this method is the only
+    /// defence against). Pinned by
+    /// `tests/adversarial_10a.rs::a_decision_landing_between_another_decisions_check_and_append_is_refused`.
+    ///
+    /// The clock is read *before* the lock is taken, deliberately: every
+    /// other operation on this `Butler` blocks on the journal for as long
+    /// as this guard is held, and a `Clock` implementation is not this
+    /// module's to assume anything about. The instant it yields is at
+    /// worst infinitesimally stale, which can only ever make this method
+    /// more permissive by less than the time one lock acquisition takes,
+    /// against a window measured in hours.
     fn decide(&self, plan_id: PlanId, decision: Decision) -> Result<(), ButlerError> {
-        let record = self
-            .journal_lock()
+        let now = self.clock.now();
+        let mut journal = self.journal_lock();
+
+        let record = journal
             .plan(&plan_id)
             .ok_or(ButlerError::UnknownPlan { plan_id })?;
 
@@ -605,24 +625,26 @@ impl Butler {
         if !matches!(record.approval, ApprovalState::Pending) {
             return Err(ButlerError::AlreadyDecided { plan_id });
         }
-        if self.elapsed_since(record.recorded_at) > self.approval_window {
+        if elapsed_between(record.recorded_at, now) > self.approval_window {
             return Err(ButlerError::PlanExpired {
                 window: ExpiryWindow::Approval,
             });
         }
 
-        match decision {
-            Decision::Grant(approver) => {
-                self.append(Event::ApprovalGranted { plan_id, approver })?;
-            }
-            Decision::Reject(approver, reason) => {
-                self.append(Event::ApprovalRejected {
-                    plan_id,
-                    approver,
-                    reason,
-                })?;
-            }
-        }
+        let event = match decision {
+            Decision::Grant(approver) => Event::ApprovalGranted { plan_id, approver },
+            Decision::Reject(approver, reason) => Event::ApprovalRejected {
+                plan_id,
+                approver,
+                reason,
+            },
+        };
+        // `Journal::append` directly, not `self.append`: that helper takes
+        // the journal lock itself, and `std::sync::Mutex` is not
+        // reentrant, so calling it here would deadlock this thread.
+        Journal::append(&mut *journal, event).map_err(|error| ButlerError::Journal {
+            message: error.to_string(),
+        })?;
         Ok(())
     }
 
@@ -908,6 +930,17 @@ impl Butler {
 enum Decision {
     Grant(PrincipalId),
     Reject(PrincipalId, Reason),
+}
+
+/// How long elapsed from `since` to `now`, saturating at zero if `now` is
+/// the earlier of the two (a `Clock` that stepped backwards).
+fn elapsed_between(
+    since: willikins_journal::Timestamp,
+    now: willikins_journal::Timestamp,
+) -> Duration {
+    (*now.as_datetime() - *since.as_datetime())
+        .to_std()
+        .unwrap_or(Duration::ZERO)
 }
 
 /// `from` plus `window`, as a [`willikins_journal::Timestamp`].

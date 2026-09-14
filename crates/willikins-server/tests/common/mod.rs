@@ -212,3 +212,96 @@ impl Tool for BlockingTool {
         })
     }
 }
+
+/// Like [`butler_with_journal`], over any [`Clock`] rather than a
+/// [`ManualClock`] specifically -- what an adversarial test that needs a
+/// clock which *blocks* (see `tests/adversarial_10a.rs`'s
+/// `GateOnceClock`) hands a `Butler`.
+pub fn butler_with_any_clock(
+    dir: &Path,
+    catalog: willikins_core::Catalog,
+    clock: Arc<dyn Clock>,
+) -> (Butler, SharedJournal) {
+    let journal: SharedJournal = Arc::new(Mutex::new(MemoryJournal::with_clock(clock.clone())));
+    let config = ButlerConfig {
+        workflows_dir: dir.to_path_buf(),
+        journal: journal.clone(),
+        catalog,
+        clock,
+        approval_window: ButlerConfig::DEFAULT_APPROVAL_WINDOW,
+        apply_window: ButlerConfig::DEFAULT_APPLY_WINDOW,
+        plan_rate_per_minute: ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE,
+        read_rate_per_minute: ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
+    };
+    (Butler::new(config), journal)
+}
+
+/// `workflows/fixtures/irreversible.yaml`'s own internal name: the
+/// filename stem it must be copied in under (see `willikins_server`'s
+/// `document` module docs).
+pub const IRREVERSIBLE_NAME: &str = "new-rust-service-irreversible";
+
+/// Copy `workflows/fixtures/irreversible.yaml` into `dir` under the stem
+/// its own internal `name:` requires.
+pub fn copy_irreversible(dir: &Path) {
+    copy_fixture_as(
+        dir,
+        "irreversible.yaml",
+        "new-rust-service-irreversible.yaml",
+    );
+}
+
+// ---------------------------------------------------------------------
+// A test-only tool whose `ensure` panics.
+// ---------------------------------------------------------------------
+
+/// `test.panicking.ensure`: `read` answers `Absent`, `ensure` panics.
+/// How an adversarial test drives a run thread into an unwind, to check
+/// that the single-apply lock is released, `RunFinished { Failed }` is
+/// journaled, and `Butler::run` reports the run as failed rather than
+/// leaving it `Running` for ever.
+pub struct PanickingTool {
+    spec: ToolSpec,
+}
+
+impl PanickingTool {
+    /// The tool, named `test.panicking.ensure`.
+    #[must_use]
+    pub fn new() -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            willikins_core::helpers::port("key"),
+            PortSpec {
+                ty: willikins_core::PortType::Exact(willikins_core::helpers::scalar("ProjectSlug")),
+                required: true,
+            },
+        );
+        Self {
+            spec: ToolSpec {
+                name: willikins_core::helpers::tool_name("test.panicking.ensure"),
+                description: "Test tool: panics from `ensure`.".to_string(),
+                inputs,
+                outputs: IndexMap::new(),
+                key: vec![willikins_core::helpers::port("key")],
+                class: Class::Reversible,
+                pure: false,
+            },
+        }
+    }
+}
+
+impl Tool for PanickingTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Absent {
+            predicted: Outputs::new(),
+        })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        panic!("test.panicking.ensure always panics");
+    }
+}
