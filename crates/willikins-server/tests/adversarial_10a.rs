@@ -1458,3 +1458,224 @@ fn two_principals_at_the_128_character_bound_keep_separate_buckets() {
         )
         .expect("b's bucket is its own");
 }
+
+// ---------------------------------------------------------------------
+// No secret byte reaches a response, an error, or the journal
+// ---------------------------------------------------------------------
+
+/// Both positive fixtures driven all the way through a `Butler` over a
+/// real `FileJournal`, with a distinctive marker seeded into every place
+/// a secret can enter the graph -- the minted service token
+/// (`next_token`, taken once per mint, so it is re-seeded before each
+/// run) and a stored Doppler secret value.
+///
+/// Then the sweep: every response the `Butler` handed back (two
+/// `PlanResponse`s, two `RunRecord`s, the whole `runs()` list, the
+/// recorded `PlanRecord`s), every error it refused with, and the journal
+/// file's own bytes are searched for each marker. The redaction marker
+/// must be there; the seeded bytes must not be, anywhere.
+#[test]
+fn no_seeded_secret_byte_reaches_a_response_an_error_or_the_journal_file() {
+    const TOKEN_BODY: &str = "ADVERSARIALTENAMARKERBYTESDONOTLEAKAAAAAAAA";
+    const SECRET_BYTES: &str = "adversarial-10a-stored-secret-bytes-do-not-leak";
+
+    fn seeded_token() -> willikins_types::DopplerServiceToken {
+        willikins_types::DopplerServiceToken::parse(&format!("dp.st.prd.{TOKEN_BODY}"))
+            .expect("a valid service token literal")
+    }
+
+    let workflows = tempfile::tempdir().unwrap();
+    common::copy_fixture_as(
+        workflows.path(),
+        "new-rust-service.yaml",
+        "new-rust-service.yaml",
+    );
+    common::copy_fixture_as(
+        workflows.path(),
+        "rotate-service-token.yaml",
+        "rotate-service-token.yaml",
+    );
+    // A third flow, so the *stored* secret marker below is reached by
+    // something rather than swept for vacuously: `secret-get.yaml` reads
+    // it and writes it straight into a GitHub Actions secret.
+    common::copy_fixture_as(workflows.path(), "secret-get.yaml", "secret-get.yaml");
+    let journal_dir = tempfile::tempdir().unwrap();
+    let journal_path = journal_dir.path().join("journal.jsonl");
+
+    let config = willikins_types::DopplerConfig::parse("third-thoughts/prd").unwrap();
+    let secret_name = willikins_types::SecretName::parse("DATABASE_URL").unwrap();
+    let state = Arc::new(Mutex::new(
+        willikins_providers_fake::FakeState::new()
+            .with_next_token(seeded_token())
+            .with_doppler_secret(
+                &config,
+                &secret_name,
+                willikins_types::DopplerSecretValue::parse(SECRET_BYTES).unwrap(),
+            ),
+    ));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let clock = common::manual_clock();
+
+    // Everything the `Butler` ever handed back, as JSON.
+    let responses = drive_every_flow(
+        workflows.path(),
+        &journal_path,
+        catalog,
+        clock,
+        &state,
+        &seeded_token,
+    );
+
+    let file_bytes = std::fs::read(&journal_path).expect("the journal file is readable");
+    let file_text = String::from_utf8_lossy(&file_bytes);
+
+    for marker in [TOKEN_BODY, SECRET_BYTES] {
+        assert!(
+            !file_text.contains(marker),
+            "the journal file carries `{marker}`"
+        );
+        for (index, response) in responses.iter().enumerate() {
+            assert!(
+                !response.contains(marker),
+                "response/error {index} carries `{marker}`: {response}"
+            );
+        }
+    }
+
+    // The redaction really did happen rather than the secret simply never
+    // being recorded: the journal names both secret types' markers.
+    for marker in [
+        "[REDACTED DopplerServiceToken]",
+        "[REDACTED DopplerSecretValue]",
+    ] {
+        assert!(
+            file_text.contains(marker),
+            "the journal should carry `{marker}` where the secret itself was"
+        );
+    }
+
+    // The seeded values were genuinely reachable: the run really did mint
+    // a token and store it, so the sweep above was not vacuous.
+    let state = state.lock().unwrap();
+    assert!(
+        !state.github_actions_secrets.is_empty(),
+        "the run stored an Actions secret"
+    );
+}
+
+/// Drive all three flows through one `Butler` and collect every response
+/// and error it handed back, as JSON. Split out of the test itself only
+/// so neither half runs past `clippy::too_many_lines`.
+fn drive_every_flow(
+    workflows_dir: &std::path::Path,
+    journal_path: &std::path::Path,
+    catalog: willikins_core::Catalog,
+    clock: Arc<ManualClock>,
+    state: &Arc<Mutex<willikins_providers_fake::FakeState>>,
+    seeded_token: &dyn Fn() -> willikins_types::DopplerServiceToken,
+) -> Vec<String> {
+    let mut responses: Vec<String> = Vec::new();
+    let journal: willikins_server::SharedJournal = Arc::new(Mutex::new(
+        willikins_journal::FileJournal::open_with_clock(
+            journal_path,
+            clock.clone() as Arc<dyn Clock>,
+        )
+        .expect("journal opens"),
+    ));
+    let butler = willikins_server::Butler::new(willikins_server::ButlerConfig {
+        workflows_dir: workflows_dir.to_path_buf(),
+        journal: journal.clone(),
+        catalog,
+        clock: clock as Arc<dyn Clock>,
+        approval_window: willikins_server::ButlerConfig::DEFAULT_APPROVAL_WINDOW,
+        apply_window: willikins_server::ButlerConfig::DEFAULT_APPLY_WINDOW,
+        plan_rate_per_minute: willikins_server::ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE,
+        read_rate_per_minute: willikins_server::ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
+    });
+
+    // The positive fixture: auto-approved, mints the seeded token.
+    let first = butler
+        .plan(
+            wf("new-rust-service"),
+            &common::new_rust_service_inputs(),
+            common::principal("agent"),
+        )
+        .expect("the positive fixture plans");
+    responses.push(serde_json::to_string(&first).unwrap());
+    let handle = butler
+        .apply(first.plan_id, common::principal("agent"))
+        .expect("an auto-approved plan applies");
+    let run = common::wait_for_run(&butler, handle.run_id, 4000);
+    assert_eq!(run.state, willikins_journal::RunState::Succeeded, "{run:?}");
+    responses.push(serde_json::to_string(&run).unwrap());
+
+    // `next_token` is taken once per mint; re-seed it so the rotation
+    // mints the marker too.
+    state.lock().unwrap().next_token = willikins_providers_fake::FakeState::new()
+        .with_next_token(seeded_token())
+        .next_token;
+
+    // The rotation fixture: Destructive, so it needs a human.
+    let second = butler
+        .plan(
+            wf("rotate-service-token"),
+            &common::partial_inputs(&[
+                ("project", "third-thoughts"),
+                ("repo", "lightless-labs/third-thoughts"),
+            ]),
+            common::principal("agent"),
+        )
+        .expect("the rotation fixture plans");
+    responses.push(serde_json::to_string(&second).unwrap());
+    assert!(second.requires_approval);
+
+    let refused = butler
+        .apply(second.plan_id, common::principal("agent"))
+        .expect_err("unapproved");
+    responses.push(serde_json::to_string(&willikins_core::Reported::new(&refused)).unwrap());
+
+    butler
+        .approve(second.plan_id, common::principal("approver"))
+        .expect("approved");
+    let handle = butler
+        .apply(second.plan_id, common::principal("agent"))
+        .expect("an approved plan applies");
+    let run = common::wait_for_run(&butler, handle.run_id, 4000);
+    assert_eq!(run.state, willikins_journal::RunState::Succeeded, "{run:?}");
+    responses.push(serde_json::to_string(&run).unwrap());
+
+    // The stored secret, read and written by `secret-get.yaml`.
+    let third = butler
+        .plan(
+            wf("secret-get"),
+            &common::partial_inputs(&[("project", "third-thoughts")]),
+            common::principal("agent"),
+        )
+        .expect("secret-get plans");
+    responses.push(serde_json::to_string(&third).unwrap());
+    let handle = butler
+        .apply(third.plan_id, common::principal("agent"))
+        .expect("secret-get applies");
+    let run = common::wait_for_run(&butler, handle.run_id, 4000);
+    assert_eq!(run.state, willikins_journal::RunState::Succeeded, "{run:?}");
+    responses.push(serde_json::to_string(&run).unwrap());
+
+    // One more error, this time carrying a whole plan's worth of
+    // context: a second apply of a spent plan.
+    let spent = butler
+        .apply(second.plan_id, common::principal("agent"))
+        .expect_err("already applied");
+    responses.push(serde_json::to_string(&willikins_core::Reported::new(&spent)).unwrap());
+
+    // And the journal's own recorded views.
+    responses.push(serde_json::to_string(&butler.runs()).unwrap());
+    for plan_id in [first.plan_id, second.plan_id, third.plan_id] {
+        let record = willikins_journal::Journal::plan(&*journal.lock().unwrap(), &plan_id)
+            .expect("recorded");
+        responses.push(serde_json::to_string(&record).unwrap());
+    }
+
+    drop(butler);
+    drop(journal);
+    responses
+}
