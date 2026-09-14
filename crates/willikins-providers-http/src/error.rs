@@ -10,6 +10,25 @@
 
 use willikins_core::{ToolError, ToolErrorKind};
 
+/// What a `401` or `403` says instead of anything the provider sent.
+/// Applied where the error is *built*, not only where it becomes a
+/// [`ToolError`]: a `ProviderError` is public, carries a public `message`,
+/// and a provider crate may hold (or log) one long before any conversion.
+pub const MISSING_PERMISSION: &str = "the credential is missing a permission this request needs";
+
+/// Repeat a provider's own words under a label, bounded and escaped.
+///
+/// Escaping alone is not enough to keep provider text from impersonating
+/// willikins: [`char::escape_debug`] leaves letters, `[` and `]` alone, so
+/// a provider answering `[REDACTED DopplerServiceToken]` would otherwise
+/// hand an agent a string indistinguishable from willikins' own redaction
+/// marker. Trust boundary 4 solves the same problem for document text with
+/// a `document says:` prefix; this is that rule for provider text.
+#[must_use]
+pub fn provider_says(text: &str) -> String {
+    format!("provider says: {}", bounded_message(text))
+}
+
 /// The greatest number of characters a [`ProviderError::message`] carries.
 /// Mirrors `willikins_types::MAX_QUOTED_INPUT`'s reasoning: a provider's
 /// error body is text willikins does not control, and an agent reads
@@ -94,9 +113,12 @@ impl From<ProviderError> for ToolError {
                 kind: ToolErrorKind::Conflict,
                 message: err.message,
             },
+            // Belt and braces: `provider_error_from_body` already
+            // dropped the body for these two statuses, so this arm only
+            // matters for a `ProviderError` a provider crate built itself.
             Some(401 | 403) => ToolError {
                 kind: ToolErrorKind::Provider,
-                message: "the credential is missing a permission this request needs".to_string(),
+                message: MISSING_PERMISSION.to_string(),
             },
             _ => ToolError {
                 kind: ToolErrorKind::Provider,

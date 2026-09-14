@@ -18,7 +18,7 @@ use ureq::Agent;
 use ureq::http::header::RETRY_AFTER;
 
 use crate::credential::Credential;
-use crate::error::{ProviderError, bounded_message};
+use crate::error::{MISSING_PERMISSION, ProviderError, bounded_message, provider_says};
 use crate::retry_after;
 use crate::sleeper::{self, Sleeper};
 
@@ -166,10 +166,21 @@ impl Http {
     /// either the caller's typed success value or a [`ProviderError`].
     fn finish<T: DeserializeOwned>(status: u16, body: &str) -> Result<T, ProviderError> {
         if (200..300).contains(&status) {
+            // `serde_json::Error`'s `Display` quotes the offending value
+            // (`invalid type: string "...", expected u64`) and, under
+            // `deny_unknown_fields`, the offending field name — both of
+            // which are response-body text, which trust boundary 5 says a
+            // message is never built from. The position is willikins' own
+            // observation and carries nothing from the body.
             serde_json::from_str(body).map_err(|err| {
                 ProviderError::new(
                     Some(status),
-                    bounded_message(&format!("could not parse response body: {err}")),
+                    format!(
+                        "could not parse the response body as the expected shape \
+                         (line {}, column {})",
+                        err.line(),
+                        err.column()
+                    ),
                 )
             })
         } else {
@@ -223,6 +234,25 @@ impl Http {
     }
 }
 
+/// The provider's own words in an error body, if it has any that are
+/// text: GitHub answers `{"message": "..."}`, Doppler (which documents no
+/// error schema at all) answers `{"messages": ["...", "..."]}`. A
+/// `message` that is an object or an array is not a message and is
+/// dropped rather than `Debug`-formatted into one.
+fn provider_text(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.get("message").and_then(serde_json::Value::as_str) {
+        return Some(text.to_string());
+    }
+    let joined = value
+        .get("messages")
+        .and_then(serde_json::Value::as_array)?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>()
+        .join("; ");
+    (!joined.is_empty()).then_some(joined)
+}
+
 /// Whether `status` is worth retrying: `429` (rate limited) or any `5xx`.
 fn is_retryable_status(status: u16) -> bool {
     status == 429 || (500..600).contains(&status)
@@ -247,16 +277,19 @@ fn backoff_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
 /// body itself, if it does not parse as JSON at all — never reaches the
 /// resulting message.
 fn provider_error_from_body(status: u16, body: &str) -> ProviderError {
+    // A `401` or `403` body is dropped here, before anything can hold it:
+    // GitHub's says "Bad credentials", Doppler's names the token, and
+    // neither tells an operator anything the fixed message does not.
+    if matches!(status, 401 | 403) {
+        return ProviderError::new(Some(status), MISSING_PERMISSION);
+    }
+
     let parsed: Option<serde_json::Value> = serde_json::from_str(body).ok();
 
-    let message = parsed
-        .as_ref()
-        .and_then(|value| value.get("message"))
-        .and_then(|value| value.as_str())
-        .map_or_else(
-            || bounded_message(&format!("provider returned status {status}")),
-            bounded_message,
-        );
+    let message = parsed.as_ref().and_then(provider_text).map_or_else(
+        || bounded_message(&format!("provider returned status {status}")),
+        |text| provider_says(&text),
+    );
 
     let already_exists = parsed
         .as_ref()
@@ -381,7 +414,10 @@ mod tests {
         let (http, _sleeper) = client(server.url());
         let err = http.get::<Thing>("/thing").expect_err("still failing");
         assert_eq!(err.status, Some(503));
-        assert_eq!(err.message.chars().count(), 256);
+        // The provider's own words are bounded to 256 characters; the
+        // `provider says:` label is willikins' own and sits outside that
+        // bound.
+        assert_eq!(err.message, format!("provider says: {}", "x".repeat(256)));
         mock.assert();
     }
 

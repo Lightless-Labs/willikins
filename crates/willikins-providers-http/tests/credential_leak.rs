@@ -57,12 +57,14 @@ fn tool_error_never_leaks_the_marker_on_401_or_403_even_when_the_body_names_it()
     let err: ProviderError = http
         .get::<serde_json::Value>("/forbidden")
         .expect_err("403 is an error");
-    // `ProviderError.message` is deliberately built from the provider's own
-    // response text verbatim (bounded and escaped) regardless of status —
-    // trust boundary 5's redaction for 401/403 happens only at the
-    // `ToolError` boundary below, which is what an agent actually sees. So
-    // the marker legitimately appears in `err.message` at this point; only
-    // `tool_err.message` carries the guarantee this test is about.
+    // The redaction happens where the error is built, so the marker is
+    // gone before anything — a provider crate deciding whether to re-read,
+    // a log line, the conversion below — can see it.
+    assert!(
+        !err.message.contains(MARKER),
+        "ProviderError leaked the 403 body: {}",
+        err.message
+    );
     let tool_err: ToolError = err.into();
     assert!(
         !tool_err.message.contains(MARKER),

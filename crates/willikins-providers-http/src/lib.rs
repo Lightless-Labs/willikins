@@ -32,6 +32,8 @@ mod sleeper;
 pub mod testing;
 
 pub use credential::{Credential, CredentialError};
-pub use error::{MAX_MESSAGE_CHARS, ProviderError, bounded_message};
+pub use error::{
+    MAX_MESSAGE_CHARS, MISSING_PERMISSION, ProviderError, bounded_message, provider_says,
+};
 pub use http::Http;
 pub use sleeper::{RealSleeper, Sleeper};
