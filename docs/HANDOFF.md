@@ -7,13 +7,22 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-14, later) — milestone 2 tasks 0 through 9 landed; the GitHub write cycle and task 10a (server library) are next
+### RESUME HERE (2026-09-14, afternoon) — milestone 2 tasks 0 through 9 and the live GitHub write cycle landed; task 10a (server library) is running
 
 - **Live state:** `main` at 227 local commits, gates green at HEAD (1,325 tests pass, 6 ignored; the ignored ones
   are by-hand measurements, a lock-probe child, and the two live probes). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
   `main` is pushed after every coordinator commit.
-- **What just happened:** tasks 7 (`willikins-providers-github`), 8
+- **What just happened:** the live GitHub write cycle
+  (`crates/willikins-providers-github/tests/live_write_cycle.rs`, opt-in with
+  `WILLIKINS_LIVE_TESTS=1`, Workflow `wf_a2ae26fe-894`) ran once, green on the first try:
+  `github.repo.ensure` created `Willikins-Test/willikins-live-write-cycle`, converged with
+  `changed: false`, refused the visibility mismatch, `github.actions_secret.ensure` sealed
+  a synthetic token and read it back `Present`, the three unverified fixtures were
+  verified by key set (no authored fixture changed), and the repository was deleted (the
+  delete lives only in the test; no tool or client method deletes). A second opt-in test,
+  `WILLIKINS_LIVE_LEFTOVER_CHECK=1`, confirms the repository is gone. Before that, tasks 7
+  (`willikins-providers-github`), 8
   (`willikins-providers-doppler`) and 9 (adversarial pass 1) landed through Workflow
   `wf_5a050a35-0a3`. The verifiers' real finds: a repository whose `topics` is null failed
   to parse instead of reading `Foreign`; `doppler.config.ensure` ignored Doppler's `root`
@@ -46,12 +55,11 @@ compaction, before handing off, after a milestone, and after a plan change or di
   config-scoped service token (`dp.st.`), enough for auth and `doppler.secret.get`
   against `willikins-test/dev`, not for creating projects, environments or tokens; task
   8's create-side probe and task 14 need a `dp.sa.` or `dp.pt.` token from the operator.
-- **Next action:** (1) a live GitHub write cycle the operator asked for: an opt-in test
-  (`WILLIKINS_LIVE_TESTS=1`) that creates a repository in `Willikins-Test` through the real
-  `github.repo.ensure`, sets the topic, stores a sealed secret, re-runs `ensure` for
-  `changed: false`, refreshes the two unverified fixtures, and deletes the repository at
-  the end; (2) task 10a (`willikins-server` library: `Butler`, plan identity closing the
-  pass-1 boundaries, startup checks; acceptance tests 7 identity half, 8, 13, 14), then 10b
+- **Next action:** task 10a is running in Workflow `wf_a2ae26fe-894` (10a-i: ids,
+  plan identity, windows, the journal-backed `Butler`, the single-apply lock; 10a-ii:
+  startup checks, trusted directory, read operations, rate limits, config, live catalog;
+  then an opus verify). When it ends: read its result, run the gates, update this block,
+  then 10b
   and 11, 12, 13, 14, one sequential Workflow at a time on `main`, sonnet implementing
   test-first and opus verifying, every `CONTEXT` string naming the four gates exactly as
   CLAUDE.md spells them (`-j 2`, `RUST_TEST_THREADS=2`). Groups run one lane at a time. The
