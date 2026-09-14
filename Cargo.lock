@@ -2390,6 +2390,7 @@ dependencies = [
  "willikins-core",
  "willikins-dsl",
  "willikins-providers-fake",
+ "willikins-providers-github",
  "willikins-providers-http",
  "willikins-tools",
  "willikins-types",
