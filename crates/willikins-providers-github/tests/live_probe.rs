@@ -151,18 +151,34 @@ fn check(
     }
 }
 
-/// The full name (`owner/repo`) of the org's first repository, or `None`
-/// if the org has none or the listing call itself failed (in which case
-/// the repository-dependent checks are skipped, not failed — a transport
-/// or auth problem there is not this probe's story to tell twice).
-fn first_repo_full_name(http: &willikins_providers_http::Http, org: &GitHubOrg) -> Option<String> {
-    http.get::<Value>(&format!("/orgs/{org}/repos"))
-        .ok()?
-        .as_array()?
-        .first()?
-        .get("full_name")?
-        .as_str()
-        .map(str::to_string)
+/// The full name (`owner/repo`) of the org's first repository.
+///
+/// `Ok(None)` means the org genuinely has no repository; `Err` means the
+/// listing call itself failed or answered a shape this probe could not
+/// read. Either way the repository-dependent checks are skipped rather
+/// than failed — a transport or auth problem there is not this probe's
+/// story to tell twice — but the two must be told apart in the skip line,
+/// because "skipped, the org is empty" and "skipped, willikins could not
+/// ask" leave the repository and public-key fixtures unverified for
+/// completely different reasons.
+fn first_repo_full_name(
+    http: &willikins_providers_http::Http,
+    org: &GitHubOrg,
+) -> Result<Option<String>, String> {
+    let listing = http
+        .get::<Value>(&format!("/orgs/{org}/repos"))
+        .map_err(|err| format!("the listing failed: {err}"))?;
+    let repos = listing
+        .as_array()
+        .ok_or_else(|| "the listing was not a JSON array".to_string())?;
+    let Some(first) = repos.first() else {
+        return Ok(None);
+    };
+    first
+        .get("full_name")
+        .and_then(Value::as_str)
+        .map(|name| Some(name.to_string()))
+        .ok_or_else(|| "the first repository carried no `full_name` string".to_string())
 }
 
 #[test]
@@ -209,8 +225,9 @@ fn github_live_probe() {
     }
 
     match first_repo_full_name(&http, &org) {
-        None => println!("repo + public-key: skip (org has no repository)"),
-        Some(full_name) => {
+        Ok(None) => println!("repo + public-key: skip (the org has no repository)"),
+        Err(reason) => println!("repo + public-key: skip ({reason})"),
+        Ok(Some(full_name)) => {
             check(
                 "/repos/{org}/{repo}",
                 "repo_get_present",
