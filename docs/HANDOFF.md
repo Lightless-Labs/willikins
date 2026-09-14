@@ -39,9 +39,12 @@ compaction, before handing off, after a milestone, and after a plan change or di
   end-to-end proof in the throwaway org; the operator's CI design (2026-09-14): every secret
   lives in Doppler and Buildkite holds one CI/CD Doppler service-account token, so no
   per-repository secret is ever pushed into CI. Milestone 3 therefore drops the
-  `ci_secret` sink from the positive fixture; what may remain is granting that CI
-  service account access to the new Doppler project, and possibly creating the Buildkite
-  pipeline for the new repository (asked, not yet answered). App Store Connect is a
+  `ci_secret` sink from the positive fixture and adds a Buildkite provider whose first tool
+  creates the pipeline for the new repository (the operator confirmed 2026-09-14 that
+  willikins must be able to provision the pipeline when a workflow asks for it, and their
+  workflows do); whether provisioning also grants the CI service account access to the
+  new Doppler project is a milestone 3 design question. A Buildkite API token for a test
+  org is needed when that work starts. App Store Connect is a
   candidate provider after that.
 - **Group A landed (2026-09-12, late evening):** Workflow `wf_c7a1d060-cec` ran three
   worktree lanes. Lane 1 (1a, 1b) and lane 3 (task 0, 1d) merged onto `main` with gates

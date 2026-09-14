@@ -917,9 +917,10 @@ Recorded here so they are not lost; nothing in this milestone depends on them.
 - CI (operator, 2026-09-14): the org runs Buildkite with self-hosted agents, not GitHub
   Actions; every secret lives in Doppler and Buildkite holds one CI/CD Doppler
   service-account token. So `github.actions_secret.ensure` is this milestone's proof of the
-  secret flow only; milestone 3 drops the `ci_secret` step from the positive fixture and
-  decides whether provisioning grants the CI service account access to the new project
-  and whether it creates the Buildkite pipeline for the repository.
+  secret flow only; milestone 3 drops the `ci_secret` step from the positive fixture, adds a
+  Buildkite provider whose first tool creates the pipeline for the new repository (the
+  operator confirmed on 2026-09-14 that workflows must be able to provision it), and
+  decides whether provisioning grants the CI service account access to the new project.
 
 ## Review resolutions
 
