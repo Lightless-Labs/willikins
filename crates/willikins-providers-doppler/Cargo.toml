@@ -1,0 +1,28 @@
+[package]
+name = "willikins-providers-doppler"
+description = "Live Doppler provider tools: doppler.project.ensure, doppler.config.ensure, doppler.service_token.ensure, doppler.service_token.rotate, doppler.secret.get"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+willikins-core.workspace = true
+willikins-types.workspace = true
+willikins-providers-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+willikins-providers-http = { workspace = true, features = ["test-support"] }
+willikins-providers-fake.workspace = true
+mockito.workspace = true
+insta.workspace = true
+
+[lints]
+workspace = true

@@ -9,6 +9,7 @@ members = [
   "crates/willikins-providers-fake",
   "crates/willikins-providers-http",
   "crates/willikins-providers-github",
+  "crates/willikins-providers-doppler",
   "crates/willikins-journal",
   "crates/willikins-cli",
 ]
@@ -30,6 +31,7 @@ willikins-tools = { path = "crates/willikins-tools" }
 willikins-providers-fake = { path = "crates/willikins-providers-fake" }
 willikins-providers-http = { path = "crates/willikins-providers-http" }
 willikins-providers-github = { path = "crates/willikins-providers-github" }
+willikins-providers-doppler = { path = "crates/willikins-providers-doppler" }
 willikins-journal = { path = "crates/willikins-journal" }
 
 chrono = { version = "0.4", default-features = false, features = ["now", "serde"] }

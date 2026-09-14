@@ -1,0 +1,33 @@
+---
+source: crates/willikins-providers-doppler/tests/catalog_parity.rs
+expression: "spec_json(DopplerConfigEnsure::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Ensure an environment's root Doppler config exists.",
+  "inputs": {
+    "environment": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "EnvironmentSlug"
+      }
+    },
+    "project": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerProject"
+      }
+    }
+  },
+  "key": [
+    "project",
+    "environment"
+  ],
+  "name": "doppler.config.ensure",
+  "outputs": {
+    "config": "DopplerConfig"
+  },
+  "pure": false
+}

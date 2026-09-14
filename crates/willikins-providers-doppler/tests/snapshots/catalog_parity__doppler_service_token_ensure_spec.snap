@@ -1,0 +1,33 @@
+---
+source: crates/willikins-providers-doppler/tests/catalog_parity.rs
+expression: "spec_json(DopplerServiceTokenEnsure::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Ensure a Doppler service token exists. Its value can never be re-read once issued.",
+  "inputs": {
+    "config": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerConfig"
+      }
+    },
+    "name": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerTokenName"
+      }
+    }
+  },
+  "key": [
+    "config",
+    "name"
+  ],
+  "name": "doppler.service_token.ensure",
+  "outputs": {
+    "token": "DopplerServiceToken"
+  },
+  "pure": false
+}

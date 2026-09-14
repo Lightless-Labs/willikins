@@ -1,0 +1,33 @@
+---
+source: crates/willikins-providers-doppler/tests/catalog_parity.rs
+expression: "spec_json(DopplerServiceTokenRotate::new(test_client()).spec())"
+---
+{
+  "class": "destructive",
+  "description": "Revoke and re-mint a Doppler service token.",
+  "inputs": {
+    "config": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerConfig"
+      }
+    },
+    "name": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerTokenName"
+      }
+    }
+  },
+  "key": [
+    "config",
+    "name"
+  ],
+  "name": "doppler.service_token.rotate",
+  "outputs": {
+    "token": "DopplerServiceToken"
+  },
+  "pure": false
+}

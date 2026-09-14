@@ -2377,6 +2377,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "willikins-providers-doppler"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "insta",
+ "mockito",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "willikins-core",
+ "willikins-providers-fake",
+ "willikins-providers-http",
+ "willikins-types",
+]
+
+[[package]]
 name = "willikins-providers-fake"
 version = "0.1.0"
 dependencies = [

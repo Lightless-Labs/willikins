@@ -1,0 +1,379 @@
+//! [`DopplerClient`]: typed calls for exactly the endpoints the five
+//! Doppler tools need. No tool ever builds a URL or query string itself;
+//! every path this client builds is assembled from already-validated
+//! domain types ([`DopplerProject`], [`DopplerConfigName`],
+//! [`DopplerTokenName`], [`SecretName`]), whose grammars are
+//! alphanumeric-and-hyphen-or-underscore, so none of them can smuggle a
+//! `/`, a `?`, or `&` into the request line.
+//!
+//! Doppler documents no error-body schema for any non-2xx response
+//! (research note `docs/research/2026-09-12-m2-dependencies.md`, section
+//! 3): the shared [`willikins_providers_http::Http`] client already
+//! treats an error body as opaque, reading a `messages` array when one is
+//! present and otherwise reporting the status alone, so this client adds
+//! no error-shape parsing of its own.
+
+use serde::{Deserialize, Serialize};
+
+use willikins_providers_http::{Credential, CredentialError, Http, ProviderError};
+use willikins_types::{
+    DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName,
+    SecretName,
+};
+
+/// Doppler's REST API base URL.
+pub const DOPPLER_API_BASE_URL: &str = "https://api.doppler.com";
+
+/// The environment variable a Doppler [`Credential`] is read from.
+pub const CREDENTIAL_VAR: &str = "WILLIKINS_DOPPLER_TOKEN";
+
+/// The shape of a Doppler token this crate accepts for provisioning: a
+/// Service Account token (`dp.sa.`) or a Personal token (`dp.pt.`). A
+/// Service token (`dp.st.`) is secrets-only within one config and cannot
+/// provision (research note section 3, "Doppler authentication and token
+/// types"); [`credential_from_env`] refuses one with
+/// [`DopplerCredentialError::WrongKind`] rather than the shared crate's
+/// generic [`CredentialError::Malformed`].
+pub const CREDENTIAL_PATTERN: &str = r"^dp\.(sa|pt)\.[a-zA-Z0-9]{40,44}$";
+
+/// The project `description` that marks a Doppler project as willikins'
+/// own. Configs and service tokens under an owned project are ours by
+/// construction — Doppler has no per-config or per-token ownership
+/// marker of its own.
+pub const MANAGED_DESCRIPTION: &str = "managed-by: willikins";
+
+/// Why [`credential_from_env`] refused to build a [`Credential`].
+///
+/// Never carries the environment variable's value: the `WrongKind`
+/// variant is raised from [`CredentialError::Malformed`] alone, without
+/// ever having read the value itself (see that function's docs for why
+/// this crate does not pre-inspect the environment variable).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DopplerCredentialError {
+    /// The environment variable was unset or empty. See
+    /// [`CredentialError::Missing`].
+    #[error(transparent)]
+    Missing(CredentialError),
+    /// The environment variable was set but did not match
+    /// [`CREDENTIAL_PATTERN`] — either it is not shaped like any Doppler
+    /// token at all, or it is a Service token (`dp.st.`), which cannot
+    /// provision.
+    #[error(
+        "a Doppler service-account (`dp.sa.`) or personal (`dp.pt.`) token is needed to \
+         provision; a service token (`dp.st.`) cannot create projects, environments, or tokens"
+    )]
+    WrongKind,
+}
+
+/// Read [`CREDENTIAL_VAR`] from the process environment and validate it
+/// against [`CREDENTIAL_PATTERN`].
+///
+/// Deliberately does not pre-inspect the raw environment variable's
+/// value to give a more specific message: doing so would read a
+/// Doppler token's bytes into a plain `String` inside this crate, a
+/// second site outside `willikins-providers-http` invisible to
+/// `crates/willikins-core/tests/expose_secret_guard.rs` and exactly the
+/// surface trust boundary 1 ("Two kinds of secret") confines credential
+/// bytes away from. Instead, every [`CredentialError::Malformed`] the
+/// shared [`Credential::from_env`] reports (which covers both "not
+/// shaped like any Doppler token" and "shaped like a `dp.st.` token") is
+/// mapped to the one [`DopplerCredentialError::WrongKind`] message: it
+/// says which kind is needed without knowing, or repeating, what was
+/// actually supplied.
+///
+/// # Errors
+///
+/// See [`Credential::from_env`], mapped through
+/// [`DopplerCredentialError`].
+///
+/// # Panics
+///
+/// Never in practice: [`CREDENTIAL_PATTERN`] is a fixed, compile-time-known
+/// literal already exercised by this crate's own tests, so
+/// `Regex::new` on it cannot fail.
+pub fn credential_from_env() -> Result<Credential, DopplerCredentialError> {
+    let pattern =
+        regex::Regex::new(CREDENTIAL_PATTERN).expect("CREDENTIAL_PATTERN is a valid regex");
+    Credential::from_env(CREDENTIAL_VAR, &pattern).map_err(|err| match err {
+        CredentialError::Missing { .. } => DopplerCredentialError::Missing(err),
+        CredentialError::Malformed { .. } => DopplerCredentialError::WrongKind,
+    })
+}
+
+/// Build an [`Http`] against Doppler's real API, carrying `credential`.
+/// Doppler needs no headers beyond the bearer `Authorization` header
+/// every [`Http`] request already carries.
+#[must_use]
+pub fn http_client(credential: Credential) -> Http {
+    Http::new(DOPPLER_API_BASE_URL, Vec::new(), credential)
+}
+
+/// A typed Doppler REST client, bound to one [`Http`] (which itself owns
+/// the [`Credential`]).
+pub struct DopplerClient {
+    http: Http,
+}
+
+impl DopplerClient {
+    /// Build a client over `http`.
+    #[must_use]
+    pub fn new(http: Http) -> Self {
+        Self { http }
+    }
+
+    /// `GET /v3/projects/project?project=<name>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] for any non-2xx response (a `404`
+    /// meaning "absent", handled by the caller) or a transport failure.
+    pub(crate) fn get_project(
+        &self,
+        project: &DopplerProject,
+    ) -> Result<ProjectBody, ProviderError> {
+        let path = format!("/v3/projects/project?project={project}");
+        self.http
+            .get::<ProjectEnvelope>(&path)
+            .map(|envelope| envelope.project)
+    }
+
+    /// `POST /v3/projects` with `name` and the [`MANAGED_DESCRIPTION`]
+    /// marker. Never retried, by this client or by [`Http`] underneath
+    /// it: an ambiguous failure here is resolved by the caller
+    /// re-`read`ing.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub(crate) fn create_project(&self, project: &DopplerProject) -> Result<(), ProviderError> {
+        let body = CreateProjectBody {
+            name: project.to_string(),
+            description: MANAGED_DESCRIPTION.to_string(),
+        };
+        self.http.post::<ProjectEnvelope>("/v3/projects", &body)?;
+        Ok(())
+    }
+
+    /// `GET /v3/configs/config?project=<project>&config=<name>`. Reports
+    /// only existence, discarding the body entirely — this crate only
+    /// ever looks a config up at the name it itself derived as a root
+    /// config's own identifier
+    /// ([`willikins_types::naming::v1::doppler_root_config`]), so a
+    /// `200` there is unambiguously the root config `doppler.config.ensure`
+    /// is asking about (Doppler's `root` field in the response is real
+    /// but not consulted: the milestone's port table gives this tool no
+    /// `Foreign` state to distinguish `root: false` from, and a config
+    /// found at a root config's own slug is never anything else in
+    /// practice — a branch config's name cannot collide with it).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub(crate) fn get_config(
+        &self,
+        project: &DopplerProject,
+        name: &DopplerConfigName,
+    ) -> Result<(), ProviderError> {
+        let path = format!("/v3/configs/config?project={project}&config={name}");
+        self.http.get::<serde_json::Value>(&path)?;
+        Ok(())
+    }
+
+    /// `POST /v3/environments?project=<project>` with `name` and `slug`
+    /// both equal to `config_name` — the root config's own name (research
+    /// note section 3, "Doppler configs": creating an environment creates
+    /// its root config with the environment's own identifier). Never
+    /// retried, for the same reason as [`Self::create_project`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub(crate) fn create_environment(
+        &self,
+        project: &DopplerProject,
+        config_name: &DopplerConfigName,
+    ) -> Result<(), ProviderError> {
+        let path = format!("/v3/environments?project={project}");
+        let body = CreateEnvironmentBody {
+            name: config_name.to_string(),
+            slug: config_name.to_string(),
+        };
+        self.http.post::<serde_json::Value>(&path, &body)?;
+        Ok(())
+    }
+
+    /// `GET /v3/configs/config/tokens?project=<project>&config=<config>`.
+    /// The response omits `key` and `access` for every listed token
+    /// (research note section 3, "Doppler service tokens").
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub(crate) fn list_service_tokens(
+        &self,
+        project: &DopplerProject,
+        config: &DopplerConfigName,
+    ) -> Result<Vec<TokenListEntry>, ProviderError> {
+        let path = format!("/v3/configs/config/tokens?project={project}&config={config}");
+        self.http
+            .get::<TokensEnvelope>(&path)
+            .map(|envelope| envelope.tokens)
+    }
+
+    /// `POST /v3/configs/config/tokens` with `project`, `config`, `name`,
+    /// and `access: "read"`. Never retried: minting is a `POST`, and a
+    /// caller that needs to know whether a retried, ambiguous failure
+    /// still minted a token re-lists instead.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub(crate) fn create_service_token(
+        &self,
+        project: &DopplerProject,
+        config: &DopplerConfigName,
+        name: &DopplerTokenName,
+    ) -> Result<TokenCreateBody, ProviderError> {
+        let body = CreateTokenBody {
+            project: project.to_string(),
+            config: config.to_string(),
+            name: name.to_string(),
+            access: "read",
+        };
+        self.http
+            .post::<TokenCreateEnvelope>("/v3/configs/config/tokens", &body)
+            .map(|envelope| envelope.token)
+    }
+
+    /// `DELETE /v3/configs/config/tokens/token` with `project`, `config`,
+    /// and `slug` in the body (Doppler's revoke endpoint takes the
+    /// identifying fields in the request body, not the path or query —
+    /// research note section 3, "Doppler service tokens").
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub(crate) fn delete_service_token(
+        &self,
+        project: &DopplerProject,
+        config: &DopplerConfigName,
+        slug: &str,
+    ) -> Result<(), ProviderError> {
+        let body = DeleteTokenBody {
+            project: project.to_string(),
+            config: config.to_string(),
+            slug: slug.to_string(),
+        };
+        self.http
+            .delete_with_body("/v3/configs/config/tokens/token", &body)
+    }
+
+    /// `GET /v3/configs/config/secret?project=<project>&config=<config>&name=<name>`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`]. A `404` names "no such secret" and
+    /// never a value, because there is none to name.
+    pub(crate) fn get_secret(
+        &self,
+        project: &DopplerProject,
+        config: &DopplerConfigName,
+        name: &SecretName,
+    ) -> Result<DopplerSecretValue, ProviderError> {
+        let path =
+            format!("/v3/configs/config/secret?project={project}&config={config}&name={name}");
+        self.http
+            .get::<SecretBody>(&path)
+            .map(|body| body.value.computed)
+    }
+}
+
+/// Doppler's project envelope: `{"project": {...}}`.
+#[derive(Debug, Deserialize)]
+struct ProjectEnvelope {
+    project: ProjectBody,
+}
+
+/// The one field of Doppler's project object this crate consults:
+/// `description`, used to detect the [`MANAGED_DESCRIPTION`] ownership
+/// marker. Nullable in Doppler's schema (a project created with no
+/// description at all).
+#[derive(Debug, Deserialize)]
+pub(crate) struct ProjectBody {
+    pub(crate) description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateProjectBody {
+    name: String,
+    description: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateEnvironmentBody {
+    name: String,
+    slug: String,
+}
+
+/// Doppler's token-list envelope: `{"tokens": [...]}`.
+#[derive(Debug, Deserialize)]
+struct TokensEnvelope {
+    tokens: Vec<TokenListEntry>,
+}
+
+/// One listed service token: `name` (to match against) and `slug` (to
+/// revoke by). The list response omits `key` and `access` entirely
+/// (research note section 3).
+#[derive(Debug, Deserialize)]
+pub(crate) struct TokenListEntry {
+    pub(crate) name: String,
+    pub(crate) slug: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateTokenBody {
+    project: String,
+    config: String,
+    name: String,
+    access: &'static str,
+}
+
+/// Doppler's token-create envelope: `{"token": {...}}`.
+#[derive(Debug, Deserialize)]
+struct TokenCreateEnvelope {
+    token: TokenCreateBody,
+}
+
+/// The one field of Doppler's create-token response this crate reads:
+/// `key`, the raw token value, present only in the create response and
+/// never again (research note section 3). Deserialized straight into
+/// [`DopplerServiceToken`] — trust boundary 5: "the response structs
+/// that hold it hold the domain type, whose `Debug` is redacted" — so a
+/// key that fails [`DopplerServiceToken`]'s pattern fails here, inside
+/// [`willikins_providers_http::Http::finish`]'s body-parse step, echoing
+/// neither the key nor its prefix (only a line/column position, which is
+/// willikins' own observation, never response text).
+#[derive(Debug, Deserialize)]
+pub(crate) struct TokenCreateBody {
+    pub(crate) key: DopplerServiceToken,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteTokenBody {
+    project: String,
+    config: String,
+    slug: String,
+}
+
+/// Doppler's secret-get response: `{"name": ..., "value": {...}}`, no
+/// envelope key. `value.computed` (references resolved) is what a
+/// consumer needs — never `value.raw`.
+#[derive(Debug, Deserialize)]
+struct SecretBody {
+    value: SecretValueBody,
+}
+
+#[derive(Debug, Deserialize)]
+struct SecretValueBody {
+    computed: DopplerSecretValue,
+}

@@ -1,0 +1,25 @@
+---
+source: crates/willikins-providers-doppler/tests/catalog_parity.rs
+expression: "spec_json(DopplerProjectEnsure::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Ensure a Doppler project exists.",
+  "inputs": {
+    "project": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerProject"
+      }
+    }
+  },
+  "key": [
+    "project"
+  ],
+  "name": "doppler.project.ensure",
+  "outputs": {
+    "project": "DopplerProject"
+  },
+  "pure": false
+}
