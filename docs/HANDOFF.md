@@ -10,8 +10,9 @@ compaction, before handing off, after a milestone, and after a plan change or di
 ### RESUME HERE (2026-09-14, later) — milestone 2 tasks 0 through 9 landed; the GitHub write cycle and task 10a (server library) are next
 
 - **Live state:** `main` at 227 local commits, gates green at HEAD (1,325 tests pass, 6 ignored; the ignored ones
-  are by-hand measurements, a lock-probe child, and the two live probes). No remote is
-  configured and nothing has been pushed.
+  are by-hand measurements, a lock-probe child, and the two live probes). Remote `origin` is
+  `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
+  `main` is pushed after every coordinator commit.
 - **What just happened:** tasks 7 (`willikins-providers-github`), 8
   (`willikins-providers-doppler`) and 9 (adversarial pass 1) landed through Workflow
   `wf_5a050a35-0a3`. The verifiers' real finds: a repository whose `topics` is null failed
@@ -26,9 +27,13 @@ compaction, before handing off, after a milestone, and after a plan change or di
   the pass; `todos/2026-09-14-pass-1-items-for-task-10a.md` lists what the server closes.
 - **Product fact (2026-09-14):** the operator's CI is Buildkite with self-hosted runners,
   not GitHub Actions. `github.actions_secret.ensure` stays milestone 2's secret sink as the
-  end-to-end proof in the throwaway org; milestone 3 adds a Buildkite provider (pipeline
-  per repo, a secret sink for the Doppler token) and the positive fixture's `ci_secret`
-  step switches to it. App Store Connect is a candidate provider after that.
+  end-to-end proof in the throwaway org; the operator's CI design (2026-09-14): every secret
+  lives in Doppler and Buildkite holds one CI/CD Doppler service-account token, so no
+  per-repository secret is ever pushed into CI. Milestone 3 therefore drops the
+  `ci_secret` sink from the positive fixture; what may remain is granting that CI
+  service account access to the new Doppler project, and possibly creating the Buildkite
+  pipeline for the new repository (asked, not yet answered). App Store Connect is a
+  candidate provider after that.
 - **Group A landed (2026-09-12, late evening):** Workflow `wf_c7a1d060-cec` ran three
   worktree lanes. Lane 1 (1a, 1b) and lane 3 (task 0, 1d) merged onto `main` with gates
   green. Lane 2 (1c) was lost: the coordinator's stop message meant for a duplicate agent
