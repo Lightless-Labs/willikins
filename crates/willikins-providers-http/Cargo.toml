@@ -1,0 +1,36 @@
+[package]
+name = "willikins-providers-http"
+description = "Execution-context credentials and a synchronous HTTP client wrapper for live providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+test-support = ["dep:mockito"]
+
+[dependencies]
+willikins-core.workspace = true
+willikins-types.workspace = true
+secrecy.workspace = true
+regex.workspace = true
+ureq.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+mockito = { workspace = true, optional = true }
+
+[dev-dependencies]
+trybuild.workspace = true
+# Self dev-dependency enabling `test-support` for this crate's own
+# `tests/` and `#[cfg(test)]` code, the same trick `willikins-core` uses
+# for its own `test-support` feature: `--all-targets` never builds a
+# crate the way its dependents see it, so the feature must come from
+# somewhere `cargo test` actually unifies against.
+willikins-providers-http = { path = ".", features = ["test-support"] }
+
+[lints]
+workspace = true
