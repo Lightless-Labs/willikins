@@ -29,9 +29,13 @@ approval gate, recorded in `docs/research/2026-09-14-executor-journal-adversaria
 no attack reached a secret byte, one defect fixed, and the boundaries core leaves to the
 server are `boundary_` tests plus `todos/2026-09-14-pass-1-items-for-task-10a.md`).
 
-**Next:** a live GitHub write cycle against the sandbox org (the operator asked for real
-provisioning evidence early), then 10a, 10b, 11, 12, 13, 14. This todo closes when the plan
-is marked Completed.
+2026-09-14 (later): both live write cycles ran against the operator's sandbox org and
+dedicated Doppler workplace (a repository and a project created, converged, and deleted through
+the real tools; the Doppler one found and fixed two defects), then task 10a landed in two halves
+and an Opus verify fixed a decision race, an unjournaled refusal and a read outside the lock.
+
+**Next:** 10b (restart-safe plans and `Reported` validate errors first, then the rmcp binary),
+11, 12, 13, 14. This todo closes when the plan is marked Completed.
 
 ## First action of the next session
 
