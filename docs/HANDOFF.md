@@ -7,13 +7,24 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-14, afternoon) — milestone 2 tasks 0 through 9 and the live GitHub write cycle landed; task 10a (server library) is running
+### RESUME HERE (2026-09-14, evening) — tasks 0 through 10a and both live write cycles landed; the task 10a verify is running
 
 - **Live state:** `main` at 227 local commits, gates green at HEAD (1,325 tests pass, 6 ignored; the ignored ones
   are by-hand measurements, a lock-probe child, and the two live probes). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
   `main` is pushed after every coordinator commit.
-- **What just happened:** the live GitHub write cycle
+- **What just happened:** the live Doppler write cycle
+  (`crates/willikins-providers-doppler/tests/live_write_cycle.rs`, `live-tests` feature plus
+  `WILLIKINS_LIVE_TESTS=1`, an Opus agent outside the Workflow) ran green on its fourth
+  attempt against the dedicated test workplace: a real project created, converged, refused
+  as foreign, its three auto-created root configs `Unchanged`, a new environment, a token
+  minted and rotated, a secret read, both projects deleted. It found and fixed two defects:
+  a missing secret is Doppler `200` with `value.computed: null`, now `NotFound`; and the
+  token list's `token_preview` leaked six real token characters into the gitignored live
+  recordings, now redacted. Eight Doppler fixtures verified; the research note's project-id
+  claim corrected; verify item 4 and the branch-config prefix question answered in the
+  plan. Task 10a (both halves) landed through Workflow `wf_a2ae26fe-894` and its Opus
+  verify is running. Earlier the same day, the live GitHub write cycle
   (`crates/willikins-providers-github/tests/live_write_cycle.rs`, opt-in with
   `WILLIKINS_LIVE_TESTS=1`, Workflow `wf_a2ae26fe-894`) ran once, green on the first try:
   `github.repo.ensure` created `Willikins-Test/willikins-live-write-cycle`, converged with
@@ -54,10 +65,9 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `WorkflowName` and `Description`, plus token-literal reshaping) and 1c is re-run on
   `main`. Tasks 1c, 1e, 2 and 3 run sequentially on `main`, one Workflow. Operator
   credentials are in
-  `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is a
-  config-scoped service token (`dp.st.`), enough for auth and `doppler.secret.get`
-  against `willikins-test/dev`, not for creating projects, environments or tokens; task
-  8's create-side probe and task 14 need a `dp.sa.` or `dp.pt.` token from the operator.
+  `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
+  2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
+  test workplace (the earlier `dp.st.` config-scoped token could only read one config).
 - **Next action:** task 10a is running in Workflow `wf_a2ae26fe-894` (10a-i: ids,
   plan identity, windows, the journal-backed `Butler`, the single-apply lock; 10a-ii:
   startup checks, trusted directory, read operations, rate limits, config, live catalog;
@@ -72,8 +82,12 @@ compaction, before handing off, after a milestone, and after a plan change or di
 - **Credentials for the probe and the smoke run** live in `~/.config/willikins/sandbox.env`
   (mode 600, outside the repo; source it before a live run): a GitHub fine-grained PAT
   scoped to the test organization `Willikins-Test` (read-only checks passed 2026-09-13)
-  and a Doppler service token that can only read `willikins-test/dev`; the create-side
-  probe and task 14 still need a `dp.sa.` or `dp.pt.` Doppler token from the operator.
+  and a Doppler service-account token (`dp.sa.`) for a dedicated test workplace that
+  holds no project: the read-only probe ran on 2026-09-14, authenticated, and failed on
+  four 404s for `willikins-test` (the missing-project shape check passed). A Doppler live
+  write cycle (`crates/willikins-providers-doppler/tests/live_write_cycle.rs`, gated by
+  the `live-tests` feature plus `WILLIKINS_LIVE_TESTS=1`) creates and deletes its own
+  throwaway projects there, so no persistent project is needed for the fixtures.
   Agents get the file path, never the values, and never print them.
 - **Ask the operator for** sandbox credentials (a throwaway GitHub org token and a Doppler
   service-account token) before task 8, so the read-only probe settles the undocumented

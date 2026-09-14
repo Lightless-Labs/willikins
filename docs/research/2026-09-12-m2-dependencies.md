@@ -557,7 +557,11 @@ it is not name-only with server-derived slug, contrary to what might be assumed.
 field carries a regex in the OpenAPI schema (both are bare `"type": "string"`); the only
 documented constraint is length. The response's `project` field is the project's opaque
 internal `id` (e.g. `ed0c2a68b6`), not the project name — a response-shape gotcha shared with
-configs (see below).
+configs (see below). **Corrected 2026-09-14 by the live write cycle:** against a real
+workplace, `project.id`, `project.name` and `project.slug` all hold the project name, and the
+`project` field of every other object (config, environment, token) is that name too. The
+fixtures were changed to match; the `ed0c2a68b6` example above is the OpenAPI example, not
+live behaviour.
 
 - `POST /v3/environments` request body requires both `name` and `slug`; query requires `project` (by name); `personal_configs` is an optional boolean, default `false`. (source: https://docs.doppler.com/reference/environments-create)
   - `"required": ["name", "slug"]` ... `"personal_configs": {"type": "boolean", "description": "Whether or not to enable personal configs for the environment", "default": false}`

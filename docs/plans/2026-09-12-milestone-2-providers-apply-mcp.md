@@ -8,6 +8,7 @@
 **Addendum:** 2026-09-14 (before task 7) — the read-only live probe splits: its GitHub half runs in task 7 (the sandbox PAT exists), its Doppler half is written in task 8 but cannot run until the operator supplies a `dp.sa.` or `dp.pt.` token, because the plan's own credential regex refuses the `dp.st.` token on hand; Doppler fixtures stay marked unverified until then. GitHub's secondary rate limit: the tools retry a 403 carrying `retry-after` or `x-ratelimit-remaining: 0` under the shared client's 60 s cap, then return `Provider` naming the rate limit and the reset time, never "missing permission"; an apply never sleeps until a reset an hour away.
 **Addendum:** 2026-09-14 (after tasks 7, 8 and 9) — `willikins-providers-http` grew for the providers: `ProviderError` carries the rate-limit facts (`retry_after`, `rate_limit_remaining`, `rate_limit_reset`), `Http::put_empty` (GitHub's 204 secret PUT) and `Http::delete_with_body` (Doppler's token revocation); the GitHub client retries a rate-limited 403 itself under the 60 s cap. Doppler: `doppler.config.ensure` reads `Present` only on `200` with `root: true`; `root: false`, missing or null is `Foreign` (a branch config `<env>_<name>` can occupy the name `naming::v1` derives for a multi-word environment, so the check is load-bearing); `doppler.service_token.rotate`'s `read` always reports `Absent`, as the fake does, so a Destructive step never plans as `NoOp`; both Doppler ensure tools re-read after any error following a possibly delivered create, since Doppler documents no error-body schema. The GitHub read-only probe ran against the sandbox org (identity and org endpoints verified; the repository and public-key fixtures wait for a repository to exist); the Doppler probe is written and refused by the credential regex until a service-account token exists. Adversarial pass 1 (`docs/research/2026-09-14-executor-journal-adversarial-pass-1.md`): no secret byte escaped; one defect fixed (a journal line could rewrite the record it named; the fold now keeps the first record of an id and `FileJournal::open` refuses a duplicate `PlanRecorded`, `RunStarted`, `RunFinished` or `NodeFinished`); acceptance test 19's "tracing line" quarter moves to pass 2 (nothing below the server emits `tracing`); the boundaries closed by task 10a are `todos/2026-09-14-pass-1-items-for-task-10a.md`. Open question for milestone 3: a repository created whose topic `PUT` then fails is an orphan that reads `Foreign` until overrides exist.
 **Addendum:** 2026-09-14 (afternoon) — the live GitHub write cycle the operator asked for landed ahead of task 14: `crates/willikins-providers-github/tests/live_write_cycle.rs`, opt-in with `WILLIKINS_LIVE_TESTS=1`, drives the two real tools through create, converge (`changed: false`), the visibility conflict (test 9 live), a sealed secret read back `Present`, records the three fixtures the probe could not reach (all verified, none changed), and deletes the repository under a panic-safe guard; deletion exists only in that test, never in a tool or client method. Observed: no propagation delay between create and the first read, the secret endpoint really carries no value field, DELETE answered 2xx. `Http::delete` collapses every 2xx into `Ok(())`, so the literal 204 is not pinned.
+**Addendum:** 2026-09-14 (evening) — the live Doppler write cycle landed against the operator's dedicated test workplace with a `dp.sa.` token: `crates/willikins-providers-doppler/tests/live_write_cycle.rs`, behind the crate's `live-tests` feature plus `WILLIKINS_LIVE_TESTS=1`, drives all five tools through a real project (create, converge, the foreign conflict, the three auto-created root configs `Unchanged`, a new environment, a minted then rotated service token, a secret read) and deletes both projects it creates under a guard. Two defects fixed: `doppler.secret.get` reported a missing secret as a parse failure, because Doppler answers `200` with `value.computed: null` rather than `404` (`docs/solutions/providers/doppler-answers-200-not-404-for-a-missing-secret.md`); the token list's `token_preview` field (six real characters of each token) was written to the gitignored live recordings unredacted and is now a redacted field. Eight fixtures verified; the research note's "opaque project id" claim was wrong (the id is the name) and is corrected. Verify item 4 and the branch-config prefix question are answered in place. `Http` collapses every DELETE 2xx into `Ok(())`, and Doppler answers `400` for a DELETE of an already deleted project and, briefly, `400` for a GET straight after a delete, so the cycle's final check asserts "not readable".
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
 **Previous:** `docs/plans/2026-09-11-milestone-1-core.md`
 **Research:** `docs/research/2026-09-12-m2-dependencies.md`
@@ -897,8 +898,13 @@ order the tasks need them.
 4. Task 8: the Doppler error-body shape (undocumented; the client treats it as opaque), the
    status of `POST /v3/projects` on a duplicate name, the environment slug's character class
    (undocumented beyond 2 to 50 characters), and whether two service tokens may share a
-   name in one config. All four are answered by task 8's read-only probe as soon as
-   sandbox credentials exist, and at the latest by the live smoke run.
+   name in one config. Answered 2026-09-14 by the live Doppler write cycle: the error body
+   carries a `messages` array (labelled `provider says:`; its `success: false` half is
+   unobservable because the client never exposes the body); a duplicate `POST /v3/projects`
+   is `400` with a provider message, not `409`, and creates nothing; the environment slug
+   accepts an underscore (`pre_prod`, the snake join `naming::v1` derives, was created with
+   name and slug equal); two tokens sharing a name was left unanswered on purpose, since
+   finding out mints a second live token into a raw response body.
 5. Task 10b: whether current MCP clients (Claude Code, the rmcp client used in test 11)
    negotiate `2026-07-28` or fall back to a legacy version that needs
    `legacy_session_mode: true`; test 11 runs the in-process client against both settings.
@@ -910,9 +916,10 @@ order the tasks need them.
 
 Recorded here so they are not lost; nothing in this milestone depends on them.
 
-- Whether `POST /v3/configs` expects the caller to prefix a branch config's name with
-  `<environment>_` or applies the prefix server-side (research note, section 3), which
-  decides the `naming::v2` row for branch configs.
+- Answered 2026-09-14 by the live write cycle: `POST /v3/configs` does not prefix
+  server-side (`name: "probe"` under `dev` is `400`; `name: "dev_probe"` is stored as
+  `dev_probe` with `root: false`), so the `naming::v2` branch-config row must emit
+  `<environment>_<name>` itself and budget the 60-character cap with the prefix included.
 - Whether the GitHub credential can be narrowed below org-wide `Administration: write` (a
   GitHub App installation, say) and whether Doppler service accounts can be scoped per
   project, which decides the credential blast radius recorded above.
