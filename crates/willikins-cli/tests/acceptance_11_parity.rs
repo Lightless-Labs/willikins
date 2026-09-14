@@ -133,7 +133,7 @@ fn validate_parity_for_both_positive_fixtures() {
 
         let response = butler()
             .validate(
-                DocumentSource::Name(WorkflowName::parse(name).unwrap()),
+                &DocumentSource::Name(WorkflowName::parse(name).unwrap()),
                 principal(),
             )
             .unwrap_or_else(|err| panic!("{name}: Butler::validate: {err}"));
@@ -174,7 +174,7 @@ fn describe_parity_for_both_positive_fixtures() {
         }
         let description = butler()
             .describe(
-                DocumentSource::Name(WorkflowName::parse(name).unwrap()),
+                &DocumentSource::Name(WorkflowName::parse(name).unwrap()),
                 &partial,
                 principal(),
             )

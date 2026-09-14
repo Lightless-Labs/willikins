@@ -36,7 +36,7 @@ fn validate_by_name_against_the_positive_fixture_is_ok_with_no_errors() {
     let (_dir, butler) = butler_and_dir();
     let response = butler
         .validate(
-            DocumentSource::Name(wf("new-rust-service")),
+            &DocumentSource::Name(wf("new-rust-service")),
             common::principal("agent"),
         )
         .unwrap();
@@ -50,7 +50,7 @@ fn validate_a_body_over_the_byte_cap_returns_the_dsl_error_never_a_parse() {
     let huge = "a".repeat(300_000);
     let body = format!("name: x\ndescription: {huge}\nsteps: {{}}\n");
     let err = butler
-        .validate(DocumentSource::Body(body), common::principal("agent"))
+        .validate(&DocumentSource::Body(body), common::principal("agent"))
         .expect_err("an over-cap body must refuse as a DocumentError, not a check result");
     assert!(matches!(err, ButlerError::Document { .. }), "{err:?}");
 }
@@ -61,7 +61,7 @@ fn validate_a_body_with_an_alias_returns_the_dsl_error() {
     let body = "name: x\ndescription: d\nanchor: &a value\nsteps: {}\nalias: *a\n";
     let err = butler
         .validate(
-            DocumentSource::Body(body.to_string()),
+            &DocumentSource::Body(body.to_string()),
             common::principal("agent"),
         )
         .expect_err("a document with an alias must refuse as a DocumentError");
@@ -73,7 +73,7 @@ fn validate_a_document_that_fails_check_reports_ok_false_with_errors() {
     let (_dir, butler) = butler_and_dir();
     let body = "name: x\ndescription: d\nsteps:\n  a:\n    tool: no.such.tool\n".to_string();
     let response = butler
-        .validate(DocumentSource::Body(body), common::principal("agent"))
+        .validate(&DocumentSource::Body(body), common::principal("agent"))
         .expect("a check failure is a normal (ok: false) response, not an Err");
     assert!(!response.ok);
     assert!(!response.errors.is_empty());
@@ -84,7 +84,7 @@ fn validate_an_unknown_workflow_name_is_unknown_workflow() {
     let (_dir, butler) = butler_and_dir();
     let err = butler
         .validate(
-            DocumentSource::Name(wf("no-such-workflow")),
+            &DocumentSource::Name(wf("no-such-workflow")),
             common::principal("agent"),
         )
         .expect_err("an unrecognised name must refuse");
@@ -108,7 +108,7 @@ fn acceptance_14_a_hostile_document_description_reaches_only_document_descriptio
 
     let description = butler
         .describe(
-            DocumentSource::Name(wf("hostile-description")),
+            &DocumentSource::Name(wf("hostile-description")),
             &indexmap::IndexMap::default(),
             common::principal("agent"),
         )
@@ -148,7 +148,7 @@ fn describe_reports_missing_and_rejected_inputs_as_result_fields_not_errors() {
     );
     let description = butler
         .describe(
-            DocumentSource::Name(wf("new-rust-service")),
+            &DocumentSource::Name(wf("new-rust-service")),
             &partial,
             common::principal("agent"),
         )
@@ -165,7 +165,7 @@ fn describe_a_document_that_fails_check_is_a_check_error() {
     let body = "name: x\ndescription: d\nsteps:\n  a:\n    tool: no.such.tool\n".to_string();
     let err = butler
         .describe(
-            DocumentSource::Body(body),
+            &DocumentSource::Body(body),
             &indexmap::IndexMap::default(),
             common::principal("agent"),
         )
@@ -307,7 +307,7 @@ fn describe_and_validate_share_one_rate_limit_bucket() {
     for _ in 0..ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE {
         butler
             .describe(
-                DocumentSource::Name(wf("new-rust-service")),
+                &DocumentSource::Name(wf("new-rust-service")),
                 &indexmap::IndexMap::default(),
                 principal.clone(),
             )
@@ -316,7 +316,7 @@ fn describe_and_validate_share_one_rate_limit_bucket() {
 
     let err = butler
         .validate(
-            DocumentSource::Name(wf("new-rust-service")),
+            &DocumentSource::Name(wf("new-rust-service")),
             principal.clone(),
         )
         .expect_err("validate shares describe's exhausted bucket");

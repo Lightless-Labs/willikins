@@ -277,7 +277,7 @@ impl Butler {
     /// [`ButlerError::RateLimited`].
     pub fn validate(
         &self,
-        source: DocumentSource,
+        source: &DocumentSource,
         principal: PrincipalId,
     ) -> Result<ValidateResponse, ButlerError> {
         if let Err(retry_after_seconds) = self.read_rate_limiter.check(&principal) {
@@ -286,10 +286,10 @@ impl Butler {
                 retry_after_seconds,
             });
         }
-        let result = self.validate_inner(&source);
+        let result = self.validate_inner(source);
         self.record_tool_call(
             "validate",
-            Self::source_workflow_name(&source),
+            Self::source_workflow_name(source),
             principal,
             result.is_ok(),
         );
@@ -331,7 +331,7 @@ impl Butler {
     /// [`ButlerError::Check`], or [`ButlerError::RateLimited`].
     pub fn describe(
         &self,
-        source: DocumentSource,
+        source: &DocumentSource,
         partial: &PartialInputs,
         principal: PrincipalId,
     ) -> Result<willikins_core::Description, ButlerError> {
@@ -341,10 +341,10 @@ impl Butler {
                 retry_after_seconds,
             });
         }
-        let result = self.describe_inner(&source, partial);
+        let result = self.describe_inner(source, partial);
         self.record_tool_call(
             "describe",
-            Self::source_workflow_name(&source),
+            Self::source_workflow_name(source),
             principal,
             result.is_ok(),
         );
@@ -389,12 +389,12 @@ impl Butler {
         name: &str,
         principal: PrincipalId,
     ) -> Result<ProposeSlugResponse, ButlerError> {
-        let result = self.propose_slug_inner(name);
+        let result = Self::propose_slug_inner(name);
         self.record_tool_call("propose_slug", None, principal, result.is_ok());
         result
     }
 
-    fn propose_slug_inner(&self, name: &str) -> Result<ProposeSlugResponse, ButlerError> {
+    fn propose_slug_inner(name: &str) -> Result<ProposeSlugResponse, ButlerError> {
         let project_name = willikins_types::ProjectName::parse(name)
             .map_err(|error| ButlerError::InvalidProjectName { error })?;
         let slug = willikins_types::propose_slug(&project_name)
