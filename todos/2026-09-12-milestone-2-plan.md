@@ -21,7 +21,13 @@ same day (20 findings folded in, stamped in the plan header). **2026-09-13:** ta
 opus-verified except 1e and 2). **2026-09-14:** tasks 4, 5 and 6 landed and were opus-verified (the executor's approval
 gate now reads the checked class; the journal replays through `Redacted<T>`; the HTTP client
 labels provider text and caps `Retry-After`). Next: 7 (GitHub), 8 (Doppler and the probe), 9
-(adversarial pass 1), sequentially. This todo closes when the plan is marked Completed.
+(adversarial pass 1), sequentially. **2026-09-14 (later):** task 9 (adversarial pass 1 over
+the executor, the journal and the approval gate) is done and recorded in
+`docs/research/2026-09-14-executor-journal-adversarial-pass-1.md`: no attack reached a secret
+byte, one defect fixed (a journal line could rewrite the record it named), and the boundaries
+core leaves to the server are now `boundary_` tests plus
+`todos/2026-09-14-pass-1-items-for-task-10a.md`. This todo closes when the plan is marked
+Completed.
 
 ## First action of the next session
 

@@ -47,7 +47,9 @@ commits, on a host that compiled `willikins-journal`'s test binary in twenty-one
 the four gates in full on the tree it finishes with: `cargo fmt --all --check`, `cargo clippy
 --workspace --all-targets -j 2 -- -D warnings`, `RUST_TEST_THREADS=2 cargo test --workspace
 -j 2 --no-fail-fast`, `cargo check -p willikins-types -j 2` — all four green, 1,325 tests
-passing, with clippy taking twenty-four minutes and the test gate its own hour.
+passing. Measured on the day: clippy twenty-four minutes, the test gate seven (most of the
+workspace was already compiled by the crate-scoped runs), and a single `willikins-journal`
+test binary twenty-one minutes to build from cold.
 
 ## Finding 1 — a journal line could rewrite the record it named (fixed)
 
