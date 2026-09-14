@@ -714,7 +714,21 @@ impl Butler {
             return Err(ButlerError::RunInProgress { run_id });
         }
 
-        if let Some(run_id) = record.applied {
+        // Re-read `applied` now that the single-apply lock is held, rather
+        // than trusting the snapshot taken above it. `applied` is the one
+        // field of a `PlanRecord` that `apply` itself can change, and
+        // `RunStarted` -- the event that sets it -- is only ever appended
+        // under this same guard, so reading it here is what makes
+        // "a plan is applied once" hold between two callers instead of
+        // only within one. The snapshot above is a read-then-check across
+        // an unheld lock: a caller that read `applied: None`, lost the
+        // guard to a second caller, and reacquired it after that caller's
+        // whole run had finished would otherwise apply the plan a second
+        // time. The window is a couple of instructions wide and no test
+        // here reproduces it; the check is cheap and the invariant is not
+        // one to leave resting on scheduling.
+        let applied_now = self.journal_lock().plan(&plan_id).and_then(|r| r.applied);
+        if let Some(run_id) = applied_now {
             self.refuse_apply(plan_id, principal, ApplyRefusedReason::AlreadyApplied);
             return Err(ButlerError::AlreadyApplied { plan_id, run_id });
         }
