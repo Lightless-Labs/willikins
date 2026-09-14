@@ -364,6 +364,16 @@ pub fn gen_secret(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&str>
             /// running inside the apply executor can construct, so callers
             /// cannot expose a secret by accident.
             #[must_use]
+            // `clippy.toml` disallows `secrecy::ExposeSecret::expose_secret`
+            // workspace-wide (see willikins-providers-http's `Credential`,
+            // the type's other allowed call site); this is load-bearing
+            // here, not merely documentation — clippy's disallowed-methods
+            // lint does fire inside a derive macro's own generated code,
+            // confirmed empirically (2026-09-14, task 6's verify item 2):
+            // removing this `#[allow]` makes every secret domain type in
+            // `willikins-types` fail `cargo clippy --all-targets -- -D
+            // warnings` at its own `#[derive(DomainType)]` site.
+            #[allow(clippy::disallowed_methods)]
             pub fn expose(&self, _token: &::willikins_types::SinkToken) -> &str {
                 ::willikins_types::__private::secrecy::ExposeSecret::expose_secret(&self.0)
             }
@@ -408,6 +418,13 @@ pub fn gen_secret(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&str>
         }
 
         impl ::std::cmp::PartialEq for #name {
+            // A second, independent generated call site (see `expose`
+            // above, and its own comment about this `#[allow]` being
+            // load-bearing): comparing two secret values for equality
+            // needs their bytes, and this is the only way to do that
+            // without exposing a `PartialEq` derived from `SecretString`
+            // itself, which does not implement it.
+            #[allow(clippy::disallowed_methods)]
             fn eq(&self, other: &Self) -> bool {
                 ::willikins_types::__private::secrecy::ExposeSecret::expose_secret(&self.0)
                     == ::willikins_types::__private::secrecy::ExposeSecret::expose_secret(&other.0)
