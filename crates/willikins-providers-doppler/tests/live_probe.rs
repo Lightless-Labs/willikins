@@ -341,3 +341,64 @@ fn doppler_live_probe() {
 
     assert!(failures.is_empty(), "live probe failures: {failures:?}");
 }
+
+/// [`redact`] is the only thing standing between a real Doppler response
+/// and a file on disk, and it is reached exclusively from an `#[ignore]`d
+/// test that has never run — so nothing had ever executed it. This test
+/// is *not* ignored: it seeds the same markers `tests/redaction.rs`
+/// sweeps, in every position a real response could put them (a bare
+/// object, nested inside another, inside an array, and inside an array
+/// nested inside an object), and proves none survives.
+#[test]
+fn redact_strips_every_secret_bearing_field_at_every_depth() {
+    const TOKEN_MARKER: &str = "dp.st.wlknTokenMarker0000000000000000000000000";
+    const SECRET_MARKER: &str = "wlkn-secret-marker-9f2h7ap5rz8s";
+
+    let live = serde_json::json!({
+        "token": {"name": "ci", "key": TOKEN_MARKER},
+        "tokens": [
+            {"name": "ci", "slug": "s1", "key": TOKEN_MARKER},
+            {"name": "other", "slug": "s2"},
+        ],
+        "name": "DATABASE",
+        "value": {"raw": SECRET_MARKER, "computed": SECRET_MARKER, "note": ""},
+        "nested": {"deeper": [{"secret": SECRET_MARKER, "password": SECRET_MARKER}]},
+        "client_secret": SECRET_MARKER,
+    });
+
+    let redacted = redact(live);
+    let rendered = serde_json::to_string(&redacted).expect("serializes");
+    assert!(
+        !rendered.contains(TOKEN_MARKER),
+        "the token marker survived redaction: {rendered}"
+    );
+    assert!(
+        !rendered.contains(SECRET_MARKER),
+        "the secret marker survived redaction: {rendered}"
+    );
+
+    // Shape survives: redaction blanks content, never deletes keys, so a
+    // recorded fixture still answers "which fields exist".
+    assert!(redacted["value"].get("raw").is_some());
+    assert!(redacted["value"].get("computed").is_some());
+    assert_eq!(redacted["value"]["note"], serde_json::json!(""));
+    assert_eq!(redacted["name"], serde_json::json!("DATABASE"));
+    assert_eq!(redacted["tokens"][1]["slug"], serde_json::json!("s2"));
+}
+
+/// The redaction list is keyed by field *name*, so a field this crate
+/// never reads but Doppler might one day add — carrying a token under a
+/// name nobody listed — would pass through. Pinned as a known limit, not
+/// as a guarantee: what the list does cover is every field name any
+/// endpoint in the research note actually returns a secret under.
+#[test]
+fn redaction_is_by_field_name_and_the_covered_names_are_the_documented_ones() {
+    for name in ["key", "raw", "computed"] {
+        let live = serde_json::json!({ name: "whatever" });
+        assert_eq!(
+            redact(live)[name],
+            serde_json::json!("[REDACTED]"),
+            "`{name}` is a documented secret-bearing field and must be redacted"
+        );
+    }
+}
