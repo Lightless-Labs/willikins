@@ -455,3 +455,33 @@ fn a_bare_403_is_a_missing_permission_message_not_a_rate_limit() {
     mock.assert();
     assert_eq!(sleeper.durations.lock().unwrap().len(), 0);
 }
+
+/// A `200` whose `topics` is absent, or explicitly `null`, is the same
+/// thing as a `200` whose `topics` is `[]`: the ownership marker is not
+/// there, so the repository is `Foreign`. GitHub's `full-repository`
+/// schema marks no field required at all (research note section 2), so
+/// neither shape may become a parse failure reported as `Provider`, and
+/// neither may panic.
+#[test]
+fn read_reports_foreign_when_topics_is_missing_or_null() {
+    for body in [
+        serde_json::json!({"visibility": "private"}),
+        serde_json::json!({"visibility": "private", "topics": null}),
+    ] {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/repos/acme/widget")
+            .with_status(200)
+            .with_body(body.to_string())
+            .create();
+        let (client, _sleeper) = client_against(provider.url());
+        let tool = GitHubRepoEnsure::new(client);
+        let observation = tool
+            .read(&inputs(RepoVisibility::Private))
+            .unwrap_or_else(|err| panic!("body {body} must read, got {err:?}"));
+        assert!(
+            matches!(observation, Observation::Foreign),
+            "body {body} must read as Foreign, got {observation:?}"
+        );
+    }
+}

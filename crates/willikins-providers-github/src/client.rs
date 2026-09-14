@@ -333,13 +333,27 @@ struct PutSecretBody {
 
 /// The fields of GitHub's `full repository` schema this crate consults:
 /// its `visibility` (`private`/`public`) and its `topics`, used to detect
-/// the `managed-by-willikins` ownership marker. `#[serde(default)]` on
-/// `topics` because the `OpenAPI` schema marks no field required at all.
+/// the `managed-by-willikins` ownership marker. `topics` is optional in
+/// both senses the `OpenAPI` schema allows — the key may be absent, and
+/// it may be present and `null`, since the schema marks no field required
+/// at all — and both mean the same thing to this crate: the ownership
+/// marker is not there, so the repository is `Foreign`. Neither may
+/// become a parse failure reported as a `Provider` error.
 #[derive(Debug, Deserialize)]
 pub(crate) struct RepoBody {
     pub(crate) visibility: RepoVisibility,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "topics_or_empty")]
     pub(crate) topics: Vec<String>,
+}
+
+/// Deserialize `topics` treating an explicit `null` as an empty list.
+/// `#[serde(default)]` alone covers only an absent key; a present `null`
+/// would otherwise fail the whole body's deserialization.
+fn topics_or_empty<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// GitHub's `actions-public-key` schema: both fields required.
