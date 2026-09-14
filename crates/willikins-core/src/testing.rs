@@ -206,3 +206,57 @@ pub fn arb_workflow(
             workflow
         })
 }
+
+// ---------------------------------------------------------------------
+// Arbitrary values of every registered domain type
+// ---------------------------------------------------------------------
+
+/// Every non-secret registered type's own scalar [`TypeRef`] paired with
+/// its [`willikins_types::DomainType::example`] -- a worked example the
+/// registry guarantees parses as its own type
+/// (`willikins_types::assert_all_examples_parse`), so it can seed a value
+/// without this module needing a text generator of its own for every
+/// domain grammar.
+fn non_secret_type_examples() -> Vec<(TypeRef, &'static str)> {
+    willikins_types::type_infos()
+        .into_iter()
+        .filter(|info| !info.secret)
+        .map(|info| {
+            let name = crate::TypeName::parse(info.name)
+                .unwrap_or_else(|err| unreachable!("a registered type name is valid: {err}"));
+            (TypeRef::scalar(name), info.example)
+        })
+        .collect()
+}
+
+/// A known [`Value`] of a randomly chosen non-secret registered type,
+/// scalar or list-valued (0 to 4 elements, every element built from that
+/// type's own worked example).
+///
+/// Exists for `willikins-server`'s own restart-survival property test
+/// (task 10b): `Butler::apply` rebuilds a plan's resolved inputs from the
+/// journal by parsing each recorded input's *rendered* string back
+/// through the type registry, which only works if
+/// `Value::parse`/`Value::parse_list` round-trips `Value::render`'s own
+/// output for every registered type -- what this generator lets that
+/// property test check, rather than the specific input text (which the
+/// registry already guarantees parses at least once, via each type's own
+/// example).
+pub fn arb_registered_value() -> impl Strategy<Value = Value> {
+    let types = non_secret_type_examples();
+    (prop::sample::select(types), any::<bool>(), 0usize..5).prop_map(
+        |((ty, example), is_list, count)| {
+            if is_list {
+                let list_ty = TypeRef::list_of(ty.name.clone());
+                let items = vec![example; count];
+                Value::parse_list(&list_ty, &items).unwrap_or_else(|err| {
+                    unreachable!("{list_ty}'s own worked example must parse: {err}")
+                })
+            } else {
+                Value::parse(&ty, example).unwrap_or_else(|err| {
+                    unreachable!("{ty}'s own worked example must parse: {err}")
+                })
+            }
+        },
+    )
+}
