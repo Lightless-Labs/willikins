@@ -1,0 +1,281 @@
+---
+source: crates/willikins-journal/tests/schema_generation.rs
+assertion_line: 26
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunRecord",
+  "description": "A run of a plan, replayed from its `RunStarted`, `NodeStarted`,\n`NodeFinished`, and `RunFinished` events.",
+  "type": "object",
+  "properties": {
+    "error": {
+      "description": "The failure the run ended with, if any.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RedactedApplyError"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "finished_at": {
+      "description": "When it finished, if it has.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nodes": {
+      "description": "Every node instance the run reached, in the applied plan's own\norder when that plan's `PlanRecorded` event is in this journal\n(with [`NodeStatus::NotRun`] filling in any instance the run never\nstarted); in the order `NodeFinished` events arrived otherwise.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RunNode"
+      }
+    },
+    "outputs": {
+      "description": "Every workflow output's resolved value. Empty until (and unless)\nthe run's `RunFinished` reports [`Outcome::Succeeded`].",
+      "$ref": "#/$defs/RedactedResolvedOutputs"
+    },
+    "plan_id": {
+      "description": "The plan it applied.",
+      "$ref": "#/$defs/PlanId"
+    },
+    "principal": {
+      "description": "Who started it.",
+      "$ref": "#/$defs/PrincipalId"
+    },
+    "run_id": {
+      "description": "This run's id.",
+      "$ref": "#/$defs/RunId"
+    },
+    "started_at": {
+      "description": "When it started.",
+      "$ref": "#/$defs/Timestamp"
+    },
+    "state": {
+      "description": "Its current state.",
+      "$ref": "#/$defs/RunState"
+    }
+  },
+  "required": [
+    "run_id",
+    "plan_id",
+    "principal",
+    "started_at",
+    "state",
+    "nodes",
+    "outputs"
+  ],
+  "$defs": {
+    "NodeName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "NodeStatus": {
+      "description": "What happened to one planned node instance during [`apply`].\n\nDerives [`serde::Deserialize`] as well as `Serialize`: unlike most\ntypes in this module, a `NodeStatus` never holds a [`crate::value::Value`]\n(its only payload, [`ToolError`], is a plain message with no secret\nobligation of its own — see that type's doc), so round-tripping it\nthrough JSON cannot resurrect anything redaction hid. `willikins-journal`\nrelies on this to store a `NodeFinished` event's `status` field\nuntouched, rather than behind its `Redacted` wrapper the way `outputs`\n(which does carry [`Value`]s) must be.",
+      "oneOf": [
+        {
+          "description": "A pure tool computed its outputs; there was nothing to create or\nleave alone.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "computed"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "`ensure` reported [`Ensured::changed`] `true`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "created"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "`ensure` reported [`Ensured::changed`] `false`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unchanged"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A required input was [`crate::value::ValueState::Unknown`] and the\nplanned action was [`Action::NoOp`]: the resource already matches,\nby the plan's own observation, and nothing was called.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "converged"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "`ensure` returned an error.",
+          "type": "object",
+          "properties": {
+            "error": {
+              "description": "The failure `ensure` reported.",
+              "$ref": "#/$defs/ToolError"
+            },
+            "kind": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "kind",
+            "error"
+          ]
+        },
+        {
+          "description": "This instance was never attempted: an earlier instance in the same\nrun failed or was blocked first.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "not_run"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "PlanId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "PrincipalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$"
+    },
+    "RedactedApplyError": {},
+    "RedactedOutputs": {},
+    "RedactedResolvedOutputs": {},
+    "RunId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "RunNode": {
+      "description": "One node instance's outcome within a [`RunRecord`], folded from a\n[`Event::NodeFinished`] event -- or synthesized as\n[`NodeStatus::NotRun`] for a planned instance the run never reached,\nwhen the plan is known (see [`RunRecord::nodes`]'s own doc).",
+      "type": "object",
+      "properties": {
+        "instance": {
+          "description": "Its `for_each` instance key, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "node": {
+          "description": "The node.",
+          "$ref": "#/$defs/NodeName"
+        },
+        "outputs": {
+          "description": "This instance's final outputs.",
+          "$ref": "#/$defs/RedactedOutputs"
+        },
+        "status": {
+          "description": "What happened.",
+          "$ref": "#/$defs/NodeStatus"
+        }
+      },
+      "required": [
+        "node",
+        "status",
+        "outputs"
+      ]
+    },
+    "RunState": {
+      "description": "Whether a run is still going, or how it ended.",
+      "oneOf": [
+        {
+          "description": "Started; no `RunFinished` seen yet (including a run whose process\ndied mid-way, which looks the same from the journal's own point of\nview -- it has no way to distinguish \"still running\" from \"will\nnever finish\").",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "Finished successfully.",
+          "type": "string",
+          "const": "succeeded"
+        },
+        {
+          "description": "Finished with a failure.",
+          "type": "string",
+          "const": "failed"
+        }
+      ]
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ToolError": {
+      "description": "A tool's failure to `read` or `ensure`.\n\nNever includes an input value: an implementation must build `message`\nfrom the tool's own state and provider response, not from the\n[`Inputs`] it was given, so this type carries no obligation for callers\nto redact it themselves.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "The kind of failure.",
+          "$ref": "#/$defs/ToolErrorKind"
+        },
+        "message": {
+          "description": "A human-readable explanation. Never a secret value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    "ToolErrorKind": {
+      "description": "The kind of failure a [`Tool`] reported.",
+      "oneOf": [
+        {
+          "description": "The resource `ensure` was asked to act on does not exist.",
+          "type": "string",
+          "const": "NotFound"
+        },
+        {
+          "description": "The resource exists but not in the state the tool was asked to\nbring it to, and the tool will not overwrite it.",
+          "type": "string",
+          "const": "Conflict"
+        },
+        {
+          "description": "The underlying provider reported a failure.",
+          "type": "string",
+          "const": "Provider"
+        },
+        {
+          "description": "The tool's inputs are not valid, independent of any provider.",
+          "type": "string",
+          "const": "Invalid"
+        }
+      ]
+    }
+  }
+}

@@ -21,6 +21,7 @@ uuid.workspace = true
 fd-lock.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
 willikins-dsl.workspace = true
 willikins-providers-fake.workspace = true
 tempfile.workspace = true

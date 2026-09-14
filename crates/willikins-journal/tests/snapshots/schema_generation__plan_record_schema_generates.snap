@@ -1,0 +1,285 @@
+---
+source: crates/willikins-journal/tests/schema_generation.rs
+assertion_line: 25
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PlanRecord",
+  "description": "A recorded plan, replayed from a [`Event::PlanRecorded`] event and\nwhatever approval and run events followed it.",
+  "type": "object",
+  "properties": {
+    "applied": {
+      "description": "The run this plan was applied as, if any. Set as soon as\n`RunStarted` is seen -- before the run finishes -- so a run that\ndied mid-way still makes a second `apply` of the same plan refuse\nas `AlreadyApplied` rather than racing a live run.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "approval": {
+      "description": "Its current approval state.",
+      "$ref": "#/$defs/ApprovalState"
+    },
+    "class": {
+      "description": "The plan's approval class.",
+      "$ref": "#/$defs/Class"
+    },
+    "document_sha256": {
+      "description": "The workflow document's content hash at plan time.",
+      "type": "string"
+    },
+    "fingerprint": {
+      "description": "The plan's per-instance fingerprint.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/InstanceFingerprint"
+      }
+    },
+    "inputs": {
+      "description": "The resolved workflow inputs the plan was built from.",
+      "$ref": "#/$defs/RedactedResolvedInputs"
+    },
+    "plan": {
+      "description": "The plan itself.",
+      "$ref": "#/$defs/RedactedPlan"
+    },
+    "plan_id": {
+      "description": "This plan's id.",
+      "$ref": "#/$defs/PlanId"
+    },
+    "recorded_at": {
+      "description": "When `plan` recorded it.",
+      "$ref": "#/$defs/Timestamp"
+    },
+    "requires_approval": {
+      "description": "Whether this plan requires human approval.",
+      "type": "boolean"
+    },
+    "workflow": {
+      "description": "The planned workflow's name.",
+      "$ref": "#/$defs/WorkflowName"
+    }
+  },
+  "required": [
+    "plan_id",
+    "workflow",
+    "document_sha256",
+    "inputs",
+    "plan",
+    "fingerprint",
+    "class",
+    "requires_approval",
+    "recorded_at",
+    "approval"
+  ],
+  "$defs": {
+    "Action": {
+      "description": "What `plan` decided to do for one node instance.",
+      "oneOf": [
+        {
+          "description": "A pure tool computed its outputs; there is no external state to\ncreate or leave alone, whatever [`Observation`] its `read` reported.",
+          "type": "string",
+          "const": "compute"
+        },
+        {
+          "description": "The resource does not exist yet: `ensure` would create it.",
+          "type": "string",
+          "const": "create"
+        },
+        {
+          "description": "The resource already exists and is ours: `ensure` would be a no-op.",
+          "type": "string",
+          "const": "noop"
+        }
+      ]
+    },
+    "ApprovalState": {
+      "description": "A pending plan's approval state, folded from the events that can\nchange it.",
+      "oneOf": [
+        {
+          "description": "No approval decision has been recorded yet.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "pending"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The plan's class did not require approval.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "automatic"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A human approved it.",
+          "type": "object",
+          "properties": {
+            "approver": {
+              "description": "The approving principal.",
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "at": {
+              "description": "When.",
+              "$ref": "#/$defs/Timestamp"
+            },
+            "kind": {
+              "type": "string",
+              "const": "granted"
+            }
+          },
+          "required": [
+            "kind",
+            "approver",
+            "at"
+          ]
+        },
+        {
+          "description": "A human rejected it.",
+          "type": "object",
+          "properties": {
+            "approver": {
+              "description": "The rejecting principal.",
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "at": {
+              "description": "When.",
+              "$ref": "#/$defs/Timestamp"
+            },
+            "kind": {
+              "type": "string",
+              "const": "rejected"
+            },
+            "reason": {
+              "description": "Why.",
+              "$ref": "#/$defs/Reason"
+            }
+          },
+          "required": [
+            "kind",
+            "approver",
+            "reason",
+            "at"
+          ]
+        }
+      ]
+    },
+    "Class": {
+      "description": "How much a tool's `ensure` should be trusted to run unattended.\n\nOrdered `Reversible < Irreversible < Destructive`, so\n[`Class::max_of`] over every node in a plan gives the plan's own class.",
+      "oneOf": [
+        {
+          "description": "Can be undone by another `ensure` call: creating a resource that can\nsimply be deleted again.",
+          "type": "string",
+          "const": "reversible"
+        },
+        {
+          "description": "Cannot be trivially undone, but is not destructive: minting a\nservice token that cannot be re-read once issued, say.",
+          "type": "string",
+          "const": "irreversible"
+        },
+        {
+          "description": "Destroys or overwrites something. The highest class.",
+          "type": "string",
+          "const": "destructive"
+        }
+      ]
+    },
+    "InstanceFingerprint": {
+      "description": "One planned node instance's identity and observable content, used by\n`willikins-core::apply::apply` to detect drift between an approved\n[`Plan`] and one freshly re-planned inside the apply executor: two\nfingerprints from the same workflow and inputs are equal exactly when\nnothing has been executed yet that the executor needs to notice.\n\nSee [`SECRET_FINGERPRINT_MARKER`] for why a secret output's actual\nvalue is never part of this.\n\nDerives `Serialize`/`Deserialize` (unlike most types [`crate::apply`]\nbuilds a plan around) because it never holds a raw [`crate::value::Value`]\n-- every output here is already rendered to a `String`, with a secret\nport's contribution fixed to [`SECRET_FINGERPRINT_MARKER`] regardless of\ncontent -- so round-tripping it cannot resurrect anything redaction\nhid. `willikins-journal` stores a `PlanRecorded` event's `fingerprint`\nfield as this type directly, unwrapped, so a journal's replayed\n`PlanRecord` keeps a typed, comparable fingerprint even though the\n`Plan` it came from is otherwise stored as opaque redacted JSON.\nDerives `JsonSchema` too, since `willikins-journal`'s `PlanRecord`\n(which the server publishes) carries a `Vec<InstanceFingerprint>`\ndirectly.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The planned action.",
+          "$ref": "#/$defs/Action"
+        },
+        "instance": {
+          "description": "The `for_each` instance key, if any; `None` for a node with no\n`for_each`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The node this instance belongs to.",
+          "$ref": "#/$defs/NodeName"
+        },
+        "outputs": {
+          "description": "Every output port's rendered value, in declaration order: the\nvalue's own canonical rendering ([`crate::value::Value::render`])\nfor a non-secret port, or [`SECRET_FINGERPRINT_MARKER`] for a\nsecret one.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/PortName"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "name",
+        "action",
+        "outputs"
+      ]
+    },
+    "NodeName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "PlanId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "PortName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "PrincipalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$"
+    },
+    "Reason": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "RedactedPlan": {},
+    "RedactedResolvedInputs": {},
+    "RunId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "WorkflowName": {
+      "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
+      "type": "string",
+      "examples": [
+        "new-rust-service"
+      ],
+      "maxLength": 64,
+      "pattern": "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$"
+    }
+  }
+}

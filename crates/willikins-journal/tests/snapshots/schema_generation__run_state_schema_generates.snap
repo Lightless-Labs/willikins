@@ -1,0 +1,27 @@
+---
+source: crates/willikins-journal/tests/schema_generation.rs
+assertion_line: 29
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunState",
+  "description": "Whether a run is still going, or how it ended.",
+  "oneOf": [
+    {
+      "description": "Started; no `RunFinished` seen yet (including a run whose process\ndied mid-way, which looks the same from the journal's own point of\nview -- it has no way to distinguish \"still running\" from \"will\nnever finish\").",
+      "type": "string",
+      "const": "running"
+    },
+    {
+      "description": "Finished successfully.",
+      "type": "string",
+      "const": "succeeded"
+    },
+    {
+      "description": "Finished with a failure.",
+      "type": "string",
+      "const": "failed"
+    }
+  ]
+}

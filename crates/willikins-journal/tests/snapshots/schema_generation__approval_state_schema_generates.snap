@@ -1,0 +1,103 @@
+---
+source: crates/willikins-journal/tests/schema_generation.rs
+assertion_line: 28
+expression: schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ApprovalState",
+  "description": "A pending plan's approval state, folded from the events that can\nchange it.",
+  "oneOf": [
+    {
+      "description": "No approval decision has been recorded yet.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "pending"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "description": "The plan's class did not require approval.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "automatic"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "description": "A human approved it.",
+      "type": "object",
+      "properties": {
+        "approver": {
+          "description": "The approving principal.",
+          "$ref": "#/$defs/PrincipalId"
+        },
+        "at": {
+          "description": "When.",
+          "$ref": "#/$defs/Timestamp"
+        },
+        "kind": {
+          "type": "string",
+          "const": "granted"
+        }
+      },
+      "required": [
+        "kind",
+        "approver",
+        "at"
+      ]
+    },
+    {
+      "description": "A human rejected it.",
+      "type": "object",
+      "properties": {
+        "approver": {
+          "description": "The rejecting principal.",
+          "$ref": "#/$defs/PrincipalId"
+        },
+        "at": {
+          "description": "When.",
+          "$ref": "#/$defs/Timestamp"
+        },
+        "kind": {
+          "type": "string",
+          "const": "rejected"
+        },
+        "reason": {
+          "description": "Why.",
+          "$ref": "#/$defs/Reason"
+        }
+      },
+      "required": [
+        "kind",
+        "approver",
+        "reason",
+        "at"
+      ]
+    }
+  ],
+  "$defs": {
+    "PrincipalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$"
+    },
+    "Reason": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
