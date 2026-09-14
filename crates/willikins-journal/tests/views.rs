@@ -43,7 +43,7 @@ fn plan_recorded(plan_id: PlanId, requires_approval: bool, instances: &[&str]) -
     Event::PlanRecorded {
         plan_id,
         workflow: workflow_name("wf"),
-        document_sha256: "sha".to_string(),
+        document_sha256: common::document_sha256("sha"),
         inputs: Redacted::from(&IndexMap::new()),
         plan: Redacted::from(&plan),
         fingerprint,

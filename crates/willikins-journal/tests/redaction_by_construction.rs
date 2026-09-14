@@ -88,7 +88,7 @@ fn events_carrying_the_secret() -> Vec<Event> {
         Event::PlanRecorded {
             plan_id,
             workflow: workflow_name("wf"),
-            document_sha256: "sha".to_string(),
+            document_sha256: common::document_sha256("sha"),
             inputs: Redacted::from(&resolved_inputs),
             plan: Redacted::from(&plan_with_secret),
             fingerprint: plan_with_secret.fingerprint(),

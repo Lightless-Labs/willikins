@@ -10,6 +10,7 @@ use willikins_core::{
 };
 use willikins_types::WorkflowName;
 
+use crate::document_hash::DocumentSha256;
 use crate::event::{Entry, Event, Outcome};
 use crate::ids::{PlanId, RunId};
 use crate::reason::Reason;
@@ -52,7 +53,7 @@ pub struct PlanRecord {
     /// The planned workflow's name.
     pub workflow: WorkflowName,
     /// The workflow document's content hash at plan time.
-    pub document_sha256: String,
+    pub document_sha256: DocumentSha256,
     /// The resolved workflow inputs the plan was built from.
     pub inputs: Redacted<IndexMap<willikins_core::InputName, Value>>,
     /// The plan itself.

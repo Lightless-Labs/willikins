@@ -5,7 +5,7 @@
 use indexmap::IndexMap;
 
 use willikins_core::{InputName, NodeName, OutputName, PortName, ToolName, Value};
-use willikins_journal::{PlanId, PrincipalId, Reason};
+use willikins_journal::{DocumentSha256, PlanId, PrincipalId, Reason};
 use willikins_types::{DomainType, WorkflowName};
 
 pub fn node(name: &str) -> NodeName {
@@ -38,6 +38,14 @@ pub fn principal(name: &str) -> PrincipalId {
 
 pub fn reason(text: &str) -> Reason {
     Reason::parse(text).unwrap()
+}
+
+/// A distinct, validly-shaped [`DocumentSha256`] derived from `label` --
+/// tests that only need two document hashes to *differ* (never a real
+/// file's actual digest) use this instead of an arbitrary string, which
+/// `DocumentSha256`'s 64-lower-case-hex grammar now refuses.
+pub fn document_sha256(label: &str) -> DocumentSha256 {
+    DocumentSha256::compute(label.as_bytes())
 }
 
 pub fn empty_inputs() -> IndexMap<InputName, Value> {

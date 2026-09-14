@@ -26,6 +26,7 @@ use willikins_core::{
 };
 use willikins_types::WorkflowName;
 
+use crate::document_hash::DocumentSha256;
 use crate::ids::{PlanId, RunId};
 use crate::reason::Reason;
 use crate::redacted::Redacted;
@@ -213,7 +214,7 @@ pub enum Event {
         /// The planned workflow's name.
         workflow: WorkflowName,
         /// The workflow document's content hash at plan time.
-        document_sha256: String,
+        document_sha256: DocumentSha256,
         /// The resolved workflow inputs the plan was built from.
         inputs: Redacted<IndexMap<InputName, Value>>,
         /// The plan itself.

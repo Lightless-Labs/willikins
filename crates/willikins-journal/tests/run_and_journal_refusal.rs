@@ -76,7 +76,7 @@ fn approval_required_refuses_without_journaling_run_started() {
         .append(Event::PlanRecorded {
             plan_id,
             workflow: checked.workflow.name.clone(),
-            document_sha256: "test-sha256".to_string(),
+            document_sha256: common::document_sha256("test-sha256"),
             inputs: Redacted::from(&inputs),
             plan: Redacted::from(&approved),
             fingerprint: approved.fingerprint(),
@@ -173,7 +173,7 @@ fn a_replan_failure_refuses_without_journaling_a_run() {
         .append(Event::PlanRecorded {
             plan_id,
             workflow: willikins_types::WorkflowName::parse("wf").unwrap(),
-            document_sha256: "test-sha256".to_string(),
+            document_sha256: common::document_sha256("test-sha256"),
             inputs: Redacted::from(&indexmap::IndexMap::new()),
             plan: Redacted::from(&willikins_core::Plan {
                 workflow: willikins_types::WorkflowName::parse("wf").unwrap(),
@@ -237,4 +237,67 @@ fn a_replan_failure_refuses_without_journaling_a_run() {
         "a re-plan failure must leave the plan applicable: {record:?}"
     );
     assert!(journal.runs().is_empty(), "{:?}", journal.runs());
+}
+
+/// The same `PlanFailed` refusal, over a real file: journal follow-ups
+/// (`todos/2026-09-14-journal-follow-ups.md`) note this event only had a
+/// `MemoryJournal` round-trip pin, never one through `FileJournal`'s own
+/// serialize-then-replay path.
+#[test]
+fn an_apply_refused_plan_failed_event_round_trips_through_a_file_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("journal.jsonl");
+    let plan_id = PlanId::new();
+    {
+        let mut journal = willikins_journal::FileJournal::open(&path).unwrap();
+        journal
+            .append(Event::PlanRecorded {
+                plan_id,
+                workflow: willikins_types::WorkflowName::parse("wf").unwrap(),
+                document_sha256: common::document_sha256("test-sha256"),
+                inputs: Redacted::from(&indexmap::IndexMap::new()),
+                plan: Redacted::from(&willikins_core::Plan {
+                    workflow: willikins_types::WorkflowName::parse("wf").unwrap(),
+                    nodes: Vec::new(),
+                    outputs: indexmap::IndexMap::new(),
+                    class: willikins_core::Class::Reversible,
+                    requires_approval: false,
+                }),
+                fingerprint: Vec::new(),
+                class: willikins_core::Class::Reversible,
+                requires_approval: false,
+            })
+            .unwrap();
+        let (result, _run_id, journal_error) = run_and_journal(
+            &mut journal,
+            willikins_journal::PrincipalId::parse("agent").unwrap(),
+            plan_id,
+            |_observer| {
+                Err(willikins_core::ApplyError::Plan {
+                    error: willikins_core::PlanError::MissingInput {
+                        input: InputName::parse("slug").unwrap(),
+                    },
+                })
+            },
+        );
+        assert!(journal_error.is_none(), "{journal_error:?}");
+        assert!(matches!(
+            result,
+            Err(willikins_core::ApplyError::Plan { .. })
+        ));
+    }
+
+    let reopened = willikins_journal::FileJournal::open(&path).expect("the file replays cleanly");
+    match &reopened.entries()[1].event {
+        Event::ApplyRefused { reason, .. } => assert_eq!(
+            reason,
+            &willikins_journal::ApplyRefusedReason::PlanFailed {
+                error_kind: "MissingInput".to_string(),
+            }
+        ),
+        other => panic!("expected ApplyRefused, got {other:?}"),
+    }
+    let record = reopened.plan(&plan_id).expect("plan must replay");
+    assert!(record.applied.is_none());
+    assert!(reopened.runs().is_empty());
 }

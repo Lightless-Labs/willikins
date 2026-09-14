@@ -92,7 +92,7 @@ fn record_plan(
         .append(Event::PlanRecorded {
             plan_id,
             workflow: checked.workflow.name.clone(),
-            document_sha256: "test-sha256".to_string(),
+            document_sha256: common::document_sha256("test-sha256"),
             inputs: Redacted::from(inputs),
             plan: Redacted::from(&approved),
             fingerprint: approved.fingerprint(),

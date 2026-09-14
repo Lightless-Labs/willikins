@@ -8,10 +8,10 @@
 
 use crate::Timestamp;
 
-/// `Timestamp::now()`, clamped up to `previous` if the clock has moved
-/// backwards since the entry before it.
-pub(crate) fn clamped_now(previous: Timestamp) -> Timestamp {
-    let now = Timestamp::now();
+/// `now`, clamped up to `previous` if it is earlier -- the clock (real or,
+/// via [`crate::Clock`], a test's own) has moved backwards since the
+/// entry before it.
+pub(crate) fn clamped(now: Timestamp, previous: Timestamp) -> Timestamp {
     if now < previous { previous } else { now }
 }
 
@@ -22,12 +22,13 @@ mod tests {
     #[test]
     fn does_not_clamp_when_the_clock_moved_forward() {
         let earlier = Timestamp::parse("2020-01-01T00:00:00+00:00").unwrap();
-        assert!(clamped_now(earlier) > earlier);
+        let now = Timestamp::now();
+        assert_eq!(clamped(now, earlier), now);
     }
 
     #[test]
     fn clamps_to_previous_when_the_clock_moved_backward() {
         let future = Timestamp::parse("2999-01-01T00:00:00+00:00").unwrap();
-        assert_eq!(clamped_now(future), future);
+        assert_eq!(clamped(Timestamp::now(), future), future);
     }
 }

@@ -28,6 +28,8 @@
 //! lock on its file for as long as it is open, so at most one process can
 //! be appending to a given journal at a time.
 
+mod clock;
+mod document_hash;
 mod event;
 mod file;
 mod ids;
@@ -38,6 +40,8 @@ mod reason;
 pub mod redacted;
 mod timestamp_clamp;
 
+pub use clock::{Clock, ManualClock, SystemClock};
+pub use document_hash::{DocumentSha256, DocumentSha256Error};
 pub use event::{
     ApplyRefusedReason, AuthFailedReason, DriftReasonKind, Entry, Event, Outcome, Transport,
 };
@@ -45,7 +49,7 @@ pub use file::{FileJournal, JournalError};
 pub use ids::{PlanId, RunId};
 pub use journal::{ApprovalState, Journal, PlanRecord, RunNode, RunRecord, RunState};
 pub use memory::MemoryJournal;
-pub use observer::{JournalObserver, run_and_journal};
+pub use observer::{Append, JournalObserver, continue_run_and_journal, run_and_journal};
 pub use reason::{Reason, ReasonError};
 pub use redacted::{Redactable, Redacted};
 

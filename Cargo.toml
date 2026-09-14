@@ -64,6 +64,7 @@ rand = "0.9"
 mockito = "1"
 base64 = "0.23"
 crypto_box = { version = "0.9", features = ["seal"] }
+sha2 = "0.11"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

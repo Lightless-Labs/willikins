@@ -107,7 +107,7 @@ fn record_plan<J: Journal>(
         .append(Event::PlanRecorded {
             plan_id,
             workflow: checked.workflow.name.clone(),
-            document_sha256: document_sha256.to_string(),
+            document_sha256: common::document_sha256(document_sha256),
             inputs: Redacted::from(inputs),
             plan: Redacted::from(approved),
             fingerprint: approved.fingerprint(),
@@ -230,7 +230,10 @@ fn boundary_a_plan_approved_for_one_document_applies_to_another_with_the_same_fi
     // executed B.
     let record = journal.plan(&plan_id).expect("the plan is recorded");
     assert_eq!(record.workflow.as_str(), "plan-identity-a");
-    assert_eq!(record.document_sha256, "sha256-of-document-a");
+    assert_eq!(
+        record.document_sha256,
+        common::document_sha256("sha256-of-document-a")
+    );
     assert!(record.applied.is_some(), "and the run is recorded as its");
 
     // Neither secret's bytes are anywhere in the file.
@@ -286,7 +289,12 @@ fn boundary_a_hand_edited_plan_record_replays_as_truth() {
     };
 
     tamper(&journal_path, 1, |value| {
-        value["event"]["document_sha256"] = serde_json::json!("sha256-of-something-else");
+        // Still a validly-shaped 64-hex digest (`DocumentSha256` refuses
+        // anything else at replay, which is precisely how pass-1 item 3
+        // was closed): the point here is that there is no hash *chain*,
+        // so a well-formed forged value is not detected either.
+        value["event"]["document_sha256"] =
+            serde_json::json!(common::document_sha256("sha256-of-something-else").to_string());
         value["event"]["requires_approval"] = serde_json::json!(false);
         value["event"]["class"] = serde_json::json!("reversible");
         value["event"]["fingerprint"][0]["action"] = serde_json::json!("noop");
@@ -295,7 +303,8 @@ fn boundary_a_hand_edited_plan_record_replays_as_truth() {
     let journal = FileJournal::open(&journal_path).expect("the edit replays cleanly");
     let record = journal.plan(&plan_id).expect("the plan is still there");
     assert_eq!(
-        record.document_sha256, "sha256-of-something-else",
+        record.document_sha256,
+        common::document_sha256("sha256-of-something-else"),
         "the journal has no way to know its own past was edited"
     );
     assert_eq!(record.fingerprint[0].action, willikins_core::Action::NoOp);
@@ -340,7 +349,8 @@ fn a_second_plan_recorded_event_for_one_id_never_replaces_the_first() {
 
     let record = journal.plan(&plan_id).expect("the plan is recorded");
     assert_eq!(
-        record.document_sha256, "sha256-original",
+        record.document_sha256,
+        common::document_sha256("sha256-original"),
         "the first record of a plan id is the only one"
     );
     assert!(
@@ -555,7 +565,7 @@ fn plan_recorded(plan_id: PlanId, requires_approval: bool, sha: &str) -> Event {
     Event::PlanRecorded {
         plan_id,
         workflow: workflow_name("forged"),
-        document_sha256: sha.to_string(),
+        document_sha256: common::document_sha256(sha),
         inputs: Redacted::from(&IndexMap::<InputName, Value>::new()),
         plan: Redacted::from(&plan),
         fingerprint: plan.fingerprint(),
@@ -650,11 +660,16 @@ fn boundary_a_run_started_for_an_unknown_plan_replays_without_inventing_a_plan()
 /// human refused reads as approved. Nothing in this crate can prevent it
 /// -- an append-only log's fold has to fold everything it is given, and
 /// two contradictory decisions are a fact about the file -- so the refusal
-/// belongs to whoever accepts the second decision: `willikins-server`
-/// (task 10a) must refuse to record an approval or rejection for a plan
-/// that already has one, exactly as it refuses a second `apply`. Pinned so
-/// that the day the fold is made first-decision-wins instead, it is a
-/// deliberate change with a test to update rather than a silent one.
+/// belongs to whoever accepts the second decision. Closed by
+/// `willikins-server`'s `Butler` (task 10a): `approve`/`reject` refuse a
+/// plan that already has a decision (`ButlerError::AlreadyDecided`)
+/// before ever appending a second `ApprovalGranted`/`ApprovalRejected`,
+/// so this fold behaviour is unreachable through the public API --
+/// pinned by `crates/willikins-server/tests/acceptance_7_identity.rs`'s
+/// `a_grant_after_a_rejection_is_refused_as_already_decided` and its
+/// mirror. Pinned here too, so that the day this crate's own fold is made
+/// first-decision-wins instead, it is a deliberate change with a test to
+/// update rather than a silent one.
 #[test]
 fn boundary_a_grant_after_a_rejection_is_the_decision_the_views_report() {
     let mut journal = MemoryJournal::new();

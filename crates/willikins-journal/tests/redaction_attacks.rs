@@ -94,7 +94,7 @@ fn a_plan_fingerprint_of_secret_outputs_never_carries_the_bytes() {
         .append(Event::PlanRecorded {
             plan_id: PlanId::new(),
             workflow: workflow_name("wf"),
-            document_sha256: "sha".to_string(),
+            document_sha256: common::document_sha256("sha"),
             inputs: Redacted::from(&IndexMap::new()),
             plan: Redacted::from(&plan),
             fingerprint,

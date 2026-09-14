@@ -84,7 +84,7 @@ fn event_samples() -> Vec<Event> {
         Event::PlanRecorded {
             plan_id,
             workflow: workflow_name("wf"),
-            document_sha256: "deadbeef".to_string(),
+            document_sha256: common::document_sha256("deadbeef"),
             inputs: Redacted::from(&indexmap::IndexMap::new()),
             plan: Redacted::from(&empty_plan()),
             fingerprint: Vec::<InstanceFingerprint>::new(),

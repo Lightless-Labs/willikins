@@ -2,12 +2,14 @@
 //! whole lifetime and replayed into memory on open.
 
 use std::fs::{File, OpenOptions};
-use std::io::Write as _;
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use crate::clock::{Clock, SystemClock};
 use crate::event::{Entry, Event};
 use crate::journal::Journal;
-use crate::timestamp_clamp::clamped_now;
+use crate::timestamp_clamp::clamped;
 
 /// Why a [`FileJournal`] could not be opened, or could not append.
 #[derive(Debug, thiserror::Error)]
@@ -55,10 +57,10 @@ pub enum JournalError {
 /// [`Journal::append`] writes one line, calls `sync_data`, and only then
 /// returns — a write is durable before its caller ever sees the
 /// [`Entry`] it produced.
-#[derive(Debug)]
 pub struct FileJournal {
     path: PathBuf,
     file: File,
+    clock: Arc<dyn Clock>,
     // Holds the flock for this value's lifetime: opened as a `dup` of
     // `file`'s own descriptor (an flock is a property of the *open file
     // description*, which `File::try_clone` shares rather than
@@ -77,8 +79,19 @@ pub struct FileJournal {
     next_seq: u64,
 }
 
+impl std::fmt::Debug for FileJournal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileJournal")
+            .field("path", &self.path)
+            .field("entries", &self.entries)
+            .field("next_seq", &self.next_seq)
+            .finish_non_exhaustive()
+    }
+}
+
 impl FileJournal {
-    /// Open (creating if absent) the journal file at `path`.
+    /// Open (creating if absent) the journal file at `path`, reading the
+    /// system clock.
     ///
     /// # Errors
     ///
@@ -90,8 +103,23 @@ impl FileJournal {
     /// the module docs on why that last case is refused rather than
     /// silently dropped).
     pub fn open(path: impl AsRef<Path>) -> Result<Self, JournalError> {
+        Self::open_with_clock(path, Arc::new(SystemClock))
+    }
+
+    /// Open (creating if absent) the journal file at `path`, reading
+    /// `clock` instead of the system clock -- what a test uses to make
+    /// this journal's own timestamps agree with whatever else (a
+    /// `willikins-server` `Butler`) is reading the same clock.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::open`].
+    pub fn open_with_clock(
+        path: impl AsRef<Path>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, JournalError> {
         let path = path.as_ref().to_path_buf();
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
@@ -114,12 +142,13 @@ impl FileJournal {
             Err(source) => return Err(JournalError::Io { path, source }),
         }
 
-        let entries = replay(&path)?;
+        let entries = replay(&mut file, &path)?;
         let next_seq = entries.last().map_or(1, |entry| entry.seq + 1);
 
         Ok(Self {
             path,
             file,
+            clock,
             _lock: lock,
             entries,
             next_seq,
@@ -135,9 +164,10 @@ impl FileJournal {
 
 impl Journal for FileJournal {
     fn append(&mut self, event: Event) -> Result<Entry, JournalError> {
+        let now = self.clock.now();
         let at = match self.entries.last() {
-            Some(last) => clamped_now(last.at),
-            None => crate::Timestamp::now(),
+            Some(last) => clamped(now, last.at),
+            None => now,
         };
         let entry = Entry {
             seq: self.next_seq,
@@ -167,10 +197,26 @@ impl Journal for FileJournal {
     }
 }
 
-/// Read `path` fresh (a separate handle from the one `FileJournal` writes
-/// through) and validate it line by line: contiguous `seq` from 1, `at`
-/// never going backwards, every line valid JSON matching [`Entry`]'s
-/// shape. A file that does not end in `\n` has its final line refused as
+/// Read `file` -- the exact descriptor [`FileJournal`] holds open and
+/// locked, seeked back to the start, *not* a fresh handle opened on
+/// `path` -- and validate its contents line by line: contiguous `seq`
+/// from 1, `at` never going backwards, every line valid JSON matching
+/// [`Entry`]'s shape. `path` is carried only for error messages.
+///
+/// Reading through the held descriptor rather than re-opening `path` is
+/// what makes this replay immune to a rename over the path between the
+/// lock being taken and this read happening: a `File` and the inode it
+/// refers to stay linked once opened, on every platform this workspace
+/// targets, regardless of what a later `rename(2)` (or `MoveFileEx` on
+/// Windows) does to the name -- unlike a second `open(path)`, which would
+/// follow the rename to whatever now sits at that name (see
+/// `tests::a_rename_over_the_path_after_the_lock_is_taken_does_not_affect_replay`).
+/// `append(true)` is safe to seek on: `O_APPEND` fixes where a *write*
+/// lands (always the current end of file) independent of the read/write
+/// cursor a `seek` moves, so leaving that cursor at EOF once replay
+/// finishes has no effect on `FileJournal::append`'s own writes.
+///
+/// A file that does not end in `\n` has its final line refused as
 /// truncated rather than parsed: `append` only ever writes a line
 /// followed by `\n` and then `sync_data`s before returning, so a missing
 /// trailing newline can only mean the process died mid-`write_all` —
@@ -179,11 +225,18 @@ impl Journal for FileJournal {
 /// silently dropping the tail either way would let a corrupted journal
 /// replay as if nothing were wrong. An operator recovering from a crash
 /// inspects the file and trims the partial line by hand.
-fn replay(path: &Path) -> Result<Vec<Entry>, JournalError> {
-    let contents = std::fs::read_to_string(path).map_err(|source| JournalError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+fn replay(file: &mut File, path: &Path) -> Result<Vec<Entry>, JournalError> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| JournalError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)
+        .map_err(|source| JournalError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
     if contents.is_empty() {
         return Ok(Vec::new());
     }
@@ -495,5 +548,59 @@ mod tests {
         drop(journal);
         let reopened = FileJournal::open(&path).unwrap();
         assert_eq!(reopened.entries().len(), 1);
+    }
+
+    /// Journal follow-up (`todos/2026-09-14-journal-follow-ups.md`):
+    /// replay must read the descriptor [`FileJournal`] already holds
+    /// open, not re-open `path` fresh, or a rename over the path between
+    /// the lock being taken and replay running would silently replay
+    /// whatever now sits at that name instead of what was locked.
+    #[test]
+    fn replay_reads_the_held_descriptor_not_the_path_so_a_rename_over_it_has_no_effect() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.jsonl");
+        let other_path = dir.path().join("other.jsonl");
+
+        {
+            let mut journal = FileJournal::open(&path).unwrap();
+            journal
+                .append(Event::ServerStarted {
+                    version: "0.1.0".to_string(),
+                    workflows_dir: "original".to_string(),
+                    workflow_hashes: std::collections::BTreeMap::new(),
+                })
+                .unwrap();
+        }
+        {
+            let mut journal = FileJournal::open(&other_path).unwrap();
+            journal
+                .append(Event::ServerStarted {
+                    version: "0.1.0".to_string(),
+                    workflows_dir: "replaced".to_string(),
+                    workflow_hashes: std::collections::BTreeMap::new(),
+                })
+                .unwrap();
+        }
+
+        // Both `FileJournal`s above have been dropped (their locks
+        // released); open a plain read handle on `path`.
+        let mut file = OpenOptions::new().read(true).open(&path).unwrap();
+
+        // Rename the *other* file's content over `path`. `file`'s
+        // already-open descriptor keeps referring to the inode it was
+        // opened on, not whatever the name `path` now resolves to.
+        std::fs::rename(&other_path, &path).unwrap();
+
+        let entries = replay(&mut file, &path).expect("replay reads the held descriptor");
+        assert_eq!(entries.len(), 1);
+        match &entries[0].event {
+            Event::ServerStarted { workflows_dir, .. } => {
+                assert_eq!(
+                    workflows_dir, "original",
+                    "replay must not follow the rename"
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 }

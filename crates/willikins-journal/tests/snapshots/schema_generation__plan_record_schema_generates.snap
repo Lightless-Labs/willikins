@@ -30,7 +30,7 @@ expression: schema
     },
     "document_sha256": {
       "description": "The workflow document's content hash at plan time.",
-      "type": "string"
+      "$ref": "#/$defs/DocumentSha256"
     },
     "fingerprint": {
       "description": "The plan's per-instance fingerprint.",
@@ -198,6 +198,10 @@ expression: schema
           "const": "destructive"
         }
       ]
+    },
+    "DocumentSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     },
     "InstanceFingerprint": {
       "description": "One planned node instance's identity and observable content, used by\n`willikins-core::apply::apply` to detect drift between an approved\n[`Plan`] and one freshly re-planned inside the apply executor: two\nfingerprints from the same workflow and inputs are equal exactly when\nnothing has been executed yet that the executor needs to notice.\n\nSee [`SECRET_FINGERPRINT_MARKER`] for why a secret output's actual\nvalue is never part of this.\n\nDerives `Serialize`/`Deserialize` (unlike most types [`crate::apply`]\nbuilds a plan around) because it never holds a raw [`crate::value::Value`]\n-- every output here is already rendered to a `String`, with a secret\nport's contribution fixed to [`SECRET_FINGERPRINT_MARKER`] regardless of\ncontent -- so round-tripping it cannot resurrect anything redaction\nhid. `willikins-journal` stores a `PlanRecorded` event's `fingerprint`\nfield as this type directly, unwrapped, so a journal's replayed\n`PlanRecord` keeps a typed, comparable fingerprint even though the\n`Plan` it came from is otherwise stored as opaque redacted JSON.\nDerives `JsonSchema` too, since `willikins-journal`'s `PlanRecord`\n(which the server publishes) carries a `Vec<InstanceFingerprint>`\ndirectly.",
