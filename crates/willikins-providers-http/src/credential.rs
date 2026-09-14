@@ -205,6 +205,63 @@ mod tests {
         assert_eq!(format!("{credential:?}"), "[REDACTED Credential(PATH)]");
     }
 
+    /// The two regexes the plan's provider sections name, so these tests
+    /// exercise the real token shapes rather than a stand-in.
+    fn github() -> Regex {
+        Regex::new("^(github_pat_|ghp_)[A-Za-z0-9_]+$").expect("valid pattern")
+    }
+
+    fn doppler() -> Regex {
+        Regex::new(r"^dp\.(sa|pt)\.[a-zA-Z0-9]{40,44}$").expect("valid pattern")
+    }
+
+    #[test]
+    fn a_value_with_surrounding_whitespace_or_a_newline_is_malformed() {
+        let var = "WILLIKINS_TEST_CREDENTIAL_WHITESPACE";
+        let good = format!("ghp_{}", "a".repeat(36));
+        for value in [
+            format!("{good}\n"),
+            format!(" {good}"),
+            format!("{good} "),
+            format!("{good}\nghp_{}", "b".repeat(36)),
+            format!("\t{good}"),
+        ] {
+            let err = Credential::from_value(var, Some(value.clone()), &github())
+                .expect_err("whitespace is not part of the token shape");
+            assert_eq!(err, CredentialError::Malformed { var }, "value {value:?}");
+            let rendered = format!("{err}");
+            assert!(!rendered.contains(&good), "value leaked: {rendered}");
+        }
+        Credential::from_value(var, Some(good), &github()).expect("the bare token is accepted");
+    }
+
+    #[test]
+    fn a_doppler_service_token_is_refused_by_the_provisioning_regex() {
+        let var = "WILLIKINS_TEST_CREDENTIAL_DOPPLER";
+        let service = format!("dp.st.{}", "a".repeat(40));
+        let err = Credential::from_value(var, Some(service.clone()), &doppler())
+            .expect_err("a dp.st. token cannot provision");
+        assert_eq!(err, CredentialError::Malformed { var });
+        assert!(!format!("{err}").contains(&service));
+        Credential::from_value(var, Some(format!("dp.sa.{}", "a".repeat(40))), &doppler())
+            .expect("a service-account token is accepted");
+    }
+
+    #[test]
+    fn a_format_that_matches_everything_still_never_prints_the_value() {
+        // `(?s).*` lets even a newline through, which is the worst case a
+        // provider crate could hand `from_env`: redaction may not depend
+        // on the format regex having been strict.
+        let var = "WILLIKINS_TEST_CREDENTIAL_PERMISSIVE";
+        let permissive = Regex::new("(?s).*").expect("valid pattern");
+        let credential =
+            Credential::from_value(var, Some(format!("{MARKER}\n{MARKER}")), &permissive)
+                .expect("matches everything");
+        let debug = format!("{credential:?}");
+        assert!(!debug.contains(MARKER), "Debug leaked: {debug}");
+        assert_eq!(debug, format!("[REDACTED Credential({var})]"));
+    }
+
     #[test]
     fn debug_never_carries_the_marker() {
         let credential = Credential::for_testing("WILLIKINS_TEST_CREDENTIAL_DEBUG_1", MARKER);

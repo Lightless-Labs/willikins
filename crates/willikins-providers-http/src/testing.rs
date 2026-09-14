@@ -91,6 +91,43 @@ mod tests {
         assert_eq!(value["name"], "self-test-fixture");
     }
 
+    #[test]
+    #[should_panic(expected = "no-such-fixture.json")]
+    fn load_fixture_names_the_path_it_could_not_read() {
+        let _ = load_fixture(&fixtures_dir(), "selftest", "no-such-fixture");
+    }
+
+    #[test]
+    fn an_exact_json_matcher_rejects_a_superset_and_a_partial_one_accepts_it() {
+        let mut provider = MockProvider::start();
+        let exact = provider
+            .mock("PUT", "/exact")
+            .match_body(json_body(serde_json::json!({"ping": "pong"})))
+            .with_status(200)
+            .with_body("{}")
+            .expect(0)
+            .create();
+        let partial = provider
+            .mock("PUT", "/partial")
+            .match_body(partial_json_body(serde_json::json!({"ping": "pong"})))
+            .with_status(200)
+            .with_body("{}")
+            .expect(1)
+            .create();
+
+        let credential = crate::Credential::for_testing("WILLIKINS_TEST_MATCHERS", "test-token");
+        let http = crate::Http::new(provider.url(), Vec::new(), credential);
+        let superset = serde_json::json!({"ping": "pong", "extra": true});
+
+        http.put::<serde_json::Value>("/exact", &superset)
+            .expect_err("an exact matcher must not accept a superset body");
+        http.put::<serde_json::Value>("/partial", &superset)
+            .expect("a partial matcher accepts a superset body");
+
+        exact.assert();
+        partial.assert();
+    }
+
     /// One self-test proving the whole seam works end to end: a mock
     /// server answers a real request (sent through [`crate::Http`], with
     /// a real [`crate::Credential`]) with a loaded fixture's body, and a
