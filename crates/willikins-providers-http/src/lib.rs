@@ -15,7 +15,9 @@
 //! [`willikins_core::Value`], and this crate does not depend on
 //! `willikins-types` with the `executor` feature and mints no
 //! `willikins_types::SinkToken`. Its bytes are read in exactly one
-//! function, [`Credential::authorize`]; `clippy.toml` disallows
+//! function, `Credential::authorize` (crate-private, so the builder it
+//! returns cannot be handed out with the header still on it);
+//! `clippy.toml` disallows
 //! `secrecy::ExposeSecret::expose_secret` everywhere else in the
 //! workspace, and `crates/willikins-core/tests/expose_secret_guard.rs`
 //! makes that a test rather than a reviewer's grep.

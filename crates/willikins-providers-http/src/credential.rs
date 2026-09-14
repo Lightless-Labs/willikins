@@ -6,7 +6,7 @@
 //! boundaries" section, item 1 ("Two kinds of secret"): a `Credential`
 //! never becomes a domain type, never enters the type registry, is never a
 //! [`willikins_core::Value`], and its bytes are read in exactly one
-//! function in this crate, [`Credential::authorize`], which sets the
+//! function in this crate, `Credential::authorize`, which sets the
 //! outgoing `Authorization` header. `clippy.toml` disallows
 //! `secrecy::ExposeSecret::expose_secret` everywhere else in the
 //! workspace; the acceptance test walking every call site lives in
@@ -73,12 +73,20 @@ impl Credential {
     ///
     /// The single non-test, non-derive call site of
     /// `secrecy::ExposeSecret::expose_secret` in the workspace.
+    ///
+    /// Crate-private on purpose: the returned builder carries the bearer
+    /// token in a header any caller could read back with
+    /// `headers_ref()`, which would be a way out of a `Credential` that
+    /// neither `clippy.toml`'s `disallowed-methods` entry nor
+    /// `expose_secret_guard.rs` can see. Everything outside this crate
+    /// goes through [`crate::Http`], which sends the header and never
+    /// hands it back.
     #[must_use]
     // The one allowed production call site outside the derive's own
     // codegen, named in `clippy.toml`'s `disallowed-methods` reason and
     // walked by `crates/willikins-core/tests/expose_secret_guard.rs`.
     #[allow(clippy::disallowed_methods)]
-    pub fn authorize<B>(&self, request: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
+    pub(crate) fn authorize<B>(&self, request: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
         let token = self.secret.expose_secret();
         request.header("Authorization", format!("Bearer {token}"))
     }

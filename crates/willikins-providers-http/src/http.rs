@@ -554,6 +554,17 @@ mod tests {
     }
 
     #[test]
+    fn a_request_builder_carrying_the_credential_does_not_print_it_in_debug() {
+        // `ureq::RequestBuilder`'s `Debug` prints method and URI only, and
+        // this pins that: a `{builder:?}` anywhere in a provider crate must
+        // not become a way to read the bearer token.
+        let credential = Credential::for_testing("WILLIKINS_TEST_HTTP_DEBUG", "sekrit-token-value");
+        let builder = credential.authorize(ureq::get("http://127.0.0.1:1/probe"));
+        let debug = format!("{builder:?}");
+        assert!(!debug.contains("sekrit-token-value"), "{debug}");
+    }
+
+    #[test]
     fn a_transport_message_never_repeats_a_url_a_ureq_error_carries() {
         // The three `ureq::Error` variants whose `Display` prints a URL, a
         // proxy URL, or text taken from the response.
