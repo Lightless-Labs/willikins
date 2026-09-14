@@ -9,7 +9,8 @@ use willikins_core::tool::helpers::{
     exact, get, not_found, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolErrorKind,
+    ToolSpec, Value,
 };
 use willikins_types::{DopplerConfig, SecretName};
 
@@ -49,6 +50,22 @@ impl DopplerSecretGet {
     /// naming the key it looked for — never the value, since there is
     /// none to name in that case, and Doppler's own `404` never carries
     /// one either.
+    ///
+    /// A `2xx` whose body did not parse (a missing, `null`, empty, or
+    /// non-string `value.computed`) is named the same way. Without that,
+    /// the only thing an operator would see is
+    /// `willikins_providers_http::Http::finish`'s deliberately
+    /// content-free "could not parse the response body as the expected
+    /// shape (line N, column M)" — true, redacted, and unactionable,
+    /// since nothing in it says *which* secret's response was malformed.
+    /// The key is `DopplerConfig` and `SecretName`, both non-secret
+    /// domain types, so naming it adds no response text: the provider's
+    /// own bytes stay discarded.
+    ///
+    /// A provider *status* error is left exactly as it is. Its message
+    /// already carries the provider's own words, bounded to
+    /// `MAX_MESSAGE_CHARS`, and prefixing those would push the whole
+    /// string past the bound that bounding exists to guarantee.
     fn lookup(&self, inputs: &Inputs) -> Result<Outputs, ToolError> {
         require_present(&self.spec, inputs)?;
         let config: DopplerConfig = get(inputs, "config")?;
@@ -56,12 +73,13 @@ impl DopplerSecretGet {
         let value = self
             .client
             .get_secret(config.project(), config.name(), &name)
-            .map_err(|err| {
-                if err.status == Some(404) {
-                    not_found(format!("no secret at `{config}#{name}`"))
-                } else {
-                    ToolError::from(err)
-                }
+            .map_err(|err| match err.status {
+                Some(404) => not_found(format!("no secret at `{config}#{name}`")),
+                Some(status) if (200..300).contains(&status) => ToolError {
+                    kind: ToolErrorKind::Provider,
+                    message: format!("reading `{config}#{name}`: {}", err.message),
+                },
+                _ => ToolError::from(err),
             })?;
         let mut outputs = Outputs::new();
         outputs.insert(port("value"), Value::known(value));

@@ -182,3 +182,61 @@ fn known_secret_renders_redacted_in_outputs_debug_and_json() {
     assert!(json.contains("REDACTED"), "{json}");
     assert!(!json.contains(&raw), "{json}");
 }
+
+/// A `200` whose `value.computed` is missing, `null`, empty, or not a
+/// string at all is a `Provider` error that names the key it was reading
+/// — never a panic, and never an echo of the body. The numeric case is
+/// the sharp one: `serde_json`'s own `Display` for a type mismatch quotes
+/// the offending value (`invalid type: integer \`123\`, expected a
+/// string`), and `Http::finish` discards that text in favour of a
+/// line/column position precisely so it cannot become a message.
+#[test]
+fn a_computed_that_is_missing_null_empty_or_not_a_string_names_the_key_and_echoes_nothing() {
+    for body in [
+        serde_json::json!({"name": "DATABASE", "value": {"raw": "r", "note": ""}}),
+        serde_json::json!({"name": "DATABASE", "value": {"computed": null}}),
+        serde_json::json!({"name": "DATABASE", "value": {"computed": ""}}),
+        serde_json::json!({"name": "DATABASE", "value": {"computed": 123}}),
+        serde_json::json!({"name": "DATABASE"}),
+    ] {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", SECRET_PATH)
+            .with_status(200)
+            .with_body(body.to_string())
+            .create();
+        let (client, _sleeper) = client_against(provider.url());
+        let tool = DopplerSecretGet::new(client);
+        let err = tool
+            .read(&inputs())
+            .expect_err(&format!("body {body} must not parse"));
+        assert_eq!(err.kind, ToolErrorKind::Provider, "body {body}");
+        assert!(
+            err.message.contains("third-thoughts/prd") && err.message.contains("DATABASE"),
+            "body {body}: the error must name the key it was reading: {}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("123") && !err.message.contains("computed"),
+            "body {body}: the error must echo nothing from the response: {}",
+            err.message
+        );
+    }
+}
+
+/// The key-naming wrapper is for *body-parse* failures only. A provider
+/// status error already carries the provider's own bounded words, and
+/// prefixing those would push them past `MAX_MESSAGE_CHARS`' guarantee.
+#[test]
+fn a_5xx_message_is_the_providers_words_alone_under_the_bound() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", SECRET_PATH)
+        .with_status(503)
+        .with_body(r#"{"messages":["Internal server error."]}"#)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerSecretGet::new(client);
+    let err = tool.read(&inputs()).unwrap_err();
+    assert_eq!(err.message, "provider says: Internal server error.");
+}
