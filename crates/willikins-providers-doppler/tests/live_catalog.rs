@@ -1,7 +1,15 @@
-//! The *whole* live catalog — the one task 10a will assemble and serve:
-//! `willikins-tools`' two pure tools, `willikins-providers-github`'s two
-//! live tools, and this crate's five live Doppler tools. Nine tools, no
-//! fake among them.
+//! The *whole* live catalog — `willikins-tools`' two pure tools,
+//! `willikins-providers-github`'s two live tools, and this crate's five
+//! live Doppler tools. Nine tools, no fake among them.
+//!
+//! The assembly itself lives in `willikins-server` now
+//! (`willikins_server::live_catalog_with`, task 10a's `Butler::live_catalog`)
+//! rather than here: this file used to keep its own copy, which is
+//! exactly the duplication task 10a's prompt asked to close ("move that
+//! assembly here and make the doppler test call it, so it exists once").
+//! A dev-only cycle back to `willikins-server` (which depends on this
+//! crate normally) is what makes that possible; see this crate's
+//! `Cargo.toml` for why that is safe.
 //!
 //! `catalog_parity.rs` pins each Doppler `ToolSpec` equal to the fake's
 //! one spec at a time, and `catalog_check_parity.rs` pins that swapping
@@ -9,9 +17,9 @@
 //! `check` can see. Neither of those, nor
 //! `willikins-providers-github`'s mirror-image file (live GitHub, fake
 //! Doppler), ever builds the catalog with *both* providers live — so
-//! until this file, nothing proved the assembly task 10a needs is even
-//! constructible: that the nine specs' names do not collide, that every
-//! one validates against the shared type registry, and that the
+//! until this file, nothing proved the assembly `willikins-server` needs
+//! is even constructible: that the nine specs' names do not collide, that
+//! every one validates against the shared type registry, and that the
 //! milestone's two positive fixtures still `check` against it, resolving
 //! the same types in the same order as against the all-fake catalog.
 //!
@@ -19,31 +27,14 @@
 //! at a port nothing listens on, and every `Credential` is a
 //! `for_testing` one.
 
-use std::sync::Arc;
-
-use willikins_core::{Catalog, Tool};
-use willikins_providers_doppler::{
-    DopplerClient, DopplerConfigEnsure, DopplerProjectEnsure, DopplerSecretGet,
-    DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
-};
-use willikins_providers_github::{GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure};
+use willikins_core::Catalog;
 use willikins_providers_http::{Credential, Http};
 
 /// The two positive fixtures the milestone's goal names.
 const POSITIVE_FIXTURES: [&str; 2] = ["new-rust-service.yaml", "rotate-service-token.yaml"];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 9] = [
-    "naming.v1",
-    "template.render",
-    "github.repo.ensure",
-    "github.actions_secret.ensure",
-    "doppler.project.ensure",
-    "doppler.config.ensure",
-    "doppler.service_token.ensure",
-    "doppler.service_token.rotate",
-    "doppler.secret.get",
-];
+const LIVE_TOOL_NAMES: [&str; 9] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -56,43 +47,19 @@ fn workflows_dir() -> std::path::PathBuf {
 /// reach the network.
 const NOWHERE: &str = "http://127.0.0.1:1";
 
-fn doppler_client() -> Arc<DopplerClient> {
-    let credential = Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
-    Arc::new(DopplerClient::new(Http::new(
-        NOWHERE,
-        Vec::new(),
-        credential,
-    )))
-}
-
-fn github_client() -> Arc<GitHubClient> {
-    let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
-    Arc::new(GitHubClient::new(Http::new(
-        NOWHERE,
-        willikins_providers_github::default_headers(),
-        credential,
-    )))
-}
-
-/// The live catalog task 10a assembles.
+/// The live catalog, assembled by `willikins-server`.
 fn live_catalog() -> Catalog {
-    let mut catalog = Catalog::new(willikins_types::registry());
-    let mut insert = |tool: Arc<dyn Tool>| {
-        let name = tool.spec().name.clone();
-        catalog
-            .insert(tool)
-            .unwrap_or_else(|err| panic!("live catalog rejected `{name}`: {err}"));
-    };
-    insert(Arc::new(willikins_tools::NamingV1::new()));
-    insert(Arc::new(willikins_tools::TemplateRender::new()));
-    insert(Arc::new(GitHubRepoEnsure::new(github_client())));
-    insert(Arc::new(GitHubActionsSecretEnsure::new(github_client())));
-    insert(Arc::new(DopplerProjectEnsure::new(doppler_client())));
-    insert(Arc::new(DopplerConfigEnsure::new(doppler_client())));
-    insert(Arc::new(DopplerServiceTokenEnsure::new(doppler_client())));
-    insert(Arc::new(DopplerServiceTokenRotate::new(doppler_client())));
-    insert(Arc::new(DopplerSecretGet::new(doppler_client())));
-    catalog
+    let doppler_credential =
+        Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
+    let github_credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+    willikins_server::live_catalog_with(
+        Http::new(
+            NOWHERE,
+            willikins_providers_github::default_headers(),
+            github_credential,
+        ),
+        Http::new(NOWHERE, Vec::new(), doppler_credential),
+    )
 }
 
 /// The assembly itself: nine tools, no name collision, every spec valid
