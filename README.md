@@ -46,4 +46,5 @@ Gates: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D 
 
 ## License
 
-MIT. See `LICENSE`.
+GNU Affero General Public License, version 3 or later (`AGPL-3.0-or-later`). See `LICENSE`.
+The source lives at <https://github.com/Lightless-Labs/willikins>.

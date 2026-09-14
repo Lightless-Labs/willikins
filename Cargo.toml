@@ -18,8 +18,8 @@ members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "MIT"
-repository = "https://github.com/lightless-labs/willikins"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/Lightless-Labs/willikins"
 authors = ["Lightless Labs"]
 
 [workspace.dependencies]

@@ -1,7 +1,8 @@
 # Willikins
 
 A provisioning butler: typed, composable project-provisioning workflows an agent can author
-and run over MCP or the CLI, without ever touching a secret. Rust workspace, Cargo, MIT.
+and run over MCP or the CLI, without ever touching a secret. Rust workspace, Cargo, AGPL-3.0-or-later; public at
+<https://github.com/Lightless-Labs/willikins>.
 
 ## Session Continuity
 

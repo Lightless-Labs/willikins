@@ -6,6 +6,7 @@
 **Addendum:** 2026-09-11 — open questions decided (YAML, typed refs, Railway, web approval, Doppler vault, MIT, Cargo); milestone list added.
 **Addendum:** 2026-09-11 — after dependency research: Railway service name is the component alone; Swift keywords join the reserved-word union.
 **Addendum:** 2026-09-11 — task 2 verification: pascal is not injective for digit-only words; accepted, since pascal never feeds a natural key.
+**Addendum:** 2026-09-14 — license changed from MIT to AGPL-3.0-or-later at the operator's request when the public repository (github.com/Lightless-Labs/willikins) was created; the decisions table row updated. CI decision recorded for milestone 3: every secret lives in Doppler and Buildkite holds one CI/CD Doppler service-account token, so no per-repository secret is ever pushed into CI.
 **Addendum:** 2026-09-12 — milestone 2 plan: two kinds of secret (graph secrets behind `SinkToken`, execution-context credentials behind one `authorize` function and a clippy entry); TLS terminated at the platform edge; the remote server plans and applies by workflow name only; a tool refuses rather than reconciles a non-key attribute it should not change; composition split out of milestone 2 into its own plan. See "Milestone 2 decisions".
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
@@ -264,7 +265,7 @@ These came up from memory during the conversation and have not been checked.
 | Hosting | Railway first | Small always-on box later if the circularity bites |
 | Approval | Web page plus push notification | Chat integration later |
 | Credential storage | Doppler as the vault, one bootstrap token | Already trusted by the org |
-| License | MIT | Matches refinery; third-thoughts is AGPL-3.0 so there is no single org rule |
+| License | AGPL-3.0-or-later (was MIT until 2026-09-14) | The operator's call when the public repository was created; matches third-thoughts |
 | Build | Cargo | Matches every public sibling; Bazel only if the monorepo pulls it in |
 
 ## Milestone 2 decisions
