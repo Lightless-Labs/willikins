@@ -96,43 +96,39 @@ pub fn butler_with_journal(
     (Butler::new(config), journal)
 }
 
+/// Open the [`FileJournal`] at `path`, retrying briefly (matching
+/// `tests/file_journal_round_trip.rs`'s own `open_once_unlocked`) rather
+/// than racing whichever previous holder's last strong `Arc` reference
+/// (a dropped `Butler`, a dropped read-only handle) is what releases the
+/// exclusive `flock`.
+fn open_file_journal(path: &Path, clock: &Arc<dyn Clock>) -> FileJournal {
+    for _ in 0..200 {
+        match FileJournal::open_with_clock(path, clock.clone()) {
+            Ok(opened) => return opened,
+            Err(willikins_journal::JournalError::Locked { .. }) => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(other) => panic!("journal at {} does not open: {other}", path.display()),
+        }
+    }
+    panic!("journal at {} stayed locked", path.display())
+}
+
 /// A `Butler` over a real [`FileJournal`] at `journal_path`, sharing
 /// `clock` with it -- for a test that needs the journal to survive a
 /// `Butler` being dropped and rebuilt (a simulated process restart),
 /// unlike [`butler_with_journal`]'s [`MemoryJournal`], which holds its
 /// entries only in memory and cannot be reopened by a fresh `Butler`.
-///
-/// Opens with a short retry (matching
-/// `tests/file_journal_round_trip.rs`'s own `open_once_unlocked`):
-/// dropping the previous `Butler` drops its last strong `Arc` reference
-/// to the journal, which is what releases the exclusive `flock` an
-/// immediate reopen would otherwise race.
 pub fn butler_over_file_journal(
     dir: &Path,
     journal_path: &Path,
     catalog: willikins_core::Catalog,
     clock: Arc<ManualClock>,
 ) -> Butler {
-    let mut journal = None;
-    for _ in 0..200 {
-        match FileJournal::open_with_clock(journal_path, clock.clone() as Arc<dyn Clock>) {
-            Ok(opened) => {
-                journal = Some(opened);
-                break;
-            }
-            Err(willikins_journal::JournalError::Locked { .. }) => {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            Err(other) => panic!(
-                "journal at {} does not open: {other}",
-                journal_path.display()
-            ),
-        }
-    }
-    let journal: SharedJournal =
-        Arc::new(Mutex::new(journal.unwrap_or_else(|| {
-            panic!("journal at {} stayed locked", journal_path.display())
-        })));
+    let journal: SharedJournal = Arc::new(Mutex::new(open_file_journal(
+        journal_path,
+        &(clock.clone() as Arc<dyn Clock>),
+    )));
     let config = ButlerConfig {
         workflows_dir: dir.to_path_buf(),
         journal,
@@ -144,6 +140,16 @@ pub fn butler_over_file_journal(
         read_rate_per_minute: ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
     };
     Butler::new(config)
+}
+
+/// Open the [`FileJournal`] at `journal_path` directly, over the real
+/// [`willikins_journal::SystemClock`], for a test that only needs to
+/// read entries back (never to drive a `Butler`) -- e.g. to confirm a
+/// refusal was journaled after the `Butler` that produced it has been
+/// dropped.
+pub fn open_file_journal_read_only(journal_path: &Path) -> FileJournal {
+    let clock: Arc<dyn Clock> = Arc::new(willikins_journal::SystemClock);
+    open_file_journal(journal_path, &clock)
 }
 
 /// Like [`butler_with_journal`], with custom windows.

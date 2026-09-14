@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use willikins_core::{Action, PortName};
-use willikins_journal::{ApplyRefusedReason, Event, PlanId, RunState};
+use willikins_journal::{ApplyRefusedReason, Event, Journal, PlanId, RunState};
 use willikins_providers_fake::FakeState;
 use willikins_server::{ButlerConfig, ButlerError, DriftDetail};
 use willikins_types::{DomainType, GitHubRepo, RepoVisibility, WorkflowName};
@@ -434,6 +434,109 @@ fn a_plan_survives_a_butler_restart_between_plan_and_approve_and_again_before_ap
         restarted_calls, control_calls,
         "the restarted flow must have made exactly the same provider calls as the unrestarted one"
     );
+}
+
+/// Task 10b, part B: a recorded input that no longer parses against its
+/// declared type refuses with `ButlerError::RecordedInputUnreadable`
+/// naming the input, never a panic -- and touches no provider. Reaching
+/// this in practice needs the journal itself hand-edited (the document
+/// hash check, which `apply` runs first, already refuses any case where
+/// the *document*'s declared types moved out from under a recorded
+/// plan); this test manufactures that directly by editing the
+/// `PlanRecorded` line's `inputs.slug.value` on disk between `plan` and
+/// `apply`, the same "operator-level" trust the plan's task 10a addendum
+/// already names for a hand-edited `fingerprint` line.
+#[test]
+fn a_recorded_input_that_no_longer_parses_refuses_without_a_panic() {
+    let workflows_dir = tempfile::tempdir().unwrap();
+    common::copy_fixture_as(
+        workflows_dir.path(),
+        "new-rust-service.yaml",
+        "new-rust-service.yaml",
+    );
+    let journal_dir = tempfile::tempdir().unwrap();
+    let journal_path = journal_dir.path().join("journal.jsonl");
+    let (state, catalog) = willikins_providers_fake::empty();
+    let clock = common::manual_clock();
+
+    let plan_id = {
+        let butler = common::butler_over_file_journal(
+            workflows_dir.path(),
+            &journal_path,
+            catalog,
+            clock.clone(),
+        );
+        let response = butler
+            .plan(
+                wf("new-rust-service"),
+                &common::new_rust_service_inputs(),
+                common::principal("agent"),
+            )
+            .unwrap();
+        assert!(
+            !response.requires_approval,
+            "the plain fixture is Reversible"
+        );
+        response.plan_id
+    };
+
+    // Corrupt the recorded `slug` input's rendered value in place: still
+    // valid JSON, still a `PlanRecorded` line the journal replays
+    // cleanly, but a string `ProjectSlug` rejects (a space is never
+    // valid in the slug grammar).
+    let original = std::fs::read_to_string(&journal_path).unwrap();
+    let mut edited_any = false;
+    let patched: String = original
+        .lines()
+        .map(|line| {
+            let mut entry: serde_json::Value = serde_json::from_str(line).unwrap();
+            if entry["event"]["kind"] == "plan_recorded" {
+                assert_eq!(
+                    entry["event"]["inputs"]["slug"]["value"],
+                    serde_json::json!("third-thoughts"),
+                    "{entry}"
+                );
+                entry["event"]["inputs"]["slug"]["value"] = serde_json::json!("BAD SLUG");
+                edited_any = true;
+            }
+            serde_json::to_string(&entry).unwrap()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert!(edited_any, "no plan_recorded line found in {original}");
+    std::fs::write(&journal_path, patched).unwrap();
+
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let butler =
+        common::butler_over_file_journal(workflows_dir.path(), &journal_path, catalog, clock);
+    let err = butler
+        .apply(plan_id, common::principal("agent"))
+        .expect_err("a recorded input that no longer parses must refuse, not panic");
+    match err {
+        ButlerError::RecordedInputUnreadable { input, .. } => {
+            assert_eq!(input.to_string(), "slug");
+        }
+        other => panic!("expected RecordedInputUnreadable, got {other:?}"),
+    }
+    assert!(
+        state.lock().unwrap().ensure_calls.is_empty(),
+        "no provider call must have happened"
+    );
+
+    drop(butler);
+    let reopened = common::open_file_journal_read_only(&journal_path);
+    let found = reopened.entries().iter().any(|entry| {
+        matches!(
+            &entry.event,
+            Event::ApplyRefused {
+                plan_id: p,
+                reason: ApplyRefusedReason::PlanFailed { error_kind },
+                ..
+            } if *p == plan_id && error_kind == "Unavailable"
+        )
+    });
+    assert!(found, "the refusal must be journaled as ApplyRefused");
 }
 
 // ---------------------------------------------------------------------
