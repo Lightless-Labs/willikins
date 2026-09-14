@@ -11,6 +11,7 @@ members = [
   "crates/willikins-providers-github",
   "crates/willikins-providers-doppler",
   "crates/willikins-journal",
+  "crates/willikins-server",
   "crates/willikins-cli",
 ]
 
@@ -33,6 +34,7 @@ willikins-providers-http = { path = "crates/willikins-providers-http" }
 willikins-providers-github = { path = "crates/willikins-providers-github" }
 willikins-providers-doppler = { path = "crates/willikins-providers-doppler" }
 willikins-journal = { path = "crates/willikins-journal" }
+willikins-server = { path = "crates/willikins-server" }
 
 chrono = { version = "0.4", default-features = false, features = ["now", "serde"] }
 serde = { version = "1", features = ["derive"] }

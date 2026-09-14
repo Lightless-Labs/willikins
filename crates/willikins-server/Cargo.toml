@@ -1,0 +1,31 @@
+[package]
+name = "willikins-server"
+description = "The Butler: plan/approve/apply library core for the willikins MCP and CLI surfaces"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+willikins-core.workspace = true
+willikins-types.workspace = true
+willikins-dsl.workspace = true
+willikins-journal.workspace = true
+willikins-tools.workspace = true
+willikins-providers-fake.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+indexmap.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+insta.workspace = true
+
+[lints]
+workspace = true

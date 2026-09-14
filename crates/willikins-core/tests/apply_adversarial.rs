@@ -56,9 +56,14 @@ fn seeded_state_and_catalog() -> (Arc<Mutex<FakeState>>, Catalog) {
 /// An `Approval::Human` carries no plan id, so core cannot tell an
 /// approval granted for *this* plan from one granted for another: it
 /// checks only that a human is claimed. Binding an approval to a
-/// `plan_id` is the server's job (`willikins-server`'s `Butler`, task
-/// 10a, which constructs `Human` only from a journaled `ApprovalGranted`
-/// event for that very id).
+/// `plan_id` is the server's job. Closed by `willikins-server`'s
+/// `Butler` (task 10a): its `apply(plan_id, principal)` takes no
+/// caller-supplied `Approval` at all -- it constructs `Human` only from
+/// the *given* `plan_id`'s own journaled `ApprovalGranted` event, so
+/// there is no code path through the public API that could hand one
+/// plan's approval to another. `crates/willikins-server/tests/acceptance_7_identity.rs`'s
+/// `an_approved_irreversible_plan_runs` and `a_rejected_plan_still_refuses_apply`
+/// exercise exactly this construction, one plan at a time.
 #[test]
 fn boundary_an_approval_is_not_bound_to_the_plan_it_approves() {
     let (state, catalog) = seeded_state_and_catalog();
@@ -99,7 +104,15 @@ fn boundary_an_approval_is_not_bound_to_the_plan_it_approves() {
 /// timestamped in the far future (a clock-skewed or forged approver) runs
 /// exactly like one stamped now. The approval and apply *windows* the
 /// trust boundaries describe are the server's, measured from journaled
-/// events, not from this field.
+/// events, not from this field. Closed by `willikins-server`'s `Butler`
+/// (task 10a): `at` is never a caller-supplied value at all -- it is the
+/// `Timestamp` the journal itself stamped on the plan's `ApprovalGranted`
+/// entry (`crates/willikins-journal/src/journal.rs`'s
+/// `ApprovalState::Granted::at`), read from the journal's own shared
+/// clock, so there is no way to forge it through the public API. Its
+/// window checks (`crates/willikins-server/src/butler.rs`'s
+/// `elapsed_since`) are what `crates/willikins-server/tests/acceptance_8_plan_identity.rs`'s
+/// four window tests pin.
 #[test]
 fn boundary_an_approval_timestamped_in_the_future_still_runs() {
     let (state, catalog) = seeded_state_and_catalog();
@@ -648,8 +661,14 @@ fn a_panicking_observer_unwinds_out_of_apply_leaving_earlier_writes_in_place() {
 /// (every fake tool reads and writes under one lock, so no resource is
 /// created twice and the state is never left inconsistent); what does
 /// *not* hold is that a plan's outputs describe the state afterwards --
-/// the two runs mint two tokens and the last write wins. The single-apply
-/// lock is the server's (task 10a).
+/// the two runs mint two tokens and the last write wins. Closed by
+/// `willikins-server`'s `Butler` (task 10a): a `Mutex<Option<RunId>>`
+/// held across each `apply` call's own synchronous checks (never across
+/// the run itself) answers a second `apply` with `RunInProgress` before
+/// a second `willikins_core::apply` is ever called, so this interleaving
+/// is unreachable through the public API. Pinned by
+/// `crates/willikins-server/tests/acceptance_8_plan_identity.rs`'s
+/// `a_second_apply_while_a_run_is_in_progress_is_refused`.
 #[test]
 fn boundary_two_threads_applying_one_plan_share_state_with_no_mutual_exclusion() {
     let (state, catalog) = seeded_state_and_catalog();
