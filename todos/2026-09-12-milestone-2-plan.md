@@ -17,17 +17,21 @@ with research in `docs/research/2026-09-12-m2-dependencies.md`. Scope item 6 (co
 moved to its own future plan (design doc, milestone 2b); the site enum stayed in as task 1b.
 Two additions to the scope below: `doppler.service_token.rotate` and a second positive
 fixture, because the convergence claim is otherwise false for a minted token. Reviewed the
-same day (20 findings folded in, stamped in the plan header). **2026-09-13:** tasks 0, 1a–1e, 2 and 3 landed on `main` (two Workflows; every task
-opus-verified except 1e and 2). **2026-09-14:** tasks 4, 5 and 6 landed and were opus-verified (the executor's approval
-gate now reads the checked class; the journal replays through `Redacted<T>`; the HTTP client
-labels provider text and caps `Retry-After`). Next: 7 (GitHub), 8 (Doppler and the probe), 9
-(adversarial pass 1), sequentially. **2026-09-14 (later):** task 9 (adversarial pass 1 over
-the executor, the journal and the approval gate) is done and recorded in
-`docs/research/2026-09-14-executor-journal-adversarial-pass-1.md`: no attack reached a secret
-byte, one defect fixed (a journal line could rewrite the record it named), and the boundaries
-core leaves to the server are now `boundary_` tests plus
-`todos/2026-09-14-pass-1-items-for-task-10a.md`. This todo closes when the plan is marked
-Completed.
+same day (20 findings folded in, stamped in the plan header).
+
+**Progress.** 2026-09-13: tasks 0, 1a–1e, 2 and 3 landed on `main` (two Workflows; every task
+opus-verified except 1e and 2). 2026-09-14: tasks 4, 5 and 6 (the executor's approval gate
+reads the checked class; the journal replays through `Redacted<T>`; the HTTP client labels
+provider text and caps `Retry-After`), then 7 and 8 (the live GitHub and Doppler providers;
+the GitHub read-only probe ran against the sandbox org, the Doppler one waits for a
+service-account token), then 9 (adversarial pass 1 over the executor, the journal and the
+approval gate, recorded in `docs/research/2026-09-14-executor-journal-adversarial-pass-1.md`:
+no attack reached a secret byte, one defect fixed, and the boundaries core leaves to the
+server are `boundary_` tests plus `todos/2026-09-14-pass-1-items-for-task-10a.md`).
+
+**Next:** a live GitHub write cycle against the sandbox org (the operator asked for real
+provisioning evidence early), then 10a, 10b, 11, 12, 13, 14. This todo closes when the plan
+is marked Completed.
 
 ## First action of the next session
 

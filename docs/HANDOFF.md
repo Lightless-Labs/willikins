@@ -3,25 +3,32 @@
 Current state of the project and active work. Read this at session start. Update before
 compaction, before handing off, after a milestone, and after a plan change or discovery.
 
-**Last updated:** 2026-09-12 (evening)
+**Last updated:** 2026-09-14 (midday)
 
 ## Current Status
 
-### RESUME HERE (2026-09-14) — milestone 2 tasks 0 through 6 landed; tasks 7 and 8 (live providers) are next
+### RESUME HERE (2026-09-14, later) — milestone 2 tasks 0 through 9 landed; the GitHub write cycle and task 10a (server library) are next
 
-- **Live state:** `main` at 194 local commits, gates green at HEAD (1142 tests, 3 ignored: two by-hand
-  measurements). No remote is configured and nothing has been pushed.
-- **What just happened:** tasks 4 (apply executor), 5 (`willikins-journal`) and 6
-  (`willikins-providers-http`) landed through Workflows `wf_99b69f88-80c` (killed by an
-  OAuth outage mid-verification) and `wf_e61c2e5e-4a2` (which inherited and finished it).
-  The verifiers' real finds: the executor's approval gate read only the plan's
-  `requires_approval` flag (now also the checked class); an `unreachable!` on an unknown
-  required input bound to a workflow input (now `UnknownRequiredInput`); the journal listed
-  already-run plans as pending and journaled a failed re-plan as a run; the HTTP client
-  echoed response bodies into error messages, kept 401/403 bodies, followed redirects,
-  slept on an uncapped `Retry-After`, panicked on a huge HTTP-date, and exposed the bearer
-  through a public `authorize`. All fixed and pinned. Plan addendum dated 2026-09-14
-  records the deviations; two new todos hold the deferred items.
+- **Live state:** `main` at 227 local commits, gates green at HEAD (1,325 tests pass, 6 ignored; the ignored ones
+  are by-hand measurements, a lock-probe child, and the two live probes). No remote is
+  configured and nothing has been pushed.
+- **What just happened:** tasks 7 (`willikins-providers-github`), 8
+  (`willikins-providers-doppler`) and 9 (adversarial pass 1) landed through Workflow
+  `wf_5a050a35-0a3`. The verifiers' real finds: a repository whose `topics` is null failed
+  to parse instead of reading `Foreign`; `doppler.config.ensure` ignored Doppler's `root`
+  flag, so a branch config could squat on a root config's derived name and a token would
+  have been minted into the wrong config; the journal fold let a later line overwrite the
+  record it named (pass 1's one defect). The GitHub read-only probe ran against
+  `Willikins-Test` (identity and org verified; the org has no repository yet, so the
+  repository and public-key fixtures stay unverified). The Doppler probe is written and
+  refused by the credential regex, as designed, until a service-account token exists. The
+  research note `docs/research/2026-09-14-executor-journal-adversarial-pass-1.md` records
+  the pass; `todos/2026-09-14-pass-1-items-for-task-10a.md` lists what the server closes.
+- **Product fact (2026-09-14):** the operator's CI is Buildkite with self-hosted runners,
+  not GitHub Actions. `github.actions_secret.ensure` stays milestone 2's secret sink as the
+  end-to-end proof in the throwaway org; milestone 3 adds a Buildkite provider (pipeline
+  per repo, a secret sink for the Doppler token) and the positive fixture's `ci_secret`
+  step switches to it. App Store Connect is a candidate provider after that.
 - **Group A landed (2026-09-12, late evening):** Workflow `wf_c7a1d060-cec` ran three
   worktree lanes. Lane 1 (1a, 1b) and lane 3 (task 0, 1d) merged onto `main` with gates
   green. Lane 2 (1c) was lost: the coordinator's stop message meant for a duplicate agent
@@ -34,12 +41,15 @@ compaction, before handing off, after a milestone, and after a plan change or di
   config-scoped service token (`dp.st.`), enough for auth and `doppler.secret.get`
   against `willikins-test/dev`, not for creating projects, environments or tokens; task
   8's create-side probe and task 14 need a `dp.sa.` or `dp.pt.` token from the operator.
-- **Next action:** task 7 (`willikins-providers-github`), task 8
-  (`willikins-providers-doppler` plus the opt-in read-only live probe), then task 9
-  (adversarial pass 1, opus, recorded under `docs/research/`), one sequential Workflow on
-  `main`, sonnet implementing test-first and opus verifying, every `CONTEXT` string naming
-  the four gates exactly as CLAUDE.md now spells them (`-j 2`, `RUST_TEST_THREADS=2`).
-  Then 10a, 10b and 11, 12, 13, 14. Groups run one lane at a time (memory, below). The
+- **Next action:** (1) a live GitHub write cycle the operator asked for: an opt-in test
+  (`WILLIKINS_LIVE_TESTS=1`) that creates a repository in `Willikins-Test` through the real
+  `github.repo.ensure`, sets the topic, stores a sealed secret, re-runs `ensure` for
+  `changed: false`, refreshes the two unverified fixtures, and deletes the repository at
+  the end; (2) task 10a (`willikins-server` library: `Butler`, plan identity closing the
+  pass-1 boundaries, startup checks; acceptance tests 7 identity half, 8, 13, 14), then 10b
+  and 11, 12, 13, 14, one sequential Workflow at a time on `main`, sonnet implementing
+  test-first and opus verifying, every `CONTEXT` string naming the four gates exactly as
+  CLAUDE.md spells them (`-j 2`, `RUST_TEST_THREADS=2`). Groups run one lane at a time. The
   Workflow tool needs the operator's opt-in per session ("use a workflow" or
   "ultracode"); without it, dispatch through plain Agent calls. Agents must never message
   the coordinator mid-run (a reply resumes a duplicate of them).
@@ -57,7 +67,7 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Project State
 
-Nine crates, dependencies flowing downward only:
+Eleven crates, dependencies flowing downward only:
 
 | Crate | Holds | State |
 | --- | --- | --- |
@@ -66,7 +76,9 @@ Nine crates, dependencies flowing downward only:
 | `willikins-core` | `Value` with its JSON shape, `Tool` contract (`ensure -> Ensured`, `Observation::Mismatch`), `tool::helpers`, `Catalog`, `Workflow` (typed name and description), `check` (21 error kinds, `Site`), `describe` (`document_description`), `plan` (`AttributeMismatch`, `Plan::fingerprint`), `apply` (the one `SinkToken::new` site; `Approval`, `ApplyError`, `ApplyObserver`, `PrincipalId`, `Timestamp`), `Reported`, JSON schemas for the MCP result types, `testing` generators behind `test-support` | done through task 4 |
 | `willikins-tools` | `naming.v1` and `template.render`, pure, moved out of the fake crate; `register(&mut Catalog)` | done |
 | `willikins-journal` | `PlanId`/`RunId` (uuid v7), `Event`/`Entry`, `Redacted<T>`, `Journal` trait with fold-based views (`PlanRecord`, `RunRecord`), `FileJournal` (JSONL, fd-lock, `sync_data`, validated replay), `MemoryJournal`, `JournalObserver`, `run_and_journal` | done, verified |
-| `willikins-providers-http` | `Credential` (env-sourced, redacted, crate-private `authorize`), `Http` over ureq 3 (retry on 429/5xx/transport for GET/PUT/DELETE, never POST; `Retry-After` capped at 60 s; no redirects), `ProviderError` -> `ToolError` with `provider says:` labelling and 256-char bound, `testing` module behind `test-support` | done, verified |
+| `willikins-providers-http` | `Credential` (env-sourced, redacted, crate-private `authorize`), `Http` over ureq 3 (retry on 429/5xx/transport for GET/PUT/DELETE, never POST; `Retry-After` capped at 60 s; no redirects; `put_empty`, `delete_with_body`), `ProviderError` with rate-limit facts -> `ToolError` with `provider says:` labelling and 256-char bound, `testing` module behind `test-support` | done, verified |
+| `willikins-providers-github` | `GitHubClient`, live `github.repo.ensure` and `github.actions_secret.ensure` (sealed box via `crypto_box`), secondary-rate-limit retry, authored fixtures with a per-file verification status, the GitHub half of the read-only probe | done, verified; probe ran |
+| `willikins-providers-doppler` | `DopplerClient`, live `doppler.project.ensure`, `config.ensure` (`root: true` only), `service_token.ensure`, `service_token.rotate` (always `Absent`), `secret.get` (`value.computed`), a nine-tool live catalog test, the Doppler half of the probe (written, refused by the `dp.st.` token) | done, verified; probe not run |
 | `willikins-providers-fake` | `FakeState` (JSON-seedable, one-way redacted; `next_token`, `fail_ensure_once`, `ensure_calls`, `read_calls`), nine tools plus the two from `willikins-tools` (`doppler.service_token.rotate` is Destructive); every `ensure` reads first, `doppler.project.ensure` seeds `dev`/`stg`/`prd`, `github.repo.ensure` refuses a visibility mismatch | done through task 4 |
 | `willikins-dsl` | YAML document to `Workflow`, reference grammar, located errors, published document schema, 256 KiB cap, anchor/alias/BOM pre-scan, typed `name`/`description` | done through task 1c |
 | `willikins-cli` | `validate`, `describe`, `plan`, `schema`, `propose-slug`; `--json` through `Reported`; text renders only through `Value::render()` and `single_line` escaping; `document says:` prefix | done, acceptance suite |
@@ -148,6 +160,13 @@ research, with a correction block on its slug section),
   body is dropped at construction; `Retry-After` is capped at 60 s; redirects are refused;
   POST is never retried. GitHub's secondary rate limit is a 403 with `retry-after`, which
   the shared client does not retry: task 7's tools handle it.
+- **`doppler.config.ensure` needs `root: true`**: Doppler names a branch config `<env>_<name>`,
+  which can equal the root-config name `naming::v1` derives for a multi-word environment;
+  anything but `root: true` on a 200 is `Foreign`. `doppler.service_token.rotate` reads
+  `Absent` always, so a Destructive step never plans as `NoOp`.
+- **The journal fold keeps the first record of an id** and `FileJournal::open` refuses a
+  duplicate `PlanRecorded`, `RunStarted`, `RunFinished` or `NodeFinished` (pass 1's fix).
+  `boundary_` tests name the task (10a or pass 2) that closes each documented gap.
 - **Both `#[allow(clippy::disallowed_methods)]` in the derive are load-bearing**: clippy
   does lint macro expansions, and the derive has two `expose_secret` sites (`expose` and
   the generated `PartialEq`). `expose_secret_mut` is disallowed too. Two syn-based tests
@@ -183,6 +202,7 @@ research, with a correction block on its slug section),
 | --- | --- | --- |
 | `todos/2026-09-12-milestone-2-plan.md` | high | the tracking todo; tasks 0–6 done, task 7 next |
 | `todos/2026-09-14-plan-identity-must-cover-inputs.md` | high | task 10a and adversarial pass 1 |
+| `todos/2026-09-14-pass-1-items-for-task-10a.md` | high | task 10a: plan identity, approval by journaled event, single-apply lock, digest type |
 | `todos/2026-09-12-error-json-uniformity-gaps.md` | medium | task 10a (`InputError`, `DocumentError` shapes) and 10b |
 | `todos/2026-09-13-apply-tests-on-the-real-fake-catalog.md` | low | any core task after 4 |
 | `todos/2026-09-14-journal-follow-ups.md` | low | task 10a |
@@ -213,6 +233,8 @@ research, with a correction block on its slug section),
   `for_each` keys; a 10 MB rejected input echoed in full; unknown document fields silently
   ignored. No attack in either adversarial pass reached a secret byte.
 - Costs: nine Workflow runs, about thirty agents, roughly 5.7M subagent tokens.
+- 2026-09-14, later: tasks 7, 8 and 9 (about 1.9M subagent tokens); the GitHub probe ran
+  live; the operator said CI is Buildkite, not Actions.
 - 2026-09-13 and 14: tasks 0 through 6 landed through five Workflows (about 8.5M subagent
   tokens); one lane lost to a misdirected stop message, one verifier killed by an OAuth
   outage and its work inherited by the next; the host's memory limit found and bounded.
