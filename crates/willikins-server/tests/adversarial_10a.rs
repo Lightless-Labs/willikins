@@ -1210,14 +1210,18 @@ fn a_clock_that_steps_backwards_neither_corrupts_the_journal_nor_expires_a_plan(
     let journal_dir = tempfile::tempdir().unwrap();
     let path = journal_dir.path().join("journal.jsonl");
 
-    let clock: Arc<dyn Clock> = Arc::new(BackwardsClock {
+    // Exactly the three reads `plan` makes -- its rate-limiter check, the
+    // `PlanRecorded` append, and the `ToolCalled` append (an irreversible
+    // plan journals no `ApprovalAutomatic`) -- see the read-count
+    // assertion below, which fails loudly rather than silently letting the
+    // step backwards land somewhere harmless if that ever changes.
+    let backwards = Arc::new(BackwardsClock {
         reads: std::sync::atomic::AtomicUsize::new(0),
-        // Enough reads for `plan` itself; everything after it reads the
-        // earlier instant.
-        forward_reads: 4,
+        forward_reads: 3,
         early: Timestamp::parse("2026-09-14T00:00:00+00:00").unwrap(),
         late: Timestamp::parse("2026-09-14T01:00:00+00:00").unwrap(),
     });
+    let clock: Arc<dyn Clock> = backwards.clone();
 
     let plan_id = {
         let journal: willikins_server::SharedJournal = Arc::new(Mutex::new(
@@ -1244,9 +1248,18 @@ fn a_clock_that_steps_backwards_neither_corrupts_the_journal_nor_expires_a_plan(
             )
             .expect("plans cleanly");
 
-        // The clock has now stepped back an hour. The plan is still
-        // inside its approval window, and saying otherwise would be the
-        // failure mode: a negative elapsed time wrapping into a huge one.
+        assert_eq!(
+            backwards.reads.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "`plan` must have spent exactly the forward reads, so `approve`'s \
+             own clock read below is the first one that goes backwards"
+        );
+
+        // The clock has now stepped back an hour, so `approve`'s window
+        // check compares a `recorded_at` of 01:00 against a "now" of
+        // 00:00. The plan is still inside its approval window; saying
+        // otherwise would be the failure mode, a negative elapsed time
+        // wrapping into an enormous one.
         butler
             .approve(response.plan_id, common::principal("approver"))
             .expect("a plan is not expired by the clock moving backwards");

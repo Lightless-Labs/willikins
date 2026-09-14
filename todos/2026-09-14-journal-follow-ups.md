@@ -38,6 +38,13 @@ Pinned by tests. Two closed in task 10a; the rest still open, each small:
 - **Views fold the whole entry list on every call** (O(entries)). Fine now; a long-lived
   server journal will want a cached fold. Still true after task 10a: `Butler` calls straight
   through to the journal's own `plan`/`run`/`runs`/`pending_approvals`, no caching added.
+  **Updated 2026-09-14 (task 10a verification):** two things made this grow rather than
+  shrink, and both are deliberate. `Butler::apply` now folds twice per call (once for the
+  record, once to re-read `applied` under the single-apply lock), and every `Butler`
+  operation -- including every refused and every rate-limited one -- appends a `ToolCalled`
+  entry, so a looping agent lengthens the list that every later view has to fold. Neither is
+  worth trading correctness or the audit trail for; a cached fold is what fixes both, and it
+  belongs to whoever picks this item up.
 - **No hash chain, by decision.** A keyless chain computed and verified by the same binary is
   not tamper evidence. Revisit only with an external anchor (a signed checkpoint, or the
   journal shipped to append-only storage).
