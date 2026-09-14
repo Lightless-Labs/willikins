@@ -114,7 +114,7 @@ pub struct Checked {
 /// which would otherwise collide with the tag or with
 /// [`crate::Reported`]'s own added field; see
 /// `tests::every_check_warning_variant_serializes_with_its_kind`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[serde(tag = "kind")]
 pub enum CheckWarning {
     /// A declared workflow input that no binding anywhere references.
@@ -146,7 +146,7 @@ impl fmt::Display for CheckWarning {
 /// whose payload is not a map) would. No variant declares a field named
 /// `kind` or `message`; see
 /// `tests::every_check_error_variant_serializes_with_its_kind`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[serde(tag = "kind")]
 pub enum CheckError {
     /// A node's `tool` names a tool the catalog does not have.

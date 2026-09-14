@@ -16,7 +16,16 @@ use crate::slug::ProjectSlug;
 ///
 /// Every variant carries the original display name: [`ProjectName`] is
 /// never secret, so there is nothing to redact.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+///
+/// Serializes internally tagged (`#[serde(tag = "kind")]`), the same
+/// convention every other error enum in this workspace uses (see
+/// `willikins-core`'s `CheckError`/`PlanError`), so a caller that wraps
+/// this behind a `{kind, message}` shape (`willikins-server`'s
+/// `ButlerError::SlugProposal`, task 10a) needs no bespoke mapping.
+#[derive(
+    Debug, Clone, PartialEq, Eq, thiserror::Error, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(tag = "kind")]
 pub enum ProposeError {
     /// The name contained no ASCII alphanumeric characters at all.
     #[error("`{input}` contains no usable characters")]
@@ -241,5 +250,14 @@ mod tests {
     #[test]
     fn digits_inside_a_word_do_not_split_it() {
         assert_eq!(propose("b2b").unwrap(), "b2b");
+    }
+
+    #[test]
+    fn serializes_with_a_kind_tag() {
+        let name = ProjectName::parse("!!!").unwrap();
+        let error = propose_slug(&name).unwrap_err();
+        let json = serde_json::to_value(&error).unwrap();
+        assert_eq!(json["kind"], "NoWords");
+        assert_eq!(json["input"], "!!!");
     }
 }

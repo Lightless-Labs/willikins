@@ -26,6 +26,13 @@ willikins-dsl.workspace = true
 willikins-tools.workspace = true
 mockito.workspace = true
 insta.workspace = true
+# A dev-only cycle back to `willikins-server` (which depends on this crate
+# normally, to assemble the live catalog): legal because dev-dependencies
+# are never built when this crate is depended on as a library, the same
+# shape `willikins-types`' own self dev-dependency documents. Lets this
+# test call `willikins_server::live_catalog_with` instead of keeping a
+# second copy of the nine-tool assembly.
+willikins-server.workspace = true
 
 [lints]
 workspace = true
