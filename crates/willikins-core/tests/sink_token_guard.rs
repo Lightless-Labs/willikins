@@ -341,7 +341,11 @@ fn resolve_mod_file(parent_file: &Path, mod_name: &str) -> PathBuf {
 /// `root` (`lib.rs` or `main.rs`), collecting every non-test call site of
 /// `SinkToken::new` under `crate_name::exempt_module_path` treated as the
 /// one allowed executor site.
-fn walk_crate(root: &Path, exempt_relative_path: &Path, violations: &mut Vec<Violation>) {
+fn walk_crate(
+    root: &Path,
+    exempt_relative_path: &Path,
+    violations: &mut Vec<Violation>,
+) -> HashSet<PathBuf> {
     let mut queue: Vec<(PathBuf, bool)> = vec![(root.to_path_buf(), false)];
     let mut visited: HashSet<PathBuf> = HashSet::new();
 
@@ -376,6 +380,54 @@ fn walk_crate(root: &Path, exempt_relative_path: &Path, violations: &mut Vec<Vio
             queue.push((child, test_only));
         }
     }
+    visited
+}
+
+/// Walk one file the module-graph walk never reached, as ordinary
+/// (non-test) code: a `build.rs`, a `src/bin/` target, a file reached only
+/// through `include!`, a bench, an example. The plan's acceptance test 4
+/// says "every `.rs` file in the workspace", and cargo compiles all of
+/// these even though no `mod` declaration mentions them.
+fn walk_single_file(path: &Path, exempt_relative_path: &Path, violations: &mut Vec<Violation>) {
+    if path.ends_with(exempt_relative_path) {
+        return;
+    }
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+    let file =
+        syn::parse_file(&source).unwrap_or_else(|err| panic!("parsing {}: {err}", path.display()));
+    let aliases = collect_sink_token_aliases(&file);
+    let mut walker = FileWalker::new(&aliases);
+    for item in &file.items {
+        walker.visit_item(item);
+    }
+    for context in walker.violations {
+        violations.push(Violation {
+            file: path.to_path_buf(),
+            context,
+        });
+    }
+}
+
+/// Every `.rs` file under `dir`, recursively, skipping `target/` (build
+/// artefacts, not source) and `tests/` (exempt outright, and a `trybuild`
+/// fixture under it need not even parse).
+fn all_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries =
+        std::fs::read_dir(dir).unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()));
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if path.is_dir() {
+            if name == "target" || name == "tests" {
+                continue;
+            }
+            all_rs_files(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            out.push(path);
+        }
+    }
 }
 
 #[test]
@@ -404,7 +456,18 @@ fn every_sink_token_new_call_site_is_the_executor_a_test_item_or_a_tests_file() 
             // uniform.
             PathBuf::from("__no_exempt_module__")
         };
-        walk_crate(&root, &exempt, &mut violations);
+        let visited = walk_crate(&root, &exempt, &mut violations);
+
+        // Second pass: every `.rs` file cargo compiles that no `mod`
+        // declaration mentions.
+        let mut every_file = Vec::new();
+        all_rs_files(&crate_dir, &mut every_file);
+        for path in every_file {
+            if visited.contains(&path) {
+                continue;
+            }
+            walk_single_file(&path, &exempt, &mut violations);
+        }
     }
 
     assert!(
@@ -475,13 +538,44 @@ fn probe_rs_calls_sink_token_new_and_is_exempt_via_its_parent_declaration() {
 fn the_executor_has_exactly_one_sink_token_new_call_site() {
     let path = crates_root().join("willikins-core/src/apply.rs");
     let mut violations = Vec::new();
-    walk_crate(&path, Path::new("__no_exempt_module__"), &mut violations);
+    let _ = walk_crate(&path, Path::new("__no_exempt_module__"), &mut violations);
     assert_eq!(
         violations.len(),
         1,
         "expected exactly one non-test SinkToken::new call site starting from {}: {violations:?}",
         path.display()
     );
+}
+
+/// Proof the second pass is not decorative: a file cargo compiles that no
+/// `mod` declaration mentions (here a `build.rs`) is walked, and the
+/// directories that are exempt outright are skipped.
+#[test]
+fn a_file_outside_the_module_graph_is_walked_and_tests_and_target_are_skipped() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("sink_token_guard_second_pass");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("tests")).expect("creates tests/");
+    std::fs::create_dir_all(dir.join("target")).expect("creates target/");
+    let build_rs = dir.join("build.rs");
+    std::fs::write(&build_rs, "fn main() { let _ = SinkToken::new(); }").expect("writes build.rs");
+    for skipped in ["tests/fixture.rs", "target/generated.rs"] {
+        std::fs::write(dir.join(skipped), "fn main() { let _ = SinkToken::new(); }")
+            .expect("writes a file that must be skipped");
+    }
+
+    let mut files = Vec::new();
+    all_rs_files(&dir, &mut files);
+    assert_eq!(files, vec![build_rs.clone()], "{files:?}");
+
+    let mut violations = Vec::new();
+    walk_single_file(
+        &build_rs,
+        Path::new("__no_exempt_module__"),
+        &mut violations,
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+
+    std::fs::remove_dir_all(&dir).expect("cleans up");
 }
 
 // -------------------------------------------------------------

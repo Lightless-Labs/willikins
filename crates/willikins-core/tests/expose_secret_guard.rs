@@ -1,5 +1,7 @@
 //! Acceptance test 4, `expose_secret` half: every call site of
-//! `secrecy::ExposeSecret::expose_secret` in the workspace is either
+//! `secrecy::ExposeSecret::expose_secret` (and of
+//! `secrecy::ExposeSecretMut::expose_secret_mut`, the second bytes-out
+//! method `secrecy` 0.10 offers) in the workspace is either
 //! inside the derive's own codegen emitter
 //! (`willikins-derive/src/codegen.rs`, which only ever emits the tokens —
 //! it never calls the method itself), inside
@@ -26,6 +28,16 @@
 //!   crate is either "the whole file" or "one named function in this one
 //!   file", rather than `sink_token_guard.rs`'s single "one named module
 //!   path" shape.
+//!
+//! The plan's acceptance test 4 says "every `.rs` file in the workspace",
+//! so the module graph alone is not enough: a `build.rs`, a `src/bin/`
+//! entry point, a file reached only through `include!`, a bench or an
+//! example is compiled by cargo and invisible to a walk that follows
+//! `mod` declarations from `lib.rs`. Every crate is therefore walked
+//! twice: once through its module graph (which is what carries
+//! `#[cfg(test)] mod probe;` test-only inheritance into a file that does
+//! not say so itself), and once over every remaining `.rs` file under the
+//! crate directory, `tests/` excepted.
 //!
 //! Deliberately not merged into `sink_token_guard.rs` itself: the two
 //! guards check an unrelated method on an unrelated crate's clippy entry,
@@ -76,7 +88,20 @@ fn has_cfg_test(attrs: &[Attribute]) -> bool {
     })
 }
 
-/// Every name `ExposeSecret` is imported under in `file`, plus the bare
+/// The traits whose methods hand out a secret's bytes. `ExposeSecretMut`
+/// is `secrecy` 0.10's second one: it returns `&mut str`, which is just
+/// as much a way out of a `SecretString` as `expose_secret`'s `&str`.
+const EXPOSE_TRAITS: [&str; 2] = ["ExposeSecret", "ExposeSecretMut"];
+
+/// The methods those traits offer.
+const EXPOSE_METHODS: [&str; 2] = ["expose_secret", "expose_secret_mut"];
+
+/// Whether `ident` names one of [`EXPOSE_METHODS`].
+fn is_expose_method(ident: &syn::Ident) -> bool {
+    EXPOSE_METHODS.iter().any(|method| ident == method)
+}
+
+/// Every name `ExposeSecret` or `ExposeSecretMut` is imported under in `file`, plus the bare
 /// name itself (so a fully qualified path that never went through a
 /// `use` — every real call site in this workspace today — still
 /// matches).
@@ -89,12 +114,13 @@ fn collect_expose_secret_aliases(file: &syn::File) -> HashSet<String> {
         match tree {
             UseTree::Path(p) => walk_use_tree(&p.tree, aliases),
             UseTree::Name(n) => {
-                if n.ident == "ExposeSecret" {
-                    aliases.insert("ExposeSecret".to_string());
+                let name = n.ident.to_string();
+                if EXPOSE_TRAITS.contains(&name.as_str()) {
+                    aliases.insert(name);
                 }
             }
             UseTree::Rename(r) => {
-                if r.ident == "ExposeSecret" {
+                if EXPOSE_TRAITS.contains(&r.ident.to_string().as_str()) {
                     aliases.insert(r.rename.to_string());
                 }
             }
@@ -114,7 +140,7 @@ fn collect_expose_secret_aliases(file: &syn::File) -> HashSet<String> {
     }
 
     let mut collector = AliasCollector {
-        aliases: HashSet::from(["ExposeSecret".to_string()]),
+        aliases: EXPOSE_TRAITS.iter().map(|t| (*t).to_string()).collect(),
     };
     collector.visit_file(file);
     collector.aliases
@@ -154,7 +180,7 @@ fn scan_tokens_for_expose_secret(
             ) = (&flat[i], &flat[i + 1], &flat[i + 2], &flat[i + 3])
             && colon1.as_char() == ':'
             && colon2.as_char() == ':'
-            && method == "expose_secret"
+            && is_expose_method(method)
             && aliases.contains(&owner.to_string())
         {
             hits.push(format!("{owner}::{method}"));
@@ -164,9 +190,9 @@ fn scan_tokens_for_expose_secret(
             && let (proc_macro2::TokenTree::Punct(dot), proc_macro2::TokenTree::Ident(method)) =
                 (&flat[i], &flat[i + 1])
             && dot.as_char() == '.'
-            && method == "expose_secret"
+            && is_expose_method(method)
         {
-            hits.push(".expose_secret".to_string());
+            hits.push(format!(".{method}"));
         }
         i += 1;
     }
@@ -186,7 +212,7 @@ fn path_is_expose_secret_ufcs(
     let Some(last) = segments.last() else {
         return false;
     };
-    if *last != "expose_secret" {
+    if !is_expose_method(last) {
         return false;
     }
     if segments.len() >= 2 {
@@ -297,7 +323,7 @@ impl<'ast> Visit<'ast> for FileWalker<'_> {
     }
 
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
-        if !self.exempt_here() && node.method == "expose_secret" {
+        if !self.exempt_here() && is_expose_method(&node.method) {
             self.violations
                 .push(format!("(method call) {}", quote::quote!(#node)));
         }
@@ -362,7 +388,7 @@ fn walk_crate(
     root: &Path,
     exempt_relative_path: Option<(&Path, Option<&'static str>)>,
     violations: &mut Vec<Violation>,
-) {
+) -> HashSet<PathBuf> {
     let mut queue: Vec<(PathBuf, bool)> = vec![(root.to_path_buf(), false)];
     let mut visited: HashSet<PathBuf> = HashSet::new();
 
@@ -403,6 +429,60 @@ fn walk_crate(
             queue.push((child, test_only));
         }
     }
+    visited
+}
+
+/// Walk one file that the module-graph walk never reached, as ordinary
+/// (non-test) code.
+fn walk_single_file(
+    path: &Path,
+    exempt_relative_path: Option<(&Path, Option<&'static str>)>,
+    violations: &mut Vec<Violation>,
+) {
+    let exemption = match exempt_relative_path {
+        Some((rel, None)) if path.ends_with(rel) => Exemption::WholeFile,
+        Some((rel, Some(fn_name))) if path.ends_with(rel) => Exemption::OneFunction(fn_name),
+        _ => Exemption::None,
+    };
+    if matches!(exemption, Exemption::WholeFile) {
+        return;
+    }
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+    let file =
+        syn::parse_file(&source).unwrap_or_else(|err| panic!("parsing {}: {err}", path.display()));
+    let aliases = collect_expose_secret_aliases(&file);
+    let mut walker = FileWalker::new(&aliases, exemption);
+    for item in &file.items {
+        walker.visit_item(item);
+    }
+    for context in walker.violations {
+        violations.push(Violation {
+            file: path.to_path_buf(),
+            context,
+        });
+    }
+}
+
+/// Every `.rs` file under `dir`, recursively, skipping `target/` (build
+/// artefacts, not source) and `tests/` (exempt outright, and a `trybuild`
+/// fixture under it need not even parse).
+fn all_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries =
+        std::fs::read_dir(dir).unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()));
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if path.is_dir() {
+            if name == "target" || name == "tests" {
+                continue;
+            }
+            all_rs_files(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            out.push(path);
+        }
+    }
 }
 
 #[test]
@@ -430,7 +510,19 @@ fn every_expose_secret_call_site_is_the_codegen_emitter_authorize_a_test_item_or
             _ => None,
         };
         let exempt_ref = exempt.as_ref().map(|(p, f)| (p.as_path(), *f));
-        walk_crate(&root, exempt_ref, &mut violations);
+        let visited = walk_crate(&root, exempt_ref, &mut violations);
+
+        // Second pass: everything cargo compiles that the module graph
+        // never mentions — `build.rs`, a `src/bin/` entry point, a bench,
+        // an example, a file reached only through `include!`.
+        let mut every_file = Vec::new();
+        all_rs_files(&crate_dir, &mut every_file);
+        for path in every_file {
+            if visited.contains(&path) {
+                continue;
+            }
+            walk_single_file(&path, exempt_ref, &mut violations);
+        }
     }
 
     assert!(
@@ -469,7 +561,7 @@ fn credential_rs_calls_expose_secret_inside_authorize_and_nowhere_else() {
     let path = crates_root().join("willikins-providers-http/src/credential.rs");
 
     let mut with_correct_exemption = Vec::new();
-    walk_crate(
+    let _ = walk_crate(
         &path,
         Some((Path::new("credential.rs"), Some("authorize"))),
         &mut with_correct_exemption,
@@ -480,7 +572,7 @@ fn credential_rs_calls_expose_secret_inside_authorize_and_nowhere_else() {
     );
 
     let mut with_wrong_exemption = Vec::new();
-    walk_crate(
+    let _ = walk_crate(
         &path,
         Some((Path::new("credential.rs"), Some("not_a_real_function"))),
         &mut with_wrong_exemption,
@@ -491,6 +583,63 @@ fn credential_rs_calls_expose_secret_inside_authorize_and_nowhere_else() {
         "expected exactly one call site in credential.rs when `authorize` is not \
          the exempted function: {with_wrong_exemption:?}"
     );
+}
+
+/// Proof the second pass is not decorative: a file cargo compiles that no
+/// `mod` declaration mentions (here a `build.rs`) is walked, and the
+/// directories that are exempt outright are skipped.
+#[test]
+fn a_file_outside_the_module_graph_is_walked_and_tests_and_target_are_skipped() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("expose_secret_guard_second_pass");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("tests")).expect("creates tests/");
+    std::fs::create_dir_all(dir.join("target")).expect("creates target/");
+    let build_rs = dir.join("build.rs");
+    std::fs::write(
+        &build_rs,
+        "fn main() { let s = secret(); let _ = s.expose_secret(); }",
+    )
+    .expect("writes build.rs");
+    for skipped in ["tests/fixture.rs", "target/generated.rs"] {
+        std::fs::write(
+            dir.join(skipped),
+            "fn main() { let s = secret(); let _ = s.expose_secret(); }",
+        )
+        .expect("writes a file that must be skipped");
+    }
+
+    let mut files = Vec::new();
+    all_rs_files(&dir, &mut files);
+    assert_eq!(files, vec![build_rs.clone()], "{files:?}");
+
+    let mut violations = Vec::new();
+    walk_single_file(&build_rs, None, &mut violations);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+
+    std::fs::remove_dir_all(&dir).expect("cleans up");
+}
+
+/// `expose_secret_mut` is `secrecy` 0.10's second way out of a
+/// `SecretString`, and is caught the same way.
+#[test]
+fn walker_catches_expose_secret_mut() {
+    let violations = violations_in(
+        "fn f(s: &mut SecretString) { s.expose_secret_mut(); }",
+        false,
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+
+    let violations = violations_in(
+        "use secrecy::ExposeSecretMut as Poke; fn f(s: &mut SecretString) { Poke::expose_secret_mut(s); }",
+        false,
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+
+    let violations = violations_in(
+        "fn f(s: &mut SecretString) { let _ = vec![s.expose_secret_mut()]; }",
+        false,
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
 }
 
 // -------------------------------------------------------------
