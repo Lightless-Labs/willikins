@@ -92,6 +92,56 @@ fn read_of_a_missing_secret_is_not_found_and_never_names_a_value() {
     assert!(err.message.contains("DATABASE"));
 }
 
+/// What Doppler actually answers for a secret that is not there, found by
+/// `tests/live_write_cycle.rs` on 2026-09-14: **`200`**, with
+/// `value.computed` `null` — not the `404` the milestone plan's port
+/// table assumed. Without this, the plan's `NotFound` row never fires
+/// live, and an operator asking for a secret that does not exist is told
+/// "could not parse the response body", which names no cause they can
+/// act on.
+///
+/// The fixture's shape is the one the live failure's parse position
+/// points at (`line 1, column 70`, the end of a `null` after
+/// `"computed":`); the response body itself is never read into the test
+/// process, because `ProviderError` drops it at construction.
+#[test]
+fn a_200_with_a_null_computed_is_not_found_because_that_is_doppler_s_missing_secret() {
+    for body in [
+        fixture("secret_get_absent"),
+        // The same answer for a `computed` that is not there at all: one
+        // safe reading of "Doppler named no value", the shape
+        // `ProjectBody::description` and `ConfigBody::root` already use.
+        serde_json::json!({"name": "DATABASE", "value": {"raw": "r", "note": ""}}),
+    ] {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", SECRET_PATH)
+            .with_status(200)
+            .with_body(body.to_string())
+            .create();
+        let (client, _sleeper) = client_against(provider.url());
+        let tool = DopplerSecretGet::new(client);
+        let err = tool.read(&inputs()).unwrap_err();
+        assert_eq!(
+            err.kind,
+            ToolErrorKind::NotFound,
+            "body {body}: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("third-thoughts/prd"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("DATABASE"), "{}", err.message);
+        assert!(
+            !err.message.contains("computed") && !err.message.contains("null"),
+            "the message must echo nothing from the response: {}",
+            err.message
+        );
+    }
+}
+
 #[test]
 fn read_maps_a_5xx_to_a_bounded_provider_error() {
     let mut provider = MockProvider::start();
@@ -190,11 +240,16 @@ fn known_secret_renders_redacted_in_outputs_debug_and_json() {
 /// the offending value verbatim, and `Http::finish` discards that text in
 /// favour of a line/column position precisely so it cannot become a
 /// message.
+///
+/// A `null` or missing `computed` is **not** in this list any more: since
+/// 2026-09-14 that is how Doppler says "no such secret" and it answers
+/// `NotFound`, pinned by the test above. What stays here is a body that
+/// is genuinely malformed — a `computed` that is present but unusable, or
+/// no `value` object at all — which is not an absence and must not be
+/// reported as one.
 #[test]
 fn a_computed_that_is_missing_null_empty_or_not_a_string_names_the_key_and_echoes_nothing() {
     for body in [
-        serde_json::json!({"name": "DATABASE", "value": {"raw": "r", "note": ""}}),
-        serde_json::json!({"name": "DATABASE", "value": {"computed": null}}),
         serde_json::json!({"name": "DATABASE", "value": {"computed": ""}}),
         serde_json::json!({"name": "DATABASE", "value": {"computed": 123}}),
         serde_json::json!({"name": "DATABASE"}),

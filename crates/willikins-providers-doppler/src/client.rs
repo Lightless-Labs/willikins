@@ -272,16 +272,27 @@ impl DopplerClient {
 
     /// `GET /v3/configs/config/secret?project=<project>&config=<config>&name=<name>`.
     ///
+    /// `Ok(None)` is "no such secret". Doppler does **not** answer `404`
+    /// for a name that does not exist, which is what the milestone plan's
+    /// port table assumed: it answers `200` with `value.computed` set to
+    /// `null` (observed live on 2026-09-14 by
+    /// `tests/live_write_cycle.rs`; `fixtures/doppler/secret_get_absent.json`
+    /// carries the shape). `computed` is therefore [`Option`], the same
+    /// shape [`ProjectBody::description`] and [`ConfigBody::root`] use, so
+    /// that a `null` *and* a missing key both land on the one safe answer
+    /// instead of failing the whole parse.
+    ///
     /// # Errors
     ///
-    /// See [`Self::get_project`]. A `404` names "no such secret" and
-    /// never a value, because there is none to name.
+    /// See [`Self::get_project`]. A `404` would name "no such secret" and
+    /// never a value, because there is none to name; nothing observed
+    /// live produces one.
     pub(crate) fn get_secret(
         &self,
         project: &DopplerProject,
         config: &DopplerConfigName,
         name: &SecretName,
-    ) -> Result<DopplerSecretValue, ProviderError> {
+    ) -> Result<Option<DopplerSecretValue>, ProviderError> {
         let path =
             format!("/v3/configs/config/secret?project={project}&config={config}&name={name}");
         self.http
@@ -392,9 +403,14 @@ struct SecretBody {
     value: SecretValueBody,
 }
 
+/// [`Option`] because Doppler answers `200` with `computed: null` for a
+/// secret that does not exist: see [`DopplerClient::get_secret`]. A
+/// missing key and an explicit `null` both parse to `None`; a `computed`
+/// that is present but unusable (an empty string, a number) still fails
+/// the parse, which is a malformed response and not an absence.
 #[derive(Debug, Deserialize)]
 struct SecretValueBody {
-    computed: DopplerSecretValue,
+    computed: Option<DopplerSecretValue>,
 }
 
 #[cfg(test)]
