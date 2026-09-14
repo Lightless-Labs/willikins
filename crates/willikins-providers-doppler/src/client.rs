@@ -154,17 +154,18 @@ impl DopplerClient {
         Ok(())
     }
 
-    /// `GET /v3/configs/config?project=<project>&config=<name>`. Reports
-    /// only existence, discarding the body entirely — this crate only
-    /// ever looks a config up at the name it itself derived as a root
-    /// config's own identifier
-    /// ([`willikins_types::naming::v1::doppler_root_config`]), so a
-    /// `200` there is unambiguously the root config `doppler.config.ensure`
-    /// is asking about (Doppler's `root` field in the response is real
-    /// but not consulted: the milestone's port table gives this tool no
-    /// `Foreign` state to distinguish `root: false` from, and a config
-    /// found at a root config's own slug is never anything else in
-    /// practice — a branch config's name cannot collide with it).
+    /// `GET /v3/configs/config?project=<project>&config=<name>`, returning
+    /// the one field `doppler.config.ensure` decides on: `root`.
+    ///
+    /// Existence alone is *not* enough to answer "is this the root config
+    /// I asked for". Doppler names a branch config `<environment>_<name>`
+    /// (research note section 3: `prd_aws` under environment `prd`), and
+    /// [`willikins_types::naming::v1::doppler_root_config`] names a root
+    /// config after its environment's snake join — so a project holding
+    /// an environment `pre` with a branch config `prod` already answers
+    /// `200` at the name this crate derives for the environment
+    /// `pre-prod`. The plan's port table conditions `Present` on `root:
+    /// true` for exactly that reason.
     ///
     /// # Errors
     ///
@@ -173,10 +174,11 @@ impl DopplerClient {
         &self,
         project: &DopplerProject,
         name: &DopplerConfigName,
-    ) -> Result<(), ProviderError> {
+    ) -> Result<ConfigBody, ProviderError> {
         let path = format!("/v3/configs/config?project={project}&config={name}");
-        self.http.get::<serde_json::Value>(&path)?;
-        Ok(())
+        self.http
+            .get::<ConfigEnvelope>(&path)
+            .map(|envelope| envelope.config)
     }
 
     /// `POST /v3/environments?project=<project>` with `name` and `slug`
@@ -313,6 +315,23 @@ struct CreateProjectBody {
 struct CreateEnvironmentBody {
     name: String,
     slug: String,
+}
+
+/// Doppler's config envelope: `{"config": {...}}`.
+#[derive(Debug, Deserialize)]
+struct ConfigEnvelope {
+    config: ConfigBody,
+}
+
+/// The one field of Doppler's config object this crate consults: `root`,
+/// which separates an environment's own root config from a branch config
+/// under it. [`Option`] rather than a defaulted `bool` so that a missing
+/// key *and* an explicit `null` both land on the same, safe answer
+/// ("not proven to be a root config") instead of one of them failing the
+/// whole parse — the same shape [`ProjectBody::description`] uses.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ConfigBody {
+    pub(crate) root: Option<bool>,
 }
 
 /// Doppler's token-list envelope: `{"tokens": [...]}`.

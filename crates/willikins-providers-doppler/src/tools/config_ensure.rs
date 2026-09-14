@@ -3,10 +3,16 @@
 //! `naming::v1::doppler_root_config`. Port table and behaviour identical
 //! to `willikins_providers_fake`'s tool of the same name
 //! (`tests/catalog_parity.rs` pins the two `ToolSpec`s equal).
+//!
+//! A `200` at the derived name is only `Present` when the fetched config
+//! is a *root* config; anything else sitting at that name is `Foreign`
+//! and `ensure` refuses it. See [`DopplerClient::get_config`].
 
 use std::sync::Arc;
 
-use willikins_core::tool::helpers::{exact, get, port, require_present, scalar, tool_name};
+use willikins_core::tool::helpers::{
+    conflict, exact, get, port, require_present, scalar, tool_name,
+};
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
@@ -57,23 +63,35 @@ impl DopplerConfigEnsure {
     }
 
     /// `GET` the config, mapped to an [`Observation`]. Shared by `read`
-    /// and `ensure`. This tool's port table gives it no `Foreign` state
-    /// (a config found at the name this crate itself derived as a root
-    /// config's own identifier is ours by construction — see
-    /// [`DopplerClient::get_config`]'s own docs), so this can only ever
-    /// answer `Present` or `Absent`.
+    /// and `ensure`.
+    ///
+    /// `Present` needs `200` **and** `root: true`, per the plan's port
+    /// table. A `200` carrying `root: false` — or no usable `root` at all
+    /// — is a config that merely occupies this name, not this
+    /// environment's root config, and is reported `Foreign`: see
+    /// [`DopplerClient::get_config`]'s own docs for the branch-config
+    /// name collision that makes this reachable rather than theoretical.
     fn observe(
         &self,
         project: &DopplerProject,
         config: &DopplerConfig,
     ) -> Result<Observation, ToolError> {
         match self.client.get_config(project, config.name()) {
-            Ok(()) => Ok(Observation::Present(Self::outputs_for(config))),
+            Ok(body) if body.root == Some(true) => {
+                Ok(Observation::Present(Self::outputs_for(config)))
+            }
+            Ok(_) => Ok(Observation::Foreign),
             Err(err) if err.status == Some(404) => Ok(Observation::Absent {
                 predicted: Self::outputs_for(config),
             }),
             Err(err) => Err(err.into()),
         }
+    }
+
+    fn foreign_conflict(config: &DopplerConfig) -> ToolError {
+        conflict(format!(
+            "`{config}` already exists and is not the environment's root config"
+        ))
     }
 }
 
@@ -96,8 +114,10 @@ impl Tool for DopplerConfigEnsure {
                 outputs,
                 changed: false,
             }),
-            Observation::Foreign | Observation::Mismatch { .. } => unreachable!(
-                "doppler.config.ensure's own observe never returns Foreign or Mismatch"
+            Observation::Foreign => Err(Self::foreign_conflict(&config)),
+            Observation::Mismatch { .. } => unreachable!(
+                "doppler.config.ensure's own observe never returns Mismatch: it has no \
+                 non-key input to mismatch on"
             ),
             Observation::Absent { .. } => {
                 match self.client.create_environment(&project, config.name()) {
@@ -114,7 +134,10 @@ impl Tool for DopplerConfigEnsure {
                             outputs,
                             changed: false,
                         }),
-                        _ => Err(err.into()),
+                        Observation::Foreign => Err(Self::foreign_conflict(&config)),
+                        Observation::Absent { .. } | Observation::Mismatch { .. } => {
+                            Err(err.into())
+                        }
                     },
                 }
             }

@@ -1,6 +1,7 @@
-//! Acceptance test 2's share for `doppler.config.ensure`. This tool's
-//! port table gives it no `Foreign` state (see the crate's own docs), so
-//! there is no `Foreign` case here.
+//! Acceptance test 2's share for `doppler.config.ensure`. The plan's port
+//! table makes `Present` conditional on the fetched config's `root` flag
+//! (`200` *and* `root: true`), so a `200` carrying `root: false` is a
+//! different config that happens to sit at this name: `Foreign`.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -97,12 +98,20 @@ fn read_reports_present_on_200() {
     assert!(matches!(observation, Observation::Present(_)));
 }
 
-/// A `200` with `root: false` (undocumented as reachable at this
-/// identifier — see [`DopplerClient::get_config`]'s own docs) is still
-/// `Present`, the same as `root: true`: this tool's `get_config` reports
-/// only existence and never parses `root` at all.
+/// A `200` whose `root` is `false` is **not** this tool's config. The
+/// plan's port table conditions `Present` on `root: true` for a reason
+/// that is reachable, not theoretical: Doppler names a branch config
+/// `<environment>_<name>` (research note section 3: `prd_aws` under
+/// environment `prd`), and `naming::v1::doppler_root_config` names a root
+/// config after its environment's *snake join*. A project holding an
+/// environment `pre` with a branch config `prod` therefore already has a
+/// config named `pre_prod` -- exactly the name this tool derives for the
+/// environment `pre-prod`. Reporting that `Present` would leave the
+/// `pre-prod` environment uncreated and hand every downstream step
+/// (`doppler.service_token.ensure` above all) a `DopplerConfig` pointing
+/// into a different environment entirely.
 #[test]
-fn read_reports_present_even_when_root_is_false() {
+fn read_reports_foreign_when_root_is_false() {
     let mut provider = MockProvider::start();
     provider
         .mock(
@@ -115,7 +124,127 @@ fn read_reports_present_even_when_root_is_false() {
     let (client, _sleeper) = client_against(provider.url());
     let tool = DopplerConfigEnsure::new(client);
     let observation = tool.read(&inputs()).unwrap();
-    assert!(matches!(observation, Observation::Present(_)));
+    assert!(
+        matches!(observation, Observation::Foreign),
+        "got {observation:?}"
+    );
+}
+
+/// A `root` field that is missing, or explicitly `null`, is `Foreign`
+/// too, never a parse failure and never `Present`: absence of the proof
+/// that this is a root config is not proof that it is one.
+#[test]
+fn read_reports_foreign_when_root_is_missing_or_null() {
+    for body in [
+        serde_json::json!({"config": {"name": "prd"}}),
+        serde_json::json!({"config": {"name": "prd", "root": null}}),
+    ] {
+        let mut provider = MockProvider::start();
+        provider
+            .mock(
+                "GET",
+                "/v3/configs/config?project=third-thoughts&config=prd",
+            )
+            .with_status(200)
+            .with_body(body.to_string())
+            .create();
+        let (client, _sleeper) = client_against(provider.url());
+        let tool = DopplerConfigEnsure::new(client);
+        let observation = tool
+            .read(&inputs())
+            .unwrap_or_else(|err| panic!("body {body} must read, got {err:?}"));
+        assert!(
+            matches!(observation, Observation::Foreign),
+            "body {body} must read as Foreign, got {observation:?}"
+        );
+    }
+}
+
+/// The collision named above, end to end: environment `pre-prod` derives
+/// the config name `pre_prod`, which a `200` answers with `root: false`
+/// (the branch config `prod` under environment `pre`). `ensure` must
+/// refuse -- `Conflict`, no `POST` -- rather than silently adopt it.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_refuses_a_branch_config_squatting_on_a_root_config_name() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=pre_prod",
+        )
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"config": {"name": "pre_prod", "root": false,
+                                          "environment": "pre"}})
+            .to_string(),
+        )
+        .create();
+    let post = provider
+        .mock("POST", "/v3/environments?project=third-thoughts")
+        .expect(0)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerConfigEnsure::new(client);
+    let mut inputs = willikins_core::Inputs::new();
+    inputs.insert(PortName::parse("project").unwrap(), Value::known(project()));
+    inputs.insert(
+        PortName::parse("environment").unwrap(),
+        Value::known(EnvironmentSlug::parse("pre-prod").unwrap()),
+    );
+    let token = SinkToken::new();
+    let err = tool.ensure(&inputs, &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    assert!(
+        err.message.contains("third-thoughts/pre_prod"),
+        "{}",
+        err.message
+    );
+    post.assert();
+}
+
+/// A multi-word environment slug reaches the wire as its snake join, in
+/// the `GET`'s query and in both halves of the `POST` body. Whether
+/// Doppler's environment-slug grammar accepts an underscore at all is the
+/// plan's own open question ("Doppler's environment-slug grammar versus
+/// `naming::v1`"), answered only by a live run; what this pins is that
+/// `naming::v1`'s answer is what gets sent, unmodified, in all three
+/// places.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_multi_word_environment_sends_its_snake_join_as_both_name_and_slug() {
+    let mut provider = MockProvider::start();
+    let read = provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=pre_prod",
+        )
+        .with_status(404)
+        .expect(1)
+        .create();
+    let create = provider
+        .mock("POST", "/v3/environments?project=third-thoughts")
+        .match_body(json_body(serde_json::json!({
+            "name": "pre_prod",
+            "slug": "pre_prod",
+        })))
+        .with_status(201)
+        .with_body(fixture("environment_post_created").to_string())
+        .expect(1)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerConfigEnsure::new(client);
+    let mut inputs = willikins_core::Inputs::new();
+    inputs.insert(PortName::parse("project").unwrap(), Value::known(project()));
+    inputs.insert(
+        PortName::parse("environment").unwrap(),
+        Value::known(EnvironmentSlug::parse("pre-prod").unwrap()),
+    );
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&inputs, &token).unwrap();
+    assert!(ensured.changed);
+    read.assert();
+    create.assert();
 }
 
 #[test]
