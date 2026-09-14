@@ -485,3 +485,60 @@ fn read_reports_foreign_when_topics_is_missing_or_null() {
         );
     }
 }
+
+/// A client whose [`Http`] carries exactly the three headers GitHub
+/// requires — the shape [`willikins_providers_github::http_client`]
+/// builds in production, which pins the real base URL and so cannot be
+/// aimed at a mock server.
+fn client_with_default_headers(url: String) -> Arc<GitHubClient> {
+    let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+    let http = Http::new(
+        url,
+        willikins_providers_github::default_headers(),
+        credential,
+    );
+    Arc::new(GitHubClient::new(http))
+}
+
+/// Add the three required-header matchers to a mock. A request missing
+/// any of them fails to match, mockito answers `501`, and the tool call
+/// fails — so every mock built this way is itself the assertion.
+fn requiring_github_headers(mock: mockito::Mock) -> mockito::Mock {
+    mock.match_header("Accept", "application/vnd.github+json")
+        .match_header("X-GitHub-Api-Version", "2022-11-28")
+        .match_header("User-Agent", mockito::Matcher::Regex("^willikins/".into()))
+}
+
+/// Every request `github.repo.ensure` makes — the existence `GET`, the
+/// create `POST`, and the topics `PUT` — carries `Accept`,
+/// `X-GitHub-Api-Version` and a `willikins/<version>` `User-Agent`
+/// (GitHub rejects a request with no `User-Agent` at all).
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn every_request_carries_the_three_required_headers() {
+    let mut provider = MockProvider::start();
+    let read = requiring_github_headers(provider.mock("GET", "/repos/acme/widget"))
+        .with_status(404)
+        .expect(1)
+        .create();
+    let create = requiring_github_headers(provider.mock("POST", "/orgs/acme/repos"))
+        .with_status(201)
+        .with_body(fixture("repo_post_created").to_string())
+        .expect(1)
+        .create();
+    let topics = requiring_github_headers(provider.mock("PUT", "/repos/acme/widget/topics"))
+        .with_status(200)
+        .with_body(fixture("repo_topics_put").to_string())
+        .expect(1)
+        .create();
+
+    let tool = GitHubRepoEnsure::new(client_with_default_headers(provider.url()));
+    let token = SinkToken::new();
+    let ensured = tool
+        .ensure(&inputs(RepoVisibility::Private), &token)
+        .expect("every request matched the required headers");
+    assert!(ensured.changed);
+    read.assert();
+    create.assert();
+    topics.assert();
+}

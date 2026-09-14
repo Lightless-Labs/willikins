@@ -232,3 +232,64 @@ fn ensure_never_leaks_the_marker_in_an_error() {
     let err = tool.ensure(&full_inputs(), &token).unwrap_err();
     assert!(!err.message.contains(MARKER), "{}", err.message);
 }
+
+/// A client whose [`Http`] carries the three headers GitHub requires, so
+/// a mock can assert on them (production builds this shape through
+/// [`willikins_providers_github::http_client`], which pins the real base
+/// URL and cannot be aimed at a mock server).
+fn client_with_default_headers(url: String) -> Arc<GitHubClient> {
+    let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+    let http = Http::new(
+        url,
+        willikins_providers_github::default_headers(),
+        credential,
+    );
+    Arc::new(GitHubClient::new(http))
+}
+
+fn requiring_github_headers(mock: mockito::Mock) -> mockito::Mock {
+    mock.match_header("Accept", "application/vnd.github+json")
+        .match_header("X-GitHub-Api-Version", "2022-11-28")
+        .match_header("User-Agent", mockito::Matcher::Regex("^willikins/".into()))
+}
+
+/// Every request `github.actions_secret.ensure` makes — the `read`'s
+/// `GET`, the public-key `GET` and the secret `PUT` — carries the three
+/// required headers.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn every_request_carries_the_three_required_headers() {
+    let secret_key = SecretKey::generate(&mut rand_core::OsRng);
+    let public_key_base64 = STANDARD.encode(secret_key.public_key().as_bytes());
+    let mut provider = MockProvider::start();
+    let read = requiring_github_headers(
+        provider.mock("GET", "/repos/acme/widget/actions/secrets/DOPPLER_TOKEN"),
+    )
+    .with_status(200)
+    .with_body(fixture("actions_secret_get_present").to_string())
+    .expect(1)
+    .create();
+    let public_key = requiring_github_headers(
+        provider.mock("GET", "/repos/acme/widget/actions/secrets/public-key"),
+    )
+    .with_status(200)
+    .with_body(serde_json::json!({"key_id": "test-key-id", "key": public_key_base64}).to_string())
+    .expect(1)
+    .create();
+    let put = requiring_github_headers(
+        provider.mock("PUT", "/repos/acme/widget/actions/secrets/DOPPLER_TOKEN"),
+    )
+    .with_status(204)
+    .expect(1)
+    .create();
+
+    let tool = GitHubActionsSecretEnsure::new(client_with_default_headers(provider.url()));
+    tool.read(&full_inputs())
+        .expect("the read's GET matched the required headers");
+    let token = SinkToken::new();
+    tool.ensure(&full_inputs(), &token)
+        .expect("both of ensure's requests matched the required headers");
+    read.assert();
+    public_key.assert();
+    put.assert();
+}
