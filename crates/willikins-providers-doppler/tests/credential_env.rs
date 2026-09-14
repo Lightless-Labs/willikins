@@ -1,7 +1,14 @@
 //! The one check that reads the operator's real `WILLIKINS_DOPPLER_TOKEN`:
-//! that [`credential_from_env`] classifies whatever is actually in the
-//! environment, and that a refusal carries nothing from the value it
-//! refused.
+//! that [`credential_from_env`] accepts what the sandbox environment
+//! actually holds, and that an accepted credential shows nothing of the
+//! value it wraps.
+//!
+//! Since 2026-09-14 the sandbox file carries a `dp.sa.` service-account
+//! token for the operator's dedicated Doppler test workplace, so this
+//! test asserts acceptance: the `Missing` and `WrongKind` branches are
+//! failures now, not outcomes, and each says what to do about it. Before
+//! that date the file held a `dp.st.` service token and this test could
+//! only observe the refusal. No branch ever shows the value.
 //!
 //! `src/client.rs`'s own unit tests pin [`CREDENTIAL_PATTERN`] against
 //! hand-built token strings, and the `WrongKind` message against a
@@ -31,26 +38,42 @@ use willikins_providers_doppler::{CREDENTIAL_VAR, DopplerCredentialError, creden
 
 /// What the environment holds, named without ever being shown.
 ///
-/// Every branch asserts the same invariant from a different side: the
-/// rendered refusal is a fixed string, identical to the one the variant
-/// renders when constructed out of thin air, so it cannot be carrying any
-/// part of what was actually supplied. `Debug` is checked too, because a
-/// future variant that *did* capture the value would show it there first.
+/// The sandbox file holds a provisioning token, so `Ok` is the expected
+/// branch and the two refusals fail. The `Ok` branch checks the invariant
+/// that matters on its own side: an accepted `Credential`'s `Debug` is
+/// the redaction marker and carries no part of the token, not even the
+/// prefix that classified it. The refusal branches still assert that a
+/// `WrongKind` renders identically to one built from nothing — a future
+/// variant that captured the value would show it in `Debug` first — and
+/// then fail with willikins' own words.
 #[test]
 #[ignore = "reads the operator's real WILLIKINS_DOPPLER_TOKEN; run with \
             ~/.config/willikins/sandbox.env sourced in the same command"]
-fn the_environment_credential_is_classified_and_a_refusal_echoes_nothing() {
+fn the_environment_credential_is_a_provisioning_token_and_stays_redacted() {
     match credential_from_env() {
+        Ok(credential) => {
+            println!("{CREDENTIAL_VAR}: accepted — a `dp.sa.` or `dp.pt.` provisioning token");
+            let debug = format!("{credential:?}");
+            assert!(
+                debug.contains("REDACTED"),
+                "an accepted Credential's Debug must stay redacted: {debug}"
+            );
+            for prefix in ["dp.sa.", "dp.pt.", "dp.st."] {
+                assert!(
+                    !debug.contains(prefix),
+                    "an accepted Credential's Debug must carry no part of the token"
+                );
+            }
+        }
         Err(DopplerCredentialError::Missing(err)) => {
-            println!("{CREDENTIAL_VAR}: unset — nothing to classify");
             let message = err.to_string();
             assert!(message.contains(CREDENTIAL_VAR), "{message}");
+            panic!(
+                "{CREDENTIAL_VAR} is unset: source ~/.config/willikins/sandbox.env in the \
+                 same command that runs this test"
+            );
         }
         Err(err @ DopplerCredentialError::WrongKind) => {
-            println!(
-                "{CREDENTIAL_VAR}: refused — not a provisioning token \
-                 (a `dp.st.` service token, or not a Doppler token at all)"
-            );
             assert_eq!(
                 err.to_string(),
                 DopplerCredentialError::WrongKind.to_string(),
@@ -64,13 +87,9 @@ fn the_environment_credential_is_classified_and_a_refusal_echoes_nothing() {
             let message = err.to_string();
             assert!(message.contains("service-account"), "{message}");
             assert!(message.contains("personal"), "{message}");
-        }
-        Ok(credential) => {
-            println!("{CREDENTIAL_VAR}: accepted — a `dp.sa.` or `dp.pt.` provisioning token");
-            let debug = format!("{credential:?}");
-            assert!(
-                debug.contains("REDACTED"),
-                "an accepted Credential's Debug must stay redacted: {debug}"
+            panic!(
+                "{CREDENTIAL_VAR} is not a provisioning token; the sandbox file has held a \
+                 `dp.sa.` service-account token since 2026-09-14"
             );
         }
     }

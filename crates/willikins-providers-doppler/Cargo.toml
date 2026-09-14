@@ -8,6 +8,18 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Compiles `tests/live_write_cycle.rs`, and nothing else. Empty on
+# purpose: it gates that one test target (see its `[[test]]` entry below),
+# so a plain `cargo test --workspace` never builds a test that provisions
+# real Doppler projects. The test is `#[ignore]`d and needs
+# `WILLIKINS_LIVE_TESTS=1` on top of the feature before it makes a call.
+live-tests = []
+
+[[test]]
+name = "live_write_cycle"
+required-features = ["live-tests"]
+
 [dependencies]
 willikins-core.workspace = true
 willikins-types.workspace = true
