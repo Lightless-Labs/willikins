@@ -1166,3 +1166,295 @@ fn a_secret_value_that_changed_between_plan_and_apply_is_not_drift() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// A clock that steps backwards
+// ---------------------------------------------------------------------
+
+/// A [`Clock`] that reads `late` for its first `forward_reads` calls and
+/// `early` -- an hour before -- for ever after: a system clock corrected
+/// backwards by NTP, which [`ManualClock`] deliberately cannot model
+/// because it saturates instead.
+struct BackwardsClock {
+    reads: std::sync::atomic::AtomicUsize,
+    forward_reads: usize,
+    early: Timestamp,
+    late: Timestamp,
+}
+
+impl Clock for BackwardsClock {
+    fn now(&self) -> Timestamp {
+        let n = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n < self.forward_reads {
+            self.late
+        } else {
+            self.early
+        }
+    }
+}
+
+/// A clock stepping backwards mid-flight must not make the journal write
+/// a line replay would then refuse, and must not expire a plan that is
+/// still inside its window.
+///
+/// Two things hold it together, and this pins both from the `Butler`'s
+/// side: `MemoryJournal`/`FileJournal` clamp each `append`'s stamp up to
+/// the previous entry's, so `at` is non-decreasing whatever the clock
+/// says; and `Butler`'s own window arithmetic saturates at zero rather
+/// than wrapping into an enormous elapsed time. The file written across
+/// the step backwards reopens cleanly.
+#[test]
+fn a_clock_that_steps_backwards_neither_corrupts_the_journal_nor_expires_a_plan() {
+    let workflows = tempfile::tempdir().unwrap();
+    common::copy_irreversible(workflows.path());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let path = journal_dir.path().join("journal.jsonl");
+
+    let clock: Arc<dyn Clock> = Arc::new(BackwardsClock {
+        reads: std::sync::atomic::AtomicUsize::new(0),
+        // Enough reads for `plan` itself; everything after it reads the
+        // earlier instant.
+        forward_reads: 4,
+        early: Timestamp::parse("2026-09-14T00:00:00+00:00").unwrap(),
+        late: Timestamp::parse("2026-09-14T01:00:00+00:00").unwrap(),
+    });
+
+    let plan_id = {
+        let journal: willikins_server::SharedJournal = Arc::new(Mutex::new(
+            willikins_journal::FileJournal::open_with_clock(&path, clock.clone())
+                .expect("journal opens"),
+        ));
+        let (_state, catalog) = willikins_providers_fake::empty();
+        let butler = willikins_server::Butler::new(willikins_server::ButlerConfig {
+            workflows_dir: workflows.path().to_path_buf(),
+            journal: journal.clone(),
+            catalog,
+            clock: clock.clone(),
+            approval_window: willikins_server::ButlerConfig::DEFAULT_APPROVAL_WINDOW,
+            apply_window: willikins_server::ButlerConfig::DEFAULT_APPLY_WINDOW,
+            plan_rate_per_minute: willikins_server::ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE,
+            read_rate_per_minute: willikins_server::ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
+        });
+
+        let response = butler
+            .plan(
+                wf(common::IRREVERSIBLE_NAME),
+                &common::new_rust_service_inputs(),
+                common::principal("agent"),
+            )
+            .expect("plans cleanly");
+
+        // The clock has now stepped back an hour. The plan is still
+        // inside its approval window, and saying otherwise would be the
+        // failure mode: a negative elapsed time wrapping into a huge one.
+        butler
+            .approve(response.plan_id, common::principal("approver"))
+            .expect("a plan is not expired by the clock moving backwards");
+
+        let entries = journal.lock().unwrap();
+        let stamps: Vec<Timestamp> = entries.entries().iter().map(|entry| entry.at).collect();
+        assert!(
+            stamps.windows(2).all(|pair| pair[0] <= pair[1]),
+            "the journal's own stamps must never go backwards: {stamps:?}"
+        );
+        drop(entries);
+        drop(butler);
+        drop(journal);
+        response.plan_id
+    };
+
+    let reopened = reopen(&path, &clock);
+    assert!(
+        willikins_journal::Journal::plan(&reopened, &plan_id).is_some(),
+        "the file written across a backwards step replays"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Nothing outside the trusted directory
+// ---------------------------------------------------------------------
+
+/// Every `Butler` entry point that names a workflow takes a
+/// [`WorkflowName`], and its grammar has no spelling for a path: there is
+/// no separate traversal check to slip past, because the argument cannot
+/// be constructed. Pinned over the spellings an attacker would try.
+#[test]
+fn no_spelling_of_a_path_parses_as_a_workflow_name() {
+    for attempt in [
+        "../x",
+        "..",
+        ".",
+        "./x",
+        "a/b",
+        "/etc/passwd",
+        "..%2Fx",
+        "x\\..\\y",
+        "new-rust-service.yaml",
+        "~/x",
+        "x\0y",
+    ] {
+        assert!(
+            WorkflowName::parse(attempt).is_err(),
+            "`{attempt}` must not parse as a WorkflowName"
+        );
+    }
+}
+
+/// Startup validates against *the catalog it was given*. A document that
+/// checks cleanly against the fake catalog and names a tool the live
+/// catalog does not have refuses startup with the live one, naming the
+/// file -- so a deployment cannot come up serving a document it could
+/// never actually run. No network call is involved: `check` is static,
+/// and the credentials here are inert test values.
+#[test]
+fn a_document_that_checks_only_against_the_fake_catalog_refuses_a_live_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    // `fake.irreversible.ensure` exists only in the fake catalog.
+    std::fs::write(
+        dir.path().join("fake-only.yaml"),
+        "name: fake-only\n\
+         description: names a tool only the fake catalog has\n\
+         steps:\n  \
+           only:\n    \
+             tool: fake.irreversible.ensure\n    \
+             with:\n      \
+               key: third-thoughts\n",
+    )
+    .unwrap();
+
+    let config = |catalog: willikins_core::Catalog| {
+        let clock = common::manual_clock();
+        willikins_server::ButlerConfig {
+            workflows_dir: dir.path().to_path_buf(),
+            journal: Arc::new(Mutex::new(willikins_journal::MemoryJournal::with_clock(
+                clock.clone() as Arc<dyn Clock>,
+            ))),
+            catalog,
+            clock: clock as Arc<dyn Clock>,
+            approval_window: willikins_server::ButlerConfig::DEFAULT_APPROVAL_WINDOW,
+            apply_window: willikins_server::ButlerConfig::DEFAULT_APPLY_WINDOW,
+            plan_rate_per_minute: willikins_server::ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE,
+            read_rate_per_minute: willikins_server::ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
+        }
+    };
+
+    let (_state, fake) = willikins_server::Butler::fake_catalog();
+    willikins_server::Butler::start(config(fake)).expect("the fake catalog has this tool");
+
+    let live = willikins_server::Butler::live_catalog(
+        willikins_providers_http::Credential::for_testing(
+            "WILLIKINS_TEST_ADVERSARIAL_GITHUB",
+            "ghp_inert",
+        ),
+        willikins_providers_http::Credential::for_testing(
+            "WILLIKINS_TEST_ADVERSARIAL_DOPPLER",
+            "dp.sa.inert",
+        ),
+    );
+    let error = willikins_server::Butler::start(config(live))
+        .err()
+        .expect("the live catalog does not have this tool");
+    match &error {
+        willikins_server::StartupError::Check { path, .. } => {
+            assert_eq!(path.file_name().unwrap(), "fake-only.yaml");
+        }
+        other => panic!("expected StartupError::Check naming the file, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// Rate limits
+// ---------------------------------------------------------------------
+
+/// The `plan` bucket refills from the shared clock, not from wall time:
+/// eleven calls in one minute is one too many, and the same principal is
+/// served again once its clock has moved past the window.
+#[test]
+fn an_exhausted_plan_bucket_refills_when_the_shared_clock_moves_on() {
+    let dir = tempfile::tempdir().unwrap();
+    common::copy_fixture_as(dir.path(), "new-rust-service.yaml", "new-rust-service.yaml");
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let clock = common::manual_clock();
+    let (butler, _journal) = common::butler_with_journal(dir.path(), catalog, clock.clone());
+
+    let agent = common::principal("agent");
+    for call in 0..willikins_server::ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE {
+        butler
+            .plan(
+                wf("new-rust-service"),
+                &common::new_rust_service_inputs(),
+                agent.clone(),
+            )
+            .unwrap_or_else(|error| panic!("call {call} is inside the budget: {error}"));
+    }
+    let err = butler
+        .plan(
+            wf("new-rust-service"),
+            &common::new_rust_service_inputs(),
+            agent.clone(),
+        )
+        .expect_err("the eleventh call in a minute is refused");
+    assert!(
+        matches!(err, ButlerError::RateLimited { retry_after_seconds } if retry_after_seconds > 0),
+        "{err:?}"
+    );
+
+    clock.advance(std::time::Duration::from_secs(61));
+    butler
+        .plan(
+            wf("new-rust-service"),
+            &common::new_rust_service_inputs(),
+            agent,
+        )
+        .expect("the window elapsed on the shared clock, so the bucket refilled");
+}
+
+/// A `PrincipalId` is bounded at 128 characters, and the limiter keys on
+/// the whole id: two principals that differ only in their last character,
+/// both at the bound, get separate buckets. (An implementation that
+/// truncated or hashed weakly would let one agent spend another's budget.)
+#[test]
+fn two_principals_at_the_128_character_bound_keep_separate_buckets() {
+    let long_a = format!("{}a", "p".repeat(127));
+    let long_b = format!("{}b", "p".repeat(127));
+    assert_eq!(long_a.len(), 128);
+    assert!(
+        willikins_journal::PrincipalId::parse(&"p".repeat(129)).is_err(),
+        "129 characters is over the bound"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    common::copy_fixture_as(dir.path(), "new-rust-service.yaml", "new-rust-service.yaml");
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let clock = common::manual_clock();
+    let (butler, _journal) = common::butler_with_journal(dir.path(), catalog, clock);
+
+    let a = common::principal(&long_a);
+    let b = common::principal(&long_b);
+    for _ in 0..willikins_server::ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE {
+        butler
+            .plan(
+                wf("new-rust-service"),
+                &common::new_rust_service_inputs(),
+                a.clone(),
+            )
+            .expect("inside a's budget");
+    }
+    assert!(
+        butler
+            .plan(
+                wf("new-rust-service"),
+                &common::new_rust_service_inputs(),
+                a
+            )
+            .is_err(),
+        "a's bucket is spent"
+    );
+    butler
+        .plan(
+            wf("new-rust-service"),
+            &common::new_rust_service_inputs(),
+            b,
+        )
+        .expect("b's bucket is its own");
+}
