@@ -100,8 +100,7 @@ impl crate::Butler {
     /// surface rather than reaching into `willikins-providers-fake`
     /// directly.
     #[must_use]
-    pub fn fake_catalog()
-    -> (
+    pub fn fake_catalog() -> (
         std::sync::Arc<std::sync::Mutex<willikins_providers_fake::FakeState>>,
         Catalog,
     ) {
@@ -123,7 +122,11 @@ mod tests {
         let github = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
         let doppler = Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
         live_catalog_with(
-            Http::new(NOWHERE, willikins_providers_github::default_headers(), github),
+            Http::new(
+                NOWHERE,
+                willikins_providers_github::default_headers(),
+                github,
+            ),
             Http::new(NOWHERE, Vec::new(), doppler),
         )
     }

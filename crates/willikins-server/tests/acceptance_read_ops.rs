@@ -71,8 +71,7 @@ fn validate_a_body_with_an_alias_returns_the_dsl_error() {
 #[test]
 fn validate_a_document_that_fails_check_reports_ok_false_with_errors() {
     let (_dir, butler) = butler_and_dir();
-    let body =
-        "name: x\ndescription: d\nsteps:\n  a:\n    tool: no.such.tool\n".to_string();
+    let body = "name: x\ndescription: d\nsteps:\n  a:\n    tool: no.such.tool\n".to_string();
     let response = butler
         .validate(DocumentSource::Body(body), common::principal("agent"))
         .expect("a check failure is a normal (ok: false) response, not an Err");
@@ -89,7 +88,10 @@ fn validate_an_unknown_workflow_name_is_unknown_workflow() {
             common::principal("agent"),
         )
         .expect_err("an unrecognised name must refuse");
-    assert!(matches!(err, ButlerError::UnknownWorkflow { .. }), "{err:?}");
+    assert!(
+        matches!(err, ButlerError::UnknownWorkflow { .. }),
+        "{err:?}"
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -151,14 +153,16 @@ fn describe_reports_missing_and_rejected_inputs_as_result_fields_not_errors() {
             common::principal("agent"),
         )
         .expect("describe never fails outright on bad inputs");
-    assert!(!description.errors.is_empty(), "the bad slug is an InputError");
+    assert!(
+        !description.errors.is_empty(),
+        "the bad slug is an InputError"
+    );
 }
 
 #[test]
 fn describe_a_document_that_fails_check_is_a_check_error() {
     let (_dir, butler) = butler_and_dir();
-    let body =
-        "name: x\ndescription: d\nsteps:\n  a:\n    tool: no.such.tool\n".to_string();
+    let body = "name: x\ndescription: d\nsteps:\n  a:\n    tool: no.such.tool\n".to_string();
     let err = butler
         .describe(
             DocumentSource::Body(body),
@@ -201,7 +205,10 @@ fn propose_slug_an_invalid_project_name_is_invalid_project_name() {
     let err = butler
         .propose_slug(&long_name, common::principal("agent"))
         .expect_err("an over-long name must refuse to even parse as ProjectName");
-    assert!(matches!(err, ButlerError::InvalidProjectName { .. }), "{err:?}");
+    assert!(
+        matches!(err, ButlerError::InvalidProjectName { .. }),
+        "{err:?}"
+    );
 }
 
 #[test]

@@ -13,12 +13,15 @@ fn wf(name: &str) -> WorkflowName {
     WorkflowName::parse(name).unwrap()
 }
 
-fn config(dir: &std::path::Path, clock: std::sync::Arc<willikins_journal::ManualClock>) -> ButlerConfig {
+fn config(
+    dir: &std::path::Path,
+    clock: std::sync::Arc<willikins_journal::ManualClock>,
+) -> ButlerConfig {
     let (_state, catalog) = willikins_providers_fake::empty();
     ButlerConfig {
         workflows_dir: dir.to_path_buf(),
         journal: std::sync::Arc::new(std::sync::Mutex::new(MemoryJournal::with_clock(
-            clock.clone() as std::sync::Arc<dyn Clock>
+            clock.clone() as std::sync::Arc<dyn Clock>,
         ))),
         catalog,
         clock: clock as std::sync::Arc<dyn Clock>,
@@ -40,12 +43,15 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
     let butler = Butler::start(cfg).expect("the real trusted directory starts cleanly");
 
     let entries = journal.lock().unwrap();
-    let started = entries.entries().iter().find_map(|entry| match &entry.event {
-        Event::ServerStarted {
-            workflow_hashes, ..
-        } => Some(workflow_hashes.clone()),
-        _ => None,
-    });
+    let started = entries
+        .entries()
+        .iter()
+        .find_map(|entry| match &entry.event {
+            Event::ServerStarted {
+                workflow_hashes, ..
+            } => Some(workflow_hashes.clone()),
+            _ => None,
+        });
     let hashes = started.expect("ServerStarted must be journaled");
     assert!(hashes.contains_key("new-rust-service.yaml"), "{hashes:?}");
     assert!(
@@ -101,7 +107,10 @@ fn a_name_not_in_the_directory_is_unknown_workflow() {
             common::principal("agent"),
         )
         .expect_err("an unknown workflow name must refuse");
-    assert!(matches!(err, ButlerError::UnknownWorkflow { .. }), "{err:?}");
+    assert!(
+        matches!(err, ButlerError::UnknownWorkflow { .. }),
+        "{err:?}"
+    );
 }
 
 /// `WorkflowName`'s own grammar refuses a path-traversal attempt before a

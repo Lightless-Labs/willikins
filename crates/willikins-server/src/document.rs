@@ -188,8 +188,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         write(outside.path(), "real.yaml", DOC);
-        std::os::unix::fs::symlink(outside.path().join("real.yaml"), dir.path().join("foo.yaml"))
-            .unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("real.yaml"),
+            dir.path().join("foo.yaml"),
+        )
+        .unwrap();
         match load_named_document(dir.path(), &wf("foo")) {
             Err(LoadError::Symlink(path)) => {
                 assert_eq!(path, dir.path().join("foo.yaml"));

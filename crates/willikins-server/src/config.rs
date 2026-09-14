@@ -205,7 +205,10 @@ mod tests {
             ("WILLIKINS_JOURNAL_PATH", "/journal.jsonl"),
         ]);
         let config = ServerConfig::from_vars(lookup(&vars)).unwrap();
-        assert_eq!(config.approval_window, ButlerConfig::DEFAULT_APPROVAL_WINDOW);
+        assert_eq!(
+            config.approval_window,
+            ButlerConfig::DEFAULT_APPROVAL_WINDOW
+        );
         assert_eq!(config.apply_window, ButlerConfig::DEFAULT_APPLY_WINDOW);
         assert_eq!(
             config.plan_rate_per_minute,

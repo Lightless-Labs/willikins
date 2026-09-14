@@ -124,10 +124,12 @@ fn validate_parity_for_both_positive_fixtures() {
         let path = workflow_path(name);
         let cli = run_cli(&["--json", "validate", path.to_str().unwrap()]);
         assert_eq!(cli.code, 0, "{name}: {}", cli.stderr);
-        let cli_json: serde_json::Value =
-            serde_json::from_str(&cli.stdout).unwrap_or_else(|err| {
-                panic!("{name}: CLI validate --json did not parse: {err}\n{}", cli.stdout)
-            });
+        let cli_json: serde_json::Value = serde_json::from_str(&cli.stdout).unwrap_or_else(|err| {
+            panic!(
+                "{name}: CLI validate --json did not parse: {err}\n{}",
+                cli.stdout
+            )
+        });
 
         let response = butler()
             .validate(
@@ -152,7 +154,11 @@ fn validate_parity_for_both_positive_fixtures() {
 fn describe_parity_for_both_positive_fixtures() {
     for (name, inputs) in POSITIVE_FIXTURES {
         let path = workflow_path(name);
-        let mut args = vec!["--json".to_string(), "describe".to_string(), path.to_str().unwrap().to_string()];
+        let mut args = vec![
+            "--json".to_string(),
+            "describe".to_string(),
+            path.to_str().unwrap().to_string(),
+        ];
         args.extend(input_args(inputs));
         let cli = run_cli(&args.iter().map(String::as_str).collect::<Vec<_>>());
         assert_eq!(cli.code, 0, "{name}: {}", cli.stderr);
@@ -187,7 +193,11 @@ fn describe_parity_for_both_positive_fixtures() {
 fn plan_parity_for_both_positive_fixtures() {
     for (name, inputs) in POSITIVE_FIXTURES {
         let path = workflow_path(name);
-        let mut args = vec!["--json".to_string(), "plan".to_string(), path.to_str().unwrap().to_string()];
+        let mut args = vec![
+            "--json".to_string(),
+            "plan".to_string(),
+            path.to_str().unwrap().to_string(),
+        ];
         args.extend(input_args(inputs));
         let cli = run_cli(&args.iter().map(String::as_str).collect::<Vec<_>>());
         assert_eq!(cli.code, 0, "{name}: {}", cli.stderr);

@@ -129,7 +129,10 @@ mod tests {
         assert!(limiter.check(&p).is_ok());
         assert!(limiter.check(&p).is_err());
         clock.advance(WINDOW + Duration::from_secs(1));
-        assert!(limiter.check(&p).is_ok(), "the window elapsed; a slot should be free");
+        assert!(
+            limiter.check(&p).is_ok(),
+            "the window elapsed; a slot should be free"
+        );
     }
 
     #[test]
@@ -137,7 +140,9 @@ mod tests {
         let limiter = RateLimiter::new(1, clock());
         let p = principal("agent");
         assert!(limiter.check(&p).is_ok());
-        let retry_after = limiter.check(&p).expect_err("the second call is over capacity");
+        let retry_after = limiter
+            .check(&p)
+            .expect_err("the second call is over capacity");
         assert!(retry_after > 0);
         assert!(retry_after <= 60);
     }
@@ -149,6 +154,9 @@ mod tests {
         let p = principal("agent");
         assert!(limiter.check(&p).is_ok());
         assert!(limiter.check(&p).is_err());
-        assert!(limiter.check(&p).is_err(), "still refused: the failed call above must not have freed a slot");
+        assert!(
+            limiter.check(&p).is_err(),
+            "still refused: the failed call above must not have freed a slot"
+        );
     }
 }

@@ -202,7 +202,10 @@ impl Butler {
     ///
     /// [`ButlerError::Startup`] wrapping whichever [`StartupError`] the
     /// scan hit.
-    pub fn list_workflows(&self, principal: PrincipalId) -> Result<Vec<WorkflowSummary>, ButlerError> {
+    pub fn list_workflows(
+        &self,
+        principal: PrincipalId,
+    ) -> Result<Vec<WorkflowSummary>, ButlerError> {
         let result = startup::scan_directory(&self.workflows_dir, &self.catalog)
             .map(|loaded| loaded.into_iter().map(WorkflowSummary::from).collect())
             .map_err(|error| ButlerError::Startup { error });
@@ -217,7 +220,10 @@ impl Butler {
     /// exactly what enforces them); a name is resolved in the trusted
     /// directory exactly as `plan` resolves one, collapsing a missing,
     /// mismatched, or symlinked file to [`ButlerError::UnknownWorkflow`].
-    fn load_source(&self, source: &DocumentSource) -> Result<willikins_core::Workflow, ButlerError> {
+    fn load_source(
+        &self,
+        source: &DocumentSource,
+    ) -> Result<willikins_core::Workflow, ButlerError> {
         match source {
             DocumentSource::Body(body) => {
                 willikins_dsl::parse_document(body).map_err(|error| ButlerError::Document { error })

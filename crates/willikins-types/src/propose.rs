@@ -22,9 +22,7 @@ use crate::slug::ProjectSlug;
 /// `willikins-core`'s `CheckError`/`PlanError`), so a caller that wraps
 /// this behind a `{kind, message}` shape (`willikins-server`'s
 /// `ButlerError::SlugProposal`, task 10a) needs no bespoke mapping.
-#[derive(
-    Debug, Clone, PartialEq, Eq, thiserror::Error, serde::Serialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, serde::Serialize, schemars::JsonSchema)]
 #[serde(tag = "kind")]
 pub enum ProposeError {
     /// The name contained no ASCII alphanumeric characters at all.

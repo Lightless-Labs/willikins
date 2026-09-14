@@ -200,12 +200,11 @@ pub fn scan_directory(dir: &Path, catalog: &Catalog) -> Result<Vec<Loaded>, Star
             message: error.to_string(),
         })?;
 
-        let workflow = willikins_dsl::load_document(&path).map_err(|error| {
-            StartupError::Document {
+        let workflow =
+            willikins_dsl::load_document(&path).map_err(|error| StartupError::Document {
                 path: path.clone(),
                 error,
-            }
-        })?;
+            })?;
         if workflow.name != name {
             return Err(StartupError::NameMismatch {
                 path,
@@ -305,7 +304,11 @@ mod tests {
     #[test]
     fn scans_yaml_and_yml_in_filename_order() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "bar.yml", "name: bar\ndescription: b\nsteps: {}\n");
+        write(
+            dir.path(),
+            "bar.yml",
+            "name: bar\ndescription: b\nsteps: {}\n",
+        );
         write(dir.path(), "foo.yaml", DOC);
         let loaded = scan_directory(dir.path(), &empty_catalog()).unwrap();
         let names: Vec<&str> = loaded.iter().map(|entry| entry.name.as_str()).collect();
@@ -335,25 +338,41 @@ mod tests {
     #[test]
     fn a_filename_that_is_not_a_valid_workflow_name_refuses_the_scan() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "Not_Valid.yaml", "name: x\ndescription: d\nsteps: {}\n");
+        write(
+            dir.path(),
+            "Not_Valid.yaml",
+            "name: x\ndescription: d\nsteps: {}\n",
+        );
         match scan_directory(dir.path(), &empty_catalog()) {
             Err(StartupError::InvalidName { path, .. }) => {
                 assert_eq!(path.file_name().unwrap(), "Not_Valid.yaml");
             }
-            other => panic!("expected InvalidName, got {other:?}", other = debug_kind(&other)),
+            other => panic!(
+                "expected InvalidName, got {other:?}",
+                other = debug_kind(&other)
+            ),
         }
     }
 
     #[test]
     fn an_internal_name_mismatch_refuses_the_scan() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "foo.yaml", "name: bar\ndescription: d\nsteps: {}\n");
+        write(
+            dir.path(),
+            "foo.yaml",
+            "name: bar\ndescription: d\nsteps: {}\n",
+        );
         match scan_directory(dir.path(), &empty_catalog()) {
-            Err(StartupError::NameMismatch { expected, found, .. }) => {
+            Err(StartupError::NameMismatch {
+                expected, found, ..
+            }) => {
                 assert_eq!(expected.as_str(), "foo");
                 assert_eq!(found.as_str(), "bar");
             }
-            other => panic!("expected NameMismatch, got {other:?}", other = debug_kind(&other)),
+            other => panic!(
+                "expected NameMismatch, got {other:?}",
+                other = debug_kind(&other)
+            ),
         }
     }
 
@@ -388,8 +407,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         write(outside.path(), "real.yaml", DOC);
-        std::os::unix::fs::symlink(outside.path().join("real.yaml"), dir.path().join("foo.yaml"))
-            .unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("real.yaml"),
+            dir.path().join("foo.yaml"),
+        )
+        .unwrap();
         assert!(matches!(
             scan_directory(dir.path(), &empty_catalog()),
             Err(StartupError::Symlink { .. })
