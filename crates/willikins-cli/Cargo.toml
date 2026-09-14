@@ -31,6 +31,10 @@ serde_yaml_ng.workspace = true
 # this is an ordinary (one-directional) dev-dependency, not a cycle.
 willikins-server.workspace = true
 willikins-journal.workspace = true
+# The MCP half of acceptance test 11: an in-process rmcp client over a
+# duplex pair against `willikins_server::WillikinsHandler`.
+rmcp = { workspace = true, features = ["client", "transport-io"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync"] }
 
 [lints]
 workspace = true
