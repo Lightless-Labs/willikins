@@ -377,6 +377,67 @@ mod tests {
     }
 
     #[test]
+    fn a_non_monotonic_timestamp_makes_open_fail_naming_the_line() {
+        let path = temp_path();
+        let first = Entry {
+            seq: 1,
+            at: crate::Timestamp::parse("2026-09-13T12:00:00+00:00").unwrap(),
+            event: server_started(),
+        };
+        let second = Entry {
+            seq: 2,
+            // Earlier than `first.at`: the clock stepped backwards.
+            at: crate::Timestamp::parse("2026-09-13T11:00:00+00:00").unwrap(),
+            event: server_started(),
+        };
+        let mut contents = serde_json::to_string(&first).unwrap();
+        contents.push('\n');
+        contents.push_str(&serde_json::to_string(&second).unwrap());
+        contents.push('\n');
+        std::fs::write(&path, contents).unwrap();
+
+        let result = FileJournal::open(&path);
+        match result {
+            Err(JournalError::Corrupt { line, reason }) => {
+                assert_eq!(line, 2);
+                assert!(reason.contains("before"), "{reason}");
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn append_clamps_a_backwards_clock_so_a_reopen_still_succeeds() {
+        let path = temp_path();
+        // A single entry stamped far in the future: `append`'s own next
+        // `Timestamp::now()` read will be *earlier* than this, exactly
+        // the clock-stepped-backwards case `clamped_now` exists for.
+        let future = crate::Timestamp::parse("2999-01-01T00:00:00+00:00").unwrap();
+        let seeded = Entry {
+            seq: 1,
+            at: future,
+            event: server_started(),
+        };
+        let mut line = serde_json::to_string(&seeded).unwrap();
+        line.push('\n');
+        std::fs::write(&path, line).unwrap();
+
+        let mut journal = FileJournal::open(&path).unwrap();
+        let appended = journal.append(server_started()).unwrap();
+        assert_eq!(appended.seq, 2);
+        assert!(
+            appended.at >= future,
+            "append must clamp to at least the previous entry's timestamp"
+        );
+        drop(journal);
+
+        // If `append` had used a bare `Timestamp::now()` instead, this
+        // reopen would refuse with a non-monotonic-timestamp `Corrupt`.
+        let reopened = FileJournal::open(&path).unwrap();
+        assert_eq!(reopened.entries().len(), 2);
+    }
+
+    #[test]
     fn append_is_durable_before_returning_and_survives_a_reopen() {
         let path = temp_path();
         let mut journal = FileJournal::open(&path).unwrap();

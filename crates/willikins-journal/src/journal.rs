@@ -158,7 +158,16 @@ pub trait Journal {
         fold(self.entries())
             .plans
             .into_values()
-            .filter(|record| matches!(record.approval, ApprovalState::Pending))
+            // `requires_approval` too, not just `approval == Pending`: a
+            // plan that never needed approval sits in `Pending` only for
+            // the instant between `PlanRecorded` and `ApprovalAutomatic`
+            // (or forever, if a process died between the two appends,
+            // which cannot happen through `run_and_journal` today but is
+            // not otherwise ruled out at the journal level) and is not a
+            // human waiting on anything.
+            .filter(|record| {
+                record.requires_approval && matches!(record.approval, ApprovalState::Pending)
+            })
             .collect()
     }
 
@@ -393,5 +402,73 @@ fn finish_runs(
                 .collect(),
             None => observed.into_values().collect(),
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `PlanRecord` and `RunRecord` both derive `JsonSchema` because
+    /// `willikins-server` (task 7) publishes them over MCP; this pins
+    /// that the generation itself succeeds and names every top-level
+    /// field the plan's own wording requires, the same kind of guard
+    /// `willikins-core`'s `schema_generation.rs` keeps for its own
+    /// published types (that crate additionally insta-snapshots the
+    /// full JSON; this one does not yet, since there is no established
+    /// snapshot to diff a first publish against -- a follow-up, not a
+    /// gap hidden here).
+    #[test]
+    fn plan_record_schema_generates_and_names_its_fields() {
+        let schema = serde_json::to_value(schemars::schema_for!(PlanRecord))
+            .expect("PlanRecord schema serializes");
+        assert_eq!(schema["title"], "PlanRecord");
+        let properties = schema["properties"]
+            .as_object()
+            .expect("PlanRecord schema has properties");
+        for field in [
+            "plan_id",
+            "workflow",
+            "document_sha256",
+            "inputs",
+            "plan",
+            "fingerprint",
+            "class",
+            "requires_approval",
+            "recorded_at",
+            "approval",
+            "applied",
+        ] {
+            assert!(
+                properties.contains_key(field),
+                "PlanRecord schema is missing `{field}`: {schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_record_schema_generates_and_names_its_fields() {
+        let schema = serde_json::to_value(schemars::schema_for!(RunRecord))
+            .expect("RunRecord schema serializes");
+        assert_eq!(schema["title"], "RunRecord");
+        let properties = schema["properties"]
+            .as_object()
+            .expect("RunRecord schema has properties");
+        for field in [
+            "run_id",
+            "plan_id",
+            "principal",
+            "started_at",
+            "state",
+            "nodes",
+            "outputs",
+            "error",
+            "finished_at",
+        ] {
+            assert!(
+                properties.contains_key(field),
+                "RunRecord schema is missing `{field}`: {schema}"
+            );
+        }
     }
 }

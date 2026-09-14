@@ -137,7 +137,7 @@ fn acceptance_10_journal_records_two_runs_without_leaking_either_secret() {
     );
     let (plan_id_1, approved_1) = record_plan(&mut journal, &checked, &inputs, &catalog);
 
-    let (result_1, journal_error_1) = run_and_journal(
+    let (result_1, _run_id_1, journal_error_1) = run_and_journal(
         &mut journal,
         willikins_journal::PrincipalId::parse("agent").unwrap(),
         plan_id_1,
@@ -181,7 +181,7 @@ fn acceptance_10_journal_records_two_runs_without_leaking_either_secret() {
         &seeded_catalog,
     );
 
-    let (result_2, journal_error_2) = run_and_journal(
+    let (result_2, _run_id_2, journal_error_2) = run_and_journal(
         &mut journal,
         willikins_journal::PrincipalId::parse("agent").unwrap(),
         plan_id_2,
