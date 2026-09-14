@@ -305,3 +305,148 @@ impl Tool for PanickingTool {
         panic!("test.panicking.ensure always panics");
     }
 }
+
+// ---------------------------------------------------------------------
+// A test-only pure tool whose list output a test can change.
+// ---------------------------------------------------------------------
+
+/// `test.list.source`: a pure tool whose one output, `items:
+/// list<EnvironmentSlug>`, is whatever the test's shared `Vec` currently
+/// holds. A `for_each` over it expands to one instance per item, so a
+/// test can change the size of a plan's `for_each` expansion between
+/// `plan` and `apply` without touching the document.
+pub struct ListSourceTool {
+    spec: ToolSpec,
+    items: Arc<Mutex<Vec<willikins_types::EnvironmentSlug>>>,
+}
+
+impl ListSourceTool {
+    /// The tool and the shared list a test mutates.
+    #[must_use]
+    pub fn new(
+        initial: Vec<willikins_types::EnvironmentSlug>,
+    ) -> (Self, Arc<Mutex<Vec<willikins_types::EnvironmentSlug>>>) {
+        let items = Arc::new(Mutex::new(initial));
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            willikins_core::helpers::port("key"),
+            PortSpec {
+                ty: willikins_core::PortType::Exact(willikins_core::helpers::scalar("ProjectSlug")),
+                required: true,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(
+            willikins_core::helpers::port("items"),
+            willikins_core::helpers::list("EnvironmentSlug"),
+        );
+        let tool = Self {
+            spec: ToolSpec {
+                name: willikins_core::helpers::tool_name("test.list.source"),
+                description: "Test tool: a list the test controls.".to_string(),
+                inputs,
+                outputs,
+                // A pure tool declares no key: it names no resource.
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: true,
+            },
+            items: Arc::clone(&items),
+        };
+        (tool, items)
+    }
+
+    fn compute(&self) -> Outputs {
+        let items = self
+            .items
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut outputs = Outputs::new();
+        outputs.insert(
+            willikins_core::helpers::port("items"),
+            willikins_core::Value::known_list(items),
+        );
+        outputs
+    }
+}
+
+impl Tool for ListSourceTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Present(self.compute()))
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: self.compute(),
+            changed: false,
+        })
+    }
+}
+
+/// `test.counting.ensure`: keyed on an `EnvironmentSlug`, `read` answers
+/// `Absent` and `ensure` counts its calls. The downstream half of a
+/// `for_each` over [`ListSourceTool`], and the way a drift test proves no
+/// provider write happened.
+pub struct CountingTool {
+    spec: ToolSpec,
+    calls: Arc<Mutex<u32>>,
+}
+
+impl CountingTool {
+    /// The tool and the shared call counter.
+    #[must_use]
+    pub fn new() -> (Self, Arc<Mutex<u32>>) {
+        let calls = Arc::new(Mutex::new(0));
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            willikins_core::helpers::port("key"),
+            PortSpec {
+                ty: willikins_core::PortType::Exact(willikins_core::helpers::scalar(
+                    "EnvironmentSlug",
+                )),
+                required: true,
+            },
+        );
+        let tool = Self {
+            spec: ToolSpec {
+                name: willikins_core::helpers::tool_name("test.counting.ensure"),
+                description: "Test tool: counts its own ensure calls.".to_string(),
+                inputs,
+                outputs: IndexMap::new(),
+                key: vec![willikins_core::helpers::port("key")],
+                class: Class::Reversible,
+                pure: false,
+            },
+            calls: Arc::clone(&calls),
+        };
+        (tool, calls)
+    }
+}
+
+impl Tool for CountingTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Absent {
+            predicted: Outputs::new(),
+        })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        *self
+            .calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+        Ok(Ensured {
+            outputs: Outputs::new(),
+            changed: true,
+        })
+    }
+}

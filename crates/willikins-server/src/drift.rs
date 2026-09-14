@@ -239,6 +239,46 @@ mod tests {
         ];
         let fresh = vec![fp("a", Action::Create, vec![])];
         let drift = first_drift(&approved, &fresh).unwrap();
+        match drift.detail {
+            DriftDetail::Instance { planned, observed } => {
+                assert!(planned.is_some(), "the approved plan has this instance");
+                assert!(observed.is_none(), "the fresh re-plan does not");
+            }
+            other => panic!("expected Instance drift, got {other:?}"),
+        }
+    }
+
+    /// The other direction: a `for_each` that expanded to one instance
+    /// *more* on the re-plan. Both directions matter, because the loop in
+    /// [`first_drift`] walks to `max(approved.len(), fresh.len())` and
+    /// each end of the comparison has its own `(Some, None)` branch.
+    #[test]
+    fn a_longer_fresh_plan_is_instance_drift() {
+        let approved = vec![fp("a", Action::Create, vec![])];
+        let fresh = vec![
+            fp("a", Action::Create, vec![]),
+            fp("b", Action::Create, vec![]),
+        ];
+        let drift = first_drift(&approved, &fresh).unwrap();
+        assert_eq!(drift.node.as_str(), "b");
+        match drift.detail {
+            DriftDetail::Instance { planned, observed } => {
+                assert!(planned.is_none(), "the approved plan lacks this instance");
+                assert!(observed.is_some(), "the fresh re-plan has it");
+            }
+            other => panic!("expected Instance drift, got {other:?}"),
+        }
+    }
+
+    /// Same node name, different `for_each` key at the same position: the
+    /// instances are not the same instance, whatever their actions say.
+    #[test]
+    fn the_same_node_under_a_different_for_each_key_is_instance_drift() {
+        let mut approved = fp("loop", Action::Create, vec![]);
+        approved.instance = Some("dev".to_string());
+        let mut fresh = fp("loop", Action::Create, vec![]);
+        fresh.instance = Some("prd".to_string());
+        let drift = first_drift(&[approved], &[fresh]).unwrap();
         assert!(matches!(drift.detail, DriftDetail::Instance { .. }));
     }
 }

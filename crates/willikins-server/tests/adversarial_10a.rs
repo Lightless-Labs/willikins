@@ -1006,3 +1006,163 @@ fn a_run_in_progress_refusal_is_journaled_like_every_other_refusal() {
     let run = common::wait_for_run(&butler, handle.run_id, 2000);
     assert_eq!(run.state, willikins_journal::RunState::Succeeded, "{run:?}");
 }
+
+// ---------------------------------------------------------------------
+// Drift: what a re-plan is and is not allowed to differ in
+// ---------------------------------------------------------------------
+
+/// A `for_each` whose source is a step output, expanded over a list the
+/// test changes between `plan` and `apply`: the fresh re-plan has one
+/// instance fewer (then, in the second half, one more), and `apply`
+/// refuses without calling any `ensure`.
+///
+/// The refusal that actually surfaces is `Output` drift on the *source*
+/// node, not `Instance` drift on the loop: `Plan::fingerprint` carries
+/// every rendered non-secret output (review resolution 14), the source
+/// node is walked before the node that loops over it, and `first_drift`
+/// reports the first disagreement it finds. Pinned as it is rather than
+/// bent towards the more dramatic-sounding variant -- the instance-count
+/// directions of `first_drift` itself are unit-tested in
+/// `src/drift.rs`, where they can be reached without a source node in
+/// front of them.
+#[test]
+fn a_for_each_source_that_changed_between_plan_and_apply_refuses_the_apply() {
+    fn env(slug: &str) -> willikins_types::EnvironmentSlug {
+        willikins_types::EnvironmentSlug::parse(slug).unwrap()
+    }
+
+    for (initial, changed, label) in [
+        (vec!["dev", "stg", "prd"], vec!["dev", "stg"], "one fewer"),
+        (vec!["dev", "stg"], vec!["dev", "stg", "prd"], "one more"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("loop-drift.yaml"),
+            "name: loop-drift\n\
+             description: a for_each over a list a test controls\n\
+             steps:\n  \
+               source:\n    \
+                 tool: test.list.source\n    \
+                 with:\n      \
+                   key: third-thoughts\n  \
+               loop:\n    \
+                 tool: test.counting.ensure\n    \
+                 for_each: ${{ steps.source.items }}\n    \
+                 with:\n      \
+                   key: ${{ item }}\n",
+        )
+        .unwrap();
+
+        let (source_tool, items) =
+            common::ListSourceTool::new(initial.iter().map(|s| env(s)).collect());
+        let (counting_tool, calls) = common::CountingTool::new();
+        let mut catalog = willikins_core::Catalog::new(willikins_types::registry());
+        catalog.insert(Arc::new(source_tool)).unwrap();
+        catalog.insert(Arc::new(counting_tool)).unwrap();
+        let clock = common::manual_clock();
+        let (butler, journal) = common::butler_with_journal(dir.path(), catalog, clock);
+
+        let response = butler
+            .plan(
+                wf("loop-drift"),
+                &indexmap::IndexMap::default(),
+                common::principal("agent"),
+            )
+            .unwrap_or_else(|error| panic!("loop-drift plans cleanly ({label}): {error}"));
+        let loop_instances = response
+            .plan
+            .nodes
+            .iter()
+            .filter(|node| node.name.as_str() == "loop")
+            .count();
+        assert_eq!(loop_instances, initial.len(), "{label}");
+
+        *items.lock().unwrap() = changed.iter().map(|s| env(s)).collect();
+
+        let err = butler
+            .apply(response.plan_id, common::principal("agent"))
+            .unwrap_err();
+        assert!(
+            matches!(err, ButlerError::Drift { .. }),
+            "{label}: expected Drift, got {err:?}"
+        );
+        assert_eq!(*calls.lock().unwrap(), 0, "{label}: nothing may be written");
+
+        let refused = journal.lock().unwrap().entries().iter().any(|entry| {
+            matches!(
+                &entry.event,
+                Event::ApplyRefused {
+                    plan_id,
+                    reason: willikins_journal::ApplyRefusedReason::Drift { .. },
+                    ..
+                } if *plan_id == response.plan_id
+            )
+        });
+        assert!(refused, "{label}: the drift refusal must be journaled");
+    }
+}
+
+/// The other direction of review resolution 14, at the `Butler` level: a
+/// seeded secret whose *bytes* change between `plan` and `apply` is not
+/// drift, and the plan runs. A secret's rendered form in the fingerprint
+/// is a fixed marker, on purpose -- the approved plan said "write
+/// whatever this port holds", not "write these bytes", so re-reading a
+/// rotated secret is the workflow working, not state drifting.
+#[test]
+fn a_secret_value_that_changed_between_plan_and_apply_is_not_drift() {
+    const SEEDED: &str = "adversarial-10a-first-secret-bytes-do-not-leak";
+    const ROTATED: &str = "adversarial-10a-second-secret-bytes-do-not-leak";
+
+    let dir = tempfile::tempdir().unwrap();
+    common::copy_fixture_as(dir.path(), "secret-get.yaml", "secret-get.yaml");
+
+    let config = willikins_types::DopplerConfig::parse("widgets/prd").unwrap();
+    let secret_name = willikins_types::SecretName::parse("DATABASE_URL").unwrap();
+    let state = Arc::new(Mutex::new(
+        willikins_providers_fake::FakeState::new().with_doppler_secret(
+            &config,
+            &secret_name,
+            willikins_types::DopplerSecretValue::parse(SEEDED).unwrap(),
+        ),
+    ));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let clock = common::manual_clock();
+    let (butler, journal) = common::butler_with_journal(dir.path(), catalog, clock);
+
+    let response = butler
+        .plan(
+            wf("secret-get"),
+            &common::partial_inputs(&[("project", "widgets")]),
+            common::principal("agent"),
+        )
+        .expect("secret-get plans cleanly");
+
+    state.lock().unwrap().doppler_secrets.insert(
+        "widgets/prd#DATABASE_URL".to_string(),
+        willikins_types::DopplerSecretValue::parse(ROTATED).unwrap(),
+    );
+
+    let handle = butler
+        .apply(response.plan_id, common::principal("agent"))
+        .expect("a changed secret value is not drift");
+    let run = common::wait_for_run(&butler, handle.run_id, 2000);
+    assert_eq!(run.state, willikins_journal::RunState::Succeeded, "{run:?}");
+
+    // And neither set of bytes is anywhere on the journal.
+    let journalled = serde_json::to_string(
+        &journal
+            .lock()
+            .unwrap()
+            .entries()
+            .iter()
+            .map(|entry| serde_json::to_value(entry).unwrap())
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    for marker in [SEEDED, ROTATED] {
+        assert!(
+            !journalled.contains(marker),
+            "the journal must never carry a seeded secret's bytes"
+        );
+    }
+}
