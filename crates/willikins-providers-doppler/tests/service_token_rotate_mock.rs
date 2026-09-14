@@ -281,3 +281,82 @@ fn spec_class_is_destructive() {
     let tool = DopplerServiceTokenRotate::new(client);
     assert_eq!(tool.spec().class, willikins_core::Class::Destructive);
 }
+
+/// The one deliberate departure from the plan's literal port table
+/// ("`read`: as `ensure`'s read") pinned where it can actually be
+/// checked: against the tool it is copied from. The fake
+/// `doppler.service_token.rotate` already ships this decision — a
+/// `Destructive` step must never plan as `Action::NoOp`, which would tell
+/// the approver nothing is about to happen to a live token — and the live
+/// tool must agree with it, in the *same* situation the fake is in: a
+/// token by that name already exists.
+///
+/// If either side is ever "fixed" to report `Present`, this fails, and
+/// whoever changes it has to change the other too.
+#[test]
+fn read_agrees_with_the_fake_tool_that_an_existing_token_is_still_absent() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(200)
+        .with_body(fixture("service_tokens_list_present").to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let live = DopplerServiceTokenRotate::new(client)
+        .read(&inputs())
+        .unwrap();
+
+    let state = Arc::new(Mutex::new(
+        willikins_providers_fake::FakeState::new().with_doppler_service_token(&config(), &name()),
+    ));
+    let fake = willikins_providers_fake::tools::DopplerServiceTokenRotate::new(state)
+        .read(&inputs())
+        .unwrap();
+
+    assert!(matches!(live, Observation::Absent { .. }), "live: {live:?}");
+    assert!(matches!(fake, Observation::Absent { .. }), "fake: {fake:?}");
+    assert_eq!(
+        serde_json::to_value(&live).unwrap(),
+        serde_json::to_value(&fake).unwrap(),
+        "the live and fake rotate must observe an existing token identically"
+    );
+}
+
+/// `ensure` mints exactly once however many tokens it had to revoke
+/// first: two `DELETE`s, one `POST`, never one mint per revocation.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_mints_exactly_once_however_many_tokens_it_revoked() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"tokens": [
+                {"name": "ci", "slug": "slug-one"},
+                {"name": "ci", "slug": "slug-two"},
+            ]})
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let deletes = provider
+        .mock("DELETE", DELETE_PATH)
+        .with_status(200)
+        .with_body(r#"{"success":true}"#)
+        .expect(2)
+        .create();
+    let create = provider
+        .mock("POST", CREATE_PATH)
+        .with_status(200)
+        .with_body(fixture("service_token_post_created").to_string())
+        .expect(1)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let sink = SinkToken::new();
+    DopplerServiceTokenRotate::new(client)
+        .ensure(&inputs(), &sink)
+        .unwrap();
+    deletes.assert();
+    create.assert();
+}
