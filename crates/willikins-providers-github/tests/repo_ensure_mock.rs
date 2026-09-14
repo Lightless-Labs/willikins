@@ -542,3 +542,129 @@ fn every_request_carries_the_three_required_headers() {
     create.assert();
     topics.assert();
 }
+
+/// `ensure` on a `Foreign` repository writes nothing at all: no create,
+/// no topics `PUT`, no `PATCH`.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_on_a_foreign_repository_conflicts_and_writes_nothing() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(200)
+        .with_body(fixture("repo_get_foreign").to_string())
+        .create();
+    let post = provider.mock("POST", "/orgs/acme/repos").expect(0).create();
+    let put = provider
+        .mock("PUT", "/repos/acme/widget/topics")
+        .expect(0)
+        .create();
+    let patch = provider
+        .mock("PATCH", "/repos/acme/widget")
+        .expect(0)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = GitHubRepoEnsure::new(client);
+    let token = SinkToken::new();
+    let err = tool
+        .ensure(&inputs(RepoVisibility::Private), &token)
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    assert!(err.message.contains("not ours"), "{}", err.message);
+    post.assert();
+    put.assert();
+    patch.assert();
+}
+
+/// `ensure` on a `Mismatch` writes nothing either — the `PATCH` that
+/// would change the visibility, and equally the create and the topics
+/// `PUT`.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_on_a_mismatch_writes_neither_post_nor_put_nor_patch() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(200)
+        .with_body(fixture("repo_get_present").to_string()) // visibility: private
+        .create();
+    let post = provider.mock("POST", "/orgs/acme/repos").expect(0).create();
+    let put = provider
+        .mock("PUT", "/repos/acme/widget/topics")
+        .expect(0)
+        .create();
+    let patch = provider
+        .mock("PATCH", "/repos/acme/widget")
+        .expect(0)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = GitHubRepoEnsure::new(client);
+    let token = SinkToken::new();
+    let err = tool
+        .ensure(&inputs(RepoVisibility::Public), &token)
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    post.assert();
+    put.assert();
+    patch.assert();
+}
+
+/// A `422` whose `errors[].code` is neither `already_exists` nor a
+/// `custom` on `field: name` is an ordinary provider failure: it is not
+/// re-read, and it is `Provider`, never `Conflict`.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_422_with_another_code_is_a_provider_error_and_is_not_re_read() {
+    let mut provider = MockProvider::start();
+    let read = provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(404)
+        .expect(1)
+        .create();
+    let create = provider
+        .mock("POST", "/orgs/acme/repos")
+        .with_status(422)
+        .with_body(
+            serde_json::json!({
+                "message": "Validation Failed",
+                "documentation_url": "https://docs.github.com/rest",
+                "errors": [{"resource": "Repository", "code": "unprocessable", "field": "name"}],
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = GitHubRepoEnsure::new(client);
+    let token = SinkToken::new();
+    let err = tool
+        .ensure(&inputs(RepoVisibility::Private), &token)
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    // Exactly one GET: the one `ensure` makes before the create. A
+    // re-read would make it two.
+    read.assert();
+    create.assert();
+}
+
+/// Trust boundary 5's "a provider may impersonate willikins" case: a
+/// provider message that itself looks like willikins' redaction marker is
+/// still labelled as the provider's own words.
+#[test]
+fn a_provider_message_that_mimics_a_redaction_marker_is_labelled_provider_says() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(503)
+        .with_body(r#"{"message":"[REDACTED DopplerServiceToken]"}"#)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = GitHubRepoEnsure::new(client);
+    let err = tool.read(&inputs(RepoVisibility::Private)).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    assert!(
+        err.message.starts_with("provider says: "),
+        "{}",
+        err.message
+    );
+}
