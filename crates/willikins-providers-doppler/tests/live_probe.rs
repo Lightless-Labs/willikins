@@ -6,19 +6,30 @@
 //! makes a network call to Doppler, and this file is the one place a
 //! real token's bytes exist in a test process.
 //!
-//! # This probe has never run
+//! # What this probe has and has not answered
 //!
-//! The operator's sandbox environment (`~/.config/willikins/sandbox.env`)
-//! carries a `dp.st.` (Service) token for `WILLIKINS_DOPPLER_TOKEN`,
-//! scoped to secrets-only access within `willikins-test/dev` — it cannot
-//! provision, which is exactly what this crate's credential regex
-//! (`^dp\.(sa|pt)\.[a-zA-Z0-9]{40,44}$`) refuses at construction. This
-//! probe is written, complete, and ready to run, but neither this
-//! session nor its verifier can run it: doing so requires the operator
-//! to supply a `dp.sa.` (Service Account) or `dp.pt.` (Personal) token.
-//! Every fixture under `fixtures/doppler/` therefore stays marked
-//! "entirely unverified" in that directory's `README.md` until someone
-//! runs:
+//! It ran for the first time on 2026-09-14, against the operator's new
+//! dedicated Doppler test workplace, with the `dp.sa.` (Service Account)
+//! token that workplace's `WILLIKINS_DOPPLER_TOKEN` now carries. Until
+//! that token existed the probe could not run at all: the sandbox file
+//! held a `dp.st.` (Service) token, scoped to secrets-only access within
+//! one config, which this crate's credential regex
+//! (`^dp\.(sa|pt)\.[a-zA-Z0-9]{40,44}$`) refuses at construction
+//! because a service token cannot provision.
+//!
+//! That run authenticated and reached Doppler, and every check that
+//! needs a project failed with `404`: the workplace is empty and holds
+//! no project named by `WILLIKINS_SANDBOX_DOPPLER_PROJECT`
+//! (`willikins-test`). Only [`check_missing_project_error_shape`], whose
+//! whole point is a project that cannot exist, passed. So this probe
+//! verified no fixture, and it stays here for a workplace that keeps a
+//! persistent project: run it there, not against an empty one.
+//!
+//! The fixtures are verified instead by `tests/live_write_cycle.rs`,
+//! which provisions the project it reads and deletes it again, and which
+//! records the same endpoints through the same helpers
+//! (`tests/common/mod.rs`). `fixtures/doppler/README.md`'s status column
+//! names, per endpoint, which of the two verified it and when.
 //!
 //! ```text
 //! source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_PROBE=1 \
@@ -50,97 +61,13 @@
 //! Confirm both exist, and their response shapes, the first time this
 //! probe actually runs.
 
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+mod common;
 
 use serde_json::Value;
 use willikins_providers_http::ProviderError;
-use willikins_providers_http::testing::load_fixture;
 use willikins_types::{DomainType, DopplerProject};
 
-/// Field names redacted, recursively and by name alone (regardless of
-/// nesting), from every value this probe writes to disk or compares.
-/// `raw` and `computed` are redacted as individual leaf fields — not by
-/// replacing their parent `value` object wholesale — so a secret
-/// response's `{raw, computed, note}` sub-shape survives the key-set
-/// comparison intact; only the two fields capable of carrying a real
-/// secret's bytes are blanked.
-const REDACTED_FIELD_NAMES: &[&str] = &[
-    "token",
-    "key",
-    "secret",
-    "password",
-    "client_secret",
-    "raw",
-    "computed",
-];
-
-/// Recursively strip [`REDACTED_FIELD_NAMES`] from `value`, replacing
-/// each with a fixed marker rather than deleting the key outright, so a
-/// recorded fixture's shape (which fields exist) survives redaction —
-/// only their content is removed.
-fn redact(value: Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, val)| {
-                    let redacted = if REDACTED_FIELD_NAMES.contains(&key.as_str()) {
-                        Value::String("[REDACTED]".to_string())
-                    } else {
-                        redact(val)
-                    };
-                    (key, redacted)
-                })
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(items.into_iter().map(redact).collect()),
-        other => other,
-    }
-}
-
-fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures")
-}
-
-fn live_dir() -> PathBuf {
-    fixtures_dir().join("doppler").join("live")
-}
-
-fn top_level_keys(value: &Value) -> BTreeSet<String> {
-    value
-        .as_object()
-        .map(|map| map.keys().cloned().collect())
-        .unwrap_or_default()
-}
-
-/// Record `live` (redacted) under `name.json` and compare its top-level
-/// key set against `fixtures/doppler/<name>.json`'s — a subset check
-/// (every key the authored fixture names must be present in the live
-/// response), the same rule `willikins-providers-github`'s probe uses and
-/// for the same reason: failing on an unauthored *extra* field would make
-/// this brittle to Doppler adding fields, which is not "the shape
-/// drifted" in any sense this crate's tools care about.
-fn record_and_compare(name: &str, live: &Value) -> Result<(), String> {
-    std::fs::create_dir_all(live_dir()).expect("can create fixtures/doppler/live/");
-    let redacted = redact(live.clone());
-    std::fs::write(
-        live_dir().join(format!("{name}.json")),
-        serde_json::to_string_pretty(&redacted).expect("serializes"),
-    )
-    .expect("can write the recorded fixture");
-
-    let authored = load_fixture(&fixtures_dir(), "doppler", name);
-    let live_keys = top_level_keys(live);
-    let authored_keys = top_level_keys(&authored);
-    let missing: Vec<_> = authored_keys.difference(&live_keys).cloned().collect();
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "missing from the live response, present in the authored fixture: {missing:?}"
-        ))
-    }
-}
+use common::{record_and_compare, record_raw};
 
 /// One endpoint's whole check: record `result` (if it succeeded) against
 /// `fixture_name`, print exactly one `pass`/`fail` line naming
@@ -182,12 +109,7 @@ fn record_list_endpoint(
 ) -> Option<Value> {
     match http.get::<Value>(path) {
         Ok(body) => {
-            std::fs::create_dir_all(live_dir()).expect("can create fixtures/doppler/live/");
-            std::fs::write(
-                live_dir().join(format!("{live_name}.json")),
-                serde_json::to_string_pretty(&redact(body.clone())).expect("serializes"),
-            )
-            .expect("can write the recorded fixture");
+            record_raw(live_name, &body);
             println!("GET {display_name}: pass");
             Some(body)
         }
@@ -275,9 +197,9 @@ fn well_known_secret_name() -> &'static str {
 
 #[test]
 #[ignore = "opt-in live probe against a real Doppler project; run with WILLIKINS_LIVE_PROBE=1 \
-            and a sandbox dp.sa. or dp.pt. token sourced in the same command — the sandbox \
-            env file on hand as of 2026-09-14 carries only a dp.st. token, which this \
-            crate's own credential regex refuses, so this test has never run"]
+            and a sandbox dp.sa. or dp.pt. token sourced in the same command. It needs a \
+            workplace that keeps a persistent project: the run of 2026-09-14 authenticated \
+            but found no WILLIKINS_SANDBOX_DOPPLER_PROJECT in the empty test workplace"]
 fn doppler_live_probe() {
     if std::env::var("WILLIKINS_LIVE_PROBE").as_deref() != Ok("1") {
         println!("skip: WILLIKINS_LIVE_PROBE is not 1");
@@ -366,7 +288,7 @@ fn redact_strips_every_secret_bearing_field_at_every_depth() {
         "client_secret": SECRET_MARKER,
     });
 
-    let redacted = redact(live);
+    let redacted = common::redact(live);
     let rendered = serde_json::to_string(&redacted).expect("serializes");
     assert!(
         !rendered.contains(TOKEN_MARKER),
@@ -396,7 +318,7 @@ fn redaction_is_by_field_name_and_the_covered_names_are_the_documented_ones() {
     for name in ["key", "raw", "computed"] {
         let live = serde_json::json!({ name: "whatever" });
         assert_eq!(
-            redact(live)[name],
+            common::redact(live)[name],
             serde_json::json!("[REDACTED]"),
             "`{name}` is a documented secret-bearing field and must be redacted"
         );
