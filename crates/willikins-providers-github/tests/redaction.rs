@@ -117,3 +117,98 @@ fn a_marker_credential_reaches_no_header_but_authorization() {
         "the Authorization header should carry the marker"
     );
 }
+
+/// The credential marker reaches no part of a recorded request other than
+/// the `Authorization` header — not the path, not the query string, not
+/// the body — and no `Observation`, `Ensured` or `ToolError` the two
+/// tools produce carries it either, across a whole create-then-topic
+/// `ensure` and a failing one.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_marker_credential_reaches_no_request_line_observation_ensured_or_error() {
+    let mut provider = MockProvider::start();
+    let recorded = Arc::new(Mutex::new(Vec::<String>::new()));
+
+    for (method, path, status, body) in [
+        ("GET", "/repos/acme/widget", 404, String::new()),
+        (
+            "POST",
+            "/orgs/acme/repos",
+            201,
+            r#"{"visibility":"private","topics":[]}"#.to_string(),
+        ),
+        (
+            "PUT",
+            "/repos/acme/widget/topics",
+            200,
+            r#"{"names":["managed-by-willikins"]}"#.to_string(),
+        ),
+    ] {
+        let capture = recorded.clone();
+        provider
+            .mock(method, path)
+            .with_status(status)
+            .with_body_from_request(move |request| {
+                let mut seen = capture.lock().expect("not poisoned");
+                seen.push(request.path_and_query().to_string());
+                seen.push(
+                    String::from_utf8_lossy(&request.body().cloned().unwrap_or_default())
+                        .into_owned(),
+                );
+                body.clone().into_bytes()
+            })
+            .create();
+    }
+
+    let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", CREDENTIAL_MARKER);
+    let http = Http::new(
+        provider.url(),
+        willikins_providers_github::default_headers(),
+        credential,
+    );
+    let tool = GitHubRepoEnsure::new(Arc::new(GitHubClient::new(http)));
+
+    let mut inputs = willikins_core::Inputs::new();
+    inputs.insert(
+        PortName::parse("repo").unwrap(),
+        Value::known(GitHubRepo::parse("acme/widget").unwrap()),
+    );
+    inputs.insert(
+        PortName::parse("visibility").unwrap(),
+        Value::known(RepoVisibility::Private),
+    );
+
+    let observation = tool.read(&inputs).expect("reads");
+    let token = willikins_core::SinkToken::new();
+    let ensured = tool.ensure(&inputs, &token).expect("ensures");
+
+    // And one failing call, so a `ToolError` is in the sweep too.
+    let mut failing = MockProvider::start();
+    failing
+        .mock("GET", "/repos/acme/widget")
+        .with_status(500)
+        .with_body(r#"{"message":"boom"}"#)
+        .create();
+    let failing_http = Http::new(
+        failing.url(),
+        willikins_providers_github::default_headers(),
+        Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN_2", CREDENTIAL_MARKER),
+    );
+    let err = GitHubRepoEnsure::new(Arc::new(GitHubClient::new(failing_http)))
+        .read(&inputs)
+        .expect_err("500");
+
+    let recorded = recorded.lock().expect("not poisoned").clone();
+    assert!(!recorded.is_empty(), "the handlers ran");
+    for text in recorded.iter().cloned().chain([
+        format!("{observation:?}"),
+        format!("{ensured:?}"),
+        format!("{err:?}"),
+        err.message.clone(),
+    ]) {
+        assert!(
+            !text.contains(CREDENTIAL_MARKER),
+            "the credential marker leaked into: {text}"
+        );
+    }
+}

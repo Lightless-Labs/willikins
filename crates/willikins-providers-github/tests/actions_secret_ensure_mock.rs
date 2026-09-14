@@ -293,3 +293,77 @@ fn every_request_carries_the_three_required_headers() {
     public_key.assert();
     put.assert();
 }
+
+/// Lowercase hex of `bytes`, so a test can assert the sealed value is not
+/// the plaintext in that encoding either.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut out, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
+
+/// The whole recorded `PUT` — every byte of its body, and its path —
+/// carries the secret in none of the three encodings a careless
+/// implementation could have leaked it in (raw, base64, hex), and neither
+/// the `Observation` nor the `Ensured` the tool hands back carries it in
+/// its `Debug` form.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn no_recorded_request_observation_or_ensured_carries_the_secret_marker() {
+    let secret_key = SecretKey::generate(&mut rand_core::OsRng);
+    let public_key_base64 = STANDARD.encode(secret_key.public_key().as_bytes());
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/repos/acme/widget/actions/secrets/DOPPLER_TOKEN")
+        .with_status(200)
+        .with_body(fixture("actions_secret_get_present").to_string())
+        .create();
+    provider
+        .mock("GET", "/repos/acme/widget/actions/secrets/public-key")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"key_id": "test-key-id", "key": public_key_base64}).to_string(),
+        )
+        .create();
+    let recorded = Arc::new(Mutex::new(Vec::<String>::new()));
+    let capture = recorded.clone();
+    provider
+        .mock("PUT", "/repos/acme/widget/actions/secrets/DOPPLER_TOKEN")
+        .with_status(204)
+        .with_body_from_request(move |request| {
+            let body = request.body().ok().cloned().unwrap_or_default();
+            let mut seen = capture.lock().expect("not poisoned");
+            seen.push(String::from_utf8_lossy(&body).into_owned());
+            seen.push(request.path().to_string());
+            Vec::new()
+        })
+        .create();
+
+    let tool = GitHubActionsSecretEnsure::new(client_against(provider.url()));
+    let observation = tool.read(&full_inputs()).expect("reads");
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&full_inputs(), &token).expect("ensures");
+
+    let encodings = [
+        MARKER.to_string(),
+        STANDARD.encode(MARKER),
+        hex(MARKER.as_bytes()),
+    ];
+    let recorded = recorded.lock().expect("not poisoned").clone();
+    assert!(!recorded.is_empty(), "the PUT handler ran");
+    for text in recorded
+        .iter()
+        .cloned()
+        .chain([format!("{observation:?}"), format!("{ensured:?}")])
+    {
+        for encoding in &encodings {
+            assert!(
+                !text.contains(encoding.as_str()),
+                "the secret marker leaked (as {} bytes) into: {text}",
+                encoding.len()
+            );
+        }
+    }
+}

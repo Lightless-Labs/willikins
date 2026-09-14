@@ -109,27 +109,64 @@ mod tests {
     }
 
     #[test]
-    fn the_ciphertext_never_contains_the_plaintext_or_its_base64() {
+    fn the_ciphertext_never_contains_the_plaintext_in_any_obvious_encoding() {
         let secret_key = SecretKey::generate(&mut rand_core::OsRng);
         let public_key_base64 = STANDARD.encode(secret_key.public_key().as_bytes());
         let plaintext = b"wlkn-test-marker-2rz8shp5tap";
         let encrypted_value = seal(&public_key_base64, plaintext).expect("seals");
-        assert!(!encrypted_value.contains("wlkn-test-marker-2rz8shp5tap"));
-        let plaintext_base64 = STANDARD.encode(plaintext);
-        assert!(!encrypted_value.contains(&plaintext_base64));
+        let hex = plaintext.iter().fold(String::new(), |mut out, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "{byte:02x}");
+            out
+        });
+        for encoding in [
+            String::from_utf8(plaintext.to_vec()).expect("ascii"),
+            STANDARD.encode(plaintext),
+            hex,
+        ] {
+            assert!(
+                !encrypted_value.contains(&encoding),
+                "the ciphertext carries the plaintext as {} bytes",
+                encoding.len()
+            );
+        }
     }
 
+    /// A malformed public key is the provider's fault, and the refusal
+    /// says so without echoing one byte of what the provider sent — the
+    /// key is not itself a secret, but trust boundary 5's rule is that a
+    /// message is built from willikins' own words, not from a response
+    /// body.
     #[test]
-    fn a_public_key_of_the_wrong_length_is_refused() {
+    fn a_public_key_of_the_wrong_length_is_refused_without_echoing_it() {
         let bad = STANDARD.encode(b"too short");
         let err = seal(&bad, b"plaintext").expect_err("32 bytes required");
         assert_eq!(err.kind, ToolErrorKind::Provider);
         assert!(err.message.contains("32 bytes"));
+        assert!(!err.message.contains(&bad), "{}", err.message);
+        assert!(!err.message.contains("too short"), "{}", err.message);
+        assert!(!err.message.contains("plaintext"), "{}", err.message);
     }
 
     #[test]
-    fn a_public_key_that_is_not_base64_is_refused() {
-        let err = seal("not base64 at all!!", b"plaintext").expect_err("invalid base64");
+    fn a_public_key_that_is_not_base64_is_refused_without_echoing_it() {
+        let bad = "not base64 at all!! wlkn-key-marker";
+        let err = seal(bad, b"plaintext").expect_err("invalid base64");
         assert_eq!(err.kind, ToolErrorKind::Provider);
+        assert!(!err.message.contains("wlkn-key-marker"), "{}", err.message);
+        assert!(!err.message.contains("plaintext"), "{}", err.message);
+    }
+
+    /// A 32-byte key is the only accepted length: one byte either side is
+    /// refused, not truncated or padded into something that would seal to
+    /// a value only the wrong recipient could open.
+    #[test]
+    fn a_public_key_one_byte_either_side_of_32_is_refused() {
+        for length in [31_usize, 33] {
+            let bad = STANDARD.encode(vec![7_u8; length]);
+            let err = seal(&bad, b"plaintext").expect_err("32 bytes required");
+            assert_eq!(err.kind, ToolErrorKind::Provider, "length {length}");
+            assert!(err.message.contains("32 bytes"), "length {length}");
+        }
     }
 }
