@@ -4,6 +4,8 @@
 **Reviewed:** 2026-09-12 (via document-review workflow: coherence, feasibility, security-lens, scope-guardian, adversarial personas). 20 findings folded in; see "Review resolutions" at the end.
 **Addendum:** 2026-09-12 (evening) — task 1c no longer flips the four core `String` fields; task 1e does, sequentially after group A merges, because 1a/1b and 1c would otherwise restructure the same core test files in parallel worktrees.
 **Addendum:** 2026-09-13 — tasks 0, 1a–1e, 2 and 3 landed. `PlanError::AttributeMismatch` carries a `Site` (not `{ node, port }`); the YAML pre-scan compensates for `saphyr-parser`'s 0-based `Marker::col`; `load_document` bounds the file read, not only the parse; Unicode tag characters (U+E0000..U+E007F) and U+061C, U+180E, U+FFF9..U+FFFB are refused in agent-facing text; the fake `github.repo.ensure` treats a bound-but-`Unknown` visibility as not comparable. Known gap for milestone 3: `AttributeMismatch` cannot name which `for_each` instance mismatched.
+**Addendum:** 2026-09-14 — tasks 4, 5 and 6 landed. Executor: rule 1 reads `checked.class.requires_approval() || approved.requires_approval` (a plan rebuilt from the journal could otherwise clear the flag); `ApplyError::UnknownRequiredInput { node, instance, port, input, applied }` refuses an `Unknown` required port bound to a workflow input instead of panicking; `Drift` is matched by `(node, instance)` identity with a `DriftKind::Instance`; mid-run failures carry the partial `Applied`; test 6d injects before round one and does exact call accounting. Known gap for plan identity (task 10a, adversarial pass 1): `Plan::fingerprint` covers actions and outputs, not node inputs, and core never compares `approved.workflow` with the checked workflow, so the server's `(workflow name, document sha256)` check is what stops a plan approved for one document from applying to another. Journal: payloads replay through a sealed `Redacted<T>` (core `Value` has no `Deserialize`); no hash chain, by decision (a keyless chain is not tamper evidence); `ApplyRefusedReason::PlanFailed` for a failed re-plan; `pending_approvals` excludes plans that already ran; expiry is the server's. HTTP: `ProviderError` carries `already_exists`; `Credential::for_testing` behind `test-support` (env mutation is `unsafe` in edition 2024 and the workspace forbids it); `Credential::authorize` is crate-private; provider text is labelled `provider says:`; `Retry-After` capped at 60 s; redirects refused; the derive has two `expose_secret` sites (`expose` and the generated `PartialEq`) and clippy does see macro expansions, so both `#[allow]`s are load-bearing; a 403 is not retried and its body is dropped, so task 7 handles GitHub's secondary rate limit (403 with `retry-after`) explicitly.
+**Addendum:** 2026-09-14 (before task 7) — the read-only live probe splits: its GitHub half runs in task 7 (the sandbox PAT exists), its Doppler half is written in task 8 but cannot run until the operator supplies a `dp.sa.` or `dp.pt.` token, because the plan's own credential regex refuses the `dp.st.` token on hand; Doppler fixtures stay marked unverified until then. GitHub's secondary rate limit: the tools retry a 403 carrying `retry-after` or `x-ratelimit-remaining: 0` under the shared client's 60 s cap, then return `Provider` naming the rate limit and the reset time, never "missing permission"; an apply never sleeps until a reset an hour away.
 **Design:** `docs/plans/2026-09-11-willikins-design.md`
 **Previous:** `docs/plans/2026-09-11-milestone-1-core.md`
 **Research:** `docs/research/2026-09-12-m2-dependencies.md`
@@ -286,8 +288,9 @@ pub fn apply(
 
 Rules, in order:
 
-1. `approved.requires_approval && approval == Auto` -> `ApplyError::ApprovalRequired`,
-   before any provider call.
+1. `(checked.class.requires_approval() || approved.requires_approval) && approval == Auto`
+   -> `ApplyError::ApprovalRequired`, before any provider call (the class comes from the
+   checked workflow, never only from the plan, which a journal replay could have altered).
 2. Re-plan: `plan(checked, inputs, catalog)`. A `PlanError` -> `ApplyError::Plan`. Any node
    instance whose fingerprint differs from `approved` -> `ApplyError::Drift { node,
    instance, kind }` with `kind` either `Action { planned, observed }` or `Output { port,
@@ -406,8 +409,11 @@ Every sealed box uses a fresh ephemeral key pair, so `encrypted_value` differs o
 call for the same plaintext: a test proves correctness by unsealing with the test key pair,
 never by comparing request bodies, and the client never dedups a `PUT` by body. GitHub's
 secondary rate limit charges one point per `GET` and five per write with a budget of 900
-points per minute; a 403 or 429 with `retry-after` is honoured verbatim, and one with
-`x-ratelimit-remaining: 0` waits until `x-ratelimit-reset`.
+points per minute. The shared client (task 6) retries 429 and 5xx only, caps `Retry-After`
+at 60 s, and drops a 403's body, so the GitHub tools detect the secondary rate limit
+themselves: a 403 carrying `retry-after` or `x-ratelimit-remaining: 0` is retried under the
+client's cap and then reported as `Provider` naming the rate limit and the reset time,
+never as a missing permission; an apply never sleeps until a reset that may be an hour away.
 
 ### willikins-providers-doppler
 

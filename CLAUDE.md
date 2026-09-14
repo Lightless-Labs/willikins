@@ -45,14 +45,16 @@ Read `docs/plans/2026-09-11-willikins-design.md` before changing anything in `cr
 
 ```
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo check -p willikins-types
+cargo clippy --workspace --all-targets -j 2 -- -D warnings
+RUST_TEST_THREADS=2 cargo test --workspace -j 2 --no-fail-fast
+cargo check -p willikins-types -j 2
 ```
 
 Run all four before every commit. The last one matters because `willikins-types` enables its
 own `executor` feature through a self dev-dependency, so `--all-targets` never builds the crate
-the way its dependents see it.
+the way its dependents see it. `-j 2` and `RUST_TEST_THREADS=2` are load-bearing on this host
+(11 GB of RAM shared with other sessions): a wider build, or the doctest harness compiling
+doctests per CPU, gets the run killed for memory. Never run two cargo commands at once.
 
 Read the log body, never just a captured exit code. In zsh, `$?` after a pipe is the last command's
 status; do not pipe gate output through `tail` or `tee`. This host is slow: run cargo in the

@@ -18,8 +18,10 @@ moved to its own future plan (design doc, milestone 2b); the site enum stayed in
 Two additions to the scope below: `doppler.service_token.rotate` and a second positive
 fixture, because the convergence claim is otherwise false for a minted token. Reviewed the
 same day (20 findings folded in, stamped in the plan header). **2026-09-13:** tasks 0, 1a–1e, 2 and 3 landed on `main` (two Workflows; every task
-opus-verified except 1e and 2). Next: task 4 (executor), then 5, 6, sequentially. This todo
-closes when the plan is marked Completed.
+opus-verified except 1e and 2). **2026-09-14:** tasks 4, 5 and 6 landed and were opus-verified (the executor's approval
+gate now reads the checked class; the journal replays through `Redacted<T>`; the HTTP client
+labels provider text and caps `Retry-After`). Next: 7 (GitHub), 8 (Doppler and the probe), 9
+(adversarial pass 1), sequentially. This todo closes when the plan is marked Completed.
 
 ## First action of the next session
 
