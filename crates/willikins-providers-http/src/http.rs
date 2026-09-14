@@ -205,6 +205,32 @@ impl Http {
         }
     }
 
+    /// `DELETE path` with a JSON-serialized `body`, retried. HTTP does not
+    /// forbid a body on `DELETE`, and Doppler's service-token revocation
+    /// endpoint requires one (`project`, `config`, and either `slug` or
+    /// `token`) — `ureq`'s `DELETE` builder refuses a body unless asked
+    /// for it explicitly ([`ureq::RequestBuilder::force_send_body`]),
+    /// which this method does on the caller's behalf. Any response body
+    /// is ignored on success, exactly like [`Http::delete`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Http::get`].
+    pub fn delete_with_body(&self, path: &str, body: &impl Serialize) -> Result<(), ProviderError> {
+        let url = self.url(path);
+        let (status, response_body, facts) = self.run_retrying(true, || {
+            let builder = self
+                .apply_headers(self.agent.delete(url.as_str()))
+                .force_send_body();
+            self.credential.authorize(builder).send_json(body)
+        })?;
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(provider_error_from_body(status, &response_body).with_facts(facts))
+        }
+    }
+
     /// Turn a `(status, body, facts)` triple that already survived
     /// retrying into either the caller's typed success value or a
     /// [`ProviderError`] carrying `facts`.
@@ -866,6 +892,62 @@ mod tests {
             .put_empty("/secrets/one", &serde_json::json!({}))
             .expect_err("422 is a failure");
         assert_eq!(err.status, Some(422));
+    }
+
+    #[test]
+    fn delete_with_body_sends_the_body_and_succeeds_on_204() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("DELETE", "/tokens/token")
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({"project": "p", "config": "c", "slug": "s"}),
+            ))
+            .with_status(204)
+            .expect(1)
+            .create();
+        let (http, _sleeper) = client(server.url());
+        http.delete_with_body(
+            "/tokens/token",
+            &serde_json::json!({"project": "p", "config": "c", "slug": "s"}),
+        )
+        .expect("204 succeeds");
+        mock.assert();
+    }
+
+    #[test]
+    fn delete_with_body_is_retried_on_503_then_succeeds() {
+        let mut server = mockito::Server::new();
+        let failing = server
+            .mock("DELETE", "/tokens/token")
+            .with_status(503)
+            .with_body("{}")
+            .expect(1)
+            .create();
+        let succeeding = server
+            .mock("DELETE", "/tokens/token")
+            .with_status(204)
+            .expect(1)
+            .create();
+        let (http, _sleeper) = client(server.url());
+        http.delete_with_body("/tokens/token", &serde_json::json!({}))
+            .expect("succeeds after one retry");
+        failing.assert();
+        succeeding.assert();
+    }
+
+    #[test]
+    fn delete_with_body_fails_with_the_provider_error_on_a_client_error() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("DELETE", "/tokens/token")
+            .with_status(404)
+            .with_body(r#"{"messages":["no such token"]}"#)
+            .create();
+        let (http, _sleeper) = client(server.url());
+        let err = http
+            .delete_with_body("/tokens/token", &serde_json::json!({}))
+            .expect_err("404 is a failure");
+        assert_eq!(err.status, Some(404));
     }
 
     #[test]
