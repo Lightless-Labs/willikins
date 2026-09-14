@@ -2,34 +2,40 @@
 //! (task 10b's rmcp tools, the CLI) call. Owns the trusted workflow
 //! directory, the catalog, the journal, and the single-apply lock.
 //!
-//! # Why `apply` keeps its own `plan_id -> resolved inputs` map
+//! # A plan's resolved inputs survive a restart
 //!
 //! `willikins_journal::journal::PlanRecord::inputs` is a
-//! `Redacted<IndexMap<InputName, Value>>`: opaque, already-redacted JSON
-//! with no way back to a live `Value` (`willikins_core::value::Value` has
-//! no `Deserialize` at all -- redaction is one-way, by design). `apply`'s
-//! own re-plan step needs the *real*, typed inputs to call
-//! `willikins_core::plan` again. This module keeps them in an in-memory
-//! map, populated by [`Butler::plan`] and read by [`Butler::apply`],
-//! rather than trying to reconstruct them from the redacted JSON (every
-//! workflow input is non-secret by construction -- `check` refuses a
-//! secret one -- so it would be *possible* in principle, by re-parsing
-//! each rendered string against its declared type, but that duplicates
-//! `describe`'s own parsing logic for no benefit this task's tests need).
+//! `Redacted<IndexMap<InputName, Value>>`: already-redacted JSON, not a
+//! live `Value` (`willikins_core::value::Value` has no `Deserialize` at
+//! all -- redaction is one-way, by design). `apply`'s own re-plan step
+//! needs the *real*, typed inputs to call `willikins_core::plan` again.
 //!
-//! **Known limitation, recorded rather than hidden**: a plan recorded in
-//! a process that then restarts (a `FileJournal` reopened by a fresh
-//! `Butler`) cannot be applied -- its resolved inputs are gone from
-//! memory even though the journal itself replayed cleanly. `apply`
-//! reports this as [`ButlerError::Journal`] rather than panicking or
-//! silently using stale data. Closing this properly (durable resolved
-//! inputs, or folding them back out of the redacted JSON) is a
-//! `willikins-server` follow-up beyond this task's scope; the journal's
-//! own durability and the `FileJournal` round-trip acceptance test are
-//! unaffected because that test never restarts `Butler` mid-flow, only
-//! `FileJournal` itself, after `apply` has already finished.
+//! An earlier revision of this module kept those inputs in an in-memory
+//! `plan_id -> resolved inputs` map, populated by [`Butler::plan`] and
+//! read by [`Butler::apply`] -- which meant a plan recorded before a
+//! process restart (a `FileJournal` reopened by a fresh `Butler`) could
+//! never be applied, even though the journal itself replayed cleanly.
+//! That is exactly the case this design promises to survive: approval is
+//! human-paced, and a redeploy between `plan` and a human's decision is
+//! the normal case, not an edge one.
+//!
+//! [`Butler::apply`] now rebuilds the resolved inputs from the journal's
+//! own record instead of trusting an in-memory cache: every workflow
+//! input is non-secret by construction (`check` refuses a secret one),
+//! so `PlanRecord.inputs`'s redacted JSON *is* the real rendered strings
+//! -- one per declared input, a plain string for a scalar or an array of
+//! strings for a list (`willikins_core::value::Value`'s own pinned JSON
+//! shape). [`resolve_recorded_inputs`] parses each one back through the
+//! type registry, against the input's declared type from the freshly
+//! reloaded (and hash-checked) workflow, exactly the way
+//! [`willikins_core::describe`] parses a raw value at `plan` time --
+//! `Value::parse`/`Value::parse_list` round-tripping `Value::render`'s
+//! own output is the invariant this depends on (see
+//! `willikins-core/tests/value_render_parse_round_trip.rs`'s property
+//! test). A value that no longer parses (which cannot happen for a
+//! document whose hash still matches, but is checked rather than assumed)
+//! refuses with [`ButlerError::RecordedInputUnreadable`], never a panic.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -38,14 +44,14 @@ use indexmap::IndexMap;
 
 use willikins_core::describe::PartialInputs;
 use willikins_core::{
-    Applied, ApplyError, Approval, Catalog, InputName, PlanError, ToolError, ToolErrorKind,
-    ToolName, Value,
+    Applied, ApplyError, Approval, Catalog, Checked, InputName, PlanError, ToolError,
+    ToolErrorKind, ToolName, TypeRef, Value,
 };
 use willikins_journal::{
     Append, ApplyRefusedReason, ApprovalState, Clock, Entry, Event, Journal, PlanId, PlanRecord,
     PrincipalId, Reason, Redacted, RunId, RunRecord, continue_run_and_journal,
 };
-use willikins_types::{DomainType, WorkflowName};
+use willikins_types::{DomainType, ParseError, WorkflowName};
 
 use crate::document;
 use crate::drift::{self, DriftDetail};
@@ -110,8 +116,6 @@ pub struct Butler {
     /// panic) -- never held across the run, only across each `apply`
     /// call's own synchronous checks. See [`Butler::apply`]'s doc.
     run_lock: Arc<Mutex<Option<RunId>>>,
-    /// See the module docs' "Why `apply` keeps its own ... map" section.
-    plan_inputs: Arc<Mutex<HashMap<PlanId, IndexMap<InputName, Value>>>>,
     /// `plan`'s own bucket.
     plan_rate_limiter: crate::rate_limit::RateLimiter,
     /// `describe` and `validate`'s shared bucket.
@@ -137,7 +141,6 @@ impl Butler {
             approval_window: config.approval_window,
             apply_window: config.apply_window,
             run_lock: Arc::new(Mutex::new(None)),
-            plan_inputs: Arc::new(Mutex::new(HashMap::new())),
             plan_rate_limiter,
             read_rate_limiter,
         }
@@ -526,11 +529,6 @@ impl Butler {
             requires_approval,
         })?;
 
-        self.plan_inputs
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(plan_id, resolved);
-
         let (approval, expires_at) = if requires_approval {
             (
                 ApprovalRequirement::Pending,
@@ -788,26 +786,18 @@ impl Butler {
             }
         };
 
-        let Some(resolved_inputs) = self
-            .plan_inputs
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&plan_id)
-            .cloned()
-        else {
-            let error = ButlerError::Journal {
-                message: "this plan's resolved inputs are not available in this server process \
-                          (it may have restarted since `plan`); plan again"
-                    .to_string(),
-            };
-            self.refuse_apply(
-                plan_id,
-                principal,
-                ApplyRefusedReason::PlanFailed {
-                    error_kind: "Unavailable".to_string(),
-                },
-            );
-            return Err(error);
+        let resolved_inputs = match resolve_recorded_inputs(&checked_now, &record.inputs) {
+            Ok(inputs) => inputs,
+            Err(error) => {
+                self.refuse_apply(
+                    plan_id,
+                    principal,
+                    ApplyRefusedReason::PlanFailed {
+                        error_kind: "Unavailable".to_string(),
+                    },
+                );
+                return Err(error);
+            }
         };
 
         let fresh = match willikins_core::plan(&checked_now, &resolved_inputs, &self.catalog) {
@@ -964,6 +954,81 @@ fn elapsed_between(
     (*now.as_datetime() - *since.as_datetime())
         .to_std()
         .unwrap_or(Duration::ZERO)
+}
+
+/// Rebuild a plan's resolved inputs from the journal's own already-redacted
+/// record, against `checked`'s freshly reloaded (and hash-checked) input
+/// specs. See the module docs' "A plan's resolved inputs survive a
+/// restart" section.
+///
+/// # Errors
+///
+/// [`ButlerError::RecordedInputUnreadable`] naming the first input whose
+/// recorded value is missing or no longer parses against its declared
+/// type -- refused rather than panicking, though this cannot happen for a
+/// document whose hash still matches the one `plan` recorded (the caller
+/// checks that first, via `Butler::reload_and_check`).
+fn resolve_recorded_inputs(
+    checked: &Checked,
+    inputs: &Redacted<IndexMap<InputName, Value>>,
+) -> Result<IndexMap<InputName, Value>, ButlerError> {
+    let raw: IndexMap<InputName, serde_json::Value> =
+        serde_json::from_value(inputs.as_json().clone()).map_err(|error| ButlerError::Journal {
+            message: format!("the recorded plan inputs are not valid JSON: {error}"),
+        })?;
+
+    let mut resolved = IndexMap::new();
+    for (name, spec) in &checked.workflow.inputs {
+        let entry = raw
+            .get(name)
+            .ok_or_else(|| ButlerError::RecordedInputUnreadable {
+                input: name.clone(),
+                error: ParseError::new(
+                    "Value",
+                    format!("the plan recorded no value for input `{name}`"),
+                ),
+            })?;
+        let value = parse_recorded_value(&spec.ty, entry).map_err(|error| {
+            ButlerError::RecordedInputUnreadable {
+                input: name.clone(),
+                error,
+            }
+        })?;
+        resolved.insert(name.clone(), value);
+    }
+    Ok(resolved)
+}
+
+/// Parse one input's recorded JSON (`willikins_core::value::Value`'s own
+/// pinned shape: `{"type", "list", "state", "value", ...}`) back into a
+/// live [`Value`], against its declared type `ty`. Every workflow input
+/// is non-secret by construction (`check` refuses a secret one), so
+/// `entry["state"]` is always `"known"` and `entry["value"]` is always
+/// present -- a scalar string, or an array of strings for a list -- but
+/// this checks rather than assumes, so a hand-edited or otherwise
+/// malformed record is refused, not panicked on.
+fn parse_recorded_value(ty: &TypeRef, entry: &serde_json::Value) -> Result<Value, ParseError> {
+    let bad_shape = || {
+        ParseError::new(
+            "Value",
+            format!("recorded input value is not the expected shape: {entry}"),
+        )
+    };
+    if entry.get("state").and_then(serde_json::Value::as_str) != Some("known") {
+        return Err(bad_shape());
+    }
+    let value = entry.get("value").ok_or_else(bad_shape)?;
+    if ty.list {
+        let items = value.as_array().ok_or_else(bad_shape)?;
+        let strings = items
+            .iter()
+            .map(|item| item.as_str().ok_or_else(bad_shape))
+            .collect::<Result<Vec<_>, _>>()?;
+        Value::parse_list(ty, &strings)
+    } else {
+        let text = value.as_str().ok_or_else(bad_shape)?;
+        Value::parse(ty, text)
+    }
 }
 
 /// `from` plus `window`, as a [`willikins_journal::Timestamp`].

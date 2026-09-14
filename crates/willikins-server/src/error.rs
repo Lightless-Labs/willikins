@@ -8,7 +8,7 @@
 use std::fmt;
 
 use willikins_core::describe::{InputError, MissingInput};
-use willikins_core::{CheckError, Class, NodeName, PlanError};
+use willikins_core::{CheckError, Class, InputName, NodeName, PlanError};
 use willikins_dsl::DocumentError;
 use willikins_journal::{PlanId, RunId};
 use willikins_types::{ParseError, ProposeError, WorkflowName};
@@ -120,6 +120,19 @@ pub enum ButlerError {
         #[serde(rename = "detail")]
         kind: Box<DriftDetail>,
     },
+    /// `apply`'s fold of the journal's own `PlanRecorded.inputs` (rebuilt
+    /// after a possible process restart -- see `crate::butler`'s module
+    /// docs) found a value that is missing or no longer parses against
+    /// the reloaded document's declared type for that input. Cannot
+    /// happen for a document whose hash still matches the one `plan`
+    /// recorded, which `apply` checks first, but refused rather than
+    /// panicked on.
+    RecordedInputUnreadable {
+        /// The input whose recorded value could not be read back.
+        input: InputName,
+        /// Why.
+        error: ParseError,
+    },
     /// Re-planning the approved workflow, against the catalog's current
     /// state, failed outright.
     Plan {
@@ -223,6 +236,12 @@ impl fmt::Display for ButlerError {
                     "{where_}: the current state no longer matches the approved plan; nothing was run"
                 )
             }
+            Self::RecordedInputUnreadable { input, error } => {
+                write!(
+                    f,
+                    "recorded input `{input}` could not be read back: {error}"
+                )
+            }
             Self::Plan { error } => write!(f, "re-planning failed: {error}"),
             Self::Check { errors } => write!(
                 f,
@@ -282,6 +301,7 @@ mod tests {
         AlreadyApplied,
         RunInProgress,
         Drift,
+        RecordedInputUnreadable,
         Plan,
         Check,
         Document,
@@ -339,6 +359,10 @@ mod tests {
                     planned: willikins_core::Action::Create,
                     observed: willikins_core::Action::NoOp,
                 }),
+            },
+            ButlerError::RecordedInputUnreadable {
+                input: willikins_core::InputName::parse("x").unwrap(),
+                error: ParseError::new("Value", "boom"),
             },
             ButlerError::Plan {
                 error: PlanError::MissingInput {

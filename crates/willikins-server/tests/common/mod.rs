@@ -11,7 +11,9 @@ use willikins_core::describe::{PartialInputs, RawInput};
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, PortSpec, SinkToken, Tool, ToolError, ToolSpec,
 };
-use willikins_journal::{Clock, ManualClock, MemoryJournal, PrincipalId, Reason, Timestamp};
+use willikins_journal::{
+    Clock, FileJournal, ManualClock, MemoryJournal, PrincipalId, Reason, Timestamp,
+};
 use willikins_server::{Butler, ButlerConfig, SharedJournal};
 use willikins_types::ProjectSlug;
 
@@ -92,6 +94,56 @@ pub fn butler_with_journal(
         read_rate_per_minute: ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
     };
     (Butler::new(config), journal)
+}
+
+/// A `Butler` over a real [`FileJournal`] at `journal_path`, sharing
+/// `clock` with it -- for a test that needs the journal to survive a
+/// `Butler` being dropped and rebuilt (a simulated process restart),
+/// unlike [`butler_with_journal`]'s [`MemoryJournal`], which holds its
+/// entries only in memory and cannot be reopened by a fresh `Butler`.
+///
+/// Opens with a short retry (matching
+/// `tests/file_journal_round_trip.rs`'s own `open_once_unlocked`):
+/// dropping the previous `Butler` drops its last strong `Arc` reference
+/// to the journal, which is what releases the exclusive `flock` an
+/// immediate reopen would otherwise race.
+pub fn butler_over_file_journal(
+    dir: &Path,
+    journal_path: &Path,
+    catalog: willikins_core::Catalog,
+    clock: Arc<ManualClock>,
+) -> Butler {
+    let mut journal = None;
+    for _ in 0..200 {
+        match FileJournal::open_with_clock(journal_path, clock.clone() as Arc<dyn Clock>) {
+            Ok(opened) => {
+                journal = Some(opened);
+                break;
+            }
+            Err(willikins_journal::JournalError::Locked { .. }) => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(other) => panic!(
+                "journal at {} does not open: {other}",
+                journal_path.display()
+            ),
+        }
+    }
+    let journal: SharedJournal =
+        Arc::new(Mutex::new(journal.unwrap_or_else(|| {
+            panic!("journal at {} stayed locked", journal_path.display())
+        })));
+    let config = ButlerConfig {
+        workflows_dir: dir.to_path_buf(),
+        journal,
+        catalog,
+        clock: clock as Arc<dyn Clock>,
+        approval_window: ButlerConfig::DEFAULT_APPROVAL_WINDOW,
+        apply_window: ButlerConfig::DEFAULT_APPLY_WINDOW,
+        plan_rate_per_minute: ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE,
+        read_rate_per_minute: ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
+    };
+    Butler::new(config)
 }
 
 /// Like [`butler_with_journal`], with custom windows.

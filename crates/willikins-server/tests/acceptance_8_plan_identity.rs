@@ -327,6 +327,115 @@ fn a_plan_approved_23_hours_later_and_applied_30_minutes_after_that_runs() {
     assert_eq!(run.state, RunState::Succeeded, "{run:?}");
 }
 
+/// Task 10b, part B: a plan recorded before a process restart still
+/// applies. Same timeline as the test above (23 hours to approve, 30
+/// minutes to apply), but over a real `FileJournal` with the `Butler`
+/// dropped and rebuilt twice -- once between `plan` and `approve`, once
+/// between `approve` and `apply` -- simulating a redeploy at each point a
+/// human might be mid-decision, which is exactly the case
+/// `crate::butler`'s "A plan's resolved inputs survive a restart" module
+/// doc says this design must survive. The run succeeds, and its fake
+/// provider call counters end up identical to an unrestarted run of the
+/// same document and inputs, proving the rebuilt `Butler` resolved the
+/// same inputs `plan` did -- not something reconstructed differently.
+#[test]
+fn a_plan_survives_a_butler_restart_between_plan_and_approve_and_again_before_apply() {
+    // The unrestarted control run, over its own independent fake state.
+    let control_dir = tempfile::tempdir().unwrap();
+    setup_irreversible(control_dir.path());
+    let (control_state, control_catalog) = willikins_providers_fake::empty();
+    let control_clock = common::manual_clock();
+    let (control_butler, _journal) =
+        common::butler_with_journal(control_dir.path(), control_catalog, control_clock.clone());
+    let control_response = control_butler
+        .plan(
+            wf("new-rust-service-irreversible"),
+            &common::new_rust_service_inputs(),
+            common::principal("agent"),
+        )
+        .unwrap();
+    control_clock.advance(Duration::from_secs(23 * 60 * 60));
+    control_butler
+        .approve(control_response.plan_id, common::principal("approver"))
+        .expect("23 hours is still inside the 24-hour approval window");
+    control_clock.advance(Duration::from_secs(30 * 60));
+    let control_handle = control_butler
+        .apply(control_response.plan_id, common::principal("agent"))
+        .expect("30 minutes since the grant is still inside the 60-minute apply window");
+    let control_run = common::wait_for_run(&control_butler, control_handle.run_id, 2000);
+    assert_eq!(control_run.state, RunState::Succeeded, "{control_run:?}");
+    let control_calls = control_state.lock().unwrap().ensure_calls.clone();
+    assert!(
+        !control_calls.is_empty(),
+        "the positive fixture calls at least one ensure"
+    );
+
+    // The restarted run: same document, same inputs, same timeline, its
+    // own independent fake state -- but a fresh `Butler` over the same
+    // `FileJournal` at each of the two points a human might be
+    // mid-decision when a redeploy happens.
+    let workflows_dir = tempfile::tempdir().unwrap();
+    setup_irreversible(workflows_dir.path());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let journal_path = journal_dir.path().join("journal.jsonl");
+    let (state, catalog) = willikins_providers_fake::empty();
+    let clock = common::manual_clock();
+
+    let plan_id = {
+        let butler = common::butler_over_file_journal(
+            workflows_dir.path(),
+            &journal_path,
+            catalog,
+            clock.clone(),
+        );
+        let response = butler
+            .plan(
+                wf("new-rust-service-irreversible"),
+                &common::new_rust_service_inputs(),
+                common::principal("agent"),
+            )
+            .unwrap();
+        assert!(response.requires_approval);
+        response.plan_id
+        // `butler` (and its last `Arc` on the journal) drops here,
+        // releasing the `FileJournal`'s exclusive lock -- simulating the
+        // process exiting between `plan` and a human's decision.
+    };
+
+    clock.advance(Duration::from_secs(23 * 60 * 60));
+    {
+        let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+        let butler = common::butler_over_file_journal(
+            workflows_dir.path(),
+            &journal_path,
+            catalog,
+            clock.clone(),
+        );
+        butler
+            .approve(plan_id, common::principal("approver"))
+            .expect("23 hours is still inside the 24-hour approval window");
+        // Dropped again -- a second redeploy between the grant and
+        // `apply`.
+    }
+
+    clock.advance(Duration::from_secs(30 * 60));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let butler =
+        common::butler_over_file_journal(workflows_dir.path(), &journal_path, catalog, clock);
+    let handle = butler.apply(plan_id, common::principal("agent")).expect(
+        "the plan's resolved inputs are rebuilt from the journal, not from an in-memory \
+             map this fresh `Butler` never populated",
+    );
+    let run = common::wait_for_run(&butler, handle.run_id, 2000);
+    assert_eq!(run.state, RunState::Succeeded, "{run:?}");
+
+    let restarted_calls = state.lock().unwrap().ensure_calls.clone();
+    assert_eq!(
+        restarted_calls, control_calls,
+        "the restarted flow must have made exactly the same provider calls as the unrestarted one"
+    );
+}
+
 // ---------------------------------------------------------------------
 // UnknownPlan / AlreadyApplied / RunInProgress
 // ---------------------------------------------------------------------
