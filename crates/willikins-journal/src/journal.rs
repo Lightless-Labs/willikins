@@ -165,8 +165,20 @@ pub trait Journal {
             // which cannot happen through `run_and_journal` today but is
             // not otherwise ruled out at the journal level) and is not a
             // human waiting on anything.
+            //
+            // `applied.is_none()` for the same reason from the other end:
+            // a plan whose run has already started is not waiting on
+            // anybody either, whatever its approval events say. That
+            // combination is not reachable through `run_and_journal`
+            // today, but this view is a fold over whatever the file holds
+            // -- a file written by an older or buggier build, or one whose
+            // `ApprovalGranted` append failed while the run itself went
+            // ahead -- and offering an operator a plan that already ran as
+            // something still to approve would be worse than omitting it.
             .filter(|record| {
-                record.requires_approval && matches!(record.approval, ApprovalState::Pending)
+                record.requires_approval
+                    && matches!(record.approval, ApprovalState::Pending)
+                    && record.applied.is_none()
             })
             .collect()
     }
