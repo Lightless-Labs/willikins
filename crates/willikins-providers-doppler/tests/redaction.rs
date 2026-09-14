@@ -266,3 +266,105 @@ fn a_marker_credential_reaches_no_request_line_observation_ensured_or_error() {
         );
     }
 }
+
+/// The other half of the credential question, which the sweep above
+/// cannot see: the marker must reach the `Authorization` header on
+/// *every* request this crate makes, and no other header at all.
+///
+/// Doppler needs no default headers beyond the bearer one (unlike
+/// GitHub's `Accept`/`X-GitHub-Api-Version`/`User-Agent`), so "no other
+/// header" here also means "nothing this crate added". Swept across all
+/// three verbs the five tools use — the `GET` listing, the `POST` mint,
+/// and the `DELETE` revoke, the last of which sends a body and so takes
+/// `Http::delete_with_body`'s distinct, newer code path.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn every_request_carries_the_marker_in_authorization_and_in_no_other_header() {
+    let mut provider = MockProvider::start();
+    let captured = Arc::new(Mutex::new(Vec::<(String, String, String)>::new()));
+
+    for (method, path, body) in [
+        (
+            "GET",
+            "/v3/configs/config/tokens?project=third-thoughts&config=prd",
+            serde_json::json!({"tokens": [{"name": "ci", "slug": "s1"}]}).to_string(),
+        ),
+        (
+            "DELETE",
+            "/v3/configs/config/tokens/token",
+            r#"{"success":true}"#.to_string(),
+        ),
+        (
+            "POST",
+            "/v3/configs/config/tokens",
+            serde_json::json!({
+                "token": {"name": "ci", "slug": "s2", "key": TOKEN_MARKER},
+            })
+            .to_string(),
+        ),
+    ] {
+        let capture = captured.clone();
+        let verb = method.to_string();
+        provider
+            .mock(method, path)
+            .with_status(200)
+            .with_body_from_request(move |request| {
+                let mut seen = capture.lock().expect("not poisoned");
+                for (name, value) in request.headers() {
+                    seen.push((
+                        verb.clone(),
+                        name.to_string(),
+                        value.to_str().unwrap_or("<non-utf8>").to_string(),
+                    ));
+                }
+                body.clone().into_bytes()
+            })
+            .create();
+    }
+
+    let client = client_against(provider.url());
+    let mut inputs = willikins_core::Inputs::new();
+    inputs.insert(
+        PortName::parse("config").unwrap(),
+        Value::known(DopplerConfig::parse("third-thoughts/prd").unwrap()),
+    );
+    inputs.insert(
+        PortName::parse("name").unwrap(),
+        Value::known(DopplerTokenName::parse("ci").unwrap()),
+    );
+    // `rotate` is the one tool that exercises all three verbs in a single
+    // call: list, revoke every match, mint.
+    let sink = willikins_core::SinkToken::new();
+    DopplerServiceTokenRotate::new(client)
+        .ensure(&inputs, &sink)
+        .expect("rotates");
+
+    let captured = captured.lock().expect("not poisoned").clone();
+    let mut authorized = std::collections::BTreeSet::new();
+    for (verb, name, value) in &captured {
+        if name.eq_ignore_ascii_case("authorization") {
+            assert!(
+                value.contains(CREDENTIAL_MARKER),
+                "{verb}: the Authorization header must carry the credential: {value}"
+            );
+            authorized.insert(verb.clone());
+        } else {
+            assert!(
+                !value.contains(CREDENTIAL_MARKER),
+                "{verb}: header `{name}` leaked the credential marker: {value}"
+            );
+            assert!(
+                !value.contains(TOKEN_MARKER),
+                "{verb}: header `{name}` leaked the token marker: {value}"
+            );
+        }
+    }
+    assert_eq!(
+        authorized,
+        ["GET", "POST", "DELETE"]
+            .into_iter()
+            .map(String::from)
+            .collect::<std::collections::BTreeSet<_>>(),
+        "every verb must have carried an Authorization header"
+    );
+}
