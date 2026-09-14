@@ -29,6 +29,14 @@ const MAX_RETRIES: u32 = 3;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The longest a single `Retry-After` may make willikins wait. A
+/// provider that asks for a day gets one minute: waiting longer blocks an
+/// apply on a value the provider alone chooses, and a provider that means
+/// it answers `429` again after the minute, which fails the call honestly
+/// instead. Worst case per request is therefore four attempts of
+/// [`TOTAL_TIMEOUT`] plus three waits of this.
+pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
+
 /// Base delay exponential backoff scales from, before jitter. Only ever
 /// observed by a test through an injected [`Sleeper`], so its exact value
 /// does not affect correctness — only how long a caller with the real
@@ -263,7 +271,7 @@ fn is_retryable_status(status: u16) -> bool {
 /// [`BASE_BACKOFF`].
 fn backoff_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
     if let Some(delay) = retry_after {
-        return delay;
+        return delay.min(MAX_RETRY_AFTER);
     }
     let exponential = BASE_BACKOFF.saturating_mul(1 << attempt.min(16));
     let jitter = rand::random_range(0.5..1.5);
@@ -522,6 +530,36 @@ mod tests {
         http.delete("/thing").expect("succeeds after one retry");
         delete_failing.assert();
         delete_succeeding.assert();
+    }
+
+    #[test]
+    fn jitter_is_bounded_and_never_negative() {
+        for attempt in 0..MAX_RETRIES {
+            let base = BASE_BACKOFF.as_secs_f64() * f64::from(1_u32 << attempt);
+            for _ in 0..200 {
+                let delay = backoff_delay(attempt, None).as_secs_f64();
+                assert!(
+                    delay >= base * 0.5 && delay < base * 1.5,
+                    "attempt {attempt} waited {delay}s, outside [{}, {})",
+                    base * 0.5,
+                    base * 1.5
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_retry_after_is_honoured_up_to_the_cap_and_no_further() {
+        assert_eq!(
+            backoff_delay(0, Some(Duration::from_secs(5))),
+            Duration::from_secs(5)
+        );
+        assert_eq!(backoff_delay(0, Some(Duration::ZERO)), Duration::ZERO);
+        assert_eq!(
+            backoff_delay(0, Some(Duration::from_secs(86_400))),
+            MAX_RETRY_AFTER
+        );
+        assert_eq!(backoff_delay(2, Some(Duration::MAX)), MAX_RETRY_AFTER);
     }
 
     #[test]

@@ -40,7 +40,16 @@ fn parse_imf_fixdate(value: &str) -> Option<std::time::SystemTime> {
     let mut parts = rest.split(' ');
     let day: u32 = parts.next()?.parse().ok()?;
     let month = month_number(parts.next()?)?;
-    let year: i64 = parts.next()?.parse().ok()?;
+    // `IMF-fixdate`'s grammar is exactly four digits, and holding to it is
+    // what keeps `days_from_civil`'s arithmetic (and the seconds
+    // multiplication below) inside `i64`: a header of `Sun, 01 Jan
+    // 9223372036854775807 00:00:00 GMT` would otherwise overflow and
+    // panic in a debug build, on nothing but a provider's say-so.
+    let year_text = parts.next()?;
+    if year_text.len() != 4 || !year_text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let year: i64 = year_text.parse().ok()?;
     let time = parts.next()?;
     let gmt = parts.next()?;
     if gmt != "GMT" || parts.next().is_some() {
@@ -129,6 +138,24 @@ mod tests {
     fn rejects_garbage() {
         assert_eq!(parse("not a date", EPOCH), None);
         assert_eq!(parse("", EPOCH), None);
+    }
+
+    #[test]
+    fn rejects_a_year_outside_the_imf_fixdate_grammar() {
+        // `IMF-fixdate` is four digits. Anything else - an absurd year a
+        // provider could send to overflow the arithmetic in
+        // `days_from_civil`, or a two-digit year - is refused, so the
+        // caller falls back to its own backoff instead of panicking.
+        for value in [
+            "Sun, 01 Jan 9223372036854775807 00:00:00 GMT",
+            "Thu, 01 Jan 292277026596 00:00:00 GMT",
+            "Thu, 01 Jan 70 00:00:10 GMT",
+            "Thu, 01 Jan 197 00:00:10 GMT",
+            "Thu, 01 Jan 19700 00:00:10 GMT",
+            "Thu, 01 Jan -970 00:00:10 GMT",
+        ] {
+            assert_eq!(parse(value, EPOCH), None, "value {value:?}");
+        }
     }
 
     #[test]
