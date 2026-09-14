@@ -1,0 +1,34 @@
+---
+source: crates/willikins-providers-github/tests/catalog_parity.rs
+assertion_line: 59
+expression: repo
+---
+{
+  "class": "reversible",
+  "description": "Ensure a GitHub repository exists.",
+  "inputs": {
+    "repo": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "GitHubRepo"
+      }
+    },
+    "visibility": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "RepoVisibility"
+      }
+    }
+  },
+  "key": [
+    "repo"
+  ],
+  "name": "github.repo.ensure",
+  "outputs": {
+    "repo": "GitHubRepo",
+    "url": "HttpsUrl"
+  },
+  "pure": false
+}

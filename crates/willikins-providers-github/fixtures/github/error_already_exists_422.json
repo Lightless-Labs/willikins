@@ -1,0 +1,11 @@
+{
+  "message": "Validation Failed",
+  "errors": [
+    {
+      "resource": "Repository",
+      "code": "already_exists",
+      "field": "name"
+    }
+  ],
+  "documentation_url": "https://docs.github.com/rest/repos/repos#create-an-organization-repository"
+}

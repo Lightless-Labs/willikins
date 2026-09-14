@@ -8,6 +8,7 @@ members = [
   "crates/willikins-tools",
   "crates/willikins-providers-fake",
   "crates/willikins-providers-http",
+  "crates/willikins-providers-github",
   "crates/willikins-journal",
   "crates/willikins-cli",
 ]
@@ -28,6 +29,7 @@ willikins-dsl = { path = "crates/willikins-dsl" }
 willikins-tools = { path = "crates/willikins-tools" }
 willikins-providers-fake = { path = "crates/willikins-providers-fake" }
 willikins-providers-http = { path = "crates/willikins-providers-http" }
+willikins-providers-github = { path = "crates/willikins-providers-github" }
 willikins-journal = { path = "crates/willikins-journal" }
 
 chrono = { version = "0.4", default-features = false, features = ["now", "serde"] }
@@ -58,6 +60,8 @@ tempfile = "3"
 ureq = { version = "3", features = ["json"] }
 rand = "0.9"
 mockito = "1"
+base64 = "0.23"
+crypto_box = { version = "0.9", features = ["seal"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
