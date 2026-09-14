@@ -97,6 +97,27 @@ fn read_reports_present_on_200() {
     assert!(matches!(observation, Observation::Present(_)));
 }
 
+/// A `200` with `root: false` (undocumented as reachable at this
+/// identifier — see [`DopplerClient::get_config`]'s own docs) is still
+/// `Present`, the same as `root: true`: this tool's `get_config` reports
+/// only existence and never parses `root` at all.
+#[test]
+fn read_reports_present_even_when_root_is_false() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(200)
+        .with_body(serde_json::json!({"config": {"name": "prd", "root": false}}).to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerConfigEnsure::new(client);
+    let observation = tool.read(&inputs()).unwrap();
+    assert!(matches!(observation, Observation::Present(_)));
+}
+
 #[test]
 fn read_maps_a_5xx_to_a_bounded_provider_error() {
     let mut provider = MockProvider::start();
