@@ -6,7 +6,7 @@
 **Addendum:** 2026-09-11 — open questions decided (YAML, typed refs, Railway, web approval, Doppler vault, MIT, Cargo); milestone list added.
 **Addendum:** 2026-09-11 — after dependency research: Railway service name is the component alone; Swift keywords join the reserved-word union.
 **Addendum:** 2026-09-11 — task 2 verification: pascal is not injective for digit-only words; accepted, since pascal never feeds a natural key.
-**Addendum:** 2026-09-14 — license changed from MIT to AGPL-3.0-or-later at the operator's request when the public repository (github.com/Lightless-Labs/willikins) was created; the decisions table row updated. CI decision recorded for milestone 3: every secret lives in Doppler and Buildkite holds one CI/CD Doppler service-account token, so no per-repository secret is ever pushed into CI.
+**Addendum:** 2026-09-14 — license changed from MIT to AGPL-3.0-or-later at the operator's request when the public repository (github.com/Lightless-Labs/willikins) was created; the decisions table row updated. CI decision recorded for milestone 3: every secret lives in Doppler and Buildkite holds one CI/CD Doppler service-account token, so no per-repository secret is ever pushed into CI; willikins must be able to provision the Buildkite pipeline when a workflow asks for it, so the Buildkite provider moves from milestone 4 to milestone 3 in the list below.
 **Addendum:** 2026-09-12 — milestone 2 plan: two kinds of secret (graph secrets behind `SinkToken`, execution-context credentials behind one `authorize` function and a clippy entry); TLS terminated at the platform edge; the remote server plans and applies by workflow name only; a tool refuses rather than reconciles a non-key attribute it should not change; composition split out of milestone 2 into its own plan. See "Milestone 2 decisions".
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
@@ -326,6 +326,8 @@ These came up from memory during the conversation and have not been checked.
    stdio and Streamable HTTP. Plan: `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`.
 2b. Composition: `Workflow` implements `Tool` with typed composite output ports. Plan to be
    written when milestone 2 completes.
-3. Templates and versioned re-apply, the project record, recorded naming overrides.
-4. Buildkite and Railway.
+3. Templates and versioned re-apply, the project record, recorded naming overrides, and the
+   Buildkite provider (a pipeline per repository; moved here from milestone 4 on 2026-09-14
+   at the operator's request).
+4. Railway.
 5. App Store Connect.

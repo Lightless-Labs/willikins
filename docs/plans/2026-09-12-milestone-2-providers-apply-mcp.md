@@ -36,9 +36,12 @@ re-run clean, and been torn down.
   milestone's goal requires it. The `CheckError` site enum it was bundled with stays in
   scope (task 1b) because the sentinel sites have already caused three bugs and the MCP
   `validate` result needs unambiguous error sites.
-- Buildkite, Railway-as-provider, App Store Connect (milestones 4 and 5). Templates and
-  versioned re-apply, the project record, and recorded naming overrides (milestone 3). Until
-  the project record exists, `NameTaken` is a stop with no override path.
+- Buildkite (milestone 3: a provider whose first tool creates the pipeline for a new
+  repository, per the operator's 2026-09-14 decision in "Notes for milestone 3"; this
+  bullet said milestones 4 and 5 until then), Railway-as-provider, App Store Connect
+  (milestones 4 and 5). Templates and versioned re-apply, the project record, and recorded
+  naming overrides (milestone 3). Until the project record exists, `NameTaken` is a stop
+  with no override path.
 - OAuth 2.1 on the MCP transport. Agents authenticate with pre-shared bearer tokens; see
   "Trust boundaries". Revisit when the authorization spec verification (see "Verify") says
   a bearer token is not acceptable for a private deployment.
