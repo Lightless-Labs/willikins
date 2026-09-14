@@ -106,6 +106,13 @@ mod tests {
         let first = seal(&public_key_base64, plaintext).expect("seals");
         let second = seal(&public_key_base64, plaintext).expect("seals");
         assert_ne!(first, second);
+        // Differing is only half the claim: both must still open to the
+        // same plaintext, or "the ciphertext changed" would be
+        // indistinguishable from "the second seal is broken".
+        for encrypted_value in [&first, &second] {
+            let ciphertext = STANDARD.decode(encrypted_value).expect("valid base64");
+            assert_eq!(secret_key.unseal(&ciphertext).expect("unseals"), plaintext);
+        }
     }
 
     #[test]

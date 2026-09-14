@@ -668,3 +668,68 @@ fn a_provider_message_that_mimics_a_redaction_marker_is_labelled_provider_says()
         err.message
     );
 }
+
+/// The 2026-09-14 addendum's "an apply never sleeps until a reset that
+/// may be an hour away": a `403` naming an `x-ratelimit-reset` an hour
+/// out is retried the full three extra times, but every wait is capped at
+/// `MAX_RETRY_AFTER`'s sixty seconds.
+#[test]
+fn a_rate_limit_reset_an_hour_away_is_waited_out_only_under_the_sixty_second_cap() {
+    let reset = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after the epoch")
+        .as_secs()
+        + 3_600;
+    let reset_header = reset.to_string();
+    let mut provider = MockProvider::start();
+    let limited = provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(403)
+        .with_header("x-ratelimit-remaining", "0")
+        .with_header("x-ratelimit-reset", &reset_header)
+        // One attempt plus the client's three secondary-rate-limit
+        // retries; `Http` itself never retries a 403.
+        .expect(4)
+        .create();
+    let (client, sleeper) = client_against(provider.url());
+    let tool = GitHubRepoEnsure::new(client);
+    let err = tool.read(&inputs(RepoVisibility::Private)).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    assert!(err.message.contains("rate limit"), "{}", err.message);
+    limited.assert();
+    let durations = sleeper.durations.lock().expect("not poisoned").clone();
+    assert_eq!(durations.len(), 3, "{durations:?}");
+    for duration in durations {
+        assert!(
+            duration <= std::time::Duration::from_secs(60),
+            "waited {duration:?}, longer than the sixty-second cap"
+        );
+    }
+}
+
+/// The other branch of the same decision: a `403` whose `Retry-After`
+/// asks for an hour is capped the same way, and the exhausted error still
+/// reads as a rate limit rather than a missing permission.
+#[test]
+fn a_retry_after_of_an_hour_is_capped_the_same_way() {
+    let mut provider = MockProvider::start();
+    let limited = provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(403)
+        .with_header("Retry-After", "3600")
+        .expect(4)
+        .create();
+    let (client, sleeper) = client_against(provider.url());
+    let tool = GitHubRepoEnsure::new(client);
+    let err = tool.read(&inputs(RepoVisibility::Private)).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    assert!(err.message.contains("rate limit"), "{}", err.message);
+    assert!(
+        !err.message.contains("permission"),
+        "must not read as a missing permission: {}",
+        err.message
+    );
+    limited.assert();
+    let durations = sleeper.durations.lock().expect("not poisoned").clone();
+    assert_eq!(durations, vec![std::time::Duration::from_secs(60); 3]);
+}

@@ -4,4 +4,3 @@ nohup.out
 .DS_Store
 .claude/worktrees/
 /crates/willikins-providers-github/fixtures/github/live/
-/crates/willikins-providers-doppler/fixtures/doppler/live/
