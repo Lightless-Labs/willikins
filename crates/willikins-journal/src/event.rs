@@ -97,6 +97,19 @@ pub enum ApplyRefusedReason {
     ApprovalRequired,
     /// This plan has already been applied once.
     AlreadyApplied,
+    /// Another run was already in progress, and only one runs at a time.
+    ///
+    /// The milestone plan's acceptance test 8 names this among the
+    /// refusals `apply` can give and closes that list with "each refusal
+    /// is journaled", so it needs a reason of its own: it is the one
+    /// refusal that means *two callers reached for the same providers at
+    /// once*, which is exactly what an operator reading the audit trail
+    /// wants to see rather than infer from a gap.
+    RunInProgress {
+        /// The run that was already under way. Not a secret and not
+        /// document text: an id this journal itself minted.
+        run_id: RunId,
+    },
 }
 
 /// Which of [`willikins_core::DriftKind`]'s three shapes an

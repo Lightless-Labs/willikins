@@ -732,3 +732,277 @@ fn a_symlink_to_a_document_outside_the_trusted_directory_cannot_be_planned() {
         "{err:?}"
     );
 }
+
+// ---------------------------------------------------------------------
+// One run at a time
+// ---------------------------------------------------------------------
+
+/// Write a one-node document at `<dir>/<name>.yaml` calling `tool` with
+/// the literal key `key`.
+fn write_one_node_document(dir: &std::path::Path, name: &str, tool: &str, key: &str) {
+    std::fs::write(
+        dir.join(format!("{name}.yaml")),
+        format!(
+            "name: {name}\n\
+             description: one node calling a test tool\n\
+             steps:\n  \
+               only:\n    \
+                 tool: {tool}\n    \
+                 with:\n      \
+                   key: {key}\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// Two *different* approved plans applied from two threads at once:
+/// exactly one starts a run, the other is refused `RunInProgress` naming
+/// the winner's run, and once that run finishes the loser applies
+/// cleanly. The winner's own `ensure` blocks until this test releases it,
+/// so the refusal is observed while a run genuinely is in progress rather
+/// than after it quietly finished.
+#[test]
+fn two_applies_racing_on_two_threads_leave_exactly_one_run() {
+    let dir = tempfile::tempdir().unwrap();
+    write_one_node_document(dir.path(), "race-a", "test.blocking.ensure", "alpha");
+    write_one_node_document(dir.path(), "race-b", "test.blocking.ensure", "beta");
+
+    let (blocking_tool, release) = common::BlockingTool::new();
+    let mut catalog = willikins_core::Catalog::new(willikins_types::registry());
+    catalog.insert(Arc::new(blocking_tool)).unwrap();
+    let clock = common::manual_clock();
+    let (butler, journal) = common::butler_with_journal(dir.path(), catalog, clock);
+    let butler = Arc::new(butler);
+
+    let plan_a = butler
+        .plan(
+            wf("race-a"),
+            &indexmap::IndexMap::default(),
+            common::principal("agent"),
+        )
+        .expect("race-a plans");
+    let plan_b = butler
+        .plan(
+            wf("race-b"),
+            &indexmap::IndexMap::default(),
+            common::principal("agent"),
+        )
+        .expect("race-b plans");
+    assert!(!plan_a.requires_approval && !plan_b.requires_approval);
+
+    let start = Arc::new(std::sync::Barrier::new(2));
+    let threads: Vec<_> = [plan_a.plan_id, plan_b.plan_id]
+        .into_iter()
+        .map(|plan_id| {
+            let butler = Arc::clone(&butler);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                (plan_id, butler.apply(plan_id, common::principal("agent")))
+            })
+        })
+        .collect();
+    let results: Vec<_> = threads
+        .into_iter()
+        .map(|handle| handle.join().expect("the apply thread finishes"))
+        .collect();
+
+    let winners: Vec<_> = results
+        .iter()
+        .filter_map(|(plan_id, result)| {
+            result.as_ref().ok().map(|handle| (*plan_id, handle.run_id))
+        })
+        .collect();
+    assert_eq!(
+        winners.len(),
+        1,
+        "exactly one apply may start a run: {results:?}"
+    );
+    let winning_run = winners[0].1;
+    let (loser_plan, loser) = results
+        .iter()
+        .find_map(|(plan_id, result)| result.as_ref().err().map(|error| (*plan_id, error)))
+        .expect("the other apply was refused");
+    assert!(
+        matches!(loser, ButlerError::RunInProgress { run_id } if *run_id == winning_run),
+        "the loser must name the winner's run: {loser:?}"
+    );
+
+    release.send(()).expect("releasing the winner's ensure");
+    let run = common::wait_for_run(&butler, winning_run, 2000);
+    assert_eq!(run.state, willikins_journal::RunState::Succeeded, "{run:?}");
+
+    // Exactly one `RunStarted` so far, and the loser can now apply.
+    let started = |journal: &willikins_server::SharedJournal| {
+        journal
+            .lock()
+            .unwrap()
+            .entries()
+            .iter()
+            .filter(|entry| matches!(&entry.event, Event::RunStarted { .. }))
+            .count()
+    };
+    assert_eq!(started(&journal), 1);
+
+    let second = butler
+        .apply(loser_plan, common::principal("agent"))
+        .expect("the lock released with the finished run");
+    release.send(()).expect("releasing the second run's ensure");
+    let run = common::wait_for_run(&butler, second.run_id, 2000);
+    assert_eq!(run.state, willikins_journal::RunState::Succeeded, "{run:?}");
+    assert_eq!(started(&journal), 2);
+}
+
+/// A run thread whose tool panics must not leave the single-apply lock
+/// held for the life of the process: the panic is caught, the run is
+/// journaled as `RunFinished { Failed }`, `Butler::run` reports it
+/// `Failed` rather than for ever `Running`, and a following `apply` of a
+/// different plan starts normally instead of being told a run is still in
+/// progress.
+#[test]
+fn a_panicking_run_thread_releases_the_lock_and_records_a_failed_run() {
+    let dir = tempfile::tempdir().unwrap();
+    write_one_node_document(dir.path(), "panic-a", "test.panicking.ensure", "alpha");
+    write_one_node_document(dir.path(), "panic-b", "test.panicking.ensure", "beta");
+
+    let mut catalog = willikins_core::Catalog::new(willikins_types::registry());
+    catalog
+        .insert(Arc::new(common::PanickingTool::new()))
+        .unwrap();
+    let clock = common::manual_clock();
+    let (butler, _journal) = common::butler_with_journal(dir.path(), catalog, clock);
+
+    let plan_a = butler
+        .plan(
+            wf("panic-a"),
+            &indexmap::IndexMap::default(),
+            common::principal("agent"),
+        )
+        .expect("panic-a plans");
+    let handle = butler
+        .apply(plan_a.plan_id, common::principal("agent"))
+        .expect("the run starts");
+    let run = common::wait_for_run(&butler, handle.run_id, 2000);
+    assert_eq!(run.state, willikins_journal::RunState::Failed, "{run:?}");
+    assert!(run.error.is_some(), "a failed run records its error");
+
+    let plan_b = butler
+        .plan(
+            wf("panic-b"),
+            &indexmap::IndexMap::default(),
+            common::principal("agent"),
+        )
+        .expect("panic-b plans");
+    let second = butler
+        .apply(plan_b.plan_id, common::principal("agent"))
+        .expect("the lock was released by the panicking run");
+    let run = common::wait_for_run(&butler, second.run_id, 2000);
+    assert_eq!(run.state, willikins_journal::RunState::Failed, "{run:?}");
+}
+
+/// A run outlives the `Butler` that started it: every handle it needs
+/// (the journal, the catalog, the lock) is an `Arc` it owns a clone of,
+/// so dropping the `Butler` mid-run neither kills the run nor loses its
+/// outcome. Pinned because the alternative -- a run silently abandoned
+/// when its server value goes away -- would leave a `RunStarted` with no
+/// `RunFinished` on the audit trail and a plan permanently `applied`.
+#[test]
+fn a_butler_dropped_mid_run_still_lets_the_run_finish_and_journal_its_outcome() {
+    let dir = tempfile::tempdir().unwrap();
+    write_one_node_document(dir.path(), "outlive", "test.blocking.ensure", "alpha");
+
+    let (blocking_tool, release) = common::BlockingTool::new();
+    let mut catalog = willikins_core::Catalog::new(willikins_types::registry());
+    catalog.insert(Arc::new(blocking_tool)).unwrap();
+    let clock = common::manual_clock();
+    let (butler, journal) = common::butler_with_journal(dir.path(), catalog, clock);
+
+    let response = butler
+        .plan(
+            wf("outlive"),
+            &indexmap::IndexMap::default(),
+            common::principal("agent"),
+        )
+        .expect("plans cleanly");
+    let handle = butler
+        .apply(response.plan_id, common::principal("agent"))
+        .expect("the run starts");
+
+    drop(butler);
+    release.send(()).expect("releasing the ensure");
+
+    for _ in 0..2000 {
+        let finished = willikins_journal::Journal::run(&*journal.lock().unwrap(), &handle.run_id)
+            .is_some_and(|run| !matches!(run.state, willikins_journal::RunState::Running));
+        if finished {
+            let run =
+                willikins_journal::Journal::run(&*journal.lock().unwrap(), &handle.run_id).unwrap();
+            assert_eq!(run.state, willikins_journal::RunState::Succeeded, "{run:?}");
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    panic!("the run never finished after its Butler was dropped");
+}
+
+/// Every `apply` refusal is journaled -- acceptance test 8's own closing
+/// sentence, over a list that names `RunInProgress`. Refusing from the
+/// single-apply lock without a journal line would leave the one refusal
+/// an operator most wants to see (two agents reaching for the same
+/// provider at once) invisible on the audit trail.
+#[test]
+fn a_run_in_progress_refusal_is_journaled_like_every_other_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    write_one_node_document(dir.path(), "busy-a", "test.blocking.ensure", "alpha");
+    write_one_node_document(dir.path(), "busy-b", "test.blocking.ensure", "beta");
+
+    let (blocking_tool, release) = common::BlockingTool::new();
+    let mut catalog = willikins_core::Catalog::new(willikins_types::registry());
+    catalog.insert(Arc::new(blocking_tool)).unwrap();
+    let clock = common::manual_clock();
+    let (butler, journal) = common::butler_with_journal(dir.path(), catalog, clock);
+
+    let first = butler
+        .plan(
+            wf("busy-a"),
+            &indexmap::IndexMap::default(),
+            common::principal("agent"),
+        )
+        .expect("busy-a plans");
+    let second = butler
+        .plan(
+            wf("busy-b"),
+            &indexmap::IndexMap::default(),
+            common::principal("agent"),
+        )
+        .expect("busy-b plans");
+
+    let handle = butler
+        .apply(first.plan_id, common::principal("agent"))
+        .expect("the first run starts");
+    let err = butler
+        .apply(second.plan_id, common::principal("agent"))
+        .expect_err("a run is in progress");
+    assert!(matches!(err, ButlerError::RunInProgress { .. }), "{err:?}");
+
+    let refused = journal.lock().unwrap().entries().iter().any(|entry| {
+        matches!(
+            &entry.event,
+            Event::ApplyRefused { plan_id, reason, .. }
+                if *plan_id == second.plan_id
+                    && matches!(
+                        reason,
+                        willikins_journal::ApplyRefusedReason::RunInProgress { run_id }
+                            if *run_id == handle.run_id
+                    )
+        )
+    });
+    assert!(
+        refused,
+        "a RunInProgress refusal must be journaled as ApplyRefused"
+    );
+
+    release.send(()).expect("releasing the first run");
+    let run = common::wait_for_run(&butler, handle.run_id, 2000);
+    assert_eq!(run.state, willikins_journal::RunState::Succeeded, "{run:?}");
+}

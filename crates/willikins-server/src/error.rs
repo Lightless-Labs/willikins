@@ -99,8 +99,9 @@ pub enum ButlerError {
         run_id: RunId,
     },
     /// A run is already in progress; `apply` refuses rather than queuing
-    /// a second one. Answered from the single-apply lock alone, without
-    /// consulting the journal's own fold.
+    /// a second one. Decided from the single-apply lock alone, without
+    /// consulting the journal's own fold -- but still journaled as an
+    /// `ApplyRefused`, like every other refusal.
     RunInProgress {
         /// The run in progress.
         run_id: RunId,

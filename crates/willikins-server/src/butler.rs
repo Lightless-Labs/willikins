@@ -654,9 +654,10 @@ impl Butler {
 
     /// Refuse or start applying `plan_id`.
     ///
-    /// Every refusal below (except [`ButlerError::RunInProgress`], which
-    /// answers from the single-apply lock alone -- see its own doc) is
-    /// journaled as `ApplyRefused` before this returns. Once every check
+    /// Every refusal below is journaled as `ApplyRefused` before this
+    /// returns -- including [`ButlerError::RunInProgress`], which is
+    /// *decided* from the single-apply lock alone, with no journal read,
+    /// but recorded all the same. Once every check
     /// passes, `RunStarted` is journaled, the lock is taken, and this
     /// returns a [`RunHandle`] at once: the run itself continues on a
     /// `std::thread`, calling `willikins_core::apply` with the plan this
@@ -700,8 +701,16 @@ impl Butler {
 
         let mut run_guard = self.run_lock.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(run_id) = *run_guard {
-            // Answered from the lock alone: no journal read, no
-            // `ApplyRefused` write, per the module doc.
+            // Decided from the lock alone -- no journal *read* -- but
+            // still journaled, like every other refusal: acceptance test
+            // 8 lists this one and closes with "each refusal is
+            // journaled", and it is the refusal that means two callers
+            // reached for the same providers at once.
+            self.refuse_apply(
+                plan_id,
+                principal,
+                ApplyRefusedReason::RunInProgress { run_id },
+            );
             return Err(ButlerError::RunInProgress { run_id });
         }
 
