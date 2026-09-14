@@ -49,19 +49,19 @@ found by the verifiers and deliberately left for the task that owns them:
    `crates/willikins-cli/tests/acceptance_11_parity.rs`'s module doc). Task 11 owns aligning
    the CLI subcommand itself to `Butler::propose_slug`'s shape.
 
-5. **Found by task 10a's adversarial verification (2026-09-14), open.**
-   `willikins_server::ValidateResponse.errors` and `.warnings` are the plan's own
-   `[CheckError]`/`[CheckWarning]`, serialized bare: each element carries `kind` and the
-   variant's own fields, but **no `message`**. The CLI prints the same lists through
-   `willikins_core::Reported`, so its elements do carry one, and the two surfaces therefore
-   disagree on the JSON for the same failure. Acceptance test 11 asks that every error a
-   tool returns carry `kind` and `message`; the plan's MCP tool table spells the result out
-   as `[CheckError]`. Task 10a implemented the table and did not deviate from it. Pinned,
-   with both shapes asserted and their one-field difference named, by `check_failure_parity`
-   in `crates/willikins-cli/tests/acceptance_11_parity.rs`. Whichever of task 10b (which
-   owns the `validate` MCP tool's result shape and its generated schema) or task 11 (which
-   owns the CLI renderer) closes this should move one surface to the other and update that
-   pin.
+5. **Closed by task 10b (2026-09-14).** `willikins_server::ValidateResponse.errors` and
+   `.warnings` now serialize each element through `willikins_core::Reported` on the wire
+   (`#[serde(serialize_with = "serialize_reported")]` per field in
+   `crates/willikins-server/src/read_ops.rs`, with a matching `schema_with` so the
+   generated JSON schema requires `message` too), so every element carries `kind` *and*
+   `message`, exactly as the CLI's own `check_errors_json`/`check_warnings_json` do. The
+   field types themselves (`Vec<CheckError>`/`Vec<CheckWarning>`) are unchanged; only the
+   struct's own `Serialize` output differs, so code that serializes a field's `Vec` on its
+   own (bypassing `ValidateResponse`'s derived `Serialize`) still gets the bare shape --
+   `crates/willikins-cli/tests/acceptance_11_parity.rs`'s `check_failure_parity` now
+   serializes the whole response and reads `["errors"]` back out of it, and pins the two
+   surfaces' JSON equal rather than equal-except-`message`. The plan's task 10a addendum
+   records this decision.
 
 Naming questions from the task 1d verifier, for task 1e or 10a to settle:
 

@@ -323,20 +323,11 @@ fn parse_failure_parity() {
 /// Stage 2, `check`. Two fixtures, each failing a different way: the CLI
 /// prints its `Vec<CheckError>` through `willikins_core::Reported`, so
 /// every element carries `kind` *and* `message`; `ValidateResponse.errors`
-/// is the plan's own `[CheckError]`, which carries `kind` and the
-/// variant's own fields but no `message`.
-///
-/// **A recorded divergence, deliberately not fixed here.** The milestone
-/// plan's MCP tool table spells this result out as `{ ok, errors:
-/// [CheckError], warnings: [CheckWarning] }`, so the crate implements what
-/// the plan says; but acceptance test 11 also asks that every error a tool
-/// returns carry `kind` and `message`, and an agent reading
-/// `{"kind":"Cycle","nodes":["a"]}` gets no sentence it can show anyone.
-/// Whichever of task 10b (which owns the `validate` tool's own result
-/// shape) or task 11 (which owns the CLI renderer) closes item 2 of
-/// `todos/2026-09-12-error-json-uniformity-gaps.md` should settle it in one
-/// direction; until then this pins both shapes and asserts they agree on
-/// everything except that one added field.
+/// now carries every element through the same `Reported` wrapper on the
+/// wire (task 10b, closing item 5 of
+/// `todos/2026-09-12-error-json-uniformity-gaps.md` -- the plan's task 10a
+/// addendum records the decision), so the two shapes are pinned equal
+/// rather than equal-except-`message`.
 #[test]
 fn check_failure_parity() {
     for name in ["cycle", "unknown-tool"] {
@@ -349,10 +340,18 @@ fn check_failure_parity() {
             .validate(&DocumentSource::Body(fixture_body(name)), principal())
             .unwrap_or_else(|err| panic!("{name}: a parseable document validates: {err}"));
         assert!(!response.ok, "{name}");
-        let butler_json = serde_json::to_value(&response.errors).unwrap();
+        // `response.errors` on its own serializes as plain `CheckError`
+        // JSON (`serialize_with` only fires through the containing
+        // struct's own derived `Serialize`), so the whole response is
+        // serialized here and `errors` is read back out of it -- the same
+        // path an MCP tool result or the CLI's own JSON output goes
+        // through.
+        let response_json = serde_json::to_value(&response).unwrap();
+        let butler_errors = response_json["errors"]
+            .as_array()
+            .expect("errors is an array");
 
         let cli_errors = cli_json.as_array().expect("the CLI prints an array");
-        let butler_errors = butler_json.as_array().expect("errors is an array");
         assert_eq!(cli_errors.len(), butler_errors.len(), "{name}");
         for (cli_error, butler_error) in cli_errors.iter().zip(butler_errors) {
             assert!(
@@ -360,16 +359,10 @@ fn check_failure_parity() {
                 "{name}: the CLI's own errors carry a message"
             );
             assert!(
-                butler_error.get("message").is_none(),
-                "{name}: `ValidateResponse.errors` carries none -- the recorded divergence; \
-                 update this pin (and the todo) when it is closed"
+                butler_error["message"].is_string(),
+                "{name}: `ValidateResponse.errors` now carries one too"
             );
-            let mut stripped = cli_error.clone();
-            stripped
-                .as_object_mut()
-                .expect("an error is an object")
-                .remove("message");
-            assert_eq!(&stripped, butler_error, "{name}: check-error parity");
+            assert_eq!(cli_error, butler_error, "{name}: check-error parity");
         }
     }
 }
