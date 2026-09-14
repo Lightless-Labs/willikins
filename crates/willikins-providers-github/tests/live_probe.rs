@@ -25,104 +25,13 @@
 //! passing test's `println!` output, and this test's whole point is
 //! those pass/skip/fail lines).
 
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+mod common;
 
 use serde_json::Value;
 use willikins_providers_http::ProviderError;
-use willikins_providers_http::testing::load_fixture;
 use willikins_types::{DomainType, GitHubOrg};
 
-/// Field names stripped, recursively, from every value this probe writes
-/// to disk or compares. None of the four endpoints this probe calls
-/// returns anything secret (GitHub's own schemas confirm this: `/user`,
-/// `/orgs/{org}`, a repository, and the Actions public key — which is,
-/// itself, public), but the redaction step exists here so task 8's
-/// Doppler probe, which does call an endpoint capable of carrying a
-/// secret value, can copy this exact shape rather than invent its own.
-const REDACTED_FIELD_NAMES: &[&str] = &[
-    "token",
-    "secret",
-    "password",
-    "encrypted_value",
-    "client_secret",
-    "value",
-];
-
-/// Recursively strip [`REDACTED_FIELD_NAMES`] from `value`, replacing
-/// each with a fixed marker rather than deleting the key outright, so a
-/// recorded fixture's shape (which fields exist) survives redaction —
-/// only their content is removed.
-fn redact(value: Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, val)| {
-                    let redacted = if REDACTED_FIELD_NAMES.contains(&key.as_str()) {
-                        Value::String("[REDACTED]".to_string())
-                    } else {
-                        redact(val)
-                    };
-                    (key, redacted)
-                })
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(items.into_iter().map(redact).collect()),
-        other => other,
-    }
-}
-
-fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures")
-}
-
-fn live_dir() -> PathBuf {
-    fixtures_dir().join("github").join("live")
-}
-
-fn top_level_keys(value: &Value) -> BTreeSet<String> {
-    value
-        .as_object()
-        .map(|map| map.keys().cloned().collect())
-        .unwrap_or_default()
-}
-
-/// Record `live` (redacted) under `name.json`, compare its top-level key
-/// set against `fixtures/github/<name>.json`'s, and report `pass` or
-/// `fail` (never panicking on a mismatch by itself — the caller decides
-/// whether a given endpoint's drift should fail the run).
-///
-/// The comparison is a subset check — every key the authored fixture
-/// names must be present in the live response — not exact equality. A
-/// real GitHub response carries dozens of fields no fixture here
-/// authors (`user.json` and `org.json` most starkly: they name only a
-/// handful of well-known fields, not the full schema); failing on an
-/// unauthored *extra* field would make this probe brittle to GitHub
-/// adding fields, which is not "the shape drifted" in any sense this
-/// crate's tools care about. A field this crate actually reads
-/// (`repo_get_present.json`'s `visibility`/`topics`, both authored) going
-/// *missing* from a live response is exactly the drift worth failing on.
-fn record_and_compare(name: &str, live: &Value) -> Result<(), String> {
-    std::fs::create_dir_all(live_dir()).expect("can create fixtures/github/live/");
-    let redacted = redact(live.clone());
-    std::fs::write(
-        live_dir().join(format!("{name}.json")),
-        serde_json::to_string_pretty(&redacted).expect("serializes"),
-    )
-    .expect("can write the recorded fixture");
-
-    let authored = load_fixture(&fixtures_dir(), "github", name);
-    let live_keys = top_level_keys(live);
-    let authored_keys = top_level_keys(&authored);
-    let missing: Vec<_> = authored_keys.difference(&live_keys).cloned().collect();
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "missing from the live response, present in the authored fixture: {missing:?}"
-        ))
-    }
-}
+use common::record_and_compare;
 
 /// One endpoint's whole check: record `result` (if it succeeded) against
 /// `fixture_name`, print exactly one `pass`/`fail` line naming
