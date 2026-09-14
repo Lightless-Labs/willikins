@@ -8,14 +8,23 @@
 //! approval binding live here rather than in `willikins-core`.
 
 mod butler;
+mod catalog;
+mod config;
 mod document;
 mod drift;
 mod error;
+mod rate_limit;
+mod read_ops;
+mod startup;
 mod types;
 
 pub use butler::{Butler, ButlerConfig, SharedJournal};
+pub use catalog::{LIVE_TOOL_NAMES, live_catalog_with};
+pub use config::{ConfigError, ServerConfig};
 pub use drift::DriftDetail;
 pub use error::{ButlerError, ExpiryWindow};
+pub use read_ops::{DocumentSource, ProposeSlugResponse, ValidateResponse};
+pub use startup::{InputSummary, StartupError, WorkflowSummary};
 pub use types::{ApprovalRequirement, PlanResponse, RunHandle};
 
 // Re-exported so a downstream crate (task 10b, task 11) never needs its

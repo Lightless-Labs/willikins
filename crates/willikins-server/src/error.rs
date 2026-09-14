@@ -11,9 +11,10 @@ use willikins_core::describe::{InputError, MissingInput};
 use willikins_core::{CheckError, Class, NodeName, PlanError};
 use willikins_dsl::DocumentError;
 use willikins_journal::{PlanId, RunId};
-use willikins_types::WorkflowName;
+use willikins_types::{ParseError, ProposeError, WorkflowName};
 
 use crate::drift::DriftDetail;
+use crate::startup::StartupError;
 
 /// Which window a plan overran. See the plan's "Plan identity" trust
 /// boundary: the *approval* window bounds how long a plan may wait,
@@ -147,6 +148,34 @@ pub enum ButlerError {
         /// What went wrong.
         message: String,
     },
+    /// A directory scan (`start`, `list_workflows`) failed. See
+    /// [`StartupError`] for what it names.
+    Startup {
+        /// The underlying failure.
+        error: StartupError,
+    },
+    /// A principal exceeded its call rate for `plan`, or the combined
+    /// `describe`/`validate` bucket. See the "Rate limits" section of the
+    /// `willikins-server` plan section: `plan` at most 10/minute,
+    /// `describe`+`validate` together at most 60/minute by default, per
+    /// principal, refilled from the shared [`willikins_journal::Clock`].
+    RateLimited {
+        /// How long, at minimum, before this principal's bucket has room
+        /// for another call in this class.
+        retry_after_seconds: u64,
+    },
+    /// `propose_slug`'s own `name` argument is not a valid
+    /// `willikins_types::ProjectName`.
+    InvalidProjectName {
+        /// The parse failure.
+        error: ParseError,
+    },
+    /// `willikins_types::propose_slug` itself refused the (valid)
+    /// project name.
+    SlugProposal {
+        /// The refusal.
+        error: ProposeError,
+    },
 }
 
 impl fmt::Display for ButlerError {
@@ -207,6 +236,15 @@ impl fmt::Display for ButlerError {
                 missing.len()
             ),
             Self::Journal { message } => write!(f, "journal: {message}"),
+            Self::Startup { error } => write!(f, "{error}"),
+            Self::RateLimited {
+                retry_after_seconds,
+            } => write!(
+                f,
+                "rate limit exceeded; try again in {retry_after_seconds} second(s)"
+            ),
+            Self::InvalidProjectName { error } => write!(f, "{error}"),
+            Self::SlugProposal { error } => write!(f, "{error}"),
         }
     }
 }
@@ -248,6 +286,10 @@ mod tests {
         Document,
         Input,
         Journal,
+        Startup,
+        RateLimited,
+        InvalidProjectName,
+        SlugProposal,
     );
 
     fn plan_id() -> PlanId {
@@ -313,11 +355,33 @@ mod tests {
             ButlerError::Journal {
                 message: "boom".to_string(),
             },
+            ButlerError::Startup {
+                error: StartupError::Symlink {
+                    path: std::path::PathBuf::from("x.yaml"),
+                },
+            },
+            ButlerError::RateLimited {
+                retry_after_seconds: 5,
+            },
+            ButlerError::InvalidProjectName {
+                error: ParseError::new("ProjectName", "bad"),
+            },
+            ButlerError::SlugProposal {
+                error: ProposeError::NoWords {
+                    input: "!!!".to_string(),
+                },
+            },
         ]
     }
 
+    /// Closes `todos/2026-09-12-error-json-uniformity-gaps.md`'s ask, for
+    /// `ButlerError`: every variant, not just some, serializes through
+    /// [`willikins_core::Reported`] with both `kind` (its own internal tag)
+    /// and `message` (its own `Display`), never colliding (no variant
+    /// declares a field named `kind` or `message` -- see the enum's own
+    /// doc).
     #[test]
-    fn every_variant_is_represented_and_serializes_with_its_kind() {
+    fn every_variant_is_represented_and_serializes_with_its_kind_and_message() {
         let samples = samples();
         assert_eq!(
             samples.len(),
@@ -325,8 +389,18 @@ mod tests {
             "add a sample for every new ButlerError variant"
         );
         for sample in &samples {
-            let json = serde_json::to_value(sample).unwrap();
-            assert_eq!(json["kind"], kind_of(sample), "{sample:?}");
+            let expected_kind = kind_of(sample);
+
+            let plain = serde_json::to_value(sample).unwrap();
+            assert_eq!(plain["kind"], expected_kind, "{sample:?}");
+
+            let reported = willikins_core::Reported::new(sample);
+            let json = serde_json::to_value(reported).unwrap();
+            assert_eq!(json["kind"], expected_kind, "{sample:?}");
+            let message = json["message"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{sample:?} has no `message` field"));
+            assert!(!message.is_empty(), "{sample:?}");
         }
     }
 

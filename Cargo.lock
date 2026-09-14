@@ -2457,6 +2457,7 @@ dependencies = [
  "willikins-providers-fake",
  "willikins-providers-github",
  "willikins-providers-http",
+ "willikins-server",
  "willikins-tools",
  "willikins-types",
 ]
@@ -2531,7 +2532,10 @@ dependencies = [
  "willikins-core",
  "willikins-dsl",
  "willikins-journal",
+ "willikins-providers-doppler",
  "willikins-providers-fake",
+ "willikins-providers-github",
+ "willikins-providers-http",
  "willikins-tools",
  "willikins-types",
 ]

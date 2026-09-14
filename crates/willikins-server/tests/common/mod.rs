@@ -88,6 +88,8 @@ pub fn butler_with_journal(
         clock: clock as Arc<dyn Clock>,
         approval_window: ButlerConfig::DEFAULT_APPROVAL_WINDOW,
         apply_window: ButlerConfig::DEFAULT_APPLY_WINDOW,
+        plan_rate_per_minute: ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE,
+        read_rate_per_minute: ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
     };
     (Butler::new(config), journal)
 }
@@ -110,6 +112,8 @@ pub fn butler_with_windows(
         clock: clock as Arc<dyn Clock>,
         approval_window,
         apply_window,
+        plan_rate_per_minute: ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE,
+        read_rate_per_minute: ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
     };
     (Butler::new(config), journal)
 }

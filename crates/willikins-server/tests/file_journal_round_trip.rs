@@ -62,6 +62,8 @@ fn approve_then_apply_over_a_file_journal_reopens_to_equal_views() {
             clock: clock as Arc<dyn Clock>,
             approval_window: ButlerConfig::DEFAULT_APPROVAL_WINDOW,
             apply_window: ButlerConfig::DEFAULT_APPLY_WINDOW,
+            plan_rate_per_minute: ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE,
+            read_rate_per_minute: ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
         });
 
         let response = butler

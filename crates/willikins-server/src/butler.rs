@@ -45,11 +45,13 @@ use willikins_journal::{
     Append, ApplyRefusedReason, ApprovalState, Clock, Entry, Event, Journal, PlanId, PlanRecord,
     PrincipalId, Reason, Redacted, RunId, RunRecord, continue_run_and_journal,
 };
-use willikins_types::WorkflowName;
+use willikins_types::{DomainType, WorkflowName};
 
 use crate::document;
 use crate::drift::{self, DriftDetail};
 use crate::error::{ButlerError, ExpiryWindow};
+use crate::read_ops::{DocumentSource, ProposeSlugResponse, ValidateResponse};
+use crate::startup::{self, StartupError, WorkflowSummary};
 use crate::types::{ApprovalRequirement, PlanResponse, RunHandle};
 
 /// A journal shared between `Butler` and the background thread a run
@@ -74,6 +76,13 @@ pub struct ButlerConfig {
     /// How long an approved (or auto-approved) plan may sit before it is
     /// applied.
     pub apply_window: Duration,
+    /// `plan` calls allowed per principal per rolling minute. See
+    /// `crate::rate_limit`'s module doc for why only `plan` and the
+    /// combined `describe`/`validate` bucket are limited at all.
+    pub plan_rate_per_minute: u32,
+    /// `describe` and `validate` calls, combined, allowed per principal
+    /// per rolling minute.
+    pub read_rate_per_minute: u32,
 }
 
 impl ButlerConfig {
@@ -81,6 +90,11 @@ impl ButlerConfig {
     pub const DEFAULT_APPROVAL_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
     /// The design's default apply window: 60 minutes.
     pub const DEFAULT_APPLY_WINDOW: Duration = Duration::from_secs(60 * 60);
+    /// The design's default `plan` rate: 10 per minute.
+    pub const DEFAULT_PLAN_RATE_PER_MINUTE: u32 = 10;
+    /// The design's default combined `describe`/`validate` rate: 60 per
+    /// minute.
+    pub const DEFAULT_READ_RATE_PER_MINUTE: u32 = 60;
 }
 
 /// The plan/approve/apply library core. See the module docs.
@@ -98,6 +112,10 @@ pub struct Butler {
     run_lock: Arc<Mutex<Option<RunId>>>,
     /// See the module docs' "Why `apply` keeps its own ... map" section.
     plan_inputs: Arc<Mutex<HashMap<PlanId, IndexMap<InputName, Value>>>>,
+    /// `plan`'s own bucket.
+    plan_rate_limiter: crate::rate_limit::RateLimiter,
+    /// `describe` and `validate`'s shared bucket.
+    read_rate_limiter: crate::rate_limit::RateLimiter,
 }
 
 impl Butler {
@@ -107,6 +125,10 @@ impl Butler {
     /// directory's documents).
     #[must_use]
     pub fn new(config: ButlerConfig) -> Self {
+        let plan_rate_limiter =
+            crate::rate_limit::RateLimiter::new(config.plan_rate_per_minute, config.clock.clone());
+        let read_rate_limiter =
+            crate::rate_limit::RateLimiter::new(config.read_rate_per_minute, config.clock.clone());
         Self {
             workflows_dir: config.workflows_dir,
             journal: config.journal,
@@ -116,7 +138,262 @@ impl Butler {
             apply_window: config.apply_window,
             run_lock: Arc::new(Mutex::new(None)),
             plan_inputs: Arc::new(Mutex::new(HashMap::new())),
+            plan_rate_limiter,
+            read_rate_limiter,
         }
+    }
+
+    /// Build a `Butler` from `config`, validating the trusted workflow
+    /// directory first: every `.yaml`/`.yml` document in it (non-recursive;
+    /// see [`startup::scan_directory`]) must have a filename stem that
+    /// parses as a [`WorkflowName`] and equals the document's own `name:`,
+    /// must parse, and must `check` against `config.catalog` -- the first
+    /// failure refuses startup, naming the file, and nothing is journaled.
+    /// On success, journals `ServerStarted` once with this crate's own
+    /// version, the directory, and every document's filename mapped to its
+    /// content hash.
+    ///
+    /// `plan` and `apply` re-read and re-validate their named document on
+    /// every call regardless (see their own docs): this only pins the
+    /// directory's state *at startup*, so a document that stops parsing
+    /// or checking afterward is caught the next time something asks for
+    /// it by name, not silently kept running against its startup version.
+    ///
+    /// # Errors
+    ///
+    /// See [`StartupError`].
+    pub fn start(config: ButlerConfig) -> Result<Self, StartupError> {
+        let butler = Self::new(config);
+        let loaded = startup::scan_directory(&butler.workflows_dir, &butler.catalog)?;
+
+        let mut workflow_hashes = std::collections::BTreeMap::new();
+        for entry in &loaded {
+            let filename = entry
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            workflow_hashes.insert(filename, entry.document_sha256.to_string());
+        }
+
+        butler
+            .append(Event::ServerStarted {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                workflows_dir: butler.workflows_dir.display().to_string(),
+                workflow_hashes,
+            })
+            .map_err(|error| StartupError::Journal {
+                message: error.to_string(),
+            })?;
+
+        Ok(butler)
+    }
+
+    /// Every document currently in the trusted workflow directory,
+    /// summarised. Re-scans the directory on every call (see
+    /// [`startup::scan_directory`]): a document that stopped parsing or
+    /// checking since [`Self::start`] fails this call by naming it, rather
+    /// than being silently omitted from the list -- the same "fail
+    /// naming the file, never drop it quietly" rule `start` itself
+    /// follows.
+    ///
+    /// # Errors
+    ///
+    /// [`ButlerError::Startup`] wrapping whichever [`StartupError`] the
+    /// scan hit.
+    pub fn list_workflows(&self, principal: PrincipalId) -> Result<Vec<WorkflowSummary>, ButlerError> {
+        let result = startup::scan_directory(&self.workflows_dir, &self.catalog)
+            .map(|loaded| loaded.into_iter().map(WorkflowSummary::from).collect())
+            .map_err(|error| ButlerError::Startup { error });
+        self.record_tool_call("list_workflows", None, principal, result.is_ok());
+        result
+    }
+
+    /// Load `source`: a body is parsed with `willikins_dsl::parse_document`
+    /// directly (never through the byte-cap-then-load-document path a
+    /// file goes through, since a body has no path to `stat` first -- the
+    /// DSL's own cap and pre-scan still apply, because `parse_document` is
+    /// exactly what enforces them); a name is resolved in the trusted
+    /// directory exactly as `plan` resolves one, collapsing a missing,
+    /// mismatched, or symlinked file to [`ButlerError::UnknownWorkflow`].
+    fn load_source(&self, source: &DocumentSource) -> Result<willikins_core::Workflow, ButlerError> {
+        match source {
+            DocumentSource::Body(body) => {
+                willikins_dsl::parse_document(body).map_err(|error| ButlerError::Document { error })
+            }
+            DocumentSource::Name(name) => {
+                match document::load_named_document(&self.workflows_dir, name) {
+                    Ok((_sha, workflow)) => Ok(workflow),
+                    Err(
+                        document::LoadError::NotFound
+                        | document::LoadError::NameMismatch { .. }
+                        | document::LoadError::Symlink(_),
+                    ) => Err(ButlerError::UnknownWorkflow {
+                        workflow: name.clone(),
+                    }),
+                    Err(document::LoadError::Document(error)) => {
+                        Err(ButlerError::Document { error })
+                    }
+                }
+            }
+        }
+    }
+
+    fn source_workflow_name(source: &DocumentSource) -> Option<WorkflowName> {
+        match source {
+            DocumentSource::Name(name) => Some(name.clone()),
+            DocumentSource::Body(_) => None,
+        }
+    }
+
+    // -------------------------------------------------------------
+    // read operations: validate, describe, list_tools, propose_slug
+    // -------------------------------------------------------------
+
+    /// Parse and statically `check` `source`, with no provider call.
+    ///
+    /// A [`DocumentSource::Body`] over the DSL's byte cap, or carrying a
+    /// YAML anchor or alias, is refused as [`ButlerError::Document`] --
+    /// the DSL's own error, never folded into a fabricated `check`
+    /// failure -- because `parse_document` runs those checks before a
+    /// [`willikins_core::Workflow`] exists to `check` at all. A document
+    /// that parses but fails `check` is reported as a normal (`ok: false`)
+    /// [`ValidateResponse`], not an `Err`: `check` failures are exactly
+    /// what a caller is asking to see.
+    ///
+    /// Rate-limited: shares the combined `describe`/`validate` bucket
+    /// (see `crate::rate_limit`).
+    ///
+    /// # Errors
+    ///
+    /// [`ButlerError::Document`], [`ButlerError::UnknownWorkflow`], or
+    /// [`ButlerError::RateLimited`].
+    pub fn validate(
+        &self,
+        source: DocumentSource,
+        principal: PrincipalId,
+    ) -> Result<ValidateResponse, ButlerError> {
+        if let Err(retry_after_seconds) = self.read_rate_limiter.check(&principal) {
+            self.record_tool_call("validate", None, principal, false);
+            return Err(ButlerError::RateLimited {
+                retry_after_seconds,
+            });
+        }
+        let result = self.validate_inner(&source);
+        self.record_tool_call(
+            "validate",
+            Self::source_workflow_name(&source),
+            principal,
+            result.is_ok(),
+        );
+        result
+    }
+
+    fn validate_inner(&self, source: &DocumentSource) -> Result<ValidateResponse, ButlerError> {
+        let workflow = self.load_source(source)?;
+        Ok(match willikins_core::check(&workflow, &self.catalog) {
+            Ok(checked) => ValidateResponse {
+                ok: true,
+                errors: Vec::new(),
+                warnings: checked.warnings,
+            },
+            Err(errors) => ValidateResponse {
+                ok: false,
+                errors,
+                warnings: Vec::new(),
+            },
+        })
+    }
+
+    /// Load, `check`, and [`willikins_core::describe`] `source` against
+    /// `partial`'s raw inputs, with no provider call.
+    ///
+    /// The returned [`willikins_core::Description`] carries its own
+    /// `errors` (rejected raw values) and `missing` (undeclared inputs)
+    /// fields *inside* a successful result -- `describe` itself never
+    /// fails on bad inputs, only on a document that will not even parse
+    /// or `check` (see `todos/2026-09-12-error-json-uniformity-gaps.md`
+    /// item 1: this is the "result field, not an error" answer that todo
+    /// asked task 10a to pin).
+    ///
+    /// Rate-limited: shares the combined `describe`/`validate` bucket.
+    ///
+    /// # Errors
+    ///
+    /// [`ButlerError::Document`], [`ButlerError::UnknownWorkflow`],
+    /// [`ButlerError::Check`], or [`ButlerError::RateLimited`].
+    pub fn describe(
+        &self,
+        source: DocumentSource,
+        partial: &PartialInputs,
+        principal: PrincipalId,
+    ) -> Result<willikins_core::Description, ButlerError> {
+        if let Err(retry_after_seconds) = self.read_rate_limiter.check(&principal) {
+            self.record_tool_call("describe", None, principal, false);
+            return Err(ButlerError::RateLimited {
+                retry_after_seconds,
+            });
+        }
+        let result = self.describe_inner(&source, partial);
+        self.record_tool_call(
+            "describe",
+            Self::source_workflow_name(&source),
+            principal,
+            result.is_ok(),
+        );
+        result
+    }
+
+    fn describe_inner(
+        &self,
+        source: &DocumentSource,
+        partial: &PartialInputs,
+    ) -> Result<willikins_core::Description, ButlerError> {
+        let workflow = self.load_source(source)?;
+        let checked = willikins_core::check(&workflow, &self.catalog)
+            .map_err(|errors| ButlerError::Check { errors })?;
+        Ok(willikins_core::describe(&checked, partial))
+    }
+
+    /// The full tool and type catalog, as
+    /// [`willikins_core::Catalog::list_tools_json`] renders it -- the same
+    /// JSON `willikins schema --catalog` prints. Never fails, and not
+    /// rate-limited (see `crate::rate_limit`'s module doc: a list
+    /// operation touches no provider).
+    pub fn list_tools(&self, principal: PrincipalId) -> serde_json::Value {
+        let json = self.catalog.list_tools_json();
+        self.record_tool_call("list_tools", None, principal, true);
+        json
+    }
+
+    /// Propose a project slug from a free-form display name, exactly as
+    /// the CLI's `propose-slug` subcommand does: parse `name` as a
+    /// [`willikins_types::ProjectName`], then run
+    /// [`willikins_types::propose_slug`]. Not rate-limited (pure, no
+    /// provider call, and not `plan`/`describe`/`validate`).
+    ///
+    /// # Errors
+    ///
+    /// [`ButlerError::InvalidProjectName`] when `name` does not parse;
+    /// [`ButlerError::SlugProposal`] when `propose_slug` itself refuses
+    /// the (valid) name.
+    pub fn propose_slug(
+        &self,
+        name: &str,
+        principal: PrincipalId,
+    ) -> Result<ProposeSlugResponse, ButlerError> {
+        let result = self.propose_slug_inner(name);
+        self.record_tool_call("propose_slug", None, principal, result.is_ok());
+        result
+    }
+
+    fn propose_slug_inner(&self, name: &str) -> Result<ProposeSlugResponse, ButlerError> {
+        let project_name = willikins_types::ProjectName::parse(name)
+            .map_err(|error| ButlerError::InvalidProjectName { error })?;
+        let slug = willikins_types::propose_slug(&project_name)
+            .map_err(|error| ButlerError::SlugProposal { error })?;
+        Ok(ProposeSlugResponse { slug })
     }
 
     fn journal_lock(&self) -> MutexGuard<'_, dyn Journal + Send + 'static> {
@@ -177,6 +454,12 @@ impl Butler {
         inputs: &PartialInputs,
         principal: PrincipalId,
     ) -> Result<PlanResponse, ButlerError> {
+        if let Err(retry_after_seconds) = self.plan_rate_limiter.check(&principal) {
+            self.record_tool_call("plan", Some(workflow), principal, false);
+            return Err(ButlerError::RateLimited {
+                retry_after_seconds,
+            });
+        }
         let result = self.plan_inner(&workflow, inputs);
         self.record_tool_call("plan", Some(workflow), principal, result.is_ok());
         result
@@ -190,7 +473,17 @@ impl Butler {
         let (document_sha256, doc_workflow) =
             match document::load_named_document(&self.workflows_dir, workflow) {
                 Ok(loaded) => loaded,
-                Err(document::LoadError::NotFound | document::LoadError::NameMismatch { .. }) => {
+                Err(
+                    document::LoadError::NotFound
+                    | document::LoadError::NameMismatch { .. }
+                    | document::LoadError::Symlink(_),
+                ) => {
+                    // A symlinked document collapses to the same refusal
+                    // as one that is simply not there: from a caller's
+                    // point of view the trusted directory does not, in
+                    // the sense that matters, hold a document named
+                    // `workflow` -- see `crate::document`'s "Symlinks are
+                    // refused" doc.
                     return Err(ButlerError::UnknownWorkflow {
                         workflow: workflow.clone(),
                     });

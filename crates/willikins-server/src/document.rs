@@ -31,8 +31,16 @@ use willikins_types::WorkflowName;
 /// Workflow)` pair.
 #[derive(Debug)]
 pub enum LoadError {
-    /// Neither `<name>.yaml` nor `<name>.yml` exists under the directory.
+    /// Neither `<name>.yaml` nor `<name>.yml` exists under the directory
+    /// as a plain file.
     NotFound,
+    /// `<name>.yaml` (or `.yml`) exists but is a symlink. Refused rather
+    /// than followed: see this module's docs' "Symlinks are refused"
+    /// section. Every current caller (`Butler::plan`, `Butler::apply`'s
+    /// reload, the read operations) collapses this to a generic refusal
+    /// without naming the path; kept for this module's own tests and a
+    /// future caller that wants it in a log line.
+    Symlink(#[allow(dead_code)] PathBuf),
     /// The file exists but failed to parse.
     Document(DocumentError),
     /// The file parsed, but its own `name:` is not `name`.
@@ -50,19 +58,36 @@ pub enum LoadError {
 }
 
 /// `<dir>/<name>.yaml`, or `<dir>/<name>.yml` if the former does not
-/// exist as a file. `None` if neither does.
-fn workflow_path(dir: &Path, name: &WorkflowName) -> Option<PathBuf> {
+/// exist as a plain file. `Err(None)` if neither exists at all; `Err(Some(path))`
+/// if the first candidate that exists on disk is a symlink (refused, not
+/// followed -- see the module docs).
+fn workflow_path(dir: &Path, name: &WorkflowName) -> Result<PathBuf, Option<PathBuf>> {
     for ext in ["yaml", "yml"] {
         let candidate = dir.join(format!("{name}.{ext}"));
-        if candidate.is_file() {
-            return Some(candidate);
+        // `symlink_metadata` does not follow the final component, unlike
+        // `Path::is_file`/`std::fs::metadata` -- this is what lets a
+        // symlink be told apart from a plain file at all.
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(Some(candidate)),
+            Ok(meta) if meta.is_file() => return Ok(candidate),
+            _ => {}
         }
     }
-    None
+    Err(None)
 }
 
 /// Load, hash, and parse the document named `name` under `dir`, checking
 /// that its own internal `name:` matches.
+///
+/// **Symlinks are refused.** A symlink named `<name>.yaml` under the
+/// trusted directory could point at content outside it -- content the
+/// operator never vetted as part of the trusted checkout -- so it is
+/// refused with [`LoadError::Symlink`] rather than followed, exactly as
+/// [`crate::startup::scan_directory`] refuses one found during the
+/// startup scan. This is a deliberate, conservative decision: a legitimate
+/// use of a symlinked document (sharing one document across two names, say)
+/// is not supported by this milestone; add it explicitly later if needed,
+/// rather than silently following an in-directory link today.
 ///
 /// # Errors
 ///
@@ -71,7 +96,10 @@ pub fn load_named_document(
     dir: &Path,
     name: &WorkflowName,
 ) -> Result<(DocumentSha256, Workflow), LoadError> {
-    let path = workflow_path(dir, name).ok_or(LoadError::NotFound)?;
+    let path = workflow_path(dir, name).map_err(|symlink| match symlink {
+        Some(path) => LoadError::Symlink(path),
+        None => LoadError::NotFound,
+    })?;
     let workflow = willikins_dsl::load_document(&path).map_err(LoadError::Document)?;
     if &workflow.name != name {
         return Err(LoadError::NameMismatch {
@@ -148,8 +176,25 @@ mod tests {
         match result {
             Ok(_) => "Ok",
             Err(LoadError::NotFound) => "NotFound",
+            Err(LoadError::Symlink(_)) => "Symlink",
             Err(LoadError::Document(_)) => "Document",
             Err(LoadError::NameMismatch { .. }) => "NameMismatch",
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_document_is_refused_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write(outside.path(), "real.yaml", DOC);
+        std::os::unix::fs::symlink(outside.path().join("real.yaml"), dir.path().join("foo.yaml"))
+            .unwrap();
+        match load_named_document(dir.path(), &wf("foo")) {
+            Err(LoadError::Symlink(path)) => {
+                assert_eq!(path, dir.path().join("foo.yaml"));
+            }
+            other => panic!("expected Symlink, got {}", matches_label(&other)),
         }
     }
 

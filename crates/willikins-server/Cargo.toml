@@ -15,6 +15,9 @@ willikins-dsl.workspace = true
 willikins-journal.workspace = true
 willikins-tools.workspace = true
 willikins-providers-fake.workspace = true
+willikins-providers-http.workspace = true
+willikins-providers-github.workspace = true
+willikins-providers-doppler.workspace = true
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -26,6 +29,10 @@ chrono.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 insta.workspace = true
+# Enables `Credential::for_testing` for this crate's own tests (cargo
+# unifies features across the build, so this reaches every target, the
+# same gotcha `willikins-types`' own self dev-dependency documents).
+willikins-providers-http = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true
