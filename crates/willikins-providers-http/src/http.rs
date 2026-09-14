@@ -67,6 +67,16 @@ impl Http {
             .timeout_connect(Some(CONNECT_TIMEOUT))
             .timeout_global(Some(TOTAL_TIMEOUT))
             .http_status_as_error(false)
+            // A provider API does not redirect. Following one would send
+            // the request somewhere the provider's response chose (ureq
+            // strips the `Authorization` header across a redirect, so the
+            // credential does not travel, but the body that comes back
+            // would still be parsed as that provider's answer), and a
+            // same-host redirect re-sent without authorization would come
+            // back `401` and be reported as a missing permission. Zero
+            // redirects means the `3xx` itself is returned and surfaces as
+            // a `ProviderError` naming the status.
+            .max_redirects(0)
             .build();
         Self {
             agent: Agent::new_with_config(config),
@@ -231,15 +241,26 @@ impl Http {
                         self.sleeper.sleep(backoff_delay(attempt_index, None));
                         continue;
                     }
-                    return Err(ProviderError::new(
-                        None,
-                        bounded_message(&format!("request failed: {err}")),
-                    ));
+                    return Err(ProviderError::new(None, transport_message(&err)));
                 }
             }
         }
         unreachable!("the loop above always returns on its last iteration")
     }
+}
+
+/// Describe a transport failure without naming the request URL (trust
+/// boundary 5). Most `ureq::Error` variants print only what went wrong,
+/// but three of them print a URL, a proxy URL, or text taken from the
+/// response, so those get fixed words instead of their `Display`.
+fn transport_message(err: &ureq::Error) -> String {
+    let detail = match err {
+        ureq::Error::BadUri(_) => "the request URL was not valid".to_string(),
+        ureq::Error::RequireHttpsOnly(_) => "the request URL was not https".to_string(),
+        ureq::Error::ConnectProxyFailed(_) => "connecting through the proxy failed".to_string(),
+        other => bounded_message(&other.to_string()),
+    };
+    format!("request failed: {detail}")
 }
 
 /// The provider's own words in an error body, if it has any that are
@@ -530,6 +551,31 @@ mod tests {
         http.delete("/thing").expect("succeeds after one retry");
         delete_failing.assert();
         delete_succeeding.assert();
+    }
+
+    #[test]
+    fn a_transport_message_never_repeats_a_url_a_ureq_error_carries() {
+        // The three `ureq::Error` variants whose `Display` prints a URL, a
+        // proxy URL, or text taken from the response.
+        let url = "https://secret-host.example/secret-path";
+        for err in [
+            ureq::Error::BadUri(url.to_string()),
+            ureq::Error::RequireHttpsOnly(url.to_string()),
+            ureq::Error::ConnectProxyFailed(url.to_string()),
+        ] {
+            let message = transport_message(&err);
+            assert!(
+                !message.contains("secret-host") && !message.contains("secret-path"),
+                "a {err:?} leaked its URL: {message}"
+            );
+            assert!(message.starts_with("request failed:"), "{message}");
+        }
+        // An ordinary io failure still explains itself.
+        let io = ureq::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "connection refused",
+        ));
+        assert!(transport_message(&io).contains("connection refused"));
     }
 
     #[test]
