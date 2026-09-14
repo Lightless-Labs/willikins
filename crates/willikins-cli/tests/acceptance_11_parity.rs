@@ -252,3 +252,166 @@ fn propose_slug_equals_the_cli() {
         .unwrap();
     assert_eq!(response.slug.to_string(), cli.stdout.trim());
 }
+
+// ---------------------------------------------------------------------
+// Negative fixtures: the same failure, the same JSON, on both surfaces
+// ---------------------------------------------------------------------
+
+/// Acceptance test 11's second half ("every error the MCP tools return
+/// has `kind` and `message`; the CLI's JSON for the same failures has the
+/// same `kind`"), at the library level, for one failure from each of the
+/// three stages a document can fail at.
+///
+/// Where the two envelopes differ this compares the *inner* error rather
+/// than pretending they agree, and says so: that divergence is the same
+/// plan defect this file's module doc already records for task 11.
+fn fixture_body(name: &str) -> String {
+    std::fs::read_to_string(
+        workflows_dir()
+            .join("fixtures")
+            .join(format!("{name}.yaml")),
+    )
+    .unwrap_or_else(|err| panic!("fixture `{name}` is readable: {err}"))
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+    workflows_dir()
+        .join("fixtures")
+        .join(format!("{name}.yaml"))
+}
+
+/// Stage 1, parse. `newline-in-document-error.yaml` never becomes a
+/// `Workflow` at all, so there is no `check` result to report: the CLI
+/// prints the bare `DocumentError` (`{"kind": "Yaml", ...}`), while
+/// `Butler::validate` wraps the identical error in
+/// `ButlerError::Document`. The wrapper is the recorded divergence; the
+/// error inside it is compared byte for byte.
+///
+/// The CLI writes this one to *stderr* (a document that will not parse is
+/// a failure of the command) while it writes `check` errors to stdout
+/// (they are the command's answer). Pinned here rather than changed:
+/// which stream each failure class uses is task 11's call, not this
+/// verification's.
+#[test]
+fn parse_failure_parity() {
+    let name = "newline-in-document-error";
+    let cli = run_cli(&["--json", "validate", fixture_path(name).to_str().unwrap()]);
+    assert_ne!(cli.code, 0, "the fixture must fail: {}", cli.stdout);
+    assert!(
+        cli.stdout.trim().is_empty(),
+        "a parse failure goes to stderr, not stdout: {}",
+        cli.stdout
+    );
+    let cli_json: serde_json::Value = serde_json::from_str(cli.stderr.trim())
+        .unwrap_or_else(|err| panic!("CLI validate --json did not parse: {err}\n{}", cli.stderr));
+    assert_eq!(cli_json["kind"], "Yaml");
+
+    let error = butler()
+        .validate(&DocumentSource::Body(fixture_body(name)), principal())
+        .expect_err("a document that does not parse is an error, not an `ok: false` result");
+    let butler_json = serde_json::to_value(&error).unwrap();
+    assert_eq!(butler_json["kind"], "Document", "the recorded divergence");
+    assert_eq!(
+        butler_json["error"], cli_json,
+        "the wrapped error must be the CLI's, verbatim"
+    );
+    // Both surfaces carry a `kind` and a `message`, whatever the wrapper.
+    let reported = serde_json::to_value(willikins_core::Reported::new(&error)).unwrap();
+    assert!(reported["kind"].is_string() && reported["message"].is_string());
+}
+
+/// Stage 2, `check`. Two fixtures, each failing a different way: the CLI
+/// prints its `Vec<CheckError>` through `willikins_core::Reported`, so
+/// every element carries `kind` *and* `message`; `ValidateResponse.errors`
+/// is the plan's own `[CheckError]`, which carries `kind` and the
+/// variant's own fields but no `message`.
+///
+/// **A recorded divergence, deliberately not fixed here.** The milestone
+/// plan's MCP tool table spells this result out as `{ ok, errors:
+/// [CheckError], warnings: [CheckWarning] }`, so the crate implements what
+/// the plan says; but acceptance test 11 also asks that every error a tool
+/// returns carry `kind` and `message`, and an agent reading
+/// `{"kind":"Cycle","nodes":["a"]}` gets no sentence it can show anyone.
+/// Whichever of task 10b (which owns the `validate` tool's own result
+/// shape) or task 11 (which owns the CLI renderer) closes item 2 of
+/// `todos/2026-09-12-error-json-uniformity-gaps.md` should settle it in one
+/// direction; until then this pins both shapes and asserts they agree on
+/// everything except that one added field.
+#[test]
+fn check_failure_parity() {
+    for name in ["cycle", "unknown-tool"] {
+        let cli = run_cli(&["--json", "validate", fixture_path(name).to_str().unwrap()]);
+        assert_ne!(cli.code, 0, "{name} must fail: {}", cli.stderr);
+        let cli_json: serde_json::Value = serde_json::from_str(cli.stdout.trim())
+            .unwrap_or_else(|err| panic!("{name}: CLI validate --json did not parse: {err}"));
+
+        let response = butler()
+            .validate(&DocumentSource::Body(fixture_body(name)), principal())
+            .unwrap_or_else(|err| panic!("{name}: a parseable document validates: {err}"));
+        assert!(!response.ok, "{name}");
+        let butler_json = serde_json::to_value(&response.errors).unwrap();
+
+        let cli_errors = cli_json.as_array().expect("the CLI prints an array");
+        let butler_errors = butler_json.as_array().expect("errors is an array");
+        assert_eq!(cli_errors.len(), butler_errors.len(), "{name}");
+        for (cli_error, butler_error) in cli_errors.iter().zip(butler_errors) {
+            assert!(
+                cli_error["message"].is_string(),
+                "{name}: the CLI's own errors carry a message"
+            );
+            assert!(
+                butler_error.get("message").is_none(),
+                "{name}: `ValidateResponse.errors` carries none -- the recorded divergence; \
+                 update this pin (and the todo) when it is closed"
+            );
+            let mut stripped = cli_error.clone();
+            stripped
+                .as_object_mut()
+                .expect("an error is an object")
+                .remove("message");
+            assert_eq!(&stripped, butler_error, "{name}: check-error parity");
+        }
+    }
+}
+
+/// Stage 3, `plan`'s own input resolution: the positive fixture with one
+/// input missing and one rejected. The CLI prints the whole
+/// `Description`; `Butler::plan` refuses with `ButlerError::Input`,
+/// carrying the same two lists under the same two names.
+#[test]
+fn plan_input_failure_parity() {
+    let name = "new-rust-service";
+    let path = workflow_path(name);
+    let cli = run_cli(&[
+        "--json",
+        "plan",
+        path.to_str().unwrap(),
+        "--input",
+        "slug=BAD_SLUG",
+    ]);
+    assert_ne!(cli.code, 0, "the inputs are bad: {}", cli.stdout);
+    let cli_json: serde_json::Value = serde_json::from_str(cli.stdout.trim())
+        .unwrap_or_else(|err| panic!("CLI plan --json did not parse: {err}\n{}", cli.stdout));
+
+    let mut partial = indexmap::IndexMap::default();
+    partial.insert(
+        willikins_core::InputName::parse("slug").unwrap(),
+        willikins_core::describe::RawInput::Scalar("BAD_SLUG".to_string()),
+    );
+    let error = butler()
+        .plan(WorkflowName::parse(name).unwrap(), &partial, principal())
+        .expect_err("a rejected input refuses the plan");
+    let butler_json = serde_json::to_value(&error).unwrap();
+    assert_eq!(butler_json["kind"], "Input");
+    assert_eq!(
+        butler_json["errors"], cli_json["errors"],
+        "rejected-input parity"
+    );
+    assert_eq!(
+        butler_json["missing"], cli_json["missing"],
+        "missing-input parity"
+    );
+    let reported = serde_json::to_value(willikins_core::Reported::new(&error)).unwrap();
+    assert_eq!(reported["kind"], "Input");
+    assert!(reported["message"].is_string());
+}
