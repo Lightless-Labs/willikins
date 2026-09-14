@@ -1,0 +1,29 @@
+# Adversarial pass 1 (task 9), the forged-marker attack: an input default
+# that is literally willikins' own redaction marker. `Text` accepts it (it
+# accepts any text), so the value flows into `template.render`'s non-secret
+# `value` port and is rendered, planned and journaled as the plain text it
+# is. Nothing is leaked -- there is no secret here at all -- but a reader
+# could mistake the forged marker for a redacted one.
+#
+# The structural defence is the `Value` JSON shape: a genuinely redacted
+# value carries `"redacted": true` alongside its marker, and this one
+# carries no `redacted` key. A *text* rendering has no such distinction;
+# that is a renderer concern, handed to adversarial pass 2.
+#
+# Pinned by `a_document_default_spelling_the_redaction_marker_is_not_marked_redacted`
+# in `crates/willikins-journal/tests/adversarial_pass_1.rs`.
+name: redaction-marker-default
+description: An input default spelling out the redaction marker.
+inputs:
+  note:
+    type: Text
+    description: A note rendered into the readme.
+    default: "[REDACTED DopplerServiceToken]"
+steps:
+  readme:
+    tool: template.render
+    with:
+      template: "Note: {{ value }}"
+      value: ${{ inputs.note }}
+outputs:
+  rendered: ${{ steps.readme.rendered }}

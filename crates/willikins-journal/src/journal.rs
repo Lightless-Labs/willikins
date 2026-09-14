@@ -260,6 +260,20 @@ fn fold_plan_recorded(plans: &mut IndexMap<PlanId, PlanRecord>, entry: &Entry) {
     else {
         unreachable!("fold_plan_recorded is only called for Event::PlanRecorded");
     };
+    // The first record of an id is the only one. A `PlanId` is minted
+    // once, by `plan`, and never reused, so a second `PlanRecorded` for
+    // one id cannot come from this crate's own `append`: it is a
+    // hand-edited or spliced file. Letting it replace the first would be
+    // a rewrite through the append door -- it would clear `applied` (so a
+    // spent plan reads as fresh to an `AlreadyApplied` check), reset the
+    // approval state to `Pending`, and swap in a fresh `document_sha256`,
+    // `fingerprint` and `requires_approval` for a later `apply` to
+    // compare against. `FileJournal::open` refuses such a file outright;
+    // this keeps every other `Journal` implementation (and any file read
+    // by an older build) safe from the same rewrite.
+    if plans.contains_key(plan_id) {
+        return;
+    }
     plans.insert(
         *plan_id,
         PlanRecord {
@@ -321,6 +335,16 @@ fn fold_run_started(
     else {
         unreachable!("fold_run_started is only called for Event::RunStarted");
     };
+    // The first `RunStarted` for a run id is the only one, for the same
+    // reason a plan's first record is (see `fold_plan_recorded`): a
+    // duplicate would reset this run's state to `Running`, drop its
+    // outcome, and -- through `finished` below -- erase every node event
+    // already folded into it. Two runs of *one plan* are a different
+    // thing entirely (two distinct run ids; `tests/views.rs` pins that
+    // the plan then names the later one) and are unaffected.
+    if runs.contains_key(run_id) {
+        return;
+    }
     if let Some(record) = plans.get_mut(plan_id) {
         record.applied = Some(*run_id);
     }
@@ -354,6 +378,16 @@ fn fold_node_finished(finished: &mut FinishedNodes, entry: &Entry) {
         unreachable!("fold_node_finished is only called for Event::NodeFinished");
     };
     if let Some(map) = finished.get_mut(run_id) {
+        // One instance finishes once. A second `NodeFinished` for the same
+        // `(run, node, instance)` cannot come from `apply` (it reports one
+        // `NodeFinished` per attempted instance, and an instance is
+        // attempted once), so it is an edited file trying to rewrite what
+        // an instance did -- a `Failed` appended over as `Created`, say.
+        // The first wins, the same way a plan's and a run's first record
+        // do (see `fold_plan_recorded`).
+        if map.contains_key(&(node.clone(), instance.clone())) {
+            return;
+        }
         map.insert(
             (node.clone(), instance.clone()),
             RunNode {
@@ -371,6 +405,13 @@ fn fold_run_finished(runs: &mut IndexMap<RunId, RunRecord>, entry: &Entry) {
         unreachable!("fold_run_finished is only called for Event::RunFinished");
     };
     if let Some(run) = runs.get_mut(run_id) {
+        // A run finishes once: `run_and_journal` appends exactly one
+        // `RunFinished` per run. A second one is an edited file trying to
+        // rewrite the outcome -- a failed run appended over as a
+        // successful one, with its `error` dropped. The first wins.
+        if run.finished_at.is_some() {
+            return;
+        }
         match outcome {
             Outcome::Succeeded { outputs } => {
                 run.state = RunState::Succeeded;

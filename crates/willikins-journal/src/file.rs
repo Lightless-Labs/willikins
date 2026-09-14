@@ -199,6 +199,27 @@ fn replay(path: &Path) -> Result<Vec<Entry>, JournalError> {
 
     let mut entries = Vec::new();
     let mut last_at: Option<crate::Timestamp> = None;
+    // Every id this file has already recorded. A `PlanId`/`RunId` is
+    // minted once (`uuid::Uuid::now_v7`) by whoever calls `plan` or starts
+    // a run, so a second `PlanRecorded` or `RunStarted` for one id cannot
+    // come from `append`: the file was edited. Refusing here is what makes
+    // "no delete, no rewrite" true of the file and not only of the API --
+    // a duplicate `PlanRecorded` would otherwise be a rewrite of a plan's
+    // recorded identity (its document hash, fingerprint, approval
+    // requirement and whether it has already run), and a duplicate
+    // `RunStarted` a rewrite of a finished run's outcome.
+    // The same holds one event further on: a run finishes once
+    // (`RunFinished`) and each of its instances finishes once
+    // (`NodeFinished`), so a second of either rewrites an outcome that was
+    // already recorded. `crate::journal::fold` independently keeps the
+    // first of all four, so a `Journal` that is not this one refuses to be
+    // rewritten too.
+    let mut plan_ids: std::collections::HashSet<crate::PlanId> = std::collections::HashSet::new();
+    let mut run_ids: std::collections::HashSet<crate::RunId> = std::collections::HashSet::new();
+    let mut finished_runs: std::collections::HashSet<crate::RunId> =
+        std::collections::HashSet::new();
+    let mut finished_nodes: std::collections::HashSet<(crate::RunId, String, Option<String>)> =
+        std::collections::HashSet::new();
     for (index, line) in contents.lines().enumerate() {
         // 1-based, matching both a line number and the `seq` a
         // contiguous, gap-free journal must carry at this position --
@@ -224,6 +245,35 @@ fn replay(path: &Path) -> Result<Vec<Entry>, JournalError> {
                 reason: format!(
                     "timestamp {} is before the previous entry's {previous}",
                     entry.at
+                ),
+            });
+        }
+        let duplicate = match &entry.event {
+            Event::PlanRecorded { plan_id, .. } if !plan_ids.insert(*plan_id) => {
+                Some(format!("a second `plan_recorded` event for plan {plan_id}"))
+            }
+            Event::RunStarted { run_id, .. } if !run_ids.insert(*run_id) => {
+                Some(format!("a second `run_started` event for run {run_id}"))
+            }
+            Event::RunFinished { run_id, .. } if !finished_runs.insert(*run_id) => {
+                Some(format!("a second `run_finished` event for run {run_id}"))
+            }
+            Event::NodeFinished {
+                run_id,
+                node,
+                instance,
+                ..
+            } if !finished_nodes.insert((*run_id, node.to_string(), instance.clone())) => Some(
+                format!("a second `node_finished` event for {node} in run {run_id}"),
+            ),
+            _ => None,
+        };
+        if let Some(what) = duplicate {
+            return Err(JournalError::Corrupt {
+                line: line_no,
+                reason: format!(
+                    "{what}: each of these is recorded once per id, so this line was not \
+                     written by `append`"
                 ),
             });
         }

@@ -1,0 +1,34 @@
+# Adversarial pass 1 (task 9), the plan-identity attack: the swapped half.
+# See `plan-identity-a.yaml` for the whole story: these two documents differ
+# only in which Doppler secret they read, and `doppler.secret.get` is
+# pure (action `Compute`) and its one output is secret, so it contributes
+# the fixed `<secret>` marker to the fingerprint rather than a value;
+# `github.actions_secret.ensure` declares no outputs at all and its inputs
+# are not part of a fingerprint. So `Plan::fingerprint()` of A equals that
+# of B, and `willikins_core::apply` — which compares the approved plan only
+# with a fresh plan of the `Checked` workflow it is handed — runs B under
+# A's approval without noticing.
+#
+# This is not a defect in `apply`: plan identity is the server's
+# ((workflow name, document sha256), task 10a), and
+# `todos/2026-09-14-plan-identity-must-cover-inputs.md` holds the milestone
+# 3 question of whether core's fingerprint should cover inputs too. The
+# pair is pinned by
+# `a_plan_approved_for_one_document_applies_to_another_with_the_same_fingerprint`
+# in `crates/willikins-journal/tests/adversarial_pass_1.rs`, which asserts
+# the two fingerprints are equal and that applying A's plan against B
+# writes B's secret. Seed state: `state/plan-identity-secrets.json`.
+name: plan-identity-b
+description: Store the ADMIN_PASSWORD secret in a GitHub Actions secret.
+steps:
+  secret:
+    tool: doppler.secret.get
+    with:
+      config: widgets/prd
+      name: ADMIN_PASSWORD
+  ci_secret:
+    tool: github.actions_secret.ensure
+    with:
+      repo: lightless-labs/third-thoughts
+      name: DOPPLER_TOKEN
+      value: ${{ steps.secret.value }}
