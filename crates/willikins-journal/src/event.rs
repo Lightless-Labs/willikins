@@ -32,7 +32,9 @@ use crate::redacted::Redacted;
 use crate::{PrincipalId, Timestamp};
 
 /// How a [`crate::Journal::append`]-time [`Event::ApplyRefused`] refused
-/// to run a plan. Mirrors the trust boundaries section's list exactly;
+/// to run a plan. Mirrors the trust boundaries section's list, plus
+/// [`Self::PlanFailed`] for the one "nothing ran" refusal that list does
+/// not name (see that variant's own doc);
 /// `Drift` carries only the instance identity and *which kind* of drift
 /// was seen, never a planned or observed value -- unlike
 /// [`willikins_core::DriftKind`], which the apply executor's own error
@@ -61,6 +63,32 @@ pub enum ApplyRefusedReason {
         /// internal tag key.
         #[serde(rename = "detail")]
         kind: DriftReasonKind,
+    },
+    /// A fresh re-plan of the approved workflow failed outright
+    /// ([`willikins_core::ApplyError::Plan`]), so `apply` refused at its
+    /// own rule 2 -- before minting a `SinkToken`, before any provider
+    /// write, and before any [`willikins_core::ApplyEvent`] reached an
+    /// observer. Nothing ran, which is why this is a refusal and not a
+    /// failed run: the same plan is still legitimately applicable once
+    /// whatever made the re-plan fail (an unreadable provider, a
+    /// `for_each` source that momentarily resolved to nothing) is
+    /// resolved, and recording it as a run would set
+    /// [`crate::PlanRecord::applied`] and block that retry for good.
+    ///
+    /// The milestone plan's own list of `ApplyRefused` reasons does not
+    /// name this case, but `willikins_core::ApplyError`'s own doc groups
+    /// `Plan` with `ApprovalRequired` and `Drift` as the three refusals
+    /// that carry no partial result; a seventh reason is the smaller
+    /// deviation of the two available, and is recorded in this task's
+    /// verification notes for a plan addendum.
+    PlanFailed {
+        /// The [`willikins_core::PlanError`]'s own internally tagged
+        /// `kind`, e.g. `MissingInput`: a serde variant name, never a
+        /// value. The full error goes back to the caller, which is where
+        /// its details (some of which are [`Value`]s) belong -- the
+        /// journal records which kind of planning failure refused the
+        /// apply, not what the values were.
+        error_kind: String,
     },
     /// The plan's approval or apply window has elapsed.
     PlanExpired,

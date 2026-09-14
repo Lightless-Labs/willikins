@@ -3,7 +3,9 @@
 //! [`run_and_journal`], which wraps a whole `apply` call with the right
 //! events around it.
 
-use willikins_core::{Applied, ApplyError, ApplyEvent, ApplyObserver, DriftKind, NodeStatus};
+use willikins_core::{
+    Applied, ApplyError, ApplyEvent, ApplyObserver, DriftKind, NodeStatus, PlanError,
+};
 
 use crate::event::{ApplyRefusedReason, DriftReasonKind, Event, Outcome};
 use crate::ids::{PlanId, RunId};
@@ -141,6 +143,30 @@ impl<J: Journal> ApplyObserver for JournalObserver<'_, J> {
     }
 }
 
+/// A [`PlanError`]'s own internally tagged `kind`, and nothing else of
+/// it.
+///
+/// `PlanError` serializes as `{"kind": "<Variant>", ...the variant's own
+/// fields}` and declares no variant field named `kind` (pinned by
+/// `willikins-core`'s `tests/plan_error_serde.rs`), so the `kind` member
+/// is always a serde variant name -- a fixed identifier from a closed
+/// set, never a value. Some of the sibling fields *are*
+/// [`willikins_core::Value`]s, which is exactly why only the tag is taken
+/// and the error itself goes back to the caller instead.
+fn plan_error_kind(error: &PlanError) -> String {
+    serde_json::to_value(error)
+        .ok()
+        .and_then(|json| {
+            json.get("kind")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        // Unreachable while `PlanError` stays internally tagged; a
+        // placeholder rather than a panic, because refusing to journal a
+        // refusal would be the worse failure of the two.
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
 /// Strip [`DriftKind`] down to [`DriftReasonKind`]: same shape, no
 /// planned or observed value.
 fn drift_reason_kind(kind: &DriftKind) -> DriftReasonKind {
@@ -157,17 +183,18 @@ fn drift_reason_kind(kind: &DriftKind) -> DriftReasonKind {
 ///
 /// Two shapes, matching `apply`'s own contract:
 ///
-/// - `Err(ApplyError::ApprovalRequired { .. })` or
-///   `Err(ApplyError::Drift { .. })`: `apply` refused before touching a
-///   provider, so nothing ran. Journals `ApplyRefused` alone — no
-///   `RunStarted`, so [`crate::journal::PlanRecord::applied`] stays
-///   `None` and the plan can still be applied once its blocker is
-///   resolved.
-/// - Everything else (`Ok`, or any other `Err`, including a re-plan
-///   failure that `willikins_core::PlanError` cannot name as one of this
-///   crate's own [`ApplyRefusedReason`] variants — recorded as a plan
-///   gap, not fixed here): a real run happened, or at least a `SinkToken`
-///   was minted for one. Journals `RunStarted` (if the [`JournalObserver`]
+/// - `Err(ApplyError::ApprovalRequired { .. })`,
+///   `Err(ApplyError::Plan { .. })` or `Err(ApplyError::Drift { .. })`:
+///   `apply` refused at its own rule 1 or rule 2, before minting a
+///   `SinkToken` and before touching a provider, so nothing ran. Journals
+///   `ApplyRefused` alone — no `RunStarted`, so
+///   [`crate::journal::PlanRecord::applied`] stays `None` and the plan
+///   can still be applied once its blocker is resolved. These are exactly
+///   the three variants `willikins_core::ApplyError`'s own doc names as
+///   carrying no partial result.
+/// - Everything else (`Ok`, or any `Err` that carries a partial
+///   `Applied`): a real run happened, or at least a `SinkToken` was
+///   minted for one. Journals `RunStarted` (if the [`JournalObserver`]
 ///   handed to `run` did not already journal it lazily on its first
 ///   event) then `RunFinished`.
 ///
@@ -193,40 +220,40 @@ where
     let started = observer.started();
     let mut journal_error = observer.into_error();
 
-    match &result {
-        Err(ApplyError::ApprovalRequired { .. }) => {
-            debug_assert!(!started, "no ApplyEvent can precede ApprovalRequired");
-            if let Err(err) = journal.append(Event::ApplyRefused {
-                plan_id,
-                principal,
-                reason: ApplyRefusedReason::ApprovalRequired,
-            }) && journal_error.is_none()
-            {
-                journal_error = Some(err);
-            }
-            return (result, run_id, journal_error);
-        }
+    // The three errors `apply` reports without having run anything (its
+    // own rules 1 and 2, both before the `SinkToken` is minted): each is
+    // journaled as an `ApplyRefused` on its own, and no `RunStarted`, so
+    // the plan stays applicable.
+    let refusal = match &result {
+        Err(ApplyError::ApprovalRequired { .. }) => Some(ApplyRefusedReason::ApprovalRequired),
+        Err(ApplyError::Plan { error }) => Some(ApplyRefusedReason::PlanFailed {
+            error_kind: plan_error_kind(error),
+        }),
         Err(ApplyError::Drift {
             node,
             instance,
             kind,
-        }) => {
-            debug_assert!(!started, "no ApplyEvent can precede Drift");
-            if let Err(err) = journal.append(Event::ApplyRefused {
-                plan_id,
-                principal,
-                reason: ApplyRefusedReason::Drift {
-                    node: node.clone(),
-                    instance: instance.clone(),
-                    kind: drift_reason_kind(kind),
-                },
-            }) && journal_error.is_none()
-            {
-                journal_error = Some(err);
-            }
-            return (result, run_id, journal_error);
+        }) => Some(ApplyRefusedReason::Drift {
+            node: node.clone(),
+            instance: instance.clone(),
+            kind: drift_reason_kind(kind),
+        }),
+        Ok(_) | Err(_) => None,
+    };
+    if let Some(reason) = refusal {
+        debug_assert!(
+            !started,
+            "no ApplyEvent can precede a refusal that ran nothing"
+        );
+        if let Err(err) = journal.append(Event::ApplyRefused {
+            plan_id,
+            principal,
+            reason,
+        }) && journal_error.is_none()
+        {
+            journal_error = Some(err);
         }
-        _ => {}
+        return (result, run_id, journal_error);
     }
 
     if !started

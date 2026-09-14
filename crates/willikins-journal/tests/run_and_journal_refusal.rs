@@ -23,6 +23,7 @@ use willikins_core::describe::{PartialInputs, RawInput};
 use willikins_core::{Approval, InputName, Workflow, apply, check, plan};
 use willikins_journal::{Event, Journal, MemoryJournal, PlanId, Redacted, run_and_journal};
 use willikins_providers_fake::FakeState;
+use willikins_types::DomainType;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -149,4 +150,91 @@ fn approval_required_refuses_without_journaling_run_started() {
         locked.github_repos.is_empty() && locked.doppler_projects.is_empty(),
         "no provider call was made"
     );
+}
+
+/// The same defect class, one variant further along: `apply`'s rule 2
+/// fails a fresh re-plan (`ApplyError::Plan`) *before* minting a
+/// `SinkToken` and before touching any provider -- core's own `ApplyError`
+/// doc groups it with `ApprovalRequired` and `Drift` as the three refusals
+/// that carry no partial result. Journaling `RunStarted` for it would set
+/// `PlanRecord::applied` and permanently refuse every later `apply` of
+/// that plan as `AlreadyApplied`, even though the cause (a provider that
+/// could not be read at that moment, a `for_each` source that momentarily
+/// resolved to nothing) is transient and the plan is still perfectly
+/// applicable. The run closure returns the error directly rather than
+/// arranging a real re-plan failure: `run_and_journal`'s own routing is
+/// what is under test, and a synthetic error pins it at every variant
+/// without a fixture per cause.
+#[test]
+fn a_replan_failure_refuses_without_journaling_a_run() {
+    let mut journal = MemoryJournal::new();
+    let plan_id = PlanId::new();
+    journal
+        .append(Event::PlanRecorded {
+            plan_id,
+            workflow: willikins_types::WorkflowName::parse("wf").unwrap(),
+            document_sha256: "test-sha256".to_string(),
+            inputs: Redacted::from(&indexmap::IndexMap::new()),
+            plan: Redacted::from(&willikins_core::Plan {
+                workflow: willikins_types::WorkflowName::parse("wf").unwrap(),
+                nodes: Vec::new(),
+                outputs: indexmap::IndexMap::new(),
+                class: willikins_core::Class::Reversible,
+                requires_approval: false,
+            }),
+            fingerprint: Vec::new(),
+            class: willikins_core::Class::Reversible,
+            requires_approval: false,
+        })
+        .unwrap();
+
+    let (result, _run_id, journal_error) = run_and_journal(
+        &mut journal,
+        willikins_journal::PrincipalId::parse("agent").unwrap(),
+        plan_id,
+        |_observer| {
+            Err(willikins_core::ApplyError::Plan {
+                error: willikins_core::PlanError::MissingInput {
+                    input: InputName::parse("slug").unwrap(),
+                },
+            })
+        },
+    );
+    assert!(journal_error.is_none(), "{journal_error:?}");
+    assert!(matches!(
+        result,
+        Err(willikins_core::ApplyError::Plan { .. })
+    ));
+
+    let kinds: Vec<&'static str> = journal
+        .entries()
+        .iter()
+        .map(|entry| match &entry.event {
+            Event::PlanRecorded { .. } => "plan_recorded",
+            Event::ApplyRefused { .. } => "apply_refused",
+            Event::RunStarted { .. } => "run_started",
+            Event::RunFinished { .. } => "run_finished",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(kinds, vec!["plan_recorded", "apply_refused"]);
+
+    // The refusal names which kind of planning failure it was, and nothing
+    // else of the error: `PlanError`'s sibling fields can hold values.
+    match &journal.entries()[1].event {
+        Event::ApplyRefused { reason, .. } => assert_eq!(
+            reason,
+            &willikins_journal::ApplyRefusedReason::PlanFailed {
+                error_kind: "MissingInput".to_string(),
+            }
+        ),
+        other => panic!("expected ApplyRefused, got {other:?}"),
+    }
+
+    let record = journal.plan(&plan_id).expect("plan must be recorded");
+    assert!(
+        record.applied.is_none(),
+        "a re-plan failure must leave the plan applicable: {record:?}"
+    );
+    assert!(journal.runs().is_empty(), "{:?}", journal.runs());
 }
