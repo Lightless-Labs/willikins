@@ -103,7 +103,7 @@ fn a_secret_marker_never_leaks_anywhere() {
     );
     let observation = tool.read(&inputs).expect("reads");
     let debug = format!("{observation:?}");
-    let json = serde_json::to_string(&observation).unwrap_or_default();
+    let json = serde_json::to_string(&observation).expect("Observation serializes");
     assert!(!debug.contains(SECRET_MARKER), "Debug leaked: {debug}");
     assert!(!json.contains(SECRET_MARKER), "JSON leaked: {json}");
 

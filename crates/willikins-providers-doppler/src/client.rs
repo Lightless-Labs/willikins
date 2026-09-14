@@ -89,8 +89,8 @@ pub enum DopplerCredentialError {
 /// # Panics
 ///
 /// Never in practice: [`CREDENTIAL_PATTERN`] is a fixed, compile-time-known
-/// literal already exercised by this crate's own tests, so
-/// `Regex::new` on it cannot fail.
+/// literal, and this module's own `tests` submodule builds a `Regex` from the
+/// exact same constant, so `Regex::new` on it cannot fail.
 pub fn credential_from_env() -> Result<Credential, DopplerCredentialError> {
     let pattern =
         regex::Regex::new(CREDENTIAL_PATTERN).expect("CREDENTIAL_PATTERN is a valid regex");
@@ -376,4 +376,77 @@ struct SecretBody {
 #[derive(Debug, Deserialize)]
 struct SecretValueBody {
     computed: DopplerSecretValue,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A distinctive marker: if it ever showed up in a rendered error, a
+    // redaction rule broke. Only used below to prove `WrongKind`'s
+    // message never echoes anything about the value that triggered it —
+    // `credential_from_env` itself is not called here (it reads the real
+    // process environment, and mutating that is `unsafe` in edition 2024,
+    // which this workspace forbids outright, including in tests). The
+    // `Malformed` -> `WrongKind` mapping is exercised end-to-end only by
+    // `tests/live_probe.rs`, which is gated and has never run (see that
+    // file's own docs) — so this module tests the two things that do not
+    // need a live environment read: the regex itself, and the message.
+    const MARKER: &str = "wlkn-test-marker-2rz8shp5tap";
+
+    fn pattern() -> regex::Regex {
+        regex::Regex::new(CREDENTIAL_PATTERN).expect("CREDENTIAL_PATTERN is a valid regex")
+    }
+
+    #[test]
+    fn accepts_a_service_account_token() {
+        let token = format!("dp.sa.{}", "a".repeat(40));
+        assert!(pattern().is_match(&token), "{token}");
+        let token = format!("dp.sa.{}", "a".repeat(44));
+        assert!(pattern().is_match(&token), "{token}");
+    }
+
+    #[test]
+    fn accepts_a_personal_token() {
+        let token = format!("dp.pt.{}", "a".repeat(44));
+        assert!(pattern().is_match(&token), "{token}");
+    }
+
+    #[test]
+    fn rejects_a_bare_service_token() {
+        let token = format!("dp.st.{}", "a".repeat(40));
+        assert!(!pattern().is_match(&token), "{token}");
+    }
+
+    #[test]
+    fn rejects_a_service_token_with_an_environment_segment() {
+        let token = format!("dp.st.dev.{}", "a".repeat(40));
+        assert!(!pattern().is_match(&token), "{token}");
+    }
+
+    #[test]
+    fn rejects_a_suffix_one_short_of_the_minimum() {
+        let token = format!("dp.sa.{}", "a".repeat(39));
+        assert!(!pattern().is_match(&token), "{token}");
+    }
+
+    #[test]
+    fn rejects_a_suffix_one_past_the_maximum() {
+        let token = format!("dp.sa.{}", "a".repeat(45));
+        assert!(!pattern().is_match(&token), "{token}");
+    }
+
+    #[test]
+    fn rejects_a_trailing_newline() {
+        let token = format!("dp.sa.{}\n", "a".repeat(40));
+        assert!(!pattern().is_match(&token), "{token:?}");
+    }
+
+    #[test]
+    fn wrong_kind_message_names_both_accepted_kinds_and_echoes_nothing() {
+        let message = DopplerCredentialError::WrongKind.to_string();
+        assert!(message.contains("service-account"), "{message}");
+        assert!(message.contains("personal"), "{message}");
+        assert!(!message.contains(MARKER), "{message}");
+    }
 }

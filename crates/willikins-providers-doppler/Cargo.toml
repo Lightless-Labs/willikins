@@ -21,6 +21,8 @@ thiserror.workspace = true
 [dev-dependencies]
 willikins-providers-http = { workspace = true, features = ["test-support"] }
 willikins-providers-fake.workspace = true
+willikins-dsl.workspace = true
+willikins-tools.workspace = true
 mockito.workspace = true
 insta.workspace = true
 

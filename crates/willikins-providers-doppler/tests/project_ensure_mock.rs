@@ -97,6 +97,60 @@ fn read_reports_foreign_when_the_marker_is_absent() {
     assert!(matches!(observation, Observation::Foreign));
 }
 
+/// A `200` whose `description` is absent, or explicitly `null`, is
+/// `Foreign`, not a parse failure — the exact bug class the sibling
+/// GitHub crate's `RepoBody.topics` had (task 7 verifier finding):
+/// `Option<String>` on its own only covers an absent key, so this pins
+/// both shapes in one loop.
+#[test]
+fn read_reports_foreign_when_description_is_missing_or_null() {
+    for body in [
+        serde_json::json!({"project": {"name": "third-thoughts"}}),
+        serde_json::json!({"project": {"name": "third-thoughts", "description": null}}),
+    ] {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/projects/project?project=third-thoughts")
+            .with_status(200)
+            .with_body(body.to_string())
+            .create();
+        let (client, _sleeper) = client_against(provider.url());
+        let tool = DopplerProjectEnsure::new(client);
+        let observation = tool
+            .read(&inputs())
+            .unwrap_or_else(|err| panic!("body {body} must read, got {err:?}"));
+        assert!(
+            matches!(observation, Observation::Foreign),
+            "body {body} must read as Foreign, got {observation:?}"
+        );
+    }
+}
+
+/// The ownership check is exact equality, not a substring match: a
+/// description that merely *contains* the marker alongside other text
+/// reads as `Foreign`, not `Present`.
+#[test]
+fn read_reports_foreign_when_description_contains_the_marker_plus_more() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v3/projects/project?project=third-thoughts")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "project": {
+                    "name": "third-thoughts",
+                    "description": "managed-by: willikins (and also by someone else)",
+                },
+            })
+            .to_string(),
+        )
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerProjectEnsure::new(client);
+    let observation = tool.read(&inputs()).unwrap();
+    assert!(matches!(observation, Observation::Foreign));
+}
+
 #[test]
 fn read_maps_a_5xx_to_a_bounded_provider_error() {
     let mut provider = MockProvider::start();

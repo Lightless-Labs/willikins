@@ -50,6 +50,15 @@ impl DopplerProjectEnsure {
 
     /// `GET` the project, mapped to an [`Observation`]. Shared by `read`
     /// and `ensure`.
+    ///
+    /// The ownership check is exact equality against
+    /// [`MANAGED_DESCRIPTION`], not a substring match: an operator who
+    /// appends a note to the description (or a project this tool created
+    /// whose description was later edited) reads as `Foreign` rather than
+    /// `Present`, which is the safer failure mode — an ensure that would
+    /// otherwise silently claim a description-edited project as still
+    /// ours risks acting on a resource a human has started managing by
+    /// hand. Pinned by `tests/project_ensure_mock.rs`.
     fn observe(&self, project: &DopplerProject) -> Result<Observation, ToolError> {
         match self.client.get_project(project) {
             Ok(body) if body.description.as_deref() == Some(MANAGED_DESCRIPTION) => {
