@@ -264,8 +264,19 @@ scenario4() {
   if grep -q "CURL_CALL.*$doppler_token_marker" "$dir/calls.log"; then
     fail "scenario4: the Doppler token leaked into curl's own arguments"
   fi
+  # Not only this test's own marker: no argument may hold anything
+  # shaped like a Doppler token at all.
+  if grep -qE "CURL_CALL.*dp\.(sa|st|pt)\." "$dir/calls.log"; then
+    fail "scenario4: a Doppler-token-shaped argument reached curl's argv"
+  fi
+  # The token reaches curl the one way that keeps it out of `ps`: a
+  # `--config -` directive read from stdin.
+  grep -q "CURL_CALL.*--config -" "$dir/calls.log" \
+    || fail "scenario4: curl was not called with --config -"
   grep -q "CURL_STDIN=.*$doppler_token_marker" "$dir/calls.log" \
     || fail "scenario4: the Doppler token never reached curl's stdin (--config -)"
+  grep -q "CURL_STDIN=.*Authorization: Bearer" "$dir/calls.log" \
+    || fail "scenario4: the Authorization header was not passed on stdin"
   rm -rf "$dir"
 }
 
