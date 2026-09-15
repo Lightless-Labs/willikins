@@ -62,6 +62,22 @@ found by the verifiers and deliberately left for the task that owns them:
    CLI's own document-error JSON, and the DSL's schema snapshots -- out of scope for task
    11's three named library changes (willikins-journal, willikins-core, willikins-server).
    Left for whoever next touches `willikins-dsl`'s error shape.
+
+   **Measured by adversarial pass 2 (2026-09-15): the collision is real in the type system
+   and unreachable on every surface that ships.** A quote- and escape-aware duplicate-key
+   scan over the *raw* response bytes, at every nesting level (not only the top one task
+   11's helper checked), was run over ten provoked errors across the whole MCP surface --
+   malformed YAML, a semantic document error, an over-large document, an unknown workflow,
+   a rejected input, a missing input, an unknown plan, an unknown run, an invalid project
+   name, and a document that fails `check`. None carries a duplicate key at any level,
+   because `DocumentError` is never itself wrapped in `Reported`: it reaches a caller as
+   the *value* of `ButlerError::Document`'s `error` field, so its own flattened `message`
+   sits one level below the one `Reported` adds. The scan is
+   `no_error_any_mcp_surface_emits_carries_a_duplicate_key` in
+   `crates/willikins-server/tests/adversarial_13.rs` and is the guard that says so; the
+   rename stays worth doing the next time `willikins-dsl`'s error shape is open, but it is
+   no longer blocking anything. See
+   `docs/research/2026-09-15-e2e-http-adversarial-pass-2.md`, finding 14.
 3. **Closed on the library side by task 11 (2026-09-15).** `willikins-cli`'s
    `check_error_variant_name` duplicated `CheckError`'s own variant names by hand, one
    `match` arm per variant, with nothing forcing it to stay in step with the enum. Added
