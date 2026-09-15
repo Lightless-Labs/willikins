@@ -387,11 +387,22 @@ enum HashTokenError {
     /// hashing the embedded newline, was meant.
     #[error("stdin held more than one line; a token must be a single line")]
     EmbeddedNewline,
+    /// Stdin held an ASCII control character (a NUL, a carriage return
+    /// in the middle of the token, a tab) once the single trailing line
+    /// ending is stripped. No control byte may appear in an
+    /// `Authorization` header value, so hashing one would store a hash
+    /// no presented bearer token can ever match -- the same silent
+    /// mismatch [`EmbeddedNewline`](Self::EmbeddedNewline) refuses, for
+    /// the same reason. Names no byte of the input.
+    #[error("stdin held a control character; a token must be one line of printable text")]
+    ControlCharacter,
 }
 
 /// Read one token from stdin, with exactly one trailing newline (`\n`,
 /// or `\r\n`) stripped -- never both a leading and a trailing one, and
-/// never any newline embedded further in.
+/// never any newline embedded further in. What is left must be one line
+/// of printable text: any ASCII control character refuses, since no
+/// such byte can reach the server inside an `Authorization` header.
 fn read_stdin_token() -> Result<String, HashTokenError> {
     let mut input = String::new();
     std::io::stdin()
@@ -405,6 +416,12 @@ fn read_stdin_token() -> Result<String, HashTokenError> {
     }
     if without_trailing_newline.contains('\n') {
         return Err(HashTokenError::EmbeddedNewline);
+    }
+    if without_trailing_newline
+        .chars()
+        .any(|character| character.is_ascii_control())
+    {
+        return Err(HashTokenError::ControlCharacter);
     }
     Ok(without_trailing_newline.to_string())
 }

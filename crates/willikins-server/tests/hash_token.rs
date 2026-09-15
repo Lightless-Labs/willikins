@@ -142,3 +142,76 @@ fn takes_no_command_line_argument() {
         "a positional argument must not be accepted as the token"
     );
 }
+
+// ---------------------------------------------------------------------
+// Task 12 verification: the bytes `hash-token` may and may not accept.
+// ---------------------------------------------------------------------
+
+/// A token with one `\r\n` line ending hashes exactly as the same token
+/// with one `\n` does: an operator on a machine that writes CRLF must
+/// not configure the server with a different hash from everyone else.
+#[test]
+fn a_crlf_line_ending_hashes_to_the_same_vector() {
+    let output = run_hash_token(b"abc\r\n");
+    assert_eq!(exit_code(&output), 0, "stderr: {}", stderr(&output));
+    assert_eq!(stdout(&output).trim_end(), SHA256_ABC);
+}
+
+/// A NUL byte can never appear in an `Authorization` header value, so a
+/// hash of a token that holds one is a hash no presented token can ever
+/// match. That is the same failure the embedded-newline refusal exists
+/// to stop: a digest the operator did not intend and the server will
+/// never see. Refused, naming no byte of the input.
+#[test]
+fn refuses_a_token_containing_a_nul_byte() {
+    let output = run_hash_token(b"token-with-a\0nul\n");
+    assert_eq!(
+        exit_code(&output),
+        2,
+        "stdout: {}, stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(stdout(&output).is_empty(), "stdout: {}", stdout(&output));
+}
+
+/// The same rule for a carriage return in the middle of a token: only
+/// one trailing `\r\n` is a line ending; an embedded `\r` is a control
+/// character no header value carries.
+#[test]
+fn refuses_a_token_containing_an_embedded_carriage_return() {
+    let output = run_hash_token(b"token-with-a\rcarriage-return\n");
+    assert_eq!(exit_code(&output), 2, "stderr: {}", stderr(&output));
+    assert!(stdout(&output).is_empty(), "stdout: {}", stdout(&output));
+}
+
+/// No refusal echoes any part of the token -- the whole point of the
+/// subcommand is that a real token's bytes reach the digest and nothing
+/// else.
+#[test]
+fn a_refusal_never_echoes_the_token() {
+    let output = run_hash_token(b"MARKER-8f2c-secret-looking\nMARKER-8f2c-second-line\n");
+    assert_eq!(exit_code(&output), 2);
+    assert!(
+        !stderr(&output).contains("MARKER-8f2c"),
+        "stderr echoed the token: {}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("MARKER-8f2c"));
+}
+
+/// A 1 MiB token is still one line of printable text, so it hashes
+/// rather than refusing -- `hash-token` bounds what a token may contain,
+/// never how long it is.
+#[test]
+fn hashes_a_one_mebibyte_token() {
+    let token = "a".repeat(1024 * 1024);
+    let mut input = token.clone().into_bytes();
+    input.push(b'\n');
+    let output = run_hash_token(&input);
+    assert_eq!(exit_code(&output), 0, "stderr: {}", stderr(&output));
+    let printed = stdout(&output).trim().to_string();
+    assert_eq!(printed.len(), 64);
+    let parsed = willikins_server::TokenHash::parse(&printed).expect("must parse as a TokenHash");
+    assert_eq!(parsed, willikins_server::TokenHash::of(&token));
+}
