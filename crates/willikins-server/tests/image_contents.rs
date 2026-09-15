@@ -151,6 +151,40 @@ fn the_image_command_is_serve_http_and_names_no_other_flag() {
     );
 }
 
+/// The image carries no credential of its own. It sets exactly one
+/// environment variable, and declares no build argument -- a token baked
+/// into an `ENV` would sit in the image's own metadata for anyone who
+/// can pull it, and one passed as an `ARG` would sit in the build log.
+/// Every credential and every token hash reaches the server from the
+/// deployment's own variables instead.
+#[test]
+fn the_image_bakes_in_no_credential() {
+    let dockerfile = read("Dockerfile");
+    let all = instructions(&dockerfile);
+    assert_eq!(
+        starting_with(&all, "ENV "),
+        vec!["ENV WILLIKINS_WORKFLOWS_DIR=/app/workflows"],
+        "the image's ENV set changed; update this test on purpose"
+    );
+    assert!(
+        starting_with(&all, "ARG ").is_empty(),
+        "this image takes no build argument"
+    );
+    for fragment in [
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "ghp_",
+        "dp.sa.",
+        "github_pat_",
+    ] {
+        assert!(
+            !dockerfile.contains(fragment),
+            "the Dockerfile names {fragment}"
+        );
+    }
+}
+
 /// Every `.dockerignore` pattern, with comments and blank lines dropped.
 fn dockerignore_patterns() -> Vec<String> {
     read(".dockerignore")
