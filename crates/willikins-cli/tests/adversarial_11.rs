@@ -1064,6 +1064,46 @@ fn approval_required_without_a_journal_names_the_recovery_in_text_and_stays_pari
     assert!(refusal.get("guidance").is_none(), "{refusal}");
 }
 
+/// `--fake-state-out` documents itself as a dump taken "after the run
+/// reaches a final state", and its whole purpose is to be reloadable as
+/// the next invocation's `--fake-state`. On a refusal no run ever starts,
+/// so there is no ending state to dump -- and dumping the starting one
+/// produces a file that cannot be reloaded at all: a seeded but
+/// unconsumed `next_token` serializes as its redaction marker, which is
+/// not a `DopplerServiceToken`. Nothing is written, and the command says
+/// why on stderr without changing the refusal's own exit code.
+#[test]
+fn fake_state_out_writes_nothing_when_no_run_reached_a_final_state() {
+    let dir = TempDir::new("fake-state-out-refusal");
+    let seed = dir.join("seed.json");
+    std::fs::write(
+        &seed,
+        serde_json::to_string_pretty(&serde_json::json!({ "next_token": SEEDED_TOKEN })).unwrap(),
+    )
+    .unwrap();
+    let out = dir.join("out.json");
+
+    let path = workflow("workflows/fixtures/irreversible.yaml");
+    let mut args = vec!["apply", path.to_str().unwrap()];
+    args.extend_from_slice(&POSITIVE_INPUTS);
+    let seed_str = seed.to_str().unwrap().to_string();
+    let out_str = out.to_str().unwrap().to_string();
+    args.extend_from_slice(&["--fake-state", &seed_str, "--fake-state-out", &out_str]);
+
+    let output = run(&args);
+    assert_eq!(exit_code(&output), 1, "stderr: {}", stderr(&output));
+    assert!(
+        !out.exists(),
+        "no run finished, so no ending state may be written: {}",
+        std::fs::read_to_string(&out).unwrap_or_default()
+    );
+    assert!(
+        stderr(&output).contains("--fake-state-out"),
+        "the command must say nothing was written: {}",
+        stderr(&output)
+    );
+}
+
 // =====================================================================
 // 7. serve, through this binary
 // =====================================================================

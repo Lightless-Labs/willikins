@@ -78,6 +78,12 @@ pub struct ApplyArgs {
     /// Fake state otherwise never persists across two CLI invocations,
     /// each of which builds its own `FakeState` from scratch. Only valid
     /// with `file` and without `--live`.
+    ///
+    /// When the command is refused before any run reaches a final state,
+    /// **nothing is written** and the reason is printed on stderr: the
+    /// starting state is not what this flag promises, and a seeded but
+    /// unconsumed `next_token` would dump as its redaction marker, which
+    /// is not a valid token -- so the file would not even reload.
     #[arg(long = "fake-state-out", value_name = "FILE")]
     pub fake_state_out: Option<String>,
     /// Real providers, credentials from `WILLIKINS_GITHUB_TOKEN` and
@@ -563,7 +569,7 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
         Err(error) => return fail_startup(error, json),
     };
 
-    let code = plan_and_apply(
+    let outcome = plan_and_apply(
         &butler,
         workflow_name,
         &partial,
@@ -573,14 +579,47 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
         json,
     );
 
-    if let Some(path) = &args.fake_state_out
-        && let Some(state) = &fake_state
-        && let Err(error) = dump_fake_state(state, path)
-    {
-        eprintln!("{path}: failed to write fake state: {error}");
+    if let Some(path) = &args.fake_state_out {
+        if outcome.ran {
+            if let Some(state) = &fake_state
+                && let Err(error) = dump_fake_state(state, path)
+            {
+                eprintln!("{path}: failed to write fake state: {error}");
+            }
+        } else {
+            // Nothing ran, so there is no *ending* state to dump -- and
+            // dumping the starting one would write a file that cannot be
+            // reloaded as `--fake-state` at all: a seeded but unconsumed
+            // `next_token` serializes as its redaction marker, which is
+            // not a valid token (see `ApplyArgs::fake_state_out`'s doc).
+            // Silence would leave a stale file from an earlier run
+            // looking like this one's output, so say so; the refusal's
+            // own exit code is unchanged.
+            eprintln!(
+                "--fake-state-out: nothing written -- no run reached a final state, so there is no ending state to dump"
+            );
+        }
     }
 
-    code
+    outcome.code
+}
+
+/// What [`plan_and_apply`] reached.
+struct ApplyOutcome {
+    /// The process exit code.
+    code: ExitCode,
+    /// True exactly when a run started and reached a final state, so the
+    /// fake providers now hold an *ending* state. False for every
+    /// refusal before that, where the providers were never touched.
+    ran: bool,
+}
+
+impl ApplyOutcome {
+    /// A refusal: no run, so nothing the providers hold is an ending
+    /// state.
+    fn refused(code: ExitCode) -> Self {
+        Self { code, ran: false }
+    }
 }
 
 /// Plan `workflow` against `butler`, print the [`PlanResponse`], apply it
@@ -596,10 +635,12 @@ fn plan_and_apply(
     approve: bool,
     journal_path: Option<&str>,
     json: bool,
-) -> ExitCode {
+) -> ApplyOutcome {
     let response = match butler.plan(workflow, partial, principal.clone()) {
         Ok(response) => response,
-        Err(error) => return fail_apply(&error, None, journal_path, butler, json),
+        Err(error) => {
+            return ApplyOutcome::refused(fail_apply(&error, None, journal_path, butler, json));
+        }
     };
     print_plan_response(&response, json);
 
@@ -607,18 +648,33 @@ fn plan_and_apply(
         && response.requires_approval
         && let Err(error) = butler.approve(response.plan_id, principal.clone())
     {
-        return fail_apply(&error, Some(response.plan_id), journal_path, butler, json);
+        return ApplyOutcome::refused(fail_apply(
+            &error,
+            Some(response.plan_id),
+            journal_path,
+            butler,
+            json,
+        ));
     }
 
     let handle = match butler.apply(response.plan_id, principal.clone()) {
         Ok(handle) => handle,
         Err(error) => {
-            return fail_apply(&error, Some(response.plan_id), journal_path, butler, json);
+            return ApplyOutcome::refused(fail_apply(
+                &error,
+                Some(response.plan_id),
+                journal_path,
+                butler,
+                json,
+            ));
         }
     };
     let run = wait_for_run(butler, handle.run_id);
     print_run_record(&run, json);
-    exit_for_run_state(&run)
+    ApplyOutcome {
+        code: exit_for_run_state(&run),
+        ran: true,
+    }
 }
 
 fn cmd_apply_plan_id(args: &ApplyArgs, plan_id_str: &str, json: bool) -> ExitCode {
