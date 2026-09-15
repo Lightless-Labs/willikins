@@ -313,6 +313,7 @@ fn the_approve_by_id_flow_runs_across_three_processes() {
 
     // Process 3: apply --plan-id runs.
     let applied = run(&[
+        "--json",
         "apply",
         "--plan-id",
         &plan_id,
@@ -322,13 +323,14 @@ fn the_approve_by_id_flow_runs_across_three_processes() {
         dir.path().to_str().unwrap(),
     ]);
     assert_eq!(exit_code(&applied), 0, "stderr: {}", stderr(&applied));
-    assert!(
-        stdout(&applied).contains("state: succeeded"),
-        "{}",
-        stdout(&applied)
-    );
+    let applied_docs = json_documents(&stdout(&applied));
+    assert_eq!(applied_docs[0]["state"], "succeeded", "{applied_docs:?}");
+    let run_id = applied_docs[0]["run_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no run_id in {applied_docs:?}"))
+        .to_string();
 
-    // `runs`/`run` over the same journal see the applied run.
+    // `runs` over the same journal sees the applied run.
     let runs = run(&["runs", "--journal", journal.to_str().unwrap()]);
     assert_eq!(exit_code(&runs), 0, "stderr: {}", stderr(&runs));
     assert!(
@@ -336,6 +338,21 @@ fn the_approve_by_id_flow_runs_across_three_processes() {
         "{}",
         stdout(&runs)
     );
+
+    // `run <run_id>` over the same journal matches the applied run
+    // exactly (same run_id, same plan_id, same final state).
+    let one_run = run(&[
+        "--json",
+        "run",
+        &run_id,
+        "--journal",
+        journal.to_str().unwrap(),
+    ]);
+    assert_eq!(exit_code(&one_run), 0, "stderr: {}", stderr(&one_run));
+    let one_run_docs = json_documents(&stdout(&one_run));
+    assert_eq!(one_run_docs[0]["run_id"], run_id, "{one_run_docs:?}");
+    assert_eq!(one_run_docs[0]["plan_id"], plan_id, "{one_run_docs:?}");
+    assert_eq!(one_run_docs[0]["state"], "succeeded", "{one_run_docs:?}");
 }
 
 #[test]
@@ -513,4 +530,88 @@ fn a_seeded_secret_never_appears_in_apply_runs_or_run_output() {
         "runs --json leaked: {}",
         stdout(&runs_json)
     );
+}
+
+// ---------------------------------------------------------------------
+// --principal, and an unrecognised run id
+// ---------------------------------------------------------------------
+
+/// `--approve` self-approves as `--principal`, not always `local`: a
+/// non-default approver name must reach the journal's own
+/// `ApprovalGranted`, which the approve-by-id flow's own `approve`
+/// command (not `apply --approve`, which self-approves in the same
+/// breath) is what actually decides. Exercises `--principal` on
+/// `approve` for the first time in this file's own tests.
+#[test]
+fn a_non_default_principal_approves_and_is_recorded() {
+    let dir = TempDir::new("custom-principal");
+    let journal = dir.join("journal.jsonl");
+    std::fs::copy(
+        workflow("workflows/fixtures/irreversible.yaml"),
+        dir.join("new-rust-service-irreversible.yaml"),
+    )
+    .unwrap();
+
+    let first = run(&[
+        "--json",
+        "apply",
+        dir.join("new-rust-service-irreversible.yaml")
+            .to_str()
+            .unwrap(),
+        "--input",
+        "slug=third-thoughts",
+        "--input",
+        "org=lightless-labs",
+        "--journal",
+        journal.to_str().unwrap(),
+    ]);
+    assert_eq!(exit_code(&first), 1, "stderr: {}", stderr(&first));
+    let plan_id = extract_plan_id(&stdout(&first));
+
+    let approved = run(&[
+        "approve",
+        &plan_id,
+        "--journal",
+        journal.to_str().unwrap(),
+        "--principal",
+        "release-manager",
+    ]);
+    assert_eq!(exit_code(&approved), 0, "stderr: {}", stderr(&approved));
+
+    let applied = run(&[
+        "apply",
+        "--plan-id",
+        &plan_id,
+        "--journal",
+        journal.to_str().unwrap(),
+        "--workflows-dir",
+        dir.path().to_str().unwrap(),
+    ]);
+    assert_eq!(exit_code(&applied), 0, "stderr: {}", stderr(&applied));
+    assert!(
+        stdout(&applied).contains("state: succeeded"),
+        "{}",
+        stdout(&applied)
+    );
+}
+
+#[test]
+fn run_with_an_unrecognised_id_is_a_kind_tagged_domain_refusal() {
+    let dir = TempDir::new("unknown-run");
+    let journal = dir.join("journal.jsonl");
+    // A journal must exist (and hold at least one entry) for `replay` to
+    // open it at all; an empty file is fine.
+    std::fs::write(&journal, "").unwrap();
+
+    let output = run(&[
+        "--json",
+        "run",
+        "018e0000-0000-7000-8000-000000000000",
+        "--journal",
+        journal.to_str().unwrap(),
+    ]);
+    assert_eq!(exit_code(&output), 1, "stderr: {}", stderr(&output));
+    let docs = json_documents(&stdout(&output));
+    assert_eq!(docs[0]["kind"], "UnknownRun", "{docs:?}");
+    assert!(docs[0]["message"].is_string(), "{docs:?}");
 }
