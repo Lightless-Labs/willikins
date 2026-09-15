@@ -7,8 +7,9 @@
 //! `--live` refusal happens before any of that, from the missing or
 //! malformed environment variable alone.
 
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -181,4 +182,38 @@ fn live_and_fake_state_are_mutually_exclusive() {
         "stderr: {}",
         stderr(&output)
     );
+}
+
+/// `hash-token` on the `willikins` binary (task 12, step A said "both
+/// binaries"). `crates/willikins-server/tests/hash_token.rs` already
+/// exercises the shared implementation against
+/// `CARGO_BIN_EXE_willikins-server` in depth; this test proves the
+/// `willikins` binary's own `Command::HashToken` arm actually dispatches
+/// to that same implementation, piping a token on stdin exactly as the
+/// README's `openssl rand -hex 32 | willikins hash-token` does.
+#[test]
+fn hash_token_dispatches_through_the_willikins_binary() {
+    const SHA256_ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    assert_eq!(SHA256_ABC.len(), 64);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_willikins"))
+        .arg("hash-token")
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn willikins hash-token");
+    child
+        .stdin
+        .take()
+        .expect("child stdin was piped")
+        .write_all(b"abc\n")
+        .expect("failed to write to child stdin");
+    let output = child
+        .wait_with_output()
+        .expect("failed to wait for willikins hash-token");
+
+    assert_eq!(exit_code(&output), 0, "stderr: {}", stderr(&output));
+    assert_eq!(stdout(&output).trim_end(), SHA256_ABC);
 }
