@@ -1,0 +1,24 @@
+# Never sent to Railway's builder -- task 12, step B.
+target
+.git
+.claude/worktrees
+docs
+todos
+
+# Gitignored live-recording directories: real (redacted) provider
+# responses from the opt-in live tests, not part of the shipped image.
+crates/willikins-providers-github/fixtures/github/live
+crates/willikins-providers-doppler/fixtures/doppler/live
+
+# The Dockerfile's `COPY workflows/*.yaml` (non-recursive) already
+# never reaches this directory, but excluding it too keeps the whole
+# tree out of the build context: `fixtures/state/` fake-state JSON and
+# every negative document under `fixtures/` are test-only, and
+# `Butler::start` scans a workflow directory flat, so shipping any of
+# them into `/app/workflows` would make the server refuse to start on
+# the first negative fixture it hit.
+workflows/fixtures
+
+nohup.out
+*.log
+.DS_Store
