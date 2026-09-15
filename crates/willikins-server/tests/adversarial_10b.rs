@@ -1136,6 +1136,40 @@ impl Clock for SleepOnceClock {
     }
 }
 
+/// A large `POST /approvals/{plan_id}` body is refused rather than
+/// buffered without bound: the approvals form is bytes an authenticated
+/// approver sends, but the same cap the MCP transport enforces should
+/// bound it too, so no single request can make the process hold a
+/// multi-megabyte body in memory.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_oversized_approvals_post_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let butler = butler_arc(dir.path(), common::manual_clock());
+    let plan_id = plan_pending(dir.path(), &butler);
+    let router = willikins_server::router(Arc::clone(&butler), &base_config());
+
+    let padding = "x".repeat(HttpConfig::DEFAULT_MAX_BODY_BYTES + 1);
+    let form = serde_urlencoded::to_string([
+        ("decision", "approve"),
+        ("nonce", "irrelevant"),
+        ("reason", padding.as_str()),
+    ])
+    .unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/approvals/{plan_id}"))
+        .header("host", ALLOWED_HOST)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("authorization", basic_header("approver-1", APPROVER_TOKEN))
+        .header("origin", format!("https://{ALLOWED_HOST}"))
+        .body(Body::from(form))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(butler.pending_approvals().len(), 1);
+}
+
 // =====================================================================
 // 5. Restart
 // =====================================================================

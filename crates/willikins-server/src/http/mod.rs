@@ -95,9 +95,17 @@ pub fn router(butler: Arc<Butler>, config: &HttpConfig) -> Router {
         axum::middleware::from_fn_with_state(Arc::clone(&auth_tokens), auth::bearer_auth),
     );
 
-    let approvals_router = approvals::approvals_router(approvals_state).layer(
-        axum::middleware::from_fn_with_state(auth_tokens, auth::basic_auth),
-    );
+    let approvals_router = approvals::approvals_router(approvals_state)
+        // The same body cap `/mcp` runs under (rmcp enforces its own
+        // while streaming; this is axum's, for the one form this
+        // transport parses). Without it the approvals form fell back to
+        // axum's own 2 MiB default, so the deployment's configured cap
+        // bounded only half the surface.
+        .layer(axum::extract::DefaultBodyLimit::max(config.max_body_bytes))
+        .layer(axum::middleware::from_fn_with_state(
+            auth_tokens,
+            auth::basic_auth,
+        ));
 
     Router::new()
         .route("/healthz", get(healthz))
