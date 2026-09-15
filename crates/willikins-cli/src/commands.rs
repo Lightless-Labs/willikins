@@ -419,10 +419,36 @@ fn parse_principal(raw: &str) -> Result<PrincipalId, ExitCode> {
 /// plan's own decision 5), so this has no bound: the run thread it is
 /// waiting on always terminates on its own (`willikins_journal::continue_run_and_journal`
 /// catches a panic and still journals `RunFinished`).
+/// Poll `run_id` until it reaches a final state -- or until the run
+/// thread is gone without having recorded one.
+///
+/// **The second condition is not belt and braces.** A run's terminal
+/// state is folded from its `RunFinished` event, and
+/// `willikins_journal::JournalObserver` stashes an append failure rather
+/// than panicking, by design: a run's outcome is not less true for the
+/// journal having trouble recording it. So a journal that stops
+/// accepting mid-run (a read-only or full volume) leaves the record
+/// reading `Running` for good, and adversarial pass 2 found this loop
+/// polling it forever, holding the operator's terminal on a run that had
+/// already finished.
+///
+/// `Butler::run_in_progress` is the signal that tells "still going" from
+/// "died unrecorded": the run thread clears the single-apply slot only
+/// *after* its `RunFinished` append has been attempted, so a slot that no
+/// longer names this run means the record will never change again. The
+/// record is re-read once after observing that -- the append may have
+/// landed between the two reads -- and returned as it stands. A run still
+/// reading `Running` exits 1 (`exit_for_run_state`), which is the honest
+/// answer: willikins does not know how it ended.
 fn wait_for_run(butler: &Butler, run_id: RunId) -> RunRecord {
     loop {
         if let Some(record) = butler.run(run_id)
             && !matches!(record.state, RunState::Running)
+        {
+            return record;
+        }
+        if butler.run_in_progress() != Some(run_id)
+            && let Some(record) = butler.run(run_id)
         {
             return record;
         }
