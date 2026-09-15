@@ -52,6 +52,15 @@ impl RateLimiter {
     /// does), naming at least how many seconds until this principal's
     /// oldest counted call ages out of the window.
     pub fn check(&self, principal: &PrincipalId) -> Result<(), u64> {
+        if self.capacity == 0 {
+            // A configured zero means "no calls of this kind at all"
+            // (`WILLIKINS_PLAN_RATE_PER_MINUTE=0` is a value an operator
+            // can set, and `from_vars` reads it like any other `u32`).
+            // Answered before the window is touched: with no capacity
+            // there is never a counted call to age out, so there is no
+            // honest "retry after" shorter than the window itself.
+            return Err(WINDOW.as_secs());
+        }
         let now = self.clock.now();
         let mut calls = self.calls.lock().unwrap_or_else(PoisonError::into_inner);
         let window = calls.entry(principal.clone()).or_default();
@@ -111,6 +120,20 @@ mod tests {
         assert!(limiter.check(&p).is_ok());
         assert!(limiter.check(&p).is_ok());
         assert!(limiter.check(&p).is_err());
+    }
+
+    /// A capacity of zero is a configuration an operator can actually
+    /// set (`WILLIKINS_PLAN_RATE_PER_MINUTE=0` parses as a `u32` like any
+    /// other), and it used to reach an `unreachable!` -- `len() >= 0` is
+    /// true for an empty window, whose `front()` is then `None` -- so
+    /// every `plan` call panicked inside `spawn_blocking` instead of
+    /// being refused. Zero means "no calls", and that is what it now
+    /// answers.
+    #[test]
+    fn a_capacity_of_zero_refuses_every_call_rather_than_panicking() {
+        let limiter = RateLimiter::new(0, clock());
+        assert_eq!(limiter.check(&principal("agent")), Err(WINDOW.as_secs()));
+        assert_eq!(limiter.check(&principal("agent")), Err(WINDOW.as_secs()));
     }
 
     #[test]
