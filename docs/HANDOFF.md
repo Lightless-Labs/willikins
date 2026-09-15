@@ -84,6 +84,16 @@ compaction, before handing off, after a milestone, and after a plan change or di
   Workflow tool needs the operator's opt-in per session ("use a workflow" or
   "ultracode"); without it, dispatch through plain Agent calls. Agents must never message
   the coordinator mid-run (a reply resumes a duplicate of them).
+- **Railway (2026-09-15):** the operator created project `Willikins` (id
+  `7d8e6a12-f6cb-46fd-aa63-de8c352cdca0`, workspace "el-fitz's Projects"), environment
+  `production`, service `willikins` sourced from `Lightless-Labs/willikins`, auto-deploying
+  on push; they set the Dockerfile builder, though the first (pre-Dockerfile) deployment
+  ran under Railpack. The checkout is linked (`railway status`); the CLI is logged in. A
+  service domain `https://willikins-production.up.railway.app` exists (created by the
+  coordinator's `railway domain` check). No volume and no willikins variables yet: task
+  12 needs `RAILWAY_DOCKERFILE_PATH=deploy/Dockerfile` (or the Dockerfile at the root), a
+  volume for the journal, and the plan's environment variables, the two provider
+  credentials arriving through Doppler's Railway integration.
 - **Credentials for the probe and the smoke run** live in `~/.config/willikins/sandbox.env`
   (mode 600, outside the repo; source it before a live run): a GitHub fine-grained PAT
   scoped to the test organization `Willikins-Test` (read-only checks passed 2026-09-13)
