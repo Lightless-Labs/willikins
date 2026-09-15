@@ -89,8 +89,12 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `production`, service `willikins` sourced from `Lightless-Labs/willikins`, auto-deploying
   on push; they set the Dockerfile builder, though the first (pre-Dockerfile) deployment
   ran under Railpack. The checkout is linked (`railway status`); the CLI is logged in. A
-  service domain `https://willikins-production.up.railway.app` exists (created by the
-  coordinator's `railway domain` check). No volume and no willikins variables yet: task
+  service domain `https://willikins-production.up.railway.app` was created by the
+  coordinator's `railway domain` check; the operator decided on 2026-09-15 to drop it
+  (dashboard only; the CLI cannot remove one) and to expose no public domain until the
+  auth path matures beyond static bearer tokens (milestone 3), so task 12 proves build,
+  startup refusals and the internal healthcheck only, and the smoke run goes over stdio or
+  a localhost `serve --http`. No volume and no willikins variables yet: task
   12 needs `RAILWAY_DOCKERFILE_PATH=deploy/Dockerfile` (or the Dockerfile at the root), a
   volume for the journal, and the plan's environment variables, the two provider
   credentials arriving through Doppler's Railway integration.
