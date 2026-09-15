@@ -7,9 +7,9 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-14, night) — tasks 0 through 10a (verified) and both live write cycles landed; task 10b (the MCP server binary) is next
+### RESUME HERE (2026-09-15, morning) — tasks 0 through 10b (verified) and both live write cycles landed; task 11 (the CLI's apply, approve, reject, runs, run, serve, --live) is next
 
-- **Live state:** `main` at 261 commits, gates green at `bafa01c` (1,452 tests pass; the ignored ones
+- **Live state:** `main` at 288 commits, gates green at `d3daa3d` (1,551 tests pass; the ignored ones
   are by-hand measurements, a lock-probe child, the two live probes and the two live write
   cycles). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
@@ -73,12 +73,12 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
   2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
   test workplace (the earlier `dp.st.` config-scoped token could only read one config).
-- **Next action:** task 10b, one Workflow: first make plans survive a restart (fold
-  resolved inputs back from the journal through the type registry) and carry `validate`'s
-  errors through `Reported`, then the `willikins-server` binary (rmcp 3.3 tools on the
-  `Butler`, stdio, Streamable HTTP under axum 0.8 with bearer auth, the approvals page with
-  nonce and origin checks, startup refusals, an in-process rmcp client for tests;
-  acceptance tests 7 HTTP half, 11, 12), with an opus verify. Then 11, 12, 13, 14, one sequential Workflow at a time on `main`, sonnet implementing
+- **Next action:** task 11, one Workflow: the CLI gains `apply`, `approve`, `reject`,
+  `runs`, `run` and `serve` over the `willikins-server` library (`serve` links
+  `serve_stdio`/`serve_http`), `--live` builds the live catalog from the two credentials,
+  renderers for the new result types, the CLI half of test 11's parity, plus the two
+  items 10b handed over (per-element `message` on `ButlerError::Check`/`Input`; the CLI's
+  hand-maintained error-name table); an opus verify. Then 12, 13, 14, one sequential Workflow at a time on `main`, sonnet implementing
   test-first and opus verifying, every `CONTEXT` string naming the four gates exactly as
   CLAUDE.md spells them (`-j 2`, `RUST_TEST_THREADS=2`). Groups run one lane at a time. The
   Workflow tool needs the operator's opt-in per session ("use a workflow" or
@@ -128,7 +128,7 @@ Eleven crates, dependencies flowing downward only:
 | `willikins-providers-http` | `Credential` (env-sourced, redacted, crate-private `authorize`), `Http` over ureq 3 (retry on 429/5xx/transport for GET/PUT/DELETE, never POST; `Retry-After` capped at 60 s; no redirects; `put_empty`, `delete_with_body`), `ProviderError` with rate-limit facts -> `ToolError` with `provider says:` labelling and 256-char bound, `testing` module behind `test-support` | done, verified |
 | `willikins-providers-github` | `GitHubClient`, live `github.repo.ensure` and `github.actions_secret.ensure` (sealed box via `crypto_box`), secondary-rate-limit retry, authored fixtures with a per-file verification status, the GitHub half of the read-only probe | done, verified; probe ran |
 | `willikins-providers-doppler` | `DopplerClient`, live `doppler.project.ensure`, `config.ensure` (`root: true` only), `service_token.ensure`, `service_token.rotate` (always `Absent`), `secret.get` (`value.computed`), a nine-tool live catalog test, the Doppler half of the probe (written, refused by the `dp.st.` token) | done, verified; probe not run |
-| `willikins-server` | library only so far: `Butler` (plan, approve, reject, apply, run, runs, pending approvals, validate, describe, list_workflows, list_tools, propose_slug), `ButlerConfig`, `ButlerError` (kind-tagged), `ServerConfig::from_vars`, `live_catalog_with`, `StartupError`; tests: acceptance 7 identity, 8, 13, read ops, CLI parity, `adversarial_10a.rs` (24 attacks) | plan identity, windows, the single-apply lock, decision finality; task 10b adds the binary |
+| `willikins-server` | library and binary: `Butler` (plan, approve, reject, apply, run, runs, pending approvals, validate, describe, list_workflows, list_tools, propose_slug), `ButlerConfig`, `ButlerError` (kind-tagged), `ServerConfig::from_vars`, `live_catalog_with`, `StartupError`; `WillikinsHandler` (rmcp tools), `serve_stdio`, `serve_http`, `router`, `HttpConfig`, `TokenHash`; binary `willikins-server serve --stdio|--http [--fake] [--principal]`; tests: acceptance 7, 8, 12, 13, read ops, CLI and MCP parity, `adversarial_10a.rs` (24 attacks), `adversarial_10b.rs` (31 attacks), `http_server.rs`, `binary_startup.rs` | plan identity, windows, the single-apply lock, decision finality, static bearer tokens + Basic auth (sandbox-grade: no public domain until milestone 3) |
 | `willikins-providers-fake` | `FakeState` (JSON-seedable, one-way redacted; `next_token`, `fail_ensure_once`, `ensure_calls`, `read_calls`), nine tools plus the two from `willikins-tools` (`doppler.service_token.rotate` is Destructive); every `ensure` reads first, `doppler.project.ensure` seeds `dev`/`stg`/`prd`, `github.repo.ensure` refuses a visibility mismatch | done through task 4 |
 | `willikins-dsl` | YAML document to `Workflow`, reference grammar, located errors, published document schema, 256 KiB cap, anchor/alias/BOM pre-scan, typed `name`/`description` | done through task 1c |
 | `willikins-cli` | `validate`, `describe`, `plan`, `schema`, `propose-slug`; `--json` through `Reported`; text renders only through `Value::render()` and `single_line` escaping; `document says:` prefix | done, acceptance suite |

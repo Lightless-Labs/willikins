@@ -34,8 +34,14 @@ dedicated Doppler workplace (a repository and a project created, converged, and 
 the real tools; the Doppler one found and fixed two defects), then task 10a landed in two halves
 and an Opus verify fixed a decision race, an unjournaled refusal and a read outside the lock.
 
-**Next:** 10b (restart-safe plans and `Reported` validate errors first, then the rmcp binary),
-11, 12, 13, 14. This todo closes when the plan is marked Completed.
+2026-09-15: task 10b landed (restart-safe plans, `Reported` validate errors, the rmcp tool
+surface over stdio, the Streamable HTTP transport with bearer and Basic auth, the approvals
+page) and its Opus verify fixed a `Debug` hash leak, a zero-rate-limit panic, the approvals
+body cap and the fake announcement over HTTP. The operator created the Railway project and
+decided on no public domain until the auth path matures.
+
+**Next:** 11 (CLI apply/approve/reject/runs/run/serve, `--live`), 12, 13, 14. This todo closes
+when the plan is marked Completed.
 
 ## First action of the next session
 
