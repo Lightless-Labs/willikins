@@ -1431,6 +1431,275 @@ Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnect
     }
 }
 
+// =====================================================================
+// The two handed-over items adversarial pass 2 did not attack.
+// Added by its completeness critic, 2026-09-15.
+// =====================================================================
+
+/// Append a `RunStarted` for `plan_id` to an existing journal file, with
+/// the next sequence number and the last line's own timestamp: exactly
+/// what a process that died between `RunStarted` and `RunFinished`
+/// leaves on the volume. Written by hand rather than by racing a
+/// `SIGKILL`, so the test is deterministic.
+fn append_orphan_run_started(journal_path: &Path, run_id: &str, plan_id: &str) {
+    let text = std::fs::read_to_string(journal_path).expect("the journal exists");
+    let last = text
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .expect("a non-empty journal");
+    let parsed: serde_json::Value = serde_json::from_str(last).expect("the last line is JSON");
+    let seq = parsed["seq"].as_u64().expect("a seq") + 1;
+    let at = parsed["at"].as_str().expect("a timestamp").to_string();
+    let line = serde_json::json!({
+        "seq": seq,
+        "at": at,
+        "event": {
+            "kind": "run_started",
+            "run_id": run_id,
+            "plan_id": plan_id,
+            "principal": "agent-0123456789ab",
+        },
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(journal_path)
+        .expect("the journal opens for append");
+    writeln!(file, "{line}").expect("the orphan RunStarted appends");
+}
+
+/// **Crash recovery.** Task 12 handed over "the crash-recovery detour
+/// (volume detach and reattach) is untested" and adversarial pass 2 did
+/// not attack it: every restart it drives is a *clean* one, a child
+/// killed between two complete records. The shape a detached volume
+/// actually leaves behind is a journal whose last record is a
+/// `RunStarted` with no `RunFinished`, and Railway is not needed to
+/// make one.
+///
+/// Four things must hold, and do:
+///
+/// - the second server **starts**. An unfinished run is a valid journal,
+///   not a truncated one, so the fail-closed replay has nothing to
+///   refuse -- the refusal task 12 asked about (finding 17) is about a
+///   half-written *line*, which is a different fault.
+/// - the run reads `running` for ever. That is the honest answer, and
+///   it is finding 13's state reached by the other road: willikins does
+///   not know how that run ended.
+/// - the crashed plan is **`AlreadyApplied`**. `PlanRecord::applied` is
+///   folded from `RunStarted`, not from a finished run, so a crash
+///   cannot buy a second apply of a plan that may already have written
+///   to a provider. This is the one that would matter: the opposite
+///   answer would make "kill the process mid-run" a way to run an
+///   irreversible plan twice.
+/// - and the single-apply slot is **`Idle`**, so an unrelated plan still
+///   applies. A crash must not wedge the server until someone edits the
+///   journal.
+#[test]
+fn a_run_that_never_finished_recovers_without_wedging_the_server() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let workflows_dir = dir.path().join("workflows");
+    std::fs::create_dir_all(&workflows_dir).unwrap();
+    copy_fixture_as(
+        &workflows_dir,
+        "new-rust-service.yaml",
+        "new-rust-service.yaml",
+    );
+    let journal_path = dir.path().join("journal.jsonl");
+
+    let (crashed_plan, unrelated_plan) = {
+        let first = start_server_at(&workflows_dir, &journal_path);
+        let crashed = plan_over_mcp(
+            &first,
+            AGENT_TOKEN,
+            "new-rust-service",
+            &serde_json::json!({ "slug": "third-thoughts", "org": "lightless-labs" }),
+        )
+        .expect("the positive fixture plans");
+        let unrelated = plan_over_mcp(
+            &first,
+            AGENT_TOKEN,
+            "new-rust-service",
+            &serde_json::json!({ "slug": "fourth-thoughts", "org": "lightless-labs" }),
+        )
+        .expect("and plans a second time");
+        (crashed, unrelated)
+        // `first` is dropped here: the child is killed and the journal's
+        // exclusive lock released.
+    };
+
+    // The crash itself.
+    let run_id = forged_uuid_v7_now();
+    append_orphan_run_started(&journal_path, &run_id, &crashed_plan);
+
+    let second = start_server_at(&workflows_dir, &journal_path);
+
+    let status = call_tool(
+        &second,
+        AGENT_TOKEN,
+        "run_status",
+        &serde_json::json!({ "run_id": run_id }),
+    );
+    assert_eq!(
+        status["result"]["structuredContent"]["state"], "running",
+        "a run with no RunFinished reads running: {status}"
+    );
+
+    let refused = call_tool(
+        &second,
+        AGENT_TOKEN,
+        "apply",
+        &serde_json::json!({ "plan_id": crashed_plan }),
+    );
+    assert_eq!(
+        refused["result"]["structuredContent"]["kind"], "AlreadyApplied",
+        "a crash must not buy a second apply: {refused}"
+    );
+
+    let applied = call_tool(
+        &second,
+        AGENT_TOKEN,
+        "apply",
+        &serde_json::json!({ "plan_id": unrelated_plan }),
+    );
+    assert!(
+        applied["result"]["structuredContent"]["run_id"].is_string(),
+        "a crashed run must not hold the single-apply slot: {applied}"
+    );
+}
+
+/// **What an agent is actually handed when an apply is refused.**
+///
+/// Task 11 handed over "rmcp round-trips for the four remaining apply
+/// refusal kinds are pinned by type identity only" -- a `matches!` on
+/// the Rust enum, which says nothing about the JSON that crosses the
+/// transport. Adversarial pass 2 did not pick that item up, and then
+/// added two more kinds to the same list. These are the refusals an
+/// agent can provoke from outside the process, each driven through the
+/// real binary and read back as the `kind` string an agent branches on.
+///
+/// Not reachable from outside, and named rather than quietly skipped:
+/// `PlanExpired` needs the clock, `Drift` and `PlanFailed` need a
+/// provider that changes its answer between plan and apply, and
+/// `ApplyPreparing` and `RunInProgress` need two applies in flight --
+/// all five are pinned in process (`adversarial_10a.rs`,
+/// `adversarial_10b.rs`, `blocking_pool_13.rs`). `UnknownPlan` and
+/// `AlreadyApplied` have their own tests in this file.
+#[test]
+fn the_apply_refusals_an_agent_can_provoke_name_their_kind_over_the_wire() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let workflows_dir = dir.path().join("workflows");
+    std::fs::create_dir_all(&workflows_dir).unwrap();
+    copy_fixture_as(
+        &workflows_dir,
+        "new-rust-service.yaml",
+        "new-rust-service.yaml",
+    );
+    copy_fixture_as(
+        &workflows_dir,
+        "hostile-description-pending.yaml",
+        "hostile-description-pending.yaml",
+    );
+    let journal_path = dir.path().join("journal.jsonl");
+    let server = start_server_at(&workflows_dir, &journal_path);
+
+    // ApprovalRequired: a plan above the threshold, applied with no
+    // decision recorded for it.
+    let pending = plan_over_mcp(
+        &server,
+        AGENT_TOKEN,
+        "hostile-description-pending",
+        &serde_json::json!({ "slug": "third-thoughts" }),
+    )
+    .expect("a pending plan");
+    let refused = call_tool(
+        &server,
+        AGENT_TOKEN,
+        "apply",
+        &serde_json::json!({ "plan_id": pending }),
+    );
+    assert_eq!(
+        refused["result"]["structuredContent"]["kind"], "ApprovalRequired",
+        "{refused}"
+    );
+
+    // DocumentChanged: the document the plan was made against is not the
+    // document on disk any more. A trailing comment is enough -- the
+    // check is the SHA-256, not the meaning.
+    let planned = plan_over_mcp(
+        &server,
+        AGENT_TOKEN,
+        "new-rust-service",
+        &serde_json::json!({ "slug": "third-thoughts", "org": "lightless-labs" }),
+    )
+    .expect("the positive fixture plans");
+    let document = workflows_dir.join("new-rust-service.yaml");
+    let before = std::fs::read_to_string(&document).unwrap();
+    std::fs::write(&document, format!("{before}\n# changed after the plan\n")).unwrap();
+    let changed = call_tool(
+        &server,
+        AGENT_TOKEN,
+        "apply",
+        &serde_json::json!({ "plan_id": planned }),
+    );
+    assert_eq!(
+        changed["result"]["structuredContent"]["kind"], "DocumentChanged",
+        "{changed}"
+    );
+}
+
+/// `RecordedInputUnreadable` over the wire, which needs a restart: the
+/// refusal exists because a plan's resolved inputs are rebuilt from the
+/// journal, and that only happens in a process that did not record them.
+///
+/// `adversarial_10b.rs` pins the `ButlerError`'s own serialization; this
+/// pins what an agent is handed, through the real transport, and that
+/// the refusal names the input rather than inventing a planning error
+/// (finding 3's whole point).
+///
+/// Added by adversarial pass 2's completeness critic, 2026-09-15.
+#[test]
+fn a_recorded_input_that_no_longer_parses_names_the_input_over_the_wire() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let workflows_dir = dir.path().join("workflows");
+    std::fs::create_dir_all(&workflows_dir).unwrap();
+    copy_fixture_as(
+        &workflows_dir,
+        "new-rust-service.yaml",
+        "new-rust-service.yaml",
+    );
+    let journal_path = dir.path().join("journal.jsonl");
+
+    let plan_id = {
+        let first = start_server_at(&workflows_dir, &journal_path);
+        plan_over_mcp(
+            &first,
+            AGENT_TOKEN,
+            "new-rust-service",
+            &serde_json::json!({ "slug": "third-thoughts", "org": "lightless-labs" }),
+        )
+        .expect("the positive fixture plans")
+    };
+
+    // Hand-edit the recorded value into something `ProjectSlug` refuses.
+    let text = std::fs::read_to_string(&journal_path).unwrap();
+    let edited = text.replace("third-thoughts", "NOT A SLUG");
+    assert_ne!(edited, text, "the recorded value must really be in there");
+    std::fs::write(&journal_path, edited).unwrap();
+
+    let second = start_server_at(&workflows_dir, &journal_path);
+    let refused = call_tool(
+        &second,
+        AGENT_TOKEN,
+        "apply",
+        &serde_json::json!({ "plan_id": plan_id }),
+    );
+    let error = &refused["result"]["structuredContent"];
+    assert_eq!(error["kind"], "RecordedInputUnreadable", "{refused}");
+    assert_eq!(
+        error["input"], "slug",
+        "the refusal names the input, not a planning-error kind: {refused}"
+    );
+}
+
 /// The nonce in the page's own form, for `plan_id`.
 fn extract_nonce(html: &str, plan_id: &str) -> String {
     let section = html
