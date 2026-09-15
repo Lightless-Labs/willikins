@@ -173,6 +173,14 @@ pub struct RunArgs {
 /// parse, or a `run`/`runs` lookup that found nothing. Kind-tagged the
 /// same way every other error in this workspace is, so `--json` prints it
 /// through [`Reported`] exactly like a [`ButlerError`].
+/// **No variant here declares a field named `message`.** [`Reported`]
+/// adds one of its own with `serde(flatten)`, and flatten resolves a
+/// collision by writing *both* keys rather than refusing: the object
+/// then carries `message` twice, which every JSON reader folds back to
+/// one silently, with no rule saying which one survives. The same
+/// invariant `willikins-core`'s own error enums keep (see
+/// [`Reported`]'s docs); pinned end to end by
+/// `tests/adversarial_11.rs`'s `assert_no_duplicate_keys`.
 #[derive(Debug, serde::Serialize)]
 #[serde(tag = "kind")]
 enum CliError {
@@ -181,7 +189,7 @@ enum CliError {
         /// The configured path.
         path: String,
         /// The underlying failure.
-        message: String,
+        error: String,
     },
     /// An argument that should have parsed as a [`PlanId`]/[`RunId`] did
     /// not.
@@ -189,7 +197,7 @@ enum CliError {
         /// The offending argument, verbatim.
         argument: String,
         /// Why.
-        message: String,
+        error: String,
     },
     /// `run <id>` named no run this journal has recorded.
     UnknownRun {
@@ -201,17 +209,17 @@ enum CliError {
     /// the named document.
     Io {
         /// What went wrong.
-        message: String,
+        error: String,
     },
 }
 
 impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Journal { path, message } => write!(f, "{path}: {message}"),
-            Self::InvalidId { argument, message } => write!(f, "`{argument}`: {message}"),
+            Self::Journal { path, error } => write!(f, "{path}: {error}"),
+            Self::InvalidId { argument, error } => write!(f, "`{argument}`: {error}"),
             Self::UnknownRun { run_id } => write!(f, "no run `{run_id}` is recorded"),
-            Self::Io { message } => write!(f, "{message}"),
+            Self::Io { error } => write!(f, "{error}"),
         }
     }
 }
@@ -245,6 +253,23 @@ where
         eprintln!("{}", render::single_line(&error.to_string()));
     }
     ExitCode::from(2)
+}
+
+/// A trusted directory that failed startup validation, reported the way
+/// the MCP surface reports the same failure: wrapped in
+/// [`ButlerError::Startup`], not as a bare [`willikins_server::StartupError`].
+///
+/// Two reasons, and they are the same reason twice. The `kind` an agent
+/// reads is then `Startup` whether it came from this CLI or from the
+/// `apply` tool over MCP, with the scan's own error nested under `error`
+/// in both -- the parity the plan's acceptance test 11 asks for. And
+/// nesting is what keeps `StartupError`'s own `message` field (on
+/// `Directory`, `InvalidName` and `Journal`) off the top level, where
+/// [`Reported`]'s added `message` would collide with it and emit the key
+/// twice. The stream and exit code are unchanged: this is still a
+/// configuration refusal, stderr and exit 2.
+fn fail_startup(error: willikins_server::StartupError, json: bool) -> ExitCode {
+    fail_config(&ButlerError::Startup { error }, json)
 }
 
 /// Print `error` -- JSON through [`Reported`], text as one escaped line
@@ -370,7 +395,7 @@ fn open_journal(
                 fail_config(
                     &CliError::Journal {
                         path: path.to_string(),
-                        message: error.to_string(),
+                        error: error.to_string(),
                     },
                     json,
                 )
@@ -506,7 +531,7 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
         Err(error) => {
             return fail_config(
                 &CliError::Io {
-                    message: format!("failed to create a temporary directory: {error}"),
+                    error: format!("failed to create a temporary directory: {error}"),
                 },
                 json,
             );
@@ -516,7 +541,7 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
     if let Err(error) = std::fs::copy(file, &dest) {
         return fail_config(
             &CliError::Io {
-                message: format!("{file}: failed to copy into a temporary directory: {error}"),
+                error: format!("{file}: failed to copy into a temporary directory: {error}"),
             },
             json,
         );
@@ -535,7 +560,7 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
         clock,
     )) {
         Ok(butler) => butler,
-        Err(error) => return fail_config(&error, json),
+        Err(error) => return fail_startup(error, json),
     };
 
     let code = plan_and_apply(
@@ -620,7 +645,7 @@ fn cmd_apply_plan_id(args: &ApplyArgs, plan_id_str: &str, json: bool) -> ExitCod
             return fail_config(
                 &CliError::InvalidId {
                     argument: plan_id_str.to_string(),
-                    message: error.to_string(),
+                    error: error.to_string(),
                 },
                 json,
             );
@@ -650,7 +675,7 @@ fn cmd_apply_plan_id(args: &ApplyArgs, plan_id_str: &str, json: bool) -> ExitCod
         clock,
     )) {
         Ok(butler) => butler,
-        Err(error) => return fail_config(&error, json),
+        Err(error) => return fail_startup(error, json),
     };
 
     let handle = match butler.apply(plan_id, principal) {
@@ -710,7 +735,7 @@ fn decide(
             return fail_config(
                 &CliError::InvalidId {
                     argument: plan_id_str.to_string(),
-                    message: error.to_string(),
+                    error: error.to_string(),
                 },
                 json,
             );
@@ -773,7 +798,7 @@ fn open_replayed(path: &str, json: bool) -> Result<willikins_journal::ReplayedJo
         fail_config(
             &CliError::Journal {
                 path: path.to_string(),
-                message: error.to_string(),
+                error: error.to_string(),
             },
             json,
         )
@@ -811,7 +836,7 @@ pub fn cmd_run(args: &RunArgs, json: bool) -> ExitCode {
             return fail_config(
                 &CliError::InvalidId {
                     argument: args.run_id.clone(),
-                    message: error.to_string(),
+                    error: error.to_string(),
                 },
                 json,
             );

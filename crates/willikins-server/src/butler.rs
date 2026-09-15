@@ -421,7 +421,7 @@ impl Butler {
 
     fn append(&self, event: Event) -> Result<Entry, ButlerError> {
         Journal::append(&mut *self.journal_lock(), event).map_err(|error| ButlerError::Journal {
-            message: error.to_string(),
+            error: error.to_string(),
         })
     }
 
@@ -657,7 +657,7 @@ impl Butler {
         // the journal lock itself, and `std::sync::Mutex` is not
         // reentrant, so calling it here would deadlock this thread.
         Journal::append(&mut *journal, event).map_err(|error| ButlerError::Journal {
-            message: error.to_string(),
+            error: error.to_string(),
         })?;
         Ok(())
     }
@@ -1065,7 +1065,7 @@ fn resolve_recorded_inputs(
 ) -> Result<IndexMap<InputName, Value>, ButlerError> {
     let raw: IndexMap<InputName, serde_json::Value> =
         serde_json::from_value(inputs.as_json().clone()).map_err(|error| ButlerError::Journal {
-            message: format!("the recorded plan inputs are not valid JSON: {error}"),
+            error: format!("the recorded plan inputs are not valid JSON: {error}"),
         })?;
 
     let mut resolved = IndexMap::new();

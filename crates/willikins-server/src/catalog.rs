@@ -94,7 +94,8 @@ pub fn live_catalog(github: Credential, doppler: Credential) -> Catalog {
 /// second caller, the CLI's `--live` flag, and this became the one shared
 /// path instead of two).
 ///
-/// Kind-tagged (`{"kind": "GitHub" | "Doppler", "message": ...}` through
+/// Kind-tagged (`{"kind": "GitHub" | "Doppler", "error": ...}`, plus the
+/// `message` added by
 /// [`willikins_core::Reported`]), the same convention every other error in
 /// this workspace follows, so a caller prints it exactly like a
 /// `ButlerError`.
@@ -104,19 +105,24 @@ pub enum LiveCredentialError {
     /// `WILLIKINS_GITHUB_TOKEN` is missing or malformed.
     GitHub {
         /// The provider crate's own message. Names the variable only.
-        message: String,
+        /// Named `error`, not `message`: `willikins-cli` prints this
+        /// through [`Reported`](willikins_core::Reported), which adds a
+        /// `message` of its own, and a field of that name here would
+        /// make the two collide into one duplicated JSON key.
+        error: String,
     },
     /// `WILLIKINS_DOPPLER_TOKEN` is missing or malformed.
     Doppler {
         /// The provider crate's own message. Names the variable only.
-        message: String,
+        /// See [`Self::GitHub`] for why this is not called `message`.
+        error: String,
     },
 }
 
 impl std::fmt::Display for LiveCredentialError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GitHub { message } | Self::Doppler { message } => write!(f, "{message}"),
+            Self::GitHub { error } | Self::Doppler { error } => write!(f, "{error}"),
         }
     }
 }
@@ -139,12 +145,12 @@ impl std::error::Error for LiveCredentialError {}
 pub fn live_catalog_from_env() -> Result<Catalog, LiveCredentialError> {
     let github = willikins_providers_github::credential_from_env().map_err(|error| {
         LiveCredentialError::GitHub {
-            message: error.to_string(),
+            error: error.to_string(),
         }
     })?;
     let doppler = willikins_providers_doppler::credential_from_env().map_err(|error| {
         LiveCredentialError::Doppler {
-            message: error.to_string(),
+            error: error.to_string(),
         }
     })?;
     Ok(live_catalog(github, doppler))

@@ -174,8 +174,13 @@ pub enum ButlerError {
     },
     /// The journal itself could not record or be read.
     Journal {
-        /// What went wrong.
-        message: String,
+        /// What went wrong. Named `error`, not `message`: this type is
+        /// serialized through [`Reported`](willikins_core::Reported),
+        /// which adds a `message` of its own by `serde(flatten)`, and
+        /// flatten resolves a collision by writing *both* keys -- which
+        /// every JSON reader then folds back to one, silently, with no
+        /// rule saying which. See the enum's own doc.
+        error: String,
     },
     /// A directory scan (`start`, `list_workflows`) failed. See
     /// [`StartupError`] for what it names.
@@ -270,7 +275,7 @@ impl fmt::Display for ButlerError {
                 errors.len(),
                 missing.len()
             ),
-            Self::Journal { message } => write!(f, "journal: {message}"),
+            Self::Journal { error } => write!(f, "journal: {error}"),
             Self::Startup { error } => write!(f, "{error}"),
             Self::RateLimited {
                 retry_after_seconds,
@@ -393,7 +398,7 @@ mod tests {
                 missing: Vec::new(),
             },
             ButlerError::Journal {
-                message: "boom".to_string(),
+                error: "boom".to_string(),
             },
             ButlerError::Startup {
                 error: StartupError::Symlink {
@@ -433,6 +438,22 @@ mod tests {
 
             let plain = serde_json::to_value(sample).unwrap();
             assert_eq!(plain["kind"], expected_kind, "{sample:?}");
+
+            // No variant may declare a field named `message`: `Reported`
+            // adds one with `serde(flatten)`, and flatten resolves a
+            // collision by writing *both* keys rather than refusing. This
+            // assertion runs before `Reported` is involved at all, so a
+            // colliding field shows up here on its own -- which the
+            // `json["message"]` check below cannot do, since parsing into
+            // a `serde_json::Value` folds a duplicate key silently. A
+            // field literally named `kind` is a compile error under
+            // `#[serde(tag = "kind")]`, so that half has a backstop
+            // already. `ButlerError::Journal` did carry a `message` field
+            // until this check was written; it is `error` now.
+            assert!(
+                plain.as_object().unwrap().get("message").is_none(),
+                "ButlerError::{expected_kind} must not have a field named `message`: {plain}"
+            );
 
             let reported = willikins_core::Reported::new(sample);
             let json = serde_json::to_value(reported).unwrap();

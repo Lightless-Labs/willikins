@@ -29,8 +29,12 @@
 //! variable: `run` clears the environment, so no `--live` test can reach
 //! a network.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+use serde::Deserializer as _;
+use serde::de::{IgnoredAny, MapAccess, Visitor};
 
 // ---------------------------------------------------------------------
 // harness
@@ -78,6 +82,58 @@ fn json_documents(text: &str) -> Vec<serde_json::Value> {
         .into_iter::<serde_json::Value>()
         .map(|result| result.unwrap_or_else(|err| panic!("invalid JSON in {text:?}: {err}")))
         .collect()
+}
+
+/// Every top-level JSON object key in `json`, in encounter order,
+/// **including duplicates** -- the same token-walking collector
+/// `willikins-core`'s own `Reported` tests use, and for the same reason:
+/// parsing into a [`serde_json::Value`] folds a duplicate key silently,
+/// which would make a `message`/`message` collision indistinguishable
+/// from the non-colliding case.
+fn top_level_keys(json: &str) -> Vec<String> {
+    struct KeyCollector(Vec<String>);
+
+    impl<'de> Visitor<'de> for KeyCollector {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a JSON object")
+        }
+
+        fn visit_map<A>(mut self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            while let Some(key) = map.next_key::<String>()? {
+                self.0.push(key);
+                map.next_value::<IgnoredAny>()?;
+            }
+            Ok(self.0)
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_str(json);
+    deserializer
+        .deserialize_map(KeyCollector(Vec::new()))
+        .unwrap_or_else(|error| panic!("not a JSON object: {error}; input was {json:?}"))
+}
+
+/// Assert that `json` is one object whose keys are all distinct -- the
+/// invariant `willikins_core::Reported` documents and every kind-tagged
+/// error in this workspace is supposed to keep: no variant may declare a
+/// field named `message`, since `Reported` adds one of its own and
+/// `serde(flatten)` writes both rather than refusing. A duplicate key is
+/// not a cosmetic flaw: every JSON reader keeps one of the two silently,
+/// and which one is not specified.
+fn assert_no_duplicate_keys(json: &str, what: &str) {
+    let keys = top_level_keys(json);
+    let mut seen = std::collections::BTreeSet::new();
+    for key in &keys {
+        assert!(
+            seen.insert(key.clone()),
+            "{what}: duplicate top-level key `{key}` in {json}\nkeys: {keys:?}"
+        );
+    }
 }
 
 struct TempDir(PathBuf);
@@ -402,6 +458,7 @@ fn a_held_journal_refuses_a_writer_admits_a_reader_and_validates_afterwards() {
     let reported = stderr(&refused);
     let docs = json_documents(&reported);
     assert_eq!(docs[0]["kind"], "Journal", "{docs:?}");
+    assert_no_duplicate_keys(reported.trim(), "apply against a held journal");
 
     // A reader: straight through, exit 0, with the seeded run in it.
     let reading = run(&["runs", "--journal", &journal_str]);
@@ -777,6 +834,13 @@ fn assert_domain_refusal(output: &Output, expected: &str) {
         refusal["message"].as_str().is_some_and(|m| !m.is_empty()),
         "{expected}: no message in {docs:?}"
     );
+    // The refusal is the last document printed, so it is the last object
+    // in the stream: check its own keys for a `Reported` collision.
+    let last = text
+        .rfind("\n{")
+        .map_or(text.as_str(), |at| &text[at + 1..])
+        .trim();
+    assert_no_duplicate_keys(last, expected);
 }
 
 /// The configuration-refusal half of the same table: stderr, exit 2, one
@@ -819,7 +883,12 @@ fn every_configuration_refusal_is_kind_tagged_on_stderr_with_exit_2() {
         "--workflows-dir",
         bad.path().to_str().unwrap(),
     ]);
-    assert_eq!(exit_code(&output), 2, "stdout: {}", stdout(&output));
+    // The kind is `Startup`, exactly as the MCP surface reports the same
+    // failure (`ButlerError::Startup { error }`), with the scan's own
+    // `StartupError` nested inside rather than flattened to the top --
+    // which is also what keeps its `message` field from colliding with
+    // the one `Reported` adds.
+    assert_config_refusal(&output, "Startup");
     assert!(
         stderr(&output).contains("InvalidName"),
         "stderr: {}",
@@ -869,6 +938,7 @@ fn assert_config_refusal(output: &Output, expected: &str) {
         value["message"].as_str().is_some_and(|m| !m.is_empty()),
         "{expected}: no message in {value}"
     );
+    assert_no_duplicate_keys(trimmed, expected);
 }
 
 // =====================================================================
