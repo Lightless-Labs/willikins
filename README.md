@@ -87,12 +87,25 @@ every environment.
 
 ### Infrastructure as code
 
-The file `.railway/railway.ts` holds the service settings for Railway: the health check path,
-1 replica, and the volume mount at `/data`. Nobody applied this file. The installed Railway
-CLI (version 4.37.4) has no `railway config` command. Set these values in the Railway
-dashboard until a later CLI can apply the file. Read the comments at the top of the file
-first. Railway's own documentation gives this rule for the file: "omit means delete". A
-resource that the file does not name can go away when someone applies the file.
+The file `.railway/railway.ts` describes the Railway project in code: the service, its GitHub
+source, its five variables (kept with `preserve()`, never written into the file), the
+healthcheck path `/healthz`, 1 replica, and the volume mounted at `/data`. The Railway CLI
+(version 5.57.2 or later) generated the file from the live project on 2026-09-15; the
+healthcheck is the only addition. To plan or apply it, install the Railway TypeScript SDK
+from the repository root, then run the CLI:
+
+```
+npm install
+railway config plan --verbose
+railway config apply
+```
+
+The plan is read-only and redacts variable values. Do not pass `--show-values` or
+`--decrypt-variables`. Railway's own rule for the file is "omit means delete": a resource or
+field that the file does not name can go away when someone applies the file. If a plan shows
+a delete, regenerate the file with `railway config pull --force`, add the healthcheck again,
+and read the plan again before you apply it. On 2026-09-15 the plan showed one change, the
+healthcheck, and nothing to destroy; the file is not applied yet.
 
 ### No public domain, on purpose
 

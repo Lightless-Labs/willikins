@@ -22,3 +22,8 @@ workflows/fixtures
 nohup.out
 *.log
 .DS_Store
+
+# The Railway TypeScript SDK the IaC commands need locally; never part of the image.
+node_modules
+package.json
+package-lock.json

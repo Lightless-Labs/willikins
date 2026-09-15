@@ -1,0 +1,8 @@
+{
+  "name": "willikins-railway-iac",
+  "private": true,
+  "description": "Node manifest for one purpose only: the Railway TypeScript SDK that `railway config plan` and `railway config apply` need to evaluate .railway/railway.ts. Nothing in the Rust workspace depends on it.",
+  "devDependencies": {
+    "railway": "3.11.0"
+  }
+}

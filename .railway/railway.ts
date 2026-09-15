@@ -1,114 +1,72 @@
-// Railway Infrastructure as Code for the `willikins` service.
+// Railway Infrastructure as Code for the `willikins` service (task 12, step C of
+// docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md).
 //
-// Task 12, step C of
-// docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md, authored
-// from Railway's own IaC reference, fetched verbatim 2026-09-15:
-//   https://docs.railway.com/infrastructure-as-code.md
-//   https://docs.railway.com/infrastructure-as-code/reference.md
+// Provenance. The shape below is what `railway config pull` (CLI 5.57.2, SDK
+// `railway` 3.11.0) generated from the live project on 2026-09-15 after the first
+// GitHub-triggered deployment succeeded, plus exactly one authored addition: the
+// healthcheck. Everything else mirrors the live environment on purpose, because
+// Railway IaC treats an omitted resource or field as an instruction to delete it,
+// not as "leave it alone": one authoring file, one apply, omit means delete.
+// A plan run against this file must therefore show the healthcheck and nothing
+// else. If it shows a delete, the live environment moved since this file was
+// generated; run `railway config pull --force`, re-add the healthcheck, and read
+// the plan again before applying.
 //
-// *** THIS FILE IS AUTHORED, NOT YET APPLIED. ***
+// Variables. `preserve()` keeps whatever value Railway already holds and never
+// writes a value into this file. The five names are the server's own
+// configuration (README, "Deploy"). The two provider credentials are absent by
+// design: they reach Railway only through Doppler's Railway integration, never
+// through this file or a paste.
 //
-// The Railway CLI installed for this task (4.37.4) has no `railway
-// config` subcommand at all, so nothing here has ever been run through
-// `railway config apply` (or `railway config pull`/`plan`, which the
-// same CLI also lacks). Applying it is the coordinator's and the
-// operator's step, and only after re-reading it against the live
-// project: Railway's Infrastructure as Code treats a field's *omission*
-// as a deletion instruction, not as "leave it alone" -- applying a
-// project definition that is missing something the live environment
-// currently has will remove that thing. In particular, this file
-// declares no `source` (see below) and no `domains`; applying it must
-// not be allowed to interpret either omission as "remove the GitHub
-// connection" or "remove a domain" if the live environment has grown
-// one since this file was written.
+// Source. `github(...)` mirrors the connection the operator made in the dashboard
+// (repository Lightless-Labs/willikins, branch main, auto-deploy on push).
+// Railway builds from the repository root `Dockerfile` (task 12, step B).
 //
-// The volume: this task's own brief permitted running `railway volume
-// add --mount-path /data` at most once, and only if `railway volume
-// list` showed none. It showed none, so that command ran (2026-09-15)
-// and Railway auto-named the result -- the installed CLI's `volume add`
-// has no `--name` flag, so the name was never this task's to choose.
-// `railway volume list` afterwards confirmed:
-//   Volume: willikins-volume
-//   Attached to: willikins
-//   Mount path: /data
-// The `volume(...)` resource below uses that exact name, per this
-// task's own rule: a volume the CLI already created must be mirrored
-// here by name, never declared as if it did not exist yet (which would
-// read, on apply, as "create a second one" -- Railway does not de-
-// duplicate by mount path).
+// Volume. `willikins-volume` was created once by `railway volume add` on
+// 2026-09-15; its region and size are the live values, read back by the pull.
+// Decreasing `sizeMB`, detaching the mount, or changing the region is destructive
+// (the IaC reference's own words), so change none of them by hand.
 //
-// No `source` field: the `willikins` service is already a GitHub-
-// sourced service the operator connected (repository
-// `Lightless-Labs/willikins`, branch `main`, auto-deploy on push)
-// through the dashboard, before this file existed. The reference's own
-// words for this: "Omit `source` when `.railway/railway.ts` should
-// manage service settings but not declare a GitHub repository or Docker
-// image." This file manages exactly the three things task 12 asks it
-// to (healthcheck, replicas, the volume mount) and leaves the
-// dashboard's own GitHub connection alone.
+// Domains. None, and no `domains` key at all: the operator deleted the service's
+// public domain on 2026-09-15 and the service gets none until milestone 2c's
+// OAuth lands (docs/HANDOFF.md, "RESUME HERE"). Generated Railway domains are
+// never part of this file, so omitting the key removes nothing.
 //
-// No `build`/`start` commands: those are the buildpack-style fields
-// (`pnpm build` / `pnpm start`) the reference's own examples use for a
-// service with no Dockerfile; this service builds from the repository
-// root `Dockerfile` (task 12, step B) instead, which is not a field
-// this version of the IaC reference documents at all -- there is
-// nothing to author here without inventing a field the schema does not
-// have. `railway status --json` showed the service's stored builder as
-// `RAILPACK` as of 2026-09-15 (every deploy before this task's
-// Dockerfile existed failed at Railpack's own "no start command
-// detected" step, for a workspace with more than one binary target);
-// Railway is documented to prefer a root `Dockerfile` automatically
-// once one exists, so `railway up --ci` (task 12, step D) is the actual
-// test of whether that holds here. If it does not, switching the
-// service to the Dockerfile builder is a dashboard action outside this
-// task's permitted commands, for the coordinator or the operator.
+// Healthcheck. `/healthz` is served outside the allowed-hosts check, so Railway's
+// probe (sent from `healthcheck.railway.app`, a host `WILLIKINS_ALLOWED_HOSTS`
+// does not name) passes; pinned by
+// crates/willikins-server/tests/deploy_host_headers.rs.
 //
-// No `domains`: the operator deleted the service's public domain on
-// purpose (docs/HANDOFF.md, "RESUME HERE") and the milestone 2 plan's
-// 2026-09-15 addendum decided the service gets none until a stronger
-// auth path lands in milestone 3. The reference's own words: "Generated
-// Railway service domains are not included in `.railway/railway.ts`."
-// Omitting the field entirely (never `domains: []`) is what keeps this
-// file from ever being read as "remove whatever domain exists" the one
-// time that stops being true.
-import { defineRailway, project, service, volume } from "railway/iac";
+// Plan and apply from the repository root, with the SDK installed (`npm install`,
+// see package.json): `railway config plan --verbose` is read-only and redacts
+// variable values; `railway config apply` re-plans, marks destructive lines, and
+// asks for confirmation. Never pass `--show-values` or `--decrypt-variables`.
+import { defineRailway, github, preserve, project, service, volume } from "railway/iac";
 
 export default defineRailway(() => {
-  // 5000 MB mirrors what `railway volume list` showed after `volume add`
-  // created this volume on 2026-09-15 (the plan-tiered default; this
-  // task's brief authorized creating the volume, not choosing its
-  // size). The IaC reference says applying a *smaller* `sizeMB` than the
-  // live volume is destructive -- re-check `railway volume list` before
-  // ever changing this number, never just edit it to a round figure.
-  //
-  // No `region`: the IaC reference's volume config takes `region` and
-  // `sizeMB`, and this file names only the second of them. The live
-  // volume's own region was never read -- `railway volume list` does not
-  // print one and this task's command list holds nothing that would --
-  // so writing a region here would be a guess. The same reference calls
-  // "changing placement" destructive, in the same sentence as deleting a
-  // volume, so whoever applies this file first must read the volume's
-  // real region from the dashboard and put it here before they do.
-  const journal = volume("willikins-volume", {
+  const willikinsVolume = volume("willikins-volume", {
+    alerts: { usage: { "100": {}, "80": {}, "95": {} } },
+    allowOnlineResize: true,
+    region: "europe-west4-drams3a",
     sizeMB: 5000,
   });
 
-  // `healthcheck: "/healthz"` is safe to apply against this server's own
-  // allowed-hosts rule: Railway sends healthchecks from the hostname
-  // `healthcheck.railway.app` (its healthcheck documentation, fetched
-  // 2026-09-15), which `WILLIKINS_ALLOWED_HOSTS` does not name, and
-  // `/healthz` sits outside that check. Pinned by
-  // `crates/willikins-server/tests/deploy_host_headers.rs`.
   const willikins = service("willikins", {
+    source: github("Lightless-Labs/willikins", { checkSuites: false }),
+    replicas: { "europe-west4-drams3a": 1 },
     healthcheck: "/healthz",
     healthcheckTimeout: 30,
-    replicas: 1,
-    volumeMounts: {
-      "/data": journal,
+    volumeMounts: { "/data": willikinsVolume },
+    env: {
+      WILLIKINS_AGENT_TOKEN_HASHES: preserve(),
+      WILLIKINS_ALLOWED_HOSTS: preserve(),
+      WILLIKINS_APPROVER_TOKEN_HASH: preserve(),
+      WILLIKINS_FAKE_CATALOG: preserve(),
+      WILLIKINS_JOURNAL_PATH: preserve(),
     },
   });
 
   return project("Willikins", {
-    resources: [willikins, journal],
+    resources: [willikins, willikinsVolume],
   });
 });

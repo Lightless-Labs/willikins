@@ -81,10 +81,13 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `DocumentErrorKind` message collision, the tracing quarter from pass 1, the truncated
   journal line policy). Then 14 (the local smoke run with the sandbox credentials over
   `serve --stdio` or a localhost `--http`, `deploy/teardown.sh` afterwards) and the plan
-  marked Completed. Railway follow-ups for the operator: apply `.railway/railway.ts` after a
-  CLI upgrade and after writing the volume's region into it; set the healthcheck path;
-  connect Doppler's Railway integration and remove `WILLIKINS_FAKE_CATALOG` when the service
-  should go live. Then one sequential Workflow at a time on `main`, sonnet implementing
+  marked Completed. Railway follow-ups for the operator: apply `.railway/railway.ts` (CLI
+  upgraded to 5.57.2 on 2026-09-15 with the operator's permission; the file was regenerated
+  from the live project with `railway config pull`, the healthcheck added, and `railway
+  config plan` showed exactly that one change and nothing to destroy; the SDK installs with
+  `npm install` from `package.json`; apply is the operator's command, or one word to the
+  coordinator, never run unasked); connect Doppler's Railway integration and remove
+  `WILLIKINS_FAKE_CATALOG` when the service should go live. Then one sequential Workflow at a time on `main`, sonnet implementing
   test-first and opus verifying, every `CONTEXT` string naming the four gates exactly as
   CLAUDE.md spells them (`-j 2`, `RUST_TEST_THREADS=2`). Groups run one lane at a time. The
   Workflow tool needs the operator's opt-in per session ("use a workflow" or
@@ -107,7 +110,10 @@ compaction, before handing off, after a milestone, and after a plan change or di
   the root `Dockerfile` builds on Railway (builder now DOCKERFILE), the volume
   `willikins-volume` is mounted at `/data`, the five non-secret variables are set, the
   latest deployment is SUCCESS and serves the fake catalog (`WILLIKINS_FAKE_CATALOG=1`);
-  `.railway/railway.ts` is authored, not applied.
+  `.railway/railway.ts` mirrors the live project plus the healthcheck (region
+  `europe-west4-drams3a`, 5000 MB, five `preserve()` variables, GitHub source) and is
+  planned clean but not applied; the first GitHub-triggered build (`fc866bf0`, commit
+  `4977451`) succeeded on 2026-09-15, so auto-deploy on push is proven.
 - **Credentials for the probe and the smoke run** live in `~/.config/willikins/sandbox.env`
   (mode 600, outside the repo; source it before a live run): a GitHub fine-grained PAT
   scoped to the test organization `Willikins-Test` (read-only checks passed 2026-09-13)
