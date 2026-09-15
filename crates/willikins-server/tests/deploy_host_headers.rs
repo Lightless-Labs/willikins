@@ -9,7 +9,7 @@
 //!    incoming traffic based on the hostname, you'll need to add
 //!    `healthcheck.railway.app` to your list of allowed hosts").
 //!    `/healthz` sits outside the allowed-hosts check, so a healthcheck
-//!    answers whatever `WILLIKINS_ALLOWED_HOSTS` holds. `.railway/railway.ts`
+//!    is answered whatever `WILLIKINS_ALLOWED_HOSTS` holds. `.railway/railway.ts`
 //!    declares `healthcheck: "/healthz"`; this is the test that says the
 //!    declaration is safe to apply without also widening the variable.
 //!
