@@ -20,6 +20,8 @@
 //! prompt string itself. A label is not enough on its own for a
 //! line-oriented rendering — see [`MissingInput::document_description`].
 
+use std::fmt;
+
 use indexmap::IndexMap;
 
 use crate::check::Checked;
@@ -129,6 +131,18 @@ pub struct InputError {
     /// before it looks at the text, so [`Value::parse`] never hands one to
     /// a parser.
     pub error: ParseError,
+}
+
+impl fmt::Display for InputError {
+    /// `willikins-server`'s `ButlerError::Input` (task 11) wraps a list of
+    /// these through [`crate::Reported`] the same way it already does for
+    /// `Check`'s `Vec<CheckError>`, which needs a [`fmt::Display`] to wrap
+    /// with. Plain, since `error`'s own message (a domain type's parser)
+    /// already carries the interesting detail; this only adds which input
+    /// it was for.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "input `{}`: {}", self.input, self.error)
+    }
 }
 
 /// A declared input `describe` found neither a raw value nor a default for.
@@ -506,6 +520,18 @@ mod tests {
         assert_eq!(description.errors.len(), 1);
         assert_eq!(description.errors[0].input, input_name("bogus"));
         assert!(description.errors[0].error.reason.contains("no such input"));
+    }
+
+    /// `willikins_server::ButlerError::Input` (task 11) wraps each
+    /// `InputError` through `Reported`, which needs `Display`; this pins
+    /// what it says, naming the input before the parser's own message.
+    #[test]
+    fn input_error_display_names_the_input_before_the_parsers_own_message() {
+        let error = InputError {
+            input: input_name("slug"),
+            error: ParseError::new("ProjectSlug", "boom"),
+        };
+        assert_eq!(error.to_string(), "input `slug`: ProjectSlug: boom");
     }
 
     #[test]

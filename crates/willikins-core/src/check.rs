@@ -469,6 +469,46 @@ impl CheckError {
             other => unreachable!("not a declaration error: {other:?}"),
         }
     }
+
+    /// This variant's name, exactly as its `Serialize` impl's `kind` tag
+    /// renders it (pinned by
+    /// `tests::kind_agrees_with_the_serialized_tag_for_every_variant`).
+    ///
+    /// A text renderer that wants the variant name on its own -- the
+    /// leading `VariantName:` in `willikins-cli`'s `check_error_line`,
+    /// say -- would otherwise have to either hand-maintain its own
+    /// name-per-variant table (drifting from this enum the moment a
+    /// variant is renamed or added, since nothing but a human keeps two
+    /// such lists in step) or serialize to JSON and read `"kind"` back out
+    /// just to get a string it already knows at the `match` site. This is
+    /// the third option: `willikins-core`'s own enum names its own
+    /// variants, once.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::UnknownTool { .. } => "UnknownTool",
+            Self::UnknownPort { .. } => "UnknownPort",
+            Self::UnknownNode { .. } => "UnknownNode",
+            Self::UnboundInput { .. } => "UnboundInput",
+            Self::UndeclaredInput { .. } => "UndeclaredInput",
+            Self::InvalidLiteral { .. } => "InvalidLiteral",
+            Self::TypeMismatch { .. } => "TypeMismatch",
+            Self::SecretLiteral { .. } => "SecretLiteral",
+            Self::SecretToNonSecretSink { .. } => "SecretToNonSecretSink",
+            Self::SecretWorkflowInput { .. } => "SecretWorkflowInput",
+            Self::SecretForEachSource { .. } => "SecretForEachSource",
+            Self::ForEachOverScalar { .. } => "ForEachOverScalar",
+            Self::ItemOutsideForEach { .. } => "ItemOutsideForEach",
+            Self::KeyedOnScalarNode { .. } => "KeyedOnScalarNode",
+            Self::Cycle { .. } => "Cycle",
+            Self::DefaultTypeMismatch { .. } => "DefaultTypeMismatch",
+            Self::NestedList { .. } => "NestedList",
+            Self::DuplicateNode { .. } => "DuplicateNode",
+            Self::UnregisteredInputType { .. } => "UnregisteredInputType",
+            Self::DuplicateForEachDefault { .. } => "DuplicateForEachDefault",
+            Self::LiteralOutput { .. } => "LiteralOutput",
+        }
+    }
 }
 
 impl std::error::Error for CheckError {}
@@ -2199,6 +2239,24 @@ mod tests {
             );
         }
         assert_eq!(seen_kinds.len(), CHECK_ERROR_VARIANT_COUNT);
+    }
+
+    /// [`CheckError::kind`] (the library-side answer to
+    /// `todos/2026-09-12-error-json-uniformity-gaps.md` item 3: a caller
+    /// that wants the variant name as a string, such as
+    /// `willikins-cli`'s text renderer, should be able to ask the enum
+    /// rather than hand-maintain its own copy) agrees with both the
+    /// `kind` this test's own `variant_kinds!`-generated `check_error_kind_of`
+    /// names and the tag `Serialize` actually puts on the wire, for every
+    /// variant.
+    #[test]
+    fn kind_agrees_with_the_serialized_tag_for_every_variant() {
+        for sample in check_error_samples() {
+            let expected = check_error_kind_of(&sample);
+            assert_eq!(sample.kind(), expected, "sample: {sample:?}");
+            let json = serde_json::to_value(&sample).expect("CheckError must serialize");
+            assert_eq!(json["kind"], sample.kind(), "sample: {sample:?}");
+        }
     }
 
     variant_kinds!(

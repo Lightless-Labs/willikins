@@ -54,7 +54,12 @@ pub struct ValidateResponse {
 /// Serialize `items` as a JSON array of [`Reported`]-wrapped elements:
 /// each one's own `{"kind", ...fields}` shape plus `message`. The
 /// `serde(serialize_with = ...)` counterpart of [`reported_array_schema`].
-fn serialize_reported<T, S>(items: &[T], serializer: S) -> Result<S::Ok, S::Error>
+///
+/// `pub(crate)` rather than private: `crate::error::ButlerError::Check`
+/// and `::Input` (task 11) reuse it for the same reason `ValidateResponse`
+/// does -- see this module's doc and
+/// `todos/2026-09-12-error-json-uniformity-gaps.md`.
+pub(crate) fn serialize_reported<T, S>(items: &[T], serializer: S) -> Result<S::Ok, S::Error>
 where
     T: serde::Serialize + std::fmt::Display,
     S: serde::Serializer,

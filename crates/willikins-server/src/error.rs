@@ -141,7 +141,13 @@ pub enum ButlerError {
     },
     /// The reloaded document failed `check` against the catalog.
     Check {
-        /// Every failure.
+        /// Every failure. Each element carries its own `kind` (`CheckError`
+        /// is itself internally tagged) and, on the wire, `message` too --
+        /// wrapped through [`willikins_core::Reported`] the same way
+        /// `willikins-server`'s `ValidateResponse.errors` already is (see
+        /// `todos/2026-09-12-error-json-uniformity-gaps.md` item 5), via
+        /// [`crate::read_ops::serialize_reported`].
+        #[serde(serialize_with = "crate::read_ops::serialize_reported")]
         errors: Vec<CheckError>,
     },
     /// The named document could not be loaded or parsed.
@@ -152,9 +158,18 @@ pub enum ButlerError {
     /// The supplied inputs did not resolve: some were rejected, or some
     /// declared input has neither a value nor a default.
     Input {
-        /// Every rejected raw value or unrecognised input name.
+        /// Every rejected raw value or unrecognised input name. Each
+        /// element carries `message` too, the same way [`Self::Check`]'s
+        /// `errors` does (`InputError` itself has no internal `kind` tag --
+        /// it is a plain struct, not an enum -- so, unlike `CheckError`,
+        /// only `message` is added; see the field's own `pub(crate)`
+        /// helper for the reasoning this reuses).
+        #[serde(serialize_with = "crate::read_ops::serialize_reported")]
         errors: Vec<InputError>,
-        /// Every declared input with no value at all.
+        /// Every declared input with no value at all. Left as `describe`
+        /// produces it (a *successful*-response shape elsewhere; see
+        /// `todos/2026-09-12-error-json-uniformity-gaps.md` item 1) --
+        /// task 11's own instructions name only `errors` for wrapping.
         missing: Vec<MissingInput>,
     },
     /// The journal itself could not record or be read.
@@ -444,5 +459,53 @@ mod tests {
         let json = serde_json::to_value(reported).unwrap();
         assert_eq!(json["kind"], "UnknownPlan");
         assert!(json["message"].as_str().unwrap().contains("no plan"));
+    }
+
+    /// Closes `todos/2026-09-12-error-json-uniformity-gaps.md` item 2 for
+    /// `ButlerError::Check`: each element of `errors`, not just the outer
+    /// `ButlerError`, carries `kind` (its own internal tag, unaffected)
+    /// and `message` (new), the same shape
+    /// `willikins_server::ValidateResponse.errors` already carries (item
+    /// 5) -- so an agent reading either surface's `errors` array sees the
+    /// identical per-element shape.
+    #[test]
+    fn check_errors_each_carry_kind_and_message() {
+        let error = ButlerError::Check {
+            errors: vec![CheckError::Cycle {
+                nodes: vec![node_name()],
+            }],
+        };
+        let json = serde_json::to_value(&error).unwrap();
+        assert_eq!(json["kind"], "Check");
+        let element = &json["errors"][0];
+        assert_eq!(element["kind"], "Cycle");
+        assert!(
+            element["message"].as_str().is_some_and(|m| !m.is_empty()),
+            "{json}"
+        );
+    }
+
+    /// The same for `ButlerError::Input`'s `errors` (not `missing`, which
+    /// task 11's own instructions leave as `describe` produces it --
+    /// see the field's own doc). `InputError` is a plain struct, not a
+    /// `#[serde(tag = "kind")]` enum, so wrapping it through `Reported`
+    /// adds `message` but no `kind` -- there is no per-variant tag to add
+    /// one from. The outer `ButlerError::Input` object still carries its
+    /// own `kind` (`"Input"`), same as every other variant.
+    #[test]
+    fn input_errors_each_carry_message_and_the_outer_object_still_carries_kind() {
+        let error = ButlerError::Input {
+            errors: vec![InputError {
+                input: willikins_core::InputName::parse("x").unwrap(),
+                error: ParseError::new("Value", "boom"),
+            }],
+            missing: Vec::new(),
+        };
+        let json = serde_json::to_value(&error).unwrap();
+        assert_eq!(json["kind"], "Input");
+        let element = &json["errors"][0];
+        assert_eq!(element["input"], "x");
+        assert_eq!(element["message"], "input `x`: Value: boom");
+        assert!(element.get("kind").is_none(), "{json}");
     }
 }

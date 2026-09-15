@@ -36,8 +36,42 @@ found by the verifiers and deliberately left for the task that owns them:
    DocumentError>` directly (not wrapped in a `ButlerError`) still cannot be built -- is
    untouched; still open for whichever of task 10b (the `validate` MCP tool's own result
    shape) or a `willikins-dsl` fix owns it.
-3. Untouched; still `crates/willikins-cli/src/render.rs`'s own hand-maintained
-   `check_error_variant_name`. Task 11 (CLI renderers) owns folding it.
+
+   **Further resolved by task 11's library step (2026-09-15).** The other two nested-list
+   variants named alongside this item get the same per-element treatment
+   `ValidateResponse` (item 5) already has: `ButlerError::Check.errors` (`Vec<CheckError>`)
+   and `ButlerError::Input.errors` (`Vec<InputError>`) each serialize through
+   `crate::read_ops::serialize_reported` (now `pub(crate)`, reused rather than
+   reimplemented), pinned by `check_errors_each_carry_kind_and_message` and
+   `input_errors_each_carry_message_and_the_outer_object_still_carries_kind` in
+   `crates/willikins-server/src/error.rs`. `CheckError` is itself an internally tagged
+   enum, so its elements carry `kind` *and* `message`, same as `ValidateResponse.errors`.
+   `InputError` is a plain struct with no internal tag -- there was no `kind` to begin
+   with -- so its elements gain only `message`; a new `impl fmt::Display for InputError`
+   in `crates/willikins-core/src/describe.rs` (`"input `{input}`: {error}"`) is what
+   `Reported` needed to wrap it at all. `ButlerError::Input.missing` (`Vec<MissingInput>`)
+   is untouched: the task narrowing this work named `errors` on both variants, not
+   `missing`, and `MissingInput` is a *successful*-response shape elsewhere (item 1), not
+   an error list. `ButlerError` itself derives no `JsonSchema` (only `Serialize`), so
+   there is no generated schema to update to match, unlike `ValidateResponse`'s.
+
+   **The literal collision this item names is still open**, and is a `willikins-dsl` wire
+   change, not a `willikins-server`/`willikins-core` one: renaming
+   `DocumentErrorKind::{Yaml,Semantic}`'s `message` field so `Reported<DocumentError>`
+   can be built directly would touch every fixture header quoting the exact error, the
+   CLI's own document-error JSON, and the DSL's schema snapshots -- out of scope for task
+   11's three named library changes (willikins-journal, willikins-core, willikins-server).
+   Left for whoever next touches `willikins-dsl`'s error shape.
+3. **Closed on the library side by task 11 (2026-09-15).** `willikins-cli`'s
+   `check_error_variant_name` duplicated `CheckError`'s own variant names by hand, one
+   `match` arm per variant, with nothing forcing it to stay in step with the enum. Added
+   `willikins_core::CheckError::kind(&self) -> &'static str` (the enum naming its own
+   variants once), pinned against both the existing test macro's `check_error_kind_of` and
+   the serialized `"kind"` tag by `kind_agrees_with_the_serialized_tag_for_every_variant`
+   in `crates/willikins-core/src/check.rs`. The CLI side is still open: the next step of
+   task 11 (the CLI subcommands and renderers themselves) deletes
+   `check_error_variant_name` from `crates/willikins-cli/src/render.rs` and calls
+   `.kind()` instead.
 4. **`Butler::propose_slug` resolved by task 10a**: it returns
    `willikins_server::ProposeSlugResponse { slug }` or a kind-tagged `ButlerError`
    (`InvalidProjectName`/`SlugProposal`, both walked by the same variant test as item 2),
