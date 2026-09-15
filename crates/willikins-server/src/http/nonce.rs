@@ -54,13 +54,27 @@ impl NonceStore {
         nonce
     }
 
-    /// Consume `plan_id`'s nonce: removes it unconditionally, whether or
-    /// not `presented` matches -- single-use means single-use even under
-    /// a failed attempt, so a nonce a hostile page guessed wrong cannot
-    /// be retried, and the legitimate one that guess collided with (if
-    /// any) is burned too rather than left presentable a second time by
-    /// coincidence. Returns whether `presented` matched the nonce this
-    /// plan had outstanding and it was issued no more than `window` ago.
+    /// Consume `plan_id`'s nonce: returns whether `presented` matched the
+    /// nonce this plan had outstanding *and* it was issued no more than
+    /// `window` ago, removing it only when it matched.
+    ///
+    /// **Compare, then remove** -- changed by adversarial pass 2, which
+    /// found that removing unconditionally let one request destroy a
+    /// nonce it had not proved it knew. A nonce posted against the wrong
+    /// plan (`POST /approvals/{B}` carrying plan A's nonce) burned B's,
+    /// so the approver's own pending decision for B stopped working until
+    /// they reloaded the page. Nothing was bought by that: the nonce is
+    /// 32 bytes from the system CSPRNG, so there is no guessing attack to
+    /// slow down, and the case where burning would matter -- a forged
+    /// cross-site POST -- never reaches this function, because the
+    /// `Origin`/`Referer` check in `crate::http::approvals` refuses it
+    /// first. What it cost was real: the approval page is the only
+    /// out-of-band decision channel this milestone has, and a stray or
+    /// stale same-origin POST could deny it.
+    ///
+    /// Single-use is unchanged: a nonce that *does* match is removed, so
+    /// replaying it fails, and a fresh `GET /approvals` reissues (see
+    /// [`Self::issue`]).
     pub(crate) fn consume(
         &self,
         plan_id: PlanId,
@@ -68,15 +82,23 @@ impl NonceStore {
         now: Timestamp,
         window: Duration,
     ) -> bool {
-        let removed = self
+        let mut entries = self
             .entries
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&plan_id);
-        match removed {
-            Some((nonce, issued_at)) => nonce == presented && elapsed(issued_at, now) <= window,
-            None => false,
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some((nonce, issued_at)) = entries.get(&plan_id) else {
+            return false;
+        };
+        // Constant-time only in the sense that matters here: the nonce is
+        // not a long-lived secret and this comparison is behind Basic
+        // authentication and the origin check, so a plain equality is
+        // enough -- but the entry is left in place unless it matched.
+        if nonce != presented {
+            return false;
         }
+        let fresh = elapsed(*issued_at, now) <= window;
+        entries.remove(&plan_id);
+        fresh
     }
 }
 
@@ -103,8 +125,12 @@ mod tests {
         assert!(!store.consume(plan_id, &nonce, now(), Duration::from_secs(60)));
     }
 
+    /// Adversarial pass 2's decision, pinned: a wrong guess is refused
+    /// and leaves the real nonce usable. See [`NonceStore::consume`]'s
+    /// own doc for why burning it bought nothing and cost the approval
+    /// path.
     #[test]
-    fn a_wrong_nonce_is_refused_and_still_burns_the_real_one() {
+    fn a_wrong_nonce_is_refused_and_leaves_the_real_one_usable() {
         let store = NonceStore::new();
         let plan_id = PlanId::new();
         let nonce = store.issue(plan_id, now());
@@ -114,8 +140,23 @@ mod tests {
             now(),
             Duration::from_secs(60)
         ));
-        // The real nonce is gone too: a wrong guess still consumes it.
+        assert!(store.consume(plan_id, &nonce, now(), Duration::from_secs(60)));
+        // Still single-use.
         assert!(!store.consume(plan_id, &nonce, now(), Duration::from_secs(60)));
+    }
+
+    /// A nonce issued for one plan, presented against another, refuses
+    /// and leaves *both* plans' nonces alone.
+    #[test]
+    fn a_nonce_presented_against_another_plan_burns_neither() {
+        let store = NonceStore::new();
+        let plan_a = PlanId::new();
+        let plan_b = PlanId::new();
+        let nonce_a = store.issue(plan_a, now());
+        let nonce_b = store.issue(plan_b, now());
+        assert!(!store.consume(plan_b, &nonce_a, now(), Duration::from_secs(60)));
+        assert!(store.consume(plan_a, &nonce_a, now(), Duration::from_secs(60)));
+        assert!(store.consume(plan_b, &nonce_b, now(), Duration::from_secs(60)));
     }
 
     #[test]
@@ -132,6 +173,10 @@ mod tests {
         let nonce = store.issue(plan_id, issued);
         let later = Timestamp::from_datetime(*issued.as_datetime() + chrono::Duration::hours(25));
         assert!(!store.consume(plan_id, &nonce, later, Duration::from_secs(24 * 60 * 60)));
+        // An expired nonce is consumed even so: it matched, and leaving
+        // it in place would keep an unusable entry alive for the life of
+        // the process.
+        assert!(!store.consume(plan_id, &nonce, issued, Duration::from_secs(24 * 60 * 60)));
     }
 
     #[test]

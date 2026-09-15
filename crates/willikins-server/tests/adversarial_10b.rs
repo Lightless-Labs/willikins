@@ -471,12 +471,19 @@ async fn a_foreign_origin_refusal_does_not_burn_the_real_nonce() {
     assert!(butler.pending_approvals().is_empty());
 }
 
-/// A wrong nonce burns the plan's real one: the store removes the entry
-/// whether or not the presented value matched, so a guess cannot be
-/// retried and the guessed-at nonce is not left presentable. The
-/// approver reloads the page (which reissues) to decide.
+/// A wrong nonce is refused and the plan's real one still works.
+///
+/// **Flipped by adversarial pass 2.** Task 10b removed the entry whether
+/// or not the presented value matched, on the theory that a guess should
+/// not be retryable -- but the nonce is 32 bytes from the system CSPRNG,
+/// so there is no guessing attack to slow down, and a forged cross-site
+/// POST never reaches the nonce check at all (the `Origin`/`Referer`
+/// check refuses it first). What burning did buy was a way for one stray
+/// same-origin POST to deny the approval path, which is the only
+/// out-of-band decision channel this milestone has. See
+/// `crate::http::nonce::NonceStore::consume`'s own doc.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_wrong_nonce_burns_the_real_one_and_the_plan_stays_pending() {
+async fn a_wrong_nonce_is_refused_and_the_real_one_still_decides() {
     let dir = tempfile::tempdir().unwrap();
     let butler = butler_arc(dir.path(), common::manual_clock());
     let plan_id = plan_pending(dir.path(), &butler);
@@ -507,8 +514,11 @@ async fn a_wrong_nonce_burns_the_real_one_and_the_plan_stays_pending() {
         .await
         .unwrap();
     assert_eq!(guessed.status(), StatusCode::FORBIDDEN);
+    assert_eq!(butler.pending_approvals().len(), 1);
 
-    let replayed = router
+    // The approver's own nonce, unburned by the wrong guess, still
+    // decides -- without a page reload.
+    let honest = router
         .clone()
         .oneshot(post_decision_request(
             &plan_id,
@@ -519,33 +529,21 @@ async fn a_wrong_nonce_burns_the_real_one_and_the_plan_stays_pending() {
         ))
         .await
         .unwrap();
-    assert_eq!(replayed.status(), StatusCode::FORBIDDEN);
-    assert_eq!(butler.pending_approvals().len(), 1);
+    assert_eq!(honest.status(), StatusCode::SEE_OTHER, "{honest:?}");
+    assert!(butler.pending_approvals().is_empty());
 
-    // Reloading the page reissues, and that nonce decides.
-    let html = body_text(
-        router
-            .clone()
-            .oneshot(get_approvals_request(&basic_header(
-                "approver-1",
-                APPROVER_TOKEN,
-            )))
-            .await
-            .unwrap(),
-    )
-    .await;
-    let fresh = extract_nonce(&html, &plan_id);
-    let response = router
+    // And it is still single-use: replaying it fails.
+    let replayed = router
         .oneshot(post_decision_request(
             &plan_id,
             &basic_header("approver-1", APPROVER_TOKEN),
             Some(("origin", &format!("https://{ALLOWED_HOST}"))),
             "approve",
-            &fresh,
+            &nonce,
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(replayed.status(), StatusCode::FORBIDDEN);
 }
 
 /// A nonce from a page loaded before a restart is refused: the store is
