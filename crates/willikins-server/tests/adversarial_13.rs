@@ -1099,15 +1099,40 @@ fn no_spelling_of_a_workflow_name_escapes_the_trusted_directory() {
 /// through the filesystem would inherit this difference, and the record
 /// should say what it is.
 #[test]
-fn this_hosts_filesystem_case_sensitivity_is_recorded() {
+fn an_upper_case_name_cannot_reach_the_filesystem_whatever_this_host_folds() {
+    use willikins_types::DomainType as _;
+
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("case-probe.yaml"), "x").unwrap();
     let case_insensitive = dir.path().join("Case-Probe.yaml").is_file();
     // macOS (APFS, default) folds case; Linux (ext4/overlayfs, which is
-    // what Railway runs) does not. Either answer is fine here: the point
-    // is that it is recorded and that `WorkflowName`'s grammar makes it
-    // unreachable.
+    // what Railway runs) does not. Printed, not asserted: this is an
+    // observation about the host, and asserting either answer would make
+    // the test fail on the other one.
     println!("filesystem is case-insensitive: {case_insensitive}");
+
+    // What *is* asserted is the invariant that makes the difference
+    // unobservable, and it holds on both hosts: an upper-case spelling
+    // is not a `WorkflowName` at all, so it is refused before any path
+    // is built and the filesystem's own answer never gets a say.
+    //
+    // Rewritten by adversarial pass 2's completeness critic, 2026-09-15.
+    // The pass shipped this as `this_hosts_filesystem_case_sensitivity_is_recorded`,
+    // whose only assertion was that the file it had just written existed
+    // -- it measured the fold, printed it into captured output a green
+    // run discards, and pinned nothing. The note claimed "both readings
+    // of the case question, pinned"; only one of them was.
+    assert!(
+        willikins_types::WorkflowName::parse("Case-Probe").is_err(),
+        "an upper-case name must be refused by the grammar"
+    );
+    assert!(
+        willikins_types::WorkflowName::parse("case-probe").is_ok(),
+        "and the honest spelling must still be a name"
+    );
+    // The sibling test drives the same upper-case spelling through the
+    // real binary and requires the same refusal; together they say the
+    // refusal is the grammar's and not the directory's.
     assert!(dir.path().join("case-probe.yaml").is_file());
 }
 
@@ -1368,6 +1393,14 @@ Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnect
 
     let stderr = server.stderr_text();
     let stdout = server.stdout_text();
+    // The sweep is only evidence if there is something to sweep: a
+    // capture that came back empty would pass every assertion below
+    // without looking at a single line the binary wrote. Added by
+    // adversarial pass 2's completeness critic, 2026-09-15.
+    assert!(
+        stderr.contains("willikins-server listening"),
+        "the stderr capture must be live for this sweep to mean anything: {stderr:?}"
+    );
     for (what, needle) in [
         ("the agent bearer token", AGENT_TOKEN),
         ("the approver password", APPROVER_PASSWORD),
@@ -1850,6 +1883,13 @@ fn document_text_cannot_forge_a_tracing_line_or_paint_a_terminal() {
     std::thread::sleep(Duration::from_millis(300));
 
     let stderr = server.stderr_text();
+    // Same liveness check as the secret sweep: an empty capture would
+    // satisfy every assertion below. Added by adversarial pass 2's
+    // completeness critic, 2026-09-15.
+    assert!(
+        stderr.contains("willikins-server listening"),
+        "the stderr capture must be live for this sweep to mean anything: {stderr:?}"
+    );
     assert!(
         !stderr.contains("PASS2MARKER"),
         "document text reached the server's own log output:\n{stderr}"
