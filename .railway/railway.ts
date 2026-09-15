@@ -80,10 +80,25 @@ export default defineRailway(() => {
   // size). The IaC reference says applying a *smaller* `sizeMB` than the
   // live volume is destructive -- re-check `railway volume list` before
   // ever changing this number, never just edit it to a round figure.
+  //
+  // No `region`: the IaC reference's volume config takes `region` and
+  // `sizeMB`, and this file names only the second of them. The live
+  // volume's own region was never read -- `railway volume list` does not
+  // print one and this task's command list holds nothing that would --
+  // so writing a region here would be a guess. The same reference calls
+  // "changing placement" destructive, in the same sentence as deleting a
+  // volume, so whoever applies this file first must read the volume's
+  // real region from the dashboard and put it here before they do.
   const journal = volume("willikins-volume", {
     sizeMB: 5000,
   });
 
+  // `healthcheck: "/healthz"` is safe to apply against this server's own
+  // allowed-hosts rule: Railway sends healthchecks from the hostname
+  // `healthcheck.railway.app` (its healthcheck documentation, fetched
+  // 2026-09-15), which `WILLIKINS_ALLOWED_HOSTS` does not name, and
+  // `/healthz` sits outside that check. Pinned by
+  // `crates/willikins-server/tests/deploy_host_headers.rs`.
   const willikins = service("willikins", {
     healthcheck: "/healthz",
     healthcheckTimeout: 30,
