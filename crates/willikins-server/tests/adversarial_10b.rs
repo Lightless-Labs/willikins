@@ -334,6 +334,43 @@ fn a_token_hash_renders_as_a_placeholder_through_display() {
     assert!(!hash.to_string().contains(&hash.short_hex()));
 }
 
+/// `TokenHash`'s `Debug` must carry as little as its `Display` does. The
+/// derived one printed all 32 bytes, so one `{config:?}` in a panic
+/// message, an `unwrap` on a `Result<_, HttpConfig>`, or a `tracing`
+/// field would have published every configured credential hash -- and the
+/// approver's "password" is a human-typed one, so its SHA-256 is worth
+/// brute-forcing in a way a high-entropy agent token's is not.
+///
+/// Asserted as an information property rather than against a literal
+/// rendering: two *different* hashes must debug-print identically, which
+/// is true exactly when the rendering carries nothing about the digest.
+#[test]
+fn a_token_hash_carries_nothing_through_debug_either() {
+    assert_eq!(
+        format!("{:?}", TokenHash::of("one token")),
+        format!("{:?}", TokenHash::of("a completely different token")),
+        "Debug must not distinguish two hashes"
+    );
+
+    // And the configuration that holds them inherits that: two configs
+    // differing only in their credentials debug-print identically.
+    let one = HttpConfig::build(
+        "127.0.0.1:0".parse().unwrap(),
+        vec![TokenHash::of("agent-a")],
+        TokenHash::of("approver-a"),
+        vec![ALLOWED_HOST.to_string()],
+    )
+    .unwrap();
+    let two = HttpConfig::build(
+        "127.0.0.1:0".parse().unwrap(),
+        vec![TokenHash::of("agent-b")],
+        TokenHash::of("approver-b"),
+        vec![ALLOWED_HOST.to_string()],
+    )
+    .unwrap();
+    assert_eq!(format!("{one:?}"), format!("{two:?}"));
+}
+
 // =====================================================================
 // 2. Nonces and origins
 // =====================================================================

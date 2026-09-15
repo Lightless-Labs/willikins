@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 /// token: only an operator-supplied hex digest, or a hash this process
 /// computed from request bytes that are immediately discarded once
 /// hashed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TokenHash([u8; 32]);
 
 impl TokenHash {
@@ -202,6 +202,22 @@ impl fmt::Display for TokenHash {
     /// `{token_hash}` in a log line or error message cannot leak even the
     /// hashed form of a credential. Use [`Self::short_hex`] deliberately
     /// when a short, non-reversible fragment is actually wanted.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<token hash>")
+    }
+}
+
+impl fmt::Debug for TokenHash {
+    /// The same placeholder [`Display`](fmt::Display) prints, for the
+    /// same reason -- hand-written rather than derived, because the
+    /// derived one printed all 32 bytes, and `Debug` is what a panic
+    /// message, an `unwrap` on a `Result<_, HttpConfig>`, a `tracing`
+    /// field, or any `{:?}` on a struct holding one actually reaches for.
+    /// The approver's credential is a password a human types into a
+    /// browser's Basic prompt, so its digest is worth brute-forcing in a
+    /// way a generated agent token's is not; neither belongs in a log
+    /// line. `HttpConfig`'s own derived `Debug` inherits this, so it too
+    /// carries nothing distinguishing about the credentials it holds.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("<token hash>")
     }
