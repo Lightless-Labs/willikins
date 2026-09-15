@@ -952,6 +952,26 @@ Recorded here so they are not lost; nothing in this milestone depends on them.
   Buildkite provider whose first tool creates the pipeline for the new repository (the
   operator confirmed on 2026-09-14 that workflows must be able to provision it), and
   decides whether provisioning grants the CI service account access to the new project.
+- Several GitHub organizations, several Doppler workplaces (operator, 2026-09-15, while
+  preparing Doppler's Railway integration: "We'll have multiple GitHub Tokens, because I
+  have multiple GitHub orgs"). This milestone's out-of-scope line "one server serves one
+  GitHub org and one Doppler workplace" therefore does not describe the operator's real
+  deployment. A fine-grained PAT is bound to one resource owner and a Doppler
+  service-account token to one workplace, so a live server needs one credential per
+  organization and per workplace, selected per call from the target's own name, never from
+  the document. Proposed shape for milestone 3: the GitHub provider routes by `GitHubOrg`
+  (already an input type) to a credential read from `WILLIKINS_GITHUB_TOKEN_<ORG>` with
+  the org uppercased and `-` mapped to `_` (collision-free: GitHub owner names allow only
+  letters, digits and hyphens), `WILLIKINS_GITHUB_TOKEN` staying the single-org default;
+  the Doppler provider needs a workplace to route by, which no current type carries, so
+  milestone 3 adds a `DopplerWorkplace` input (an operator-chosen alias that names the
+  variable suffix, since Doppler's API exposes no workplace slug on the project object)
+  with `WILLIKINS_DOPPLER_TOKEN` as the default. Startup validates every variable of either
+  family. The better long-term GitHub answer is a GitHub App installed in each
+  organization, minting short-lived installation tokens per call from one private key held
+  in Doppler, which also answers the blast-radius question above; it needs RS256 signing
+  and an installation lookup per org, so it is a milestone 3 decision, not a patch. Until
+  then the Railway service serves one organization and one workplace.
 
 ## Review resolutions
 
