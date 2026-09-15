@@ -49,6 +49,7 @@
 
 use std::sync::Arc;
 
+use http::request::Parts;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{
     CallToolResult, ErrorData, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
@@ -260,23 +261,76 @@ impl std::fmt::Display for RunLookupError {
     }
 }
 
+/// Why a tool call could not resolve a principal to run as. The one
+/// domain error this module raises that comes from the transport layer
+/// rather than from `Butler` itself.
+///
+/// This can only happen when [`WillikinsHandler::requiring_request_principal`]
+/// is set (the Streamable HTTP transport, task 10b's `http` module) and
+/// the bearer-auth middleware that is the only thing ever supposed to
+/// attach a principal did not run -- a deployment/routing bug, never
+/// anything an agent controls, which is why it is reported as a domain
+/// error (through [`domain_error`]) rather than `Err(ErrorData)`: every
+/// other refusal in this module already reports "something about this
+/// deployment is wrong" the same way, and treating it as a protocol error
+/// instead would mean changing the five tool methods below that have no
+/// `Err(ErrorData)` arm at all today just for a case an agent can never
+/// trigger.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind")]
+enum PrincipalError {
+    /// No principal was attached to this request's extensions, and this
+    /// handler requires one (see
+    /// [`WillikinsHandler::requiring_request_principal`]).
+    MissingPrincipal,
+}
+
+impl std::fmt::Display for PrincipalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingPrincipal => write!(
+                f,
+                "no principal was attached to this request by the transport's own auth layer"
+            ),
+        }
+    }
+}
+
 /// The rmcp server handler: every MCP tool this milestone defines, over
-/// one [`Butler`] and one fixed [`PrincipalId`]. See the module docs.
+/// one [`Butler`].
+///
+/// # Where the principal comes from (transports beyond stdio)
+///
+/// `principal` is the *fallback* identity every call runs as when no
+/// per-request one is attached -- exactly right for stdio (the spec's own
+/// rule: a local, stdio-transported server has one caller and takes
+/// credentials from the environment, not the transport). The Streamable
+/// HTTP transport (`crate::http`) attaches a request's resolved
+/// [`PrincipalId`] to the underlying `http::request::Parts`' own
+/// extensions, from its bearer-auth middleware; [`Self::principal_for`]
+/// reads it back out of the [`rmcp::model::Extensions`] rmcp exposes to
+/// every tool call (never `rmcp::handler::server::tool::Extension<Parts>`
+/// directly, which errors when the key is absent -- true of every stdio
+/// call, since nothing there ever inserts one). See the module docs.
 #[derive(Clone)]
 pub struct WillikinsHandler {
     butler: Arc<Butler>,
     principal: PrincipalId,
     fake_catalog: bool,
+    require_request_principal: bool,
 }
 
 impl WillikinsHandler {
-    /// Build a handler calling every tool as `principal`.
+    /// Build a handler calling every tool as `principal`, unless a
+    /// per-request principal is attached (see the struct's own doc) --
+    /// which nothing does yet outside `crate::http`'s own construction.
     #[must_use]
     pub fn new(butler: Arc<Butler>, principal: PrincipalId) -> Self {
         Self {
             butler,
             principal,
             fake_catalog: false,
+            require_request_principal: false,
         }
     }
 
@@ -292,6 +346,47 @@ impl WillikinsHandler {
     pub fn with_fake_catalog_note(mut self) -> Self {
         self.fake_catalog = true;
         self
+    }
+
+    /// Refuse every tool call that carries no per-request principal,
+    /// instead of silently falling back to `self.principal` -- the
+    /// Streamable HTTP transport's own choice (`crate::http::router`
+    /// always builds a handler this way): a fallback identity is right
+    /// for stdio's one fixed caller, and would be a silent
+    /// authentication bypass over a transport whose whole point is that
+    /// different requests are different principals. The constructor's
+    /// own `principal` argument is unused once this is set except as a
+    /// value that satisfies the type; `crate::http` always passes a
+    /// harmless placeholder.
+    #[must_use]
+    pub fn requiring_request_principal(mut self) -> Self {
+        self.require_request_principal = true;
+        self
+    }
+
+    /// Resolve the principal a tool call runs as: the one
+    /// `crate::http`'s bearer-auth middleware attached to this request's
+    /// `http::request::Parts` extensions, when present, or `self.principal`
+    /// as a fallback -- unless [`Self::requiring_request_principal`] was
+    /// set, in which case an absent one refuses outright. See the
+    /// struct's own doc for why `Extensions` (never
+    /// `rmcp::handler::server::tool::Extension<Parts>`) is the extractor
+    /// every tool method below uses.
+    fn principal_for(
+        &self,
+        extensions: &rmcp::model::Extensions,
+    ) -> Result<PrincipalId, CallToolResult> {
+        let from_request = extensions
+            .get::<Parts>()
+            .and_then(|parts| parts.extensions.get::<PrincipalId>())
+            .cloned();
+        match from_request {
+            Some(principal) => Ok(principal),
+            None if self.require_request_principal => {
+                Err(domain_error(&PrincipalError::MissingPrincipal))
+            }
+            None => Ok(self.principal.clone()),
+        }
     }
 }
 
@@ -318,10 +413,14 @@ impl WillikinsHandler {
     async fn validate(
         &self,
         Parameters(params): Parameters<ValidateParams>,
+        extensions: rmcp::model::Extensions,
     ) -> Result<Result<Json<ValidateResponse>, CallToolResult>, ErrorData> {
         let source = document_source_from(params.document, params.workflow)?;
+        let principal = match self.principal_for(&extensions) {
+            Ok(principal) => principal,
+            Err(result) => return Ok(Err(result)),
+        };
         let butler = Arc::clone(&self.butler);
-        let principal = self.principal.clone();
         let result = run_blocking(move || butler.validate(&source, principal)).await;
         Ok(result.map(Json).map_err(|error| domain_error(&error)))
     }
@@ -339,11 +438,15 @@ impl WillikinsHandler {
     async fn describe(
         &self,
         Parameters(params): Parameters<DescribeParams>,
+        extensions: rmcp::model::Extensions,
     ) -> Result<Result<Json<Description>, CallToolResult>, ErrorData> {
         let source = document_source_from(params.document, params.workflow)?;
         let partial = partial_inputs_from(params.inputs)?;
+        let principal = match self.principal_for(&extensions) {
+            Ok(principal) => principal,
+            Err(result) => return Ok(Err(result)),
+        };
         let butler = Arc::clone(&self.butler);
-        let principal = self.principal.clone();
         let result = run_blocking(move || butler.describe(&source, &partial, principal)).await;
         Ok(result.map(Json).map_err(|error| domain_error(&error)))
     }
@@ -362,10 +465,14 @@ impl WillikinsHandler {
     async fn plan(
         &self,
         Parameters(params): Parameters<PlanParams>,
+        extensions: rmcp::model::Extensions,
     ) -> Result<Result<Json<PlanResponse>, CallToolResult>, ErrorData> {
         let partial = partial_inputs_from(params.inputs)?;
+        let principal = match self.principal_for(&extensions) {
+            Ok(principal) => principal,
+            Err(result) => return Ok(Err(result)),
+        };
         let butler = Arc::clone(&self.butler);
-        let principal = self.principal.clone();
         let workflow = params.workflow;
         let result = run_blocking(move || butler.plan(workflow, &partial, principal)).await;
         Ok(result.map(Json).map_err(|error| domain_error(&error)))
@@ -381,9 +488,10 @@ impl WillikinsHandler {
     async fn apply(
         &self,
         Parameters(params): Parameters<ApplyParams>,
+        extensions: rmcp::model::Extensions,
     ) -> Result<Json<ApplyStarted>, CallToolResult> {
+        let principal = self.principal_for(&extensions)?;
         let butler = Arc::clone(&self.butler);
-        let principal = self.principal.clone();
         run_blocking(move || butler.apply(params.plan_id, principal))
             .await
             .map(|handle| {
@@ -414,9 +522,12 @@ impl WillikinsHandler {
     #[tool(description = "Every workflow currently in the trusted \
         directory: its name, its own document description, and its \
         declared inputs (name, type, whether required).")]
-    async fn list_workflows(&self) -> Result<Json<Vec<WorkflowSummary>>, CallToolResult> {
+    async fn list_workflows(
+        &self,
+        extensions: rmcp::model::Extensions,
+    ) -> Result<Json<Vec<WorkflowSummary>>, CallToolResult> {
+        let principal = self.principal_for(&extensions)?;
         let butler = Arc::clone(&self.butler);
-        let principal = self.principal.clone();
         run_blocking(move || butler.list_workflows(principal))
             .await
             .map(Json)
@@ -427,9 +538,12 @@ impl WillikinsHandler {
     #[tool(description = "The full tool and type catalog this server's \
         `plan`/`apply` runs against -- the same JSON `willikins schema \
         --catalog` prints.")]
-    async fn list_tools(&self) -> Result<Json<serde_json::Value>, CallToolResult> {
+    async fn list_tools(
+        &self,
+        extensions: rmcp::model::Extensions,
+    ) -> Result<Json<serde_json::Value>, CallToolResult> {
+        let principal = self.principal_for(&extensions)?;
         let butler = Arc::clone(&self.butler);
-        let principal = self.principal.clone();
         Ok(Json(
             run_blocking(move || butler.list_tools(principal)).await,
         ))
@@ -441,9 +555,10 @@ impl WillikinsHandler {
     async fn propose_slug(
         &self,
         Parameters(params): Parameters<ProposeSlugParams>,
+        extensions: rmcp::model::Extensions,
     ) -> Result<Json<ProposeSlugResponse>, CallToolResult> {
+        let principal = self.principal_for(&extensions)?;
         let butler = Arc::clone(&self.butler);
-        let principal = self.principal.clone();
         run_blocking(move || butler.propose_slug(&params.name, principal))
             .await
             .map(Json)
@@ -489,7 +604,7 @@ impl ServerHandler for WillikinsHandler {
 /// cancelled or the closure itself panicked, neither of which this
 /// module's callers can usefully recover from; `unwrap_or_else` re-raises
 /// the panic on this task instead of swallowing it silently.
-async fn run_blocking<F, T>(f: F) -> T
+pub(crate) async fn run_blocking<F, T>(f: F) -> T
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
