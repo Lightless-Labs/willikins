@@ -138,10 +138,20 @@ a partial record, and it never drops a line on its own.
 
 To recover, remove the truncated last line from the journal file, then start the server
 again. The runtime image has no shell, so an operator cannot fix the file inside the running
-container. The documented procedure: attach the same volume to a temporary debug service
-that has a shell. Fix the file there. Then move the volume back to the `willikins` service.
-A `willikins` subcommand that repairs a truncated journal without this detour does not exist
-yet (`todos/2026-09-15-journal-repair-subcommand.md`).
+container.
+
+One way to reach the file: attach the same volume to a temporary debug service that has a
+shell. Fix the file there. Then move the volume back to the `willikins` service.
+
+Task 12 did not test this detour. The installed Railway CLI lists `volume detach` and
+`volume attach` commands. Nobody ran them for this service. The `willikins` service keeps
+its own restart policy (`ON_FAILURE`, 10 retries) while its volume is away, so it keeps
+restarting and failing the whole time. Read Railway's own volume documentation first. Test
+the detour once, on a disposable environment. Do this before an operator relies on it during
+a real incident.
+
+A `willikins` subcommand that repairs a truncated journal does not exist yet. It would close
+this gap without the detour. See `todos/2026-09-15-journal-repair-subcommand.md`.
 
 ### Environment variables
 

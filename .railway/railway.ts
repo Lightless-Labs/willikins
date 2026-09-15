@@ -74,6 +74,12 @@
 import { defineRailway, project, service, volume } from "railway/iac";
 
 export default defineRailway(() => {
+  // 5000 MB mirrors what `railway volume list` showed after `volume add`
+  // created this volume on 2026-09-15 (the plan-tiered default; this
+  // task's brief authorized creating the volume, not choosing its
+  // size). The IaC reference says applying a *smaller* `sizeMB` than the
+  // live volume is destructive -- re-check `railway volume list` before
+  // ever changing this number, never just edit it to a round figure.
   const journal = volume("willikins-volume", {
     sizeMB: 5000,
   });
