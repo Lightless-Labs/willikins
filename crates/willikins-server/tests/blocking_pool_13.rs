@@ -434,6 +434,100 @@ fn the_concurrency_bound_answers_busy_instead_of_queueing_on_a_full_pool() {
     });
 }
 
+/// **An attack that held, pinned.** The bound has to count blocking
+/// *threads*, and it holds its permit in an *async frame*: nothing
+/// cancels a `spawn_blocking` closure, so a future dropped while its
+/// thread is still wedged would -- if the permit went with it -- return
+/// a permit the thread still owes. A caller who let every call time out
+/// could then accumulate wedged threads up to the pool's 512 while the
+/// bound went on reading "none in flight" and `/healthz` went on
+/// answering 200.
+///
+/// It does not happen, and this pins why: rmcp's stateless path runs the
+/// handler on a task of its own (`streamable_http_server/tower.rs`
+/// spawns `service.waiting()`), so the permit does not live on the axum
+/// request future that the 30-second timeout drops. Abandoning the
+/// request leaves the permit exactly where the thread is.
+///
+/// **What this does not reach**, named rather than implied: that same
+/// rmcp path arms a `CancellationToken` drop-guard for a client that
+/// disconnects *before the handler emits its first message*, and that
+/// token does cancel the handler future. A disconnect inside that window
+/// would drop the permit with the frame while the blocking thread ran
+/// on. Driving it needs a real half-closed hyper connection against a
+/// wedged tool, which this in-process harness cannot make; the one-line
+/// hardening is to move the permit into the blocking closure
+/// (`run_blocking(move || { let _permit = permit; f() })`), which costs
+/// nothing and stops the property depending on rmcp's task structure.
+/// Recorded in the pass-2 note for milestone 3.
+///
+/// Added by adversarial pass 2's completeness critic, 2026-09-15, and
+/// checked by mutation: releasing the permit before `run_blocking`
+/// instead of after makes this test fail in five seconds.
+#[test]
+fn an_abandoned_tool_call_keeps_its_permit_until_its_blocking_thread_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let gate = Arc::new(Gate::new(0));
+    let butler = butler_for(dir.path(), blocking_catalog(&gate));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(4)
+        .enable_all()
+        .build()
+        .unwrap();
+    // Declared after `runtime` so it drops first: see `OpenOnDrop`.
+    let _opener = OpenOnDrop(Arc::clone(&gate));
+
+    runtime.block_on(async {
+        // One permit, four pool threads: the permit is the only thing
+        // that can be accounted wrongly here.
+        let router = willikins_server::router(Arc::clone(&butler), &config(1));
+        let abandoned = {
+            let router = router.clone();
+            tokio::spawn(async move {
+                router
+                    .oneshot(plan_request(AGENT_TOKENS[0], "probe-0"))
+                    .await
+            })
+        };
+        assert!(
+            gate.wait_for_waiters(1),
+            "the first plan must reach the blocking tool"
+        );
+
+        // Abandon it, exactly as the request timeout would: the future
+        // is dropped while its blocking thread is still wedged.
+        abandoned.abort();
+        let _ = abandoned.await;
+
+        // The thread is still there, so the bound must still be reached.
+        let refused = tokio::time::timeout(
+            Duration::from_secs(5),
+            router
+                .clone()
+                .oneshot(plan_request(AGENT_TOKENS[1], "probe-1")),
+        )
+        .await
+        .expect("the bound must answer rather than queue behind the abandoned thread")
+        .unwrap();
+        let json = body_json(refused).await;
+        assert_eq!(
+            json["result"]["structuredContent"]["kind"], "Busy",
+            "an abandoned call must keep its permit until its thread ends: {json}"
+        );
+
+        // And the refused call never reached the tool: exactly one
+        // caller is inside the gate, the abandoned one.
+        assert_eq!(
+            gate.waiting(),
+            1,
+            "the refused call must not have taken a second blocking thread"
+        );
+
+        gate.open();
+    });
+}
+
 /// A second `apply` while the first is still in its pre-run checks --
 /// the window where the first is calling every planned tool's `read`
 /// against a provider that has stopped answering -- is refused at once
