@@ -36,6 +36,7 @@
 //! document whose hash still matches, but is checked rather than assumed)
 //! refuses with [`ButlerError::RecordedInputUnreadable`], never a panic.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -120,6 +121,14 @@ pub struct Butler {
     plan_rate_limiter: crate::rate_limit::RateLimiter,
     /// `describe` and `validate`'s shared bucket.
     read_rate_limiter: crate::rate_limit::RateLimiter,
+    /// Who called `plan` for a given [`PlanId`], for this process's own
+    /// lifetime only -- task 10b's approvals page "requester" field. Not
+    /// part of the journal (`PlanRecorded` carries no principal at all;
+    /// see [`Self::requested_by`]'s own doc for why this is a deliberate,
+    /// reasoned gap rather than an oversight), so a plan recorded before a
+    /// restart has no entry here even though it still replays from the
+    /// journal fine.
+    requested_by: Mutex<HashMap<PlanId, PrincipalId>>,
 }
 
 impl Butler {
@@ -143,6 +152,7 @@ impl Butler {
             run_lock: Arc::new(Mutex::new(None)),
             plan_rate_limiter,
             read_rate_limiter,
+            requested_by: Mutex::new(HashMap::new()),
         }
     }
 
@@ -467,6 +477,12 @@ impl Butler {
             });
         }
         let result = self.plan_inner(&workflow, inputs);
+        if let Ok(response) = &result {
+            self.requested_by
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(response.plan_id, principal.clone());
+        }
         self.record_tool_call("plan", Some(workflow), principal, result.is_ok());
         result
     }
@@ -937,6 +953,81 @@ impl Butler {
     #[must_use]
     pub fn pending_approvals(&self) -> Vec<PlanRecord> {
         self.journal_lock().pending_approvals()
+    }
+
+    /// Who called `plan` for `plan_id`, if this very `Butler` instance is
+    /// the one that recorded it -- task 10b's approvals page "requester"
+    /// field.
+    ///
+    /// This is process-lifetime state, not journaled: `Event::PlanRecorded`
+    /// carries no principal at all (only the later `Event::ToolCalled`
+    /// does, and correlating the two by sequence-number adjacency would
+    /// misattribute under concurrency, since two principals can call
+    /// `plan` at once). Recording the requester properly is a journal
+    /// wire-format change, out of this task's scope (see the module docs
+    /// on `PlanRecorded`'s current fields); this map is the pragmatic
+    /// stand-in, with the same shape and the same restart-loses-it
+    /// property `resolve_recorded_inputs`'s own predecessor had before
+    /// this task. `None` both for a plan this process never planned and
+    /// for one planned before a restart -- the caller cannot tell the two
+    /// apart from this alone, which is why the page labels it "unknown"
+    /// rather than pretending certainty.
+    #[must_use]
+    pub fn requested_by(&self, plan_id: PlanId) -> Option<PrincipalId> {
+        self.requested_by
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&plan_id)
+            .cloned()
+    }
+
+    /// The current time, from this `Butler`'s own [`Clock`] -- so a caller
+    /// computing a plan's age (task 10b's approvals page) never drifts
+    /// from the clock `apply`'s own window checks use.
+    #[must_use]
+    pub fn now(&self) -> willikins_journal::Timestamp {
+        self.clock.now()
+    }
+
+    /// This `Butler`'s configured approval window: how long a pending
+    /// plan's single-use approval nonce (task 10b) stays valid, matching
+    /// exactly how long [`Self::decide`] itself still accepts a decision
+    /// for.
+    #[must_use]
+    pub fn approval_window(&self) -> Duration {
+        self.approval_window
+    }
+
+    /// Record an authentication failure reached over `transport`, for
+    /// `reason` -- the audit trail's only trace of a request the HTTP
+    /// transport (task 10b) refused before it ever reached a `Butler`
+    /// operation. Swallows a journal write failure, like
+    /// [`Self::record_tool_call`]: the caller's HTTP response does not
+    /// depend on whether the journal accepted the write.
+    pub fn record_auth_failure(
+        &self,
+        transport: willikins_journal::Transport,
+        reason: willikins_journal::AuthFailedReason,
+    ) {
+        let _ = self.append(Event::AuthFailed { transport, reason });
+    }
+
+    /// This `Butler`'s trusted workflow directory -- task 10b's
+    /// approvals page reloads a pending plan's document from here (best
+    /// effort, for its "document says:" section) rather than trusting
+    /// anything cached from `plan` time.
+    #[must_use]
+    pub fn workflows_dir(&self) -> &std::path::Path {
+        &self.workflows_dir
+    }
+
+    /// The run currently in progress, if any -- task 10b's `serve_http`
+    /// graceful shutdown polls this (bounded) so an in-progress run's
+    /// `NodeStarted`/`NodeFinished` pairs have a chance to land in the
+    /// journal before the process exits.
+    #[must_use]
+    pub fn run_in_progress(&self) -> Option<RunId> {
+        *self.run_lock.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
