@@ -318,6 +318,74 @@ pub struct WillikinsHandler {
     principal: PrincipalId,
     fake_catalog: bool,
     require_request_principal: bool,
+    /// How many tool calls may occupy a blocking thread at once, and the
+    /// permits left. Shared by every clone of this handler --
+    /// `crate::http` builds one and clones it per request -- so the bound
+    /// is per server, not per connection. See
+    /// [`MAX_CONCURRENT_TOOL_CALLS`].
+    concurrency: Arc<tokio::sync::Semaphore>,
+    /// The bound `concurrency` was built with, for the refusal's own
+    /// message (a `Semaphore` reports permits left, not its capacity).
+    max_concurrent: usize,
+}
+
+/// How many MCP tool calls may hold a `spawn_blocking` thread at once.
+///
+/// Every `Butler` operation is synchronous, so every tool call that
+/// reaches one occupies a blocking thread for its whole duration -- a
+/// `plan` for as long as its provider reads take, which is as long as the
+/// provider takes to answer. tokio's blocking pool is 512 threads by
+/// default and *queues* beyond that: once it is full every later
+/// `spawn_blocking` waits, including an unrelated principal's, and the
+/// only thing still answering is `/healthz`, which uses no blocking
+/// thread at all. Adversarial pass 2 reproduced exactly that with a tool
+/// that never returns (`tests/blocking_pool_13.rs`).
+///
+/// 64 is deliberately far below the pool: it leaves the rest of the
+/// threads for everything else the process does, so a looping or wedged
+/// agent stalls its own calls and nothing else. The next concurrent call
+/// is refused at once with [`BusyError::Busy`] -- a kind-tagged domain
+/// error an agent can retry -- rather than queued behind work that may
+/// never finish, because an answer an agent can act on beats a request
+/// that hangs until the 30-second timeout cuts it.
+///
+/// Not configurable by a deployment: a variable here would need a
+/// startup refusal, a README row and an image test, for a number whose
+/// only job is to stay well under a pool size this process does not
+/// configure either. Recorded as a follow-up in the pass-2 note.
+/// [`WillikinsHandler::with_max_concurrent_tool_calls`] lowers it for
+/// tests, which is the only caller that needs another value.
+pub const MAX_CONCURRENT_TOOL_CALLS: usize = 64;
+
+/// Too many tool calls are already running.
+///
+/// A transport-level refusal, like [`PrincipalError`], not a `Butler`
+/// one: nothing about the plan, the document or the principal is wrong,
+/// and the same call a moment later may well succeed. Kind-tagged and
+/// returned through [`domain_error`], so an agent sees it as a tool
+/// outcome with a name it can branch on.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind")]
+enum BusyError {
+    /// The server is already running its maximum of concurrent tool
+    /// calls.
+    Busy {
+        /// The bound that was reached.
+        max_concurrent_calls: usize,
+    },
+}
+
+impl std::fmt::Display for BusyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy {
+                max_concurrent_calls,
+            } => write!(
+                f,
+                "the server is already running {max_concurrent_calls} tool calls; retry"
+            ),
+        }
+    }
 }
 
 impl WillikinsHandler {
@@ -331,7 +399,20 @@ impl WillikinsHandler {
             principal,
             fake_catalog: false,
             require_request_principal: false,
+            concurrency: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_TOOL_CALLS)),
+            max_concurrent: MAX_CONCURRENT_TOOL_CALLS,
         }
+    }
+
+    /// Lower the concurrent-tool-call bound from
+    /// [`MAX_CONCURRENT_TOOL_CALLS`]. For a test that must reach the
+    /// bound without starting 64 calls that never return; production
+    /// always uses the constant.
+    #[must_use]
+    pub fn with_max_concurrent_tool_calls(mut self, max: usize) -> Self {
+        self.concurrency = Arc::new(tokio::sync::Semaphore::new(max));
+        self.max_concurrent = max;
+        self
     }
 
     /// Mark this handler as serving the fake, in-memory catalog rather
@@ -372,6 +453,38 @@ impl WillikinsHandler {
     /// struct's own doc for why `Extensions` (never
     /// `rmcp::handler::server::tool::Extension<Parts>`) is the extractor
     /// every tool method below uses.
+    /// Run `f` on a blocking thread, but only if fewer than
+    /// [`Self::max_concurrent`] are already running: otherwise refuse at
+    /// once with [`BusyError::Busy`] rather than queue behind work that
+    /// may never finish. See [`MAX_CONCURRENT_TOOL_CALLS`].
+    ///
+    /// `try_acquire_owned`, never `acquire`: waiting for a permit would
+    /// rebuild, one level up, exactly the queue this exists to avoid.
+    ///
+    /// Used by every tool that can block on the filesystem or a provider
+    /// (`validate`, `describe`, `plan`, `apply`, `list_workflows`).
+    /// `run_status`, `list_tools` and `propose_slug` stay unbounded on
+    /// purpose: they are in-memory reads that touch no provider, and
+    /// `run_status` in particular is how a caller learns what happened to
+    /// a run -- refusing it while the bound is reached would hide the
+    /// state of the very calls that reached it.
+    async fn run_bounded<F, T>(&self, f: F) -> Result<T, CallToolResult>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let permit = Arc::clone(&self.concurrency)
+            .try_acquire_owned()
+            .map_err(|_| {
+                domain_error(&BusyError::Busy {
+                    max_concurrent_calls: self.max_concurrent,
+                })
+            })?;
+        let value = run_blocking(f).await;
+        drop(permit);
+        Ok(value)
+    }
+
     fn principal_for(
         &self,
         extensions: &rmcp::model::Extensions,
@@ -421,7 +534,13 @@ impl WillikinsHandler {
             Err(result) => return Ok(Err(result)),
         };
         let butler = Arc::clone(&self.butler);
-        let result = run_blocking(move || butler.validate(&source, principal)).await;
+        let result = match self
+            .run_bounded(move || butler.validate(&source, principal))
+            .await
+        {
+            Ok(result) => result,
+            Err(busy) => return Ok(Err(busy)),
+        };
         Ok(result.map(Json).map_err(|error| domain_error(&error)))
     }
 
@@ -447,7 +566,13 @@ impl WillikinsHandler {
             Err(result) => return Ok(Err(result)),
         };
         let butler = Arc::clone(&self.butler);
-        let result = run_blocking(move || butler.describe(&source, &partial, principal)).await;
+        let result = match self
+            .run_bounded(move || butler.describe(&source, &partial, principal))
+            .await
+        {
+            Ok(result) => result,
+            Err(busy) => return Ok(Err(busy)),
+        };
         Ok(result.map(Json).map_err(|error| domain_error(&error)))
     }
 
@@ -474,7 +599,13 @@ impl WillikinsHandler {
         };
         let butler = Arc::clone(&self.butler);
         let workflow = params.workflow;
-        let result = run_blocking(move || butler.plan(workflow, &partial, principal)).await;
+        let result = match self
+            .run_bounded(move || butler.plan(workflow, &partial, principal))
+            .await
+        {
+            Ok(result) => result,
+            Err(busy) => return Ok(Err(busy)),
+        };
         Ok(result.map(Json).map_err(|error| domain_error(&error)))
     }
 
@@ -492,8 +623,8 @@ impl WillikinsHandler {
     ) -> Result<Json<ApplyStarted>, CallToolResult> {
         let principal = self.principal_for(&extensions)?;
         let butler = Arc::clone(&self.butler);
-        run_blocking(move || butler.apply(params.plan_id, principal))
-            .await
+        self.run_bounded(move || butler.apply(params.plan_id, principal))
+            .await?
             .map(|handle| {
                 Json(ApplyStarted {
                     run_id: handle.run_id,
@@ -528,8 +659,8 @@ impl WillikinsHandler {
     ) -> Result<Json<Vec<WorkflowSummary>>, CallToolResult> {
         let principal = self.principal_for(&extensions)?;
         let butler = Arc::clone(&self.butler);
-        run_blocking(move || butler.list_workflows(principal))
-            .await
+        self.run_bounded(move || butler.list_workflows(principal))
+            .await?
             .map(Json)
             .map_err(|error| domain_error(&error))
     }

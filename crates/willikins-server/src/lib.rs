@@ -31,9 +31,9 @@ pub use http::{
     serve_http_with,
 };
 pub use mcp::{
-    ApplyParams, ApplyStarted, DescribeParams, InputValueDto, PlanParams, ProposeSlugParams,
-    RunStatusParams, ServeError, ValidateParams, WillikinsHandler, serve_stdio,
-    serve_stdio_handler,
+    ApplyParams, ApplyStarted, DescribeParams, InputValueDto, MAX_CONCURRENT_TOOL_CALLS,
+    PlanParams, ProposeSlugParams, RunStatusParams, ServeError, ValidateParams, WillikinsHandler,
+    serve_stdio, serve_stdio_handler,
 };
 pub use read_ops::{DocumentSource, ProposeSlugResponse, ValidateResponse};
 pub use startup::{InputSummary, StartupError, WorkflowSummary};

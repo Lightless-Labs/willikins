@@ -112,6 +112,7 @@ pub struct HttpConfig {
     pub(crate) request_timeout: Duration,
     pub(crate) max_body_bytes: usize,
     pub(crate) fake_catalog: bool,
+    pub(crate) max_concurrent_tool_calls: usize,
 }
 
 impl HttpConfig {
@@ -153,7 +154,19 @@ impl HttpConfig {
             request_timeout: Self::DEFAULT_REQUEST_TIMEOUT,
             max_body_bytes: Self::DEFAULT_MAX_BODY_BYTES,
             fake_catalog: false,
+            max_concurrent_tool_calls: crate::mcp::MAX_CONCURRENT_TOOL_CALLS,
         })
+    }
+
+    /// Override how many tool calls may hold a blocking thread at once
+    /// (default [`crate::MAX_CONCURRENT_TOOL_CALLS`]). The binary
+    /// never calls this; adversarial pass 2's
+    /// `tests/blocking_pool_13.rs` lowers it so the bound is reachable
+    /// without starting 64 calls that never return.
+    #[must_use]
+    pub fn with_max_concurrent_tool_calls(mut self, max: usize) -> Self {
+        self.max_concurrent_tool_calls = max;
+        self
     }
 
     /// Override the request timeout (default [`Self::DEFAULT_REQUEST_TIMEOUT`]).

@@ -50,8 +50,9 @@ fn build_mcp_service(
     butler: Arc<Butler>,
     config: &HttpConfig,
 ) -> StreamableHttpService<WillikinsHandler, LocalSessionManager> {
-    let mut handler =
-        WillikinsHandler::new(butler, placeholder_principal()).requiring_request_principal();
+    let mut handler = WillikinsHandler::new(butler, placeholder_principal())
+        .requiring_request_principal()
+        .with_max_concurrent_tool_calls(config.max_concurrent_tool_calls);
     if config.fake_catalog {
         handler = handler.with_fake_catalog_note();
     }
@@ -157,10 +158,17 @@ const RUN_DRAIN_BOUND: Duration = Duration::from_secs(30);
 ///
 /// See [`ServeHttpError`].
 pub async fn serve_http(butler: Arc<Butler>, config: HttpConfig) -> Result<(), ServeHttpError> {
-    let bind = config.bind;
-    let listener = TcpListener::bind(bind)
+    let listener = TcpListener::bind(config.bind)
         .await
         .map_err(ServeHttpError::Bind)?;
+    // The address actually bound, never the one that was asked for.
+    // Adversarial pass 2: this line used to print `config.bind`, so a
+    // server started on port 0 -- the OS-assigned-port convention every
+    // test harness and every "just give me a free port" invocation uses
+    // -- announced `:0`, which is not an address anything can connect to.
+    // The doc below claims this is "the only place that ever names the
+    // literal address bound"; `local_addr()` is what makes that true.
+    let bind = listener.local_addr().unwrap_or(config.bind);
     // The one startup line this transport ever emits: an operator (or a
     // deployment's own log-based healthcheck) watching `tracing`'s JSON
     // on stderr has otherwise no way to tell "listening" from "still
