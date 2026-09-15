@@ -7,9 +7,9 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-15, midday) — tasks 0 through 11 (verified) and both live write cycles landed; task 12 (deployment: Dockerfile, Railway, README Deploy, teardown) is next
+### RESUME HERE (2026-09-15, afternoon) — tasks 0 through 12 (verified) landed and the image runs on Railway with the fake catalog; task 13 (adversarial pass 2 over HTTP) is next, then the local smoke run (14)
 
-- **Live state:** `main` at 303 commits, gates green at `cc1c194` (the verify's final gate; the ignored ones
+- **Live state:** `main` at 324 commits, gates green at `b48fd8d` (1,645 tests; the ignored ones
   are by-hand measurements, a lock-probe child, the two live probes and the two live write
   cycles). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
@@ -73,12 +73,18 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
   2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
   test workplace (the earlier `dp.st.` config-scoped token could only read one config).
-- **Next action:** task 12, one Workflow: `Dockerfile` at the repository root (multi-stage,
-  `rust:1.97-slim-bookworm` + cargo-chef, then `gcr.io/distroless/cc-debian12`), Railway
-  wiring for the `willikins` service (one volume for the journal, `/healthz` check, one
-  replica, no public domain), README "Deploy", the environment-variable reference,
-  `deploy/teardown.sh`, a `docs/solutions` entry for the credential gate; proves build,
-  startup refusals and the internal healthcheck only. Then 13, 14, one sequential Workflow at a time on `main`, sonnet implementing
+- **Next action:** task 13, adversarial pass 2 end to end over HTTP (acceptance test 19's
+  second half; opus; a research note under `docs/research/`), taking the items every verify
+  handed to it (listed in the plan's 2026-09-15 addenda: `AuthFailedReason` variants for
+  nonce and origin refusals, `PlanRecorded.principal`, `PlanFailed { error_kind:
+  "Unavailable" }`, the cached journal fold, the unbounded `wait_for_run`, the DSL
+  `DocumentErrorKind` message collision, the tracing quarter from pass 1, the truncated
+  journal line policy). Then 14 (the local smoke run with the sandbox credentials over
+  `serve --stdio` or a localhost `--http`, `deploy/teardown.sh` afterwards) and the plan
+  marked Completed. Railway follow-ups for the operator: apply `.railway/railway.ts` after a
+  CLI upgrade and after writing the volume's region into it; set the healthcheck path;
+  connect Doppler's Railway integration and remove `WILLIKINS_FAKE_CATALOG` when the service
+  should go live. Then one sequential Workflow at a time on `main`, sonnet implementing
   test-first and opus verifying, every `CONTEXT` string naming the four gates exactly as
   CLAUDE.md spells them (`-j 2`, `RUST_TEST_THREADS=2`). Groups run one lane at a time. The
   Workflow tool needs the operator's opt-in per session ("use a workflow" or
@@ -97,7 +103,11 @@ compaction, before handing off, after a milestone, and after a plan change or di
   a localhost `serve --http`. No volume and no willikins variables yet: task
   12 needs `RAILWAY_DOCKERFILE_PATH=deploy/Dockerfile` (or the Dockerfile at the root), a
   volume for the journal, and the plan's environment variables, the two provider
-  credentials arriving through Doppler's Railway integration.
+  credentials arriving through Doppler's Railway integration. Done 2026-09-15 (task 12):
+  the root `Dockerfile` builds on Railway (builder now DOCKERFILE), the volume
+  `willikins-volume` is mounted at `/data`, the five non-secret variables are set, the
+  latest deployment is SUCCESS and serves the fake catalog (`WILLIKINS_FAKE_CATALOG=1`);
+  `.railway/railway.ts` is authored, not applied.
 - **Credentials for the probe and the smoke run** live in `~/.config/willikins/sandbox.env`
   (mode 600, outside the repo; source it before a live run): a GitHub fine-grained PAT
   scoped to the test organization `Willikins-Test` (read-only checks passed 2026-09-13)

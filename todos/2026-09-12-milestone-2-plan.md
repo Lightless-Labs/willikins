@@ -44,7 +44,12 @@ decided on no public domain until the auth path matures.
 runs, run, serve, `--live`, `--plan-id`, `--fake-state-out`, renderers) and its Opus verify fixed a
 duplicate `message` key in every self-describing error and an unloadable fake-state dump.
 
-**Next:** 12 (deployment), 13 (pass 2), 14 (local smoke run). This todo closes when the plan is
+2026-09-15 (afternoon): task 12 landed: the root Dockerfile builds and runs on Railway with the
+fake catalog, the volume and the non-secret variables are set, `hash-token` and
+`WILLIKINS_FAKE_CATALOG` exist, `deploy/teardown.sh` is tested against the real CLI's output, the
+README has a Deploy section; the verify fixed the script's failed-run and refused-delete paths.
+
+**Next:** 13 (pass 2 over HTTP), 14 (local smoke run, teardown). This todo closes when the plan is
 marked Completed.
 
 ## First action of the next session

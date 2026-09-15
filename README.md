@@ -21,14 +21,18 @@ Milestone 2 is not complete. These parts are done:
 - The append-only JSONL journal.
 - The HTTP client with redaction.
 - The live GitHub and Doppler providers.
-- 1 live write cycle against a sandbox GitHub organization. The cycle created a repository,
-  converged it, put a sealed secret in it, and then deleted the repository.
+- 2 live write cycles. The GitHub cycle created a repository in a sandbox organization,
+  converged it, put a sealed secret in it, and then deleted the repository. The Doppler
+  cycle created a project in a test workplace, minted and rotated a token, read a secret,
+  and then deleted the project.
+- The server library and the MCP server over stdio and Streamable HTTP.
+- The CLI commands apply, approve, reject, runs, run, and serve.
+- A container image. Railway builds it and runs it with the fake catalog.
 
 These parts are not done:
 
-- The server library.
-- The MCP server over stdio and Streamable HTTP.
-- The CLI apply commands.
+- Adversarial pass 2 over the HTTP surface.
+- The live smoke run with sandbox credentials.
 
 Milestone 1 had 2 adversarial passes. Milestone 2 has 1 adversarial pass. No pass found a path
 for a secret byte to reach an output.
