@@ -21,7 +21,9 @@ use std::sync::{Arc, Mutex};
 use clap::{Parser, Subcommand};
 
 use willikins_journal::{Clock, FileJournal, JournalError, PrincipalId, SystemClock};
-use willikins_server::{Butler, ButlerConfig, ConfigError, SharedJournal, StartupError};
+use willikins_server::{
+    Butler, ButlerConfig, ConfigError, SharedJournal, StartupError, WillikinsHandler,
+};
 
 #[derive(Parser)]
 #[command(name = "willikins-server", version, about = "The willikins MCP server")]
@@ -107,11 +109,6 @@ fn cmd_serve(stdio: bool, principal: &str, fake: bool) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if fake {
-        eprintln!(
-            "willikins-server: serving the fake catalog (--fake); no request reaches a real provider"
-        );
-    }
     let butler = match build_butler(fake) {
         Ok(butler) => butler,
         Err(error) => {
@@ -119,6 +116,14 @@ fn cmd_serve(stdio: bool, principal: &str, fake: bool) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let mut handler = WillikinsHandler::new(Arc::new(butler), principal);
+    if fake {
+        // `--fake` is a decision this binary makes that the plan does not
+        // (see the module doc); the server's own `initialize` response
+        // says so via this sentence, rather than only a stderr line a
+        // caller talking MCP over the pipe would never see.
+        handler = handler.with_fake_catalog_note();
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -129,7 +134,7 @@ fn cmd_serve(stdio: bool, principal: &str, fake: bool) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match runtime.block_on(willikins_server::serve_stdio(Arc::new(butler), principal)) {
+    match runtime.block_on(willikins_server::serve_stdio_handler(handler)) {
         Ok(()) => ExitCode::from(0),
         Err(error) => {
             eprintln!("{error}");

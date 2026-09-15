@@ -56,9 +56,15 @@ fn butler(
 /// `AsyncWrite`, so each end serves directly with no split needed (rmcp's
 /// own `IntoTransport` covers a single combined-read-write type).
 async fn connect(butler: Arc<Butler>, principal: PrincipalId) -> RunningService<RoleClient, ()> {
+    connect_handler(WillikinsHandler::new(butler, principal)).await
+}
+
+/// As [`connect`], but over an already-built [`WillikinsHandler`] -- for
+/// tests that need a builder option (`with_fake_catalog_note`) `connect`
+/// itself has no parameter for.
+async fn connect_handler(handler: WillikinsHandler) -> RunningService<RoleClient, ()> {
     let (client_io, server_io) = tokio::io::duplex(1024 * 1024);
     tokio::spawn(async move {
-        let handler = WillikinsHandler::new(butler, principal);
         if let Ok(service) = handler.serve(server_io).await {
             let _ = service.waiting().await;
         }
@@ -88,22 +94,33 @@ fn call(name: &'static str, arguments: serde_json::Value) -> CallToolRequestPara
 /// explicitly, as the plan asks, but the in-process rmcp 3.3.0 client
 /// still negotiates `2025-11-25` over the classic `initialize` handshake
 /// -- read from `rmcp::service::server::negotiate_protocol_version`'s own
-/// doc and source (`crates/rmcp-3.3.0/src/service/server.rs`): SEP-2567's
-/// `2026-07-28` replaced the handshake with per-request metadata (an HTTP
-/// header, `ProtocolVersion::STANDARD_HEADERS`), which has no
-/// representation in the `initialize` response's `protocol_version`
-/// field at all, so a server's own `get_info()` value is never echoed
-/// back for that revision -- `negotiate_protocol_version` falls back to
-/// `newest_legacy_version(server_supported)` instead, which is
-/// `2025-11-25` (the newest version older than `2026-07-28`). This holds
-/// for every transport reachable over the classic handshake, stdio
-/// (this crate's own) included; `2026-07-28` proper is only reachable
-/// over Streamable HTTP's per-request header, a fact for the next step
-/// once that transport exists. `get_info`'s explicit
-/// `.with_protocol_version(V_2026_07_28)` is not wasted: it is still
-/// what `Service::get_info` reports (and what a caller reading the
-/// source would see it declare), even though this particular negotiation
-/// path can't surface it.
+/// doc and source (`crates/rmcp-3.3.0/src/service/server.rs`) plus
+/// `ClientInfo`'s (`= InitializeRequestParams`) `Default` impl in
+/// `model.rs`. The mechanism is the first branch, not a fallback: this
+/// test's client is `()`, whose `ClientHandler::get_info` returns
+/// `ClientInfo::default()` (the crate's own blanket impl), which sets
+/// `protocol_version: ProtocolVersion::default()` -- `Self::LATEST`,
+/// i.e. `V_2025_11_25`, a *legacy* (pre-SEP-2567) version -- so
+/// `negotiate_protocol_version`'s own first check,
+/// `is_legacy_version(client_requested) && server_supported.contains(client_requested)`,
+/// is already true and the function returns `client_requested` verbatim.
+/// The `server_fallback`/`newest_legacy_version` branch (what a server
+/// falls back to when the client asked for something newer or
+/// unsupported) is never reached in this handshake at all. Separately,
+/// and for the same underlying reason: SEP-2567's `2026-07-28` replaced
+/// the handshake with per-request metadata (an HTTP header,
+/// `ProtocolVersion::STANDARD_HEADERS`), which has no representation in
+/// the classic `initialize` response's `protocol_version` field, so a
+/// server's own `get_info()` value could not be echoed back at
+/// `2026-07-28` even if a client did request it there -- true for every
+/// transport reachable over the classic handshake, stdio (this crate's
+/// own) included; `2026-07-28` proper is only reachable over Streamable
+/// HTTP's per-request header, a fact for the next step once that
+/// transport exists. `get_info`'s explicit
+/// `.with_protocol_version(V_2026_07_28)` is not wasted: it is still what
+/// `Service::get_info` reports (and what a caller reading the source
+/// would see it declare), even though this particular negotiation path
+/// can't surface it.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_client_negotiates_the_newest_legacy_protocol_version_over_stdio() {
     let dir = tempfile::tempdir().unwrap();
@@ -123,6 +140,53 @@ async fn the_client_negotiates_the_newest_legacy_protocol_version_over_stdio() {
             .is_some_and(|text| text.contains("trusted directory")),
         "{:?}",
         info.instructions
+    );
+}
+
+/// `WillikinsHandler::with_fake_catalog_note` appends one sentence to
+/// `get_info`'s `instructions`, and only when set -- the plan does not
+/// say how a `--fake`-served instance should announce itself; this is
+/// that choice (see `main.rs`'s module doc and `mcp.rs`'s
+/// `with_fake_catalog_note` doc), pinned from both directions so a
+/// caller reading `initialize`'s response can always tell which catalog
+/// it is talking to.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fake_catalog_note_appears_in_instructions_only_when_set() {
+    let dir = tempfile::tempdir().unwrap();
+    common::copy_fixture_as(dir.path(), "new-rust-service.yaml", "new-rust-service.yaml");
+    let (_state, catalog) = Butler::fake_catalog();
+    let clock: Arc<dyn Clock> = common::manual_clock();
+
+    let plain = butler(dir.path(), catalog, clock.clone());
+    let plain_client = connect_handler(WillikinsHandler::new(Arc::new(plain), principal())).await;
+    let plain_info = plain_client
+        .peer_info()
+        .expect("the server's InitializeResult is recorded");
+    assert!(
+        !plain_info
+            .instructions
+            .as_deref()
+            .is_some_and(|text| text.contains("fake in-memory catalog")),
+        "a plain handler must not mention the fake catalog: {:?}",
+        plain_info.instructions
+    );
+
+    let (_state, noted_catalog) = Butler::fake_catalog();
+    let noted = butler(dir.path(), noted_catalog, clock);
+    let noted_client = connect_handler(
+        WillikinsHandler::new(Arc::new(noted), principal()).with_fake_catalog_note(),
+    )
+    .await;
+    let noted_info = noted_client
+        .peer_info()
+        .expect("the server's InitializeResult is recorded");
+    assert!(
+        noted_info
+            .instructions
+            .as_deref()
+            .is_some_and(|text| text.contains("fake in-memory catalog")),
+        "a handler built with with_fake_catalog_note must say so: {:?}",
+        noted_info.instructions
     );
 }
 
