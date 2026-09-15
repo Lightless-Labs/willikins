@@ -407,10 +407,44 @@ fn plan_input_failure_parity() {
         .expect_err("a rejected input refuses the plan");
     let butler_json = serde_json::to_value(&error).unwrap();
     assert_eq!(butler_json["kind"], "Input");
+    // `errors` is no longer byte-identical between the two surfaces
+    // (task 11's per-element `message`, `todos/2026-09-12-error-json-uniformity-gaps.md`
+    // item 2): `ButlerError::Input.errors` now wraps each `InputError`
+    // through `Reported`, adding `message`, while the CLI's own `plan
+    // --json` output for a rejected input is unchanged (item 1's
+    // decision) and carries none. `input`/`error` -- the part that
+    // identifies *what* was rejected and why -- still agrees exactly.
+    let butler_errors = butler_json["errors"]
+        .as_array()
+        .expect("errors is an array");
+    let cli_errors = cli_json["errors"]
+        .as_array()
+        .expect("the CLI's errors is an array");
     assert_eq!(
-        butler_json["errors"], cli_json["errors"],
-        "rejected-input parity"
+        butler_errors.len(),
+        cli_errors.len(),
+        "rejected-input count parity"
     );
+    for (butler_error, cli_error) in butler_errors.iter().zip(cli_errors) {
+        assert_eq!(
+            butler_error["input"], cli_error["input"],
+            "rejected-input parity"
+        );
+        assert_eq!(
+            butler_error["error"], cli_error["error"],
+            "rejected-input parity"
+        );
+        assert!(
+            butler_error["message"]
+                .as_str()
+                .is_some_and(|m| !m.is_empty()),
+            "the Butler/MCP side carries a per-element message: {butler_error}"
+        );
+        assert!(
+            cli_error.get("message").is_none(),
+            "the CLI's own plan --json output for InputError is unchanged: {cli_error}"
+        );
+    }
     assert_eq!(
         butler_json["missing"], cli_json["missing"],
         "missing-input parity"

@@ -425,10 +425,38 @@ async fn plan_input_failure_parity() {
         .expect("a domain error carries structured content");
     assert_eq!(structured["kind"], "Input");
     assert!(structured["message"].is_string(), "{structured}");
+    // See `acceptance_11_parity.rs::plan_input_failure_parity`'s own
+    // comment: `errors` is no longer byte-identical between the two
+    // surfaces (task 11's per-element `message` on `ButlerError::Input`,
+    // `todos/2026-09-12-error-json-uniformity-gaps.md` item 2); `input`/
+    // `error` -- what identifies the rejection -- still agrees exactly.
+    let mcp_errors = structured["errors"].as_array().expect("errors is an array");
+    let cli_errors = cli_json["errors"]
+        .as_array()
+        .expect("the CLI's errors is an array");
     assert_eq!(
-        structured["errors"], cli_json["errors"],
-        "rejected-input parity"
+        mcp_errors.len(),
+        cli_errors.len(),
+        "rejected-input count parity"
     );
+    for (mcp_error, cli_error) in mcp_errors.iter().zip(cli_errors) {
+        assert_eq!(
+            mcp_error["input"], cli_error["input"],
+            "rejected-input parity"
+        );
+        assert_eq!(
+            mcp_error["error"], cli_error["error"],
+            "rejected-input parity"
+        );
+        assert!(
+            mcp_error["message"].as_str().is_some_and(|m| !m.is_empty()),
+            "the tool's errors carry a per-element message: {mcp_error}"
+        );
+        assert!(
+            cli_error.get("message").is_none(),
+            "the CLI's own plan --json output for InputError is unchanged: {cli_error}"
+        );
+    }
     assert_eq!(
         structured["missing"], cli_json["missing"],
         "missing-input parity"
