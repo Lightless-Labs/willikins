@@ -69,6 +69,14 @@ crypto_box = { version = "0.9", features = ["seal"] }
 sha2 = "0.11"
 rmcp = "3"
 tokio = "1"
+http = "1"
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.7", default-features = false }
+subtle = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json"] }
+serde_urlencoded = "0.7"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
