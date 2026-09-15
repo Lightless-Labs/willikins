@@ -7,6 +7,7 @@
 **Addendum:** 2026-09-11 — after dependency research: Railway service name is the component alone; Swift keywords join the reserved-word union.
 **Addendum:** 2026-09-11 — task 2 verification: pascal is not injective for digit-only words; accepted, since pascal never feeds a natural key.
 **Addendum:** 2026-09-14 — license changed from MIT to AGPL-3.0-or-later at the operator's request when the public repository (github.com/Lightless-Labs/willikins) was created; the decisions table row updated. CI decision recorded for milestone 3: every secret lives in Doppler and Buildkite holds one CI/CD Doppler service-account token, so no per-repository secret is ever pushed into CI; willikins must be able to provision the Buildkite pipeline when a workflow asks for it, so the Buildkite provider moves from milestone 4 to milestone 3 in the list below.
+**Addendum:** 2026-09-15 — milestone 2c added to the list below: OAuth 2.1 on the MCP transport and a browser login on the approvals page, scheduled right after milestone 2 because static bearer tokens are sandbox-grade and the service gets no public domain until then.
 **Addendum:** 2026-09-12 — milestone 2 plan: two kinds of secret (graph secrets behind `SinkToken`, execution-context credentials behind one `authorize` function and a clippy entry); TLS terminated at the platform edge; the remote server plans and applies by workflow name only; a tool refuses rather than reconciles a non-key attribute it should not change; composition split out of milestone 2 into its own plan. See "Milestone 2 decisions".
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
@@ -326,6 +327,12 @@ These came up from memory during the conversation and have not been checked.
    stdio and Streamable HTTP. Plan: `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`.
 2b. Composition: `Workflow` implements `Tool` with typed composite output ports. Plan to be
    written when milestone 2 completes.
+2c. Authorization: OAuth 2.1 on the MCP transport (the server as an OAuth resource server
+   with protected-resource metadata, tokens validated against the operator's identity
+   provider) and a browser login on the approvals page in place of Basic auth; short-lived
+   credentials, no static bearer tokens. Decided 2026-09-15 ("We're going to need OAuth");
+   it is what unblocks a public domain for the service, so it runs before 2b and 3. Plan to
+   be written when milestone 2 completes; the identity provider is the open question.
 3. Templates and versioned re-apply, the project record, recorded naming overrides, and the
    Buildkite provider (a pipeline per repository; moved here from milestone 4 on 2026-09-14
    at the operator's request).
