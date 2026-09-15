@@ -81,6 +81,15 @@ Railway builds and runs this image for the `willikins` service. The image's own 
 `serve --http`. Every other choice comes from an environment variable, so one image serves
 every environment.
 
+### Infrastructure as code
+
+The file `.railway/railway.ts` holds the service settings for Railway: the health check path,
+1 replica, and the volume mount at `/data`. Nobody applied this file. The installed Railway
+CLI (version 4.37.4) has no `railway config` command. Set these values in the Railway
+dashboard until a later CLI can apply the file. Read the comments at the top of the file
+first. Railway's own documentation gives this rule for the file: "omit means delete". A
+resource that the file does not name can go away when someone applies the file.
+
 ### No public domain, on purpose
 
 Milestone 2 uses static bearer tokens for authentication. A static bearer token is not
