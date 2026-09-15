@@ -38,6 +38,9 @@
 # Exits non-zero, printing why, on any refusal: a missing argument, a
 # run with no `repo` or `doppler` output, a resource that does not
 # carry its ownership marker, or a provider call that fails outright.
+# Every `curl` call carries `--fail`: without it curl exits 0 on a 403
+# or a 500, and the script would report a delete that never happened.
+# `gh api` fails on an HTTP error on its own.
 set -euo pipefail
 
 usage() {
@@ -126,7 +129,7 @@ fi
 
 doppler_json=$(
   printf 'header = "Authorization: Bearer %s"\n' "$WILLIKINS_DOPPLER_TOKEN" \
-    | curl -sS --config - \
+    | curl -sS --fail --config - \
         "$doppler_api_base_url/v3/projects/project?project=$project"
 ) || {
   echo "teardown.sh: refusing -- could not read Doppler project $project" >&2
@@ -153,7 +156,7 @@ gh api -X DELETE "repos/$repo" > /dev/null
 
 echo "teardown.sh: deleting Doppler project $project"
 printf 'header = "Authorization: Bearer %s"\n' "$WILLIKINS_DOPPLER_TOKEN" \
-  | curl -sS --config - -X DELETE "$doppler_api_base_url/v3/projects/project" \
+  | curl -sS --fail --config - -X DELETE "$doppler_api_base_url/v3/projects/project" \
       -H "Content-Type: application/json" \
       -d "{\"project\":\"$project\"}" \
   > /dev/null

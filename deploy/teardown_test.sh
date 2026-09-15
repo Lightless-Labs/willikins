@@ -378,6 +378,70 @@ JSON
   rm -rf "$dir"
 }
 
+# =======================================================================
+# Scenario 8: Doppler answers with an HTTP error. `curl` exits 0 on a
+# 4xx or a 5xx unless it is given `--fail`, so without it the script
+# would print "done" after a delete that never happened. Both curl calls
+# must carry `--fail`, and a failing curl must stop the script.
+# =======================================================================
+scenario8() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
+  write_stub_willikins "$dir"
+  write_stub_gh "$dir" '["managed-by-willikins"]'
+  write_stub_curl "$dir" "managed-by: willikins"
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "scenario8: setup run failed: $output"
+  local curl_calls
+  curl_calls=$(grep -c "CURL_CALL" "$dir/calls.log" || true)
+  [ "$curl_calls" -eq 2 ] || fail "scenario8: expected 2 curl calls, got $curl_calls"
+  local failing_calls
+  failing_calls=$(grep -c "CURL_CALL.*--fail" "$dir/calls.log" || true)
+  [ "$failing_calls" -eq 2 ] \
+    || fail "scenario8: both curl calls must carry --fail; $failing_calls of $curl_calls do"
+  rm -rf "$dir"
+
+  # The same shape again, with a `curl` that fails the DELETE the way
+  # `--fail` makes it fail a 4xx: the script must stop, not print "done".
+  dir="$(new_sandbox)"
+  write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
+  write_stub_willikins "$dir"
+  write_stub_gh "$dir" '["managed-by-willikins"]'
+  write_stub_curl "$dir" "managed-by: willikins"
+  # Re-write only the DELETE half of the stub: exit 22, curl's own
+  # "HTTP page not retrieved" status under --fail.
+  cat > "$dir/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+set -uo pipefail
+method="GET"
+args=("$@")
+for i in "${!args[@]}"; do
+  if [ "${args[$i]}" = "-X" ]; then
+    method="${args[$((i + 1))]}"
+  fi
+done
+stdin_content="$(cat)"
+echo "CURL_CALL method=$method args=[${args[*]}]" >> "$STUB_LOG"
+if [ "$method" = "DELETE" ]; then
+  echo "curl: (22) The requested URL returned error: 403" >&2
+  exit 22
+fi
+cat "$CURL_GET_RESPONSE_FILE"
+STUB
+  chmod +x "$dir/bin/curl"
+  touch "$dir/calls.log"
+
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+  [ "$status" -ne 0 ] || fail "scenario8: a failing Doppler delete must not exit 0"
+  echo "$output" | grep -q "teardown.sh: done" \
+    && fail "scenario8: must not print 'done' after a delete that failed"
+  rm -rf "$dir"
+}
+
 scenario1
 scenario2
 scenario3
@@ -385,6 +449,7 @@ scenario4
 scenario5
 scenario6
 scenario7
+scenario8
 
 if [ "$failures" -eq 0 ]; then
   echo "teardown_test.sh: all scenarios passed"
