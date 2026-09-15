@@ -1,0 +1,13 @@
+{"seq":1,"at":"2026-09-15T12:00:01+00:00","event":{"kind":"plan_recorded","plan_id":"01a0a70c-18dd-77c4-a459-9114cf5efa63","workflow":"new-rust-service","document_sha256":"da493aba2ef6940ca1291c898f67e943af4d757017f62dc2eade863bda5713aa","inputs":{},"plan":{"class":"reversible","nodes":[],"outputs":{},"requires_approval":false,"workflow":"new-rust-service"},"fingerprint":[],"class":"reversible","requires_approval":false,"principal":"agent-0123456789ab"}}
+{"seq":2,"at":"2026-09-15T12:00:02+00:00","event":{"kind":"apply_refused","plan_id":"01a0a70c-18dd-77c4-a459-9114cf5efa63","principal":"agent-0123456789ab","reason":{"kind":"recorded_input_unreadable","input":"slug"}}}
+{"seq":3,"at":"2026-09-15T12:00:03+00:00","event":{"kind":"apply_refused","plan_id":"01a0a70c-18dd-77c4-a459-9114cf5efa63","principal":"agent-0123456789ab","reason":{"kind":"recorded_input_unreadable","input":null}}}
+{"seq":4,"at":"2026-09-15T12:00:04+00:00","event":{"kind":"apply_refused","plan_id":"01a0a70c-18dd-77c4-a459-9114cf5efa63","principal":"agent-0123456789ab","reason":{"kind":"apply_preparing"}}}
+{"seq":5,"at":"2026-09-15T12:00:05+00:00","event":{"kind":"run_started","run_id":"01a0a70c-18dd-77c4-a459-9115155bee59","plan_id":"01a0a70c-18dd-77c4-a459-9114cf5efa63","principal":"agent-0123456789ab"}}
+{"seq":6,"at":"2026-09-15T12:00:06+00:00","event":{"kind":"node_finished","run_id":"01a0a70c-18dd-77c4-a459-9115155bee59","node":"repo","instance":null,"status":{"kind":"computed"},"outputs":{},"error":null}}
+{"seq":7,"at":"2026-09-15T12:00:07+00:00","event":{"kind":"node_finished","run_id":"01a0a70c-18dd-77c4-a459-9115155bee59","node":"project","instance":null,"status":{"kind":"unchanged"},"outputs":{},"error":null}}
+{"seq":8,"at":"2026-09-15T12:00:08+00:00","event":{"kind":"node_finished","run_id":"01a0a70c-18dd-77c4-a459-9115155bee59","node":"config","instance":null,"status":{"kind":"converged"},"outputs":{},"error":null}}
+{"seq":9,"at":"2026-09-15T12:00:09+00:00","event":{"kind":"node_finished","run_id":"01a0a70c-18dd-77c4-a459-9115155bee59","node":"secret","instance":null,"status":{"kind":"not_run"},"outputs":{},"error":null}}
+{"seq":10,"at":"2026-09-15T12:00:10+00:00","event":{"kind":"auth_failed","transport":"http","reason":{"kind":"invalid_nonce"}}}
+{"seq":11,"at":"2026-09-15T12:00:11+00:00","event":{"kind":"auth_failed","transport":"http","reason":{"kind":"foreign_origin"}}}
+{"seq":12,"at":"2026-09-15T12:00:12+00:00","event":{"kind":"auth_failed","transport":"http","reason":{"kind":"malformed_username"}}}
+{"seq":13,"at":"2026-09-15T12:00:13+00:00","event":{"kind":"auth_failed","transport":"stdio","reason":{"kind":"malformed_username"}}}
