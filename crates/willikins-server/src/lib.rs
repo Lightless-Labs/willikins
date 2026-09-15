@@ -13,6 +13,7 @@ mod config;
 mod document;
 mod drift;
 mod error;
+mod http;
 mod mcp;
 mod rate_limit;
 mod read_ops;
@@ -24,6 +25,10 @@ pub use catalog::{LIVE_TOOL_NAMES, live_catalog_with};
 pub use config::{ConfigError, ServerConfig};
 pub use drift::DriftDetail;
 pub use error::{ButlerError, ExpiryWindow};
+pub use http::{
+    HttpConfig, HttpConfigError, ServeHttpError, TokenHash, TokenHashError, router, serve_http,
+    serve_http_with,
+};
 pub use mcp::{
     ApplyParams, ApplyStarted, DescribeParams, InputValueDto, PlanParams, ProposeSlugParams,
     RunStatusParams, ServeError, ValidateParams, WillikinsHandler, serve_stdio,
