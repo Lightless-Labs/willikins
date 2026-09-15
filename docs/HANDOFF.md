@@ -7,9 +7,9 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-15, morning) — tasks 0 through 10b (verified) and both live write cycles landed; task 11 (the CLI's apply, approve, reject, runs, run, serve, --live) is next
+### RESUME HERE (2026-09-15, midday) — tasks 0 through 11 (verified) and both live write cycles landed; task 12 (deployment: Dockerfile, Railway, README Deploy, teardown) is next
 
-- **Live state:** `main` at 288 commits, gates green at `d3daa3d` (1,551 tests pass; the ignored ones
+- **Live state:** `main` at 303 commits, gates green at `cc1c194` (the verify's final gate; the ignored ones
   are by-hand measurements, a lock-probe child, the two live probes and the two live write
   cycles). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
@@ -73,12 +73,12 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
   2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
   test workplace (the earlier `dp.st.` config-scoped token could only read one config).
-- **Next action:** task 11, one Workflow: the CLI gains `apply`, `approve`, `reject`,
-  `runs`, `run` and `serve` over the `willikins-server` library (`serve` links
-  `serve_stdio`/`serve_http`), `--live` builds the live catalog from the two credentials,
-  renderers for the new result types, the CLI half of test 11's parity, plus the two
-  items 10b handed over (per-element `message` on `ButlerError::Check`/`Input`; the CLI's
-  hand-maintained error-name table); an opus verify. Then 12, 13, 14, one sequential Workflow at a time on `main`, sonnet implementing
+- **Next action:** task 12, one Workflow: `Dockerfile` at the repository root (multi-stage,
+  `rust:1.97-slim-bookworm` + cargo-chef, then `gcr.io/distroless/cc-debian12`), Railway
+  wiring for the `willikins` service (one volume for the journal, `/healthz` check, one
+  replica, no public domain), README "Deploy", the environment-variable reference,
+  `deploy/teardown.sh`, a `docs/solutions` entry for the credential gate; proves build,
+  startup refusals and the internal healthcheck only. Then 13, 14, one sequential Workflow at a time on `main`, sonnet implementing
   test-first and opus verifying, every `CONTEXT` string naming the four gates exactly as
   CLAUDE.md spells them (`-j 2`, `RUST_TEST_THREADS=2`). Groups run one lane at a time. The
   Workflow tool needs the operator's opt-in per session ("use a workflow" or

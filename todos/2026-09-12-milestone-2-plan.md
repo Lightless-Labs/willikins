@@ -40,8 +40,12 @@ page) and its Opus verify fixed a `Debug` hash leak, a zero-rate-limit panic, th
 body cap and the fake announcement over HTTP. The operator created the Railway project and
 decided on no public domain until the auth path matures.
 
-**Next:** 11 (CLI apply/approve/reject/runs/run/serve, `--live`), 12, 13, 14. This todo closes
-when the plan is marked Completed.
+2026-09-15 (midday): task 11 landed (read-only journal replay, the CLI's apply, approve, reject,
+runs, run, serve, `--live`, `--plan-id`, `--fake-state-out`, renderers) and its Opus verify fixed a
+duplicate `message` key in every self-describing error and an unloadable fake-state dump.
+
+**Next:** 12 (deployment), 13 (pass 2), 14 (local smoke run). This todo closes when the plan is
+marked Completed.
 
 ## First action of the next session
 
