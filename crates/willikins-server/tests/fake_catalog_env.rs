@@ -107,3 +107,67 @@ fn an_unset_fake_catalog_variable_does_not_change_the_existing_refusal() {
         stderr(&output)
     );
 }
+
+/// A value that would be `1` but for one stray character refuses like
+/// any other. A trailing space is what a dashboard variable field
+/// collects from a paste; `resolve_fake_catalog` never trims, so the
+/// refusal is what an operator sees instead of a silently live server.
+#[test]
+fn a_fake_catalog_value_of_1_with_a_trailing_space_refuses() {
+    let mut vars = dummy_paths();
+    vars.push(("WILLIKINS_FAKE_CATALOG", "1 "));
+    let output = willikins_server(&["serve", "--stdio"], &vars);
+    assert_eq!(exit_code(&output), 2);
+    assert!(
+        stderr(&output).contains("WILLIKINS_FAKE_CATALOG"),
+        "got: {}",
+        stderr(&output)
+    );
+}
+
+/// The same for a leading space, `01`, and `true`-like spellings: only
+/// the one-character value `1` is accepted.
+#[test]
+fn every_near_miss_of_1_refuses() {
+    for value in [" 1", "01", "1\n", "1,1", "yes", "on", "TRUE", "-1"] {
+        let mut vars = dummy_paths();
+        vars.push(("WILLIKINS_FAKE_CATALOG", value));
+        let output = willikins_server(&["serve", "--stdio"], &vars);
+        assert_eq!(
+            exit_code(&output),
+            2,
+            "{value:?} was not refused; stderr: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("WILLIKINS_FAKE_CATALOG"),
+            "{value:?}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// `--fake` and `WILLIKINS_FAKE_CATALOG=1` together are not a conflict:
+/// the two mean the same thing, so the server starts. (That it announces
+/// the fake catalog exactly once, not twice, is
+/// `tests/serve_http_deploy_pins.rs`'s own pin -- it needs a running
+/// server.) Here: no refusal, so the process does not exit 2 before it
+/// reaches its own missing-variable refusal for the workflow directory.
+#[test]
+fn the_fake_flag_and_the_fake_variable_together_are_not_a_conflict() {
+    let output = willikins_server(
+        &["serve", "--stdio", "--fake"],
+        &[("WILLIKINS_FAKE_CATALOG", "1")],
+    );
+    assert_eq!(exit_code(&output), 2);
+    assert!(
+        stderr(&output).contains("WILLIKINS_WORKFLOWS_DIR"),
+        "the refusal should be the missing workflow directory, not the variable: {}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("WILLIKINS_FAKE_CATALOG"),
+        "got: {}",
+        stderr(&output)
+    );
+}

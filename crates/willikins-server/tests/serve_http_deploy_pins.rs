@@ -1,4 +1,4 @@
-//! Task 12, step A: three pins on the real `willikins-server` binary,
+//! Task 12, step A: five pins on the real `willikins-server` binary,
 //! spawned as a live child process (never `.output()`, which would
 //! block forever on an HTTP server that only stops on a signal):
 //!
@@ -9,6 +9,8 @@
 //! 3. `WILLIKINS_FAKE_CATALOG=1` behaves exactly like `--fake`: the
 //!    fake catalog is announced in `initialize`'s `instructions`, with
 //!    no `--fake` flag on the command line at all.
+//! 4. `--fake` and `WILLIKINS_FAKE_CATALOG=1` together announce it once.
+//! 5. A second server refuses to start on a journal the first holds.
 //!
 //! The child's stderr is redirected to a file (never a pipe this test
 //! does not drain -- `tracing`'s JSON lines could otherwise fill the
@@ -188,6 +190,22 @@ fn serve_http_with_no_bind_binds_0_0_0_0_port() {
 /// Pin 2: the journal file is created inside a fresh, empty directory,
 /// owned by whichever user actually ran the process -- no chown, no
 /// privilege drop that would brick a deployment nobody can shell into.
+///
+/// What this stands in for, and why the reasoning is written here rather
+/// than executed: the deployed case is `/data`, Railway's mounted
+/// volume, which this host has no way to reproduce. Railway's own volume
+/// documentation (fetched 2026-09-15:
+/// <https://docs.railway.com/volumes>) says "Volumes are mounted as the
+/// `root` user" and that an image running as a non-root user needs
+/// `RAILWAY_RUN_UID=0`. The image runs as root (it takes
+/// `gcr.io/distroless/cc-debian12`'s default user, never the `:nonroot`
+/// variant), so the process's own user owns the mount point, which is
+/// the same relationship this test sets up locally: the user that owns
+/// the directory is the user that creates and locks the file in it. The
+/// live deployment's log line ("willikins-server listening") is the
+/// end-to-end evidence that it holds, since an unopenable or unlockable
+/// journal is startup refusal five and the process would never have got
+/// that far.
 #[test]
 #[cfg(unix)]
 fn serve_http_creates_the_journal_file_as_the_running_user() {
@@ -290,5 +308,132 @@ fn fake_catalog_env_var_announces_itself_over_http_with_no_fake_flag() {
     assert!(
         instructions.contains("fake in-memory catalog"),
         "instructions did not announce the fake catalog: {instructions}"
+    );
+}
+
+/// Pin 4: `--fake` and `WILLIKINS_FAKE_CATALOG=1` together say the same
+/// thing once. The two are combined with an "either says fake" rule, so
+/// a deployment that sets the variable and an operator who also passes
+/// the flag get one announcement in `initialize`'s `instructions`, not
+/// two -- a duplicated sentence would be the visible symptom of the flag
+/// and the variable each applying their own note.
+#[test]
+fn the_fake_flag_and_the_fake_variable_announce_the_catalog_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let workflows_dir = temp.path().join("workflows");
+    std::fs::create_dir_all(&workflows_dir).unwrap();
+    let journal_path = temp.path().join("journal.jsonl");
+    let port = free_port();
+
+    // `base_vars` sets `WILLIKINS_FAKE_CATALOG=1`; `--fake` is passed as
+    // well, which is the point of this pin.
+    let vars = base_vars(&workflows_dir, &journal_path);
+
+    let mut guard = spawn(
+        temp.path(),
+        &[
+            "serve",
+            "--http",
+            "--fake",
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+        ],
+        &vars_as_str(&vars),
+    );
+    wait_until_healthy(
+        &mut guard,
+        temp.path(),
+        &format!("http://127.0.0.1:{port}/healthz"),
+    );
+
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": { "name": "deploy-pin-test", "version": "0.1.0" },
+        },
+    });
+    let mut response = ureq::post(format!("http://127.0.0.1:{port}/mcp"))
+        .header("host", ALLOWED_HOST)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("authorization", format!("Bearer {AGENT_TOKEN}"))
+        .send_json(&body)
+        .expect("initialize request failed");
+    assert_eq!(response.status().as_u16(), 200);
+    let text = response.body_mut().read_to_string().expect("readable body");
+    let json: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|error| panic!("{error}: {text}"));
+    let instructions = json["result"]["instructions"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no instructions string in {json}"));
+    assert_eq!(
+        instructions.matches("fake in-memory catalog").count(),
+        1,
+        "the fake catalog must be announced exactly once: {instructions}"
+    );
+}
+
+/// Pin 5: a second server refuses to start on a journal file the first
+/// one already holds, and its refusal names the journal path.
+///
+/// Railway states that it "prevent[s] multiple deployments from being
+/// active and mounted to the same service" for a service with a volume
+/// (its volumes reference, fetched 2026-09-15:
+/// <https://docs.railway.com/volumes/reference>), so this should never
+/// happen in production. `FileJournal`'s own `fd-lock` is what makes the
+/// failure a refusal with a message rather than two writers interleaving
+/// lines in one audit log if that guarantee ever slips.
+#[test]
+fn a_second_server_on_the_same_journal_refuses_to_start() {
+    let temp = tempfile::tempdir().unwrap();
+    let workflows_dir = temp.path().join("workflows");
+    std::fs::create_dir_all(&workflows_dir).unwrap();
+    let journal_path = temp.path().join("journal.jsonl");
+    let first_port = free_port();
+
+    let mut vars = base_vars(&workflows_dir, &journal_path);
+    vars.push(("PORT".to_string(), first_port.to_string()));
+    let mut first = spawn(temp.path(), &["serve", "--http"], &vars_as_str(&vars));
+    wait_until_healthy(
+        &mut first,
+        temp.path(),
+        &format!("http://127.0.0.1:{first_port}/healthz"),
+    );
+
+    // The second process gets its own directory only so its stderr does
+    // not overwrite the first's; the journal path is deliberately shared.
+    let second_dir = temp.path().join("second");
+    std::fs::create_dir_all(&second_dir).unwrap();
+    let second_port = free_port();
+    let mut second_vars = base_vars(&workflows_dir, &journal_path);
+    second_vars.push(("PORT".to_string(), second_port.to_string()));
+    let mut second = spawn(
+        &second_dir,
+        &["serve", "--http"],
+        &vars_as_str(&second_vars),
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = second.0.try_wait().expect("try_wait") {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the second server never exited; stderr:\n{}",
+            read_stderr(&second_dir)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    assert_eq!(status.code(), Some(2), "expected startup refusal exit code");
+    let stderr = read_stderr(&second_dir);
+    assert!(
+        stderr.contains(&journal_path.display().to_string()),
+        "the refusal must name the journal path; stderr:\n{stderr}"
     );
 }
