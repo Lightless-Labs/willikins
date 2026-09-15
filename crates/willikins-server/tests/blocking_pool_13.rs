@@ -107,6 +107,29 @@ impl Gate {
     }
 }
 
+/// Opens a [`Gate`] when it leaves scope.
+///
+/// Added by adversarial pass 2's completeness critic, 2026-09-15, found
+/// by mutation: replacing `try_acquire_owned` with a waiting
+/// `acquire_owned` made
+/// [`the_concurrency_bound_answers_busy_instead_of_queueing_on_a_full_pool`]
+/// panic at its five-second timeout exactly as intended -- and then hang
+/// for ever, because the panic unwound *past* `gate.open()` and
+/// `tokio::runtime::Runtime`'s own `Drop` waits for every blocking task
+/// to finish. A regression in the bound has to fail loudly, not wedge
+/// the suite for whoever runs it next.
+///
+/// Declare it *after* the runtime: locals drop in reverse declaration
+/// order, so the last declared opens the gate first and the runtime then
+/// drops with nothing wedged.
+struct OpenOnDrop(Arc<Gate>);
+
+impl Drop for OpenOnDrop {
+    fn drop(&mut self) {
+        self.0.open();
+    }
+}
+
 /// `fake.blocking.ensure`: a tool whose `read` blocks until the test
 /// opens its gate. Stands in for a provider that has accepted a
 /// connection and will not answer -- the shape the plan's own risk
@@ -299,6 +322,8 @@ fn a_tool_that_never_returns_exhausts_the_blocking_pool_and_healthz_still_says_o
         .enable_all()
         .build()
         .unwrap();
+    // Declared after `runtime` so it drops first: see `OpenOnDrop`.
+    let _opener = OpenOnDrop(Arc::clone(&gate));
 
     runtime.block_on(async {
         // A bound far above the pool, so this measures the pool itself.
@@ -357,6 +382,8 @@ fn the_concurrency_bound_answers_busy_instead_of_queueing_on_a_full_pool() {
         .enable_all()
         .build()
         .unwrap();
+    // Declared after `runtime` so it drops first: see `OpenOnDrop`.
+    let _opener = OpenOnDrop(Arc::clone(&gate));
 
     runtime.block_on(async {
         // Two permits, four pool threads: the bound is reached first, by
