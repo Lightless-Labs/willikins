@@ -58,6 +58,111 @@ fn serve_stdio_with_no_environment_refuses_naming_the_missing_variable() {
     );
 }
 
+// ---------------------------------------------------------------------
+// `serve --http`'s own startup refusals -- task 10b. `HttpConfig::build`
+// itself is unit-tested directly (`crate::http::config`'s own tests);
+// these pin that `main.rs`'s wiring actually surfaces each refusal
+// through the real binary, at the process level, with the plan's own
+// "distinct message" and exit code 2. A dummy `WILLIKINS_WORKFLOWS_DIR`/
+// `WILLIKINS_JOURNAL_PATH` (neither needs to exist: `build_http_config`
+// runs, and refuses, before `build_butler` ever touches the filesystem)
+// and `--bind 127.0.0.1:0` keep every case here from reaching anything
+// but the one rule under test.
+// ---------------------------------------------------------------------
+
+const HEX_64: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+fn hex_64(fill: char) -> String {
+    std::iter::repeat_n(fill, 64).collect()
+}
+
+fn dummy_paths() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("WILLIKINS_WORKFLOWS_DIR", "/nonexistent/workflows"),
+        ("WILLIKINS_JOURNAL_PATH", "/nonexistent/journal.jsonl"),
+    ]
+}
+
+#[test]
+fn serve_http_with_no_agent_hash_refuses() {
+    let mut vars = dummy_paths();
+    vars.push(("WILLIKINS_APPROVER_TOKEN_HASH", HEX_64));
+    let output = willikins_server(&["serve", "--http", "--bind", "127.0.0.1:0"], &vars);
+    assert_eq!(exit_code(&output), 2);
+    assert!(
+        stderr(&output).contains("agent token hash"),
+        "got: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn serve_http_with_the_approver_hash_among_the_agent_hashes_refuses() {
+    let shared = hex_64('a');
+    let mut vars = dummy_paths();
+    vars.push(("WILLIKINS_AGENT_TOKEN_HASHES", &shared));
+    vars.push(("WILLIKINS_APPROVER_TOKEN_HASH", &shared));
+    let output = willikins_server(&["serve", "--http", "--bind", "127.0.0.1:0"], &vars);
+    assert_eq!(exit_code(&output), 2);
+    assert!(
+        stderr(&output).contains("approver token hash"),
+        "got: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn serve_http_with_empty_allowed_hosts_refuses() {
+    let approver = hex_64('a');
+    let mut vars = dummy_paths();
+    vars.push(("WILLIKINS_AGENT_TOKEN_HASHES", HEX_64));
+    vars.push(("WILLIKINS_APPROVER_TOKEN_HASH", &approver));
+    let output = willikins_server(&["serve", "--http", "--bind", "127.0.0.1:0"], &vars);
+    assert_eq!(exit_code(&output), 2);
+    assert!(
+        stderr(&output).contains("allowed host"),
+        "got: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn serve_http_with_no_approver_hash_refuses_naming_the_variable() {
+    let mut vars = dummy_paths();
+    vars.push(("WILLIKINS_AGENT_TOKEN_HASHES", HEX_64));
+    vars.push(("WILLIKINS_ALLOWED_HOSTS", "example.com"));
+    let output = willikins_server(&["serve", "--http", "--bind", "127.0.0.1:0"], &vars);
+    assert_eq!(exit_code(&output), 2);
+    assert!(
+        stderr(&output).contains("WILLIKINS_APPROVER_TOKEN_HASH"),
+        "got: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn serve_http_with_no_bind_and_no_port_refuses() {
+    let vars = dummy_paths();
+    let output = willikins_server(&["serve", "--http"], &vars);
+    assert_eq!(exit_code(&output), 2);
+    assert!(
+        stderr(&output).contains("--bind") && stderr(&output).contains("PORT"),
+        "got: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn serve_http_and_serve_stdio_together_refuses() {
+    let output = willikins_server(&["serve", "--stdio", "--http"], &[]);
+    assert_eq!(exit_code(&output), 2);
+    assert!(
+        stderr(&output).contains("not both"),
+        "got: {}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn serve_stdio_with_an_invalid_principal_refuses_before_touching_the_environment() {
     // No env vars set at all (not even WILLIKINS_WORKFLOWS_DIR): the

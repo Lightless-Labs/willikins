@@ -1,0 +1,16 @@
+# Task 10b acceptance test 12: a pending plan whose one input's
+# description carries literal `<script>` and `</textarea>` markup. The
+# approvals page must escape both -- `<script>` so it never executes,
+# `</textarea>` so it cannot prematurely close a form element the page
+# does not even use for this purpose (the reject form's own `reason`
+# field is a plain `<input type="text">`, never a `<textarea>`,
+# precisely so this string could never legitimately close one there).
+name: hostile-markup-pending
+description: A pending plan whose one input's description carries hostile markup.
+inputs:
+  slug: { type: ProjectSlug, description: "<script>alert(1)</script></textarea>" }
+steps:
+  danger:
+    tool: fake.irreversible.ensure
+    with:
+      key: ${{ inputs.slug }}
