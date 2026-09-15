@@ -180,3 +180,31 @@ fn serve_stdio_with_an_invalid_principal_refuses_before_touching_the_environment
         "the principal must be validated before the environment is read, got: {text}"
     );
 }
+
+/// One malformed entry in `WILLIKINS_AGENT_TOKEN_HASHES` refuses the
+/// whole variable, naming it -- it is never silently dropped, leaving the
+/// well-formed entries in force. A typo in an operator's hash list must
+/// be a refusal to start, not a server that quietly honours fewer tokens
+/// (or, worse, admits an entry that parsed into something unintended).
+#[test]
+fn a_malformed_entry_in_the_agent_hash_list_refuses_naming_the_variable() {
+    let good = hex_64('a');
+    let list = format!("{good},not-a-hash");
+    let approver = hex_64('b');
+    let mut vars = dummy_paths();
+    vars.push(("WILLIKINS_AGENT_TOKEN_HASHES", &list));
+    vars.push(("WILLIKINS_APPROVER_TOKEN_HASH", &approver));
+    vars.push(("WILLIKINS_ALLOWED_HOSTS", "example.com"));
+    let output = willikins_server(&["serve", "--http", "--bind", "127.0.0.1:0"], &vars);
+    assert_eq!(exit_code(&output), 2);
+    assert!(
+        stderr(&output).contains("WILLIKINS_AGENT_TOKEN_HASHES"),
+        "got: {}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("not-a-hash"),
+        "the refusal must not echo the rejected value: {}",
+        stderr(&output)
+    );
+}

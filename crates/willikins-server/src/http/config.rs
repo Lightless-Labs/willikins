@@ -111,6 +111,7 @@ pub struct HttpConfig {
     pub(crate) allowed_hosts: Vec<String>,
     pub(crate) request_timeout: Duration,
     pub(crate) max_body_bytes: usize,
+    pub(crate) fake_catalog: bool,
 }
 
 impl HttpConfig {
@@ -151,6 +152,7 @@ impl HttpConfig {
             allowed_hosts,
             request_timeout: Self::DEFAULT_REQUEST_TIMEOUT,
             max_body_bytes: Self::DEFAULT_MAX_BODY_BYTES,
+            fake_catalog: false,
         })
     }
 
@@ -161,6 +163,21 @@ impl HttpConfig {
     #[must_use]
     pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
+        self
+    }
+
+    /// Announce, in `initialize`'s own `instructions`, that this server
+    /// serves the fake in-memory catalog -- what the binary's `--fake`
+    /// flag sets, and the HTTP counterpart of
+    /// [`crate::WillikinsHandler::with_fake_catalog_note`]. It belongs to
+    /// the configuration rather than to `router`'s signature because
+    /// `router` builds its own handler internally; without it a `--fake`
+    /// server announced itself over stdio and said nothing at all over
+    /// HTTP, leaving an agent to infer from behaviour whether the
+    /// provisioning it just did was real.
+    #[must_use]
+    pub fn announcing_fake_catalog(mut self) -> Self {
+        self.fake_catalog = true;
         self
     }
 

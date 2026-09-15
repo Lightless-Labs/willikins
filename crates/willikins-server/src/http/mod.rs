@@ -50,8 +50,11 @@ fn build_mcp_service(
     butler: Arc<Butler>,
     config: &HttpConfig,
 ) -> StreamableHttpService<WillikinsHandler, LocalSessionManager> {
-    let handler =
+    let mut handler =
         WillikinsHandler::new(butler, placeholder_principal()).requiring_request_principal();
+    if config.fake_catalog {
+        handler = handler.with_fake_catalog_note();
+    }
     let session_manager = Arc::new(LocalSessionManager::default());
     let streamable_config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)

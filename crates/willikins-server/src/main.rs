@@ -201,7 +201,7 @@ fn cmd_serve_http(bind: Option<&str>, fake: bool) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let http_config = match build_http_config(&config, bind) {
+    let http_config = match build_http_config(&config, bind, fake) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("{error}");
@@ -245,7 +245,11 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
 /// an already-resolved [`willikins_server::TokenHash`], not an
 /// `Option`) -- reusing [`ConfigError::Missing`]'s own existing shape and
 /// message rather than adding a new variant just for this.
-fn build_http_config(config: &ServerConfig, bind: Option<&str>) -> Result<HttpConfig, StartError> {
+fn build_http_config(
+    config: &ServerConfig,
+    bind: Option<&str>,
+    fake: bool,
+) -> Result<HttpConfig, StartError> {
     let bind = if let Some(addr) = bind {
         addr.parse::<SocketAddr>()
             .map_err(|error| StartError::Bind(error.to_string()))?
@@ -258,13 +262,21 @@ fn build_http_config(config: &ServerConfig, bind: Option<&str>) -> Result<HttpCo
             variable: "WILLIKINS_APPROVER_TOKEN_HASH",
         })
     })?;
-    HttpConfig::build(
+    let http_config = HttpConfig::build(
         bind,
         config.agent_token_hashes.clone(),
         approver_hash,
         config.allowed_hosts.clone(),
     )
-    .map_err(StartError::from)
+    .map_err(StartError::from)?;
+    // `--fake` says so in `initialize`'s own `instructions`, over this
+    // transport exactly as over stdio -- see
+    // `HttpConfig::announcing_fake_catalog`.
+    Ok(if fake {
+        http_config.announcing_fake_catalog()
+    } else {
+        http_config
+    })
 }
 
 /// Build a [`Butler`] from `config` (already loaded, so both transports'

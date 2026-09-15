@@ -1442,6 +1442,46 @@ async fn initialize_with_an_old_or_invented_protocol_version_still_answers() {
     }
 }
 
+/// `--fake` must announce itself over HTTP too. The stdio binary marks
+/// its handler with `with_fake_catalog_note`, so an agent reading
+/// `initialize`'s `instructions` can see that nothing reaches a real
+/// provider; the HTTP transport built its handler inside `router`, where
+/// no such flag could reach, so the same `--fake` server said nothing at
+/// all over HTTP. An agent cannot be left to infer from behaviour alone
+/// whether the provisioning it just did was real.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fake_catalog_announces_itself_over_http_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let butler = butler_arc(dir.path(), common::manual_clock());
+
+    for (config, expected) in [
+        (base_config().announcing_fake_catalog(), true),
+        (base_config(), false),
+    ] {
+        let router = willikins_server::router(Arc::clone(&butler), &config);
+        let response = router
+            .oneshot(mcp_request(initialize_body(1), AGENT_TOKEN))
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let instructions = json["result"]["instructions"].as_str().unwrap_or_default();
+        assert!(
+            instructions.contains("trusted directory"),
+            "the instructions are always served: {json}"
+        );
+        assert_eq!(
+            instructions.contains("fake in-memory catalog"),
+            expected,
+            "announcing_fake_catalog() == {expected} but instructions read: {instructions}"
+        );
+    }
+}
+
 /// A `tools/call` for a tool this server does not define is a protocol
 /// error (rmcp cannot route it), not a domain result an agent should
 /// render as an outcome -- and the session is not poisoned by it.
