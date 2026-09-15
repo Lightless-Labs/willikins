@@ -69,7 +69,6 @@ crypto_box = { version = "0.9", features = ["seal"] }
 sha2 = "0.11"
 rmcp = "3"
 tokio = "1"
-http = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
