@@ -68,20 +68,23 @@ found by the verifiers and deliberately left for the task that owns them:
    `willikins_core::CheckError::kind(&self) -> &'static str` (the enum naming its own
    variants once), pinned against both the existing test macro's `check_error_kind_of` and
    the serialized `"kind"` tag by `kind_agrees_with_the_serialized_tag_for_every_variant`
-   in `crates/willikins-core/src/check.rs`. The CLI side is still open: the next step of
-   task 11 (the CLI subcommands and renderers themselves) deletes
-   `check_error_variant_name` from `crates/willikins-cli/src/render.rs` and calls
-   `.kind()` instead.
+   in `crates/willikins-core/src/check.rs`. **Closed by task 11's second step
+   (2026-09-15):** `check_error_variant_name` is deleted from
+   `crates/willikins-cli/src/render.rs`; `check_error_line` now calls `error.kind()`
+   directly, so the CLI's text output can no longer drift from `CheckError`'s own variant
+   names.
 4. **`Butler::propose_slug` resolved by task 10a**: it returns
    `willikins_server::ProposeSlugResponse { slug }` or a kind-tagged `ButlerError`
    (`InvalidProjectName`/`SlugProposal`, both walked by the same variant test as item 2),
    through `willikins_types::propose_slug` exactly as the CLI does -- `ProposeError` itself
    also gained a `kind` tag (`crates/willikins-types/src/propose.rs`) so this wrapping needs
-   no bespoke mapping. The CLI's own `willikins --json propose-slug` subcommand is
-   unchanged (still hand-built `{"error": ...}`/`{type_name, reason}`, and its *success*
-   path ignores `--json` entirely and always prints plain text -- see
-   `crates/willikins-cli/tests/acceptance_11_parity.rs`'s module doc). Task 11 owns aligning
-   the CLI subcommand itself to `Butler::propose_slug`'s shape.
+   no bespoke mapping. **Closed by task 11's second step (2026-09-15):** `willikins
+   --json propose-slug` now prints `{"slug": "..."}` on success (matching
+   `ProposeSlugResponse`) and, on failure, builds the same `ButlerError` variant
+   `Butler::propose_slug` itself would return and prints it through `Reported` -- no
+   `Butler` instance needed, since both variants are constructed directly from the same
+   parse the subcommand already ran. `crates/willikins-cli/tests/acceptance_11_parity.rs`'s
+   module doc (and its one propose-slug test, which never used `--json`) needed no change.
 
 5. **Closed by task 10b (2026-09-14).** `willikins_server::ValidateResponse.errors` and
    `.warnings` now serialize each element through `willikins_core::Reported` on the wire

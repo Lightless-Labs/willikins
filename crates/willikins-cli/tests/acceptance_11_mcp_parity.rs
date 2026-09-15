@@ -607,3 +607,110 @@ async fn list_tools_equals_schema_catalog_byte_for_byte() {
         "and the CLI's own bytes must be that document pretty-printed"
     );
 }
+
+// ---------------------------------------------------------------------
+// apply: the same refusal kind on both surfaces (task 11's own half of
+// acceptance test 11)
+// ---------------------------------------------------------------------
+
+/// The MCP `apply` tool and the CLI's own `apply` subcommand, applying
+/// the irreversible fixture without approval, both refuse with
+/// `ApprovalRequired`. The MCP half needs its own `Butler` (not the
+/// shared `butler()` helper, whose trusted directory is `workflows/`
+/// only and does not hold this fixture) over a private trusted
+/// directory holding just this one document under its own internal
+/// name -- mirroring `commands::cmd_apply`'s own temporary-directory
+/// copy for the CLI half of this same comparison.
+#[tokio::test(flavor = "multi_thread")]
+async fn apply_approval_required_kind_matches_the_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        fixture_path("irreversible"),
+        dir.path().join("new-rust-service-irreversible.yaml"),
+    )
+    .unwrap();
+
+    let clock: Arc<ManualClock> = Arc::new(ManualClock::new(
+        Timestamp::parse("2026-09-14T00:00:00+00:00").unwrap(),
+    ));
+    let journal = Arc::new(Mutex::new(MemoryJournal::with_clock(
+        clock.clone() as Arc<dyn Clock>
+    )));
+    let (_state, catalog) = Butler::fake_catalog();
+    let mcp_butler = Butler::new(ButlerConfig {
+        workflows_dir: dir.path().to_path_buf(),
+        journal,
+        catalog,
+        clock: clock as Arc<dyn Clock>,
+        approval_window: ButlerConfig::DEFAULT_APPROVAL_WINDOW,
+        apply_window: ButlerConfig::DEFAULT_APPLY_WINDOW,
+        plan_rate_per_minute: ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE,
+        read_rate_per_minute: ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
+    });
+
+    let (client_io, server_io) = tokio::io::duplex(1024 * 1024);
+    let handler_butler = Arc::new(mcp_butler);
+    tokio::spawn(async move {
+        let handler = WillikinsHandler::new(handler_butler, principal());
+        if let Ok(service) = handler.serve(server_io).await {
+            let _ = service.waiting().await;
+        }
+    });
+    let client = ().serve(client_io).await.expect("the client connects and initializes");
+
+    let inputs = &[("slug", "third-thoughts"), ("org", "lightless-labs")];
+    let plan_result = client
+        .call_tool(call(
+            "plan",
+            serde_json::json!({
+                "workflow": "new-rust-service-irreversible",
+                "inputs": inputs_object(inputs),
+            }),
+        ))
+        .await
+        .expect("plan is routed");
+    let plan_structured = plan_result
+        .structured_content
+        .expect("plan returns structured content");
+    let plan_id = plan_structured["plan_id"]
+        .as_str()
+        .expect("plan_id is a string")
+        .to_string();
+
+    let apply_result = client
+        .call_tool(call("apply", serde_json::json!({ "plan_id": plan_id })))
+        .await
+        .expect("apply is routed (a domain refusal, not a transport error)");
+    assert_eq!(apply_result.is_error, Some(true), "{apply_result:?}");
+    let mcp_structured = apply_result
+        .structured_content
+        .expect("apply's refusal carries structured content");
+    assert_eq!(
+        mcp_structured["kind"], "ApprovalRequired",
+        "{mcp_structured}"
+    );
+
+    let cli = run_cli(&[
+        "--json",
+        "apply",
+        fixture_path("irreversible").to_str().unwrap(),
+        "--input",
+        "slug=third-thoughts",
+        "--input",
+        "org=lightless-labs",
+    ]);
+    assert_eq!(cli.code, 1, "{}", cli.stderr);
+    let cli_docs: Vec<serde_json::Value> = serde_json::Deserializer::from_str(&cli.stdout)
+        .into_iter()
+        .map(|result| result.expect("valid JSON"))
+        .collect();
+    assert_eq!(
+        cli_docs.len(),
+        2,
+        "expected a PlanResponse then the refusal: {cli_docs:?}"
+    );
+    assert_eq!(
+        cli_docs[1]["kind"], mcp_structured["kind"],
+        "the CLI and the MCP tool must refuse with the same kind"
+    );
+}
