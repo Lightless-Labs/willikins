@@ -42,6 +42,8 @@ use willikins_core::{
     Action, Applied, AppliedNode, CheckError, CheckWarning, Description, NodeStatus, Plan,
     PlanError, PlannedNode, Reported, Value,
 };
+use willikins_journal::{PlanId, PlanRecord, RunNode, RunRecord, RunState};
+use willikins_server::{ApprovalRequirement, PlanResponse};
 
 /// Escape `text` onto one line: every character that is not printable —
 /// a line feed, a lone carriage return, an ANSI escape, a bidirectional
@@ -157,11 +159,7 @@ pub fn check_errors_json(errors: &[CheckError]) -> serde_json::Value {
 /// [`willikins_core::Reported`]): the two need not agree word for word, only
 /// on the leading variant name.
 fn check_error_line(error: &CheckError) -> String {
-    format!(
-        "{}: {}",
-        check_error_variant_name(error),
-        check_error_detail(error)
-    )
+    format!("{}: {}", error.kind(), check_error_detail(error))
 }
 
 fn check_error_detail(error: &CheckError) -> String {
@@ -242,37 +240,6 @@ fn check_error_detail(error: &CheckError) -> String {
         CheckError::LiteralOutput { output } => {
             format!("output `{output}`: a workflow output must be a reference, not a literal")
         }
-    }
-}
-
-/// `error`'s own Rust variant name, for the leading `VariantName:` in
-/// [`check_error_line`]'s text rendering. Kept separate from the `kind`
-/// [`Reported`] produces in JSON output (see [`check_errors_json`]) even
-/// though the two strings are always equal, since text rendering has no
-/// other reason to depend on `CheckError`'s `Serialize` impl at all.
-fn check_error_variant_name(error: &CheckError) -> &'static str {
-    match error {
-        CheckError::UnknownTool { .. } => "UnknownTool",
-        CheckError::UnknownPort { .. } => "UnknownPort",
-        CheckError::UnknownNode { .. } => "UnknownNode",
-        CheckError::UnboundInput { .. } => "UnboundInput",
-        CheckError::UndeclaredInput { .. } => "UndeclaredInput",
-        CheckError::InvalidLiteral { .. } => "InvalidLiteral",
-        CheckError::TypeMismatch { .. } => "TypeMismatch",
-        CheckError::SecretLiteral { .. } => "SecretLiteral",
-        CheckError::SecretToNonSecretSink { .. } => "SecretToNonSecretSink",
-        CheckError::SecretWorkflowInput { .. } => "SecretWorkflowInput",
-        CheckError::SecretForEachSource { .. } => "SecretForEachSource",
-        CheckError::ForEachOverScalar { .. } => "ForEachOverScalar",
-        CheckError::ItemOutsideForEach { .. } => "ItemOutsideForEach",
-        CheckError::KeyedOnScalarNode { .. } => "KeyedOnScalarNode",
-        CheckError::Cycle { .. } => "Cycle",
-        CheckError::DefaultTypeMismatch { .. } => "DefaultTypeMismatch",
-        CheckError::NestedList { .. } => "NestedList",
-        CheckError::DuplicateNode { .. } => "DuplicateNode",
-        CheckError::UnregisteredInputType { .. } => "UnregisteredInputType",
-        CheckError::DuplicateForEachDefault { .. } => "DuplicateForEachDefault",
-        CheckError::LiteralOutput { .. } => "LiteralOutput",
     }
 }
 
@@ -403,10 +370,14 @@ fn action_text(action: Action) -> &'static str {
 /// its redaction marker here exactly as it does in `plan_text` and in
 /// [`Applied`]'s own JSON.
 ///
-/// Not yet called from `main.rs`: the CLI's own `apply` subcommand is
-/// task 11's job. Exercised today by this module's own tests (acceptance
-/// test 5's marker-redaction claim, for text output) so it exists ahead
-/// of its caller rather than being written twice.
+/// Still not called from `main.rs`: task 11's `apply` subcommand renders
+/// [`willikins_journal::RunRecord`] instead (see [`run_record_text`]),
+/// since `willikins_server::Butler::apply` returns as soon as the run is
+/// journaled and the CLI polls `Butler::run` for its outcome -- there is
+/// never a live [`Applied`] value for the CLI itself to hold. Kept for
+/// this module's own tests (acceptance test 5's marker-redaction claim,
+/// for text output) and for a future caller that drives
+/// `willikins_core::apply` directly rather than through a `Butler`.
 #[allow(dead_code)]
 #[must_use]
 pub fn applied_text(applied: &Applied) -> String {
@@ -441,8 +412,11 @@ fn applied_node_line(node: &AppliedNode) -> String {
 /// A [`NodeStatus`]'s text label. [`NodeStatus::Failed`]'s error message
 /// is a provider's own text (trust boundary 5), so it goes through
 /// [`single_line`] the same way [`plan_error_text`] treats a tool
-/// failure.
-#[allow(dead_code)] // see `applied_text`'s own doc: awaits task 11's caller
+/// failure. Called from both [`applied_node_line`] and
+/// [`run_record_node_line`]: a [`willikins_journal::RunNode::status`] is a
+/// live, un-redacted `NodeStatus` (nothing in it is a `Value` -- see
+/// [`run_record_text`]'s own doc), so the two callers share this one
+/// rendering rather than the journal-backed one reimplementing it.
 fn node_status_text(status: &NodeStatus) -> String {
     match status {
         NodeStatus::Computed => "Computed".to_string(),
@@ -451,6 +425,179 @@ fn node_status_text(status: &NodeStatus) -> String {
         NodeStatus::Converged => "Converged".to_string(),
         NodeStatus::Failed { error } => format!("Failed: {}", single_line(&error.to_string())),
         NodeStatus::NotRun => "NotRun".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------
+// task 11: plan/run responses driven through a `willikins_server::Butler`
+// ---------------------------------------------------------------------
+
+/// Render a [`willikins_server::Butler::plan`] response for text output:
+/// the plan id, [`plan_text`]'s own rendering of the plan itself, and
+/// whether it needs a human decision.
+#[must_use]
+pub fn plan_response_text(response: &PlanResponse) -> String {
+    let approval = match response.approval {
+        ApprovalRequirement::Automatic => "approval: automatic",
+        ApprovalRequirement::Pending => "approval: pending",
+    };
+    [
+        format!("plan_id: {}", response.plan_id),
+        plan_text(&response.plan),
+        approval.to_string(),
+        format!("expires_at: {}", response.expires_at),
+    ]
+    .join("\n")
+}
+
+/// Extract the rendered string(s) [`Value`]'s own `Serialize` already
+/// wrote into `json` when the journal recorded it. See [`run_record_text`]'s
+/// own doc for why this reads pre-redacted JSON rather than calling
+/// [`Value::render`] itself: there is no live `Value` left to call it on
+/// here, only the JSON its `Serialize` produced, which already carries a
+/// secret's redaction marker in place of its bytes
+/// (`{"value": "[REDACTED DopplerServiceToken]", ...}`) -- so reading
+/// `json["value"]` back out leaks nothing `Value::render` would not
+/// itself have printed.
+fn redacted_value_text(json: &serde_json::Value) -> String {
+    if json.get("state").and_then(serde_json::Value::as_str) != Some("known") {
+        return "<unknown>".to_string();
+    }
+    let is_list = json
+        .get("list")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let Some(value) = json.get("value") else {
+        return "<unknown>".to_string();
+    };
+    if is_list {
+        let items = value
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| item.as_str().unwrap_or_default())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        single_line(&format!("[{items}]"))
+    } else {
+        single_line(value.as_str().unwrap_or_default())
+    }
+}
+
+/// One line per entry of a `Redacted<IndexMap<OutputName, Value>>`'s (or a
+/// node's `Redacted<Outputs>`) own JSON object, in the order its own
+/// `Serialize` wrote them.
+fn redacted_map_lines(json: &serde_json::Value, indent: &str) -> Vec<String> {
+    let Some(map) = json.as_object() else {
+        return Vec::new();
+    };
+    map.iter()
+        .map(|(name, value)| format!("{indent}{name}: {}", redacted_value_text(value)))
+        .collect()
+}
+
+fn run_record_node_line(node: &RunNode) -> String {
+    let status = node_status_text(&node.status);
+    match &node.instance {
+        Some(instance) => format!("{}[{}]: {status}", node.node, single_line(instance)),
+        None => format!("{}: {status}", node.node),
+    }
+}
+
+fn run_state_text(state: RunState) -> &'static str {
+    match state {
+        RunState::Running => "running",
+        RunState::Succeeded => "succeeded",
+        RunState::Failed => "failed",
+    }
+}
+
+/// Render a [`RunRecord`] (from `willikins_server::Butler::run`, or from
+/// [`willikins_journal::replay`]'s own `run`/`runs`) for text output: one
+/// line per node instance and its outputs, then the workflow's own
+/// outputs, then the run's final state and, on a failure, its error.
+///
+/// Unlike [`plan_text`]/[`applied_text`], this never touches a live
+/// [`Value`]: a `RunRecord`'s `outputs`, and each [`RunNode`]'s own
+/// `outputs`, are [`willikins_journal::Redacted`] -- already-serialized
+/// JSON, produced by `Value`'s own redacting `Serialize` at the moment the
+/// journal recorded them (see `willikins-journal`'s `redacted` module
+/// docs). There is no live `Value` left here for this module's usual
+/// invariant ("every function that touches a `Value` calls
+/// `Value::render`") to apply to: [`redacted_value_text`] reads back the
+/// same `value`/`state`/`list` shape `Value::render` itself would have
+/// produced, so the two agree on every value neither has anything left to
+/// redact.
+#[must_use]
+pub fn run_record_text(run: &RunRecord) -> String {
+    let mut lines = vec![
+        format!("run_id: {}", run.run_id),
+        format!("plan_id: {}", run.plan_id),
+        format!("principal: {}", run.principal),
+    ];
+    for node in &run.nodes {
+        lines.push(run_record_node_line(node));
+        lines.extend(redacted_map_lines(node.outputs.as_json(), "    "));
+    }
+    lines.push("outputs:".to_string());
+    lines.extend(redacted_map_lines(run.outputs.as_json(), "  "));
+    lines.push(format!("state: {}", run_state_text(run.state)));
+    if let Some(error) = &run.error {
+        lines.push(format!(
+            "error: {}",
+            single_line(&error.as_json().to_string())
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Render every plan still waiting on a human decision
+/// (`willikins_server::Butler::pending_approvals`), one line each: its id,
+/// workflow name, class, and when it was recorded -- so an operator
+/// pointed at a `--journal` can see every plan it holds, not only the one
+/// they just asked about.
+#[must_use]
+pub fn pending_approvals_text(records: &[PlanRecord]) -> String {
+    records
+        .iter()
+        .map(|record| {
+            format!(
+                "{} ({}): class {:?}, recorded {}",
+                record.plan_id, record.workflow, record.class, record.recorded_at
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The extra guidance line printed alongside a text-mode `apply` refusal
+/// whose plan needs a human decision (`ButlerError::ApprovalRequired`, or
+/// the same refusal after a rejection): `plan_id` is not itself a field of
+/// `ButlerError` (see that enum's own doc), so the call site that still
+/// has it in hand builds this rather than a generic error renderer having
+/// to accept it as an extra parameter for one variant alone.
+///
+/// `journal_path` is `None` for the CLI's default in-memory journal: a
+/// plan an operator cannot re-approve after this process exits (the whole
+/// point of `--journal <path>` is to survive across the separate
+/// `approve`/`apply --plan-id` processes the approve-by-id flow needs),
+/// so the guidance says so rather than naming commands that cannot work.
+#[must_use]
+pub fn approval_required_guidance(plan_id: PlanId, journal_path: Option<&str>) -> String {
+    match journal_path {
+        Some(path) => format!(
+            "plan `{plan_id}` needs a human decision: run `willikins approve {plan_id} --journal {path}`, \
+             then `willikins apply --plan-id {plan_id} --journal {path}`; or re-run this command with \
+             --approve"
+        ),
+        None => format!(
+            "plan `{plan_id}` needs a human decision, but no --journal was given, so this plan is gone \
+             once this process exits; re-run with --journal <path> and either --approve or the \
+             approve / `apply --plan-id` flow"
+        ),
     }
 }
 
@@ -848,5 +995,132 @@ mod tests {
             "text: {text}"
         );
         assert!(!text.contains("MARKERMARKER"), "text leaked: {text}");
+    }
+
+    // -------------------------------------------------------------
+    // task 11: plan/run responses driven through a `Butler`
+    // -------------------------------------------------------------
+
+    fn run_id() -> willikins_journal::RunId {
+        willikins_journal::RunId::new()
+    }
+
+    fn plan_id() -> PlanId {
+        PlanId::new()
+    }
+
+    fn principal(name: &str) -> willikins_core::PrincipalId {
+        willikins_core::PrincipalId::parse(name).unwrap()
+    }
+
+    /// A [`RunRecord`] must never print a secret output's bytes through
+    /// [`run_record_text`], for the same reason [`applied_text`] must
+    /// not -- acceptance test 5's own claim, at the journal-backed
+    /// renderer this crate's `apply`/`runs`/`run` subcommands actually
+    /// call, not the in-process [`Applied`] one.
+    #[test]
+    fn run_record_text_redacts_a_secret_output_and_still_shows_created() {
+        let token = willikins_types::DopplerServiceToken::parse(&format!(
+            "dp.st.prd.{}",
+            "MARKER".repeat(7)
+        ))
+        .unwrap();
+        let mut outputs = Outputs::new();
+        outputs.insert(PortName::parse("token").unwrap(), Value::known(token));
+
+        let node = RunNode {
+            node: NodeName::parse("token").unwrap(),
+            instance: None,
+            status: NodeStatus::Created,
+            outputs: willikins_journal::Redacted::from(&outputs),
+        };
+        let run = RunRecord {
+            run_id: run_id(),
+            plan_id: plan_id(),
+            principal: principal("agent"),
+            started_at: willikins_core::Timestamp::now(),
+            state: RunState::Succeeded,
+            nodes: vec![node],
+            outputs: willikins_journal::Redacted::from(&IndexMap::new()),
+            error: None,
+            finished_at: Some(willikins_core::Timestamp::now()),
+        };
+
+        let text = run_record_text(&run);
+        assert!(text.contains("Created"), "text: {text}");
+        assert!(
+            text.contains("[REDACTED DopplerServiceToken]"),
+            "text: {text}"
+        );
+        assert!(!text.contains("MARKERMARKER"), "text leaked: {text}");
+        assert!(text.contains("state: succeeded"), "text: {text}");
+    }
+
+    #[test]
+    fn run_record_text_shows_an_unknown_output_and_the_error_on_failure() {
+        let node = RunNode {
+            node: NodeName::parse("blocked").unwrap(),
+            instance: None,
+            status: NodeStatus::NotRun,
+            outputs: willikins_journal::Redacted::from(&Outputs::new()),
+        };
+        let error = willikins_core::ApplyError::ApprovalRequired {
+            class: Class::Irreversible,
+        };
+        let run = RunRecord {
+            run_id: run_id(),
+            plan_id: plan_id(),
+            principal: principal("agent"),
+            started_at: willikins_core::Timestamp::now(),
+            state: RunState::Failed,
+            nodes: vec![node],
+            outputs: willikins_journal::Redacted::from(&IndexMap::new()),
+            error: Some(willikins_journal::Redacted::from(&error)),
+            finished_at: Some(willikins_core::Timestamp::now()),
+        };
+
+        let text = run_record_text(&run);
+        assert!(text.contains("NotRun"), "text: {text}");
+        assert!(text.contains("state: failed"), "text: {text}");
+        assert!(text.contains("error:"), "text: {text}");
+        assert!(text.contains("ApprovalRequired"), "text: {text}");
+    }
+
+    #[test]
+    fn plan_response_text_includes_the_plan_id_and_approval_state() {
+        let response = PlanResponse {
+            plan_id: plan_id(),
+            plan: Plan {
+                workflow: willikins_types::WorkflowName::parse("test").unwrap(),
+                nodes: Vec::new(),
+                outputs: IndexMap::new(),
+                class: Class::Reversible,
+                requires_approval: false,
+            },
+            requires_approval: false,
+            approval: ApprovalRequirement::Automatic,
+            expires_at: willikins_core::Timestamp::now(),
+        };
+        let text = plan_response_text(&response);
+        assert!(text.contains(&response.plan_id.to_string()), "{text}");
+        assert!(text.contains("approval: automatic"), "{text}");
+    }
+
+    #[test]
+    fn approval_required_guidance_names_a_journal_path_when_given() {
+        let id = plan_id();
+        let with_journal = approval_required_guidance(id, Some("/tmp/j.jsonl"));
+        assert!(with_journal.contains("willikins approve"), "{with_journal}");
+        assert!(with_journal.contains("/tmp/j.jsonl"), "{with_journal}");
+
+        let without_journal = approval_required_guidance(id, None);
+        assert!(
+            without_journal.contains("no --journal was given"),
+            "{without_journal}"
+        );
+        assert!(
+            !without_journal.contains("willikins approve"),
+            "{without_journal}: should not suggest a command that cannot work"
+        );
     }
 }
