@@ -225,7 +225,7 @@ impl Journal for FileJournal {
 /// silently dropping the tail either way would let a corrupted journal
 /// replay as if nothing were wrong. An operator recovering from a crash
 /// inspects the file and trims the partial line by hand.
-fn replay(file: &mut File, path: &Path) -> Result<Vec<Entry>, JournalError> {
+pub(crate) fn replay(file: &mut File, path: &Path) -> Result<Vec<Entry>, JournalError> {
     file.seek(SeekFrom::Start(0))
         .map_err(|source| JournalError::Io {
             path: path.to_path_buf(),

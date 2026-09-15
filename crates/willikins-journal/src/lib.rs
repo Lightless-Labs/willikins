@@ -36,6 +36,7 @@ mod ids;
 mod journal;
 mod memory;
 mod observer;
+mod read_only;
 mod reason;
 pub mod redacted;
 mod timestamp_clamp;
@@ -50,6 +51,7 @@ pub use ids::{PlanId, RunId};
 pub use journal::{ApprovalState, Journal, PlanRecord, RunNode, RunRecord, RunState};
 pub use memory::MemoryJournal;
 pub use observer::{Append, JournalObserver, continue_run_and_journal, run_and_journal};
+pub use read_only::{ReplayedJournal, replay};
 pub use reason::{Reason, ReasonError};
 pub use redacted::{Redactable, Redacted};
 

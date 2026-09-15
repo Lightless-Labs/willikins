@@ -154,50 +154,77 @@ pub trait Journal {
     fn entries(&self) -> &[Entry];
 
     /// Every plan still awaiting a human decision (recorded, but neither
-    /// auto-approved nor granted nor rejected).
+    /// auto-approved nor granted nor rejected). See [`pending_approvals_view`]
+    /// for the filtering rules.
     fn pending_approvals(&self) -> Vec<PlanRecord> {
-        fold(self.entries())
-            .plans
-            .into_values()
-            // `requires_approval` too, not just `approval == Pending`: a
-            // plan that never needed approval sits in `Pending` only for
-            // the instant between `PlanRecorded` and `ApprovalAutomatic`
-            // (or forever, if a process died between the two appends,
-            // which cannot happen through `run_and_journal` today but is
-            // not otherwise ruled out at the journal level) and is not a
-            // human waiting on anything.
-            //
-            // `applied.is_none()` for the same reason from the other end:
-            // a plan whose run has already started is not waiting on
-            // anybody either, whatever its approval events say. That
-            // combination is not reachable through `run_and_journal`
-            // today, but this view is a fold over whatever the file holds
-            // -- a file written by an older or buggier build, or one whose
-            // `ApprovalGranted` append failed while the run itself went
-            // ahead -- and offering an operator a plan that already ran as
-            // something still to approve would be worse than omitting it.
-            .filter(|record| {
-                record.requires_approval
-                    && matches!(record.approval, ApprovalState::Pending)
-                    && record.applied.is_none()
-            })
-            .collect()
+        pending_approvals_view(self.entries())
     }
 
     /// One recorded plan, by id.
     fn plan(&self, plan_id: &PlanId) -> Option<PlanRecord> {
-        fold(self.entries()).plans.shift_remove(plan_id)
+        plan_view(self.entries(), plan_id)
     }
 
     /// Every run recorded so far.
     fn runs(&self) -> Vec<RunRecord> {
-        fold(self.entries()).runs.into_values().collect()
+        runs_view(self.entries())
     }
 
     /// One run, by id.
     fn run(&self, run_id: &RunId) -> Option<RunRecord> {
-        fold(self.entries()).runs.shift_remove(run_id)
+        run_view(self.entries(), run_id)
     }
+}
+
+/// The fold behind [`Journal::pending_approvals`], factored out as a free
+/// function over a plain entry slice so [`crate::ReplayedJournal`] (which
+/// cannot implement [`Journal`] itself -- it has no `append`) exposes the
+/// identical view without a second implementation to drift from this one.
+pub(crate) fn pending_approvals_view(entries: &[Entry]) -> Vec<PlanRecord> {
+    fold(entries)
+        .plans
+        .into_values()
+        // `requires_approval` too, not just `approval == Pending`: a
+        // plan that never needed approval sits in `Pending` only for
+        // the instant between `PlanRecorded` and `ApprovalAutomatic`
+        // (or forever, if a process died between the two appends,
+        // which cannot happen through `run_and_journal` today but is
+        // not otherwise ruled out at the journal level) and is not a
+        // human waiting on anything.
+        //
+        // `applied.is_none()` for the same reason from the other end:
+        // a plan whose run has already started is not waiting on
+        // anybody either, whatever its approval events say. That
+        // combination is not reachable through `run_and_journal`
+        // today, but this view is a fold over whatever the file holds
+        // -- a file written by an older or buggier build, or one whose
+        // `ApprovalGranted` append failed while the run itself went
+        // ahead -- and offering an operator a plan that already ran as
+        // something still to approve would be worse than omitting it.
+        .filter(|record| {
+            record.requires_approval
+                && matches!(record.approval, ApprovalState::Pending)
+                && record.applied.is_none()
+        })
+        .collect()
+}
+
+/// The fold behind [`Journal::plan`]; see [`pending_approvals_view`]'s doc
+/// for why this is a free function.
+pub(crate) fn plan_view(entries: &[Entry], plan_id: &PlanId) -> Option<PlanRecord> {
+    fold(entries).plans.shift_remove(plan_id)
+}
+
+/// The fold behind [`Journal::runs`]; see [`pending_approvals_view`]'s doc
+/// for why this is a free function.
+pub(crate) fn runs_view(entries: &[Entry]) -> Vec<RunRecord> {
+    fold(entries).runs.into_values().collect()
+}
+
+/// The fold behind [`Journal::run`]; see [`pending_approvals_view`]'s doc
+/// for why this is a free function.
+pub(crate) fn run_view(entries: &[Entry], run_id: &RunId) -> Option<RunRecord> {
+    fold(entries).runs.shift_remove(run_id)
 }
 
 /// The two replay views, built together in one pass over `entries` so a
