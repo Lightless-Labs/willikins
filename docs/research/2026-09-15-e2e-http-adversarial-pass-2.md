@@ -20,7 +20,15 @@ and the 2026-09-14/15 addenda for tasks 10a, 10b, 11 and 12.
 **Inherits:** `docs/research/2026-09-14-executor-journal-adversarial-pass-1.md`'s "Handed to
 adversarial pass 2", and the four verifies' carried items listed in the plan's addenda.
 
-**Tests added:** 45, in three files.
+**Reviewed:** 2026-09-15 (completeness critic) — every amendment below marked
+*completeness critic, 2026-09-15*. The critic added no source change: nothing in
+`crates/*/src` moved. What it changed is the evidence — one vacuous test rewritten, one
+test-harness defect that turned a regression into a hang, two handed-over items the pass
+never attacked, a second frozen fixture for the shapes the first one cannot carry, and a
+liveness assertion under each of the two sweeps the headline rests on. Its own section is
+at the end, with the mutation table.
+
+**Tests added:** 45 by the pass, in three files; 10 more by the critic (below), for 55.
 `crates/willikins-server/tests/adversarial_13.rs` (31 attacks against the real binary over
 TCP, two of them `#[ignore]`d because they hold a connection for tens of seconds),
 `crates/willikins-server/tests/blocking_pool_13.rs` (4: the blocking pool and journal failure
@@ -68,6 +76,23 @@ pre-change HEAD and exercising every event kind, every `ApplyRefusedReason`, eve
 as `crates/willikins-journal/tests/fixtures/pre-pass-2-every-event.jsonl`. It is frozen; the
 tests beside it only read it, and they replay it through both `FileJournal::open` and the
 lock-free `willikins_journal::replay` after every change in this pass.
+
+**Amended — completeness critic, 2026-09-15.** That fixture is the *backward* direction
+only, and it cannot be anything else: a journal written before the change has no
+`invalid_nonce`, no `foreign_origin`, no `malformed_username`, no
+`recorded_input_unreadable`, no `apply_preparing` and no `principal` on a `plan_recorded`
+line, because none of them existed when it was written. Nothing in the tree pinned the
+*spelling* of a single new variant, so a later pass that renamed `invalid_nonce` or
+dropped `input` from `recorded_input_unreadable` would have orphaned every journal this
+milestone's binary wrote, with no test to say so.
+`crates/willikins-journal/tests/fixtures/post-pass-2-new-shapes.jsonl` and
+`tests/post_pass_2_shapes.rs` (6 tests plus its own `#[ignore]`d generator) are that pin,
+and they are the *next* pass's pre-change baseline. Two facts the pass's own claim did not
+cover, now covered there: `RecordedInputUnreadable` is frozen in **both** shapes (`input:
+Some("slug")` and `input: null`, the case where the whole recorded payload is unreadable
+and naming an input would be a lie), and `NodeStatus` — which the claim never mentions —
+is exercised in the pre-change fixture only as `created` and `failed`, so the four it
+misses (`computed`, `unchanged`, `converged`, `not_run`) are frozen in the new file.
 
 **The direction that does not work, recorded as a decision.** `Event` carries
 `#[serde(deny_unknown_fields)]`, so a journal written by a *newer* binary is a replay error
@@ -213,7 +238,7 @@ Every attack below ran over TCP against the real binary. **None got through.**
 | `HTTP/1.0` | same 401 |
 | A chunked body | same 401: chunking is not a way around the bearer check |
 | A foreign `Host` on `/mcp`, unauthenticated | 401, not 403 — authentication is the outer gate, so rmcp's DNS-rebinding check never becomes an oracle for whether a token is valid |
-| A foreign `Host` on `/mcp`, authenticated | refused by rmcp's `allowed_hosts` |
+| A foreign `Host` on `/mcp`, authenticated | refused. *Precision, completeness critic 2026-09-15:* the test asserts only that the status is **not 200**, so "refused by rmcp's `allowed_hosts`" is the mechanism inferred, not the mechanism measured — a 401 would satisfy the assertion equally. Left as written rather than tightened to a status this pass did not record |
 | `/healthz` with and without a port in `Host`, and with `localhost` | 200, no credential needed |
 | An approver password with the username `agent-0123456789ab`, `not a principal`, or empty | 403 each, journaled `malformed_username` |
 | A cross-site `POST /approvals/{id}` with a valid nonce | 403 on the `Origin`, journaled `foreign_origin`, and the approver's own nonce survives it |
@@ -225,8 +250,8 @@ Every attack below ran over TCP against the real binary. **None got through.**
 | A `/mcp` body of exactly 1 MiB | accepted (200) |
 | One byte more | 413, from rmcp's own streaming limit |
 | A 1 MiB `POST /approvals` form | 413, from the configured `DefaultBodyLimit` — task 10b's verify had found this falling back to axum's 2 MiB default, and it is still fixed |
-| A request that announces a body and never sends it | dropped inside the 30-second request timeout |
-| Headers that never terminate, trickled | **not bounded — finding 8 below** |
+| A request that announces a body and never sends it | dropped inside the 30-second request timeout. `#[ignore]`d (it waits out the real timeout); **re-measured by hand 2026-09-15 by the completeness critic: green** |
+| Headers that never terminate, trickled | **not bounded — finding 8 below.** `#[ignore]`d; **re-measured by hand 2026-09-15 by the completeness critic: green** (both ignored tests, 43 s together) |
 | A tool that never returns, times four | **exhausts the blocking pool — finding 9 below** |
 
 ### 8. Slowloris: a trickled header stream is bounded by nothing
@@ -304,6 +329,35 @@ caller learns what happened to a run — refusing it while the bound is reached 
 state of the very calls that reached it. The approvals page is unbounded for the same reason
 at a higher stake: the approver's channel must not be refused because an agent is looping.
 
+**One more way the bound could have been defeated, attacked and held — completeness
+critic, 2026-09-15.** The bound counts *permits*, and it takes its permit in an **async
+frame**: `run_bounded` holds it across `spawn_blocking(f).await` and drops it after.
+Nothing cancels a `spawn_blocking` closure, so if that frame were dropped while its thread
+was still wedged — which is exactly what the 30-second `tower-http` timeout does to a
+service call — the permit would come back while the thread did not, and a caller who let
+every call time out could accumulate wedged threads up to the pool's 512 while the bound
+went on reading "none in flight" and `/healthz` went on answering 200.
+
+It does not happen. Measured in
+`blocking_pool_13.rs::an_abandoned_tool_call_keeps_its_permit_until_its_blocking_thread_ends`:
+with one permit, a wedged call, and that call's request future abandoned, the next call is
+still refused `Busy` and never reaches the tool. The reason is rmcp's own structure —
+`streamable_http_server/tower.rs` runs the stateless handler on a task of its own
+(`tokio::spawn(async move { service.waiting().await })`), so the permit does not live on
+the axum request future the timeout drops. The test is checked by mutation: releasing the
+permit *before* `run_blocking` instead of after makes it fail in five seconds.
+
+**What that test does not reach**, named rather than implied: the same rmcp path arms a
+`CancellationToken` drop-guard for a client that disconnects *before the handler emits its
+first message*, and that token does cancel the handler future. A disconnect inside that
+window would drop the permit with the frame while the thread ran on. Driving it needs a
+real half-closed hyper connection against a wedged tool, which the in-process harness
+cannot make. The hardening is one line — move the permit into the blocking closure,
+`run_blocking(move || { let _permit = permit; f() })` — which costs nothing and stops the
+property depending on rmcp's internal task structure. **Not made here**, because a source
+change whose failing test cannot be written is exactly the discipline this pass is
+measuring; handed to milestone 3.
+
 **The bound is not configurable**, and that is recorded rather than hidden: a deployment
 variable here would need a startup refusal, a README row and an image test, for a number whose
 only job is to stay well under a pool size this process does not configure either. A follow-up
@@ -329,7 +383,20 @@ workflow name). `WorkflowName`'s grammar — `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`, 
 characters — is what refuses them, and the honest spelling still plans in the same test, so
 the refusals are the grammar's doing and not a broken directory.
 
-**Both readings of the case question, pinned.** This host's filesystem is case-insensitive and
+**Both readings of the case question — one of them was not pinned.** *Corrected,
+completeness critic, 2026-09-15.* The test that carried this claim,
+`this_hosts_filesystem_case_sensitivity_is_recorded`, measured the fold, `println!`ed it
+into output a green `cargo test` run discards, and then asserted only that the file it had
+just written existed. It could not have failed for any reason this section is about, and
+it recorded nothing durable. It is now
+`an_upper_case_name_cannot_reach_the_filesystem_whatever_this_host_folds`, which asserts
+the invariant that actually makes the difference unobservable and holds on both hosts:
+`WorkflowName::parse("Case-Probe")` is an error and `parse("case-probe")` is not, so an
+upper-case spelling never reaches a path at all. The fold itself stays printed, not
+asserted — asserting either answer would fail on the other host, which is the whole point.
+The claim below is otherwise unchanged and correct.
+
+This host's filesystem is case-insensitive and
 Railway's is not, so `New-Rust-Service.yaml` would find `new-rust-service.yaml` here and not
 there. The grammar makes that difference unobservable, because an upper-case name never
 reaches the filesystem: the request is refused identically on both, and the test that measures
@@ -398,6 +465,17 @@ clean.
 The nonce matters as much as the token here: a nonce in a log line is a replay for anyone who
 can read logs, which on a hosted deployment is everyone with access to the project.
 
+**Amended — completeness critic, 2026-09-15.** The sweep had no *liveness* assertion: it
+read the child's stderr and stdout and asserted six needles were absent, and a capture that
+came back empty — a broken drain thread, a tracing writer redirected, a child that died
+before it logged — would have satisfied every one of them without looking at a single line
+the binary wrote. The same was true of finding 7's document-text sweep, whose
+"every line is one well-formed JSON object" loop iterates over `stderr.lines()` and checks
+nothing when there are none. Both now assert that the capture carries the
+`willikins-server listening` line first. The sweep itself was checked by mutation:
+`tracing::info!(presented = %token, …)` injected into `bearer_auth` makes it fail, naming
+the token, in 4 s — so the capture is live today and the assertion is what keeps it so.
+
 **The limitation, next to the claim rather than three sections away:** this is a sweep of what
 the binary emits, and the binary emits INFO (finding 10). **rmcp's own `debug!`/`trace!` of
 received JSON-RPC bodies was not swept**, because there is no way to make this binary emit
@@ -433,6 +511,8 @@ bound". It now logs `listener.local_addr()`, which makes that true. On Railway t
 | A tool that lies about its own output types (pass 1) | recorded — finding 16 |
 | No `catch_unwind` around observers (pass 1) | recorded — finding 16 |
 | The text renderer's forged redaction marker (pass 1) | recorded — finding 16 |
+| **rmcp round-trips for the four remaining apply refusal kinds are pinned by type identity only (11)** | **missed by this pass entirely.** *Completeness critic, 2026-09-15:* attacked, held, now pinned. See "What the pass did not attack" below |
+| **The crash-recovery detour — volume detach and reattach — is untested (12)** | **missed by this pass entirely.** *Completeness critic, 2026-09-15:* attacked without Railway, held, now pinned. See "What the pass did not attack" below |
 
 ### 13. A journal that stops accepting leaves a run `Running` for ever
 
@@ -551,6 +631,13 @@ it priority when a production journal actually needs it.
    field-value rule and second-guessing the transport is worse than the (already refused)
    way an operator could get bitten.
 
+*Added by the completeness critic, 2026-09-15:*
+
+8. **The permit stays in the async frame** (finding 9's amendment). The property holds
+   today because of how rmcp schedules the handler; the one-line hardening that would stop
+   it depending on that goes to milestone 3, rather than shipping a source change whose
+   failing test cannot be written.
+
 ## Plan defects found
 
 1. **The `willikins-server` section's `ApplyRefused` reason list is short by two.** It now
@@ -602,6 +689,153 @@ every one of them changes when that decision does:
 8. **`willikins journal repair`** (`todos/2026-09-15-journal-repair-subcommand.md`), which is
    now the recorded answer to a truncated last line rather than an idea (finding 17).
 
+*Added by the completeness critic, 2026-09-15:*
+
+9. **Move the concurrency permit into the blocking closure.** One line, no behaviour
+   change, and it stops the bound's correctness depending on rmcp running the stateless
+   handler on its own task (finding 9's amendment). The path that would defeat it —
+   rmcp's disconnect `CancellationToken`, armed only until the handler's first message —
+   needs a real half-closed hyper connection against a wedged tool to drive, which is a
+   harness milestone 3 should build alongside the public listener.
+10. **Tighten the authenticated foreign-`Host` assertion** to the status rmcp actually
+    returns, so the auth table's mechanism is measured rather than inferred.
+
+## Completeness critic, 2026-09-15
+
+A second reader, sent after this pass with one question per section: what did it not attack,
+which of its tests would pass with the defence removed, which claim is stronger than its
+test, which fix has no failing-test-first history, and does the frozen fixture really cover
+what it says. **No source file changed.** Everything below is evidence, not behaviour: the
+pass's fixes are sound, and what was thin was the proof.
+
+### What the pass did not attack
+
+Two items the four addenda handed over are absent from the "items the four verifies handed
+over" table entirely — not deferred, not decided, simply not picked up. Both were attacked
+here, and both held.
+
+**Task 11: "rmcp round-trips for the four remaining apply refusal kinds are pinned by type
+identity only."** A `matches!` on the Rust enum says nothing about the JSON that crosses
+the transport, and this pass then *added two more kinds* to the same list without
+round-tripping either. Three refusals are provokable from outside the process and are now
+driven through the real binary and read back as the `kind` string an agent branches on:
+`ApprovalRequired`, `DocumentChanged`
+(`the_apply_refusals_an_agent_can_provoke_name_their_kind_over_the_wire`) and
+`RecordedInputUnreadable`, which needs a restart because the refusal only exists in a
+process that did not record the inputs
+(`a_recorded_input_that_no_longer_parses_names_the_input_over_the_wire`, which also asserts
+the refusal names `slug` rather than inventing a planning error — finding 3's whole point,
+previously pinned only as a Rust type). The five that are not reachable from outside are
+named in the test rather than quietly skipped: `PlanExpired` needs the clock, `Drift` and
+`PlanFailed` need a provider that changes its answer, `ApplyPreparing` and `RunInProgress`
+need two applies in flight.
+
+**Task 12: "the crash-recovery detour (volume detach and reattach) is untested."** Railway
+is out of bounds, but the shape is not: what a detached volume leaves behind is a journal
+whose last record is a `RunStarted` with no `RunFinished`. Reproduced deterministically —
+plan against one child, stop it, append the orphan `RunStarted` by hand, start a second
+child over the same file — in
+`a_run_that_never_finished_recovers_without_wedging_the_server`. Four things hold: the
+server starts (an unfinished run is a *valid* journal, not a truncated one, so finding 17's
+refusal is a different fault); the run reads `running` for ever, which is finding 13's
+state reached by the other road; the crashed plan is **`AlreadyApplied`**, because
+`PlanRecord::applied` folds from `RunStarted` and not from a finished run — the opposite
+answer would make "kill the process mid-run" a way to apply an irreversible plan twice;
+and an unrelated plan still applies, so a crash does not wedge the server.
+
+Acceptance test 19's six classes were all attacked by the pass. Nothing there is missing.
+
+### The vacuous test
+
+`this_hosts_filesystem_case_sensitivity_is_recorded` measured this host's case folding,
+`println!`ed the answer into output a green run discards, and then asserted only that the
+file it had just written existed. It could not fail for any reason the section around it
+was about. The note's claim "both readings of the case question, pinned" was true of one
+reading. Rewritten as
+`an_upper_case_name_cannot_reach_the_filesystem_whatever_this_host_folds`, which asserts
+the invariant that holds on both hosts — `WorkflowName::parse("Case-Probe")` is an error,
+`parse("case-probe")` is not — and leaves the fold printed rather than asserted, because
+asserting either answer would fail on the other host.
+
+Two more tests were *latently* vacuous rather than vacuous: the secret sweep (finding 11)
+and the document-text sweep (finding 7) both read the child's captured stderr and assert
+that things are **absent** from it. An empty capture satisfies every such assertion. Both
+now assert the capture carries the `willikins-server listening` line before they sweep it.
+
+### The test-harness defect
+
+`blocking_pool_13.rs`'s two runtime-building tests opened their gate at the *end* of the
+`block_on` body, so any failing assertion before that line unwound past it and left the
+blocking threads wedged — and `tokio::runtime::Runtime`'s own `Drop` waits for every
+blocking task to finish. A regression in the concurrency bound therefore hung the suite
+instead of failing it, which is how the mutation below was discovered rather than a thing
+the mutation was looking for. An `OpenOnDrop` guard, declared after the runtime so it drops
+before it, turns the hang into a five-second `FAILED`.
+
+### The mutation table
+
+Six mutations, each applied to a green tree, the named test run crate-scoped, then the tree
+restored from `HEAD` and `git diff` confirmed empty.
+
+| # | Mutation | Test | Result | Conclusion |
+| --- | --- | --- | --- | --- |
+| 1 | `NonceStore::consume` reverted to remove-before-compare (`356cdd3^`) | `a_wrong_nonce_is_refused_and_leaves_the_real_one_usable`, `a_nonce_presented_against_another_plan_burns_neither` | both **FAILED** | finding 5 is really pinned |
+| 2 | `try_acquire_owned` → `acquire_owned().await` | `the_concurrency_bound_answers_busy_instead_of_queueing_on_a_full_pool` | **hung** (> 60 s, killed); after the `OpenOnDrop` fix, **FAILED in 5.1 s** | the bound is pinned; the *harness* was not, and now is |
+| 3 | `butler.rs` reverted to before the apply-guard fix (`294c97a^`) | `a_second_apply_during_the_first_ones_pre_run_checks_is_refused_not_blocked` | **FAILED in 10.2 s**, at "the second apply blocked behind the first" | finding 9's first half is really pinned |
+| 4 | the `projected_length(...)?` call deleted from `TemplateRender::compute` | `a_template_that_would_amplify_past_the_bound_is_refused_without_allocating` | **FAILED** | the assertion distinguishes the arithmetic refusal from `Text::parse`'s own, which was the vacuity risk |
+| 5 | the frozen fixture's `plan_failed` line rewritten as `already_applied` (seq preserved, so replay still succeeds) | `every_apply_refused_reason_in_the_frozen_fixture_still_deserializes` | **FAILED**, naming `plan_failed` | the test checks the *set*, not mere presence. (Deleting the line outright fails all nine tests on the sequence check, which is why the mutation had to be this precise) |
+| 6 | `tracing::info!(presented = %token, …)` injected into `bearer_auth` | `no_secret_token_password_or_nonce_reaches_stderr_or_stdout` | **FAILED in 4.4 s**, naming the token | the headline sweep is live: the capture works and the assertion fires |
+
+A seventh, on the critic's own new test — releasing the concurrency permit *before*
+`run_blocking` instead of after — makes
+`an_abandoned_tool_call_keeps_its_permit_until_its_blocking_thread_ends` fail in five
+seconds, so that test is not vacuous either.
+
+### Claims stronger than their tests
+
+1. **"Both readings of the case question, pinned"** — corrected above.
+2. **The authenticated foreign-`Host` row** says "refused by rmcp's `allowed_hosts`". The
+   test asserts only that the status is **not 200**; a 401 would satisfy it. The mechanism
+   is inferred, not measured. Left as written rather than tightened to a status this pass
+   did not record; handed to milestone 3.
+3. **The two `#[ignore]`d rows in the "exceed a limit" table** read as measurements. They
+   are, but nothing runs them: re-measured by hand on 2026-09-15, both green, 43 s
+   together. Recorded in the table so the next reader knows when it was last true.
+4. **"At most 64 concurrent MCP tool calls may hold a blocking thread"** is stronger than
+   the mechanism that delivers it: the permit lives in an async frame and survives only
+   because rmcp runs the handler on its own task. Attacked, held, pinned, and the one path
+   that could still defeat it is named in finding 9's amendment.
+5. **The pre-change fixture's coverage claim** is accurate for the enums it names and silent
+   about `NodeStatus`, which it exercises as two of six. Closed by the new fixture.
+
+### Failing-test-first history
+
+There is none in git for any fix in this pass, and that is structural rather than sloppy:
+the repo's convention is one *behaviour* per commit, so every fix landed together with its
+test and no commit is ever red. The mutation table above is therefore the actual
+failing-test-first record — it is the only evidence that any of these tests would have
+failed before its fix. Three commits are worth naming separately:
+
+- **`a45552f`** (`wait_for_run`) contains 26 inserted lines in `commands.rs` and **no test
+  at all**. The note says so, and it remains the one fix in this pass with no pin of any
+  kind.
+- **`294c97a`** (the apply guard) landed with only a *modified* `adversarial_10a` test,
+  widened to accept either refusal. Its actual pin,
+  `a_second_apply_during_the_first_ones_pre_run_checks_is_refused_not_blocked`, arrived in
+  `fba9bc0`, one commit later. Mutation 3 confirms it now holds.
+- **`f6eef32`** (the three authentication-failure reasons) landed with a serialization-shape
+  test. The tests proving that each *call site* records the true reason arrived in
+  `11e6787`, five commits later.
+
+### The frozen fixture
+
+It does exercise every `Event` kind (12 of 12), every pre-change `ApplyRefusedReason` (8),
+every `DriftReasonKind` (3), both `Outcome`s, both `Transport`s and every pre-change
+`AuthFailedReason` (3) — the claim holds. It cannot exercise a single *new* variant, and
+nothing else did either; `post-pass-2-new-shapes.jsonl` closes that, and covers the four
+`NodeStatus` kinds the pre-change file misses. See the amendment under "The wire-format
+debts, paid first".
+
 ## Commits
 
 - `49a352f` — freeze a journal written before this pass and prove it still replays.
@@ -618,6 +852,19 @@ every one of them changes when that decision does:
 - `11e6787` — the 31 attacks against the real binary, and what held.
 - this note, with `todos/2026-09-12-error-json-uniformity-gaps.md` amended by finding 14.
 
+*Completeness critic, 2026-09-15 — six further commits, no source file among them:*
+
+- a `blocking_pool_13.rs` gate guard, so a wedged pool fails the test rather than hanging it.
+- `an_abandoned_tool_call_keeps_its_permit_until_its_blocking_thread_ends`: the permit
+  attack, which held.
+- the case-sensitivity test rewritten from a `println!` into an assertion, and a liveness
+  assertion under each of the two stderr sweeps.
+- the two handed-over items the pass never attacked: crash recovery, and the apply refusals
+  an agent can provoke, over the wire.
+- `post-pass-2-new-shapes.jsonl` and `post_pass_2_shapes.rs`: the new variants frozen, and
+  the next pass's baseline.
+- this note's amendments.
+
 ## Gate discipline, disclosed
 
 The four gates ran green before every commit. Two mechanical mistakes are on the record rather
@@ -632,3 +879,16 @@ be restarted from the start rather than resumed. The lesson, for whoever inherit
 host where a full gate is forty minutes, run the crate-scoped clippy over *every* crate the
 change touches — including the ones whose tests merely `match` on a type you
 extended — before starting the full one.
+
+**Completeness critic, 2026-09-15 — its own gate structure, disclosed.** Every change it
+made is strictly additive (new tests, a new fixture, a guard used only by tests, and this
+note), and it changed no file under any `src/`. Rather than pay a forty-minute gate six
+times for six independent additions, it ran the four gates **once on the union** — the
+finished tree — and then committed the additions in an order where each commit is
+self-contained, so every intermediate tree is a prefix of a gated one and differs from it
+only by additions that are absent. The one ordering constraint is real and was respected:
+the gate guard must precede the permit test that uses it. The gates were then run again on
+the committed tree. This is a weaker discipline than a gate per commit and is recorded as
+such rather than described as the same thing. Following the lesson above, `cargo fmt` and a
+crate-scoped run of every touched test file came first, and the full clippy caught three
+lint failures in the new tests before the test gate was started.
