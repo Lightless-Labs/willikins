@@ -22,7 +22,7 @@ mod startup;
 mod types;
 
 pub use butler::{Butler, ButlerConfig, SharedJournal};
-pub use catalog::{LIVE_TOOL_NAMES, live_catalog_with};
+pub use catalog::{LIVE_TOOL_NAMES, LiveCredentialError, live_catalog_from_env, live_catalog_with};
 pub use config::{ConfigError, ServerConfig};
 pub use drift::DriftDetail;
 pub use error::{ButlerError, ExpiryWindow};

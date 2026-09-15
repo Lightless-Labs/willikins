@@ -288,11 +288,7 @@ fn build_butler(fake: bool, config: ServerConfig) -> Result<Butler, StartError> 
         let (_state, catalog) = Butler::fake_catalog();
         catalog
     } else {
-        let github = willikins_providers_github::credential_from_env()
-            .map_err(|error| StartError::Credential(error.to_string()))?;
-        let doppler = willikins_providers_doppler::credential_from_env()
-            .map_err(|error| StartError::Credential(error.to_string()))?;
-        Butler::live_catalog(github, doppler)
+        crate::live_catalog_from_env().map_err(|error| StartError::Credential(error.to_string()))?
     };
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);

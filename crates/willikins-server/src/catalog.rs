@@ -84,6 +84,72 @@ pub fn live_catalog(github: Credential, doppler: Credential) -> Catalog {
     )
 }
 
+/// Why [`live_catalog_from_env`] could not build the live catalog: one of
+/// the two provisioning credentials (`WILLIKINS_GITHUB_TOKEN`,
+/// `WILLIKINS_DOPPLER_TOKEN`) was missing or did not look like a valid
+/// token for its provider. Never carries the credential's value -- each
+/// variant is built from the provider crate's own already-redacted
+/// `Display`, exactly like `crate::cli`'s `StartError::Credential` (which
+/// this function's own logic used to duplicate before task 11 gave it a
+/// second caller, the CLI's `--live` flag, and this became the one shared
+/// path instead of two).
+///
+/// Kind-tagged (`{"kind": "GitHub" | "Doppler", "message": ...}` through
+/// [`willikins_core::Reported`]), the same convention every other error in
+/// this workspace follows, so a caller prints it exactly like a
+/// `ButlerError`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind")]
+pub enum LiveCredentialError {
+    /// `WILLIKINS_GITHUB_TOKEN` is missing or malformed.
+    GitHub {
+        /// The provider crate's own message. Names the variable only.
+        message: String,
+    },
+    /// `WILLIKINS_DOPPLER_TOKEN` is missing or malformed.
+    Doppler {
+        /// The provider crate's own message. Names the variable only.
+        message: String,
+    },
+}
+
+impl std::fmt::Display for LiveCredentialError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GitHub { message } | Self::Doppler { message } => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for LiveCredentialError {}
+
+/// Build the live catalog from the process environment: each provider
+/// crate's own `credential_from_env` (`WILLIKINS_GITHUB_TOKEN`,
+/// `WILLIKINS_DOPPLER_TOKEN`), then [`live_catalog`]. The one path both
+/// `crate::cli::run_serve`'s `--live`-equivalent (the non-`--fake` default)
+/// and the `willikins` binary's own `--live` flag (task 11) go through, so
+/// a caller never has to depend on the provider crates directly just to
+/// build this from the environment.
+///
+/// # Errors
+///
+/// [`LiveCredentialError`] naming whichever credential was missing or
+/// malformed, checking `WILLIKINS_GITHUB_TOKEN` first. No network call is
+/// made either way.
+pub fn live_catalog_from_env() -> Result<Catalog, LiveCredentialError> {
+    let github = willikins_providers_github::credential_from_env().map_err(|error| {
+        LiveCredentialError::GitHub {
+            message: error.to_string(),
+        }
+    })?;
+    let doppler = willikins_providers_doppler::credential_from_env().map_err(|error| {
+        LiveCredentialError::Doppler {
+            message: error.to_string(),
+        }
+    })?;
+    Ok(live_catalog(github, doppler))
+}
+
 impl crate::Butler {
     /// The live catalog: `willikins-tools`' two pure tools plus every
     /// live GitHub and Doppler tool, against each provider's real API.
