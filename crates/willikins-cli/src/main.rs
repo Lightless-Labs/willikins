@@ -106,6 +106,13 @@ enum Command {
     /// `willikins-server serve` calls -- see
     /// `willikins_server::cli::run_serve`'s own docs.
     Serve(willikins_server::cli::ServeArgs),
+    /// Read one token from stdin and print its SHA-256 as 64 lower-case
+    /// hex characters -- the form `WILLIKINS_AGENT_TOKEN_HASHES` and
+    /// `WILLIKINS_APPROVER_TOKEN_HASH` expect. The token is never a
+    /// command-line argument, only stdin, so it never appears in `ps`
+    /// output or a shell history. The same implementation
+    /// `willikins-server hash-token` calls.
+    HashToken,
 }
 
 fn main() -> ExitCode {
@@ -127,6 +134,7 @@ fn main() -> ExitCode {
         Command::Runs(args) => commands::cmd_runs(&args, cli.json),
         Command::Run(args) => commands::cmd_run(&args, cli.json),
         Command::Serve(args) => willikins_server::cli::run_serve(&args),
+        Command::HashToken => willikins_server::cli::run_hash_token(),
     }
 }
 

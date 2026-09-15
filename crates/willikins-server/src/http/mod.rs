@@ -161,6 +161,16 @@ pub async fn serve_http(butler: Arc<Butler>, config: HttpConfig) -> Result<(), S
     let listener = TcpListener::bind(bind)
         .await
         .map_err(ServeHttpError::Bind)?;
+    // The one startup line this transport ever emits: an operator (or a
+    // deployment's own log-based healthcheck) watching `tracing`'s JSON
+    // on stderr has otherwise no way to tell "listening" from "still
+    // starting" -- and, distinct from `/healthz`, this is the only place
+    // that ever names the literal address bound, which matters because
+    // the default (no `--bind`) is `0.0.0.0:$PORT`, not the loopback
+    // address a client that merely connected successfully could not
+    // have told apart from it. A socket address is neither a body nor a
+    // header value, so trust boundary 5's tracing rule is unaffected.
+    tracing::info!(bind = %bind, "willikins-server listening");
     serve_http_with(butler, config, listener, shutdown_signal()).await
 }
 

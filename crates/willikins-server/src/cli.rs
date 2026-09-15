@@ -25,6 +25,7 @@
 //! exercise exactly this function through that binary and stay green
 //! unchanged by this move.
 
+use std::io::Read as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -111,6 +112,40 @@ enum StartError {
     /// [`HttpConfig::build`]).
     #[error("{0}")]
     HttpConfig(#[from] HttpConfigError),
+    /// `WILLIKINS_FAKE_CATALOG` was set to something other than `1`
+    /// (including the empty string) -- see [`resolve_fake_catalog`].
+    #[error(r#"WILLIKINS_FAKE_CATALOG must be "1" if set"#)]
+    FakeCatalogEnv,
+}
+
+/// Deployment task 12, step A: `WILLIKINS_FAKE_CATALOG=1` is the
+/// environment equivalent of `--fake`, so the image's own `CMD` can stay
+/// `serve --http` and a deployment decides through its own variables,
+/// never a baked-in flag. `cli_flag` is `args.fake`; the two are
+/// combined with an "either says fake" rule, never a conflict, since
+/// there is no scenario where the flag and the variable disagreeing
+/// should mean anything other than "fake".
+///
+/// Unset is the only value read as "no opinion" (falls through to
+/// `cli_flag`); every other value, including an empty string, refuses
+/// naming the variable -- matching the plan's own words ("any other
+/// value than 1 or unset is a refusal") literally rather than folding
+/// empty into "unset" the way `ServerConfig::from_vars`'s numeric and
+/// list variables do. A blank `WILLIKINS_FAKE_CATALOG=` left in a
+/// deployment's variable set by mistake should not silently mean "not
+/// fake" when the operator's plausible intent (an empty value someone
+/// meant to fill in) is exactly the opposite of what "not fake" gets
+/// them: pointing it at real credentials.
+///
+/// # Errors
+///
+/// [`StartError::FakeCatalogEnv`] on any set value other than `"1"`.
+fn resolve_fake_catalog(cli_flag: bool) -> Result<bool, StartError> {
+    match std::env::var("WILLIKINS_FAKE_CATALOG") {
+        Err(std::env::VarError::NotPresent) => Ok(cli_flag),
+        Ok(value) if value == "1" => Ok(true),
+        _ => Err(StartError::FakeCatalogEnv),
+    }
 }
 
 /// Run `serve`: parse `args`, load configuration from the process
@@ -138,11 +173,18 @@ pub fn run_serve(args: &ServeArgs) -> ExitCode {
     }
 }
 
-fn cmd_serve_stdio(principal: &str, fake: bool) -> ExitCode {
+fn cmd_serve_stdio(principal: &str, cli_fake: bool) -> ExitCode {
     let principal = match PrincipalId::parse(principal) {
         Ok(id) => id,
         Err(error) => {
             eprintln!("{}", StartError::Principal(error));
+            return ExitCode::from(2);
+        }
+    };
+    let fake = match resolve_fake_catalog(cli_fake) {
+        Ok(fake) => fake,
+        Err(error) => {
+            eprintln!("{error}");
             return ExitCode::from(2);
         }
     };
@@ -184,7 +226,7 @@ fn cmd_serve_stdio(principal: &str, fake: bool) -> ExitCode {
     }
 }
 
-fn cmd_serve_http(bind: Option<&str>, fake: bool) -> ExitCode {
+fn cmd_serve_http(bind: Option<&str>, cli_fake: bool) -> ExitCode {
     // JSON to stderr, never a body or header value (trust boundary 5):
     // the journal is the audit source of truth, this is only for an
     // operator watching the process. `try_init` rather than `init`
@@ -194,6 +236,13 @@ fn cmd_serve_http(bind: Option<&str>, fake: bool) -> ExitCode {
         .json()
         .with_writer(std::io::stderr)
         .try_init();
+    let fake = match resolve_fake_catalog(cli_fake) {
+        Ok(fake) => fake,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
     let config = match ServerConfig::from_vars(|name| std::env::var(name).ok()) {
         Ok(config) => config,
         Err(error) => {
@@ -312,4 +361,78 @@ fn build_butler(fake: bool, config: ServerConfig) -> Result<Butler, StartError> 
         read_rate_per_minute: config.read_rate_per_minute,
     })
     .map_err(StartError::from)
+}
+
+/// Why `hash-token` refused. Carries no value: the whole point of this
+/// subcommand is that a real token's bytes go nowhere but into the
+/// digest, so neither error variant here echoes any part of stdin.
+#[derive(Debug, thiserror::Error)]
+enum HashTokenError {
+    /// Reading stdin itself failed (a genuine I/O error, not "stdin was
+    /// empty" -- see [`Empty`](Self::Empty)).
+    #[error("failed to read stdin: {0}")]
+    Io(std::io::Error),
+    /// Stdin held nothing, or held only a trailing newline.
+    /// `WILLIKINS_AGENT_TOKEN_HASHES`/`WILLIKINS_APPROVER_TOKEN_HASH`
+    /// have no meaningful hash of "no token"; refusing here is cheaper
+    /// than an operator discovering it as a server that starts up with
+    /// a hash nothing will ever match.
+    #[error("stdin held an empty token")]
+    Empty,
+    /// Stdin held more than one line once the single trailing newline
+    /// is stripped. `hash-token` never takes the token as an argument,
+    /// so stdin is the only channel; a token broken across two lines
+    /// would silently hash to bytes the server was never actually
+    /// configured with. Refused rather than guessing which line, or
+    /// hashing the embedded newline, was meant.
+    #[error("stdin held more than one line; a token must be a single line")]
+    EmbeddedNewline,
+}
+
+/// Read one token from stdin, with exactly one trailing newline (`\n`,
+/// or `\r\n`) stripped -- never both a leading and a trailing one, and
+/// never any newline embedded further in.
+fn read_stdin_token() -> Result<String, HashTokenError> {
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(HashTokenError::Io)?;
+    let without_trailing_newline = input.strip_suffix('\n').map_or(input.as_str(), |rest| {
+        rest.strip_suffix('\r').unwrap_or(rest)
+    });
+    if without_trailing_newline.is_empty() {
+        return Err(HashTokenError::Empty);
+    }
+    if without_trailing_newline.contains('\n') {
+        return Err(HashTokenError::EmbeddedNewline);
+    }
+    Ok(without_trailing_newline.to_string())
+}
+
+/// `willikins-server hash-token` / `willikins hash-token`: read one
+/// token from stdin (never a command-line argument, so it can never
+/// appear in `ps` output or a shell history) and print its SHA-256 as
+/// 64 lower-case hex characters and nothing else -- exactly the form
+/// `WILLIKINS_AGENT_TOKEN_HASHES` and `WILLIKINS_APPROVER_TOKEN_HASH`
+/// expect, and what [`crate::TokenHash::parse`] accepts.
+#[must_use]
+pub fn run_hash_token() -> ExitCode {
+    match read_stdin_token() {
+        Ok(token) => {
+            let hash = crate::TokenHash::of(&token);
+            let mut hex = String::with_capacity(64);
+            {
+                use std::fmt::Write as _;
+                for byte in hash.as_bytes() {
+                    let _ = write!(hex, "{byte:02x}");
+                }
+            }
+            println!("{hex}");
+            ExitCode::from(0)
+        }
+        Err(error) => {
+            eprintln!("hash-token: {error}");
+            ExitCode::from(2)
+        }
+    }
 }
