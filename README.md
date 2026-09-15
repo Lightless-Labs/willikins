@@ -74,6 +74,97 @@ Run these 4 gates before each commit:
 - `cargo test --workspace`
 - `cargo check -p willikins-types`
 
+## Deploy
+
+Willikins runs as one Docker image. The `Dockerfile` at the repository root builds it.
+Railway builds and runs this image for the `willikins` service. The image's own command is
+`serve --http`. Every other choice comes from an environment variable, so one image serves
+every environment.
+
+### No public domain, on purpose
+
+Milestone 2 uses static bearer tokens for authentication. A static bearer token is not
+strong enough to protect a public endpoint. For this reason, the `willikins` service has no
+public domain. Reach it only over Railway's private network, or run `serve --stdio` on a
+trusted machine. Milestone 3 adds a stronger authentication path. The operator can add a
+public domain once that path exists.
+
+### The two provider credentials
+
+The server needs two credentials to reach live providers: `WILLIKINS_GITHUB_TOKEN` and
+`WILLIKINS_DOPPLER_TOKEN`. Doppler's own Railway integration is the only way these two
+credentials reach the service. Set up this integration in the Railway dashboard. Point it at
+the Doppler config that holds both tokens. Do not set either variable by hand in the Railway
+dashboard or through the Railway CLI. A hand-set credential does not rotate when the Doppler
+config changes.
+
+### The fake-catalog variable
+
+Set `WILLIKINS_FAKE_CATALOG=1` to make the server serve the fake, in-memory catalog. No
+tool call reaches GitHub or Doppler in this mode. Use this variable to check that a fresh
+deployment starts and answers `/healthz`, before the two real credentials exist. Remove the
+variable once the two real credentials are in place. Any value other than `1` refuses to
+start, and the refusal names the variable.
+
+### Minting and hashing a real token
+
+Willikins never stores a bearer token in the clear. It stores each token's SHA-256 hash, as
+64 lower-case hex characters. Mint a token and hash it with this command:
+
+```
+openssl rand -hex 32 | willikins hash-token
+```
+
+`hash-token` reads the token from standard input. `hash-token` never takes the token as a
+command-line argument. A command-line argument sits in `ps` output and in shell history for
+as long as the process runs. Standard input leaves neither trace. Copy the printed hash into
+`WILLIKINS_AGENT_TOKEN_HASHES` (a comma-separated list, for more than one agent) or
+`WILLIKINS_APPROVER_TOKEN_HASH`. Give the real, unhashed token only to the agent or the
+approver who will present it.
+
+### The volume and the journal
+
+The journal is one JSONL file. Set `WILLIKINS_JOURNAL_PATH=/data/journal.jsonl`. Railway
+stores this file on one persistent volume, mounted at `/data`. A Railway service with a
+volume runs at most one replica; Railway does not allow more.
+
+### Recovery after a crash
+
+A crash during a write can truncate the journal's last line. `willikins-server` checks
+every line when it starts, including the last one. `willikins-server` refuses to start when
+the last line is truncated. This refusal names the line number and the reason
+(`JournalError::Corrupt`). The refusal is fail-closed by design: willikins never guesses at
+a partial record, and it never drops a line on its own.
+
+To recover, remove the truncated last line from the journal file, then start the server
+again. The runtime image has no shell, so an operator cannot fix the file inside the running
+container. The documented procedure: attach the same volume to a temporary debug service
+that has a shell. Fix the file there. Then move the volume back to the `willikins` service.
+A `willikins` subcommand that repairs a truncated journal without this detour does not exist
+yet (`todos/2026-09-15-journal-repair-subcommand.md`).
+
+### Environment variables
+
+| Variable | Default | Required when | Format |
+| --- | --- | --- | --- |
+| `WILLIKINS_WORKFLOWS_DIR` | none | Always. The image sets this; do not set it again. | A directory path. |
+| `WILLIKINS_JOURNAL_PATH` | none | Always. | A file path. |
+| `WILLIKINS_AGENT_TOKEN_HASHES` | empty | `serve --http`. | Comma-separated 64-character lower-case hex hashes. |
+| `WILLIKINS_APPROVER_TOKEN_HASH` | none | `serve --http`. | One 64-character lower-case hex hash. |
+| `WILLIKINS_ALLOWED_HOSTS` | empty | `serve --http`. | Comma-separated hostnames. On Railway, the private-domain reference (see the Railway docs on variable references), not a resolved hostname. |
+| `PORT` | none | `serve --http` with no `--bind`. Railway sets this. | A port number. |
+| `WILLIKINS_APPROVAL_WINDOW_SECONDS` | `86400` (24 hours) | Never; optional. | A whole number of seconds. |
+| `WILLIKINS_PLAN_TTL_SECONDS` | `3600` (1 hour) | Never; optional. | A whole number of seconds. |
+| `WILLIKINS_PLAN_RATE_PER_MINUTE` | `10` | Never; optional. | A whole number. |
+| `WILLIKINS_READ_RATE_PER_MINUTE` | `60` | Never; optional. | A whole number. |
+| `WILLIKINS_GITHUB_TOKEN` | none | Live mode only (`WILLIKINS_FAKE_CATALOG` unset). | `github_pat_...` (fine-grained) or `ghp_...` (classic). |
+| `WILLIKINS_DOPPLER_TOKEN` | none | Live mode only. | `dp.sa.<40-44 characters>` (service account) or `dp.pt.<40-44 characters>` (personal). |
+| `WILLIKINS_FAKE_CATALOG` | unset | Never; optional. | Exactly `1`, or unset. Any other value refuses to start. |
+
+These variables exist only for the opt-in live tests run by hand during development. Never
+set any of them on a deployed service: `WILLIKINS_LIVE_TESTS`, `WILLIKINS_LIVE_PROBE`,
+`WILLIKINS_LIVE_LEFTOVER_CHECK`.
+
 ## Principles
 
 - Each value that crosses a tool boundary is a nominal domain type. Each type is secret or
