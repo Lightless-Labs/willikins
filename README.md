@@ -27,14 +27,16 @@ Milestone 2 is not complete. These parts are done:
   and then deleted the project.
 - The server library and the MCP server over stdio and Streamable HTTP.
 - The CLI commands apply, approve, reject, runs, run, and serve.
-- A container image. Railway builds it and runs it with the fake catalog.
+- A container image. Railway builds it and runs it with the fake catalog. The Railway
+  settings are in code and applied.
+- Adversarial pass 2, over the HTTP surface, against the real binary. It found and fixed
+  2 availability defects and 3 wrong words in the journal.
 
-These parts are not done:
+This part is not done:
 
-- Adversarial pass 2 over the HTTP surface.
 - The live smoke run with sandbox credentials.
 
-Milestone 1 had 2 adversarial passes. Milestone 2 has 1 adversarial pass. No pass found a path
+Milestone 1 had 2 adversarial passes. Milestone 2 had 2 adversarial passes. No pass found a path
 for a secret byte to reach an output.
 
 Read these documents for more information:

@@ -49,8 +49,15 @@ fake catalog, the volume and the non-secret variables are set, `hash-token` and
 `WILLIKINS_FAKE_CATALOG` exist, `deploy/teardown.sh` is tested against the real CLI's output, the
 README has a Deploy section; the verify fixed the script's failed-run and refused-delete paths.
 
-**Next:** 13 (pass 2 over HTTP), 14 (local smoke run, teardown). This todo closes when the plan is
-marked Completed.
+2026-09-15 (evening): task 13 landed: adversarial pass 2 over TCP against the real binary held (no
+secret byte, no forged approval, no unapproved run, no escape); it fixed the template amplification
+and the blocking-pool exhaustion, corrected three journal words additively behind a frozen
+pre-change journal, and its completeness critic turned thin proofs into real ones without touching
+source (`docs/research/2026-09-15-e2e-http-adversarial-pass-2.md`). The Railway settings file was
+regenerated, planned, read by the operator and applied; the redeploy passed `/healthz` live.
+
+**Next:** 14 (the local live smoke run, teardown, fixtures refreshed, plan Completed), then the
+milestone 2c plan. This todo closes when the plan is marked Completed.
 
 ## First action of the next session
 

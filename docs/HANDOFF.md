@@ -7,14 +7,33 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-15, afternoon) — tasks 0 through 12 (verified) landed and the image runs on Railway with the fake catalog; task 13 (adversarial pass 2 over HTTP) is next, then the local smoke run (14)
+### RESUME HERE (2026-09-15, evening) — tasks 0 through 13 (verified) landed; adversarial pass 2 held; the Railway settings file is applied; task 14 (the local live smoke run) is next, then the plan is marked Completed and milestone 2c's plan is written
 
-- **Live state:** `main` at 324 commits, gates green at `b48fd8d` (1,645 tests; the ignored ones
-  are by-hand measurements, a lock-probe child, the two live probes and the two live write
-  cycles). Remote `origin` is
+- **Live state:** `main` at 344 commits, gates green at `f067011` (1,703 tests; the ignored ones
+  are by-hand measurements, a lock-probe child, two slow connection-holding attacks, a
+  fixture generator, the two live probes and the two live write cycles). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
   `main` is pushed after every coordinator commit.
-- **What just happened:** the live Doppler write cycle
+- **What just happened (2026-09-15, evening):** task 13, adversarial pass 2, ran end to end
+  over TCP against the real binary through Workflow `wf_7515decb-fd7` (an Opus attacker,
+  then an Opus completeness critic) and held: no secret byte, no forged approval, no
+  unapproved run, no escape from the trusted directory. Two availability defects fixed
+  (`template.render`'s 390 MB amplification; a hung provider read filling the blocking pool
+  while `/healthz` stayed green, now bounded at 64 concurrent tool calls with `Busy` beyond)
+  and three journal words corrected additively (`PlanRecorded.principal`, three new
+  `AuthFailedReason`s, `RecordedInputUnreadable`), with a frozen pre-change journal proving
+  replay. The critic added evidence only (two skipped hand-over items attacked, a vacuous
+  test and two sweeps made live, a hang-instead-of-fail harness fixed, a second frozen
+  fixture, a seven-mutation table); its section closes the note
+  `docs/research/2026-09-15-e2e-http-adversarial-pass-2.md`. The plan's task 13 addendum
+  records decisions and hand-overs; five plan passages were corrected in place. Same
+  evening, with the operator's permission: the Railway CLI went to 5.57.2, `.railway/railway.ts`
+  was regenerated from the live project (`railway config pull`), the healthcheck added, the
+  plan read by the operator (one change, nothing destroyed) and applied on their word; the
+  redeploy passed `/healthz` live for the first time. The operator also said they run
+  several GitHub organizations and Doppler workplaces, so per-target credential routing is
+  a milestone 3 design item (plan, "Notes for milestone 3").
+- **Earlier (2026-09-14, the live write cycles and tasks 7 to 10a):** the live Doppler write cycle
   (`crates/willikins-providers-doppler/tests/live_write_cycle.rs`, `live-tests` feature plus
   `WILLIKINS_LIVE_TESTS=1`, an Opus agent outside the Workflow) ran green on its fourth
   attempt against the dedicated test workplace: a real project created, converged, refused
@@ -73,15 +92,20 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
   2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
   test workplace (the earlier `dp.st.` config-scoped token could only read one config).
-- **Next action:** task 13, adversarial pass 2 end to end over HTTP (acceptance test 19's
-  second half; opus; a research note under `docs/research/`), taking the items every verify
-  handed to it (listed in the plan's 2026-09-15 addenda: `AuthFailedReason` variants for
-  nonce and origin refusals, `PlanRecorded.principal`, `PlanFailed { error_kind:
-  "Unavailable" }`, the cached journal fold, the unbounded `wait_for_run`, the DSL
-  `DocumentErrorKind` message collision, the tracing quarter from pass 1, the truncated
-  journal line policy). Then 14 (the local smoke run with the sandbox credentials over
-  `serve --stdio` or a localhost `--http`, `deploy/teardown.sh` afterwards) and the plan
-  marked Completed. Railway follow-ups for the operator: connect Doppler's Railway
+- **Next action:** task 14, the live smoke run (acceptance test 18), coordinator with the
+  operator, local only, never the Railway service: source `~/.config/willikins/sandbox.env`
+  in the same command as the run (never print it), `WILLIKINS_LIVE_TESTS=1`, the positive
+  fixture with `slug=willikins-smoke` and `org=Willikins-Test` (`naming::v1` gives the
+  repository `Willikins-Test/willikins-smoke` and the Doppler project `willikins-smoke` in the
+  dedicated test workplace, which holds no such project) through `willikins apply --live`
+  or a localhost `serve --http`; every node `Created`, a second apply `Unchanged` and
+  `Converged`, then `workflows/rotate-service-token.yaml` with `project=willikins-smoke` and
+  `repo=Willikins-Test/willikins-smoke` after approval; `deploy/teardown.sh <run-id>
+  <journal>` as a dry run, then with `--yes`, and the leftover check; refresh the recorded
+  fixtures (redacted) from the run; mark the plan Completed. Then write milestone 2c's plan
+  (OAuth 2.1 on the MCP transport, browser login on the approvals page, identity provider
+  still open) taking the exposure items pass 2 handed over (header-read bound, IPv6-aware
+  origin check, log level, the permit in the blocking closure). Railway follow-ups for the operator: connect Doppler's Railway
   integration and remove `WILLIKINS_FAKE_CATALOG` when the service should go live (the IaC
   file is applied: CLI upgraded to 5.57.2 on 2026-09-15 with the operator's permission, the
   file regenerated from the live project with `railway config pull`, the healthcheck added,
