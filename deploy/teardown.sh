@@ -21,6 +21,9 @@
 # name that happens to collide with something willikins never created,
 # is left alone.
 #
+# Works on a failed run as well as a succeeded one: a run that stopped
+# part way is the run most likely to have left something behind.
+#
 # Dry-run by default: prints what it would delete and exits 0 without
 # calling either provider's delete endpoint. `--yes` deletes for real.
 #
@@ -69,10 +72,21 @@ doppler_api_base_url="${DOPPLER_API_BASE_URL:-https://api.doppler.com}"
 managed_topic="managed-by-willikins"
 managed_description="managed-by: willikins"
 
-run_json=$("$willikins_bin" run "$run_id" --journal "$journal_path" --json) || {
+# `willikins run --json` prints the whole run record and *then* exits 1
+# for a run whose state is `failed` or `running`
+# (`exit_for_run_state` in crates/willikins-cli/src/commands.rs). A
+# failed run is exactly the run this script exists for -- it is the one
+# that leaves a repository or a project behind -- so its exit code
+# cannot stand in for "the run could not be read".
+#
+# Decide from the document instead: a run record carries `run_id`; the
+# CLI's own error documents (`UnknownRun`, an unreadable journal) carry
+# `kind` and `message` and no `run_id`.
+run_json=$("$willikins_bin" run "$run_id" --journal "$journal_path" --json) || true
+if ! printf '%s' "$run_json" | jq -e 'has("run_id")' > /dev/null 2>&1; then
   echo "teardown.sh: refusing -- could not read run $run_id from $journal_path" >&2
   exit 1
-}
+fi
 
 repo=$(printf '%s' "$run_json" \
   | jq -r '.nodes[]? | select(.node == "repo") | .outputs.repo.value // empty')

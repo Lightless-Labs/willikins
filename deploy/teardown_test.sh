@@ -20,6 +20,10 @@ fail() {
 # it never reached the stub `curl`'s argv -- only its stdin.
 doppler_token_marker="teardown-test-doppler-token-MARKER-8f2c"
 
+# The exit code the stub `willikins` leaves with (the real CLI exits 1
+# for a failed or still-running run while printing the whole record).
+stub_willikins_exit=0
+
 # --- one fresh sandbox per scenario: stub bin dir, fake run record,
 # canned GitHub/Doppler responses, and a call log every stub appends
 # to. ------------------------------------------------------------------
@@ -30,16 +34,17 @@ new_sandbox() {
   echo "$dir"
 }
 
-# Args: sandbox, repo value, project value
+# Args: sandbox, repo value, project value, [run state] (default
+# "succeeded"; "failed" for the case the stub also exits 1 on).
 write_run_record() {
-  local dir="$1" repo="$2" project="$3"
+  local dir="$1" repo="$2" project="$3" state="${4:-succeeded}"
   cat > "$dir/run.json" <<JSON
 {
   "run_id": "01000000-0000-7000-8000-000000000000",
   "plan_id": "01000000-0000-7000-8000-000000000001",
   "principal": "test",
   "started_at": "2026-01-01T00:00:00+00:00",
-  "state": "succeeded",
+  "state": "$state",
   "nodes": [
     {
       "node": "repo",
@@ -66,13 +71,19 @@ write_run_record() {
 JSON
 }
 
+# The stub exits with `$STUB_WILLIKINS_EXIT` (0 unless a scenario says
+# otherwise) *after* printing the record, exactly as the real `willikins
+# run --json` does: it prints the whole RunRecord and then exits 1 for a
+# run whose state is `failed` or `running`
+# (crates/willikins-cli/src/commands.rs, `exit_for_run_state`).
 write_stub_willikins() {
   local dir="$1"
   cat > "$dir/bin/willikins" <<'STUB'
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 echo "WILLIKINS_CALL $*" >> "$STUB_LOG"
 cat "$RUN_JSON_FILE"
+exit "${STUB_WILLIKINS_EXIT:-0}"
 STUB
   chmod +x "$dir/bin/willikins"
 }
@@ -142,6 +153,7 @@ run_teardown() {
   shift
   PATH="$dir/bin:$PATH" \
     STUB_LOG="$dir/calls.log" \
+    STUB_WILLIKINS_EXIT="${stub_willikins_exit:-0}" \
     RUN_JSON_FILE="$dir/run.json" \
     GH_GET_RESPONSE_FILE="$dir/gh_get_response.json" \
     CURL_GET_RESPONSE_FILE="$dir/curl_get_response.json" \
@@ -302,11 +314,77 @@ JSON
   rm -rf "$dir"
 }
 
+# =======================================================================
+# Scenario 6: the run failed. `willikins run --json` prints the whole
+# record and then exits 1 for a run whose state is `failed` -- and a
+# failed run is the one that leaves resources behind, so it is the case
+# this script exists for. The exit code must not be read as "could not
+# read the run".
+# =======================================================================
+scenario6() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project" "failed"
+  write_stub_willikins "$dir"
+  write_stub_gh "$dir" '["managed-by-willikins"]'
+  write_stub_curl "$dir" "managed-by: willikins"
+  touch "$dir/calls.log"
+
+  local output status
+  stub_willikins_exit=1
+  output=$(run_teardown "$dir" 2>&1) && status=0 || status=$?
+  stub_willikins_exit=0
+
+  [ "$status" -eq 0 ] \
+    || fail "scenario6: a failed run must still be tearable down; got $status; output: $output"
+  echo "$output" | grep -q "would delete GitHub repository: Willikins-Test/teardown-test-repo" \
+    || fail "scenario6: missing 'would delete' line for the repository"
+  echo "$output" | grep -q "would delete Doppler project:   teardown-test-project" \
+    || fail "scenario6: missing 'would delete' line for the project"
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 7: an unknown run id. The real CLI prints its own error
+# document (`{"kind": "UnknownRun", ...}`, no `run_id`) and exits 1.
+# That is not a run record, so the script must refuse and call neither
+# provider -- the exit code alone can no longer tell it so.
+# =======================================================================
+scenario7() {
+  local dir
+  dir="$(new_sandbox)"
+  cat > "$dir/run.json" <<'JSON'
+{
+  "kind": "UnknownRun",
+  "message": "no run with id 01000000-0000-7000-8000-000000000000"
+}
+JSON
+  write_stub_willikins "$dir"
+  write_stub_gh "$dir" '["managed-by-willikins"]'
+  write_stub_curl "$dir" "managed-by: willikins"
+  touch "$dir/calls.log"
+
+  local output status
+  stub_willikins_exit=1
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+  stub_willikins_exit=0
+
+  [ "$status" -ne 0 ] || fail "scenario7: expected a non-zero exit for an unknown run"
+  echo "$output" | grep -q "could not read run" \
+    || fail "scenario7: refusal should say the run could not be read; output: $output"
+  if grep -qE "^(GH_CALL|CURL_CALL)" "$dir/calls.log"; then
+    fail "scenario7: must not call gh or curl at all: $(cat "$dir/calls.log")"
+  fi
+  rm -rf "$dir"
+}
+
 scenario1
 scenario2
 scenario3
 scenario4
 scenario5
+scenario6
+scenario7
 
 if [ "$failures" -eq 0 ]; then
   echo "teardown_test.sh: all scenarios passed"
