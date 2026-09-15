@@ -105,7 +105,8 @@ The plan is read-only and redacts variable values. Do not pass `--show-values` o
 field that the file does not name can go away when someone applies the file. If a plan shows
 a delete, regenerate the file with `railway config pull --force`, add the healthcheck again,
 and read the plan again before you apply it. On 2026-09-15 the plan showed one change, the
-healthcheck, and nothing to destroy; the file is not applied yet.
+healthcheck, and nothing to destroy; the operator approved it and `railway config apply`
+set the healthcheck. A new plan now reports the configuration as up to date.
 
 ### No public domain, on purpose
 
