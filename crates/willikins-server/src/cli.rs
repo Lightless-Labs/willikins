@@ -122,11 +122,15 @@ enum StartError {
 pub fn run_serve(args: &ServeArgs) -> ExitCode {
     match (args.stdio, args.http) {
         (true, true) => {
-            eprintln!("willikins-server serve: pass exactly one of --stdio or --http, not both");
+            // No binary name in the message: this is shared by both
+            // binaries' `serve` subcommands (see the module doc's "where
+            // the two binaries may differ" answer), and hardcoding
+            // `willikins-server` here would make it wrong for `willikins`.
+            eprintln!("serve: pass exactly one of --stdio or --http, not both");
             ExitCode::from(2)
         }
         (false, false) => {
-            eprintln!("willikins-server serve: pass --stdio or --http");
+            eprintln!("serve: pass --stdio or --http");
             ExitCode::from(2)
         }
         (true, false) => cmd_serve_stdio(&args.principal, args.fake),
