@@ -9,6 +9,7 @@
 
 mod butler;
 mod catalog;
+pub mod cli;
 mod config;
 mod document;
 mod drift;
