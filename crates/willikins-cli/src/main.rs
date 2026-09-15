@@ -12,18 +12,17 @@
 //! Text rendering never touches a [`willikins_core::Value`] directly —
 //! see `render`'s module docs.
 
+mod commands;
 mod render;
 
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
 
 use clap::{Parser, Subcommand};
 
 use willikins_core::describe::{InputArg, PartialInputs, RawInput};
 use willikins_core::{Catalog, Checked, Reported};
 use willikins_dsl::DocumentError;
-use willikins_providers_fake::FakeState;
 use willikins_types::DomainType;
 
 #[derive(Parser)]
@@ -68,8 +67,14 @@ enum Command {
         /// round trip: a seeded secret reserializes as its redaction
         /// marker, never its bytes, and a seeded `next_token` marker is
         /// not itself a valid token, so reloading such a dump fails.
+        /// Mutually exclusive with `--live`.
         #[arg(long = "fake-state", value_name = "FILE")]
         fake_state: Option<String>,
+        /// Plan against the real providers, with credentials from
+        /// `WILLIKINS_GITHUB_TOKEN` and `WILLIKINS_DOPPLER_TOKEN`. Without
+        /// it, the fake providers.
+        #[arg(long)]
+        live: bool,
     },
     /// Print the JSON schema of the document format or the tool catalog.
     Schema {
@@ -85,6 +90,22 @@ enum Command {
         /// The display name to derive a slug from.
         name: String,
     },
+    /// Plan and apply a workflow document (or apply one already planned
+    /// by an earlier `apply`/`plan`, named by `--plan-id`).
+    Apply(commands::ApplyArgs),
+    /// Grant a pending plan's approval.
+    Approve(commands::ApproveArgs),
+    /// Reject a pending plan.
+    Reject(commands::RejectArgs),
+    /// List every recorded run in a file journal.
+    Runs(commands::RunsArgs),
+    /// Show one recorded run from a file journal.
+    Run(commands::RunArgs),
+    /// Run the MCP server: `willikins serve --stdio | --http --bind <addr>
+    /// [--fake] [--principal <id>]`. The same implementation
+    /// `willikins-server serve` calls -- see
+    /// `willikins_server::cli::run_serve`'s own docs.
+    Serve(willikins_server::cli::ServeArgs),
 }
 
 fn main() -> ExitCode {
@@ -96,9 +117,16 @@ fn main() -> ExitCode {
             file,
             inputs,
             fake_state,
-        } => cmd_plan(&file, &inputs, fake_state.as_deref(), cli.json),
+            live,
+        } => cmd_plan(&file, &inputs, fake_state.as_deref(), live, cli.json),
         Command::Schema { document, catalog } => cmd_schema(document, catalog),
         Command::ProposeSlug { name } => cmd_propose_slug(&name, cli.json),
+        Command::Apply(args) => commands::cmd_apply(&args, cli.json),
+        Command::Approve(args) => commands::cmd_approve(&args, cli.json),
+        Command::Reject(args) => commands::cmd_reject(&args, cli.json),
+        Command::Runs(args) => commands::cmd_runs(&args, cli.json),
+        Command::Run(args) => commands::cmd_run(&args, cli.json),
+        Command::Serve(args) => willikins_server::cli::run_serve(&args),
     }
 }
 
@@ -135,7 +163,16 @@ fn print_document_error(err: &DocumentError, json: bool) {
 /// it to stderr and returns `Err(ExitCode::from(2))`. On [`CheckError`]s,
 /// prints them (text or JSON, per `json`) to stdout and returns
 /// `Err(ExitCode::from(1))`.
-fn load_and_check(file: &str, catalog: &Catalog, json: bool) -> Result<Checked, ExitCode> {
+///
+/// `pub(crate)`: `commands::cmd_apply` shares this exact pipeline for the
+/// document/check half of `apply <file>`, so a document error or a check
+/// failure gives the same exit code and message whether it was hit by
+/// `plan`/`validate`/`describe` or by `apply`.
+pub(crate) fn load_and_check(
+    file: &str,
+    catalog: &Catalog,
+    json: bool,
+) -> Result<Checked, ExitCode> {
     let workflow = load_workflow(file, json)?;
     willikins_core::check(&workflow, catalog).map_err(|errors| {
         if json {
@@ -159,7 +196,13 @@ fn load_and_check(file: &str, catalog: &Catalog, json: bool) -> Result<Checked, 
 /// meant to send. The error names the input but never echoes either
 /// value: which one was dropped is not the point, and the caller has both
 /// in hand. Adversarial pass 2, finding 4.
-fn build_partial_inputs(checked: &Checked, args: &[InputArg]) -> Result<PartialInputs, ExitCode> {
+///
+/// `pub(crate)`: shared with `commands::cmd_apply`'s own `--input`
+/// handling.
+pub(crate) fn build_partial_inputs(
+    checked: &Checked,
+    args: &[InputArg],
+) -> Result<PartialInputs, ExitCode> {
     let mut partial = PartialInputs::new();
     for arg in args {
         let raw = match checked.workflow.inputs.get(&arg.name) {
@@ -226,32 +269,20 @@ fn cmd_describe(file: &str, inputs: &[InputArg], json: bool) -> ExitCode {
     }
 }
 
-/// Build the fake-provider [`Catalog`] for `plan`: an empty state, or one
-/// seeded from `fake_state_path`. A missing or malformed seed file exits 2,
-/// the same as any other input the CLI cannot make sense of before it ever
-/// reaches `check`.
-fn build_fake_catalog(fake_state_path: Option<&str>) -> Result<Catalog, ExitCode> {
-    let state = match fake_state_path {
-        Some(path) => {
-            let contents = std::fs::read_to_string(path).map_err(|err| {
-                eprintln!("{path}: failed to read fake state: {err}");
-                ExitCode::from(2)
-            })?;
-            FakeState::from_json(&contents).map_err(|err| {
-                eprintln!("{path}: invalid fake state: {err}");
-                ExitCode::from(2)
-            })?
-        }
-        None => FakeState::new(),
-    };
-    Ok(willikins_providers_fake::catalog(Arc::new(Mutex::new(
-        state,
-    ))))
-}
-
-fn cmd_plan(file: &str, inputs: &[InputArg], fake_state: Option<&str>, json: bool) -> ExitCode {
-    let catalog = match build_fake_catalog(fake_state) {
-        Ok(catalog) => catalog,
+fn cmd_plan(
+    file: &str,
+    inputs: &[InputArg],
+    fake_state: Option<&str>,
+    live: bool,
+    json: bool,
+) -> ExitCode {
+    // Shared with `apply`'s own catalog construction (task 11): the same
+    // `--live`/`--fake-state` semantics, so the two subcommands can never
+    // silently drift apart on which providers a given flag combination
+    // selects. `plan` never seeds `--fake-state-out`, so the `FakeState`
+    // handle this also returns is simply dropped here.
+    let (catalog, _fake_state) = match commands::build_catalog(live, fake_state, json) {
+        Ok(built) => built,
         Err(code) => return code,
     };
     let checked = match load_and_check(file, &catalog, json) {
@@ -325,30 +356,50 @@ fn cmd_schema(document: bool, catalog: bool) -> ExitCode {
     }
 }
 
+/// `propose-slug`'s JSON output is aligned with
+/// `willikins_server::Butler::propose_slug`'s own shape (todo item 4 of
+/// `todos/2026-09-12-error-json-uniformity-gaps.md`): success is
+/// `{"slug": "..."}`, matching [`willikins_server::ProposeSlugResponse`];
+/// a failure is built as the same [`willikins_server::ButlerError`]
+/// variant `Butler::propose_slug` itself would return
+/// (`InvalidProjectName`/`SlugProposal`) and printed through [`Reported`],
+/// so the CLI's `--json propose-slug` and the MCP `propose_slug` tool's
+/// error carry the same `kind`. No `Butler` is built for this: both
+/// variants are constructed directly from the same parse this subcommand
+/// already ran, exactly as `Butler::propose_slug_inner` does internally.
 fn cmd_propose_slug(name: &str, json: bool) -> ExitCode {
     let project_name = match willikins_types::ProjectName::parse(name) {
         Ok(name) => name,
-        Err(err) => {
-            if json {
-                println!("{}", serde_json::to_string(&err).unwrap_or_default());
-            } else {
-                println!("{err}");
-            }
-            return ExitCode::from(1);
+        Err(error) => {
+            return propose_slug_failure(
+                &willikins_server::ButlerError::InvalidProjectName { error },
+                json,
+            );
         }
     };
     match willikins_types::propose_slug(&project_name) {
         Ok(slug) => {
-            println!("{slug}");
+            if json {
+                println!("{}", serde_json::json!({ "slug": slug.to_string() }));
+            } else {
+                println!("{slug}");
+            }
             ExitCode::from(0)
         }
-        Err(err) => {
-            if json {
-                println!("{}", serde_json::json!({ "error": err.to_string() }));
-            } else {
-                println!("{err}");
-            }
-            ExitCode::from(1)
+        Err(error) => {
+            propose_slug_failure(&willikins_server::ButlerError::SlugProposal { error }, json)
         }
     }
+}
+
+fn propose_slug_failure(error: &willikins_server::ButlerError, json: bool) -> ExitCode {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&Reported::new(error)).unwrap_or_default()
+        );
+    } else {
+        println!("{error}");
+    }
+    ExitCode::from(1)
 }

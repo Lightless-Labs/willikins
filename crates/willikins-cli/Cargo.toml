@@ -17,20 +17,34 @@ willikins-types.workspace = true
 willikins-core.workspace = true
 willikins-dsl.workspace = true
 willikins-providers-fake.workspace = true
+# Task 11: `apply`, `approve`, `reject`, `runs`, `run`, and `serve` (which
+# re-exports `willikins-server`'s own `cli::run_serve`) all drive
+# `willikins_server::Butler` directly, and `serve` needs
+# `willikins_server::cli::{ServeArgs, run_serve}` -- so this is now an
+# ordinary runtime dependency, not only a dev one for the parity tests.
+# `willikins-server` never depends on this crate, so there is still no
+# cycle; this does pull `rmcp`, `axum`, and `tokio` transitively into the
+# CLI's own build, which the handoff already flagged as making the first
+# build of this crate long.
+willikins-server.workspace = true
+# `apply`/`approve`/`reject`/`runs`/`run` need `FileJournal`,
+# `MemoryJournal`, `PrincipalId`, `Reason`, and the read-only `replay`
+# directly, not only through `willikins-server`'s own re-exports.
+willikins-journal.workspace = true
 clap.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# `apply <file>` copies the one named document into a private temporary
+# directory (see `main.rs`'s own docs on why) rather than pointing a
+# `Butler` at the file's own parent, which may hold sibling fixtures that
+# do not even parse.
+tempfile.workspace = true
 
 [dev-dependencies]
 indexmap.workspace = true
 proptest.workspace = true
 serde_yaml_ng.workspace = true
-# Acceptance test 11's library half: the parity test drives the built
-# `willikins` binary and `willikins_server::Butler` side by side and
-# compares their JSON. `willikins-server` never depends on this crate, so
-# this is an ordinary (one-directional) dev-dependency, not a cycle.
-willikins-server.workspace = true
-willikins-journal.workspace = true
 # The MCP half of acceptance test 11: an in-process rmcp client over a
 # duplex pair against `willikins_server::WillikinsHandler`.
 rmcp = { workspace = true, features = ["client", "transport-io"] }
