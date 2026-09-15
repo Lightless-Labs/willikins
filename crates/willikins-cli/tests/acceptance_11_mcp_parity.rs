@@ -434,3 +434,148 @@ async fn plan_input_failure_parity() {
         "missing-input parity"
     );
 }
+
+// ---------------------------------------------------------------------
+// Every shipped fixture, not a hand-picked three
+// ---------------------------------------------------------------------
+
+/// Acceptance test 11's "the two surfaces cannot drift", over *every*
+/// document in `workflows/` and `workflows/fixtures/` rather than the
+/// three stages' representatives above: for each one, the CLI's own
+/// `--json validate` output and the `validate` tool's result must agree,
+/// whichever of the three outcomes (parse failure, `check` failure,
+/// success) the document produces. A fixture added later is covered the
+/// day it lands, with no list to remember to update.
+///
+/// The one recorded, deliberate difference is the envelope, not the
+/// content: the CLI prints a bare `DocumentError` on stderr for a parse
+/// failure, while the tool wraps the identical error in a
+/// `ButlerError::Document` domain error (`{kind: "Document", error,
+/// message}`) -- exactly what `parse_failure_parity` above pins for one
+/// fixture, asserted here for all of them.
+#[tokio::test(flavor = "multi_thread")]
+async fn validate_parity_for_every_shipped_document() {
+    let client = connect().await;
+
+    let mut documents: Vec<PathBuf> = Vec::new();
+    for dir in [workflows_dir(), workflows_dir().join("fixtures")] {
+        for entry in std::fs::read_dir(&dir).expect("the directory is readable") {
+            let path = entry.expect("a readable entry").path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("yaml") {
+                documents.push(path);
+            }
+        }
+    }
+    documents.sort();
+    assert!(
+        documents.len() > 20,
+        "every shipped document must be swept, found {}",
+        documents.len()
+    );
+
+    let mut parse_failures = 0;
+    let mut check_failures = 0;
+    let mut successes = 0;
+
+    for path in &documents {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let body = std::fs::read_to_string(path).expect("a readable document");
+        let cli = run_cli(&["--json", "validate", path.to_str().unwrap()]);
+
+        let result = client
+            .call_tool(call("validate", serde_json::json!({ "document": body })))
+            .await
+            .unwrap_or_else(|err| panic!("{name}: validate is routed: {err}"));
+        let structured = result
+            .structured_content
+            .clone()
+            .unwrap_or_else(|| panic!("{name}: validate returns structured content"));
+
+        let cli_stdout_json: Option<serde_json::Value> =
+            serde_json::from_str(cli.stdout.trim()).ok();
+
+        if cli.code == 0 {
+            // Success: the CLI prints its warnings array, the tool
+            // reports `ok: true` with the same warnings.
+            successes += 1;
+            assert_ne!(result.is_error, Some(true), "{name}: {structured}");
+            assert_eq!(structured["ok"], true, "{name}: {structured}");
+            let cli_warnings = cli_stdout_json
+                .unwrap_or_else(|| panic!("{name}: the CLI prints a warnings array"));
+            assert_eq!(
+                structured["warnings"], cli_warnings,
+                "{name}: warning parity"
+            );
+        } else if let Some(cli_errors) = cli_stdout_json.filter(serde_json::Value::is_array) {
+            // `check` failed: not a domain error on either surface.
+            check_failures += 1;
+            assert_ne!(result.is_error, Some(true), "{name}: {structured}");
+            assert_eq!(structured["ok"], false, "{name}: {structured}");
+            assert_eq!(structured["errors"], cli_errors, "{name}: check parity");
+            for error in cli_errors.as_array().unwrap() {
+                assert!(
+                    error["kind"].is_string() && error["message"].is_string(),
+                    "{name}: every error carries kind and message: {error}"
+                );
+            }
+        } else {
+            // Parse failed: the CLI's bare error on stderr, the tool's
+            // wrapped one.
+            parse_failures += 1;
+            let cli_error: serde_json::Value = serde_json::from_str(cli.stderr.trim())
+                .unwrap_or_else(|err| {
+                    panic!("{name}: CLI stderr is not JSON ({err}): {}", cli.stderr)
+                });
+            assert_eq!(result.is_error, Some(true), "{name}: {structured}");
+            assert_eq!(structured["kind"], "Document", "{name}: {structured}");
+            assert!(structured["message"].is_string(), "{name}: {structured}");
+            assert_eq!(
+                structured["error"], cli_error,
+                "{name}: the wrapped error is the CLI's, verbatim"
+            );
+            assert!(
+                cli_error["kind"].is_string(),
+                "{name}: the CLI's own error carries a kind: {cli_error}"
+            );
+        }
+    }
+
+    // Not vacuous: all three outcomes really are represented.
+    assert!(parse_failures > 0, "some fixture must fail at parse");
+    assert!(check_failures > 0, "some fixture must fail at check");
+    assert!(successes > 0, "some document must validate");
+}
+
+/// `list_tools` equals `schema --catalog` byte for byte, not merely as
+/// equal JSON values: the two surfaces publish one catalog document, and
+/// a difference in key order or number formatting would be a difference
+/// an agent diffing the two would see.
+#[tokio::test(flavor = "multi_thread")]
+async fn list_tools_equals_schema_catalog_byte_for_byte() {
+    let cli = run_cli(&["schema", "--catalog"]);
+    assert_eq!(cli.code, 0, "{}", cli.stderr);
+
+    let client = connect().await;
+    let result = client
+        .call_tool(call("list_tools", serde_json::Value::Null))
+        .await
+        .expect("list_tools is routed");
+    let structured = result
+        .structured_content
+        .expect("list_tools returns structured content");
+
+    // The CLI pretty-prints; compare the two as the same serializer
+    // renders them, so this is a byte comparison of one canonical form
+    // rather than of two formatting choices.
+    let cli_json: serde_json::Value = serde_json::from_str(&cli.stdout).unwrap();
+    assert_eq!(
+        serde_json::to_string(&structured).unwrap(),
+        serde_json::to_string(&cli_json).unwrap(),
+        "the catalog the two surfaces publish must be one document"
+    );
+    assert_eq!(
+        serde_json::to_string_pretty(&structured).unwrap().trim(),
+        cli.stdout.trim(),
+        "and the CLI's own bytes must be that document pretty-printed"
+    );
+}
