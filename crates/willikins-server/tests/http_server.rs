@@ -697,9 +697,10 @@ async fn approve_with_a_reused_nonce_is_403_and_the_first_decision_still_stands(
         .unwrap();
     assert_eq!(second.status(), StatusCode::FORBIDDEN);
     assert!(
-        journal_has_auth_failed(&journal, "invalid_credential"),
-        "a reused nonce has no `AuthFailedReason` of its own -- see `crate::http::auth`'s \
-         module doc's mapping note -- and is recorded as `invalid_credential`"
+        journal_has_auth_failed(&journal, "invalid_nonce"),
+        "a reused nonce is recorded as `invalid_nonce` since adversarial pass 2 gave it a \
+         reason of its own -- recording it as `invalid_credential` told an operator a \
+         password had been wrong when none had"
     );
 }
 
@@ -724,7 +725,7 @@ async fn approve_with_no_nonce_is_403_and_plan_stays_pending() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(butler.pending_approvals().len(), 1);
-    assert!(journal_has_auth_failed(&journal, "invalid_credential"));
+    assert!(journal_has_auth_failed(&journal, "invalid_nonce"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -756,7 +757,7 @@ async fn approve_with_a_foreign_origin_is_403_and_plan_stays_pending() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(butler.pending_approvals().len(), 1);
-    assert!(journal_has_auth_failed(&journal, "invalid_credential"));
+    assert!(journal_has_auth_failed(&journal, "foreign_origin"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

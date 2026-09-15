@@ -123,11 +123,12 @@ fn document_says(dir: &Path, name: &WorkflowName) -> Option<String> {
 fn render_plan_section(butler: &Butler, dir: &Path, record: &PlanRecord, nonce: &str) -> String {
     let now = butler.now();
     let age = elapsed(record.recorded_at, now).as_secs();
+    // Read from the journal's own `PlanRecorded` line since adversarial
+    // pass 2, so a restart between `plan` and a human's decision -- the
+    // normal case for a 24-hour approval window -- no longer erases who
+    // asked. "unknown" now means only that the line predates the field.
     let requester = butler.requested_by(record.plan_id).map_or_else(
-        || {
-            "unknown (recorded before this server process started, or by another instance)"
-                .to_string()
-        },
+        || "unknown (recorded before the requester was journaled)".to_string(),
         |principal| principal.to_string(),
     );
     let class = format!("{:?}", record.class);
@@ -264,11 +265,12 @@ fn origin_allowed(headers: &HeaderMap, allowed_hosts: &[String]) -> bool {
 }
 
 /// `POST /approvals/{plan_id}`: checks `Origin`/`Referer` first, then
-/// consumes the presented nonce (see `NonceStore::consume`'s own doc --
-/// single-use, regardless of outcome), then decides. Both the origin
-/// check and the nonce check refuse 403 and journal `AuthFailed` (mapped
-/// to `InvalidCredential` -- see `crate::http::auth`'s module doc for why
-/// neither gets its own `AuthFailedReason`), leaving the plan untouched
+/// consumes the presented nonce (see `NonceStore::consume`'s own doc),
+/// then decides. Both the origin check and the nonce check refuse 403
+/// and journal `AuthFailed` -- since adversarial pass 2 each with the
+/// reason that is literally true of it (`ForeignOrigin`, `InvalidNonce`)
+/// rather than `InvalidCredential`, which would have an operator rotating
+/// a password that was never wrong -- leaving the plan untouched
 /// (pending) either way, before `Butler::approve`/`reject` is ever
 /// called. The nonce is deliberately not consumed on a foreign-origin
 /// refusal: a legitimate approver retrying from the right origin should
@@ -284,7 +286,7 @@ pub(crate) async fn post_decision(
     if !origin_allowed(&headers, &state.allowed_hosts) {
         state
             .butler
-            .record_auth_failure(Transport::Http, AuthFailedReason::InvalidCredential);
+            .record_auth_failure(Transport::Http, AuthFailedReason::ForeignOrigin);
         return (
             StatusCode::FORBIDDEN,
             "Origin/Referer is not an allowed host",
@@ -297,7 +299,7 @@ pub(crate) async fn post_decision(
     if !state.nonces.consume(plan_id, &form.nonce, now, window) {
         state
             .butler
-            .record_auth_failure(Transport::Http, AuthFailedReason::InvalidCredential);
+            .record_auth_failure(Transport::Http, AuthFailedReason::InvalidNonce);
         return (StatusCode::FORBIDDEN, "missing, reused, or expired nonce").into_response();
     }
 

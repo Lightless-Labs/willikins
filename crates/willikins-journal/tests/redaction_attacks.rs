@@ -100,6 +100,7 @@ fn a_plan_fingerprint_of_secret_outputs_never_carries_the_bytes() {
             fingerprint,
             class: plan.class,
             requires_approval: plan.requires_approval,
+            principal: None,
         })
         .unwrap();
     let line = serde_json::to_string(&journal.entries()[0]).unwrap();

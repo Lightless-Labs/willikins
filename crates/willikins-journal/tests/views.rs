@@ -49,6 +49,7 @@ fn plan_recorded(plan_id: PlanId, requires_approval: bool, instances: &[&str]) -
         fingerprint,
         class: plan.class,
         requires_approval,
+        principal: None,
     }
 }
 

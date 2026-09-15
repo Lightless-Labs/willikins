@@ -36,7 +36,6 @@
 //! document whose hash still matches, but is checked rather than assumed)
 //! refuses with [`ButlerError::RecordedInputUnreadable`], never a panic.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -121,14 +120,6 @@ pub struct Butler {
     plan_rate_limiter: crate::rate_limit::RateLimiter,
     /// `describe` and `validate`'s shared bucket.
     read_rate_limiter: crate::rate_limit::RateLimiter,
-    /// Who called `plan` for a given [`PlanId`], for this process's own
-    /// lifetime only -- task 10b's approvals page "requester" field. Not
-    /// part of the journal (`PlanRecorded` carries no principal at all;
-    /// see [`Self::requested_by`]'s own doc for why this is a deliberate,
-    /// reasoned gap rather than an oversight), so a plan recorded before a
-    /// restart has no entry here even though it still replays from the
-    /// journal fine.
-    requested_by: Mutex<HashMap<PlanId, PrincipalId>>,
 }
 
 impl Butler {
@@ -152,7 +143,6 @@ impl Butler {
             run_lock: Arc::new(Mutex::new(None)),
             plan_rate_limiter,
             read_rate_limiter,
-            requested_by: Mutex::new(HashMap::new()),
         }
     }
 
@@ -476,13 +466,7 @@ impl Butler {
                 retry_after_seconds,
             });
         }
-        let result = self.plan_inner(&workflow, inputs);
-        if let Ok(response) = &result {
-            self.requested_by
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(response.plan_id, principal.clone());
-        }
+        let result = self.plan_inner(&workflow, inputs, &principal);
         self.record_tool_call("plan", Some(workflow), principal, result.is_ok());
         result
     }
@@ -491,6 +475,7 @@ impl Butler {
         &self,
         workflow: &WorkflowName,
         inputs: &PartialInputs,
+        principal: &PrincipalId,
     ) -> Result<PlanResponse, ButlerError> {
         let (document_sha256, doc_workflow) =
             match document::load_named_document(&self.workflows_dir, workflow) {
@@ -543,6 +528,7 @@ impl Butler {
             fingerprint,
             class,
             requires_approval,
+            principal: Some(principal.clone()),
         })?;
 
         let (approval, expires_at) = if requires_approval {
@@ -667,6 +653,39 @@ impl Butler {
     // -------------------------------------------------------------
 
     /// Refuse or start applying `plan_id`.
+    ///
+    /// # Any agent principal may apply any recorded plan
+    ///
+    /// `principal` is recorded (`RunStarted.principal`) and never
+    /// checked against the plan's own requester
+    /// (`PlanRecorded.principal`, which adversarial pass 2 added). That
+    /// is a decision, not an omission.
+    ///
+    /// What a plan is, is fixed at `plan` time: the workflow name, the
+    /// document's SHA-256, the resolved inputs, the per-node actions and
+    /// the class. `apply` re-verifies every one of them -- the document
+    /// is reloaded and its hash compared, the inputs are rebuilt from the
+    /// record, the workflow is re-planned against current provider state
+    /// and refused on any drift, the approval must be a journaled
+    /// decision for *that* plan id, and both windows must still be open.
+    /// Nothing in that set depends on who is calling. A second agent
+    /// token applying another agent's plan therefore runs exactly what
+    /// the first agent's plan said and what the approver (for a plan
+    /// above the threshold) actually saw.
+    ///
+    /// Refusing it would also invent a principal class the trust
+    /// boundaries do not have: the plan names three principals -- agent,
+    /// approver, operator -- with one agent *role*, and says the agent
+    /// "may call every MCP tool". Agent principals are derived
+    /// (`agent-<12 hex of the token hash>`), so rotating an agent token
+    /// silently changes the principal; a requester check would make every
+    /// token rotation strand every plan recorded before it, with no way
+    /// to apply them and no way to say so. The audit trail keeps both
+    /// names, which is what an operator actually needs.
+    ///
+    /// If a later milestone wants per-agent ownership it is an
+    /// authorization feature with its own policy (who may take over a
+    /// stale plan, and how), not a line in this function.
     ///
     /// Every refusal below is journaled as `ApplyRefused` before this
     /// returns -- including [`ButlerError::RunInProgress`], which is
@@ -805,12 +824,22 @@ impl Butler {
         let resolved_inputs = match resolve_recorded_inputs(&checked_now, &record.inputs) {
             Ok(inputs) => inputs,
             Err(error) => {
+                // Its own reason since adversarial pass 2. It used to be
+                // journaled as `PlanFailed { error_kind: "Unavailable" }`,
+                // naming a `PlanError` kind that does not exist -- nothing
+                // planned at all, and the fault is in the record, not the
+                // provider.
+                let input = match &error {
+                    ButlerError::RecordedInputUnreadable { input, .. } => Some(input.clone()),
+                    // `resolve_recorded_inputs`'s other failure is the
+                    // whole recorded `inputs` payload being unreadable
+                    // JSON, which names no single input.
+                    _ => None,
+                };
                 self.refuse_apply(
                     plan_id,
                     principal,
-                    ApplyRefusedReason::PlanFailed {
-                        error_kind: "Unavailable".to_string(),
-                    },
+                    ApplyRefusedReason::RecordedInputUnreadable { input },
                 );
                 return Err(error);
             }
@@ -955,30 +984,25 @@ impl Butler {
         self.journal_lock().pending_approvals()
     }
 
-    /// Who called `plan` for `plan_id`, if this very `Butler` instance is
-    /// the one that recorded it -- task 10b's approvals page "requester"
-    /// field.
+    /// Who called `plan` for `plan_id`, read from the journal's own
+    /// `PlanRecorded` line -- the approvals page's "requester" field.
     ///
-    /// This is process-lifetime state, not journaled: `Event::PlanRecorded`
-    /// carries no principal at all (only the later `Event::ToolCalled`
-    /// does, and correlating the two by sequence-number adjacency would
-    /// misattribute under concurrency, since two principals can call
-    /// `plan` at once). Recording the requester properly is a journal
-    /// wire-format change, out of this task's scope (see the module docs
-    /// on `PlanRecorded`'s current fields); this map is the pragmatic
-    /// stand-in, with the same shape and the same restart-loses-it
-    /// property `resolve_recorded_inputs`'s own predecessor had before
-    /// this task. `None` both for a plan this process never planned and
-    /// for one planned before a restart -- the caller cannot tell the two
-    /// apart from this alone, which is why the page labels it "unknown"
-    /// rather than pretending certainty.
+    /// Adversarial pass 2 moved this off process-lifetime memory and onto
+    /// the wire (`Event::PlanRecorded.principal`), so a plan recorded
+    /// before a restart still names who asked for it: approval is
+    /// human-paced by design and a redeploy between `plan` and a
+    /// decision is the normal case, not an edge one. `None` now means
+    /// only one thing -- the line was written before that field existed
+    /// -- and the page still labels that "unknown" rather than
+    /// pretending certainty.
+    ///
+    /// Read by the page, never by `apply`: the requester is audit, not
+    /// authorization. See [`Self::apply`]'s own doc.
     #[must_use]
     pub fn requested_by(&self, plan_id: PlanId) -> Option<PrincipalId> {
-        self.requested_by
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&plan_id)
-            .cloned()
+        self.journal_lock()
+            .plan(&plan_id)
+            .and_then(|record| record.requested_by)
     }
 
     /// The current time, from this `Butler`'s own [`Clock`] -- so a caller

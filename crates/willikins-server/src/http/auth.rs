@@ -12,19 +12,20 @@
 //! unavoidable (every authentication check ends in a branch on its
 //! result somewhere).
 //!
-//! [`AuthFailedReason`] has no variant for "valid credential, wrong
-//! role", "missing nonce", or "foreign origin" beyond the three the
-//! journal wire format already defines
-//! ([`AuthFailedReason::MissingCredential`],
-//! [`AuthFailedReason::InvalidCredential`], [`AuthFailedReason::WrongRole`]):
-//! adding one is exactly the kind of journal wire-format change this task
-//! was told not to make. `WrongRole` is used for its literal meaning (an
-//! agent hash presented where the approver's belongs, or vice versa);
-//! every other new failure this transport introduces (a missing or
-//! reused nonce, a foreign `Origin`/`Referer`, a malformed Basic username)
-//! is recorded as `InvalidCredential` -- documented here, and at each call
-//! site, as a deliberate mapping rather than an oversight, and named as a
-//! gap for whichever pass next owns journal wire-format changes.
+//! Each refusal is journaled with the [`AuthFailedReason`] that is
+//! literally true of it. Task 10b could not do that -- the journal's wire
+//! format then had only [`AuthFailedReason::MissingCredential`],
+//! [`AuthFailedReason::InvalidCredential`] and
+//! [`AuthFailedReason::WrongRole`], so a malformed Basic username, a bad
+//! nonce and a foreign origin were all recorded as `InvalidCredential`,
+//! which told an operator reading the audit trail that a *credential* had
+//! been wrong when none had. Adversarial pass 2 added
+//! [`AuthFailedReason::MalformedUsername`],
+//! [`AuthFailedReason::InvalidNonce`] and
+//! [`AuthFailedReason::ForeignOrigin`] (additively: every journal written
+//! before still replays), and every site below now records the one that
+//! matches. `InvalidCredential` again means only what it says: a
+//! credential was presented and matched nothing configured.
 
 use std::sync::Arc;
 
@@ -157,9 +158,10 @@ fn unauthorized_basic() -> Response {
 /// when it is the approver's own but the username fails
 /// [`PrincipalId`]'s grammar or starts with `agent-` (the plan's own
 /// rule: an approver's identity may never collide with the `agent-*`
-/// namespace `bearer_auth` derives its own principals in). The username
-/// case has no `AuthFailedReason` of its own -- see the module doc's
-/// mapping note -- and is recorded as `InvalidCredential`.
+/// namespace `bearer_auth` derives its own principals in). That last
+/// case is journaled as [`AuthFailedReason::MalformedUsername`]: the
+/// password was the approver's, so nothing about the *credential* was
+/// wrong.
 pub(crate) async fn basic_auth(
     State(tokens): State<Arc<AuthTokens>>,
     headers: HeaderMap,
@@ -184,7 +186,7 @@ pub(crate) async fn basic_auth(
             _ => {
                 tokens
                     .butler
-                    .record_auth_failure(Transport::Http, AuthFailedReason::InvalidCredential);
+                    .record_auth_failure(Transport::Http, AuthFailedReason::MalformedUsername);
                 return forbidden();
             }
         }

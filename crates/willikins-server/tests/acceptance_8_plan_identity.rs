@@ -529,11 +529,14 @@ fn a_recorded_input_that_no_longer_parses_refuses_without_a_panic() {
     let found = reopened.entries().iter().any(|entry| {
         matches!(
             &entry.event,
+            // Its own reason since adversarial pass 2: this used to be
+            // journaled as `PlanFailed { error_kind: "Unavailable" }`,
+            // naming a `PlanError` kind that does not exist.
             Event::ApplyRefused {
                 plan_id: p,
-                reason: ApplyRefusedReason::PlanFailed { error_kind },
+                reason: ApplyRefusedReason::RecordedInputUnreadable { input },
                 ..
-            } if *p == plan_id && error_kind == "Unavailable"
+            } if *p == plan_id && input.as_ref().is_some_and(|input| input.to_string() == "slug")
         )
     });
     assert!(found, "the refusal must be journaled as ApplyRefused");

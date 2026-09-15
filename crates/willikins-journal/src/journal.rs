@@ -64,6 +64,12 @@ pub struct PlanRecord {
     pub class: Class,
     /// Whether this plan requires human approval.
     pub requires_approval: bool,
+    /// Who called `plan`, from the record's own
+    /// [`Event::PlanRecorded`] line. `None` for a plan recorded before
+    /// adversarial pass 2 added the field -- the approvals page says
+    /// "unknown" rather than pretending certainty. Never an
+    /// authorization input: see `willikins-server`'s `Butler::apply`.
+    pub requested_by: Option<PrincipalId>,
     /// When `plan` recorded it.
     pub recorded_at: Timestamp,
     /// Its current approval state.
@@ -284,6 +290,7 @@ fn fold_plan_recorded(plans: &mut IndexMap<PlanId, PlanRecord>, entry: &Entry) {
         fingerprint,
         class,
         requires_approval,
+        principal,
     } = &entry.event
     else {
         unreachable!("fold_plan_recorded is only called for Event::PlanRecorded");
@@ -313,6 +320,7 @@ fn fold_plan_recorded(plans: &mut IndexMap<PlanId, PlanRecord>, entry: &Entry) {
             fingerprint: fingerprint.clone(),
             class: *class,
             requires_approval: *requires_approval,
+            requested_by: principal.clone(),
             recorded_at: entry.at,
             approval: ApprovalState::Pending,
             applied: None,

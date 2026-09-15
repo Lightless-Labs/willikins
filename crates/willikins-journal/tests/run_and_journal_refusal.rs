@@ -82,6 +82,7 @@ fn approval_required_refuses_without_journaling_run_started() {
             fingerprint: approved.fingerprint(),
             class: approved.class,
             requires_approval: approved.requires_approval,
+            principal: None,
         })
         .unwrap();
 
@@ -185,6 +186,7 @@ fn a_replan_failure_refuses_without_journaling_a_run() {
             fingerprint: Vec::new(),
             class: willikins_core::Class::Reversible,
             requires_approval: false,
+            principal: None,
         })
         .unwrap();
 
@@ -266,6 +268,7 @@ fn an_apply_refused_plan_failed_event_round_trips_through_a_file_journal() {
                 fingerprint: Vec::new(),
                 class: willikins_core::Class::Reversible,
                 requires_approval: false,
+                principal: None,
             })
             .unwrap();
         let (result, _run_id, journal_error) = run_and_journal(

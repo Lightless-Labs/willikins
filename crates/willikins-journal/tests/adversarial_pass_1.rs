@@ -113,6 +113,7 @@ fn record_plan<J: Journal>(
             fingerprint: approved.fingerprint(),
             class: approved.class,
             requires_approval: approved.requires_approval,
+            principal: None,
         })
         .expect("PlanRecorded must append");
     if approved.requires_approval {
@@ -575,6 +576,7 @@ fn plan_recorded(plan_id: PlanId, requires_approval: bool, sha: &str) -> Event {
             Class::Reversible
         },
         requires_approval,
+        principal: None,
     }
 }
 

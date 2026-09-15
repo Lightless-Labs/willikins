@@ -90,6 +90,7 @@ fn event_samples() -> Vec<Event> {
             fingerprint: Vec::<InstanceFingerprint>::new(),
             class: Class::Reversible,
             requires_approval: false,
+            principal: Some(principal("agent-0123456789ab")),
         },
         Event::ApprovalAutomatic {
             plan_id,
@@ -172,6 +173,35 @@ fn every_event_variant_round_trips_through_json() {
         let back_json = serde_json::to_string(&back).unwrap();
         assert_eq!(json, back_json, "round trip changed the wire shape");
     }
+}
+
+/// `PlanRecorded.principal` (adversarial pass 2) is additive in both
+/// directions of a *read*: a line written before it existed carries no
+/// such field and folds to `None`, and a line that carries it round-trips
+/// unchanged. Absent is written as absent, never as `null`, so the wire
+/// shape of a plan with no requester is byte-identical to what the
+/// pre-change binary wrote.
+#[test]
+fn a_plan_recorded_line_without_a_principal_still_deserializes() {
+    let pre_change = concat!(
+        r#"{"kind":"plan_recorded","plan_id":"018f0000-0000-7000-8000-000000000000","#,
+        r#""workflow":"wf","#,
+        r#""document_sha256":"da493aba2ef6940ca1291c898f67e943af4d757017f62dc2eade863bda5713aa","#,
+        r#""inputs":{},"#,
+        r#""plan":{"workflow":"wf","nodes":[],"outputs":{},"class":"reversible","#,
+        r#""requires_approval":false},"#,
+        r#""fingerprint":[],"class":"reversible","requires_approval":false}"#,
+    );
+    let event: Event = serde_json::from_str(pre_change).expect("a pre-pass-2 line still replays");
+    let Event::PlanRecorded { principal, .. } = &event else {
+        panic!("expected PlanRecorded");
+    };
+    assert!(principal.is_none());
+    let json = serde_json::to_value(&event).unwrap();
+    assert!(
+        json.get("principal").is_none(),
+        "an absent principal is omitted, not written as null: {json}"
+    );
 }
 
 #[test]

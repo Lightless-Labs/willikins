@@ -98,6 +98,7 @@ fn record_plan(
             fingerprint: approved.fingerprint(),
             class: approved.class,
             requires_approval: approved.requires_approval,
+            principal: None,
         })
         .expect("PlanRecorded must append");
     // Both fixtures this test drives are `Class::Reversible`

@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-journal/tests/schema_generation.rs
-assertion_line: 25
 expression: schema
 ---
 {
@@ -54,6 +53,17 @@ expression: schema
     "recorded_at": {
       "description": "When `plan` recorded it.",
       "$ref": "#/$defs/Timestamp"
+    },
+    "requested_by": {
+      "description": "Who called `plan`, from the record's own\n[`Event::PlanRecorded`] line. `None` for a plan recorded before\nadversarial pass 2 added the field -- the approvals page says\n\"unknown\" rather than pretending certainty. Never an\nauthorization input: see `willikins-server`'s `Butler::apply`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PrincipalId"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "requires_approval": {
       "description": "Whether this plan requires human approval.",

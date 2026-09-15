@@ -91,6 +91,30 @@ pub enum ApplyRefusedReason {
         /// apply, not what the values were.
         error_kind: String,
     },
+    /// A value the plan recorded for one of its own workflow inputs
+    /// could not be read back.
+    ///
+    /// `apply` rebuilds a plan's resolved inputs from
+    /// [`Event::PlanRecorded`]'s own `inputs` (see `willikins-server`'s
+    /// `Butler` module docs: the plan must survive a restart, and core
+    /// `Value` has no `Deserialize`), so a recorded value that no longer
+    /// parses against its declared type refuses the apply before any
+    /// provider is touched. Until adversarial pass 2 this was recorded as
+    /// [`Self::PlanFailed`] with the invented `error_kind`
+    /// `"Unavailable"` -- a string that is not a
+    /// [`willikins_core::PlanError`] kind at all, so an operator reading
+    /// the audit trail was told a planning error had a kind it could
+    /// never look up. It is its own reason instead: nothing planned, and
+    /// the cause is the record, not the provider.
+    RecordedInputUnreadable {
+        /// Which workflow input's recorded value could not be read: a
+        /// declared input's name, from the document, never its value.
+        /// `None` when the record's whole `inputs` payload, rather than
+        /// one value inside it, was unreadable -- there is no single
+        /// input to name then, and inventing one would be a lie in the
+        /// audit trail.
+        input: Option<InputName>,
+    },
     /// The plan's approval or apply window has elapsed.
     PlanExpired,
     /// The plan requires approval and none was given.
@@ -184,6 +208,29 @@ pub enum AuthFailedReason {
     /// The credential was valid but for the wrong role (an approver
     /// credential on `/mcp`, an agent credential on `/approvals`).
     WrongRole,
+    /// A `POST /approvals/{plan_id}` carried no nonce, a nonce that was
+    /// already spent, a nonce issued for a different plan, or one older
+    /// than the approval window. Added by adversarial pass 2: the
+    /// approver's credential itself was valid in every one of these
+    /// cases, so recording them as [`Self::InvalidCredential`] (what
+    /// task 10b had to do, with no variant of its own available) told an
+    /// operator reading the audit trail that someone had presented a bad
+    /// password -- which is exactly the line that should make them
+    /// rotate a credential, and exactly the wrong response to a
+    /// cross-site request forgery attempt that the nonce stopped.
+    InvalidNonce,
+    /// A `POST /approvals/{plan_id}` carried an `Origin` (or, absent
+    /// that, a `Referer`) naming a host the deployment does not allow,
+    /// or carried neither header at all. The second half of review
+    /// resolution 1's forgery defence, and, like [`Self::InvalidNonce`],
+    /// a refusal that says nothing about the credential presented.
+    ForeignOrigin,
+    /// HTTP Basic credentials whose *password* is the approver's, but
+    /// whose username is not a usable [`crate::PrincipalId`] -- it fails
+    /// the grammar, or it claims the `agent-` namespace the bearer
+    /// middleware mints its own principals in. The approver's own
+    /// credential was correct; the identity it asked to act as was not.
+    MalformedUsername,
 }
 
 /// One thing that happened, recorded by [`crate::Journal::append`].
@@ -241,6 +288,23 @@ pub enum Event {
         class: Class,
         /// Whether this plan requires human approval.
         requires_approval: bool,
+        /// Who called `plan`. `None` for a line written before
+        /// adversarial pass 2 added this field, which is why it is an
+        /// `Option` with `#[serde(default)]` and is omitted from the wire
+        /// entirely when absent: every journal written before the change
+        /// replays unchanged, byte for byte
+        /// (`willikins-journal/tests/pre_pass_2_replay.rs`).
+        ///
+        /// The approvals page reads the requester from here rather than
+        /// from process-lifetime memory, so a plan recorded before a
+        /// restart still names who asked for it -- the case a
+        /// human-paced approval window makes normal rather than
+        /// exceptional. It is *not* an access-control field: any agent
+        /// principal may apply any recorded plan (see
+        /// `willikins-server`'s `Butler::apply` doc for that decision and
+        /// why the plan is what is fixed, not the applier).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        principal: Option<PrincipalId>,
     },
     /// A plan below the approval threshold was auto-approved.
     ApprovalAutomatic {
