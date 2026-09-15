@@ -823,9 +823,25 @@ fn two_applies_racing_on_two_threads_leave_exactly_one_run() {
         .iter()
         .find_map(|(plan_id, result)| result.as_ref().err().map(|error| (*plan_id, error)))
         .expect("the other apply was refused");
+    // Either refusal is correct, and which one arrives is a scheduling
+    // detail: adversarial pass 2 moved `apply`'s pre-run checks out from
+    // under the single-apply mutex (they call every planned tool's
+    // `read`, so holding it there let one hung provider eat the blocking
+    // pool). A loser that arrives while the winner is still *preparing*
+    // -- reloading, re-planning, comparing fingerprints, with no run id
+    // in existence yet -- is now refused at once with `ApplyPreparing`
+    // instead of blocking on the mutex until `RunStarted` is journaled
+    // and then being told `RunInProgress`. Both mean "someone else is
+    // applying; retry", both are journaled, and the invariant this test
+    // is really about is unchanged and asserted above: exactly one run.
     assert!(
-        matches!(loser, ButlerError::RunInProgress { run_id } if *run_id == winning_run),
-        "the loser must name the winner's run: {loser:?}"
+        match loser {
+            ButlerError::RunInProgress { run_id } => *run_id == winning_run,
+            ButlerError::ApplyPreparing => true,
+            _ => false,
+        },
+        "the loser must be refused as RunInProgress (naming the winner's run) \
+         or as ApplyPreparing: {loser:?}"
     );
 
     release.send(()).expect("releasing the winner's ensure");

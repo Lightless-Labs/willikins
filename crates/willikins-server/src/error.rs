@@ -182,6 +182,13 @@ pub enum ButlerError {
         /// rule saying which. See the enum's own doc.
         error: String,
     },
+    /// Another `apply` call is in its pre-run checks (reload, rebuild,
+    /// re-plan, drift) and only one does that at a time. No run has
+    /// started, and the plan is still applicable: the caller retries.
+    ///
+    /// Distinct from [`Self::RunInProgress`], which has a run to name.
+    /// See `crate::Butler::apply`'s own doc.
+    ApplyPreparing,
     /// A directory scan (`start`, `list_workflows`) failed. See
     /// [`StartupError`] for what it names.
     Startup {
@@ -262,6 +269,10 @@ impl fmt::Display for ButlerError {
                     "recorded input `{input}` could not be read back: {error}"
                 )
             }
+            Self::ApplyPreparing => write!(
+                f,
+                "another apply is running its pre-run checks; retry in a moment"
+            ),
             Self::Plan { error } => write!(f, "re-planning failed: {error}"),
             Self::Check { errors } => write!(
                 f,
@@ -320,6 +331,7 @@ mod tests {
         NotPendingApproval,
         AlreadyApplied,
         RunInProgress,
+        ApplyPreparing,
         Drift,
         RecordedInputUnreadable,
         Plan,
@@ -372,6 +384,7 @@ mod tests {
                 run_id: run_id(),
             },
             ButlerError::RunInProgress { run_id: run_id() },
+            ButlerError::ApplyPreparing,
             ButlerError::Drift {
                 node: node_name(),
                 instance: None,

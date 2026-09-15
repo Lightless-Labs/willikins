@@ -131,6 +131,7 @@ fn every_apply_refused_reason_in_the_frozen_fixture_still_deserializes() {
                 // pre-pass-2 file, but named so this match stays
                 // exhaustive and a future variant fails to compile here.
                 ApplyRefusedReason::RecordedInputUnreadable { .. } => "recorded_input_unreadable",
+                ApplyRefusedReason::ApplyPreparing => "apply_preparing",
                 ApplyRefusedReason::PlanExpired => "plan_expired",
                 ApplyRefusedReason::ApprovalRequired => "approval_required",
                 ApplyRefusedReason::AlreadyApplied => "already_applied",

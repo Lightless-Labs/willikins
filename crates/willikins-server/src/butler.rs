@@ -111,11 +111,10 @@ pub struct Butler {
     clock: Arc<dyn Clock>,
     approval_window: Duration,
     apply_window: Duration,
-    /// `Some(run_id)` while a run is in progress; cleared by the run
-    /// thread itself when it finishes (success, failure, or a caught
-    /// panic) -- never held across the run, only across each `apply`
-    /// call's own synchronous checks. See [`Butler::apply`]'s doc.
-    run_lock: Arc<Mutex<Option<RunId>>>,
+    /// What `apply` is doing, if anything: see [`RunState`]. The mutex
+    /// is held only long enough to read and change that value -- never
+    /// across a provider read, a file read, or the run itself.
+    run_lock: Arc<Mutex<RunState>>,
     /// `plan`'s own bucket.
     plan_rate_limiter: crate::rate_limit::RateLimiter,
     /// `describe` and `validate`'s shared bucket.
@@ -140,7 +139,7 @@ impl Butler {
             clock: config.clock,
             approval_window: config.approval_window,
             apply_window: config.apply_window,
-            run_lock: Arc::new(Mutex::new(None)),
+            run_lock: Arc::new(Mutex::new(RunState::Idle)),
             plan_rate_limiter,
             read_rate_limiter,
         }
@@ -732,34 +731,53 @@ impl Butler {
             return Err(ButlerError::UnknownPlan { plan_id });
         };
 
-        let mut run_guard = self.run_lock.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(run_id) = *run_guard {
-            // Decided from the lock alone -- no journal *read* -- but
-            // still journaled, like every other refusal: acceptance test
-            // 8 lists this one and closes with "each refusal is
-            // journaled", and it is the refusal that means two callers
-            // reached for the same providers at once.
-            self.refuse_apply(
-                plan_id,
-                principal,
-                ApplyRefusedReason::RunInProgress { run_id },
-            );
-            return Err(ButlerError::RunInProgress { run_id });
-        }
+        // Claim the single-apply slot. The mutex is taken, read, changed
+        // and dropped inside `claim` -- it is *not* held across the
+        // checks below, which read the filesystem and call every planned
+        // tool's `read`. Adversarial pass 2 found that holding it there
+        // meant one slow or hung provider blocked every later `apply`
+        // inside its own `spawn_blocking` thread, one thread each, until
+        // the blocking pool was gone and nothing answered; and that
+        // `run_in_progress()` (which the graceful-shutdown path polls
+        // from async code) blocked a runtime worker on the same mutex.
+        // `ApplyGuard` returns the slot to `Idle` on every path out of
+        // this function, including a panic, unless it is committed to a
+        // started run.
+        let guard = match ApplyGuard::claim(&self.run_lock) {
+            Ok(guard) => guard,
+            Err(RunState::Running(run_id)) => {
+                // Decided from the lock alone -- no journal *read* -- but
+                // still journaled, like every other refusal: acceptance
+                // test 8 lists this one and closes with "each refusal is
+                // journaled", and it is the refusal that means two
+                // callers reached for the same providers at once.
+                self.refuse_apply(
+                    plan_id,
+                    principal,
+                    ApplyRefusedReason::RunInProgress { run_id },
+                );
+                return Err(ButlerError::RunInProgress { run_id });
+            }
+            Err(RunState::Preparing) => {
+                self.refuse_apply(plan_id, principal, ApplyRefusedReason::ApplyPreparing);
+                return Err(ButlerError::ApplyPreparing);
+            }
+            Err(RunState::Idle) => unreachable!("claim only fails on a taken slot"),
+        };
 
-        // Re-read `applied` now that the single-apply lock is held, rather
-        // than trusting the snapshot taken above it. `applied` is the one
+        // Re-read `applied` now that the slot is claimed, rather than
+        // trusting the snapshot taken above it. `applied` is the one
         // field of a `PlanRecord` that `apply` itself can change, and
         // `RunStarted` -- the event that sets it -- is only ever appended
-        // under this same guard, so reading it here is what makes
-        // "a plan is applied once" hold between two callers instead of
-        // only within one. The snapshot above is a read-then-check across
-        // an unheld lock: a caller that read `applied: None`, lost the
-        // guard to a second caller, and reacquired it after that caller's
-        // whole run had finished would otherwise apply the plan a second
-        // time. The window is a couple of instructions wide and no test
-        // here reproduces it; the check is cheap and the invariant is not
-        // one to leave resting on scheduling.
+        // by a caller holding this same slot, so reading it here is what
+        // makes "a plan is applied once" hold between two callers instead
+        // of only within one. The snapshot above is a read-then-check
+        // across an unclaimed slot: a caller that read `applied: None`,
+        // lost the slot to a second caller, and claimed it after that
+        // caller's whole run had finished would otherwise apply the plan
+        // a second time. The window is a couple of instructions wide and
+        // no test here reproduces it; the check is cheap and the
+        // invariant is not one to leave resting on scheduling.
         let applied_now = self.journal_lock().plan(&plan_id).and_then(|r| r.applied);
         if let Some(run_id) = applied_now {
             self.refuse_apply(plan_id, principal, ApplyRefusedReason::AlreadyApplied);
@@ -883,8 +901,7 @@ impl Butler {
             plan_id,
             principal: principal.clone(),
         })?;
-        *run_guard = Some(run_id);
-        drop(run_guard);
+        guard.commit(run_id);
 
         let journal = self.journal.clone();
         let run_lock = Arc::clone(&self.run_lock);
@@ -939,7 +956,7 @@ impl Butler {
                     },
                 });
             }
-            *run_lock.lock().unwrap_or_else(PoisonError::into_inner) = None;
+            *run_lock.lock().unwrap_or_else(PoisonError::into_inner) = RunState::Idle;
         });
 
         Ok(RunHandle { run_id })
@@ -1049,15 +1066,89 @@ impl Butler {
     /// graceful shutdown polls this (bounded) so an in-progress run's
     /// `NodeStarted`/`NodeFinished` pairs have a chance to land in the
     /// journal before the process exits.
+    ///
+    /// Returns `None` while an `apply` is still in its pre-run checks:
+    /// nothing has run, so there is nothing to drain. The mutex behind
+    /// this is never held across any I/O (see [`RunState`]), which is
+    /// what makes it safe to call from async code.
     #[must_use]
     pub fn run_in_progress(&self) -> Option<RunId> {
-        *self.run_lock.lock().unwrap_or_else(PoisonError::into_inner)
+        match *self.run_lock.lock().unwrap_or_else(PoisonError::into_inner) {
+            RunState::Running(run_id) => Some(run_id),
+            RunState::Idle | RunState::Preparing => None,
+        }
     }
 }
 
 enum Decision {
     Grant(PrincipalId),
     Reject(PrincipalId, Reason),
+}
+
+/// The single-apply slot: what `apply` is doing, if anything.
+///
+/// Three states rather than task 10a's `Option<RunId>`, because there
+/// are three situations and a caller deserves to be told which: nothing
+/// is happening, one `apply` is running its pre-run checks (no run id
+/// exists yet, and one may never exist), or a run is under way.
+/// Adversarial pass 2's change; see [`Butler::apply`] and
+/// [`ApplyGuard`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunState {
+    /// No `apply` is in flight.
+    Idle,
+    /// One `apply` is between claiming the slot and journaling
+    /// `RunStarted` -- reloading the document, rebuilding the recorded
+    /// inputs, re-planning against providers, comparing fingerprints.
+    Preparing,
+    /// A run is under way; the run thread clears the slot when it ends.
+    Running(RunId),
+}
+
+/// Holds the single-apply slot in [`RunState::Preparing`] for as long as
+/// `apply`'s pre-run checks take, and returns it to [`RunState::Idle`] on
+/// *every* way out -- an early refusal, a `?`, or a panic -- unless
+/// [`Self::commit`] hands it to a started run.
+///
+/// The `Drop` is the point: `apply` has nine early returns between
+/// claiming the slot and journaling `RunStarted`, and a slot that stayed
+/// claimed after one of them would refuse every later `apply` for the
+/// life of the process, with nothing running.
+struct ApplyGuard {
+    lock: Arc<Mutex<RunState>>,
+    committed: bool,
+}
+
+impl ApplyGuard {
+    /// Claim the slot, or report the state that already holds it.
+    fn claim(lock: &Arc<Mutex<RunState>>) -> Result<Self, RunState> {
+        let mut guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        match *guard {
+            RunState::Idle => {
+                *guard = RunState::Preparing;
+                drop(guard);
+                Ok(Self {
+                    lock: Arc::clone(lock),
+                    committed: false,
+                })
+            }
+            taken => Err(taken),
+        }
+    }
+
+    /// Hand the slot to `run_id`: the run thread clears it when it ends.
+    fn commit(mut self, run_id: RunId) {
+        *self.lock.lock().unwrap_or_else(PoisonError::into_inner) = RunState::Running(run_id);
+        self.committed = true;
+    }
+}
+
+impl Drop for ApplyGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            *self.lock.lock().unwrap_or_else(PoisonError::into_inner) = RunState::Idle;
+        }
+    }
 }
 
 /// How long elapsed from `since` to `now`, saturating at zero if `now` is

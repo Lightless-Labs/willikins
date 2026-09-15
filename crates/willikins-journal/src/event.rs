@@ -121,6 +121,21 @@ pub enum ApplyRefusedReason {
     ApprovalRequired,
     /// This plan has already been applied once.
     AlreadyApplied,
+    /// Another `apply` was in its pre-run checks -- reloading the
+    /// document, rebuilding the recorded inputs, re-planning against
+    /// current provider state, comparing the fingerprints -- and only one
+    /// apply does that at a time.
+    ///
+    /// Distinct from [`Self::RunInProgress`], which names the run already
+    /// under way: here there is no run to name, because none has started
+    /// and one may never start (the preparing call can still refuse on
+    /// drift, on a changed document, or on an elapsed window). Added by
+    /// adversarial pass 2, which moved those checks out from under the
+    /// single-apply mutex: holding that mutex across a provider read
+    /// meant a slow or hung provider blocked every later `apply` inside
+    /// its own blocking thread, one thread each, until the blocking pool
+    /// was gone.
+    ApplyPreparing,
     /// Another run was already in progress, and only one runs at a time.
     ///
     /// The milestone plan's acceptance test 8 names this among the
