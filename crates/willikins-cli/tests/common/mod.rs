@@ -20,9 +20,10 @@
 //! Nothing here string-matches a rendered line: the CLI's `--json`
 //! documents are parsed with `serde_json` and read by field.
 
-// The two targets use different subsets -- the live one alone needs the
-// teardown helpers, the parity one alone needs the fake-state plumbing
-// -- and an unused item here is not a defect in either.
+// The two targets use different subsets of this module -- `node_output`
+// and `plan_response`, for instance, are read by `smoke_parity.rs` and
+// not by `live_smoke.rs` -- and an item one target leaves alone is not
+// a defect in the other.
 #![allow(dead_code)]
 
 use std::path::PathBuf;
