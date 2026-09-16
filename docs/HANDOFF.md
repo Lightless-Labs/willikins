@@ -64,8 +64,23 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `WILLIKINS_GITHUB_TOKEN`; no `gh` invocation remains in any file this workspace runs. The
   coordinator's secret-scanning push-protection bypass is retired for the same reason: the
   synthetic provider-shaped literals in fixtures are what trip the scanner, so they are built
-  at runtime from parts instead, and two guard tests (no `gh`, no token-shaped literal) make
-  both rules gate-enforced rather than remembered. **Outstanding work, the next thing to land.**
+  at runtime from parts instead, and two guard tests make both rules gate-enforced rather than
+  remembered. **Landed 2026-09-16** (Workflow `wf_61a0ea94-362`, sonnet verified by opus; gates
+  green; a push then went through with no bypass, and none ever will again). The coordinator's own
+  sweep had been wrong: it said twelve literals across eight files, assuming a token is a prefix
+  followed immediately by the random run, but Doppler's real shape carries an optional environment
+  segment between them, and the true scope was about 45 sites across 28 files — including a real
+  Doppler documentation token sitting in a mock fixture and three more quoted in a research note.
+  Every one is now assembled at runtime (`concat!`), which needed one small widening of
+  `willikins-derive` so a secret type's `#[domain(example = ...)]` can be an expression rather than
+  a string literal; the runtime values are byte-identical, so `assert_example_parses` still proves
+  what it proved. The verify found both guards narrower than GitHub's published detector tables
+  (only two of six GitHub prefixes, three of six Doppler kinds) and a demonstrated bypass in the
+  `gh` guard, in the very file it protects: a shell `case` arm begins with `*`, which the matcher
+  treated as a comment continuation, so `*) gh api -X DELETE …` passed unseen. Both closed, and
+  every fix proven by planting a real offender and watching the guard name its file and line. The
+  guards live at `crates/willikins-core/tests/secret_literal_guard.rs` and
+  `crates/willikins-cli/tests/no_gh_writes_guard.rs`, and CLAUDE.md carries both invariants.
 - **Earlier (2026-09-16, the night):** milestone 2c's plan exists and is
   reviewed. Workflow `wf_cfe76f52-8cc` (six opus readers, a synthesizer, a drafter) wrote
   `docs/research/2026-09-16-m2c-authorization.md` (1,391 lines, every fact quoted from a source
@@ -189,14 +204,7 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
   2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
   test workplace (the earlier `dp.st.` config-scoped token could only read one config).
-- **Next action:** two things, in this order. (1) Land the credential-boundary work described
-  above: replace the twelve provider-shaped literals (eleven Doppler, one GitHub, across eight
-  files including `crates/willikins-types/src/doppler.rs`, `crates/willikins-cli/src/render.rs`
-  and `crates/willikins-providers-fake/src/tools/fake_secret_list.rs`) with values built at
-  runtime so the runtime value still satisfies `CREDENTIAL_PATTERN` while no literal in the tree
-  matches a provider's detector, and add the two guard tests (the `gh` one is drafted at
-  `<session scratchpad>/no_gh_writes_guard.rs`), with the invariants written into CLAUDE.md.
-  (2) Milestone 2c, whose plan is rewritten for willikins issuing its own
+- **Next action:** milestone 2c, whose plan is rewritten for willikins issuing its own
   tokens: task 1 starts once the operator answers the login-method decision (recommended:
   passkeys through `webauthn-rs`, because this deployment has no email or SMS so a password path
   has no reset and no escape from lockout; the cost is that OpenSSL enters the build and the
