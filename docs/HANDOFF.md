@@ -7,14 +7,25 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-15, evening) — tasks 0 through 13 (verified) landed; adversarial pass 2 held; the Railway settings file is applied; task 14 (the local live smoke run) is next, then the plan is marked Completed and milestone 2c's plan is written
+### RESUME HERE (2026-09-16) — tasks 0 through 13 (verified) and task 14 part A landed; the live smoke run (part B) is one command away and waits on the operator granting `gh` the `delete_repo` scope; then the plan is marked Completed and milestone 2c's plan is written
 
-- **Live state:** `main` at 344 commits, gates green at `f067011` (1,703 tests; the ignored ones
+- **Live state:** `main` at 348 commits, gates green at `1bc23f5` (1,704 tests; the ignored ones
   are by-hand measurements, a lock-probe child, two slow connection-holding attacks, a
   fixture generator, the two live probes and the two live write cycles). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
   `main` is pushed after every coordinator commit.
-- **What just happened (2026-09-15, evening):** task 13, adversarial pass 2, ran end to end
+- **What just happened (2026-09-16, small hours):** task 14 part A (Workflow `wf_ba182dd5-636`,
+  opus): both sandbox credentials probed alive (read-only; the Doppler project checks 404 by
+  design in the empty workplace), and acceptance test 18 written as code,
+  `crates/willikins-cli/tests/live_smoke.rs` behind the `live-tests` feature and
+  `WILLIKINS_LIVE_TESTS=1`, with `tests/smoke_parity.rs` driving the same four binary
+  invocations against the fake catalog in every gate. Driving the binary corrected two plan
+  words (the three root configs read `Unchanged` on the first apply; `ci_secret` reads
+  `Converged` on the second); acceptance test 18 is amended. Pre-flight found that the
+  operator's `gh` token lacks the `delete_repo` scope `deploy/teardown.sh` needs, so the
+  test refuses to create anything until `gh auth refresh -h github.com -s delete_repo` has
+  run; `jq` is installed; no `willikins-smoke` repository exists.
+- **Earlier (2026-09-15, evening):** task 13, adversarial pass 2, ran end to end
   over TCP against the real binary through Workflow `wf_7515decb-fd7` (an Opus attacker,
   then an Opus completeness critic) and held: no secret byte, no forged approval, no
   unapproved run, no escape from the trusted directory. Two availability defects fixed
@@ -92,20 +103,23 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
   2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
   test workplace (the earlier `dp.st.` config-scoped token could only read one config).
-- **Next action:** task 14, the live smoke run (acceptance test 18), coordinator with the
-  operator, local only, never the Railway service: source `~/.config/willikins/sandbox.env`
-  in the same command as the run (never print it), `WILLIKINS_LIVE_TESTS=1`, the positive
-  fixture with `slug=willikins-smoke` and `org=Willikins-Test` (`naming::v1` gives the
-  repository `Willikins-Test/willikins-smoke` and the Doppler project `willikins-smoke` in the
-  dedicated test workplace, which holds no such project) through `willikins apply --live`
-  or a localhost `serve --http`; every node `Created`, a second apply `Unchanged` and
-  `Converged`, then `workflows/rotate-service-token.yaml` with `project=willikins-smoke` and
-  `repo=Willikins-Test/willikins-smoke` after approval; `deploy/teardown.sh <run-id>
-  <journal>` as a dry run, then with `--yes`, and the leftover check; refresh the recorded
-  fixtures (redacted) from the run; mark the plan Completed. Then write milestone 2c's plan
-  (OAuth 2.1 on the MCP transport, browser login on the approvals page, identity provider
-  still open) taking the exposure items pass 2 handed over (header-read bound, IPv6-aware
-  origin check, log level, the permit in the blocking closure). Railway follow-ups for the operator: connect Doppler's Railway
+- **Next action:** task 14 part B, the live smoke run, once `gh api -i user` shows
+  `delete_repo` among `x-oauth-scopes` (the operator runs `gh auth refresh -h github.com -s
+  delete_repo`; the coordinator never does). One opus agent, one command, the sandbox file
+  sourced in the same command and never printed:
+  `source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_TESTS=1 RUST_TEST_THREADS=2 cargo
+  test -p willikins-cli --features live-tests --test live_smoke -j 2 -- --ignored --nocapture`.
+  It creates `Willikins-Test/willikins-smoke` and the Doppler project `willikins-smoke`,
+  applies twice, rotates after approval, tears down through `deploy/teardown.sh` and checks
+  for leftovers; on any failure it prints `teardown: run <id> --journal <path>` for a by-hand
+  teardown, which the agent must run before returning. Then the coordinator confirms the
+  leftover check independently (`gh api repos/Willikins-Test/willikins-smoke` is 404), records
+  the run in the plan (addendum, `**Completed:** 2026-09-16`), closes
+  `todos/2026-09-12-milestone-2-plan.md`, updates the README's last "not done" line, and
+  writes milestone 2c's plan (OAuth 2.1 on the MCP transport, browser login on the approvals
+  page, identity provider still open) taking the exposure items pass 2 handed over
+  (header-read bound, IPv6-aware origin check, log level, the permit in the blocking
+  closure), with its own document-review pass. Railway follow-ups for the operator: connect Doppler's Railway
   integration and remove `WILLIKINS_FAKE_CATALOG` when the service should go live (the IaC
   file is applied: CLI upgraded to 5.57.2 on 2026-09-15 with the operator's permission, the
   file regenerated from the live project with `railway config pull`, the healthcheck added,

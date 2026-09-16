@@ -56,8 +56,13 @@ pre-change journal, and its completeness critic turned thin proofs into real one
 source (`docs/research/2026-09-15-e2e-http-adversarial-pass-2.md`). The Railway settings file was
 regenerated, planned, read by the operator and applied; the redeploy passed `/healthz` live.
 
-**Next:** 14 (the local live smoke run, teardown, fixtures refreshed, plan Completed), then the
-milestone 2c plan. This todo closes when the plan is marked Completed.
+2026-09-16: task 14 part A landed: both credentials probed alive, acceptance test 18 written as the
+opt-in `live_smoke` test plus its fake-catalog twin `smoke_parity` (in every gate); two plan words
+corrected (root configs `Unchanged` on the first apply, `ci_secret` `Converged` on the second). Part
+B waits on the operator granting `gh` the `delete_repo` scope the teardown script needs.
+
+**Next:** 14 part B (the live run in one command, teardown, leftover check, plan Completed), then
+the milestone 2c plan. This todo closes when the plan is marked Completed.
 
 ## First action of the next session
 
