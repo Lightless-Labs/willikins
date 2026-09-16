@@ -38,8 +38,8 @@
 # `Http::delete`, so deleting one here asks nothing new of it.
 #
 # Neither token reaches `curl` by any channel another process can read.
-# Not argv: a process listing shows every process its command line. Not
-# the environment either: `ps -E` shows a process its environment to
+# Not argv: a process listing shows every process's command line. Not
+# the environment either: `ps -E` shows a process's environment to
 # anything running as the same user, for as long as the call lasts, so
 # both variables are copied into shell variables and `unset` before the
 # first `curl` starts and no child from there on carries either one.
