@@ -34,19 +34,24 @@
 //!
 //! # The shapes matched, and why patterns are not literals
 //!
-//! [`DOPPLER_NON_ST`], [`DOPPLER_ST`], and [`GITHUB_TOKEN`] mirror what
-//! the *detector* looks for, not what this workspace issues or parses.
-//! That distinction is the whole design of the three constants, and it
-//! was learned the hard way: the first version of this guard was written
-//! from `willikins-providers-doppler`'s and `-github`'s own
-//! `CREDENTIAL_PATTERN`s -- two GitHub prefixes and three Doppler kinds
-//! -- and passed green over a tree that still carried a `gho_` OAuth
-//! token quoted from GitHub's own documentation and a `dp.st.PRD.`
-//! service token with an uppercase environment segment. Both are shapes
-//! GitHub's published secret-scanning pattern list marks push-protected;
-//! neither is a shape willikins would ever authenticate as. The lists
-//! here therefore come from GitHub's own tables (read 2026-09-16, cited
-//! on each constant): six GitHub prefixes and six Doppler token kinds.
+//! [`DOPPLER_NON_ST`], [`DOPPLER_ST`], [`GITHUB_TOKEN`], and
+//! [`BUILDKITE_TOKEN`] mirror what the *detector* looks for, not what
+//! this workspace issues or parses. That distinction is the whole design
+//! of these constants, and it was learned the hard way: the first
+//! version of this guard was written from `willikins-providers-doppler`'s
+//! and `-github`'s own `CREDENTIAL_PATTERN`s -- two GitHub prefixes and
+//! three Doppler kinds -- and passed green over a tree that still carried
+//! a `gho_` OAuth token quoted from GitHub's own documentation and a
+//! `dp.st.PRD.` service token with an uppercase environment segment. Both
+//! are shapes GitHub's published secret-scanning pattern list marks
+//! push-protected; neither is a shape willikins would ever authenticate
+//! as. The GitHub and Doppler lists come from GitHub's own tables (read
+//! 2026-09-16, cited on each constant): six GitHub prefixes and six
+//! Doppler token kinds. The milestone 3a addendum (2026-09-16) applies
+//! the same principle to the new provider before willikins ever holds one
+//! of its tokens: [`BUILDKITE_TOKEN`] lists all nine prefixes Buildkite's
+//! own security documentation publishes, not only the one family
+//! `willikins-providers-buildkite` will authenticate with.
 //!
 //! The bounds are deliberately unbounded above (`{40,}`) rather than the
 //! `{40,44}` willikins' own types enforce: a real scanner has no reason
@@ -161,6 +166,33 @@ const DOPPLER_ST: &str = r"dp\.st\.(?:[A-Za-z0-9_-]{2,35}\.)?[A-Za-z0-9]{40,}";
 /// green -- see [`flags_every_github_prefix`].
 const GITHUB_TOKEN: &str = r"(?:github_pat_|ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9_]{20,}";
 
+/// Every Buildkite token family, by the prefix it stamps on it: `bk` plus
+/// one of nine published acronyms, an underscore, then a long run.
+///
+/// All nine prefixes Buildkite documents
+/// (`platform/security/tokens.md`, read 2026-09-16 for the milestone 3a
+/// research note), not only `bkua_`, the one family willikins itself
+/// authenticates with: `bkua_` (API access -- "Buildkite user access"),
+/// `bkaa_` (agent session), `bkaj_` (agent job), `bkar_` (unclustered
+/// agent), `bkct_` (agent / cluster), `bkpt_` (registry), `bkpat_`
+/// (portal), `bkps_` (portal secret), `bkjat_` (job acquisition). A guard
+/// that knew only the token willikins holds would miss every agent,
+/// portal and registry token -- the same argument section 4 of the
+/// research note (`docs/research/2026-09-16-m3a-buildkite.md`) makes for
+/// the type-level pattern.
+///
+/// The body class is `[A-Za-z0-9_-]`, wider than the plain-alphanumeric
+/// run the other two constants use above: `willikins-providers-buildkite`'s
+/// own `CREDENTIAL_PATTERN` (`^bkua_[A-Za-z0-9_-]{20,}$`) is deliberately
+/// tolerant of the same class, because Buildkite masks every published
+/// token body with asterisks and gives no character-class rule at all --
+/// a pattern narrower than the credential it watches for would be the
+/// same mistake the module doc's `gho_` story already recorded once. The
+/// length floor, 20, is likewise chosen rather than derived, for the same
+/// masked-body reason; it is not copied from any type's own upper bound
+/// because none of these families has one this crate could cite.
+const BUILDKITE_TOKEN: &str = r"bk(?:ua|aa|aj|ar|ct|pt|pat|ps|jat)_[A-Za-z0-9_-]{20,}";
+
 /// Every offense a compiled matcher finds in `text`, as `(line_number,
 /// matched_text)`, 1-indexed to match an editor's line numbers. Every
 /// match on a line, not the first: a line that spells two tokens must
@@ -182,8 +214,10 @@ fn offenses_in(matcher: &Regex, text: &str) -> Vec<(usize, String)> {
 
 #[test]
 fn no_provider_token_shaped_literal_anywhere_in_the_tree() {
-    let matcher = Regex::new(&format!("{DOPPLER_NON_ST}|{DOPPLER_ST}|{GITHUB_TOKEN}"))
-        .expect("the combined matcher is a valid regex");
+    let matcher = Regex::new(&format!(
+        "{DOPPLER_NON_ST}|{DOPPLER_ST}|{GITHUB_TOKEN}|{BUILDKITE_TOKEN}"
+    ))
+    .expect("the combined matcher is a valid regex");
 
     let root = repo_root();
     let mut files = Vec::new();
@@ -224,7 +258,10 @@ mod tests {
     use super::*;
 
     fn matcher() -> Regex {
-        Regex::new(&format!("{DOPPLER_NON_ST}|{DOPPLER_ST}|{GITHUB_TOKEN}")).unwrap()
+        Regex::new(&format!(
+            "{DOPPLER_NON_ST}|{DOPPLER_ST}|{GITHUB_TOKEN}|{BUILDKITE_TOKEN}"
+        ))
+        .unwrap()
     }
 
     /// The two shapes stated in this repository's own research note
@@ -288,6 +325,50 @@ mod tests {
         }
         let service = format!("dp.st.{suffix}");
         assert!(matcher().is_match(&service), "{service}");
+    }
+
+    /// Every prefix Buildkite's own security documentation stamps on a
+    /// token it issues, not only `bkua_`, the one family willikins itself
+    /// authenticates with (see [`BUILDKITE_TOKEN`]'s doc comment for the
+    /// full list and its source).
+    #[test]
+    fn flags_every_buildkite_prefix() {
+        let suffix = "aaaaaaaaaaaaaaaaaaaaaaaa";
+        for prefix in [
+            "bkua_", "bkaa_", "bkaj_", "bkar_", "bkct_", "bkpt_", "bkpat_", "bkps_", "bkjat_",
+        ] {
+            let token = format!("{prefix}{suffix}");
+            assert!(matcher().is_match(&token), "{prefix} was not flagged");
+        }
+    }
+
+    /// `bkup_` is not one of the nine prefixes Buildkite publishes -- it
+    /// is not, for instance, a typo `bkua_` would fold to -- so a run
+    /// behind it must not be flagged. A guard that matched any `bk..._`
+    /// shape indiscriminately would also light up on unrelated
+    /// identifiers this workspace writes for its own reasons.
+    #[test]
+    fn does_not_flag_an_undocumented_buildkite_prefix() {
+        let token = concat!("bkup_", "aaaaaaaaaaaaaaaaaaaaaaaa");
+        assert!(!matcher().is_match(token), "{token}");
+    }
+
+    /// `willikins-providers-buildkite`'s own `CREDENTIAL_PATTERN`
+    /// (`^bkua_[A-Za-z0-9_-]{20,}$`) must not be flagged. Unlike the
+    /// Doppler patterns above, the reason is not an escaped separator --
+    /// this prefix has no dot to escape -- it is that the bracket
+    /// expression `[A-Za-z0-9_-]` immediately after `bkua_` opens with
+    /// `[`, a character outside [`BUILDKITE_TOKEN`]'s own run class, so
+    /// the run this guard looks for never starts: a regex *source* is
+    /// syntax, not a run of token-shaped bytes, and it is the character
+    /// class's own bracket that breaks the match here, not escaping.
+    #[test]
+    fn a_buildkite_pattern_constant_is_never_flagged() {
+        let credential_pattern = "^bkua_[A-Za-z0-9_-]{20,}$";
+        assert!(
+            !matcher().is_match(credential_pattern),
+            "{credential_pattern}"
+        );
     }
 
     /// An uppercase environment segment. `DopplerServiceToken` rejects
