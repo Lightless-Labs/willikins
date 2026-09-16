@@ -7,7 +7,7 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-16) — tasks 0 through 13 (verified) and task 14 part A landed; the live smoke run (part B) is one command away and waits on the operator granting `gh` the `delete_repo` scope; then the plan is marked Completed and milestone 2c's plan is written
+### RESUME HERE (2026-09-16) — tasks 0 through 13 (verified) and task 14 part A landed, the teardown was re-authenticated onto the sandbox PAT, and the live smoke run (part B) is running; then the plan is marked Completed. Milestone 2c's plan is written, reviewed and carries the operator's three decisions
 
 - **Live state:** `main` at 348 commits, gates green at `1bc23f5` (1,704 tests; the ignored ones
   are by-hand measurements, a lock-probe child, two slow connection-holding attacks, a
@@ -50,9 +50,15 @@ compaction, before handing off, after a milestone, and after a plan change or di
   invocations against the fake catalog in every gate. Driving the binary corrected two plan
   words (the three root configs read `Unchanged` on the first apply; `ci_secret` reads
   `Converged` on the second); acceptance test 18 is amended. Pre-flight found that the
-  operator's `gh` token lacks the `delete_repo` scope `deploy/teardown.sh` needs, so the
-  test refuses to create anything until `gh auth refresh -h github.com -s delete_repo` has
-  run; `jq` is installed; no `willikins-smoke` repository exists.
+  teardown needed a scope on the operator's own `gh` credential that they refused outright, so
+  the teardown was re-authenticated onto the sandbox PAT instead (Workflow `wf_b2605177-57f`,
+  sonnet verified by opus): `deploy/teardown.sh` now talks to GitHub through `curl --config -`
+  with `WILLIKINS_GITHUB_TOKEN`, the same shape the Doppler half uses, which the live write
+  cycle had already proved can delete a repository in the throwaway org. The verify caught a
+  leak the implementation missed — both tokens rode in the environment every `curl` child
+  inherited, which `ps -E` exposes to the same user — and both are now unset before any child
+  starts, with the stubs recording each child's environment. **Never ask for that scope again:
+  the operator's answer was "That one is out of the question."**
 - **Earlier (2026-09-15, evening):** task 13, adversarial pass 2, ran end to end
   over TCP against the real binary through Workflow `wf_7515decb-fd7` (an Opus attacker,
   then an Opus completeness critic) and held: no secret byte, no forged approval, no
@@ -131,10 +137,9 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
   2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
   test workplace (the earlier `dp.st.` config-scoped token could only read one config).
-- **Next action:** task 14 part B, the live smoke run, once `gh api -i user` shows
-  `delete_repo` among `x-oauth-scopes` (the operator runs `gh auth refresh -h github.com -s
-  delete_repo`; the coordinator never does). One opus agent, one command, the sandbox file
-  sourced in the same command and never printed:
+- **Next action:** task 14 part B, the live smoke run, which now needs nothing from the
+  operator. One opus agent, one command, the sandbox file sourced in the same command and
+  never printed:
   `source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_TESTS=1 RUST_TEST_THREADS=2 cargo
   test -p willikins-cli --features live-tests --test live_smoke -j 2 -- --ignored --nocapture`.
   It creates `Willikins-Test/willikins-smoke` and the Doppler project `willikins-smoke`,

@@ -59,7 +59,9 @@ regenerated, planned, read by the operator and applied; the redeploy passed `/he
 2026-09-16: task 14 part A landed: both credentials probed alive, acceptance test 18 written as the
 opt-in `live_smoke` test plus its fake-catalog twin `smoke_parity` (in every gate); two plan words
 corrected (root configs `Unchanged` on the first apply, `ci_secret` `Converged` on the second). Part
-B waits on the operator granting `gh` the `delete_repo` scope the teardown script needs.
+B needed a scope on the operator's own gh credential, which they refused; the teardown was
+re-authenticated onto the sandbox PAT instead (the live write cycle already deletes with it), so
+part B waits on nothing.
 
 2026-09-16 (later): the milestone 2c plan is drafted and reviewed ahead of time
 (`docs/plans/2026-09-16-milestone-2c-authorization.md`, research note
