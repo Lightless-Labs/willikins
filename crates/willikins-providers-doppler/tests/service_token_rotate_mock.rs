@@ -387,3 +387,28 @@ fn ensure_mints_exactly_once_however_many_tokens_it_revoked() {
     deletes.assert();
     create.assert();
 }
+
+/// The missing-parent tolerance stops at `read`. `ensure` must be able to
+/// list the tokens it is about to revoke: a rotation that mints a
+/// replacement without having revoked anything is the opposite of a
+/// rotation, so a listing 404 fails outright here — no `DELETE`, no mint —
+/// where the same 404 in `read` is only "no token listed yet".
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_still_fails_outright_on_a_listing_404() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(404)
+        .with_body(fixture("service_tokens_list_project_missing").to_string())
+        .create();
+    let delete = provider.mock("DELETE", DELETE_PATH).expect(0).create();
+    let create = provider.mock("POST", CREATE_PATH).expect(0).create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerServiceTokenRotate::new(client);
+    let token = SinkToken::new();
+    let err = tool.ensure(&inputs(), &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::NotFound);
+    delete.assert();
+    create.assert();
+}

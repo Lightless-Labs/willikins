@@ -79,6 +79,35 @@ impl DopplerSecretGet {
     /// already carries the provider's own words, bounded to
     /// `MAX_MESSAGE_CHARS`, and prefixing those would push the whole
     /// string past the bound that bounding exists to guarantee.
+    ///
+    /// **Why a missing parent is not tolerated here, unlike the two
+    /// service-token tools.** A `404` — which this endpoint answers for a
+    /// project or config that does not exist, though never for a secret
+    /// name that does not (see [`DopplerClient::get_secret`]) — stays a
+    /// plan-time `NotFound` rather than becoming an observation. Audited
+    /// 2026-09-16 alongside the missing-parent fix in
+    /// `doppler.service_token.ensure`/`.rotate` and deliberately left
+    /// alone: this tool has no create path, and nothing in this
+    /// milestone's catalog writes a Doppler secret, so a lookup that
+    /// cannot be answered at plan time will not be answerable at apply
+    /// time either, and refusing early is honest.
+    ///
+    /// The one gap that audit left open, recorded here rather than
+    /// guessed at: a config `doppler.config.ensure` creates in the *same*
+    /// plan does come with Doppler's auto-injected `DOPPLER_PROJECT`, so
+    /// a workflow reading that one key from a not-yet-created config
+    /// would be refused at plan time for a secret an apply would have
+    /// found. No workflow or fixture asks for that key:
+    /// `workflows/fixtures/secret-get.yaml` is the one document with this
+    /// very shape — a `doppler.secret.get` on a config
+    /// `doppler.config.ensure` creates in the same plan — and the key it
+    /// reads, `DATABASE_URL`, is one a fresh config does not hold. The
+    /// first workflow that does, the first tool that writes a secret, or
+    /// milestone 3's inheritable base configs (Doppler's own
+    /// `inherits`/`inheritable` fields, seen live on every config) — any
+    /// of the three makes an apply able to answer what plan could not,
+    /// and is the signal to give this arm the same "not yet" the token
+    /// tools learned.
     fn lookup(&self, inputs: &Inputs) -> Result<Outputs, ToolError> {
         require_present(&self.spec, inputs)?;
         let config: DopplerConfig = get(inputs, "config")?;
