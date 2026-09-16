@@ -12,6 +12,19 @@ authors.workspace = true
 name = "willikins"
 path = "src/main.rs"
 
+[features]
+# Compiles `tests/live_smoke.rs`, and nothing else. Empty on purpose: it
+# gates that one test target (see its `[[test]]` entry below), so a plain
+# `cargo test --workspace` never builds the test that provisions a real
+# GitHub repository and a real Doppler project. The test is `#[ignore]`d
+# and needs `WILLIKINS_LIVE_TESTS=1` on top of the feature before it
+# makes a call. Mirrors `willikins-providers-doppler`'s own `live-tests`.
+live-tests = []
+
+[[test]]
+name = "live_smoke"
+required-features = ["live-tests"]
+
 [dependencies]
 willikins-types.workspace = true
 willikins-core.workspace = true
@@ -43,6 +56,13 @@ tempfile.workspace = true
 
 [dev-dependencies]
 indexmap.workspace = true
+# Task 14's live smoke test reads the Doppler project back after the
+# teardown script has run, through the same client the provider uses --
+# an independent leftover check, not the script's own word for it. Only
+# a dev-dependency: the CLI itself reaches Doppler through
+# `willikins-server`'s live catalog, never directly.
+willikins-providers-doppler.workspace = true
+willikins-providers-http.workspace = true
 proptest.workspace = true
 serde_yaml_ng.workspace = true
 # The MCP half of acceptance test 11: an in-process rmcp client over a
