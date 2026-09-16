@@ -17,6 +17,17 @@
 //!   suite, once against a real `willikins run --json` document, which
 //!   is the tie that matters (the script's `jq` paths).
 //!
+//! - any difference between the fake catalog's behaviour and a live
+//!   provider's. Both sides of every comparison here are the fake, so
+//!   this target agrees with itself by construction. The 2026-09-16
+//!   missing-parent defect -- `doppler.service_token.ensure` refusing to
+//!   plan against a Doppler project that does not exist yet, where the
+//!   fake had always read `Absent` -- was invisible to it, and stayed
+//!   invisible until the live run. What pins that class of difference is
+//!   each provider crate's own live-against-fake parity test, such as
+//!   `read_agrees_with_the_fake_tool_on_a_project_it_does_not_hold` in
+//!   `willikins-providers-doppler`'s `tests/service_token_ensure_mock.rs`.
+//!
 //! The one place the two halves differ on purpose: the live run starts
 //! from an account where nothing exists, while fake state does not
 //! persist between two CLI processes at all, so the convergence step
