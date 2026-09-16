@@ -17,14 +17,17 @@ revision of this plan, a task shape, the seam, the open decisions and the risks.
 supersedes the first of the three operator decisions in the addendum below**: there is no identity
 provider left to be self-hostable, because there is no identity provider.
 **Addendum:** 2026-09-16 (operator) — three decisions the operator made on reading the review: the
+**Addendum:** 2026-09-16 (the four open decisions are settled by the operator) — **passkeys** for the human login ("Passkeys are good enough"); the signing key **Doppler-injected as two variables**, the current one and an optional retiring one; **pre-registered clients**; a **3600-second** access-token lifetime that is also the key-rotation overlap window. The Open decisions section is now empty of operator questions and records what each delta would have been. The operator also raised Doppler's secret **version history** against the two-variable shape: it is an audit and recovery feature, viewed in the dashboard, and it does not put two values in one running process, so it changes the *rollback* story rather than the overlap (decision 22). And they rejected this plan's word "permanently" for the WebAuthn relying-party identifier: "All it takes for to stop being permanent is wiping accounts and changing the domain." Correct, and the second time this plan has dressed a migration up as a law; every such sentence is now written as what the migration costs.
 identity provider must be **self-hostable open source**, because willikins is an open-source tool
 and an open-source tool may not require a third-party SaaS account to run ("Willikins is *open
 source*, *first and foremost*. Since when do you make open source tools dependent on third-party
 SaaS?") — **superseded, see above, by the decision that there is no separate provider at all**; the
 public host is **`willikins.bandeabonnot.com`**; and no identifier is permanent ("But no, nothing
 is forever"), so the audience gets a documented migration path instead of a promise of permanence.
-Decisions 10 and 12 and the go-live sequence carry them, and decision 12 records the one identifier
-that turns out to be permanent after all.
+Decisions 10 and 12 and the go-live sequence carry them. An earlier draft of this line claimed the
+WebAuthn relying-party identifier as "the one identifier that turns out to be permanent after all";
+it is not, and the operator said so: moving it costs a re-enrolment of every passkey, which
+decision 12 now prices instead of forbidding.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (the 2026-09-15 addendum and milestone
 2c in the milestone list)
 **Previous:** `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`
@@ -924,52 +927,10 @@ written anywhere.
    deployment publishes belongs to the operator and survives a move off Railway. This step got
    **heavier** with this revision, and the extra weight is worth saying in one breath: that host is
    now also the **issuer identifier** and the **WebAuthn RP ID**. The audience has a documented
-   migration path (decision 12); **the RP ID has none at all** — `webauthn-rs` 0.5.5 has no Related
-   Origin Requests support, and that would not solve a domain *change* anyway, so a move orphans
-   every credential and every human re-enrols. Therefore:
-   `WILLIKINS_PUBLIC_URL=https://willikins.bandeabonnot.com`, the issuer identifier is that string
-   exactly, the resource identifier and audience are `https://willikins.bandeabonnot.com/mcp`, the
-   two metadata documents are at `/.well-known/oauth-authorization-server` and
-   `/.well-known/oauth-protected-resource/mcp`, and the RP ID is
-   `willikins.bandeabonnot.com`. A domain is not automatic on Railway: the operator adds it in the
-   dashboard or with the CLI, and a custom domain needs **both** a CNAME and a TXT ownership
-   record — with only the CNAME it answers 404 even after DNS resolves — after which Railway issues
-   the certificate itself, giving up after 72 hours.
-2. **Declare it.** `.railway/railway.ts` can declare a custom domain (`domains: ["…"]`, or
-   `{ domain, port }`) and **cannot** declare a generated one — that is documented, and it is the
-   primary source behind the file's own header comment. So: a custom domain goes in the file; a
-   generated one is created in the dashboard or by the CLI and the file's header comment is updated
-   to say which. **Conditional in both directions on a verify item**: whether an omitted `domains`
-   key deletes an already-attached *custom* domain is not stated anywhere — the documented "omit
-   means delete" exemption covers only generated domains — so the file is never applied against a
-   live custom domain until a read-only `railway config plan` has shown what the apply would do.
-   Never settle this by applying.
-3. **Measure what the edge sends, and what it already bounds.** Before any allowed-hosts value is
-   frozen, deploy a build that echoes the inbound `Host`, `X-Forwarded-Host` and `X-Railway-Edge`
-   on `/healthz` and read them from a real public request. What `Host` reads at the service is
-   documented nowhere on `docs.railway.com` and it decides both `WILLIKINS_ALLOWED_HOSTS` and
-   rmcp's `allowed_hosts` — a question that now covers four unauthenticated routes rather than one
-   (verify item 14). In the same visit, **measure what the edge does to a trickled header stream**:
-   open a connection, send headers one byte at a time, and record when and how it is closed.
-   Railway's own documented limits are a "Max 32 KB combined header size" and "idle HTTP/1.1
-   connections are closed after 60 seconds between requests", so the edge already bounds part of
-   this shape and task 17 is **defence in depth behind it** rather than the only bound.
-4. **Enroll, and set both allowlists.** This step changed shape with the login. The operator runs
-   the **enrollment CLI** on the host, enrols **two** credentials (decision 24's rule: prevention
-   before recovery), saves the recovery codes somewhere that is not the deployment, and pastes the
-   subject the CLI prints into `WILLIKINS_AGENT_SUBJECTS` and `WILLIKINS_APPROVER_SUBJECTS` as
-   needed. The `WrongRole` page keeps its bootstrap role as the **second** path, for anyone who
-   enrolled without noting the value down. Both variables are required in http mode and an empty
-   one refuses startup, so there is no window in which a reachable service has an unset allowlist.
-5. **One variable change, before the deploy that needs it, with `.railway/railway.ts` in the same
-   change.** In a single staged edit: set the whole new block — the signing key and its retiring
-   sibling, the credential-store and client-table paths, both subject allowlists, the three
-   lifetimes — give `WILLIKINS_ALLOWED_HOSTS` the measured public host alongside the private-domain
-   reference, and delete `WILLIKINS_AGENT_TOKEN_HASHES` and `WILLIKINS_APPROVER_TOKEN_HASH`. Doing
-   the deletion and the new block as two changes around the deploy leaves a window where the
-   service refuses to start — either `RetiredVariable` or `Missing`, depending on which half landed
-   first — so they are one change. (`healthcheck.railway.app` needs no entry: `/healthz` is served
-   outside the host check.)
+   migration path (decision 12); **the RP ID's migration is a re-enrolment** — `webauthn-rs` 0.5.5
+   has no Related Origin Requests, so changing the host invalidates every enrolled passkey and each
+   human enrols again at the new host through the recovery path of decision 25. Choose the host
+   knowing that, rather than believing it cannot be changed.
 
    `.railway/railway.ts` must move with it. Its `env` block names five variables through
    `preserve()` today, two of which are the retired hashes, and **the file's own header states that
@@ -1095,12 +1056,18 @@ for a bare-origin issuer, which removes by construction a three-route trap a shi
 and the metadata document's `issuer` is byte-identical to the identifier the URL was built from,
 which is MCP's MUST and which no startup check has to enforce.
 
-**Sibling two: the WebAuthn RP ID is derived from `WILLIKINS_PUBLIC_URL`'s host, and it has no
-migration path at all.** This asymmetry belongs in the decision and not in a footnote. Decision 12's
-own sentence, from the operator — "nothing is forever" — holds for the audience and **does not hold
-for the RP ID**: `rp_id` cannot change without breaking every credential associated with it, and
-`webauthn-rs` 0.5.5 has no Related Origin Requests support, which would not solve a domain *change*
-anyway. Moving host orphans every passkey and every human re-enrols.
+**Sibling two: the WebAuthn RP ID is derived from `WILLIKINS_PUBLIC_URL`'s host, and moving it
+costs every credential.** `webauthn-rs` 0.5.5 implements no Related Origin Requests, so a
+credential enrolled against one RP ID cannot be presented to another: change the host and every
+enrolled passkey stops working. That is a migration with a price, not a law — the operator's
+correction, 2026-09-16: "All it takes for to stop being permanent is wiping accounts and changing
+the domain." So the price, stated plainly so nobody has to rediscover it: each human re-enrols a
+passkey at the new host, which means someone must be able to authenticate *to enrol*, which is
+what decision 25's recovery codes and the enrolment CLI are for. Task 10's break-glass path is
+therefore also the domain-migration path, and it is tested as both. What is genuinely lost is the
+old credentials, and nothing else: the journal, the plans, the subject allowlists and the issued
+tokens' claims are unaffected, because a principal derives from issuer and subject, not from the
+authenticator that proved the subject.
 
 **Stable is not permanent, and the plan says how to move the audience.** `WILLIKINS_OAUTH_PREVIOUS_AUDIENCES`
 is a comma-separated list of resource identifiers this server **also accepts** in `aud` during a
@@ -1579,9 +1546,9 @@ endpoints upstream, the TypeScript SDK's `ProxyOAuthServerProvider` shape. **The
 todo's default**, because it leaves the resource-server half untouched, and
 `draft-ietf-oauth-identity-assertion-authz-grant` is the document to read before freezing anything.
 
-**What does not port, written down rather than discovered.** Passkeys are bound to the RP ID, which
-cannot change (decision 12), so switching to an external provider orphans every credential and
-switching back re-enrols. Pre-registered client ids are per-authorization-server — MCP says clients
+**What does not port, written down rather than discovered.** Passkeys are bound to the RP ID
+(decision 12), so switching to an external provider orphans every credential and switching back
+costs a re-enrolment each way — a price, not a barrier, and the same price a change of host costs. Pre-registered client ids are per-authorization-server — MCP says clients
 "MUST maintain separate registration state per authorization server and MUST NOT assume that
 credentials valid for one authorization server will be accepted by another" — so every client
 re-registers the day the advertised server changes; CIMD ids would port, because they are
@@ -2594,47 +2561,55 @@ Then, in descending order of how likely each is to surprise someone:
   `/mcp`, `/approvals` and the authorization-server routes share a domain, because it turns away
   every non-browser request — and three of those routes now *must* answer a non-browser client.
 
-## Open decisions
+## Decisions the operator settled, and what each delta would have been
 
-Four, all the operator's, each with one recommended default and exactly one reason. **The plan
-below is written at all four defaults** — the task table, the pin table and the variable table
-cannot be conditional — so this section is what names the delta if one is overridden, not a gap in
-the design. The two the delegating draft carried are gone: there is no provider to choose
-(decision 10), and the public host is settled at `willikins.bandeabonnot.com` (go-live step 1).
+Four questions stood open when this plan was rewritten. The operator settled all four on
+2026-09-16, and the plan is written at those settings throughout — the task table, the pin table
+and the variable table are not conditional. This section keeps the reasoning and the delta of the
+road not taken, because a decision whose alternative is forgotten cannot be revisited honestly.
 
-1. **The human login method. Recommended: passkeys, through `webauthn-rs` 0.5.5.**
-   *The reason:* this deployment has no email and no SMS, so a password path has **no reset**, and
-   losing the reset also removes the account-lockout mechanism's only escape hatch.
-   *What it carries:* OpenSSL enters the build, and the RP ID freezes the domain permanently.
-   *If overridden:* decision 24's ceremonies become a form login, `webauthn-rs` and
-   `webauthn-authenticator-rs` leave the pin table, `argon2` stays (it hashes passwords instead of
-   only recovery codes), the ceremony store may be replaced by a stateless signed pre-auth cookie,
-   and NIST's SHALL-level compromised-password blocklist arrives, needing either third-party egress
-   or a corpus download.
+1. **The human login method: passkeys, through `webauthn-rs` 0.5.5.** Operator: "Passkeys are good
+   enough." *The reason:* this deployment has no email and no SMS, so a password path has **no
+   reset**, and losing the reset also removes the account-lockout mechanism's only escape hatch.
+   *What it carries:* OpenSSL enters the build, which falsifies the Dockerfile's own comment about
+   holding no `openssl-sys`, and task 1 is where that comment is corrected rather than quietly
+   left wrong. *The delta if it is ever reversed:* decision 24's ceremonies become a form login,
+   `webauthn-rs` and `webauthn-authenticator-rs` leave the pin table, `argon2` hashes passwords
+   rather than only recovery codes, the ceremony store may become a stateless signed pre-auth
+   cookie, and NIST's SHALL-level compromised-password blocklist arrives, needing either
+   third-party egress or a corpus download.
 
-2. **Where the signing key lives. Recommended: a Doppler-injected PKCS#8 PEM variable.**
-   *The reason:* the design doc's own rule is that every secret lives in Doppler, and a
-   Doppler-injected key makes rotation a variable change rather than an edit to a file on a volume
-   that nothing backs up. The counter-pull — first-boot self-provisioning onto the volume beside
-   the journal — is equally consistent with the fetched platform facts, and it is what the
-   credential store must do anyway.
-   *One shape constraint either way:* decision 22's two-key overlap must be expressible, so the
-   Doppler branch is **two variables**, the current signing key and an optional retiring one, not
-   one. A single-key variable cannot express an overlap, and an overlap that cannot be expressed is
-   a flag day in which every outstanding token is refused.
+2. **Where the signing key lives: Doppler-injected, as two variables.** *The reason:* the design
+   doc's own rule is that every secret lives in Doppler, and a Doppler-injected key makes rotation
+   a variable change rather than an edit to a file on a volume nothing backs up. Two variables and
+   not one because decision 22's overlap must be expressible: a single variable makes a rotation a
+   flag day in which every outstanding token is refused at once.
+   **On Doppler's secret version history**, which the operator raised against this shape: it is an
+   audit and recovery feature — past values are viewed from the secret's row in the dashboard, and
+   historical values can be redacted irreversibly (<https://docs.doppler.com/docs/secrets>, fetched
+   2026-09-16). It does not deliver two values to one running process: the integration injects the
+   current value of a variable, so a process that must accept tokens signed by the outgoing key
+   still needs that key present. What version history *does* settle is the rollback: a rotation
+   that installs a bad key is recoverable from the dashboard without willikins keeping a copy, so
+   the retiring-key variable exists only for the overlap and may be cleared as soon as the window
+   closes. The interaction that makes the overlap worth its variable is decision 20's: **there are
+   no refresh tokens**, so an outstanding token that is refused does not refresh — it sends its
+   holder back to `/authorize`, which needs a human. Without the overlap, rotating the key demands
+   one human consent per client, immediately, which is the kind of cost that makes an operator
+   rotate less often.
 
-3. **Client registration. Recommended: pre-registration, one configuration entry per client.**
-   *The reason:* for a handful of agent clients it costs zero new endpoints and zero attack
-   surface, where CIMD is an outbound fetch of an attacker-chosen URL and dynamic registration is
-   an anonymous write endpoint with a garbage collector.
-   *If overridden toward CIMD:* `client_id_metadata_document_supported` must then be advertised
-   (decision 23), the narrowly typed fetcher of the milestone-3 note is required, and verify item
-   23's expired draft matters immediately.
+3. **Client registration: pre-registration, one configuration entry per client.** *The reason:* for
+   a handful of agent clients it costs zero new endpoints and zero attack surface, where a client
+   ID metadata document is an outbound fetch of an attacker-chosen URL and dynamic registration is
+   an anonymous write endpoint with a garbage collector. *The delta toward metadata documents:*
+   `client_id_metadata_document_supported` must be advertised (decision 23), the narrowly typed
+   fetcher of the milestone-3 note is required, and verify item 23's expired draft matters
+   immediately.
 
-4. **The access-token lifetime. Recommended: 3600 seconds.**
-   *The reason:* with no refresh tokens the lifetime is *exactly* how often a human must re-consent
-   at `/authorize`, and an hour is the shortest span that does not interrupt a working session. It
-   is also the key-rotation overlap window (decision 22), so the two numbers are one decision.
+4. **The access-token lifetime: 3600 seconds.** *The reason:* with no refresh tokens the lifetime
+   is exactly how often a human must re-consent at `/authorize`, and an hour is the shortest span
+   that does not interrupt a working session. It is also decision 22's key-rotation overlap window,
+   so the two numbers are one decision and move together.
 
 **Not operator decisions, recorded here so they do not become a fifth.** `SameSite=Strict` versus
 `Lax` is a **browser measurement** (verify item 7), not a preference: measure whether `Strict`
