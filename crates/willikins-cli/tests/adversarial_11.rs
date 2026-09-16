@@ -522,7 +522,10 @@ fn a_truncated_journal_is_refused_the_same_way_by_runs_and_by_open() {
 // =====================================================================
 
 const SEEDED_SECRET: &str = "acceptance-test-8b-fake-secret-bytes-do-not-leak";
-const SEEDED_TOKEN: &str = "dp.st.prd.donotleakdonotleakdonotleakdonotleakdono";
+/// `concat!`-split so this file holds no literal spelling a full
+/// Doppler-service-token-shaped string contiguously; the compiled value
+/// (still a valid `DopplerServiceToken`) is byte-identical to one that did.
+const SEEDED_TOKEN: &str = concat!("dp.st.prd.", "donotleakdonotleakdonotleakdonotleakdono");
 
 /// A secret in each of the positions a `Value` can occupy -- a tool
 /// output (`doppler.secret.get`), a freshly minted token flowing into a

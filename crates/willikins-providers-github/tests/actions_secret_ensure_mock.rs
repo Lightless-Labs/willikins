@@ -38,7 +38,9 @@ fn secret_name() -> ActionsSecretName {
 
 /// The distinctive marker used across this file's tests: if it ever shows
 /// up in a recorded request body or an error message, redaction broke.
-const MARKER: &str = "dp.st.prd.wlkntestmarker0000000000000000000000wlkn";
+/// `concat!`-joined so this file holds no literal spelling the whole
+/// Doppler-token-shaped string contiguously.
+const MARKER: &str = concat!("dp.st.prd.", "wlkntestmarker0000000000000000000000wlkn");
 
 fn secret_value() -> DopplerServiceToken {
     DopplerServiceToken::parse(MARKER).unwrap()

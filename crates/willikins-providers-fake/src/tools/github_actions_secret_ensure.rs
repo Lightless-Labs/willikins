@@ -107,8 +107,14 @@ mod tests {
         ActionsSecretName::parse("DOPPLER_TOKEN").unwrap()
     }
 
+    // `concat!`-split so this file holds no literal spelling the whole
+    // token contiguously.
     fn value() -> DopplerServiceToken {
-        DopplerServiceToken::parse("dp.st.prd.exampleexampleexampleexampleexampleexample").unwrap()
+        DopplerServiceToken::parse(concat!(
+            "dp.st.prd.",
+            "exampleexampleexampleexampleexampleexample"
+        ))
+        .unwrap()
     }
 
     fn full_inputs() -> Inputs {

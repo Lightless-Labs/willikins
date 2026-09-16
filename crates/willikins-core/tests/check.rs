@@ -340,8 +340,13 @@ fn acceptance_2_secret_workflow_input_is_rejected_for_a_secret_list_too() {
 #[test]
 fn acceptance_3_the_registry_refuses_a_secret_literal_input_value() {
     let ty = ty("DopplerServiceToken");
-    let err =
-        Value::parse(&ty, "dp.st.prd.exampleexampleexampleexampleexampleexample").unwrap_err();
+    // `concat!`-split so this file holds no literal spelling the whole
+    // token contiguously.
+    let err = Value::parse(
+        &ty,
+        concat!("dp.st.prd.", "exampleexampleexampleexampleexampleexample"),
+    )
+    .unwrap_err();
     assert!(err.reason.contains("cannot be supplied"), "{}", err.reason);
 }
 

@@ -636,15 +636,19 @@ steps:
 
     #[test]
     fn secret_typed_default_is_refused_without_echoing_the_value() {
-        let err = parse_document(
+        // `concat!`-split around the token-shaped default so this file
+        // holds no literal spelling it contiguously.
+        let err = parse_document(concat!(
             "\
 name: demo
 inputs:
-  token: { type: DopplerServiceToken, default: dp.st.prd.exampleexampleexampleexampleexampleexample }
+  token: { type: DopplerServiceToken, default: dp.st.prd.",
+            "exampleexampleexampleexampleexampleexample",
+            " }
 steps:
   a: { tool: naming.v1, with: {} }
-",
-        )
+"
+        ))
         .unwrap_err();
         match err.kind {
             DocumentErrorKind::Semantic { path, message } => {

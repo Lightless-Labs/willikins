@@ -22,12 +22,17 @@ use willikins_types::{DomainType, GitHubRepo, RepoVisibility};
 /// Stands in for a real GitHub token: shaped like one (so nothing in the
 /// pipeline could reject it before the point this test cares about) but
 /// distinctive enough that its presence anywhere but the `Authorization`
-/// header is unambiguously a bug.
-const CREDENTIAL_MARKER: &str = "ghp_wlknCredentialMarker00000000000000000";
+/// header is unambiguously a bug. `concat!`-joined so this file holds no
+/// literal spelling the whole thing contiguously.
+const CREDENTIAL_MARKER: &str = concat!("ghp_", "wlknCredentialMarker00000000000000000");
 
 /// Stands in for a real Doppler service token this crate would seal and
-/// send to GitHub's Actions secret endpoint.
-const SECRET_MARKER: &str = "dp.st.prd.wlknSecretMarker00000000000000000000000000wlkn";
+/// send to GitHub's Actions secret endpoint. Same reason as
+/// [`CREDENTIAL_MARKER`] for the `concat!` split.
+const SECRET_MARKER: &str = concat!(
+    "dp.st.prd.",
+    "wlknSecretMarker00000000000000000000000000wlkn"
+);
 
 #[test]
 fn no_authored_fixture_carries_either_marker() {

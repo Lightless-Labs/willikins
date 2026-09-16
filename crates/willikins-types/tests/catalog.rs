@@ -71,5 +71,19 @@ fn every_domain_type_is_registered_exactly_once_and_its_example_parses() {
 #[test]
 fn catalog_json_snapshot() {
     let json = serde_json::to_string_pretty(&type_infos()).unwrap();
-    insta::assert_snapshot!(json);
+    // Every secret type's `example` must itself be a valid, pattern-shaped
+    // instance of its own type (`assert_example_parses`, exercised above
+    // and by `assert_all_examples_parse`) -- which is exactly the shape a
+    // provider's own secret scanner looks for. This snapshot's only job
+    // (see the module doc) is to catch structural drift in the published
+    // catalog, not to pin those bytes, so each secret type's real example
+    // is replaced by a stable placeholder wherever it appears -- both
+    // `TypeInfo.example` and the copy repeated inside its JSON schema's
+    // own `examples` array -- before the snapshot is taken. The other
+    // test in this file still parses the real, unredacted value.
+    let mut redacted = json;
+    for info in type_infos().iter().filter(|info| info.secret) {
+        redacted = redacted.replace(info.example, "[ELIDED SECRET EXAMPLE]");
+    }
+    insta::assert_snapshot!(redacted);
 }

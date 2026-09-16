@@ -20,6 +20,19 @@ fn fixture(name: &str) -> serde_json::Value {
     load_fixture(&fixtures_dir(), "doppler", name)
 }
 
+/// `service_token_post_created.json`'s `key` field is the placeholder
+/// `DOPPLER_TOKEN_PLACEHOLDER`, not a token-shaped literal (see
+/// `fixtures/doppler/README.md`): this substitutes in a token
+/// `concat!`-assembled from parts, so the wire body still carries
+/// something [`willikins_types::DopplerServiceToken`] parses, without
+/// spelling a Doppler-token-shaped string in any file on disk.
+fn service_token_created_body() -> String {
+    fixture("service_token_post_created").to_string().replace(
+        "DOPPLER_TOKEN_PLACEHOLDER",
+        concat!("dp.st.dev.", "wlknFixtureServiceTokenNotARealCredential00"),
+    )
+}
+
 #[derive(Default)]
 struct RecordingSleeper {
     durations: Mutex<Vec<Duration>>,
@@ -144,7 +157,7 @@ fn ensure_mints_when_the_parent_project_or_config_does_not_exist_yet() {
     let create = provider
         .mock("POST", CREATE_PATH)
         .with_status(200)
-        .with_body(fixture("service_token_post_created").to_string())
+        .with_body(service_token_created_body())
         .expect(1)
         .create();
     let (client, _sleeper) = client_against(provider.url());
@@ -277,7 +290,7 @@ fn ensure_on_an_absent_token_creates_it_and_asserts_the_request_body() {
             "access": "read",
         })))
         .with_status(200)
-        .with_body(fixture("service_token_post_created").to_string())
+        .with_body(service_token_created_body())
         .expect(1)
         .create();
     let (client, _sleeper) = client_against(provider.url());

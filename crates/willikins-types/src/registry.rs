@@ -623,10 +623,12 @@ mod tests {
     #[test]
     fn registry_refuses_to_parse_doppler_service_token_as_a_literal() {
         let name = TypeName::parse("DopplerServiceToken").unwrap();
+        // `concat!`-split: a value shaped like a real token, on purpose,
+        // but not spelled contiguously in this file.
         let err = crate::registry()
             .parse(
                 &name,
-                "dp.st.prd.exampleexampleexampleexampleexampleexample",
+                concat!("dp.st.prd.", "exampleexampleexampleexampleexampleexample"),
             )
             .unwrap_err();
         assert_eq!(err.reason, SECRET_LITERAL_REFUSAL);
@@ -687,9 +689,11 @@ mod tests {
         // The registry refuses secret literals, but plain serde
         // `Deserialize` on the concrete type still works: this is how
         // fake-state seeding constructs secret values.
-        let token: DopplerServiceToken =
-            serde_json::from_str("\"dp.st.prd.exampleexampleexampleexampleexampleexample\"")
-                .unwrap();
+        let token: DopplerServiceToken = serde_json::from_str(concat!(
+            "\"dp.st.prd.",
+            "exampleexampleexampleexampleexampleexample\""
+        ))
+        .unwrap();
         assert_eq!(format!("{token:?}"), "[REDACTED DopplerServiceToken]");
 
         let value: DopplerSecretValue = serde_json::from_str("\"s3cr3t-value\"").unwrap();

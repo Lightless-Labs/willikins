@@ -1710,8 +1710,14 @@ mod tests {
                     .port(port("name"), Binding::Literal("DOPPLER_TOKEN".to_string()))
                     .port(
                         port("value"),
+                        // The literal's shape does not matter here: `check`
+                        // rejects any literal bound to a secret-accepting
+                        // port before looking at its text. `concat!`-split
+                        // anyway, so this file holds nothing a scanner reads
+                        // as a real Doppler token.
                         Binding::Literal(
-                            "dp.st.prd.hunter2hunter2hunter2hunter2hunter2hunter2".to_string(),
+                            concat!("dp.st.prd.", "hunter2hunter2hunter2hunter2hunter2hunter2")
+                                .to_string(),
                         ),
                     ),
             );

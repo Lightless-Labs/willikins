@@ -39,9 +39,11 @@ use willikins_providers_fake::FakeState;
 use willikins_types::DomainType;
 
 /// A `DopplerServiceToken`-shaped literal (real shape does not matter here:
-/// the registry refuses every secret literal before looking at its text),
-/// used by [`acceptance_03_static_errors`]'s last check.
-const SECRET_LITERAL_TOKEN: &str = "dp.st.prd.hunter2hunter2hunter2hunter2hunter2hunter2";
+/// the registry refuses every secret literal before looking at its text).
+/// `concat!`-split so this file holds no literal spelling it contiguously.
+/// Used by [`acceptance_03_static_errors`]'s last check.
+const SECRET_LITERAL_TOKEN: &str =
+    concat!("dp.st.prd.", "hunter2hunter2hunter2hunter2hunter2hunter2");
 
 // ---------------------------------------------------------------------
 // paths and loading
@@ -828,7 +830,9 @@ fn acceptance_07_plan_against_seeded_state() {
 #[test]
 fn acceptance_08a_redaction_by_construction() {
     const SECRET_TAIL: &str = "acceptance08afakesecretbytesaaaaaaaaaaaaaa";
-    const TOKEN: &str = "dp.st.prd.acceptance08afakesecretbytesaaaaaaaaaaaaaa";
+    // `concat!`-joined with the same tail text as `SECRET_TAIL` so this
+    // file holds no literal spelling the whole token contiguously.
+    const TOKEN: &str = concat!("dp.st.prd.", "acceptance08afakesecretbytesaaaaaaaaaaaaaa");
     const MARKER: &str = "[REDACTED DopplerServiceToken]";
 
     let value = Value::known(willikins_types::DopplerServiceToken::parse(TOKEN).unwrap());

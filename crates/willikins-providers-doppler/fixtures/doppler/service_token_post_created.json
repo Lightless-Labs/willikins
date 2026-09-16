@@ -3,7 +3,7 @@
     "name": "ci",
     "slug": "56c69f96-3045-11ea-978f-2e728ce88125",
     "created_at": "2019-11-19T07:19:01.073Z",
-    "key": "dp.st.dev.bAqhcVzrhy5cRHkOlNTc0Ve6w5NUDCpcutm8vGE9myi",
+    "key": "DOPPLER_TOKEN_PLACEHOLDER",
     "config": "prd",
     "environment": "prd",
     "project": "third-thoughts",

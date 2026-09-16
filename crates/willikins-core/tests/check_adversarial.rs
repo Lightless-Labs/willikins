@@ -63,10 +63,15 @@ fn workflow_name(name: &str) -> willikins_types::WorkflowName {
 }
 
 /// A secret value, constructed on the concrete type (the registry refuses
-/// to parse a secret type from a string, by design).
+/// to parse a secret type from a string, by design). `concat!`-split so
+/// this file holds no literal spelling the whole token contiguously.
 fn secret_value() -> Value {
     Value::known(
-        DopplerServiceToken::parse("dp.st.fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+        DopplerServiceToken::parse(concat!(
+            "dp.st.",
+            "fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ))
+        .unwrap(),
     )
 }
 
@@ -1023,13 +1028,19 @@ const TYPE_NAMES: &[&str] = &[
     "NoSuchType",
 ];
 
+/// A `DopplerServiceToken`-shaped literal, `concat!`-split (see
+/// `check.rs`'s own copy of this test literal) so this file holds no
+/// literal spelling it contiguously.
+const SECRET_LITERAL_TOKEN: &str =
+    concat!("dp.st.prd.", "hunter2hunter2hunter2hunter2hunter2hunter2");
+
 const LITERALS: &[&str] = &[
     "",
     "private",
     "prd",
     "acme-web",
     "lightless-labs/acme-web",
-    "dp.st.prd.hunter2hunter2hunter2hunter2hunter2hunter2",
+    SECRET_LITERAL_TOKEN,
     "[REDACTED DopplerServiceToken]",
 ];
 
