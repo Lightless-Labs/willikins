@@ -74,6 +74,21 @@ a secret. The agent plans; the butler acts.
   Primitives are Rust, composites are DSL, one abstraction.
 - The document JSON schema and the tool catalog are published over MCP so an agent can
   validate a workflow locally before submitting it.
+- **Policy lives in the workflow, never in the tool** (operator, 2026-09-16: "That's a
+  workflow-specific rule. An individual's / team's / org's process encoded in a workflow.
+  That's the whole point of Willikins"). A tool is a typed primitive over one provider
+  operation and holds no opinion about how an organization arranges its work: which
+  environments exist and what they mean, whether a CI credential is one token per project or a
+  shared account granted per project, whether shared secrets live in inheritable base configs,
+  which stages a project has, what a pipeline runs. All of that is a document, and two
+  organizations running the same willikins express different processes by writing different
+  documents. Three consequences, each checkable. The tool set is judged by whether the
+  primitives are sufficient to express a process, never by whether it implements a favoured
+  one. No provider concept may be narrowed on the way in: an `EnvironmentSlug` is any slug the
+  provider accepts, not a member of `dev`/`stg`/`prd`, and `naming::v1` derives from whatever
+  the document supplies. And where this project records a preferred layout — the milestone 3
+  notes carry two — it is written as a recommendation with its reasoning, in documentation an
+  operator can ignore, never as a default the code enforces.
 
 ### Workflow inputs
 
