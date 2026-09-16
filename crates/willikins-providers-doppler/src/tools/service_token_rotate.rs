@@ -98,10 +98,11 @@ impl Tool for DopplerServiceTokenRotate {
         // here, pinned by `read_still_propagates_a_listing_failure`.
         //
         // The 404 carries the same ambiguity `is_listed`'s doc spells
-        // out — the status alone cannot separate "no parent yet" from
-        // "a parent this credential is not granted" — and the same
-        // one-status width (a `400`, Doppler's other answer for a
-        // project that is not there, still fails). Here it costs even less: the
+        // out — it cannot prove the parent is merely absent rather than
+        // outside this credential's grant, a case whose status Doppler
+        // has never been observed to give — and the same one-status
+        // width (a `400`, Doppler's other answer for a project that is
+        // not there, still fails). Here it costs even less: the
         // observation is `Absent` either way, so tolerating it changes
         // only whether the plan is refused, never what the plan says this
         // `Destructive` step will do. `read` still never reports

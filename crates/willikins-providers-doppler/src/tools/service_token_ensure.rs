@@ -82,16 +82,22 @@ impl DopplerServiceTokenEnsure {
     /// **What this 404 cannot tell apart.** Doppler documents no
     /// error-body schema for any non-2xx response at all (research note
     /// `docs/research/2026-09-12-m2-dependencies.md`, section 3, and its
-    /// own open-questions list), so a 404 here is a bare status: "no such
-    /// project or config" and "a project or config this credential is not
-    /// granted" arrive as the same three digits. The second case is real
-    /// rather than theoretical — a Service Account token holds "a
-    /// granular set of resources within your workplace" (same section),
-    /// and another workplace's projects are not visible to it at all —
-    /// and it is the same conflation
+    /// own open-questions list), so a 404 here is a bare status and
+    /// nothing else. It certainly covers "no such project or config":
+    /// that is the case the live smoke run met, and the one this arm
+    /// exists for. What it cannot be shown *not* to cover is "a project
+    /// or config this credential is not granted" — a Service Account
+    /// token holds "a granular set of resources within your workplace"
+    /// (same section), and another workplace's projects lie outside it
+    /// entirely. **Which status Doppler answers for a project outside
+    /// the grant was never observed**, by the write cycle, the probe or
+    /// the smoke run; a `403` is as plausible as a `404`, and nothing
+    /// here may assume either. GitHub's 404 is documented to conflate
+    /// the two, which is why
     /// `willikins_providers_github::tools::GitHubRepoEnsure::observe`
-    /// already records for GitHub's own 404. Neither provider can do
-    /// better from a status alone.
+    /// says so outright. For Doppler the honest statement is the weaker
+    /// one: this status cannot *prove* absence, so nothing downstream
+    /// may treat it as proof.
     ///
     /// [`Observation::Foreign`] is nonetheless the wrong answer for the
     /// ambiguity: `willikins_core::plan` turns `Foreign` into
