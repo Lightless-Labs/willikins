@@ -325,6 +325,73 @@ expression: redacted
     }
   },
   {
+    "name": "BuildkiteOrg",
+    "secret": false,
+    "description": "A Buildkite organisation slug.",
+    "example": "willikins-test",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "BuildkiteOrg",
+      "description": "A Buildkite organisation slug.",
+      "type": "string",
+      "examples": [
+        "willikins-test"
+      ],
+      "maxLength": 100,
+      "pattern": "^(?:[a-z0-9]+(?:-[a-z0-9]+)*)$"
+    }
+  },
+  {
+    "name": "BuildkitePipelineSlug",
+    "secret": false,
+    "description": "A Buildkite pipeline slug.",
+    "example": "third-thoughts",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "BuildkitePipelineSlug",
+      "description": "A Buildkite pipeline slug.",
+      "type": "string",
+      "examples": [
+        "third-thoughts"
+      ],
+      "maxLength": 100,
+      "pattern": "^(?:[a-z0-9][a-z0-9-]*)$"
+    }
+  },
+  {
+    "name": "BuildkiteClusterId",
+    "secret": false,
+    "description": "A Buildkite cluster's UUID.",
+    "example": "018e5a22-d14c-7085-bb28-db0f83f43a1c",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "BuildkiteClusterId",
+      "description": "A Buildkite cluster's UUID.",
+      "type": "string",
+      "examples": [
+        "018e5a22-d14c-7085-bb28-db0f83f43a1c"
+      ],
+      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+    }
+  },
+  {
+    "name": "BuildkiteClusterName",
+    "secret": false,
+    "description": "A human-written Buildkite cluster name, such as `Default cluster`.",
+    "example": "Default cluster",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "BuildkiteClusterName",
+      "description": "A human-written Buildkite cluster name, such as `Default cluster`.",
+      "type": "string",
+      "examples": [
+        "Default cluster"
+      ],
+      "maxLength": 255,
+      "minLength": 1
+    }
+  },
+  {
     "name": "WorkflowName",
     "secret": false,
     "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",

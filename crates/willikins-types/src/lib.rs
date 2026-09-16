@@ -8,8 +8,9 @@
 //! See `docs/plans/2026-09-11-willikins-design.md` for the invariants.
 //!
 //! Derived provider names come from [`naming::v1`]: `github_repo`,
-//! `doppler_project`, and `doppler_root_config`. These are pure, total,
-//! and frozen — see [`NamingScheme`] for the freeze rule.
+//! `doppler_project`, `doppler_root_config`, and `buildkite_pipeline_slug`.
+//! These are pure, total, and frozen — see [`NamingScheme`] for the
+//! freeze rule.
 
 extern crate self as willikins_types;
 
@@ -138,6 +139,7 @@ impl TypeInfo {
 
 pub use willikins_derive::DomainType;
 
+pub mod buildkite;
 pub mod description;
 pub mod doppler;
 pub mod github;
@@ -151,6 +153,9 @@ pub mod text;
 pub mod word;
 pub mod workflow_name;
 
+pub use buildkite::{
+    BuildkiteClusterId, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug,
+};
 pub use description::Description;
 pub use doppler::{
     DopplerConfig, DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken,
@@ -190,6 +195,10 @@ registry::domain_types! {
     SecretName,
     DopplerServiceToken,
     DopplerSecretValue,
+    BuildkiteOrg,
+    BuildkitePipelineSlug,
+    BuildkiteClusterId,
+    BuildkiteClusterName,
     WorkflowName,
     Description,
 }
