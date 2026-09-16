@@ -977,6 +977,34 @@ Recorded here so they are not lost; nothing in this milestone depends on them.
   Buildkite provider whose first tool creates the pipeline for the new repository (the
   operator confirmed on 2026-09-14 that workflows must be able to provision it), and
   decides whether provisioning grants the CI service account access to the new project.
+- **CI credential topology (operator question, 2026-09-16), still open and worth settling before
+  the Buildkite provider is designed.** Milestone 2's fixture mints a Doppler *service token*
+  per project: `POST /v3/configs/config/tokens` yields a `dp.st.` token that is, in Doppler's
+  own words, "read or read/write access to secrets within a specific config", so it is
+  config-scoped by construction and there is one per project per config. The operator proposes
+  the alternative: two *service accounts* instead (`dp.sa.`, "access to a granular set of
+  resources within your workplace"), one reaching a `prd_ci` config and one a `prd_deploy`
+  config across every project, so Buildkite holds exactly two secrets,
+  `DOPPLER_CI_TOKEN` and `DOPPLER_DEPLOYMENT_TOKEN`, for the life of the organization. The
+  trade is blast radius against operational cost: a per-project token leaks one project and
+  needs N rotations and N CI secrets; a shared service account leaks every project's CI config
+  at once and needs two. The middle shape, and the recommendation if Doppler supports it, is
+  two service accounts whose grants are added *per project at provisioning time* rather than
+  granted by wildcard, so an unprovisioned project is unreachable and the grant list is an
+  audit record of which projects CI can read.
+  **The fact that decides it has not been fetched:** whether a Service Account's permission set
+  can name a config across all projects, or whether every grant is per-project. The research
+  note establishes only that a Service Account's permissions come "either from an existing role
+  identifier or an explicit permissions array, never both"
+  (`docs/research/2026-09-12-m2-dependencies.md`, section 3). Fetch the service-account
+  permissions schema verbatim before designing the tool, per this project's own rule.
+  **What it changes in willikins:** under the operator's shape the provisioning workflow stops
+  minting a token and stops pushing a secret into CI. It grants an existing service account
+  access to the new project's config instead, which needs a new tool
+  (`doppler.service_account.grant.ensure`, shape unknown until the schema is read) and drops
+  both `doppler.service_token.ensure` and the `ci_secret` step from the positive fixture. Like
+  the base-config layout, this is workflow content and organization-specific: willikins supports
+  both shapes and recommends one, never mandates it.
 - Several GitHub organizations, several Doppler workplaces (operator, 2026-09-15, while
   preparing Doppler's Railway integration: "We'll have multiple GitHub Tokens, because I
   have multiple GitHub orgs"). This milestone's out-of-scope line "one server serves one
