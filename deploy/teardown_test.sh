@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Bats-free test for deploy/teardown.sh: stubs `willikins` and `curl` on
 # PATH, so no real network call, real repository, or real Doppler
-# project is ever touched. Every scenario below is a case this script
+# project is ever touched. The stub `curl` records every call's argv,
+# its stdin and the `WILLIKINS_*` variables it started with, so a
+# scenario can assert where a token did and did not travel. Every scenario below is a case this script
 # must get right or exit non-zero -- run by the workspace gate through
 # crates/willikins-cli/tests/teardown_script.rs, which only spawns this
 # file and checks its exit code.
@@ -483,18 +485,20 @@ scenario8() {
   rm -rf "$dir"
 }
 
-# A `curl` stub whose GET half behaves normally for both providers, but
-# whose DELETE half fails the way `--fail` makes curl fail a 4xx or a
-# 5xx (non-zero exit, nothing useful on stdout) for exactly one
-# provider's URL, named by `$1`'s caller through `FAIL_DELETE_HOST`.
-# Used by scenario 9 and scenario 10 to prove a failing delete from
-# either provider, on its own, is a refusal and never a silent "done".
-write_stub_curl_one_delete_fails() {
-  local dir="$1" fail_host="$2"
+# A `curl` stub that answers both providers normally except for exactly
+# one call, named by its method and its host. That one call fails the
+# way real curl fails: `22` is what `--fail` turns a 4xx or a 5xx into
+# (nothing useful on stdout), `7` is curl dying without an HTTP status
+# at all. Scenarios 9 to 12 use it to prove that a failed call to either
+# provider, read or delete, is a refusal and never a silent "done".
+write_stub_curl_one_call_fails() {
+  local dir="$1" fail_method="$2" fail_host="$3" fail_code="${4:-22}"
   cat > "$dir/bin/curl" <<STUB
 #!/usr/bin/env bash
 set -uo pipefail
+fail_method="$fail_method"
 fail_host="$fail_host"
+fail_code="$fail_code"
 STUB
   cat >> "$dir/bin/curl" <<'STUB'
 method="GET"
@@ -521,9 +525,9 @@ env_seen="$(env | grep -E '^WILLIKINS_' | tr '\n' ' ' || true)"
   echo "CURL_STDIN=[$stdin_content]"
   echo "CURL_ENV=[$env_seen]"
 } >> "$STUB_LOG"
-if [ "$method" = "DELETE" ] && [[ "$url" == *"$fail_host"* ]]; then
-  echo "curl: (22) The requested URL returned error: 403" >&2
-  exit 22
+if [ "$method" = "$fail_method" ] && [[ "$url" == *"$fail_host"* ]]; then
+  echo "curl: ($fail_code) the $fail_method to $url failed" >&2
+  exit "$fail_code"
 fi
 case "$url" in
   *api.github.com/repos/*)
@@ -561,7 +565,7 @@ scenario9() {
   write_stub_willikins "$dir"
   write_github_get_response "$dir" '["managed-by-willikins"]'
   write_doppler_get_response "$dir" "managed-by: willikins"
-  write_stub_curl_one_delete_fails "$dir" "api.github.com"
+  write_stub_curl_one_call_fails "$dir" DELETE "api.github.com" 22
   touch "$dir/calls.log"
 
   local output status
@@ -586,7 +590,7 @@ scenario10() {
   write_stub_willikins "$dir"
   write_github_get_response "$dir" '["managed-by-willikins"]'
   write_doppler_get_response "$dir" "managed-by: willikins"
-  write_stub_curl_one_delete_fails "$dir" "api.doppler.com"
+  write_stub_curl_one_call_fails "$dir" DELETE "api.doppler.com" 22
   touch "$dir/calls.log"
 
   local output status
@@ -658,6 +662,67 @@ scenario12() {
   assert_missing_token_refuses WILLIKINS_DOPPLER_TOKEN scenario12
 }
 
+# =======================================================================
+# Scenario 13: the GitHub *ownership read* fails -- a 404 (the
+# repository is gone, or the PAT cannot see it), a 401, a 403, a 5xx:
+# `--fail` turns all of them into a non-zero exit with no document. The
+# script must refuse by name, reach Doppler not at all, and delete
+# nothing. An unreadable marker is not an absent marker, and neither is
+# a licence to delete.
+# =======================================================================
+scenario13() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl_one_call_fails "$dir" GET "api.github.com" 22
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+
+  [ "$status" -ne 0 ] || fail "scenario13: a failing GitHub ownership read must not exit 0"
+  echo "$output" | grep -q "could not read repository" \
+    || fail "scenario13: refusal should say the repository could not be read; output: $output"
+  if grep -q "CURL_CALL.*api.doppler.com" "$dir/calls.log"; then
+    fail "scenario13: must never reach Doppler once the GitHub read has failed"
+  fi
+  if grep -q "CURL_CALL method=DELETE" "$dir/calls.log"; then
+    fail "scenario13: must delete nothing when the ownership read failed"
+  fi
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 14: the Doppler ownership read fails, this time the way curl
+# fails when the call never got an HTTP answer at all (exit 7). Same
+# rule: refuse by name, delete nothing -- including the GitHub
+# repository, whose own marker did check out.
+# =======================================================================
+scenario14() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl_one_call_fails "$dir" GET "api.doppler.com" 7
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+
+  [ "$status" -ne 0 ] || fail "scenario14: a failing Doppler ownership read must not exit 0"
+  echo "$output" | grep -q "could not read Doppler project" \
+    || fail "scenario14: refusal should say the project could not be read; output: $output"
+  if grep -q "CURL_CALL method=DELETE" "$dir/calls.log"; then
+    fail "scenario14: must delete nothing when the ownership read failed"
+  fi
+  rm -rf "$dir"
+}
+
 scenario1
 scenario2
 scenario3
@@ -670,6 +735,8 @@ scenario9
 scenario10
 scenario11
 scenario12
+scenario13
+scenario14
 
 if [ "$failures" -eq 0 ]; then
   echo "teardown_test.sh: all scenarios passed"
