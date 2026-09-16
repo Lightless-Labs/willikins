@@ -1015,8 +1015,18 @@ Recorded here so they are not lost; nothing in this milestone depends on them.
   positive fixture. The two service accounts and their tokens are created once by the operator,
   never by willikins: minting a workplace-level credential is not something a provisioning run
   should be able to do. Like
-  the base-config layout, this is workflow content and organization-specific: willikins supports
-  both shapes and recommends one, never mandates it.
+  the base-config layout, this is workflow content and organization-specific, which is the design
+  doc's "policy lives in the workflow, never in the tool". So milestone 3's question is not which
+  of the shapes willikins should implement — it implements none of them — but whether its Doppler
+  primitives are **sufficient to express all of them**, and that is a short list: minting a
+  config-scoped token (`doppler.service_token.ensure`, exists), granting a service account to a
+  project by role and environments (`doppler.project_member.ensure`, new), **creating an
+  environment** (new: today only configs are created, and a process that makes `ci` and `deploy`
+  environments rather than configs cannot be written without it), **creating a branch config**
+  (the `<env>_<name>` naming rule is settled, the tool is not), and the two inheritance tools
+  recorded above. A process that wants CI and deploy as environments, one that wants them as
+  configs under `prd`, and one that wants a token per project are then three documents over the
+  same primitives, and which of them is right is not the tool's business.
 - Several GitHub organizations, several Doppler workplaces (operator, 2026-09-15, while
   preparing Doppler's Railway integration: "We'll have multiple GitHub Tokens, because I
   have multiple GitHub orgs"). This milestone's out-of-scope line "one server serves one
