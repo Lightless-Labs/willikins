@@ -511,8 +511,13 @@ impl Butler {
         }
         let resolved = description.resolved;
 
-        let planned = willikins_core::plan(&checked, &resolved, &self.catalog)
-            .map_err(|error| ButlerError::Plan { error })?;
+        let planned =
+            willikins_core::plan(&checked, &resolved, &self.catalog).map_err(|error| {
+                ButlerError::Plan {
+                    error: Box::new(error),
+                    attempt: crate::error::PlanAttempt::Initial,
+                }
+            })?;
         let fingerprint = planned.fingerprint();
         let class = planned.class;
         let requires_approval = planned.requires_approval;
@@ -873,7 +878,10 @@ impl Butler {
                         error_kind: plan_error_kind(&error),
                     },
                 );
-                return Err(ButlerError::Plan { error });
+                return Err(ButlerError::Plan {
+                    error: Box::new(error),
+                    attempt: crate::error::PlanAttempt::RePlan,
+                });
             }
         };
         let fresh_fp = fresh.fingerprint();
