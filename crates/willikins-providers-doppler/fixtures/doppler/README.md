@@ -97,6 +97,20 @@ are deliberately left out because no tool reads them.
   ever listing tokens; the mock-server tests added alongside this fix
   (`service_token_ensure_mock.rs`, `service_token_rotate_mock.rs`) are what pin the 404 case now.
 
+  **What that 404 cannot settle**, recorded so it is not re-derived: Doppler documents no
+  error-body schema for any non-2xx response, so the status alone cannot separate "no such
+  project or config" from "one this Service Account is not granted" (its permission set is
+  granular within a workplace, and another workplace's projects are invisible to it outright).
+  That is the same conflation GitHub's own 404 already carries in `github.repo.ensure`.
+  `Observation::Foreign` would be the wrong reading of the ambiguity anyway — `plan` turns
+  `Foreign` into `NameTaken` and refuses everything, which is the defect again for the ordinary
+  case — and `Absent` reaches nothing a `200` did not already reach, since the ownership gate is
+  `doppler.project.ensure`'s `managed-by: willikins` marker upstream, never this tool. A parent
+  that really is unreachable fails one call later, at the mint `POST`. The tolerance is one
+  status wide on purpose: a `400` — this API's *other* answer for a project that is not there,
+  recorded under "Undocumented facts the cycle settled" below — still refuses the plan, because
+  whether this endpoint ever answers it was never observed.
+
 ## What the live responses carry that these fixtures do not
 
 Recorded 2026-09-14; left out because no tool reads them, and a fixture that models every field

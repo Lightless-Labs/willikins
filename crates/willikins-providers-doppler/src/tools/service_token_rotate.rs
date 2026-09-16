@@ -96,6 +96,21 @@ impl Tool for DopplerServiceTokenRotate {
         // to compute from the listing beyond "did the call fail for a
         // real reason" — a bad credential (401/403) or a 5xx still fails
         // here, pinned by `read_still_propagates_a_listing_failure`.
+        //
+        // The 404 carries the same ambiguity `is_listed`'s doc spells
+        // out — the status alone cannot separate "no parent yet" from
+        // "a parent this credential is not granted" — and the same
+        // one-status width (a `400`, Doppler's other answer for a
+        // project that is not there, still fails). Here it costs even less: the
+        // observation is `Absent` either way, so tolerating it changes
+        // only whether the plan is refused, never what the plan says this
+        // `Destructive` step will do. `read` still never reports
+        // `Present`, so this step can never plan as `Action::NoOp`
+        // (`read_always_reports_absent_even_when_a_token_is_listed`).
+        // `ensure`'s own listing call below stays strict, 404 included:
+        // a rotate that cannot list the tokens it is about to revoke must
+        // not mint a replacement
+        // (`ensure_still_fails_outright_on_a_listing_404`).
         match self
             .client
             .list_service_tokens(config.project(), config.name())

@@ -414,3 +414,56 @@ fn ensure_on_a_present_token_makes_no_call_but_the_listing_get() {
     post.assert();
     delete.assert();
 }
+
+/// Where the tolerance stops, part one. The 404 above answers "is a token
+/// listed", never "may this plan proceed": a parent still missing when
+/// `ensure` runs — ordering should have created it by then — fails at the
+/// mint `POST`, loudly and with Doppler's own status. That is what keeps
+/// the `read` arm from swallowing anything, and it is the same answer for
+/// the 404 that means "a project this credential is not granted", which
+/// the status alone cannot be told apart from "not created yet".
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_fails_when_the_parent_is_still_missing_at_apply() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(404)
+        .with_body(fixture("service_tokens_list_project_missing").to_string())
+        .create();
+    let create = provider
+        .mock("POST", CREATE_PATH)
+        .with_status(404)
+        .with_body(fixture("service_tokens_list_project_missing").to_string())
+        .expect(1)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerServiceTokenEnsure::new(client);
+    let token = SinkToken::new();
+    let err = tool.ensure(&inputs(), &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::NotFound);
+    create.assert();
+}
+
+/// Where the tolerance stops, part two: it is exactly one status wide.
+/// Doppler also answers `400` for a project that is not there — the live
+/// write cycle saw one just-deleted project answer `400` and the other
+/// `404` in the same run (`fixtures/doppler/README.md`) — and whether
+/// this endpoint ever does was never observed, so a `400` still refuses the
+/// plan instead of being guessed at. Widening that is a deliberate act
+/// with this test to change first.
+#[test]
+fn read_still_propagates_a_400_from_the_listing() {
+    let mut provider = MockProvider::start();
+    let list = provider
+        .mock("GET", LIST_PATH)
+        .with_status(400)
+        .with_body(fixture("service_tokens_list_project_missing").to_string())
+        .expect(1)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerServiceTokenEnsure::new(client);
+    let err = tool.read(&inputs()).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    list.assert();
+}
