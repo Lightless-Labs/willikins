@@ -14,7 +14,7 @@ Milestone 1 is complete. Willikins parses a YAML workflow into a typed graph. Wi
 does a static check of the graph, describes it to an agent, and makes a plan against fake
 providers. The CLI has the same commands as the milestone 2 MCP tools.
 
-Milestone 2 is not complete. These parts are done:
+Milestone 2 is complete. These parts are done:
 
 - The apply executor. The executor asks a human to approve a plan, and it refuses a plan
   that shows drift.
@@ -31,10 +31,10 @@ Milestone 2 is not complete. These parts are done:
   settings are in code and applied.
 - Adversarial pass 2, over the HTTP surface, against the real binary. It found and fixed
   2 availability defects and 3 wrong words in the journal.
+- The live smoke run. Willikins created a repository and a Doppler project in sandbox
+  accounts, converged them, rotated a token after approval, and removed both.
 
-This part is not done:
-
-- The live smoke run with sandbox credentials.
+Milestone 2 is complete.
 
 Milestone 1 had 2 adversarial passes. Milestone 2 had 2 adversarial passes. No pass found a path
 for a secret byte to reach an output.

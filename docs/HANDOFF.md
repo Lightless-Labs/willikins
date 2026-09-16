@@ -7,14 +7,39 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-16) — tasks 0 through 13 (verified) and task 14 part A landed, the teardown was re-authenticated onto the sandbox PAT, and the live smoke run (part B) is running; then the plan is marked Completed. Milestone 2c's plan is written, reviewed and carries the operator's three decisions
+### RESUME HERE (2026-09-16) — **milestone 2 is complete**: the live smoke run passed end to end and `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md` carries `Completed: 2026-09-16`. Next: land the token-literal change and two guard tests, then milestone 2c's task 1 once the operator names a provider
 
 - **Live state:** `main` at 348 commits, gates green at `1bc23f5` (1,704 tests; the ignored ones
   are by-hand measurements, a lock-probe child, two slow connection-holding attacks, a
   fixture generator, the two live probes and the two live write cycles). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
   `main` is pushed after every coordinator commit.
-- **What just happened (2026-09-16, later in the night):** milestone 2c's plan exists and is
+- **What just happened (2026-09-16, morning):** task 14 part B, the live smoke run, **passed**,
+  and milestone 2 is complete. Thirty seconds against the sandbox accounts: `repo`, `doppler`,
+  `token` and `ci_secret` `Created` with the three root configs `Unchanged`, a second apply
+  `Unchanged` throughout with `ci_secret` `Converged` and the token output `Unknown`, the
+  rotation refused without approval and applied with it, `deploy/teardown.sh` dry-run then
+  `--yes`, and both accounts empty afterwards (the test's own check plus two independent
+  reads). Three run ids, one journal, no credential in any output. The first attempt that day
+  failed in four seconds during the *initial* plan, creating nothing: `doppler.service_token.ensure`'s
+  read propagated Doppler's `404` for a project the plan had not created yet. Fixed and
+  verified in Workflow `wf_8c292047-d33` before the re-run (both token reads tolerate that one
+  status, `rotate`'s ensure stays strict, a `400` still refuses, and `ButlerError::Plan` now
+  says "planning failed" rather than "re-planning failed" for a first plan). The lesson is in
+  the plan's addendum: the live write cycle created its project before listing tokens and the
+  fake answered `Absent`, so `smoke_parity.rs` — both of whose sides are the fake — agreed with
+  itself and every offline gate was green.
+- **Credential boundary, set by the operator the same morning, and standing:** their own `gh`
+  CLI credential is never used for a write against their accounts and never asked to carry a
+  wider scope ("That one is out of the question"; "I already provided a pat, scoped to the test
+  org. On purpose. So a mistake could *not* wreck anything. I *never* allowed using my github
+  cli set up to create or delete repositories."). The teardown authenticates as
+  `WILLIKINS_GITHUB_TOKEN`; no `gh` invocation remains in any file this workspace runs. The
+  coordinator's secret-scanning push-protection bypass is retired for the same reason: the
+  synthetic provider-shaped literals in fixtures are what trip the scanner, so they are built
+  at runtime from parts instead, and two guard tests (no `gh`, no token-shaped literal) make
+  both rules gate-enforced rather than remembered. **Outstanding work, the next thing to land.**
+- **Earlier (2026-09-16, the night):** milestone 2c's plan exists and is
   reviewed. Workflow `wf_cfe76f52-8cc` (six opus readers, a synthesizer, a drafter) wrote
   `docs/research/2026-09-16-m2c-authorization.md` (1,391 lines, every fact quoted from a source
   fetched 2026-09-16, a twenty-item verify list, a six-provider facts table) and drafted
@@ -137,22 +162,24 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
   2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
   test workplace (the earlier `dp.st.` config-scoped token could only read one config).
-- **Next action:** task 14 part B, the live smoke run, which now needs nothing from the
-  operator. One opus agent, one command, the sandbox file sourced in the same command and
-  never printed:
-  `source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_TESTS=1 RUST_TEST_THREADS=2 cargo
-  test -p willikins-cli --features live-tests --test live_smoke -j 2 -- --ignored --nocapture`.
-  It creates `Willikins-Test/willikins-smoke` and the Doppler project `willikins-smoke`,
-  applies twice, rotates after approval, tears down through `deploy/teardown.sh` and checks
-  for leftovers; on any failure it prints `teardown: run <id> --journal <path>` for a by-hand
-  teardown, which the agent must run before returning. Then the coordinator confirms the
-  leftover check independently (`gh api repos/Willikins-Test/willikins-smoke` is 404), records
-  the run in the plan (addendum, `**Completed:** 2026-09-16`), closes
-  `todos/2026-09-12-milestone-2-plan.md`, updates the README's last "not done" line, and
-  writes milestone 2c's plan (OAuth 2.1 on the MCP transport, browser login on the approvals
-  page, identity provider still open) taking the exposure items pass 2 handed over
-  (header-read bound, IPv6-aware origin check, log level, the permit in the blocking
-  closure), with its own document-review pass. **Update:** the 2c plan is written and
+- **Next action:** two things, in this order. (1) Land the credential-boundary work described
+  above: replace the twelve provider-shaped literals (eleven Doppler, one GitHub, across eight
+  files including `crates/willikins-types/src/doppler.rs`, `crates/willikins-cli/src/render.rs`
+  and `crates/willikins-providers-fake/src/tools/fake_secret_list.rs`) with values built at
+  runtime so the runtime value still satisfies `CREDENTIAL_PATTERN` while no literal in the tree
+  matches a provider's detector, and add the two guard tests (the `gh` one is drafted at
+  `<session scratchpad>/no_gh_writes_guard.rs`), with the invariants written into CLAUDE.md.
+  (2) Milestone 2c, whose plan is written and reviewed
+  (`docs/plans/2026-09-16-milestone-2c-authorization.md`): task 1 starts once the operator
+  answers its one open decision — accept self-hosted Logto, or name another self-hostable
+  provider. The plan's own shape, the operator's three decisions and the pass-2 exposure
+  hand-overs are in that plan; milestone 2c then gets its own tracking todo. Railway follow-ups
+  for the operator remain: connect Doppler's Railway integration and remove
+  `WILLIKINS_FAKE_CATALOG` when the service should go live. Everything else about how work runs
+  is unchanged: one sequential Workflow at a time on `main`, sonnet implementing test-first and
+  opus verifying, every `CONTEXT` naming the four gates exactly as CLAUDE.md spells them
+  (`-j 2`, `RUST_TEST_THREADS=2`). The old next-action text followed; it is superseded by this
+  one. closure), with its own document-review pass. **Update:** the 2c plan is written and
   reviewed (see "What just happened"); after part B lands, the coordinator puts the two open
   decisions to the operator (provider, host), one question at a time, and starts 2c's task 1
   only with the milestone 2 plan marked Completed. Railway follow-ups for the operator: connect Doppler's Railway
