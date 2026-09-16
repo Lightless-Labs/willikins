@@ -41,11 +41,14 @@ Read `docs/plans/2026-09-11-willikins-design.md` before changing anything in `cr
   a narrowly scoped `#[allow(clippy::disallowed_methods)]`. `Tool::read` never receives one.
 - The type registry refuses secret types for any literal or input, regardless of element count.
 - Workflow documents and templates are privileged content: run only from a trusted ref.
-- No provider-token-shaped literal anywhere in the tree (`dp.sa./pt./st./ct.` or
-  `ghp_`/`github_pat_` followed by a long alphanumeric run, source or docs alike): assemble it
-  from parts (`concat!("dp.st.", "...")`) instead. `secret_literal_guard.rs` enforces it — the
-  fix for a literal that trips push protection is to stop writing it, never to bypass the
-  scanner with the operator's own credential.
+- No provider-token-shaped literal anywhere in the tree, source or docs alike: any of Doppler's
+  six kinds (`dp.sa./pt./ct./st./scim./audit.`) or GitHub's six prefixes
+  (`ghp_`/`github_pat_`/`gho_`/`ghu_`/`ghs_`/`ghr_`) followed by a long run. Assemble it from
+  parts (`concat!("dp.st.", "...")`) instead. The lists are the *detector's*, taken from
+  GitHub's published pattern tables, not willikins' own `CREDENTIAL_PATTERN`s — a shape this
+  workspace never authenticates as still blocks a push. `secret_literal_guard.rs` enforces it;
+  the fix for a blocked push is to stop writing the literal, never to bypass the scanner with
+  the operator's own credential.
 - No file this workspace runs invokes the operator's own `gh` CLI. Every provider call
   authenticates as a credential the project holds instead (e.g. `WILLIKINS_GITHUB_TOKEN`
   through `curl`). `no_gh_writes_guard.rs` enforces it — the operator's `gh` credential can

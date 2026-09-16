@@ -1178,7 +1178,18 @@ entirely.
 
 **6.34** (sources: https://raw.githubusercontent.com/github/docs/main/content/authentication/keeping-your-account-and-data-secure/about-authentication-to-github.md and .../authorizing-oauth-apps.md, 2026-09-16)
 - "| OAuth access token | `gho_` | [AUTOTITLE](/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps) |"
-- "access_token=gho_16C7e42F292c6912E7710c838347Ae178B4a\n&scope=repo%2Cgist\n&token_type=bearer"
+- "access_token=gho_16C7e42F292c…178B4a (masked) \n&scope=repo%2Cgist\n&token_type=bearer"
+
+**2026-09-16 note:** the worked `gho_` token above is quoted from GitHub's own OAuth
+documentation with its random run elided by an ellipsis — a deliberate departure from this
+document's "fetched verbatim" rule, the same one `docs/research/2026-09-12-m2-dependencies.md`
+took for Doppler's three worked examples. GitHub's published secret-scanning pattern list marks
+every one of its six token prefixes (`ghp_`, `github_pat_`, `gho_`, `ghu_`, `ghs_`, `ghr_`)
+push-protected, so the unmasked value is exactly what a scanner looks for, and this file is
+prose: it cannot `concat!`-split a literal apart the way the Rust siblings of such examples do.
+Whether GitHub's own detector would clear this particular string on a checksum is not known and
+is not the test — the rule this repository enforces (`crates/willikins-core/tests/secret_literal_guard.rs`)
+is about shape, because a push blocked on shape is not something to clear with a bypass.
 
 **6.35** No quotable sentence was fetched stating GitHub's hosting model or that registering an
 OAuth app is free; see section 7.
