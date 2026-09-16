@@ -58,15 +58,39 @@ impl DopplerServiceTokenEnsure {
     }
 
     /// Whether a token by `name` is already listed for `config`.
+    ///
+    /// **2026-09-16 defect, fixed here.** Doppler 404s the token-list
+    /// endpoint when the `project` or `config` it was asked about does
+    /// not exist yet — which, at plan time, is exactly the state before
+    /// this workflow's own `doppler.project.ensure` and
+    /// `doppler.config.ensure` nodes have run (the first live smoke run
+    /// found this: planning the positive fixture against a fresh Doppler
+    /// account failed outright at this node). "No parent yet" answers
+    /// "is a token named `name` already listed?" the same way "an empty
+    /// list" does, so a 404 here reads as `false`, exactly the way
+    /// `doppler.config.ensure::observe` already reads a 404 as `Absent`
+    /// two tools over — see `fixtures/doppler/README.md` for the full
+    /// note and the recorded fixture. `ensure` shares this method with
+    /// `read`, so the same tolerance applies to both; that is safe
+    /// because a project or config still missing by *apply* time
+    /// (ordering should already have created both) makes `ensure` fall
+    /// through to the mint `POST` below, which then fails for real
+    /// against the still-missing parent — nothing is silently swallowed,
+    /// only the question this method answers changes from "does Doppler
+    /// error" to "is a token already there".
     fn is_listed(
         &self,
         config: &DopplerConfig,
         name: &DopplerTokenName,
     ) -> Result<bool, ToolError> {
-        let listed = self
+        match self
             .client
-            .list_service_tokens(config.project(), config.name())?;
-        Ok(listed.iter().any(|entry| entry.name == name.as_str()))
+            .list_service_tokens(config.project(), config.name())
+        {
+            Ok(listed) => Ok(listed.iter().any(|entry| entry.name == name.as_str())),
+            Err(err) if err.status == Some(404) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 }
 

@@ -48,6 +48,7 @@ are deliberately left out because no tool reads them.
 | `service_token_delete.json` | `DELETE /v3/configs/config/tokens/token` | **not recordable**: `Http::delete_with_body` collapses every 2xx into `Ok(())` and keeps no body. The rotation succeeded live, so the endpoint and its request body are confirmed; only the response shape is not |
 | `error_404.json` | any `GET` (404) | **partly confirmed** live 2026-09-14: a real 404 carried a `messages` array, which the shared client labelled `provider says:`. The body itself is never recordable — `ProviderError` drops it at construction (trust boundary 5) — so the `success: false` half stays unconfirmed |
 | `error_5xx.json` | any request (5xx) | same caveat as `error_404.json` |
+| `service_tokens_list_project_missing.json` | `GET /v3/configs/config/tokens` (404, project does not exist yet) | **confirmed live 2026-09-16** by the first live smoke run (`docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s task 14 record): planning the positive fixture against a fresh Doppler account failed at node `token` with exactly this message, because at plan time `doppler.project.ensure` had not yet run. Same `success: false` caveat as `error_404.json`; the message names `willikins-smoke` (the smoke run's project) while the mock tests below reuse `third-thoughts` as the project in their `LIST_PATH` — harmless, since the tool never reads the body's text, only the status code. Used by `service_token_ensure_mock.rs` and `service_token_rotate_mock.rs` to pin that a token `read` now tolerates a missing parent project or config instead of failing the whole plan |
 
 ## What the live run changed
 
@@ -73,6 +74,28 @@ are deliberately left out because no tool reads them.
   `access`, `last_seen_at`, and **`token_preview`** (`"dp.st…"` plus six real characters of the
   token). Nothing in the authored material named that field, so nothing redacted it.
   `token_preview` is now in `tests/common/mod.rs`'s `REDACTED_FIELD_NAMES`, beside `key`.
+
+- **`doppler.service_token.ensure` and `.rotate` failed to plan against a project that does not
+  exist yet.** Found 2026-09-16 by the first live smoke run (four seconds, nothing created):
+  planning the positive fixture against a fresh Doppler account failed at node `token` with
+  `{"kind":"NotFound","message":"provider says: Could not find requested project
+  'willikins-smoke'"}`, because Doppler's token-list endpoint 404s when its `project` or
+  `config` query parameter names something that does not exist, and both tools' `read`
+  propagated that 404 as a hard `ToolError` instead of reading it as "no token is listed" — the
+  same 404 `doppler.config.ensure` already maps to `Observation::Absent` two tools over. At plan
+  time, before `doppler.project.ensure` and `doppler.config.ensure` have run, the parent
+  genuinely does not exist yet; that is not a reason to fail, it is the reason a plan exists.
+  Fixed by treating a 404 from the token list the same way as an empty list: in
+  `doppler.service_token.ensure`, `is_listed` (shared by `read` and `ensure`, so `ensure` also
+  tolerates it before falling through to the mint); in `doppler.service_token.rotate`, only
+  `read` (its `ensure` still fails outright on a listing 404, since a rotate that cannot list
+  the tokens it is about to revoke must not mint a replacement either). Either way, a project or
+  config still missing by *apply* time (ordering should already have created it) still fails for
+  real, at the mint call that actually needs it to exist — nothing is silently swallowed.
+  `service_tokens_list_project_missing.json` records the exact body the live run saw.
+  No live tool's *live-write-cycle* test caught this, because it creates the project before
+  ever listing tokens; the mock-server tests added alongside this fix
+  (`service_token_ensure_mock.rs`, `service_token_rotate_mock.rs`) are what pin the 404 case now.
 
 ## What the live responses carry that these fixtures do not
 
