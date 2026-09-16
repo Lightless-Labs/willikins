@@ -1,7 +1,7 @@
 ---
 title: "Milestone 2: real providers, apply, ledger, MCP server (tracking todo)"
 created: 2026-09-12
-status: open
+status: done
 priority: high
 area: planning
 related:
@@ -68,8 +68,16 @@ part B waits on nothing.
 `docs/research/2026-09-16-m2c-authorization.md`); its two open decisions (identity provider, public
 host) are the operator's.
 
-**Next:** 14 part B (the live run in one command, teardown, leftover check, plan Completed). This
-todo closes when the plan is marked Completed; milestone 2c then gets its own tracking todo.
+2026-09-16: **task 14 part B passed and the milestone is complete.** The live smoke run created a
+repository and a Doppler project in the sandbox accounts, converged both on a second apply, refused
+the rotation without approval and applied it with, tore down through `deploy/teardown.sh`, and left
+both accounts empty (checked three ways). It first found a live-only defect — `doppler.service_token.ensure`
+could not plan against a project the same plan would create — which was fixed and verified before the
+re-run. The plan carries `**Completed:** 2026-09-16`.
+
+**Closed.** Milestone 2c is next and has its own plan
+(`docs/plans/2026-09-16-milestone-2c-authorization.md`, reviewed); it gets its own tracking todo when
+its first task starts.
 
 ## First action of the next session
 
