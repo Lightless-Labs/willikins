@@ -481,6 +481,55 @@ fn step_1_absent(raw: &Http, projects: &[&DopplerProject]) {
     println!("step 1 (both fixed project names are 404): pass");
 }
 
+/// Step 2b: the 2026-09-16 smoke-run defect, live. Both token tools
+/// `read` a token in a config of the project step 1 has just proved does
+/// not exist, and both must answer `Absent` rather than failing. That is
+/// the whole of what the fix changed, and no other step here meets it:
+/// step 3 creates the project before anything ever lists a token, which
+/// is exactly why this cycle was green while the live smoke run died four
+/// seconds in.
+///
+/// Numbered `2b` beside the guard rather than inserted as a new step, so
+/// the steps this file's own docs and sweep accounting name keep their
+/// numbers (the same reason steps `5a`/`5b` and `9a`/`9b`/`9c` are
+/// lettered).
+///
+/// **Not yet run live** (added 2026-09-16, after the smoke run, in a
+/// session with no credentials). It depends on the status that run itself
+/// observed — `404`, "Could not find requested project" — recorded as
+/// `fixtures/doppler/service_tokens_list_project_missing.json`. If Doppler
+/// answers something else here, a `400` most plausibly (it answers that
+/// for a project deleted moments earlier; see step 10), this step fails,
+/// and that failure is the finding:
+/// `DopplerServiceTokenEnsure::is_listed`'s tolerance is one status wide
+/// on purpose.
+fn step_2b_token_read_before_the_project_exists(cycle: &mut Cycle) {
+    let config = derived_config(&cycle.project, "dev");
+    let inputs = cycle.token_inputs(&config);
+
+    let observation = cycle
+        .token_tool
+        .read(&inputs)
+        .expect("step 2b: doppler.service_token.ensure must read, not fail, with no parent");
+    cycle.record_observation("step 2b ensure read (no parent yet)", &observation);
+    assert!(
+        matches!(observation, Observation::Absent { .. }),
+        "step 2b: doppler.service_token.ensure must read Absent before its project exists"
+    );
+
+    let rotation = cycle
+        .rotate_tool
+        .read(&inputs)
+        .expect("step 2b: doppler.service_token.rotate must read, not fail, with no parent");
+    cycle.record_observation("step 2b rotate read (no parent yet)", &rotation);
+    assert!(
+        matches!(rotation, Observation::Absent { .. }),
+        "step 2b: doppler.service_token.rotate must read Absent before its project exists"
+    );
+
+    cycle.say("step 2b (both token reads are Absent before the project exists): pass");
+}
+
 /// Step 3: `read` is `Absent`, `ensure` creates the project with the
 /// ownership marker and reports `changed: true`, a raw `GET` shows the
 /// description, `read` is now `Present`, and a second `ensure` is
@@ -1312,6 +1361,7 @@ fn doppler_live_write_cycle() {
         observations: Vec::new(),
     };
 
+    step_2b_token_read_before_the_project_exists(&mut cycle);
     step_3_project(&mut cycle);
     step_4_foreign(&mut cycle);
     step_5a_default_configs(&mut cycle);
