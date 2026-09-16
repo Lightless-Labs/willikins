@@ -334,8 +334,10 @@ These came up from memory during the conversation and have not been checked.
    it is what unblocks a public domain for the service, so it runs before 2b and 3. Plan:
    `docs/plans/2026-09-16-milestone-2c-authorization.md` (drafted from
    `docs/research/2026-09-16-m2c-authorization.md` and reviewed 2026-09-16; implementation
-   starts only after milestone 2 is marked Completed); the identity provider and the public
-   host are its two open decisions, both the operator's.
+   starts only after milestone 2 is marked Completed); the operator decided on 2026-09-16 that the identity
+   provider must be self-hostable open source (an open-source tool may not require a SaaS
+   account) and that the public host is `willikins.bandeabonnot.com`; which self-hostable
+   provider is the one open decision, with self-hosted Logto recommended.
 3. Templates and versioned re-apply, the project record, recorded naming overrides, and the
    Buildkite provider (a pipeline per repository; moved here from milestone 4 on 2026-09-14
    at the operator's request).

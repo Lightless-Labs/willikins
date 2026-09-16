@@ -29,11 +29,18 @@ compaction, before handing off, after a milestone, and after a plan change or di
   OAuth required on every HTTP bind (stdio keeps the local principal), the static hashes and
   `hash-token` removed and refused at startup, an in-process fake authorization server for a
   deterministic adversarial pass 3, pass 2's four exposure hand-overs as tasks, a go-live
-  sequence, 17 tasks, 19 acceptance tests, 17 new variables. Two open decisions, both the
-  operator's: the identity provider (recommended default Logto, the only surveyed provider
-  honouring RFC 8707 `resource` and offering Client ID Metadata Documents; question:
-  self-hosted or Logto Cloud) and the public host (recommended: a custom domain the operator
-  owns; question: which hostname). Implementation starts only after the milestone 2 plan is
+  sequence, 17 tasks, 19 acceptance tests, 17 new variables. **Operator decisions the same night (plan addendum
+  2026-09-16):** the identity provider must be **self-hostable open source**, because an
+  open-source tool may not require a third-party SaaS account, which makes it decision 10's
+  first must-have and rules Auth0 out entirely; the public host is
+  **`willikins.bandeabonnot.com`**, so the audience is `https://willikins.bandeabonnot.com/mcp`
+  and the redirect URI `…/approvals/callback`; and no identifier is permanent, so decision 12
+  gained a migration path (`WILLIKINS_OAUTH_PREVIOUS_AUDIENCES`, accepted but never published,
+  with a startup warning while it is set) in place of the draft's "frozen forever" language. One
+  open decision remains, the operator's: which self-hostable provider, with self-hosted Logto
+  recommended as the only one of six passing all three must-haves. A willikins that issues its
+  own tokens, so a single-operator deployment needs no second service, is recorded as the
+  milestone 3 note that would finish the thought. Implementation starts only after the milestone 2 plan is
   Completed (task 14 part B).
 - **Earlier (2026-09-16, small hours):** task 14 part A (Workflow `wf_ba182dd5-636`,
   opus): both sandbox credentials probed alive (read-only; the Doppler project checks 404 by

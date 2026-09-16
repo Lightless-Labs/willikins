@@ -2,6 +2,13 @@
 
 **Created:** 2026-09-16
 **Reviewed:** 2026-09-16 (via document-review workflow: coherence, feasibility, security-lens, scope-guardian, adversarial; findings folded in below)
+**Addendum:** 2026-09-16 (operator) — three decisions the operator made on reading the review: the
+identity provider must be **self-hostable open source**, because willikins is an open-source tool
+and an open-source tool may not require a third-party SaaS account to run ("Willikins is *open
+source*, *first and foremost*. Since when do you make open source tools dependent on third-party
+SaaS?"); the public host is **`willikins.bandeabonnot.com`**; and no identifier is permanent ("But
+no, nothing is forever"), so the audience gets a documented migration path instead of a promise of
+permanence. Decisions 10, 12, 19 and the go-live sequence carry them.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (the 2026-09-15 addendum and milestone
 2c in the milestone list)
 **Previous:** `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`
@@ -141,8 +148,9 @@ list; the MCP profile is what makes the audience check a server-side MUST (resea
 3. Signature verifies against the JWKS key whose `kid` matches the header's (decision 16).
 4. `iss` matches `WILLIKINS_OAUTH_ISSUER` exactly, as a string.
 5. `aud` contains this server's resource identifier, `<WILLIKINS_PUBLIC_URL>/mcp` — derived, never
-   configured (decision 12). RFC 9068 says "contains", so an `aud` array carrying this resource
-   among others is accepted.
+   configured (decision 12) — or, while a migration is in progress, one of the identifiers listed
+   in `WILLIKINS_OAUTH_PREVIOUS_AUDIENCES`, which are accepted but never published. RFC 9068 says
+   "contains", so an `aud` array carrying an accepted resource among others is accepted.
 6. `exp` is in the future, within `WILLIKINS_OAUTH_LEEWAY_SECONDS` of clock skew (decision 17).
    `nbf`, when present, is validated too — `jsonwebtoken`'s `validate_nbf` defaults to false and
    is overridden.
@@ -488,7 +496,7 @@ callback rather than being buffered, because the token endpoint is a host willik
 JWT and not for an unbounded body. The refresh token and id token in the token response are
 **dropped unread** — willikins stores neither, and a session that cannot be silently refreshed is a
 session whose TTL means what it says. A provider
-that will not issue such a token for a browser login fails decision 10's first must-have, and the
+that will not issue such a token for a browser login fails decision 10's audience must-have, and the
 live test is where that shows.
 
 **PKCE is used even though this is a confidential client**, because draft-16 §4.1.1 makes
@@ -701,6 +709,7 @@ at all.
 | `alg: none`, and a symmetric `alg` signed with a guessed secret | 401, `invalid_token`, `AuthFailedReason::InvalidAlgorithm`; the symmetric case also fails startup validation if it is ever configured |
 | A key rotated out of the JWKS | 401, `invalid_token`, `AuthFailedReason::UnknownKey`, and at most one refetch |
 | A token minted for another resource (valid signature, valid issuer, other `aud`) | 401, `invalid_token`, `InvalidAudience` — the token-passthrough MUST, from the receiving side |
+| A token for a **previous** audience, with `WILLIKINS_OAUTH_PREVIOUS_AUDIENCES` listing it and then not listing it | **200** while listed, 401 `InvalidAudience` the moment it is not; and the PRM document and every challenge name only the current identifier in both cases (decision 12's migration path) |
 | A valid token whose `sub` is in neither allowlist, at `/mcp` | **403**, `AuthFailedReason::UnlistedSubject`, and no tool runs — asserted by the journal carrying no `ToolCalled` for it |
 | A token with no `sub` claim | 401, `invalid_token`, `AuthFailedReason::MissingSubject` |
 | An expired session cookie, and a session cookie replayed after `POST /approvals/logout` | **302 to `/approvals/login`** on a GET and **403** on a POST, in both cases, with the plan's nonce not burned |
@@ -789,15 +798,19 @@ Ordered, and the order matters: the resource identifier, the audience, the PRM d
 `resource` value and the registered `redirect_uri` all freeze the host the moment they are
 published (research §2.2, §3.3), so the host is chosen before any of them is written anywhere.
 
-1. **Choose the host.** A generated `*.up.railway.app` domain or a custom domain. Either way
-   the operator clicks Generate Domain or runs `railway domain`; a domain is not automatic
-   (research §5.3). A custom domain needs **both** a CNAME and a TXT ownership record — with
-   only the CNAME the domain answers 404 even after DNS resolves — and Railway issues the
-   certificate itself, giving up after 72 hours. **Recommendation: a custom domain**, because
-   the identifier it freezes is one the operator owns and can re-point if the deployment ever
-   moves off Railway, whereas a generated hostname freezes a vendor name into a value that the
-   RFC requires to be byte-identical forever after. That is a recommendation, not a decision;
-   it is in "Open decisions" below.
+1. **The host is `willikins.bandeabonnot.com`** (operator, 2026-09-16), a custom domain on a
+   name the operator owns rather than a generated `*.up.railway.app` one, so the identifier the
+   deployment publishes belongs to the operator and survives a move off Railway. Therefore:
+   `WILLIKINS_PUBLIC_URL=https://willikins.bandeabonnot.com`, the resource identifier and audience
+   are `https://willikins.bandeabonnot.com/mcp`, the PRM document is at
+   `https://willikins.bandeabonnot.com/.well-known/oauth-protected-resource/mcp`, and the
+   registered redirect URI is `https://willikins.bandeabonnot.com/approvals/callback`. A domain is
+   not automatic on Railway (research §5.3): the operator adds it in the dashboard or with the
+   CLI, and a custom domain needs **both** a CNAME and a TXT ownership record — with only the
+   CNAME it answers 404 even after DNS resolves — after which Railway issues the certificate
+   itself, giving up after 72 hours. These four values are what every later step and the
+   provider's client registration are configured against, and they are the only values in this
+   milestone that a change of host would move (decision 12 says how to move them).
 2. **Declare it.** `.railway/railway.ts` can declare a custom domain (`domains: ["…"]`, or
    `{ domain, port }`) and **cannot** declare a generated one — that is documented, and it is the
    primary source behind the file's own header comment (research §5.4). So: a custom domain goes
@@ -870,23 +883,49 @@ they are a check rather than work.
 
 *Pinned by test 19, which is a checklist run by hand with the operator, not a cargo test.*
 
-### 10. The identity provider is the operator's decision
+### 10. The identity provider is the operator's decision, and it is self-hosted
 
-The plan is provider-agnostic. Any OIDC authorization server passes if it satisfies **two
-must-haves**, stated as the research note defines them (research §6):
+The plan is provider-agnostic. Any OIDC authorization server passes if it satisfies **three
+must-haves**. The first is the operator's own constraint, stated on 2026-09-16; the other two are
+the research note's (research §6):
 
-1. **Audience or resource-indicator binding.** The authorization server must be able to issue an
+1. **Self-hostable, under an open-source licence.** willikins is an AGPL-3.0-or-later tool that
+   anyone may run, and a tool nobody can run without opening an account with a particular company
+   is not one of those. Every deployment must be able to stand up its own authorization server
+   from source, so a hosted tier is a convenience an operator may choose, never a dependency the
+   software carries. This rules out Auth0 outright (SaaS only, no self-hosted edition) and rules
+   out the hosted tier of every other candidate as a *requirement*, though not as a choice.
+2. **Audience or resource-indicator binding.** The authorization server must be able to issue an
    access token whose audience is willikins' resource identifier. Honouring RFC 8707's `resource`
    parameter is the interoperable form, because that is the parameter a stock MCP client is
    required to send; a provider that binds the audience through a proprietary parameter instead
    still works for a client the operator configures, and does not work for one they do not.
-2. **A registration path for MCP clients.** Client ID Metadata Documents, or an open Dynamic
+3. **A registration path for MCP clients.** Client ID Metadata Documents, or an open Dynamic
    Client Registration endpoint, or pre-registration if the operator is content to register each
    client by hand before it can ever connect.
 
-A third condition falls out of the out-of-scope list rather than the specification: **the
+A fourth condition falls out of the out-of-scope list rather than the specification: **the
 provider must issue JWT access tokens** for the registered resource, since introspection is out
 of scope.
+
+**The licence table**, from the research note's own section 6, because must-have 1 is now a filter
+and not a footnote: Logto MPL-2.0 (self-host or cloud), Keycloak Apache-2.0 (self-host only),
+authentik MIT with enterprise carve-outs (self-host), Zitadel AGPL-3.0-only with Apache-2.0 and MIT
+carve-outs (self-host or cloud), Ory Hydra Apache-2.0 (self-host; no login UI, so the operator
+writes the login and consent app), Auth0 proprietary SaaS. Only the last fails must-have 1. What
+still eliminates the others is must-have 2: Keycloak "cannot recognize" the `resource` parameter,
+Zitadel accepts and ignores it, authentik rejects it, and Ory Hydra has no user store to log in
+against. That leaves Logto, self-hosted, which is what the Open decisions section recommends —
+recommends, because must-have 1 is a property of the deployment and the operator may prefer to
+carry the cost of one of the others.
+
+**A willikins that needs no second service at all** is the honest end state for a self-hosted
+open-source tool, and it is not this milestone: hosting an authorization server means exact
+`redirect_uri` matching, refresh-token rotation, a client registry, RFC 7591 and RFC 8414
+endpoints and a user store, which the out-of-scope list already prices as a milestone of its own.
+It is recorded in "Notes for milestone 3" as the thing that would make a single-operator
+deployment self-contained, and this milestone's job is to make the seam clean enough that it can
+be filled later without changing the resource-server half at all.
 
 Everything provider-specific lives in **one configuration block** — issuer URL, JWKS URI, the
 approvals client's id and secret, the authorization and token endpoints, the algorithm allowlist
@@ -896,11 +935,11 @@ providers is an environment change, two rewritten subject allowlists (decision 3
 test run.
 
 **"Provider-agnostic" is about the code, not about the operator's shortlist.** The Open decisions
-section below recommends Logto as a deployment default. That is a recommendation for a human to
+section below recommends self-hosted Logto as a deployment default. That is a recommendation for a human to
 accept or reject, and accepting it changes zero lines in `crates/` and zero names in the
 configuration shape — which is exactly the distinction this decision draws. A recommendation is not
 a code dependency, and nothing in this milestone becomes harder if the operator picks another
-provider that passes the two must-haves.
+provider that passes the three must-haves.
 
 *Pinned by test 3, which runs the whole validation matrix against the fake authorization server
 and therefore against no provider at all; by test 18 against the real one; and by test 19's
@@ -944,8 +983,22 @@ a misconfiguration that produces a server whose published metadata does not desc
 it validates for. Deriving both makes that rule hold **by construction** rather than by a startup
 comparison nobody wrote. Startup refuses a `WILLIKINS_PUBLIC_URL` that carries a path, a query or a
 fragment, or that is not `https://` (decision 7's loopback carve-out excepted), because each of
-those makes the derivation ambiguous or the identifier insecure. The host itself is still verify
-item 1.
+those makes the derivation ambiguous or the identifier insecure.
+
+**Stable is not permanent, and the plan says how to move.** An earlier draft of this section, and
+of the Risks entry below, said the audience is frozen "forever after". That is wrong as a design
+statement: RFC 9728 §3.3 constrains what a *published* document may say at a given moment, not how
+long a deployment must keep the same hostname, and a tool whose identifier can never change is a
+tool that can never move off a host. So there is a migration path, and it is one optional variable:
+`WILLIKINS_OAUTH_PREVIOUS_AUDIENCES`, a comma-separated list of resource identifiers this server
+**also accepts** in `aud` during a move. It is never published — the PRM document's `resource` is
+always the one derived value, so test 1's byte-identical rule still holds by construction — and it
+is never what a challenge names. While it is non-empty, startup logs a named warning saying which
+identifiers are being accepted beyond the current one, so a migration that was left half-finished is
+visible in the first log line rather than a year later. The documented move is therefore: publish
+the new host, set the previous identifier here, let clients re-discover through the 401 challenge
+they already follow, then remove it. Pass 3 attacks it: a token for a previous audience is accepted
+only while the variable lists it, and rejected the moment it does not.
 
 **13. Introspection, opaque tokens and AS-metadata discovery are all absent.** See the
 out-of-scope list for the first two. For the third: willikins does not fetch the authorization
@@ -1182,7 +1235,7 @@ delete, because the file's own rule is that an omitted field is an instruction t
 
 ## Environment variables
 
-**Seventeen added**, ten of them required in http mode and seven optional. Every tunable names the component that
+**Eighteen added**, ten of them required in http mode and eight optional. Every tunable names the component that
 reads it, so a value with no consumer cannot survive review. Two values that look like they should
 be here are not, and deliberately: the **audience** and the **redirect URI** are derived from
 `WILLIKINS_PUBLIC_URL` and are not configurable at all (decision 12), and the accepted `typ` set is
@@ -1207,6 +1260,7 @@ frozen in code (decision 14).
 | `WILLIKINS_OAUTH_TOKEN_TIMEOUT_SECONDS` | `5` | optional | Whole seconds bounding the callback's token exchange, so a hung token endpoint cannot hold a request or a worker. Read by the token exchange. |
 | `WILLIKINS_SESSION_TTL_SECONDS` | `3600` | optional | Capped below `WILLIKINS_APPROVAL_WINDOW_SECONDS`; startup refuses a larger value. Read by the session store. |
 | `WILLIKINS_LOG` | the current INFO behaviour | optional | A `tracing_subscriber` filter directive (task 9c). Read once, when the subscriber is built. |
+| `WILLIKINS_OAUTH_PREVIOUS_AUDIENCES` | empty | optional | Comma-separated resource identifiers this server also accepts in `aud` during a move to a new host (decision 12). Never published, never named in a challenge; a non-empty value logs a named startup warning. Read by `oauth::validate`. |
 
 Retired, and refused at startup: `WILLIKINS_AGENT_TOKEN_HASHES`, `WILLIKINS_APPROVER_TOKEN_HASH`.
 
@@ -1557,14 +1611,18 @@ into frozen code before it is settled.
 
 ## Risks
 
-- **The audience value is frozen the moment it is published.** RFC 9728 §3.3 makes the `resource`
-  value byte-identical to the URL a client used; RFC 8707 §3 warns that a multi-tenant resource
-  needs the tenant in the URI. Milestone 3 routes credentials across several GitHub organizations
-  and Doppler workplaces, and whatever identifier 2c freezes constrains how per-organization
-  resources can later be expressed. Mitigation: pick the host in step 1 of the go-live sequence
-  with milestone 3 in mind, and treat a change of audience as a client-visible breaking change.
+- **The audience is stable while it is published, and moving it costs a migration.** RFC 9728 §3.3
+  makes the published `resource` byte-identical to the URL a client used, and RFC 8707 §3 warns
+  that a multi-tenant resource needs the tenant in its URI. Milestone 3 routes credentials across
+  several GitHub organizations and Doppler workplaces, so the identifier chosen here constrains how
+  per-organization resources can later be expressed. Mitigation, in two halves: the host
+  (`willikins.bandeabonnot.com`, go-live step 1) is one the operator owns, so a move off Railway
+  does not move the identifier at all; and a move of the identifier itself is a migration with a
+  documented window rather than a breakage, through decision 12's
+  `WILLIKINS_OAUTH_PREVIOUS_AUDIENCES`. It is still client-visible: a client that never re-reads
+  the challenge keeps sending the old resource and stops working when the window closes.
 - **A provider that does not honour `resource`** still works for a client the operator
-  configures and fails for one they do not. Decision 10's first must-have is what keeps this
+  configures and fails for one they do not. Decision 10's audience must-have is what keeps this
   visible; test 18 is what makes it concrete before anything depends on it.
 - **The `rsa` advisory, if `rust_crypto` wins task 1.** RUSTSEC-2023-0071 has `patched = []`
   deliberately. The leak is of a *private* key through signing or decryption timing and a
@@ -1616,6 +1674,18 @@ into frozen code before it is settled.
 
 ## Notes for milestone 3
 
+- **A willikins that needs no authorization server beside it.** Must-have 1 of decision 10 says a
+  deployment must be able to self-host its identity provider; it does not make that pleasant. A
+  single-operator deployment today means running Logto (or another of the four) next to willikins
+  for the sake of one human and a handful of agent clients. The end state for an open-source tool
+  is a built-in, minimal authorization server: one operator account, client registration through
+  CIMD, short-lived JWTs signed by a key the deployment generates, and nothing else — with the
+  delegating path kept for anyone who already runs an identity provider. This milestone's shape is
+  deliberately compatible with that: willikins is a resource server that trusts an issuer and a
+  JWKS URI, so an internal issuer is a configuration value, not a rewrite. The costs the
+  out-of-scope list names (exact `redirect_uri` matching, refresh-token rotation, a client
+  registry, RFC 7591 and RFC 8414 endpoints, a user store) are what make it a milestone rather
+  than a task.
 - **Credential routing is unchanged by this milestone.** One GitHub organization, one Doppler
   workplace, per the go-live sequence's step 8. The proposed shape stays what milestone 2's notes
   recorded: route by `GitHubOrg` to `WILLIKINS_GITHUB_TOKEN_<ORG>`, add a `DopplerWorkplace`
@@ -1641,35 +1711,26 @@ into frozen code before it is settled.
 
 ## Open decisions
 
-Two, both the operator's, each with the recommendation this plan would take by default and the
-one question that settles it.
+One, the operator's. The other two this section carried are decided, and the header addendum records
+them: the identity provider must be self-hostable open source (decision 10, must-have 1), and the
+public host is `willikins.bandeabonnot.com` (go-live step 1).
 
-**The identity provider. Recommended default: Logto.** The one reason: of the six providers
-surveyed it is the only one that passes both must-haves — it honours RFC 8707's `resource`
-parameter by name, and its Client ID Metadata Documents give a client with no prior relationship
-a registration path (research §6). Everything else in the table fails one or the other: Auth0 and
-Zitadel bind the audience through a non-`resource` parameter, Keycloak "cannot recognize" the
-parameter and its CIMD is experimental, authentik rejects it and its DCR needs a bearer token,
-Ory Hydra has no login UI at all, and GitHub OAuth apps fail both and publish no discovery
-document. *Conditional* on verify item 11: Logto's CIMD pages were read from the docs
-repository's `master` branch rather than the v1.43.0 tag, and whether a token requested without a
-`resource` parameter is a JWT was not established — test 18 answers both before anything is
-frozen.
-
-**The question for the operator: self-hosted Logto or Logto Cloud?** Self-hosting puts another
-service on the operator's infrastructure and another thing to keep patched in the authentication
-path; Cloud puts the identity of the only human who can approve a destructive plan in a vendor's
-hands. Nothing in this plan depends on the answer — the configuration block is the same either
-way — but the issuer URL, and therefore the audience and the registered `redirect_uri`, are
-frozen by it.
-
-**The public host. Recommended default: a custom domain on a name the operator owns.** The one
-reason: the resource identifier, the audience, the PRM document's `resource` and the registered
-`redirect_uri` are all frozen by it and RFC 9728 requires the value to match byte for byte
-forever after, so a vendor hostname would put `up.railway.app` inside a value that cannot be
-changed without breaking every client. **The question: which hostname?** It needs a CNAME and a
-TXT record before Railway will route to it, and it is the value step 3 of the go-live sequence
-measures `Host` against.
+**Which self-hosted provider. Recommended default: Logto, self-hosted (MPL-2.0).** The one reason:
+of the six surveyed it is the only one that passes all three must-haves at once — it is open source
+and self-hostable, it honours RFC 8707's `resource` parameter by name, and its Client ID Metadata
+Documents give a client with no prior relationship a registration path (research §6). Each of the
+others fails must-have 2 or 3 rather than the licence: Keycloak (Apache-2.0) "cannot recognize" the
+`resource` parameter and its CIMD support is experimental; Zitadel (AGPL-3.0-only) accepts
+`resource` and ignores it; authentik (MIT) rejects it and its dynamic registration needs a bearer
+token; Ory Hydra (Apache-2.0) has no user store or login UI, so the operator would write the login
+and consent app themselves; Auth0 is SaaS-only and fails must-have 1 outright. *Conditional* on
+verify item 11: Logto's CIMD pages were read from the docs repository's `master` branch rather than
+the v1.43.0 tag, and whether a token requested without a `resource` parameter is a JWT was not
+established. **The question for the operator: accept self-hosted Logto, or name another
+self-hostable provider to test against?** Nothing in `crates/` changes either way; what changes is
+which issuer, JWKS URI and client the deployment is configured with, and which one test 18 runs
+against. If the answer is "none of them, willikins should issue its own", that is the milestone-3
+note above, and 2c ships against whichever of these is easiest to stand up in the meantime.
 
 ## Review resolutions
 
