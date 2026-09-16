@@ -62,6 +62,10 @@ indexmap.workspace = true
 # a dev-dependency: the CLI itself reaches Doppler through
 # `willikins-server`'s live catalog, never directly.
 willikins-providers-doppler.workspace = true
+# The same test's GitHub pre-flight and leftover check read the
+# repository through the sandbox PAT directly (the same credential and
+# client `deploy/teardown.sh` authenticates with), never through `gh`.
+willikins-providers-github.workspace = true
 willikins-providers-http.workspace = true
 proptest.workspace = true
 serde_yaml_ng.workspace = true

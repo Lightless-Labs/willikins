@@ -27,17 +27,15 @@
 //! resources' names out of a run record, and a run record that no longer
 //! exists cannot be torn down.
 //!
-//! 1. **Pre-flight, before anything is created.** `gh api -i user` must
-//!    answer an `x-oauth-scopes` header containing `delete_repo`,
-//!    because the teardown script deletes the repository through `gh
-//!    api` with `gh`'s own credential, and a dry run cannot reveal that
-//!    scope's absence. Both `WILLIKINS_GITHUB_TOKEN` and
-//!    `WILLIKINS_DOPPLER_TOKEN` must be set (presence only -- neither
-//!    value is ever read for anything but the leak sweep). The
-//!    repository and the Doppler project must both answer `404`: a
-//!    leftover from an earlier run is a stop, not something to reuse.
-//!    `jq`, which the teardown script reads every document with, must be
-//!    on `PATH`.
+//! 1. **Pre-flight, before anything is created.** Both `WILLIKINS_GITHUB_TOKEN`
+//!    and `WILLIKINS_DOPPLER_TOKEN` must be set (presence only -- neither
+//!    value is ever read for anything but the leak sweep); `deploy/
+//!    teardown.sh` authenticates to GitHub with the sandbox PAT
+//!    `WILLIKINS_GITHUB_TOKEN` names, exactly as it already does for
+//!    Doppler, so no `gh`-specific scope is needed. The repository and
+//!    the Doppler project must both answer `404`: a leftover from an
+//!    earlier run is a stop, not something to reuse. `jq`, which the
+//!    teardown script reads every document with, must be on `PATH`.
 //! 2. **First apply** of `workflows/new-rust-service.yaml` with `slug=`
 //!    [`common::SLUG`] and `org=`[`common::ORG`].
 //! 3. **Second, identical apply**: the convergence claim.
@@ -79,9 +77,6 @@ use common::{
     positive_inputs, recorded_run_count, rotation_inputs, willikins, workspace_path,
     workspace_root,
 };
-
-/// The GitHub scope `deploy/teardown.sh` needs on `gh`'s own credential.
-const DELETE_REPO_SCOPE: &str = "delete_repo";
 
 /// What to tell the operator when a step after the first apply fails:
 /// the run is real, its resources exist, and the teardown script is the
@@ -130,82 +125,6 @@ impl Drop for TeardownHint {
     }
 }
 
-/// Run `gh` with `args` and hand back the whole [`Output`]; `gh` exits
-/// non-zero on an HTTP error, which several callers here expect.
-fn gh(args: &[&str]) -> Output {
-    Command::new("gh")
-        .args(args)
-        .output()
-        .expect("failed to run `gh`; install the GitHub CLI and authenticate it")
-}
-
-/// The HTTP status of a `gh api -i` response.
-///
-/// Read from the status line `-i` prints on stdout; a plain non-zero
-/// exit is not enough, because it cannot tell `404` (what a fresh run
-/// needs) from `401` (a dead `gh` credential). `gh` also names the
-/// status in its stderr message (`gh: Not Found (HTTP 404)`), which is
-/// the fallback when the status line is missing.
-fn gh_status(output: &Output) -> Option<u16> {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if let Some(line) = stdout.lines().next()
-        && line.starts_with("HTTP/")
-        && let Some(code) = line.split_whitespace().nth(1)
-        && let Ok(code) = code.parse::<u16>()
-    {
-        return Some(code);
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let start = stderr.find("(HTTP ")? + "(HTTP ".len();
-    stderr[start..].split(')').next()?.trim().parse().ok()
-}
-
-/// One response header of a `gh api -i` response, by lower-case name.
-fn gh_header(output: &Output, name: &str) -> Option<String> {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if line.trim().is_empty() {
-            break;
-        }
-        if let Some((key, value)) = line.split_once(':')
-            && key.trim().eq_ignore_ascii_case(name)
-        {
-            return Some(value.trim().to_string());
-        }
-    }
-    None
-}
-
-/// Step 1: `gh`'s own credential must carry `delete_repo`.
-///
-/// A fine-grained personal access token used for `gh auth login` carries
-/// no `X-OAuth-Scopes` header at all, so a missing header and an empty
-/// one are the same failure, and the message says so: the fix is to
-/// authenticate `gh` with a token that has the scope.
-fn require_delete_repo_scope() {
-    let output = gh(&["api", "-i", "user"]);
-    let status = gh_status(&output);
-    assert!(
-        status == Some(200),
-        "pre-flight: `gh api -i user` answered {status:?}; `gh` is not authenticated. \
-         Run `gh auth login`, then \
-         `gh auth refresh -h github.com -s {DELETE_REPO_SCOPE}`."
-    );
-    let scopes = gh_header(&output, "x-oauth-scopes").unwrap_or_default();
-    assert!(
-        scopes
-            .split(',')
-            .any(|scope| scope.trim() == DELETE_REPO_SCOPE),
-        "pre-flight: `gh`'s credential does not carry the `{DELETE_REPO_SCOPE}` scope, \
-         so `deploy/teardown.sh` could not delete the repository it is about to create. \
-         `gh api -i user` reported the scopes `{scopes}` (a fine-grained personal access \
-         token reports none at all). Fix it with \
-         `gh auth refresh -h github.com -s {DELETE_REPO_SCOPE}`, then run this test again. \
-         Nothing has been created."
-    );
-    println!("1a. gh scope pre-flight: `{DELETE_REPO_SCOPE}` present");
-}
-
 /// Step 1: both provider credentials must be set. Presence only -- the
 /// CLI's own `--live` path parses and validates them, and a second read
 /// here would make a plaintext copy for nothing.
@@ -216,7 +135,7 @@ fn require_credentials_present() {
             "pre-flight: {name} is not set. Source \
              ~/.config/willikins/sandbox.env in the same command as this test."
         );
-        println!("1b. {name}: set");
+        println!("1a. {name}: set");
     }
 }
 
@@ -233,13 +152,30 @@ fn require_jq() {
         "pre-flight: `jq` is not on PATH, and `deploy/teardown.sh` needs it to read \
          the run record. Install it before running this test. Nothing has been created."
     );
-    println!("1c. jq: present");
+    println!("1b. jq: present");
+}
+
+/// A read-only GitHub client built from the sandbox PAT -- the same
+/// credential `deploy/teardown.sh` authenticates with, so a `404` this
+/// test sees here is the same `404` the script would see.
+fn github() -> willikins_providers_http::Http {
+    let credential = willikins_providers_github::credential_from_env()
+        .expect("a valid sandbox GitHub token (source ~/.config/willikins/sandbox.env)");
+    willikins_providers_github::http_client(credential)
+}
+
+/// `GET /repos/<owner>/<name>`: `Some(status)` for a failure, `None`
+/// when the repository reads back.
+fn github_repo_status(http: &willikins_providers_http::Http) -> Option<u16> {
+    match http.get::<Json>(&format!("/repos/{REPO}")) {
+        Ok(_) => None,
+        Err(err) => Some(err.status.unwrap_or(0)),
+    }
 }
 
 /// Step 1: the repository must not exist yet.
-fn require_repository_absent() {
-    let output = gh(&["api", "-i", &format!("repos/{REPO}")]);
-    let status = gh_status(&output);
+fn require_repository_absent(http: &willikins_providers_http::Http) {
+    let status = github_repo_status(http);
     assert!(
         status == Some(404),
         "pre-flight: `repos/{REPO}` answered {status:?}, expected 404. \
@@ -247,11 +183,10 @@ fn require_repository_absent() {
          (`deploy/teardown.sh <run-id> <journal> --yes`, or by hand); \
          this test never reuses one. Nothing has been created."
     );
-    println!("1d. GET repos/{REPO}: 404, as a fresh run needs");
+    println!("1c. GET repos/{REPO}: 404, as a fresh run needs");
 }
 
-/// A read-only Doppler client built from the sandbox credential, for the
-/// two checks `gh` cannot make.
+/// A read-only Doppler client built from the sandbox credential.
 fn doppler() -> willikins_providers_http::Http {
     let credential = willikins_providers_doppler::credential_from_env()
         .expect("a valid sandbox Doppler token (source ~/.config/willikins/sandbox.env)");
@@ -277,7 +212,7 @@ fn require_project_absent(http: &willikins_providers_http::Http) {
          A leftover is the operator's to remove; this test never reuses one. \
          Nothing has been created."
     );
-    println!("1e. GET /v3/projects/project ({PROJECT}): 404, as a fresh run needs");
+    println!("1d. GET /v3/projects/project ({PROJECT}): 404, as a fresh run needs");
 }
 
 /// `willikins --json apply <document> --live --journal <j> --principal
@@ -345,10 +280,10 @@ fn live_smoke_run() {
     println!("journal: {journal}");
 
     // --- 1. pre-flight ----------------------------------------------
-    require_delete_repo_scope();
     require_credentials_present();
     require_jq();
-    require_repository_absent();
+    let github_http = github();
+    require_repository_absent(&github_http);
     let http = doppler();
     require_project_absent(&http);
 
@@ -537,8 +472,7 @@ fn live_smoke_run() {
     // reporting success and the two accounts agreeing are different
     // claims, and only the second one is the one that matters.
     println!("6c. leftover check, independent of the script");
-    let repo_after = gh(&["api", "-i", &format!("repos/{REPO}")]);
-    let repo_status = gh_status(&repo_after);
+    let repo_status = github_repo_status(&github_http);
     assert!(
         repo_status == Some(404),
         "leftover: `repos/{REPO}` answered {repo_status:?} after the teardown; \

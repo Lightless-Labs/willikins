@@ -10,7 +10,7 @@
 //!
 //! What it deliberately does *not* cover, and why:
 //!
-//! - the `gh` scope pre-flight and the leftover checks, which are
+//! - the pre-flight credential checks and the leftover checks, which are
 //!   questions about a real account;
 //! - `deploy/teardown.sh`, already covered twice over by
 //!   `tests/teardown_script.rs` -- once against its own stubbed scenario
