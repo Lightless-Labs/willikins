@@ -777,11 +777,17 @@ So it shrinks and is repurposed:
   route with no consumer is fixture surface with no consumer — which is the same reasoning that
   removed the fake's metadata documents in the 2026-09-16 review (resolution 31). The fixture
   supplies its key set through the same `JwkSource` boundary the in-house issuer does.
+- **It loses its blocking `start()` too**, for the same reason and one more. That entry point
+  existed so a synchronous test spawning the real binary could point it at a fixture already
+  serving a JWKS from its own runtime thread; with no HTTP route to serve and no
+  `WILLIKINS_OAUTH_JWKS_URI` for a spawned binary to point at, it has no consumer either. The
+  consequence is worth stating rather than discovering: **tests that spawn the binary exercise
+  willikins' own issuer only**, and the foreign-issuer assertion is made in process, against
+  `oauth::validate` and against a router the test builds, which is where test 3 already lives.
 - **It keeps everything with a consumer:** the fixed test key pair, a key set carrying a `kid`,
-  `mint(flaws)` with its whole flaw list, key rotation, the blocking `start()` for tests that spawn
-  the real binary from a synchronous test, and the shared environment-block helper — because every
-  test that configures a server sets the same block, and a hand-written block in twelve files is
-  twelve places to forget `WILLIKINS_AGENT_SUBJECTS`.
+  `mint(flaws)` with its whole flaw list, key rotation, and the shared environment-block helper —
+  because every test that configures a server sets the same block, and a hand-written block in
+  twelve files is twelve places to forget `WILLIKINS_AGENT_SUBJECTS`.
 - **`mint(flaws)`** returns a signed token with any combination of: wrong `aud`, wrong `iss`,
   `exp` in the past, `exp` inside the leeway, `alg: none`, a symmetric `alg`, an `alg` outside
   the allowlist, a `kid` that is not in the key set, no `kid`, a `typ` other than `at+jwt`, missing
@@ -1313,7 +1319,10 @@ discipline willikins already applies with domain newtypes, and the shape prior a
   checks.
 - **Both endpoints carry their own bounds**, because both are anonymously reachable on a public
   domain with no edge rate limit: a default rate limit on `/authorize` and `/token`, and
-  `Cache-Control: no-store` set before anything else on the response.
+  `Cache-Control: no-store` set before anything else on the response. **The numbers are this
+  plan's choice and no specification sets them**; the prior art they are taken from is
+  Cloudflare's shipped MCP authorization server, which defaults to 100 requests per 15 minutes at
+  `/authorize` and 50 at `/token`.
 - **Every refusal is journalled**, through the machinery decision 1 already specifies rather than a
   second one: new additive `AuthFailedReason` variants, with the refusals of an unauthenticated
   request passing through the same per-reason token bucket and carrying the same `suppressed`
@@ -1942,8 +1951,11 @@ the test it was written about; the authorization-server half is tests 20 to 26.
    decision 1's table; a token whose `aud` is an array containing this resource among others is
    **200**. Two cases exist only because willikins now mints: **a token signed with willikins' own
    key carrying a foreign `iss`** is refused `InvalidIssuer`, and **a token carrying the configured
-   `iss` signed with a foreign key** is refused `UnknownKey` or `InvalidSignature` — neither is
-   waved through on the strength of recognising half of itself. One further case for decision 15:
+   `iss` signed with a foreign key** is refused — with the reason split by case, because a test that
+   accepts either is a test that asserts neither: a foreign key whose `kid` is not in the set is
+   `UnknownKey`, and a foreign key **reusing willikins' own `kid`** is `InvalidSignature`. The
+   second is the sharper case. Neither token is waved through on the strength of recognising half
+   of itself. One further case for decision 15:
    with an allowlist spanning **two key families** (an `RS*` and an `ES*` entry) and a key set
    holding one key of each, a token signed by either verifies, and a token whose `alg` names the
    other key's family is refused — which is what proves the per-key intersection rather than a
@@ -2007,8 +2019,9 @@ the test it was written about; the authorization-server half is tests 20 to 26.
     **401** `MissingCredential`. Neither surface reads the other's credential in any code path.
 10. **The approvals login.** `GET /approvals` with no session → **302** to `/approvals/login`.
     The login page's username step answers **uniformly** whether or not the account exists, so it
-    is not an account-existence oracle. `POST /approvals/login/start` mints a ceremony, stores its
-    state **server-side** (the crate refuses to derive serde on it, which is the reason), and sets
+    is not an account-existence oracle. The ceremony-start endpoint — whose path is this plan's to
+    pick, and is named nowhere in the research — mints a ceremony, stores its state
+    **server-side** (the crate refuses to derive serde on it, which is the reason), and sets
     `__Host-willikins-login` with `Secure`, `HttpOnly`, `SameSite=Lax` and a 300 s lifetime; the
     finish step requires that cookie to be present and to name the same ceremony, and a mismatch or
     an absent cookie is **400** — the two-approver attack of decision 4, in its WebAuthn form. A
@@ -2048,9 +2061,13 @@ the test it was written about; the authorization-server half is tests 20 to 26.
     refused. A `WILLIKINS_PUBLIC_URL` carrying a path, a query or a fragment → refused. A
     `WILLIKINS_PUBLIC_URL` that is `http://` on a **non-loopback** host →
     `HttpConfigError::InsecureUrl`; the same URL on `127.0.0.1`, `[::1]` or `localhost` →
-    **starts**, with a startup warning naming it (decision 7, both readings). No signing key
-    configured and none generatable → `StartError`; an unreadable or unwritable credential store →
-    `StartError`. A loopback `--bind` with no OAuth configuration → the same refusals as any other
+    **starts**, with a startup warning naming it (decision 7, both readings). An **unset**
+    `WILLIKINS_SIGNING_KEY_PEM` → `ConfigError::Missing`, because at open decision 2's recommended
+    default the key is a required variable like any other; a key that is **present and cannot be
+    loaded** — the shape verify item 4's PKCS#8 round trip would fail in — and a credential store
+    that cannot be read or written → `StartError`, because both need the filesystem or the runtime
+    (decision 6). On the volume branch of open decision 2, "no key and none generatable" joins the
+    second group rather than the first. A loopback `--bind` with no OAuth configuration → the same refusals as any other
     bind (decision 5). `hash-token` is gone from both binaries: invoking it exits non-zero with a
     usage error.
 13. **Bounded header read.** The pass-2 slowloris test, un-`#[ignore]`d: a client that trickles
@@ -2216,7 +2233,7 @@ OOM-killed. Agents stage only their own paths and the coordinator commits by pat
 | 0 | Research: `docs/research/2026-09-16-m2c-authorization.md`, then `…-m2c-own-authorization-server.md` and `…-m2c-scope-revision.md`. **Done 2026-09-16** | | six parallel passes, then two |
 | 1 | **Dockerfile and dependency pins — first, because it is the one thing that can invalidate the shape.** Choose the `jsonwebtoken` 11 backend by building **both** in the image; add `libssl-dev` and `pkg-config` to the builder for `webauthn-rs-core`'s unconditional `openssl`/`openssl-sys`; **verify the distroless runtime image ships the `libssl.so.3` that `openssl-sys` 0.9.114 links against** (verify item 2, build-blocking); rewrite the Dockerfile comment claiming no `openssl-sys` anywhere, which becomes false. Pins: `webauthn-rs` 0.5.5 (+ core/proto), `argon2` 0.6.0, `password-hash` **0.6.1**, `rand` 0.8 as a direct dependency for the `rand_core` 0.6 bound, `axum-extra` 0.12 `cookie-signed`, `webauthn-authenticator-rs` 0.5.5 dev-only. Pinned by: the image builds, the runtime container starts and serves `/healthz`, all four gates | 0 | sonnet, verified by opus |
 | 1b | rmcp 3.4.0 (conditional, decision 18): `cargo update -p rmcp --precise 3.4.0`, the `ServerInfo` rename at three `mcp.rs` sites, `enforce_origin_validation()`, all four gates. Lands it or records why not; nothing depends on it | 1 | sonnet |
-| 2 | **First commit:** freeze `pre-2c-every-event.jsonl` from the current binary, before any 2c change (decision 2), through an `#[ignore]`d generator in the shape of `willikins-journal`'s two existing ones. Then the **foreign-issuer fixture** (decision 7): fixed test key, a key set carrying a `kid`, `mint(flaws)` including the two new flaws, key rotation, the blocking `start()`, and the shared environment-block helper. **No `/authorize`, no `/token`, no metadata documents and no HTTP JWKS route.** Wire `SoftPasskey`. Shared test support, used by tasks 4, 5, 7, 9 and 16. Pinned by: all three fixtures replay through `Journal` and `replay` | 1 | sonnet, verified by opus |
+| 2 | **First commit:** freeze `pre-2c-every-event.jsonl` from the current binary, before any 2c change (decision 2), through an `#[ignore]`d generator in the shape of `willikins-journal`'s two existing ones. Then the **foreign-issuer fixture** (decision 7): fixed test key, a key set carrying a `kid`, `mint(flaws)` including the two new flaws, key rotation, and the shared environment-block helper. **No `/authorize`, no `/token`, no metadata documents, no HTTP JWKS route and no blocking `start()`** — each of those lost its consumer with decision 16, and the foreign-issuer assertion is made in process. Wire `SoftPasskey`. Shared test support, used by tasks 4, 5, 7, 9 and 16. Pinned by: all three fixtures replay through `Journal` and `replay` | 1 | sonnet, verified by opus |
 | 3 | **The signing key and the issuer's mint.** ES256 generation (`p256` + `rand` 0.8), PKCS#8 persistence at the home open decision 2 chooses, redacted `Debug`/no `Display`/no `Serialize`/zeroize, the RFC 7638 thumbprint as `kid` set on **both** the header and the published JWK, `JwkSet` assembly, the two-key overlap mechanism, `mint(sub, scopes, aud) -> Jwt` emitting all seven RFC 9068 claims with `typ` overwritten, and the `JwkSource` boundary with its in-process implementation. Test 21 | 2 | sonnet, verified by opus |
 | 4 | **The resource-server middleware, against both issuers.** `OAuthConfig`, `validate`, `require_token`, the header strip, the subject-allowlist check, the new validating-half `AuthFailedReason` variants, the refusals of decisions 6, 7 and 15 — plus the assertion that the fixed-order path runs **identically** for a willikins-minted and a fixture-minted token. **Also removes `HttpConfig::build`'s agent-hash rules and retires `WILLIKINS_AGENT_TOKEN_HASHES`**, and migrates every `HttpConfig::build` test site. Tests 3, 4, 5, 6, and test 12's validating-half refusals | 3 | sonnet, verified by opus |
 | 5 | **Both metadata documents, the JWKS route and the challenge surface.** RFC 9728 at the insertion-built path; RFC 8414 with a byte-identical `issuer`, `code_challenge_methods_supported`, explicit `grant_types_supported` and `token_endpoint_auth_methods_supported`, `authorization_response_iss_parameter_supported`, `jwks_uri`, and zero-element arrays omitted; `/jwks.json`; all four routes outside the bearer middleware and rmcp's host check as `/healthz` is; the 401/403 challenge shapes; rmcp's `allowed_origins` set unconditionally at 3.3.0. Tests 1, 2, 20 | 4 | sonnet, verified by opus |
@@ -2635,6 +2652,15 @@ Findings from two or more reviewers on the same point are merged; the reviewers 
 raised it. Seventy-five findings merged into entries 1 to 57; entry 58 is the scope revision, and
 says which of the fifty-seven it supersedes.
 
+**Entries 1 to 57 are kept verbatim as the record, so they cite the task and verify-item numbers
+the delegating draft had.** The key, once, rather than fifty-seven edits that would falsify the
+record: tasks **3 → 4**, **5 → 6**, **6 → 7**, **7 → 9**, **8 → 12**, **9a → 17**, **9b → 13**,
+**9c → 14**, **9d → 15**, **10 → 16**, **11 → 18**, **12 → 19**; tasks 1, 1b and 2 keep their
+numbers. Verify items were renumbered wholesale against the merged list above, and three of the
+delegating draft's — its items 3, 6 and 11, all about choosing or characterising an external
+provider — are **removed** rather than renumbered, so a resolution citing one of those is citing a
+question this plan no longer asks.
+
 1. **A scope was the only authority for every MCP tool** (adversarial P0, security P1). Decision 3
    argued that on an open-registration provider a scope alone is not authority — and applied that
    argument to `willikins:approve` only, leaving `willikins:apply` gated by a scope the provider's
@@ -2972,9 +2998,9 @@ says which of the fifty-seven it supersedes.
     journal bucket and its `suppressed` field, the RFC 9728 document, the 401 and 403 challenge
     shapes, the four scopes and their hierarchy, both subject allowlists, the derived principal and
     its additively journalled claims, the four exposure tasks, and the shape of the go-live
-    sequence. Thirty-five of them are untouched — resolutions 1, 2, 3, 7, 12, 13, 14, 15, 16, 17, 20,
-    21, 22, 23, 25, 26, 27, 28, 32, 33, 34, 36, 37, 38, 39, 40, 44, 46, 47, 49, 50, 51, 52, 55 and
-    56 — and none of them is reversed. The remaining twenty-two are below. **What the new shape
+    sequence. Thirty-four of them are untouched — resolutions 1, 2, 3, 7, 12, 13, 14, 15, 16, 17, 20,
+    21, 22, 23, 25, 26, 27, 28, 32, 33, 34, 36, 37, 38, 39, 40, 44, 46, 49, 50, 51, 52, 55 and 56 —
+    and none of them is reversed. The remaining twenty-three are below. **What the new shape
     supersedes, named one by one so no reader follows a dead resolution:**
 
     - **4** keeps its rule and changes its subject. There are no provider URLs left to be
@@ -3032,6 +3058,11 @@ says which of the fifty-seven it supersedes.
       **reversed** rather than re-founded: the per-plan nonce is promoted from defence in depth to
       **load-bearing and session-bound**, because `SameSite` is scoped to the registrable domain
       and every sibling host under `bandeabonnot.com` is same-site.
+    - **47** holds except for one clause. The migration it counted is still 11 `HttpConfig::build`
+      test sites across six files, the retirement is still split across two tasks, and task 9 still
+      flips the `adversarial_10b.rs` pins — but the blocking `start()` it added to the fixture
+      loses its consumer with the HTTP JWKS route (decision 7), so spawned-binary tests exercise
+      willikins' own issuer only.
     - **48** loses its carve-out. Trust boundary 5's whole paragraph about
       `WILLIKINS_OAUTH_CLIENT_SECRET` goes, because that secret does not exist. What must **not**
       be written in its place is a claim that willikins now holds no secret: it holds a *signing*
