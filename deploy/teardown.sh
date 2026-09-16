@@ -27,20 +27,29 @@
 # Dry-run by default: prints what it would delete and exits 0 without
 # calling either provider's delete endpoint. `--yes` deletes for real.
 #
-# Authentication: GitHub through `gh api`, which holds its own
-# credential (never the fine-grained PAT `WILLIKINS_GITHUB_TOKEN` names
-# for the server); Doppler through `curl`, with the token read from
-# `WILLIKINS_DOPPLER_TOKEN` and passed to curl only via `--config -` on
-# stdin (a `header = "Authorization: Bearer <token>"` directive), never
-# as a command-line argument -- a token on argv would sit in `ps`
-# output and any shell history for as long as the process runs.
+# Authentication: both providers through `curl`, each with its own
+# fine-grained credential -- `WILLIKINS_GITHUB_TOKEN` for GitHub,
+# `WILLIKINS_DOPPLER_TOKEN` for Doppler, the same two variables the
+# server itself reads for live mode. Neither token is ever passed to
+# `curl` as a command-line argument: each is written to a `header =
+# "Authorization: Bearer <token>"` directive and piped to `curl --config
+# -` on stdin, so it never sits in `ps` output or shell history for as
+# long as the process runs. The GitHub token is a sandbox fine-grained
+# PAT scoped to the throwaway `Willikins-Test` organization, holding
+# repository administration there -- the same credential and scope
+# `crates/willikins-providers-github/tests/live_write_cycle.rs` already
+# uses to delete a repository through `Http::delete`, so deleting one
+# here needs nothing new of it. GitHub's REST API also requires an
+# `Accept` and a `User-Agent` header on every request; this script sends
+# the same three headers `crates/willikins-providers-github/src/
+# client.rs`'s `default_headers` does.
 #
-# Exits non-zero, printing why, on any refusal: a missing argument, a
-# run with no `repo` or `doppler` output, a resource that does not
-# carry its ownership marker, or a provider call that fails outright.
-# Every `curl` call carries `--fail`: without it curl exits 0 on a 403
-# or a 500, and the script would report a delete that never happened.
-# `gh api` fails on an HTTP error on its own.
+# Exits non-zero, printing why, on any refusal: a missing argument, an
+# unset credential, a run with no `repo` or `doppler` output, a resource
+# that does not carry its ownership marker, or a provider call that
+# fails outright. Every `curl` call carries `--fail`: without it curl
+# exits 0 on a 403 or a 500, and the script would report a delete that
+# never happened.
 set -euo pipefail
 
 usage() {
@@ -71,6 +80,7 @@ for arg in "$@"; do
 done
 
 willikins_bin="${WILLIKINS_BIN:-willikins}"
+github_api_base_url="${GITHUB_API_BASE_URL:-https://api.github.com}"
 doppler_api_base_url="${DOPPLER_API_BASE_URL:-https://api.doppler.com}"
 managed_topic="managed-by-willikins"
 managed_description="managed-by: willikins"
@@ -111,8 +121,22 @@ echo "teardown.sh: run $run_id created repository '$repo' and Doppler project '$
 
 # --- GitHub: read first, refuse unless the marker is still there. -----
 
-repo_json=$(gh api "repos/$repo") || {
-  echo "teardown.sh: refusing -- could not read repository $repo via gh api" >&2
+: "${WILLIKINS_GITHUB_TOKEN:?teardown.sh: WILLIKINS_GITHUB_TOKEN must be set}"
+
+# The three headers GitHub's docs require on every request, mirroring
+# `crates/willikins-providers-github/src/client.rs`'s `default_headers`:
+# `Accept`, `X-GitHub-Api-Version`, and a `User-Agent` (GitHub rejects a
+# request with none at all). The `Authorization` directive travels with
+# them on the same `--config -` stdin, never on argv.
+github_curl_config() {
+  printf 'header = "Authorization: Bearer %s"\n' "$WILLIKINS_GITHUB_TOKEN"
+  printf 'header = "Accept: application/vnd.github+json"\n'
+  printf 'header = "X-GitHub-Api-Version: 2022-11-28"\n'
+  printf 'header = "User-Agent: willikins-teardown"\n'
+}
+
+repo_json=$(github_curl_config | curl -sS --fail --config - "$github_api_base_url/repos/$repo") || {
+  echo "teardown.sh: refusing -- could not read repository $repo via the GitHub API" >&2
   exit 1
 }
 if ! printf '%s' "$repo_json" \
@@ -152,7 +176,9 @@ if [ "$yes" -ne 1 ]; then
 fi
 
 echo "teardown.sh: deleting GitHub repository $repo"
-gh api -X DELETE "repos/$repo" > /dev/null
+github_curl_config \
+  | curl -sS --fail --config - -X DELETE "$github_api_base_url/repos/$repo" \
+  > /dev/null
 
 echo "teardown.sh: deleting Doppler project $project"
 printf 'header = "Authorization: Bearer %s"\n' "$WILLIKINS_DOPPLER_TOKEN" \

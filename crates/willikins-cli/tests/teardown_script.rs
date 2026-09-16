@@ -3,9 +3,9 @@
 //! the thin spawner the workspace gate uses to run its own bats-free
 //! test suite, `deploy/teardown_test.sh` -- every actual scenario (both
 //! ownership markers present, either one missing, `--yes` vs. dry run,
-//! the Doppler token never reaching `curl`'s argv, a run record with no
-//! `doppler` output) lives there, stubbing `willikins`, `gh`, and
-//! `curl` on `PATH` so nothing here ever makes a real network call.
+//! neither token ever reaching `curl`'s argv, a run record with no
+//! `doppler` output) lives there, stubbing `willikins` and `curl` on
+//! `PATH` so nothing here ever makes a real network call.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -125,9 +125,12 @@ fn node_output(record: &serde_json::Value, node: &str, port: &str) -> String {
         .to_string()
 }
 
-/// Stubs for the three commands the script calls, so it makes no network
+/// Stubs for the two commands the script calls, so it makes no network
 /// call and touches no real resource. `willikins` here replays the
-/// document the real binary printed.
+/// document the real binary printed; `curl` answers both providers'
+/// ownership reads, telling them apart by which URL each call carries
+/// (this test never passes `--yes`, so neither delete endpoint is ever
+/// called).
 #[cfg(unix)]
 fn write_stubs(bin: &std::path::Path, record_path: &std::path::Path) {
     std::fs::create_dir_all(bin).unwrap();
@@ -139,13 +142,21 @@ fn write_stubs(bin: &std::path::Path, record_path: &std::path::Path) {
         ),
     );
     write_executable(
-        &bin.join("gh"),
-        "#!/usr/bin/env bash\nset -euo pipefail\necho '{\"topics\": [\"managed-by-willikins\"]}'\n",
-    );
-    write_executable(
         &bin.join("curl"),
-        "#!/usr/bin/env bash\nset -euo pipefail\ncat > /dev/null\n\
-         echo '{\"project\": {\"description\": \"managed-by: willikins\"}}'\n",
+        "#!/usr/bin/env bash\n\
+         set -euo pipefail\n\
+         cat > /dev/null\n\
+         url=\"\"\n\
+         for a in \"$@\"; do\n\
+         \x20\x20case \"$a\" in\n\
+         \x20\x20\x20\x20http://*|https://*) url=\"$a\" ;;\n\
+         \x20\x20esac\n\
+         done\n\
+         case \"$url\" in\n\
+         \x20\x20*api.github.com*) echo '{\"topics\": [\"managed-by-willikins\"]}' ;;\n\
+         \x20\x20*api.doppler.com*) echo '{\"project\": {\"description\": \"managed-by: willikins\"}}' ;;\n\
+         \x20\x20*) echo \"stub curl: unrecognized URL: $url\" >&2; exit 1 ;;\n\
+         esac\n",
     );
 }
 
@@ -179,6 +190,10 @@ fn teardown_reads_the_document_the_real_willikins_run_prints() {
         .env_clear()
         .env("PATH", path)
         .env("HOME", temp.path())
+        .env(
+            "WILLIKINS_GITHUB_TOKEN",
+            "github_pat_teardown-shape-test-token",
+        )
         .env("WILLIKINS_DOPPLER_TOKEN", "dp.sa.teardown-shape-test-token")
         .output()
         .expect("failed to run deploy/teardown.sh");
