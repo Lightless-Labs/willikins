@@ -2524,7 +2524,12 @@ Then, in descending order of how likely each is to surprise someone:
   with reuse detection and family revocation — and every one of rauthy's worst fetched problems
   lived on that path. The cost is that the access-token lifetime is exactly how often a human
   re-consents, and that an operator who believes a token leaked waits the lifetime out. Revisit
-  both at once or neither.
+  both at once or neither. **Banked at `todos/2026-09-16-unattended-agents-token-longevity.md`**,
+  which carries the pairing rule, the cost to an agent meant to run without a human, and the three
+  ways out: a longer per-client lifetime (the client table already has the column), refresh plus
+  revocation together, or capability tokens with offline attenuation (`biscuit-auth`, macaroons),
+  which suit willikins' shaped authority — a plan is a fixed set of operations against named
+  resources — and which are unverified beyond the crate's existence.
 - **Automated key-rotation scheduling.** The *mechanism* is in this milestone (decision 22); the
   cron is not. Rotation is an operator action until someone asks for it, and no RFC prescribes a
   schedule.
