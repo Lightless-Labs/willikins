@@ -39,6 +39,19 @@ impl fmt::Display for ExpiryWindow {
     }
 }
 
+/// Which of the two `willikins_core::plan` call sites a
+/// [`ButlerError::Plan`] failure came from — never serialized, carried
+/// only so [`fmt::Display`] can say which. See that variant's own doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanAttempt {
+    /// The very first plan for a workflow, from [`crate::Butler::plan`].
+    Initial,
+    /// A re-plan of an already-approved workflow, from
+    /// [`crate::Butler::apply`], compared against the plan that was
+    /// approved.
+    RePlan,
+}
+
 /// Everything a [`crate::Butler`] operation can refuse with.
 ///
 /// Serializes internally tagged (`#[serde(tag = "kind")]`), the same
@@ -133,11 +146,29 @@ pub enum ButlerError {
         /// Why.
         error: ParseError,
     },
-    /// Re-planning the approved workflow, against the catalog's current
-    /// state, failed outright.
+    /// Planning a workflow failed outright — either the very first plan
+    /// (`Butler::plan`) or a mid-`apply` re-plan against the catalog's
+    /// current state (`Butler::apply`, comparing the fresh plan against
+    /// the one that was approved).
     Plan {
-        /// The failure.
-        error: PlanError,
+        /// The failure. Boxed (`Box<T>` serializes exactly as `T` would),
+        /// the same reason `Self::Drift`'s own `kind` is boxed
+        /// (`clippy::result_large_err`): adding `attempt` below pushed
+        /// this variant, unboxed, past the lint's size threshold.
+        error: Box<PlanError>,
+        /// Which of the two `willikins_core::plan` call sites failed.
+        /// Never serialized (`kind` and this variant's JSON shape stay
+        /// exactly `{"kind": "Plan", "error": ...}`): it exists only to
+        /// let `Display` say "planning failed" for the first plan and
+        /// "re-planning failed" for the second, instead of always
+        /// claiming "re-planning" — which a first-plan failure never is.
+        /// Found 2026-09-16 by the first live smoke run: the initial
+        /// plan failed at node `token` and printed "re-planning failed",
+        /// which sent the operator looking for an apply that never
+        /// started, with only the journal actually showing where
+        /// planning died.
+        #[serde(skip)]
+        attempt: PlanAttempt,
     },
     /// The reloaded document failed `check` against the catalog.
     Check {
@@ -273,7 +304,14 @@ impl fmt::Display for ButlerError {
                 f,
                 "another apply is running its pre-run checks; retry in a moment"
             ),
-            Self::Plan { error } => write!(f, "re-planning failed: {error}"),
+            Self::Plan {
+                error,
+                attempt: PlanAttempt::Initial,
+            } => write!(f, "planning failed: {error}"),
+            Self::Plan {
+                error,
+                attempt: PlanAttempt::RePlan,
+            } => write!(f, "re-planning failed: {error}"),
             Self::Check { errors } => write!(
                 f,
                 "the document no longer checks: {} error(s)",
@@ -398,9 +436,10 @@ mod tests {
                 error: ParseError::new("Value", "boom"),
             },
             ButlerError::Plan {
-                error: PlanError::MissingInput {
+                error: Box::new(PlanError::MissingInput {
                     input: willikins_core::InputName::parse("x").unwrap(),
-                },
+                }),
+                attempt: PlanAttempt::Initial,
             },
             ButlerError::Check { errors: Vec::new() },
             ButlerError::Document {
@@ -541,5 +580,44 @@ mod tests {
         assert_eq!(element["input"], "x");
         assert_eq!(element["message"], "input `x`: Value: boom");
         assert!(element.get("kind").is_none(), "{json}");
+    }
+
+    /// **The 2026-09-16 smoke-run defect.** `Butler::plan_inner` (the
+    /// *very first* plan) and `Butler::apply`'s own re-plan both raised
+    /// `ButlerError::Plan`, and its `Display` always said "re-planning
+    /// failed" -- so the first live smoke run's initial-plan failure
+    /// printed that, sending a reader looking for an apply that never
+    /// started, with only the journal actually showing where planning
+    /// died. Fixed by carrying which of the two call sites failed
+    /// ([`PlanAttempt`], never serialized) so the message names the
+    /// right one, while the `kind` tag and every serialized field stay
+    /// exactly `{"kind": "Plan", "error": ...}` either way.
+    #[test]
+    fn plan_error_message_distinguishes_initial_planning_from_a_replan() {
+        let error = |attempt| ButlerError::Plan {
+            error: Box::new(PlanError::MissingInput {
+                input: willikins_core::InputName::parse("x").unwrap(),
+            }),
+            attempt,
+        };
+        let initial = error(PlanAttempt::Initial);
+        let replan = error(PlanAttempt::RePlan);
+
+        assert!(
+            initial.to_string().starts_with("planning failed:"),
+            "{initial}"
+        );
+        assert!(!initial.to_string().starts_with("re-planning"), "{initial}");
+        assert!(
+            replan.to_string().starts_with("re-planning failed:"),
+            "{replan}"
+        );
+
+        // The `attempt` field never reaches the wire: both attempts
+        // serialize identically.
+        assert_eq!(
+            serde_json::to_value(&initial).unwrap(),
+            serde_json::to_value(&replan).unwrap()
+        );
     }
 }
