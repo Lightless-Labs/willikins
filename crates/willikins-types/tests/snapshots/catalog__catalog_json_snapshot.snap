@@ -1,7 +1,6 @@
 ---
 source: crates/willikins-types/tests/catalog.rs
-assertion_line: 74
-expression: json
+expression: redacted
 ---
 [
   {
@@ -296,14 +295,14 @@ expression: json
     "name": "DopplerServiceToken",
     "secret": true,
     "description": "A Doppler service token value.",
-    "example": "dp.st.prd.exampleexampleexampleexampleexampleexample",
+    "example": "[ELIDED SECRET EXAMPLE]",
     "schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "DopplerServiceToken",
       "description": "A Doppler service token value.",
       "type": "string",
       "examples": [
-        "dp.st.prd.exampleexampleexampleexampleexampleexample"
+        "[ELIDED SECRET EXAMPLE]"
       ],
       "pattern": "^(?:dp\\.st\\.(?:[a-z0-9\\-_]{2,35}\\.)?[a-zA-Z0-9]{40,44})$"
     }
@@ -312,14 +311,14 @@ expression: json
     "name": "DopplerSecretValue",
     "secret": true,
     "description": "A secret's value.",
-    "example": "s3cr3t-value",
+    "example": "[ELIDED SECRET EXAMPLE]",
     "schema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "DopplerSecretValue",
       "description": "A secret's value.",
       "type": "string",
       "examples": [
-        "s3cr3t-value"
+        "[ELIDED SECRET EXAMPLE]"
       ],
       "maxLength": 65536,
       "minLength": 1

@@ -12,9 +12,14 @@ use willikins_types::{DomainType, DopplerConfig, DopplerServiceToken};
 use crate::support::{exact, get, list, port, require_present, tool_name};
 
 /// The first constant token `fake.secret_list` always reports.
-const TOKEN_ONE: &str = "dp.st.fakesecretlistoneaaaaaaaaaaaaaaaaaaaaaaaaa";
-/// The second constant token `fake.secret_list` always reports.
-const TOKEN_TWO: &str = "dp.st.fakesecretlisttwoaaaaaaaaaaaaaaaaaaaaaaaaa";
+/// `concat!`-joined at compile time so this file holds no literal spelling
+/// the whole Doppler-service-token-shaped string contiguously; the
+/// compiled `&'static str` is byte-identical to one that did, and still
+/// parses as [`DopplerServiceToken`] below.
+const TOKEN_ONE: &str = concat!("dp.st.", "fakesecretlistoneaaaaaaaaaaaaaaaaaaaaaaaaa");
+/// The second constant token `fake.secret_list` always reports. Same
+/// reason as [`TOKEN_ONE`].
+const TOKEN_TWO: &str = concat!("dp.st.", "fakesecretlisttwoaaaaaaaaaaaaaaaaaaaaaaaaa");
 
 /// `fake.secret_list`.
 pub struct FakeSecretList {

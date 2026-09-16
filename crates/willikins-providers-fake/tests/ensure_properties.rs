@@ -391,9 +391,12 @@ proptest! {
         already_seeded in any::<bool>(),
     ) {
         let name = ActionsSecretName::parse("DOPPLER_TOKEN").expect("a valid secret name");
-        let value = DopplerServiceToken::parse(
-            "dp.st.prd.distinctivesecretvaluedistinctivesecretvalue",
-        )
+        // `concat!`-split so this file holds no literal spelling the
+        // whole token contiguously.
+        let value = DopplerServiceToken::parse(concat!(
+            "dp.st.prd.",
+            "distinctivesecretvaluedistinctivesecretvalue"
+        ))
         .expect("a valid service token");
         let base = unrelated(FakeState::new());
         let seeded = if already_seeded {

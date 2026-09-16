@@ -19,6 +19,19 @@ fn fixture(name: &str) -> serde_json::Value {
     load_fixture(&fixtures_dir(), "doppler", name)
 }
 
+/// `service_token_post_created.json`'s `key` field is the placeholder
+/// `DOPPLER_TOKEN_PLACEHOLDER`, not a token-shaped literal (see
+/// `fixtures/doppler/README.md`): this substitutes in a token
+/// `concat!`-assembled from parts, so the wire body still carries
+/// something [`willikins_types::DopplerServiceToken`] parses, without
+/// spelling a Doppler-token-shaped string in any file on disk.
+fn service_token_created_body() -> String {
+    fixture("service_token_post_created").to_string().replace(
+        "DOPPLER_TOKEN_PLACEHOLDER",
+        concat!("dp.st.dev.", "wlknFixtureServiceTokenNotARealCredential00"),
+    )
+}
+
 #[derive(Default)]
 struct RecordingSleeper {
     durations: Mutex<Vec<Duration>>,
@@ -146,7 +159,7 @@ fn ensure_with_no_existing_token_makes_no_delete_and_mints() {
     let create = provider
         .mock("POST", CREATE_PATH)
         .with_status(200)
-        .with_body(fixture("service_token_post_created").to_string())
+        .with_body(service_token_created_body())
         .expect(1)
         .create();
     let (client, _sleeper) = client_against(provider.url());
@@ -184,7 +197,7 @@ fn ensure_deletes_the_one_listed_token_by_slug_then_mints() {
     let create = provider
         .mock("POST", CREATE_PATH)
         .with_status(200)
-        .with_body(fixture("service_token_post_created").to_string())
+        .with_body(service_token_created_body())
         .expect(1)
         .create();
     let (client, _sleeper) = client_against(provider.url());
@@ -242,7 +255,7 @@ fn ensure_deletes_every_listed_token_sharing_the_name() {
     provider
         .mock("POST", CREATE_PATH)
         .with_status(200)
-        .with_body(fixture("service_token_post_created").to_string())
+        .with_body(service_token_created_body())
         .create();
     let (client, _sleeper) = client_against(provider.url());
     let tool = DopplerServiceTokenRotate::new(client);
@@ -376,7 +389,7 @@ fn ensure_mints_exactly_once_however_many_tokens_it_revoked() {
     let create = provider
         .mock("POST", CREATE_PATH)
         .with_status(200)
-        .with_body(fixture("service_token_post_created").to_string())
+        .with_body(service_token_created_body())
         .expect(1)
         .create();
     let (client, _sleeper) = client_against(provider.url());

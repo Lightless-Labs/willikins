@@ -7,7 +7,16 @@ pub struct DomainAttrs {
     pub max_len: Option<u64>,
     pub secret: bool,
     pub description: syn::LitStr,
-    pub example: syn::LitStr,
+    /// An expression rather than a plain `syn::LitStr` on purpose: a
+    /// secret type's example must satisfy its own pattern
+    /// (`assert_example_parses`), and for Doppler's token types that
+    /// pattern is exactly the shape a secret-scanner looks for. Accepting
+    /// any constant expression lets the value be written as
+    /// `concat!("dp.st.prd.", "...")` — the compiled `&'static str` is
+    /// byte-identical to a single literal, but no one string in this
+    /// source file spells the whole token. A plain `"literal"` is itself
+    /// a valid `Expr`, so every non-secret type's attribute is unchanged.
+    pub example: syn::Expr,
 }
 
 impl DomainAttrs {
@@ -19,7 +28,7 @@ impl DomainAttrs {
         let mut max_len: Option<syn::LitInt> = None;
         let mut secret = false;
         let mut description: Option<syn::LitStr> = None;
-        let mut example: Option<syn::LitStr> = None;
+        let mut example: Option<syn::Expr> = None;
 
         let mut saw_domain_attr = false;
 

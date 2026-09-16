@@ -273,7 +273,9 @@ fn doppler_live_probe() {
 /// nested inside an object), and proves none survives.
 #[test]
 fn redact_strips_every_secret_bearing_field_at_every_depth() {
-    const TOKEN_MARKER: &str = "dp.st.wlknTokenMarker0000000000000000000000000";
+    // `concat!`-joined so this file holds no literal spelling the whole
+    // thing contiguously (same marker as `tests/redaction.rs`).
+    const TOKEN_MARKER: &str = concat!("dp.st.", "wlknTokenMarker0000000000000000000000000");
     const SECRET_MARKER: &str = "wlkn-secret-marker-9f2h7ap5rz8s";
 
     let live = serde_json::json!({

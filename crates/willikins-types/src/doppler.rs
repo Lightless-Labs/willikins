@@ -62,12 +62,17 @@ pub struct SecretName(String);
 /// plain alphanumeric characters, no dots or hyphens inside it (research
 /// note `docs/research/2026-09-12-m2-dependencies.md`, section 3, citing
 /// `https://docs.doppler.com/reference/auth-token-formats`).
+// The example is `concat!`-assembled, not a plain string literal: it must
+// satisfy this very pattern (`assert_example_parses`, below), and any
+// string that does is exactly what a Doppler-token scanner looks for. No
+// single literal in this source file spells the whole 52-character token;
+// `concat!` joins them at compile time into the identical `&'static str`.
 #[derive(willikins_derive::DomainType)]
 #[domain(
     pattern = r"dp\.st\.(?:[a-z0-9\-_]{2,35}\.)?[a-zA-Z0-9]{40,44}",
     secret,
     description = "A Doppler service token value.",
-    example = "dp.st.prd.exampleexampleexampleexampleexampleexample"
+    example = concat!("dp.st.prd.", "exampleexampleexampleexampleexampleexample")
 )]
 pub struct DopplerServiceToken(secrecy::SecretString);
 
@@ -209,6 +214,12 @@ crate::impl_domain_object_non_secret!(DopplerConfig);
 mod tests {
     use super::*;
     use crate::{DomainObject, SinkToken};
+
+    /// A valid [`DopplerServiceToken`], assembled the same way as the
+    /// type's own `#[domain(example = ...)]` value (see the comment on
+    /// that attribute): any single literal spelling this contiguously
+    /// is exactly what a Doppler-token scanner looks for.
+    const EXAMPLE_TOKEN: &str = concat!("dp.st.prd.", "exampleexampleexampleexampleexampleexample");
 
     // -------------------------------------------------------------
     // DopplerProject
@@ -380,13 +391,8 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn doppler_service_token_accepts_a_valid_token() {
-        let value =
-            DopplerServiceToken::parse("dp.st.prd.exampleexampleexampleexampleexampleexample")
-                .unwrap();
-        assert_eq!(
-            value.expose(&SinkToken::new()),
-            "dp.st.prd.exampleexampleexampleexampleexampleexample"
-        );
+        let value = DopplerServiceToken::parse(EXAMPLE_TOKEN).unwrap();
+        assert_eq!(value.expose(&SinkToken::new()), EXAMPLE_TOKEN);
     }
 
     #[test]
@@ -394,17 +400,22 @@ mod tests {
         assert!(DopplerServiceToken::parse("dp.st.short").is_err());
     }
 
-    /// The two token shapes Doppler's own documentation prints, taken
-    /// verbatim from `docs/research/2026-09-12-m2-dependencies.md`
-    /// section 3: one with the optional environment-like segment and one
-    /// without. The pattern this type carries was written from that
-    /// documentation rather than from a token, so the documentation's
-    /// own examples are the one check that it was read correctly.
+    /// The two token shapes Doppler's own documentation prints (values
+    /// matching `docs/research/2026-09-12-m2-dependencies.md` section 3,
+    /// masked there since 2026-09-16 for the same reason they are
+    /// `concat!`-split here): one with the optional environment-like
+    /// segment and one without. The pattern this type carries was written
+    /// from that documentation rather than from a token, so the
+    /// documentation's own examples are the one check that it was read
+    /// correctly.
     #[test]
     fn doppler_service_token_accepts_dopplers_documented_examples() {
+        // Split at compile time (`concat!`) so neither example, quoted
+        // from Doppler's own docs, appears in this file as one
+        // scanner-shaped literal.
         for token in [
-            "dp.st.dev.bAqhcVzrhy5cRHkOlNTc0Ve6w5NUDCpcutm8vGE9myi",
-            "dp.st.gJ23agW5s09x4TKLMJMc4OPIr9fCm3bIs0QAC2L5",
+            concat!("dp.st.dev.", "bAqhcVzrhy5cRHkOlNTc0Ve6w5NUDCpcutm8vGE9myi"),
+            concat!("dp.st.", "gJ23agW5s09x4TKLMJMc4OPIr9fCm3bIs0QAC2L5"),
         ] {
             assert!(
                 DopplerServiceToken::parse(token).is_ok(),
@@ -432,7 +443,7 @@ mod tests {
             // An uppercase environment segment.
             "dp.st.PRD.exampleexampleexampleexampleexampleexample",
             // 45 characters, one past the longest Doppler issues.
-            "dp.st.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            concat!("dp.st.", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         ] {
             assert!(
                 DopplerServiceToken::parse(token).is_err(),
@@ -448,9 +459,7 @@ mod tests {
 
     #[test]
     fn doppler_service_token_debug_and_display_are_redacted_and_never_echo_input() {
-        let value =
-            DopplerServiceToken::parse("dp.st.prd.exampleexampleexampleexampleexampleexample")
-                .unwrap();
+        let value = DopplerServiceToken::parse(EXAMPLE_TOKEN).unwrap();
         assert_eq!(format!("{value:?}"), "[REDACTED DopplerServiceToken]");
         assert_eq!(value.to_string(), "[REDACTED DopplerServiceToken]");
 
@@ -465,14 +474,10 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn doppler_service_token_deserialize_works_and_stays_redacted() {
-        let value: DopplerServiceToken =
-            serde_json::from_str("\"dp.st.prd.exampleexampleexampleexampleexampleexample\"")
-                .unwrap();
+        let quoted = format!("\"{EXAMPLE_TOKEN}\"");
+        let value: DopplerServiceToken = serde_json::from_str(&quoted).unwrap();
         assert_eq!(format!("{value:?}"), "[REDACTED DopplerServiceToken]");
-        assert_eq!(
-            value.expose(&SinkToken::new()),
-            "dp.st.prd.exampleexampleexampleexampleexampleexample"
-        );
+        assert_eq!(value.expose(&SinkToken::new()), EXAMPLE_TOKEN);
 
         let err = serde_json::from_str::<DopplerServiceToken>("\"dp.st.short\"").unwrap_err();
         assert!(

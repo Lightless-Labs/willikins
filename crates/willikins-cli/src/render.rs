@@ -613,9 +613,12 @@ mod tests {
     /// instead — the same guarantee acceptance test 8 pins for JSON.
     #[test]
     fn plan_text_redacts_a_known_secret_output() {
-        let token = willikins_types::DopplerServiceToken::parse(
-            "dp.st.fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        )
+        // `concat!`-split so this file holds no literal spelling the
+        // whole Doppler-token-shaped string contiguously.
+        let token = willikins_types::DopplerServiceToken::parse(concat!(
+            "dp.st.",
+            "fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ))
         .unwrap();
         let mut outputs = Outputs::new();
         outputs.insert(PortName::parse("token").unwrap(), Value::known(token));

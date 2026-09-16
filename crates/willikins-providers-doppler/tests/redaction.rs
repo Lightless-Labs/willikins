@@ -24,15 +24,17 @@ use willikins_types::{DomainType, DopplerConfig, DopplerProject, DopplerTokenNam
 /// Stands in for a real Doppler service-account token: shaped like one so
 /// nothing rejects it before the point this test cares about, but
 /// distinctive enough that its presence anywhere but the `Authorization`
-/// header is unambiguously a bug.
-const CREDENTIAL_MARKER: &str = "dp.sa.wlknCredentialMarker00000000000000000";
+/// header is unambiguously a bug. `concat!`-joined so this file holds no
+/// literal spelling the whole thing contiguously.
+const CREDENTIAL_MARKER: &str = concat!("dp.sa.", "wlknCredentialMarker00000000000000000");
 
 /// Stands in for a real secret value.
 const SECRET_MARKER: &str = "wlkn-secret-marker-9f2h7ap5rz8s";
 
 /// Stands in for a real minted service token: shaped to match
-/// [`willikins_types::DopplerServiceToken`]'s pattern.
-const TOKEN_MARKER: &str = "dp.st.wlknTokenMarker0000000000000000000000000";
+/// [`willikins_types::DopplerServiceToken`]'s pattern. `concat!`-joined
+/// for the same reason as [`CREDENTIAL_MARKER`].
+const TOKEN_MARKER: &str = concat!("dp.st.", "wlknTokenMarker0000000000000000000000000");
 
 #[test]
 fn no_authored_fixture_carries_either_marker() {

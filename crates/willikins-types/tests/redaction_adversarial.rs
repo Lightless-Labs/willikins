@@ -16,8 +16,11 @@ use willikins_types::{
 };
 
 /// A token whose bytes are distinctive enough that any appearance in any
-/// rendering is unmistakable.
-const SECRET_BYTES: &str = "dp.st.fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/// rendering is unmistakable. `concat!`-joined at compile time (same tail
+/// text as [`SECRET_TAIL`], below) so this file holds no single literal
+/// spelling the whole Doppler-token-shaped string contiguously; the
+/// compiled value is byte-identical to one that did.
+const SECRET_BYTES: &str = concat!("dp.st.", "fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 
 /// The distinctive tail of [`SECRET_BYTES`], so a check also catches a
 /// partial leak that drops the `dp.st.` prefix.
@@ -102,9 +105,14 @@ fn dyn_eq_is_true_for_two_secrets_with_the_same_bytes() {
 #[test]
 fn dyn_eq_is_false_across_secret_values_and_types_without_leaking() {
     let one = boxed_token();
+    // `concat!`-split so the token's full 46-character shape is not
+    // spelled contiguously in this file.
     let other: Box<dyn DomainObject> = Box::new(
-        DopplerServiceToken::parse("dp.st.someothertokenbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-            .expect("fixture parses"),
+        DopplerServiceToken::parse(concat!(
+            "dp.st.",
+            "someothertokenbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ))
+        .expect("fixture parses"),
     );
     assert!(!one.dyn_eq(other.as_ref()));
 

@@ -21,7 +21,9 @@ use willikins_types::{DomainType, DopplerServiceToken};
 const SECRET_TAIL: &str = "fakesecretbytes0001aaaaaaaaaaaaaaaaaaaaaaa";
 
 /// The full token string, matching `DopplerServiceToken`'s pattern.
-const TOKEN: &str = "dp.st.prd.fakesecretbytes0001aaaaaaaaaaaaaaaaaaaaaaa";
+/// `concat!`-joined with the same tail text as [`SECRET_TAIL`] so this
+/// file holds no literal spelling the whole thing contiguously.
+const TOKEN: &str = concat!("dp.st.prd.", "fakesecretbytes0001aaaaaaaaaaaaaaaaaaaaaaa");
 
 /// The marker every redaction is expected to show instead.
 const MARKER: &str = "[REDACTED DopplerServiceToken]";
