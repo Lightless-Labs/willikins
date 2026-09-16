@@ -203,12 +203,12 @@ source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_TESTS=1 \
 ```
 
 The test starts with a pre-flight check, before it creates anything. The teardown script
-deletes the repository through `gh api`, which uses the credential of the `gh` CLI, not
-`WILLIKINS_GITHUB_TOKEN`. That credential must carry the `delete_repo` scope. A dry run
-cannot show that the scope is absent. For this reason the test reads the `x-oauth-scopes`
-header of `gh api -i user` first, and it stops with the fix in the message
-(`gh auth refresh -h github.com -s delete_repo`) when the scope is absent. The pre-flight
-also stops when the repository or the Doppler project already exists: a leftover from an
+deletes the repository through `curl`, authenticated with `WILLIKINS_GITHUB_TOKEN` -- the
+same sandbox fine-grained PAT the server itself uses in live mode, scoped to repository
+administration in the throwaway `Willikins-Test` organization -- exactly as it already
+authenticates to Doppler with `WILLIKINS_DOPPLER_TOKEN`. The pre-flight checks that both
+`WILLIKINS_GITHUB_TOKEN` and `WILLIKINS_DOPPLER_TOKEN` are set, that `jq` is on `PATH`, and
+that neither the repository nor the Doppler project already exists: a leftover from an
 earlier run is for the operator to remove, and this test never reuses one.
 
 The test prints the journal path as its first line of output. Keep that line. The run record
