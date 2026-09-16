@@ -76,6 +76,19 @@ fn read_returns_computed_not_raw() {
     assert_eq!(value.render().to_string(), "[REDACTED DopplerSecretValue]");
 }
 
+/// Also this tool's answer for "a secret in a missing config" (or a
+/// missing project): Doppler's secret-get endpoint 404s the same opaque
+/// way regardless of which of the three (project, config, secret name)
+/// does not exist, and unlike `doppler.project.ensure`,
+/// `doppler.config.ensure` or `doppler.service_token.ensure`/`.rotate`,
+/// this tool has no `ensure`/create path that could make the parent
+/// exist by the time a caller retries — it is a pure lookup of a secret
+/// that must already be there. So, unlike those tools' 404-tolerant
+/// `read` (2026-09-16 defect: a missing *parent* is not a reason to fail
+/// a plan when the same plan is about to create it), a missing parent
+/// here is correctly a hard plan-time refusal: nothing later in this
+/// plan can fix it, so failing now, with a message naming the key, is
+/// the honest answer rather than a `NotFound` deferred to `apply`.
 #[test]
 fn read_of_a_missing_secret_is_not_found_and_never_names_a_value() {
     let mut provider = MockProvider::start();
