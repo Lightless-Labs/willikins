@@ -81,4 +81,13 @@ proptest! {
         prop_assert_eq!(DopplerConfig::parse(&text).unwrap(), config);
         let _: DopplerProject = project;
     }
+
+    #[test]
+    fn buildkite_pipeline_slug_is_total_and_round_trips(slug in valid_project_slug()) {
+        use willikins_types::BuildkitePipelineSlug;
+
+        let pipeline_slug = v1::buildkite_pipeline_slug(&slug);
+        let text = pipeline_slug.to_string();
+        prop_assert_eq!(BuildkitePipelineSlug::parse(&text).unwrap(), pipeline_slug);
+    }
 }

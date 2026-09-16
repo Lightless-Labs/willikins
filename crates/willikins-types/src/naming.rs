@@ -10,11 +10,12 @@
 //! | GitHub repo | kebab | `third-thoughts` |
 //! | Doppler project | kebab | `third-thoughts` |
 //! | Doppler root config | environment, snake | `third-thoughts/prd` (for environment `prd`) |
+//! | Buildkite pipeline slug | kebab | `third-thoughts` |
 //!
-//! Rows for other providers (Buildkite, Railway, Cargo, Swift, Android,
-//! bundle IDs, and the rest of the design doc's join table) are added by
-//! the milestone that adds their provider, without a version bump: adding
-//! a row never changes an existing one.
+//! Rows for other providers (Railway, Cargo, Swift, Android, bundle IDs,
+//! and the rest of the design doc's join table) are added by the
+//! milestone that adds their provider, without a version bump: adding a
+//! row never changes an existing one.
 
 use std::fmt;
 use std::str::FromStr;
@@ -93,6 +94,7 @@ impl<'de> serde::Deserialize<'de> for NamingScheme {
 /// changes once published. Never edit these functions; add `v2` instead.
 pub mod v1 {
     use crate::DomainType;
+    use crate::buildkite::BuildkitePipelineSlug;
     use crate::doppler::{DopplerConfig, DopplerConfigName, DopplerProject};
     use crate::github::{GitHubOrg, GitHubRepo};
     use crate::slug::{EnvironmentSlug, ProjectSlug};
@@ -134,6 +136,23 @@ pub mod v1 {
             .expect("an EnvironmentSlug's snake form always parses as a DopplerConfigName");
         DopplerConfig::new(project.clone(), name)
     }
+
+    /// The Buildkite pipeline slug for `slug`. Join: kebab.
+    ///
+    /// The Buildkite organisation is not an argument, because the slug
+    /// does not depend on it -- which is why `naming.v1`'s tool port for
+    /// this row needs no new input.
+    ///
+    /// # Panics
+    ///
+    /// Never: [`ProjectSlug`]'s kebab form (`[a-z][a-z0-9]*(-[a-z0-9]+)*`,
+    /// at most 32 characters) is inside [`BuildkitePipelineSlug`]'s
+    /// grammar (`[a-z0-9][a-z0-9-]*`) and its 100-character cap.
+    #[must_use]
+    pub fn buildkite_pipeline_slug(slug: &ProjectSlug) -> BuildkitePipelineSlug {
+        BuildkitePipelineSlug::parse(&slug.words().kebab())
+            .expect("a ProjectSlug's kebab form always parses as a BuildkitePipelineSlug")
+    }
 }
 
 #[cfg(test)]
@@ -174,6 +193,15 @@ mod tests {
         assert_eq!(
             v1::doppler_root_config(&project, &environment).to_string(),
             "x/pre_prod"
+        );
+    }
+
+    #[test]
+    fn golden_buildkite_pipeline_slug() {
+        let slug = ProjectSlug::parse("third-thoughts").unwrap();
+        assert_eq!(
+            v1::buildkite_pipeline_slug(&slug).to_string(),
+            "third-thoughts"
         );
     }
 
