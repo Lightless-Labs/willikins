@@ -97,6 +97,100 @@ fn read_reports_present_with_an_unknown_token_when_listed() {
     assert!(!token_value(&outputs).is_known());
 }
 
+/// **The 2026-09-16 smoke-run defect.** Doppler's token-list endpoint
+/// 404s when the `project` or `config` it was asked about does not exist
+/// yet — which, at plan time, is exactly the state before this
+/// workflow's own `doppler.project.ensure` and `doppler.config.ensure`
+/// nodes have run. Before this fix, `read` propagated that 404 as a hard
+/// `ToolError`, so planning the positive fixture against a fresh Doppler
+/// account failed outright at this node
+/// (`fixtures/doppler/service_tokens_list_project_missing.json` is the
+/// exact body the live smoke run saw). "No parent yet" answers "is a
+/// token named `name` already listed?" the same way "an empty list"
+/// does: `Observation::Absent`, matching `doppler.config.ensure`'s
+/// identical 404 handling next door. See the fixtures directory's
+/// README for the full defect note.
+#[test]
+fn read_reports_absent_when_the_parent_project_or_config_does_not_exist_yet() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(404)
+        .with_body(fixture("service_tokens_list_project_missing").to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerServiceTokenEnsure::new(client);
+    let observation = tool.read(&inputs()).unwrap();
+    let Observation::Absent { predicted } = observation else {
+        panic!("expected Absent, got {observation:?}");
+    };
+    assert!(!token_value(&predicted).is_known());
+}
+
+/// The same 404 tolerated by `ensure`'s own listing check: with the
+/// parent still missing, `ensure` proceeds straight to the mint `POST`
+/// rather than failing on the listing `GET` — the mint itself is what
+/// surfaces a real failure if the parent is genuinely still absent by
+/// apply time.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_mints_when_the_parent_project_or_config_does_not_exist_yet() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(404)
+        .with_body(fixture("service_tokens_list_project_missing").to_string())
+        .create();
+    let create = provider
+        .mock("POST", CREATE_PATH)
+        .with_status(200)
+        .with_body(fixture("service_token_post_created").to_string())
+        .expect(1)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerServiceTokenEnsure::new(client);
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&inputs(), &token).unwrap();
+    assert!(ensured.changed);
+    assert!(token_value(&ensured.outputs).is_known());
+    create.assert();
+}
+
+/// The parity hole the defect exposed: the fake and the live provider
+/// must agree on this exact question ("is a token listed, in a project
+/// the provider does not hold at all?"). The fake never models a project
+/// existing or not — a token is either seeded or it is not — so a fresh
+/// `FakeState` with nothing seeded already answers `Absent` here, which
+/// is also what the live tool must answer once the fix above lands. If
+/// either side changes, this fails, and whoever changes it has to change
+/// the other too.
+#[test]
+fn read_agrees_with_the_fake_tool_on_a_project_it_does_not_hold() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(404)
+        .with_body(fixture("service_tokens_list_project_missing").to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let live = DopplerServiceTokenEnsure::new(client)
+        .read(&inputs())
+        .unwrap();
+
+    let state = Arc::new(Mutex::new(willikins_providers_fake::FakeState::new()));
+    let fake = willikins_providers_fake::tools::DopplerServiceTokenEnsure::new(state)
+        .read(&inputs())
+        .unwrap();
+
+    assert!(matches!(live, Observation::Absent { .. }), "live: {live:?}");
+    assert!(matches!(fake, Observation::Absent { .. }), "fake: {fake:?}");
+    assert_eq!(
+        serde_json::to_value(&live).unwrap(),
+        serde_json::to_value(&fake).unwrap(),
+        "the live and fake ensure must observe a token in a missing project identically"
+    );
+}
+
 #[test]
 fn read_maps_a_5xx_to_a_bounded_provider_error() {
     let mut provider = MockProvider::start();

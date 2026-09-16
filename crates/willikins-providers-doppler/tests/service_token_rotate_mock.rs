@@ -79,6 +79,33 @@ fn read_always_reports_absent_even_when_a_token_is_listed() {
     assert!(matches!(observation, Observation::Absent { .. }));
 }
 
+/// **The 2026-09-16 smoke-run defect, this tool's share.** Same cause as
+/// `doppler.service_token.ensure`'s identical fix (see that crate's
+/// mock test and the fixtures directory's README): the listing `GET`
+/// this `read` always performs 404s when the parent project or config
+/// does not exist yet, which at plan time is exactly the state before
+/// this workflow's own `doppler.project.ensure`/`doppler.config.ensure`
+/// nodes have run. `read` already reports `Absent` unconditionally once
+/// the listing succeeds (a `Destructive` step must never plan as
+/// `NoOp`) — the fix is only that a 404 must not stop it from reaching
+/// that unconditional answer. `read_still_propagates_a_listing_failure`
+/// below still pins that a *real* failure (a 5xx, a bad credential)
+/// keeps failing at plan time; only "the parent is not there yet" is
+/// now tolerated.
+#[test]
+fn read_reports_absent_when_the_parent_project_or_config_does_not_exist_yet() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(404)
+        .with_body(fixture("service_tokens_list_project_missing").to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerServiceTokenRotate::new(client);
+    let observation = tool.read(&inputs()).unwrap();
+    assert!(matches!(observation, Observation::Absent { .. }));
+}
+
 /// The listing `GET` still runs during `read`, so a bad credential or
 /// config fails at plan time rather than being silently swallowed.
 #[test]

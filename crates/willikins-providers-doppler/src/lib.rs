@@ -15,8 +15,16 @@
 //! read" — reporting `Present` when a token by that name is already
 //! listed. This crate deliberately does not do that: it always reports
 //! [`willikins_core::Observation::Absent`], performing the listing `GET`
-//! first so a bad credential or config still fails at plan time, but
-//! never letting the observation itself read `Present`.
+//! first so a bad credential, or a genuine provider failure, still fails
+//! at plan time, but never letting the observation itself read
+//! `Present`. Since 2026-09-16, a 404 from that listing call is *not*
+//! one of the failures this fails on: it means the parent project or
+//! config does not exist yet, which at plan time is exactly the state
+//! before this workflow's own `doppler.project.ensure`/
+//! `doppler.config.ensure` nodes have run — see
+//! `tools::service_token_rotate`'s and `tools::service_token_ensure`'s
+//! own doc comments and `fixtures/doppler/README.md` for the defect this
+//! fixed.
 //!
 //! This mirrors `willikins_providers_fake::tools::DopplerServiceTokenRotate`'s
 //! own, already-shipped decision, and for the same reason its module doc

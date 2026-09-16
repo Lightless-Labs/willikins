@@ -79,13 +79,31 @@ impl Tool for DopplerServiceTokenRotate {
 
     fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
         let (config, _name) = self.key_ports(inputs)?;
-        // Performed so a bad credential or config fails at plan time, but
-        // its result never changes the observation — see this crate's
-        // module docs (`src/lib.rs`) for why a rotate must never plan as
-        // `NoOp`.
-        let _ = self
+        // Performed so a bad credential, or a genuine provider failure,
+        // fails at plan time, but its result never changes the
+        // observation — see this crate's module docs (`src/lib.rs`) for
+        // why a rotate must never plan as `NoOp`.
+        //
+        // **2026-09-16 defect, fixed here.** A 404 is tolerated, not
+        // propagated: Doppler 404s this same listing endpoint when the
+        // `project` or `config` does not exist yet, which at plan time is
+        // exactly the state before this workflow's own
+        // `doppler.project.ensure`/`doppler.config.ensure` nodes have
+        // run — the same "no parent yet" case
+        // `doppler.service_token.ensure`'s `is_listed` was fixed for
+        // (see that fix's doc comment and `fixtures/doppler/README.md`).
+        // Since the observation is `Absent` either way, there is nothing
+        // to compute from the listing beyond "did the call fail for a
+        // real reason" — a bad credential (401/403) or a 5xx still fails
+        // here, pinned by `read_still_propagates_a_listing_failure`.
+        match self
             .client
-            .list_service_tokens(config.project(), config.name())?;
+            .list_service_tokens(config.project(), config.name())
+        {
+            Ok(_) => {}
+            Err(err) if err.status == Some(404) => {}
+            Err(err) => return Err(err.into()),
+        }
         Ok(Observation::Absent {
             predicted: Self::unknown_outputs(),
         })
