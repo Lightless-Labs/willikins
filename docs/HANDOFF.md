@@ -14,7 +14,28 @@ compaction, before handing off, after a milestone, and after a plan change or di
   fixture generator, the two live probes and the two live write cycles). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
   `main` is pushed after every coordinator commit.
-- **What just happened (2026-09-16, small hours):** task 14 part A (Workflow `wf_ba182dd5-636`,
+- **What just happened (2026-09-16, later in the night):** milestone 2c's plan exists and is
+  reviewed. Workflow `wf_cfe76f52-8cc` (six opus readers, a synthesizer, a drafter) wrote
+  `docs/research/2026-09-16-m2c-authorization.md` (1,391 lines, every fact quoted from a source
+  fetched 2026-09-16, a twenty-item verify list, a six-provider facts table) and drafted
+  `docs/plans/2026-09-16-milestone-2c-authorization.md`; a five-persona document review
+  (coherence, feasibility, security-lens, scope-guardian, adversarial; 75 findings merged into
+  57 resolutions, recorded in the plan's "Review resolutions") was folded in by an opus agent
+  and the plan is stamped Reviewed. Its shape: willikins as an OAuth 2.1 resource server only
+  (RFC 9068 validation against a cached JWKS, RFC 9728 metadata, the 401/403 challenges), a
+  derived `oauth-<12 hex>` principal with claims journaled additively, four scopes plus two
+  subject allowlists (`WILLIKINS_AGENT_SUBJECTS`, `WILLIKINS_APPROVER_SUBJECTS`) as the
+  authority, a PKCE browser login with a `__Host-` session cookie and a login-binding cookie,
+  OAuth required on every HTTP bind (stdio keeps the local principal), the static hashes and
+  `hash-token` removed and refused at startup, an in-process fake authorization server for a
+  deterministic adversarial pass 3, pass 2's four exposure hand-overs as tasks, a go-live
+  sequence, 17 tasks, 19 acceptance tests, 17 new variables. Two open decisions, both the
+  operator's: the identity provider (recommended default Logto, the only surveyed provider
+  honouring RFC 8707 `resource` and offering Client ID Metadata Documents; question:
+  self-hosted or Logto Cloud) and the public host (recommended: a custom domain the operator
+  owns; question: which hostname). Implementation starts only after the milestone 2 plan is
+  Completed (task 14 part B).
+- **Earlier (2026-09-16, small hours):** task 14 part A (Workflow `wf_ba182dd5-636`,
   opus): both sandbox credentials probed alive (read-only; the Doppler project checks 404 by
   design in the empty workplace), and acceptance test 18 written as code,
   `crates/willikins-cli/tests/live_smoke.rs` behind the `live-tests` feature and
@@ -119,7 +140,10 @@ compaction, before handing off, after a milestone, and after a plan change or di
   writes milestone 2c's plan (OAuth 2.1 on the MCP transport, browser login on the approvals
   page, identity provider still open) taking the exposure items pass 2 handed over
   (header-read bound, IPv6-aware origin check, log level, the permit in the blocking
-  closure), with its own document-review pass. Railway follow-ups for the operator: connect Doppler's Railway
+  closure), with its own document-review pass. **Update:** the 2c plan is written and
+  reviewed (see "What just happened"); after part B lands, the coordinator puts the two open
+  decisions to the operator (provider, host), one question at a time, and starts 2c's task 1
+  only with the milestone 2 plan marked Completed. Railway follow-ups for the operator: connect Doppler's Railway
   integration and remove `WILLIKINS_FAKE_CATALOG` when the service should go live (the IaC
   file is applied: CLI upgraded to 5.57.2 on 2026-09-15 with the operator's permission, the
   file regenerated from the live project with `railway config pull`, the healthcheck added,

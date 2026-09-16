@@ -331,8 +331,11 @@ These came up from memory during the conversation and have not been checked.
    with protected-resource metadata, tokens validated against the operator's identity
    provider) and a browser login on the approvals page in place of Basic auth; short-lived
    credentials, no static bearer tokens. Decided 2026-09-15 ("We're going to need OAuth");
-   it is what unblocks a public domain for the service, so it runs before 2b and 3. Plan to
-   be written when milestone 2 completes; the identity provider is the open question.
+   it is what unblocks a public domain for the service, so it runs before 2b and 3. Plan:
+   `docs/plans/2026-09-16-milestone-2c-authorization.md` (drafted from
+   `docs/research/2026-09-16-m2c-authorization.md` and reviewed 2026-09-16; implementation
+   starts only after milestone 2 is marked Completed); the identity provider and the public
+   host are its two open decisions, both the operator's.
 3. Templates and versioned re-apply, the project record, recorded naming overrides, and the
    Buildkite provider (a pipeline per repository; moved here from milestone 4 on 2026-09-14
    at the operator's request).

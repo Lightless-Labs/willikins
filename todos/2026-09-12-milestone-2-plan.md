@@ -61,8 +61,13 @@ opt-in `live_smoke` test plus its fake-catalog twin `smoke_parity` (in every gat
 corrected (root configs `Unchanged` on the first apply, `ci_secret` `Converged` on the second). Part
 B waits on the operator granting `gh` the `delete_repo` scope the teardown script needs.
 
-**Next:** 14 part B (the live run in one command, teardown, leftover check, plan Completed), then
-the milestone 2c plan. This todo closes when the plan is marked Completed.
+2026-09-16 (later): the milestone 2c plan is drafted and reviewed ahead of time
+(`docs/plans/2026-09-16-milestone-2c-authorization.md`, research note
+`docs/research/2026-09-16-m2c-authorization.md`); its two open decisions (identity provider, public
+host) are the operator's.
+
+**Next:** 14 part B (the live run in one command, teardown, leftover check, plan Completed). This
+todo closes when the plan is marked Completed; milestone 2c then gets its own tracking todo.
 
 ## First action of the next session
 
