@@ -2857,6 +2857,7 @@ dependencies = [
  "willikins-journal",
  "willikins-providers-doppler",
  "willikins-providers-fake",
+ "willikins-providers-github",
  "willikins-providers-http",
  "willikins-server",
  "willikins-types",
