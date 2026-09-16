@@ -58,6 +58,17 @@ fn full_inputs() -> willikins_core::Inputs {
     inputs
 }
 
+/// Also this tool's answer for "an Actions secret in a missing
+/// repository" (the same audit that found the 2026-09-16
+/// `doppler.service_token.ensure`/`.rotate` defect: a parent this same
+/// plan is about to create must not fail a `read` at plan time). GitHub
+/// answers this endpoint `404` whether the secret's repository does not
+/// exist yet or the repository exists but the secret does not — the same
+/// opaque conflation `github.repo.ensure`'s own docs note for `get_repo`
+/// — and this tool already reads either shape as `Absent`, matching
+/// `github.repo.ensure`'s ordering guarantee (by the time this tool's
+/// `ensure` runs, `github.repo.ensure` has already created the
+/// repository). No fix needed here; this test is what pins it.
 #[test]
 fn read_reports_absent_on_404() {
     let mut provider = MockProvider::start();
