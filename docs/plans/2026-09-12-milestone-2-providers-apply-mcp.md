@@ -992,17 +992,29 @@ Recorded here so they are not lost; nothing in this milestone depends on them.
   two service accounts whose grants are added *per project at provisioning time* rather than
   granted by wildcard, so an unprovisioned project is unreachable and the grant list is an
   audit record of which projects CI can read.
-  **The fact that decides it has not been fetched:** whether a Service Account's permission set
-  can name a config across all projects, or whether every grant is per-project. The research
-  note establishes only that a Service Account's permissions come "either from an existing role
-  identifier or an explicit permissions array, never both"
-  (`docs/research/2026-09-12-m2-dependencies.md`, section 3). Fetch the service-account
-  permissions schema verbatim before designing the tool, per this project's own rule.
+  **Answered 2026-09-16, by probe against the operator's test workplace with a second, deliberately
+  ungranted `dp.sa.` token they provided** (research note, section "3.y Service-account access"):
+  a grant is **per project**, and within a project it names **environments**
+  (`POST /v3/projects/project/members`, body `{type, slug, role, environments[]}`), so the UI's
+  per-project limit is the API's too. An environment grant reaches that environment's **branch
+  configs** as well as its root config, and no others, so a `prd_ci` / `prd_deploy` split *inside*
+  one environment cannot be separated by grant at all: separation by grant needs separate
+  environments, and config-level separation is exactly what a config-scoped service token
+  (`dp.st.`) is for. A workplace-wide blanket exists only as admin over everything (a service
+  account with it is *refused* a project role). So the operator's two-account shape works, the
+  per-project grants are not a preference but the only expressible form, and **what distinguishes
+  the CI account from the deploy account has to be the project role, not the config name** —
+  `viewer` for read, a custom project role for whatever deploy needs (`/v3/projects/roles` lists
+  them and `project_roles-create` defines new ones).
   **What it changes in willikins:** under the operator's shape the provisioning workflow stops
   minting a token and stops pushing a secret into CI. It grants an existing service account
-  access to the new project's config instead, which needs a new tool
-  (`doppler.service_account.grant.ensure`, shape unknown until the schema is read) and drops
-  both `doppler.service_token.ensure` and the `ci_secret` step from the positive fixture. Like
+  access to the new project instead, which needs one new tool — `doppler.project_member.ensure`,
+  inputs `project`, a service-account slug, a project role and a list of environments; `read`
+  through `GET /v3/projects/project/members`, `ensure` through the `POST` above, class
+  `Reversible` — and drops both `doppler.service_token.ensure` and the `ci_secret` step from the
+  positive fixture. The two service accounts and their tokens are created once by the operator,
+  never by willikins: minting a workplace-level credential is not something a provisioning run
+  should be able to do. Like
   the base-config layout, this is workflow content and organization-specific: willikins supports
   both shapes and recommends one, never mandates it.
 - Several GitHub organizations, several Doppler workplaces (operator, 2026-09-15, while

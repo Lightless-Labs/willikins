@@ -497,6 +497,14 @@ page — this avoided the 429s a previous session hit.
 
 ### Doppler authentication and token types
 
+**2026-09-16 note:** the three worked token examples below are quoted from
+Doppler's own docs (a deliberate departure from this document's usual
+"fetched verbatim" rule) with their random suffix elided by an ellipsis,
+because the unmasked value is exactly what a Doppler-token scanner looks
+for and this file is prose, not code that can `concat!`-split a literal
+apart the way the same examples' Rust siblings now do (see
+`crates/willikins-types/src/doppler.rs`'s test module).
+
 **Recommendation:** Provision (create projects/environments/configs/service tokens) with a
 Personal Token or a Service Account Token whose workplace role grants the needed
 permissions; never attempt provisioning with a Service Token, which Doppler's own docs
@@ -517,9 +525,9 @@ documented off-by-one, not a research gap.
 - SCIM tokens are read/write over users/groups; Audit tokens are read-only over users/groups. (source: https://docs.doppler.com/reference/api)
   - "**SCIM Tokens**: * Provide read/write access to users and groups within your workplace." / "**Audit Tokens** * Provide read-only access to users and groups within your workplace"
 - Every token kind has an exact prefix and a fixed-length random suffix regex, with a worked example per kind. (source: https://docs.doppler.com/reference/auth-token-formats)
-  - CLI: `/dp\.ct\.[a-zA-Z0-9]{40,44}/` — `dp.ct.bAqhcVzrhy5cRHkOlNTc0Ve6w5NUDCpcutm8vGE9myi`
+  - CLI: `/dp\.ct\.[a-zA-Z0-9]{40,44}/` — `dp.ct.bAqhcVzrhy5cRHkOlNTc0…cutm8vGE9myi` (masked)
   - Personal: `/dp\.pt\.[a-zA-Z0-9]{40,44}/`
-  - Service: `/dp\.st\.(?:[a-z0-9\-_]{2,35}\.)?[a-zA-Z0-9]{40,44}/` — `dp.st.dev.bAqhcVzrhy5cRHkOlNTc0Ve6w5NUDCpcutm8vGE9myi`
+  - Service: `/dp\.st\.(?:[a-z0-9\-_]{2,35}\.)?[a-zA-Z0-9]{40,44}/` — `dp.st.dev.bAqhcVzrhy5cRHkOlNTc0…cutm8vGE9myi` (masked)
   - Service Account: `/dp\.sa\.[a-zA-Z0-9]{40,44}/`
   - Service Account Identity (short lived): `/dp\.said\.[a-zA-Z0-9]{40,44}/`
   - SCIM: `/dp\.scim\.[a-zA-Z0-9]{40,44}/`
@@ -618,7 +626,7 @@ Revoke by `slug` (a server-assigned UUID) or by the raw `token` value.
 - `POST /v3/configs/config/tokens` requires `project`, `config`, `name`; optional `expire_at` (date-time) and `access` (enum `["read", "read/write"]`, default `"read"`). (source: https://docs.doppler.com/reference/service_tokens-create)
   - `"required": ["project", "config", "name"]` ... `"access": {"type": "string", "description": "Token's capabilities.", "default": "read", "enum": ["read", "read/write"]}`
 - Create response includes the one-time `key`, plus `name`, `slug` (a UUID), `created_at`, `config`, `environment`, `project`, `expires_at`, `access`. (source: https://docs.doppler.com/reference/service_tokens-create)
-  - `{"token": {"name": "AWS Lambda", "slug": "56c69f96-3045-11ea-978f-2e728ce88125", "created_at": "2019-11-19T07:19:01.073Z", "key": "dp.st.gJ23agW5s09x4TKLMJMc4OPIr9fCm3bIs0QAC2L5", "config": "dev", "environment": "dev", "project": "ed0c2a68b6t", "expires_at": null, "access": "read"}}`
+  - `{"token": {"name": "AWS Lambda", "slug": "56c69f96-3045-11ea-978f-2e728ce88125", "created_at": "2019-11-19T07:19:01.073Z", "key": "dp.st.gJ23agW5s09x4TKLMJMc4O…s0QAC2L5" (masked), "config": "dev", "environment": "dev", "project": "ed0c2a68b6t", "expires_at": null, "access": "read"}}`
 - `GET /v3/configs/config/tokens` (list) response's token objects omit `key` (expected — it's a secret) **and also omit `access`**, unlike the create response. (source: https://docs.doppler.com/reference/service_tokens-list)
   - `{"tokens": [{"name": "AWS Lambda", "slug": "56c69f96-3045-11ea-978f-2e728ce88125", "created_at": "...", "config": "dev", "environment": "dev", "project": "ed0c2a68b6t", "expires_at": null}]}`
 - `DELETE /v3/configs/config/tokens/token` requires `project` and `config` in the body; `slug` and `token` are both present as optional properties (the schema's `required` array lists only `project`/`config`), so the token is identified by whichever of `slug`/`token` is supplied. Response is `{"success": true}`. (source: https://docs.doppler.com/reference/service_tokens-delete)
@@ -1160,3 +1168,50 @@ The word-level pins live in `crates/willikins-types/tests/naming_adversarial.rs`
 
 No changes needed in `naming_properties.rs`, `naming_v1_properties.rs`, or `catalog.rs` —
 none hardcode a keyword list; they all call `is_reserved` or filter through it.
+
+## 3.y Service-account access: what a grant can and cannot express (probed live 2026-09-16)
+
+Answered empirically against the operator's dedicated test workplace, with a second `dp.sa.`
+token they created holding the workplace role `no_access` and no project grants. Every probe
+created its own throwaway project and deleted it under a trap; the workplace held zero projects
+before and after. No token reached a command line.
+
+**A grant is per project, and within a project it names environments.**
+`POST /v3/projects/project/members?project=<slug>` takes
+`{type, slug, role, environments[]}` (OpenAPI, `project_members-add`, fetched 2026-09-16; `type`
+is one of `workplace_user`, `group`, `invite`, `service_account`). A successful grant answers with
+`"access_all_environments": false, "environments": ["prd"]`, so that flag is the only
+all-of-something switch and it is scoped to one project's environments, never across projects.
+There is no endpoint, field or role that says "this config in every project". The documentation
+agrees in prose: "A service account consists of a workplace role, project access, and tokens ...
+Project access grants the service account access to projects and environments"
+(<https://docs.doppler.com/docs/service-accounts>, fetched 2026-09-16).
+
+**An environment grant reaches that environment's branch configs, and nothing else.** Granted
+`environments: ["prd"]` with role `viewer`, the service account read: the project (200), the
+config list (200), the root config `prd` (200), the **branch** config `prd_ci` (200) and that
+branch config's secrets (200). It could not read the root config `dev` (404) or the branch config
+`dev_ci` (404). So a `prd_ci` / `prd_deploy` split *inside* one environment cannot be separated by
+grant: whoever can see the environment sees both. Separation by grant needs separate
+environments, or config-scoped service tokens (`dp.st.`), which is what a service token is for.
+
+**A workplace-wide blanket does exist, but only as everything.** Granting a project role to a
+service account that already has workplace-level admin is refused: `400 {"messages": ["Cannot set
+project role for service account with admin access to all projects."]}`. So the choice is
+per-project grants or admin over the whole workplace; there is no middle setting.
+
+**Out-of-grant is indistinguishable from absent, at every level.** This settles the question
+adversarial verification left open on 2026-09-16 (the token-list `404` fix). A project that
+exists but sits outside the grant answers `404 {"messages": ["Could not find requested project
+'X'"], "success": false}` — byte-identical in shape to a project that does not exist at all, which
+the same probe requested in the same run. A config outside a granted environment answers the same
+way (`"Could not find requested config 'dev'"`). Listing projects with an ungranted token answers
+`200 {"projects": []}`, not `403`. `GET /v3/me` works regardless and reports
+`"type": "workplace_service_account"`.
+
+*Consequence for willikins, recorded rather than fixed:* the plan-time reading of a `404` as
+`Absent` is unavoidable (nothing else is available) and is therefore also the reading an
+out-of-grant project receives. The failure is loud rather than silent: `ensure` then tries to
+create a project whose name is already taken in the workplace, which Doppler answers `400`, and
+the apply fails naming it. A credential whose grants are narrower than its workflow does not
+corrupt anything; it fails at apply.
