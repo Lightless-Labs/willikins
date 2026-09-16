@@ -17,7 +17,8 @@ fail() {
 }
 
 # Distinctive markers for the two tokens, so a scenario can assert each
-# never reached the stub `curl`'s argv -- only its stdin.
+# reached the stub `curl` only on its stdin -- never on its argv, and
+# never in its environment either.
 github_token_marker="teardown-test-github-token-MARKER-3af1"
 doppler_token_marker="teardown-test-doppler-token-MARKER-8f2c"
 
@@ -131,9 +132,15 @@ for i in "${!args[@]}"; do
   esac
 done
 stdin_content="$(cat)"
+# Every WILLIKINS_* variable this process was started with. A token in
+# here is a token `ps -E` would show to anything running as this user
+# for as long as the call lasts, so it is recorded next to argv and
+# asserted against just as hard.
+env_seen="$(env | grep -E '^WILLIKINS_' | tr '\n' ' ' || true)"
 {
   echo "CURL_CALL method=$method url=$url args=[${args[*]}]"
   echo "CURL_STDIN=[$stdin_content]"
+  echo "CURL_ENV=[$env_seen]"
 } >> "$STUB_LOG"
 case "$url" in
   *api.github.com/repos/*)
@@ -255,8 +262,9 @@ scenario3() {
 # =======================================================================
 # Scenario 4: both markers present, `--yes` -- actually calls both
 # delete endpoints, and neither token reached `curl` as one of its
-# command-line arguments; both reach it, with the three GitHub headers
-# and the Doppler Authorization header, only through `--config -`.
+# command-line arguments *or* in its environment; both reach it, with
+# the three GitHub headers and the Doppler Authorization header, only
+# through `--config -`.
 # =======================================================================
 scenario4() {
   local dir
@@ -292,6 +300,23 @@ scenario4() {
   fi
   if grep -qE "CURL_CALL.*dp\.(sa|st|pt)\." "$dir/calls.log"; then
     fail "scenario4: a Doppler-token-shaped argument reached curl's argv"
+  fi
+
+  # argv is only half of what a process listing gives away: `ps -E`
+  # shows a process's environment to anything running as the same user,
+  # for as long as the call lasts. `curl` must therefore start with
+  # neither token in its environment at all. The CURL_ENV line count is
+  # asserted too, so "no token in CURL_ENV" cannot pass by the stub
+  # having recorded no environment.
+  local env_lines
+  env_lines=$(grep -c "^CURL_ENV=" "$dir/calls.log" || true)
+  [ "$env_lines" -eq 4 ] \
+    || fail "scenario4: expected 4 recorded curl environments, got $env_lines"
+  if grep -q "CURL_ENV.*$github_token_marker" "$dir/calls.log"; then
+    fail "scenario4: the GitHub token was in curl's own environment"
+  fi
+  if grep -q "CURL_ENV.*$doppler_token_marker" "$dir/calls.log"; then
+    fail "scenario4: the Doppler token was in curl's own environment"
   fi
 
   # Every one of the four calls (two reads, two deletes) carries
@@ -486,9 +511,15 @@ for i in "${!args[@]}"; do
   esac
 done
 stdin_content="$(cat)"
+# Every WILLIKINS_* variable this process was started with. A token in
+# here is a token `ps -E` would show to anything running as this user
+# for as long as the call lasts, so it is recorded next to argv and
+# asserted against just as hard.
+env_seen="$(env | grep -E '^WILLIKINS_' | tr '\n' ' ' || true)"
 {
   echo "CURL_CALL method=$method url=$url args=[${args[*]}]"
   echo "CURL_STDIN=[$stdin_content]"
+  echo "CURL_ENV=[$env_seen]"
 } >> "$STUB_LOG"
 if [ "$method" = "DELETE" ] && [[ "$url" == *"$fail_host"* ]]; then
   echo "curl: (22) The requested URL returned error: 403" >&2
@@ -568,11 +599,12 @@ scenario10() {
   rm -rf "$dir"
 }
 
-# =======================================================================
-# Scenario 11: `WILLIKINS_GITHUB_TOKEN` is unset -- refuses with a named
-# message, before ever calling curl.
-# =======================================================================
-scenario11() {
+# One scenario body for both credentials: `$1` is the variable to unset,
+# `$2` the scenario's own name for its failure messages. The script must
+# refuse, name the variable it is missing, and reach neither provider --
+# a half-done teardown is worse than one that never started.
+assert_missing_token_refuses() {
+  local missing="$1" label="$2"
   local dir
   dir="$(new_sandbox)"
   write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
@@ -582,26 +614,48 @@ scenario11() {
   write_stub_curl "$dir"
   touch "$dir/calls.log"
 
+  # Both tokens are exported *first* and `env -u` then removes the one
+  # under test: `env -u X X=v` would set it straight back, and the
+  # scenario would prove nothing.
   local output status
   output=$(
-    env -u WILLIKINS_GITHUB_TOKEN \
+    export WILLIKINS_GITHUB_TOKEN="$github_token_marker"
+    export WILLIKINS_DOPPLER_TOKEN="$doppler_token_marker"
+    env -u "$missing" \
       PATH="$dir/bin:$PATH" \
       STUB_LOG="$dir/calls.log" \
       STUB_WILLIKINS_EXIT="0" \
       RUN_JSON_FILE="$dir/run.json" \
       GITHUB_GET_RESPONSE_FILE="$dir/github_get_response.json" \
       DOPPLER_GET_RESPONSE_FILE="$dir/doppler_get_response.json" \
-      WILLIKINS_DOPPLER_TOKEN="$doppler_token_marker" \
       "$teardown" "01000000-0000-7000-8000-000000000000" "$dir/journal.jsonl" --yes 2>&1
   ) && status=0 || status=$?
 
-  [ "$status" -ne 0 ] || fail "scenario11: expected a non-zero exit when WILLIKINS_GITHUB_TOKEN is unset"
-  echo "$output" | grep -q "WILLIKINS_GITHUB_TOKEN must be set" \
-    || fail "scenario11: refusal should name WILLIKINS_GITHUB_TOKEN; output: $output"
+  [ "$status" -ne 0 ] || fail "$label: expected a non-zero exit when $missing is unset"
+  echo "$output" | grep -q "$missing must be set" \
+    || fail "$label: refusal should name $missing; output: $output"
   if grep -qE "^CURL_CALL" "$dir/calls.log"; then
-    fail "scenario11: must not call curl before the token check: $(cat "$dir/calls.log")"
+    fail "$label: must not call curl before the token check: $(cat "$dir/calls.log")"
   fi
   rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 11: `WILLIKINS_GITHUB_TOKEN` is unset -- refuses with a named
+# message, before ever calling curl.
+# =======================================================================
+scenario11() {
+  assert_missing_token_refuses WILLIKINS_GITHUB_TOKEN scenario11
+}
+
+# =======================================================================
+# Scenario 12: `WILLIKINS_DOPPLER_TOKEN` is unset -- the same refusal.
+# Both credentials are demanded together, before the first provider call,
+# so a missing Doppler token cannot be discovered only after the GitHub
+# repository has already been deleted.
+# =======================================================================
+scenario12() {
+  assert_missing_token_refuses WILLIKINS_DOPPLER_TOKEN scenario12
 }
 
 scenario1
@@ -615,6 +669,7 @@ scenario8
 scenario9
 scenario10
 scenario11
+scenario12
 
 if [ "$failures" -eq 0 ]; then
   echo "teardown_test.sh: all scenarios passed"

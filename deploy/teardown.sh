@@ -30,19 +30,30 @@
 # Authentication: both providers through `curl`, each with its own
 # fine-grained credential -- `WILLIKINS_GITHUB_TOKEN` for GitHub,
 # `WILLIKINS_DOPPLER_TOKEN` for Doppler, the same two variables the
-# server itself reads for live mode. Neither token is ever passed to
-# `curl` as a command-line argument: each is written to a `header =
-# "Authorization: Bearer <token>"` directive and piped to `curl --config
-# -` on stdin, so it never sits in `ps` output or shell history for as
-# long as the process runs. The GitHub token is a sandbox fine-grained
-# PAT scoped to the throwaway `Willikins-Test` organization, holding
-# repository administration there -- the same credential and scope
-# `crates/willikins-providers-github/tests/live_write_cycle.rs` already
-# uses to delete a repository through `Http::delete`, so deleting one
-# here needs nothing new of it. GitHub's REST API also requires an
-# `Accept` and a `User-Agent` header on every request; this script sends
-# the same three headers `crates/willikins-providers-github/src/
-# client.rs`'s `default_headers` does.
+# server itself reads for live mode. The GitHub token is a sandbox
+# fine-grained PAT scoped to the throwaway `Willikins-Test`
+# organization, holding repository administration there -- the same
+# credential `crates/willikins-providers-github/tests/
+# live_write_cycle.rs` already deletes a repository with, through
+# `Http::delete`, so deleting one here asks nothing new of it.
+#
+# Neither token reaches `curl` by any channel another process can read.
+# Not argv: a process listing shows every process its command line. Not
+# the environment either: `ps -E` shows a process its environment to
+# anything running as the same user, for as long as the call lasts, so
+# both variables are copied into shell variables and `unset` before the
+# first `curl` starts and no child from there on carries either one.
+# What `curl` gets is a `header = "Authorization: Bearer <token>"`
+# directive piped to `--config -` on its stdin. (`ps -E` reads the
+# environment a process *started* with, so unsetting here hides the
+# tokens from every child, not from this script's own listing: that
+# snapshot belongs to the calling shell, which exported them.)
+#
+# GitHub's REST API also wants an `Accept`, an `X-GitHub-Api-Version`
+# and a `User-Agent` header on every request, so each GitHub call
+# carries the same three header names
+# `crates/willikins-providers-github/src/client.rs`'s `default_headers`
+# sends, with a `User-Agent` naming this script rather than the server.
 #
 # Exits non-zero, printing why, on any refusal: a missing argument, an
 # unset credential, a run with no `repo` or `doppler` output, a resource
@@ -119,17 +130,32 @@ fi
 
 echo "teardown.sh: run $run_id created repository '$repo' and Doppler project '$project'"
 
-# --- GitHub: read first, refuse unless the marker is still there. -----
-
+# --- Credentials: required, then taken out of the environment. ---------
+#
+# Both are demanded here, before either provider is touched, so an
+# operator missing one is told so instead of finding out half way
+# through. Each is then copied into a shell variable and the exported
+# variable unset: from this line on no child this script spawns --
+# `curl` above all, which lives as long as a network round trip -- has
+# a token in the environment `ps -E` would show it by. With `set -u` a
+# reference to either original name below is now a loud failure, not a
+# silent empty header.
 : "${WILLIKINS_GITHUB_TOKEN:?teardown.sh: WILLIKINS_GITHUB_TOKEN must be set}"
+: "${WILLIKINS_DOPPLER_TOKEN:?teardown.sh: WILLIKINS_DOPPLER_TOKEN must be set}"
+github_token="$WILLIKINS_GITHUB_TOKEN"
+doppler_token="$WILLIKINS_DOPPLER_TOKEN"
+unset WILLIKINS_GITHUB_TOKEN WILLIKINS_DOPPLER_TOKEN
+
+# --- GitHub: read first, refuse unless the marker is still there. -----
 
 # The three headers GitHub's docs require on every request, mirroring
 # `crates/willikins-providers-github/src/client.rs`'s `default_headers`:
 # `Accept`, `X-GitHub-Api-Version`, and a `User-Agent` (GitHub rejects a
 # request with none at all). The `Authorization` directive travels with
-# them on the same `--config -` stdin, never on argv.
+# them on the same `--config -` stdin, never on argv and never in the
+# environment `curl` starts with.
 github_curl_config() {
-  printf 'header = "Authorization: Bearer %s"\n' "$WILLIKINS_GITHUB_TOKEN"
+  printf 'header = "Authorization: Bearer %s"\n' "$github_token"
   printf 'header = "Accept: application/vnd.github+json"\n'
   printf 'header = "X-GitHub-Api-Version: 2022-11-28"\n'
   printf 'header = "User-Agent: willikins-teardown"\n'
@@ -149,10 +175,8 @@ fi
 
 # --- Doppler: same rule, same order. -----------------------------------
 
-: "${WILLIKINS_DOPPLER_TOKEN:?teardown.sh: WILLIKINS_DOPPLER_TOKEN must be set}"
-
 doppler_json=$(
-  printf 'header = "Authorization: Bearer %s"\n' "$WILLIKINS_DOPPLER_TOKEN" \
+  printf 'header = "Authorization: Bearer %s"\n' "$doppler_token" \
     | curl -sS --fail --config - \
         "$doppler_api_base_url/v3/projects/project?project=$project"
 ) || {
@@ -181,7 +205,7 @@ github_curl_config \
   > /dev/null
 
 echo "teardown.sh: deleting Doppler project $project"
-printf 'header = "Authorization: Bearer %s"\n' "$WILLIKINS_DOPPLER_TOKEN" \
+printf 'header = "Authorization: Bearer %s"\n' "$doppler_token" \
   | curl -sS --fail --config - -X DELETE "$doppler_api_base_url/v3/projects/project" \
       -H "Content-Type: application/json" \
       -d "{\"project\":\"$project\"}" \

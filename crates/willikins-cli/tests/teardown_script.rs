@@ -3,9 +3,11 @@
 //! the thin spawner the workspace gate uses to run its own bats-free
 //! test suite, `deploy/teardown_test.sh` -- every actual scenario (both
 //! ownership markers present, either one missing, `--yes` vs. dry run,
-//! neither token ever reaching `curl`'s argv, a run record with no
-//! `doppler` output) lives there, stubbing `willikins` and `curl` on
-//! `PATH` so nothing here ever makes a real network call.
+//! neither token ever reaching `curl`'s argv *or* its environment,
+//! either credential unset, a failing read or delete from either
+//! provider, a run record with no `doppler` output) lives there,
+//! stubbing `willikins` and `curl` on `PATH` so nothing here ever makes
+//! a real network call.
 
 use std::path::PathBuf;
 use std::process::Command;
