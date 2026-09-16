@@ -233,8 +233,9 @@ https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/sec
 - "Authorization servers **MUST** validate exact redirect URIs against pre-registered values to prevent redirection attacks."
 - "1. All authorization server endpoints **MUST** be served over HTTPS.\n2. All redirect URIs **MUST** be either `localhost` or use HTTPS."
 
-(source: https://www.ietf.org/archive/id/draft-ietf-oauth-v2-1-13.txt, §2.3.1 and §8.4.2,
-2026-09-16)
+(source: https://www.ietf.org/archive/id/draft-ietf-oauth-v2-1-16.txt, §2.3.1 and §8.4.2,
+2026-09-16. Re-fetched at draft-16 in this session: both clauses and both section numbers are
+unchanged from draft-13, which closes one of the existing note's renumbering worries.)
 
 - "   Authorization servers MUST require clients to register their complete\n   redirect URI (including the path component).  Authorization servers\n   MUST reject authorization requests that specify a redirect URI that\n   doesn't exactly match one that was registered, with an exception for\n   loopback redirects, where an exact match is required except for the\n   port URI component"
 - "   While redirect URIs using the name localhost (i.e.,\n   http://localhost:{port}/{path}) function similarly to loopback IP\n   redirects, the use of localhost is NOT RECOMMENDED."
@@ -1698,9 +1699,20 @@ The seam makes the *protocol* swappable. It does not make the *history* portable
 ## 8. Pin table
 
 One row per crate considered. **No cargo command was run**, so every "Dockerfile" cell is
-dependency-graph inference from fetched manifests, not a build. Licence, MSRV and date cells come
-from crates.io version metadata or the crate's own `Cargo.toml` at the pinned version, fetched
-2026-09-16.
+dependency-graph inference from fetched manifests, not a build.
+
+Provenance of the licence and MSRV cells, stated precisely rather than blanket-claimed. Every row
+was checked against `https://crates.io/api/v1/crates/<name>/<version>` at the exact version pinned
+in the table, fetched 2026-09-16 with a `User-Agent` header (the API returns a non-JSON body
+without one). Two cells were corrected by that check and are recorded here rather than silently
+fixed: `ring` 0.17.14 is `Apache-2.0 AND ISC`, not the "ISC-style" a first draft of this table
+carried; and `aws-lc-rs`' MSRV is **1.70.0 at 1.15.0**, where 1.71.0 is the figure reported for the
+newest release. The remaining metadata, verbatim:
+
+- "ed25519-dalek 2.1.1 -> license= BSD-3-Clause rust_version= 1.60 edition= 2021 yanked= False\np256 0.13.2 -> license= Apache-2.0 OR MIT rust_version= 1.65 edition= 2021 yanked= False\np384 0.13.0 -> license= Apache-2.0 OR MIT rust_version= 1.65 edition= 2021 yanked= False\nelliptic-curve 0.13.8 -> license= Apache-2.0 OR MIT rust_version= 1.65 edition= 2021 yanked= False\nring 0.17.14 -> license= Apache-2.0 AND ISC rust_version= 1.66.0 edition= 2021 yanked= False\npassword-hash 0.6.1 -> license= MIT OR Apache-2.0 rust_version= 1.85 edition= 2024 yanked= False\nrsa 0.9.6 -> license= MIT OR Apache-2.0 rust_version= 1.65 edition= 2021 yanked= False\nwebauthn-authenticator-rs 0.5.5 -> license= MPL-2.0 rust_version= 1.88 edition= 2021 yanked= False\nargon2 0.6.0 -> license= MIT OR Apache-2.0 rust_version= 1.85 edition= 2024 yanked= False\nwebauthn-rs 0.5.5 -> license= MPL-2.0 rust_version= 1.88 edition= 2021 yanked= False\naws-lc-rs 1.15.0 -> license= ISC AND (Apache-2.0 OR ISC) rust_version= 1.70.0 edition= 2021 yanked= False"
+
+Note in passing what that check also confirms: **`webauthn-authenticator-rs` 0.5.5 declares MSRV
+1.88**, the workspace floor exactly, so the test authenticator raises no floor either.
 
 | Crate | Version | Licence | Maintenance signals | What it would do here | Risk | Dockerfile builds it? |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -1721,8 +1733,8 @@ from crates.io version metadata or the crate's own `Cargo.toml` at the pinned ve
 | `axum-extra` | 0.12.6 (2026-04-14) | MIT | Already the plan's pin | **Take.** `SignedCookieJar` for the approvals session | The jar must be **returned** from the handler or `Set-Cookie` is silently dropped (§5.7) — assert the header in tests. A startup-generated `Key` makes sessions replica-local | Yes; `cookie`'s `signed` is pure RustCrypto, only build-dep is `version_check`. Adds `base64` 0.22 and `rand` 0.8 as duplicate majors |
 | `p256` / `p384` / `elliptic-curve` | 0.13.2 / 0.13.0 / 0.13.8 | Apache-2.0 OR MIT | RustCrypto; **already pulled** by `jsonwebtoken`'s `rust_crypto` with defaults on | ES256 key generation → PKCS#8 (`SecretKey::random`, `to_pkcs8_der`/`to_pkcs8_pem`) | Binds `rand_core` **0.6**, which neither of the tree's `rand` majors satisfies — declare `rand = "0.8"` directly (§3.6) | Yes, and needs no feature change |
 | `ed25519-dalek` | 2.1.1 | BSD-3-Clause | RustCrypto-adjacent; already pulled by `rust_crypto` with `features = ["pkcs8"]` only | EdDSA generation, if EdDSA is chosen over ES256 | Needs the `rand_core` feature added to generate; its `to_pkcs8_der` emits **v2**, which `Jwk::from_encoding_key` refuses (§3.3) | Yes |
-| `ring` | 0.17.14 | ISC-style + others | **Already in the lock** via rustls → ureq | Alternative key factory; `SystemRandom` sidesteps the `rand_core` 0.6 mismatch | EC output is PKCS#8 v1 but with no inner `parameters` field — round-trip through `EncodingKey::from_ec_der` **unverified** (§9). Ed25519 output is v2, so unusable for JWKS | Yes — it is the tree's existing native dependency |
-| `aws-lc-rs` | 1.15.0 (jsonwebtoken's pin; 1.18.1 newest, 2026-09-01) | ISC AND (Apache-2.0 OR ISC) | 224.8M all-time; MSRV 1.71.0 | Alternative `jsonwebtoken` backend; **the only** crate with a first-class Ed25519 `generate_pkcs8v1`; avoids `rsa` entirely, which is exit (b) of §3.5 | Its README (unpinned `main`) says a C/**C++** compiler is required; CMake, bindgen and Go are **never** required for non-FIPS | **No, not as-is.** The blocker is **`g++`**, not cmake — the builder installs `gcc` only, deliberately avoiding `build-essential`. Correct the note's earlier framing |
+| `ring` | 0.17.14 | Apache-2.0 AND ISC | **Already in the lock** via rustls → ureq | Alternative key factory; `SystemRandom` sidesteps the `rand_core` 0.6 mismatch | EC output is PKCS#8 v1 but with no inner `parameters` field — round-trip through `EncodingKey::from_ec_der` **unverified** (§9). Ed25519 output is v2, so unusable for JWKS | Yes — it is the tree's existing native dependency |
+| `aws-lc-rs` | 1.15.0 (jsonwebtoken's pin; 1.18.1 newest, 2026-09-01) | ISC AND (Apache-2.0 OR ISC) | 224.8M all-time; MSRV **1.70.0 at 1.15.0** (1.71.0 is the newest release's) | Alternative `jsonwebtoken` backend; **the only** crate with a first-class Ed25519 `generate_pkcs8v1`; avoids `rsa` entirely, which is exit (b) of §3.5 | Its README (unpinned `main`) says a C/**C++** compiler is required; CMake, bindgen and Go are **never** required for non-FIPS | **No, not as-is.** The blocker is **`g++`**, not cmake — the builder installs `gcc` only, deliberately avoiding `build-essential`. Correct the note's earlier framing |
 | `rsa` | 0.9.6 | MIT OR Apache-2.0 | RUSTSEC-2023-0071, **`patched = []`** | Nothing — it is an unavoidable transitive of `jsonwebtoken`'s `rust_crypto` feature | Now a **real** exposure, not paperwork (§3.4). Survives only on the ground that willikins never signs with the RSA family. A `cargo-audit`/`cargo-deny` gate needs a documented ignore with a **rewritten** justification | Yes (pure Rust) |
 | `reqwest` | 0.13.5 | — | — | Nothing | **Reject**, unchanged from the existing note: a second async HTTP+TLS stack in an image that has none | n/a |
 
@@ -1827,8 +1839,9 @@ may enter frozen code.**
 
 ### 9.3 Claims that could not be fetched verbatim, and sources that could not be pinned
 
-Three reader findings were self-reported as not verbatim. **Two of them were re-fetched and
-settled in this session** and are now verbatim; the third remains.
+Three reader findings were self-reported as not verbatim. **All three were re-fetched and settled
+in this session** and are now verbatim, so what remains in this subsection is provenance, not
+paraphrase.
 
 - **Settled.** The design doc's trust-model line, verified against the local file
   (`docs/plans/2026-09-11-willikins-design.md:22`, read 2026-09-16): "Remote-first. Willikins is an
@@ -1841,11 +1854,13 @@ settled in this session** and are now verbatim; the third remains.
   use our passkey flow.\n//!\n//! Remember, no other authentication factors are needed. A passkey
   combines inbuilt user\n//! verification (pin, biometrics, etc) with a hardware cryptographic
   authenticator."
-- **Not settled.** NIST SP 800-63B-4's phishing-resistance sentence for syncable authenticators
-  ("Achieved: Properly configured syncable authenticators create a unique public or private key
-  pair whose use is constrained to the domain in which it was created…") was reported as not
-  verbatim. It is a supporting argument in §4, not a load-bearing one; confirm in a browser before
-  quoting it in a plan.
+- **Settled.** NIST SP 800-63B-4's phishing-resistance sentence for syncable authenticators, the
+  third and last item reported as not verbatim, re-read from the tag-stripped fetch on disk
+  (https://pages.nist.gov/800-63-4/sp800-63b.html, 2026-09-16): "Achieved : Properly configured
+  syncable authenticators create a unique public or private key pair whose use is constrained to
+  the domain in which it was created (i.e., the key can only be used with a specific website or
+  RP)." Whitespace is the strip's, not the document's (see below). **So no finding in this note
+  now rests on a paraphrase** — only on the whitespace and pinning caveats that follow.
 
 Sources whose provenance is weaker than the rest, each flagged by the reader that used it:
 
