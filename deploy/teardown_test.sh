@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Bats-free test for deploy/teardown.sh: stubs `willikins`, `gh`, and
-# `curl` on PATH, so no real network call, real repository, or real
-# Doppler project is ever touched. Every scenario below is a case this
-# script must get right or exit non-zero -- run by the workspace gate
-# through crates/willikins-cli/tests/teardown_script.rs, which only
-# spawns this file and checks its exit code.
+# Bats-free test for deploy/teardown.sh: stubs `willikins` and `curl` on
+# PATH, so no real network call, real repository, or real Doppler
+# project is ever touched. Every scenario below is a case this script
+# must get right or exit non-zero -- run by the workspace gate through
+# crates/willikins-cli/tests/teardown_script.rs, which only spawns this
+# file and checks its exit code.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,8 +16,9 @@ fail() {
   failures=$((failures + 1))
 }
 
-# A distinctive marker for the Doppler token, so a scenario can assert
-# it never reached the stub `curl`'s argv -- only its stdin.
+# Distinctive markers for the two tokens, so a scenario can assert each
+# never reached the stub `curl`'s argv -- only its stdin.
+github_token_marker="teardown-test-github-token-MARKER-3af1"
 doppler_token_marker="teardown-test-doppler-token-MARKER-8f2c"
 
 # The exit code the stub `willikins` leaves with (the real CLI exits 1
@@ -88,60 +89,72 @@ STUB
   chmod +x "$dir/bin/willikins"
 }
 
-# Args: sandbox, topics-json-array (e.g. '["managed-by-willikins"]')
-write_stub_gh() {
+# Args: sandbox, topics-json-array (e.g. '["managed-by-willikins"]') --
+# what the stub answers a GitHub repository read with.
+write_github_get_response() {
   local dir="$1" topics="$2"
-  cat > "$dir/gh_get_response.json" <<JSON
+  cat > "$dir/github_get_response.json" <<JSON
 {"topics": $topics}
 JSON
-  cat > "$dir/bin/gh" <<'STUB'
-#!/usr/bin/env bash
-set -euo pipefail
-# Called either as `gh api repos/OWNER/NAME` (read) or
-# `gh api -X DELETE repos/OWNER/NAME` (delete).
-shift # drop "api"
-method="GET"
-if [ "${1:-}" = "-X" ]; then
-  method="$2"
-  shift 2
-fi
-path="${1:-}"
-echo "GH_CALL method=$method path=$path" >> "$STUB_LOG"
-if [ "$method" = "DELETE" ]; then
-  echo "{}"
-else
-  cat "$GH_GET_RESPONSE_FILE"
-fi
-STUB
-  chmod +x "$dir/bin/gh"
 }
 
-# Args: sandbox, description-or-empty
-write_stub_curl() {
+# Args: sandbox, description-or-empty -- what the stub answers a Doppler
+# project read with.
+write_doppler_get_response() {
   local dir="$1" description="$2"
-  cat > "$dir/curl_get_response.json" <<JSON
+  cat > "$dir/doppler_get_response.json" <<JSON
 {"project": {"description": "$description"}}
 JSON
+}
+
+# `deploy/teardown.sh` now speaks to both providers through `curl` --
+# there is no `gh` any more. One stub answers both: it tells GitHub's
+# `/repos/...` calls from Doppler's `/v3/projects/project...` calls by
+# the URL each carries (the last argument starting with `http`), and
+# `GET` from `DELETE` the same way the script's own two providers do.
+write_stub_curl() {
+  local dir="$1"
   cat > "$dir/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 method="GET"
 args=("$@")
+url=""
 for i in "${!args[@]}"; do
-  if [ "${args[$i]}" = "-X" ]; then
-    method="${args[$((i + 1))]}"
-  fi
+  case "${args[$i]}" in
+    -X)
+      method="${args[$((i + 1))]}"
+      ;;
+    http://*|https://*)
+      url="${args[$i]}"
+      ;;
+  esac
 done
 stdin_content="$(cat)"
 {
-  echo "CURL_CALL method=$method args=[${args[*]}]"
+  echo "CURL_CALL method=$method url=$url args=[${args[*]}]"
   echo "CURL_STDIN=[$stdin_content]"
 } >> "$STUB_LOG"
-if [ "$method" = "DELETE" ]; then
-  echo '{"project": {}}'
-else
-  cat "$CURL_GET_RESPONSE_FILE"
-fi
+case "$url" in
+  *api.github.com/repos/*)
+    if [ "$method" = "DELETE" ]; then
+      echo "{}"
+    else
+      cat "$GITHUB_GET_RESPONSE_FILE"
+    fi
+    ;;
+  *api.doppler.com/v3/projects/project*)
+    if [ "$method" = "DELETE" ]; then
+      echo '{"project": {}}'
+    else
+      cat "$DOPPLER_GET_RESPONSE_FILE"
+    fi
+    ;;
+  *)
+    echo "stub curl: unrecognized URL: $url" >&2
+    exit 1
+    ;;
+esac
 STUB
   chmod +x "$dir/bin/curl"
 }
@@ -155,8 +168,9 @@ run_teardown() {
     STUB_LOG="$dir/calls.log" \
     STUB_WILLIKINS_EXIT="${stub_willikins_exit:-0}" \
     RUN_JSON_FILE="$dir/run.json" \
-    GH_GET_RESPONSE_FILE="$dir/gh_get_response.json" \
-    CURL_GET_RESPONSE_FILE="$dir/curl_get_response.json" \
+    GITHUB_GET_RESPONSE_FILE="$dir/github_get_response.json" \
+    DOPPLER_GET_RESPONSE_FILE="$dir/doppler_get_response.json" \
+    WILLIKINS_GITHUB_TOKEN="$github_token_marker" \
     WILLIKINS_DOPPLER_TOKEN="$doppler_token_marker" \
     "$teardown" "01000000-0000-7000-8000-000000000000" "$dir/journal.jsonl" "$@"
 }
@@ -170,8 +184,9 @@ scenario1() {
   dir="$(new_sandbox)"
   write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
   write_stub_willikins "$dir"
-  write_stub_gh "$dir" '["managed-by-willikins"]'
-  write_stub_curl "$dir" "managed-by: willikins"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
   touch "$dir/calls.log"
 
   local output status
@@ -182,10 +197,8 @@ scenario1() {
     || fail "scenario1: missing 'would delete' line for the repository"
   echo "$output" | grep -q "would delete Doppler project:   teardown-test-project" \
     || fail "scenario1: missing 'would delete' line for the project"
-  grep -q "GH_CALL method=DELETE" "$dir/calls.log" \
-    && fail "scenario1: gh DELETE must not be called on a dry run"
   grep -q "CURL_CALL method=DELETE" "$dir/calls.log" \
-    && fail "scenario1: curl DELETE must not be called on a dry run"
+    && fail "scenario1: a dry run must not call either delete endpoint"
   rm -rf "$dir"
 }
 
@@ -198,8 +211,9 @@ scenario2() {
   dir="$(new_sandbox)"
   write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
   write_stub_willikins "$dir"
-  write_stub_gh "$dir" '[]'
-  write_stub_curl "$dir" "managed-by: willikins"
+  write_github_get_response "$dir" '[]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
   touch "$dir/calls.log"
 
   local output status
@@ -208,7 +222,7 @@ scenario2() {
   [ "$status" -ne 0 ] || fail "scenario2: expected a non-zero exit when the topic is missing"
   echo "$output" | grep -q "managed-by-willikins" \
     || fail "scenario2: refusal message should name the missing topic"
-  grep -q "CURL_CALL" "$dir/calls.log" \
+  grep -q "CURL_CALL.*api.doppler.com" "$dir/calls.log" \
     && fail "scenario2: must never call Doppler once the GitHub check has refused"
   rm -rf "$dir"
 }
@@ -222,8 +236,9 @@ scenario3() {
   dir="$(new_sandbox)"
   write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
   write_stub_willikins "$dir"
-  write_stub_gh "$dir" '["managed-by-willikins"]'
-  write_stub_curl "$dir" "some other description"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "some other description"
+  write_stub_curl "$dir"
   touch "$dir/calls.log"
 
   local output status
@@ -232,57 +247,78 @@ scenario3() {
   [ "$status" -ne 0 ] || fail "scenario3: expected a non-zero exit when the description is wrong"
   echo "$output" | grep -q "managed-by: willikins" \
     || fail "scenario3: refusal message should name the expected description"
-  grep -q "GH_CALL method=DELETE" "$dir/calls.log" \
-    && fail "scenario3: must never delete the repository once the Doppler check has refused"
   grep -q "CURL_CALL method=DELETE" "$dir/calls.log" \
-    && fail "scenario3: must never delete the Doppler project once its own check has refused"
+    && fail "scenario3: must never delete anything once the Doppler check has refused"
   rm -rf "$dir"
 }
 
 # =======================================================================
 # Scenario 4: both markers present, `--yes` -- actually calls both
-# delete endpoints, and the Doppler token reached `curl` only via
-# stdin, never as one of its command-line arguments.
+# delete endpoints, and neither token reached `curl` as one of its
+# command-line arguments; both reach it, with the three GitHub headers
+# and the Doppler Authorization header, only through `--config -`.
 # =======================================================================
 scenario4() {
   local dir
   dir="$(new_sandbox)"
   write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
   write_stub_willikins "$dir"
-  write_stub_gh "$dir" '["managed-by-willikins"]'
-  write_stub_curl "$dir" "managed-by: willikins"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
   touch "$dir/calls.log"
 
   local output status
   output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
 
   [ "$status" -eq 0 ] || fail "scenario4: expected exit 0, got $status; output: $output"
-  grep -q "GH_CALL method=DELETE path=repos/Willikins-Test/teardown-test-repo" "$dir/calls.log" \
-    || fail "scenario4: gh DELETE was not called with the expected repository"
-  grep -q "CURL_CALL method=DELETE" "$dir/calls.log" \
+  grep -q "CURL_CALL method=DELETE url=https://api.github.com/repos/Willikins-Test/teardown-test-repo" \
+    "$dir/calls.log" \
+    || fail "scenario4: curl DELETE was not called for the GitHub repository"
+  grep -q "CURL_CALL method=DELETE url=https://api.doppler.com/v3/projects/project" \
+    "$dir/calls.log" \
     || fail "scenario4: curl DELETE was not called for the Doppler project"
+
+  if grep -q "CURL_CALL.*$github_token_marker" "$dir/calls.log"; then
+    fail "scenario4: the GitHub token leaked into curl's own arguments"
+  fi
   if grep -q "CURL_CALL.*$doppler_token_marker" "$dir/calls.log"; then
     fail "scenario4: the Doppler token leaked into curl's own arguments"
   fi
-  # Not only this test's own marker: no argument may hold anything
-  # shaped like a Doppler token at all.
+  # Not only this test's own markers: no argument may hold anything
+  # shaped like either provider's real token at all.
+  if grep -qE "CURL_CALL.*(ghp_|github_pat_)" "$dir/calls.log"; then
+    fail "scenario4: a GitHub-token-shaped argument reached curl's argv"
+  fi
   if grep -qE "CURL_CALL.*dp\.(sa|st|pt)\." "$dir/calls.log"; then
     fail "scenario4: a Doppler-token-shaped argument reached curl's argv"
   fi
-  # The token reaches curl the one way that keeps it out of `ps`: a
-  # `--config -` directive read from stdin.
-  grep -q "CURL_CALL.*--config -" "$dir/calls.log" \
-    || fail "scenario4: curl was not called with --config -"
-  grep -q "CURL_STDIN=.*$doppler_token_marker" "$dir/calls.log" \
+
+  # Every one of the four calls (two reads, two deletes) carries
+  # --config -: the one way a header-borne token stays out of `ps`.
+  local curl_calls config_calls
+  curl_calls=$(grep -c "CURL_CALL" "$dir/calls.log" || true)
+  config_calls=$(grep -c "CURL_CALL.*--config -" "$dir/calls.log" || true)
+  [ "$curl_calls" -eq 4 ] || fail "scenario4: expected 4 curl calls, got $curl_calls"
+  [ "$config_calls" -eq 4 ] \
+    || fail "scenario4: every curl call must carry --config -; $config_calls of $curl_calls do"
+
+  grep -q "Authorization: Bearer $github_token_marker" "$dir/calls.log" \
+    || fail "scenario4: the GitHub token never reached curl's stdin (--config -)"
+  grep -q "Authorization: Bearer $doppler_token_marker" "$dir/calls.log" \
     || fail "scenario4: the Doppler token never reached curl's stdin (--config -)"
-  grep -q "CURL_STDIN=.*Authorization: Bearer" "$dir/calls.log" \
-    || fail "scenario4: the Authorization header was not passed on stdin"
+  grep -q 'Accept: application/vnd.github+json' "$dir/calls.log" \
+    || fail "scenario4: the GitHub Accept header was not passed on stdin"
+  grep -q 'X-GitHub-Api-Version: 2022-11-28' "$dir/calls.log" \
+    || fail "scenario4: the GitHub X-GitHub-Api-Version header was not passed on stdin"
+  grep -q 'User-Agent: willikins-teardown' "$dir/calls.log" \
+    || fail "scenario4: the GitHub User-Agent header was not passed on stdin"
   rm -rf "$dir"
 }
 
 # =======================================================================
 # Scenario 5: a run record with no `doppler` output -- refuses before
-# calling gh or curl at all (never guesses a project name).
+# calling curl at all (never guesses a project name).
 # =======================================================================
 scenario5() {
   local dir
@@ -311,16 +347,17 @@ scenario5() {
 }
 JSON
   write_stub_willikins "$dir"
-  write_stub_gh "$dir" '["managed-by-willikins"]'
-  write_stub_curl "$dir" "managed-by: willikins"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
   touch "$dir/calls.log"
 
   local output status
   output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
 
   [ "$status" -ne 0 ] || fail "scenario5: expected a non-zero exit with no doppler output"
-  if grep -qE "^(GH_CALL|CURL_CALL)" "$dir/calls.log"; then
-    fail "scenario5: must not call gh or curl at all: $(cat "$dir/calls.log")"
+  if grep -qE "^CURL_CALL" "$dir/calls.log"; then
+    fail "scenario5: must not call curl at all: $(cat "$dir/calls.log")"
   fi
   rm -rf "$dir"
 }
@@ -337,8 +374,9 @@ scenario6() {
   dir="$(new_sandbox)"
   write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project" "failed"
   write_stub_willikins "$dir"
-  write_stub_gh "$dir" '["managed-by-willikins"]'
-  write_stub_curl "$dir" "managed-by: willikins"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
   touch "$dir/calls.log"
 
   local output status
@@ -358,8 +396,8 @@ scenario6() {
 # =======================================================================
 # Scenario 7: an unknown run id. The real CLI prints its own error
 # document (`{"kind": "UnknownRun", ...}`, no `run_id`) and exits 1.
-# That is not a run record, so the script must refuse and call neither
-# provider -- the exit code alone can no longer tell it so.
+# That is not a run record, so the script must refuse and call curl not
+# at all -- the exit code alone can no longer tell it so.
 # =======================================================================
 scenario7() {
   local dir
@@ -371,8 +409,9 @@ scenario7() {
 }
 JSON
   write_stub_willikins "$dir"
-  write_stub_gh "$dir" '["managed-by-willikins"]'
-  write_stub_curl "$dir" "managed-by: willikins"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
   touch "$dir/calls.log"
 
   local output status
@@ -383,25 +422,27 @@ JSON
   [ "$status" -ne 0 ] || fail "scenario7: expected a non-zero exit for an unknown run"
   echo "$output" | grep -q "could not read run" \
     || fail "scenario7: refusal should say the run could not be read; output: $output"
-  if grep -qE "^(GH_CALL|CURL_CALL)" "$dir/calls.log"; then
-    fail "scenario7: must not call gh or curl at all: $(cat "$dir/calls.log")"
+  if grep -qE "^CURL_CALL" "$dir/calls.log"; then
+    fail "scenario7: must not call curl at all: $(cat "$dir/calls.log")"
   fi
   rm -rf "$dir"
 }
 
 # =======================================================================
-# Scenario 8: Doppler answers with an HTTP error. `curl` exits 0 on a
-# 4xx or a 5xx unless it is given `--fail`, so without it the script
-# would print "done" after a delete that never happened. Both curl calls
-# must carry `--fail`, and a failing curl must stop the script.
+# Scenario 8: every curl call carries --fail. `curl` exits 0 on a 4xx or
+# a 5xx unless it is given `--fail`, so without it the script would
+# report a delete that never happened. All four calls this run makes
+# (GitHub read, GitHub delete, Doppler read, Doppler delete) must carry
+# it.
 # =======================================================================
 scenario8() {
   local dir
   dir="$(new_sandbox)"
   write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
   write_stub_willikins "$dir"
-  write_stub_gh "$dir" '["managed-by-willikins"]'
-  write_stub_curl "$dir" "managed-by: willikins"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
   touch "$dir/calls.log"
 
   local output status
@@ -409,47 +450,157 @@ scenario8() {
   [ "$status" -eq 0 ] || fail "scenario8: setup run failed: $output"
   local curl_calls
   curl_calls=$(grep -c "CURL_CALL" "$dir/calls.log" || true)
-  [ "$curl_calls" -eq 2 ] || fail "scenario8: expected 2 curl calls, got $curl_calls"
+  [ "$curl_calls" -eq 4 ] || fail "scenario8: expected 4 curl calls, got $curl_calls"
   local failing_calls
   failing_calls=$(grep -c "CURL_CALL.*--fail" "$dir/calls.log" || true)
-  [ "$failing_calls" -eq 2 ] \
-    || fail "scenario8: both curl calls must carry --fail; $failing_calls of $curl_calls do"
+  [ "$failing_calls" -eq 4 ] \
+    || fail "scenario8: every curl call must carry --fail; $failing_calls of $curl_calls do"
   rm -rf "$dir"
+}
 
-  # The same shape again, with a `curl` that fails the DELETE the way
-  # `--fail` makes it fail a 4xx: the script must stop, not print "done".
-  dir="$(new_sandbox)"
-  write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
-  write_stub_willikins "$dir"
-  write_stub_gh "$dir" '["managed-by-willikins"]'
-  write_stub_curl "$dir" "managed-by: willikins"
-  # Re-write only the DELETE half of the stub: exit 22, curl's own
-  # "HTTP page not retrieved" status under --fail.
-  cat > "$dir/bin/curl" <<'STUB'
+# A `curl` stub whose GET half behaves normally for both providers, but
+# whose DELETE half fails the way `--fail` makes curl fail a 4xx or a
+# 5xx (non-zero exit, nothing useful on stdout) for exactly one
+# provider's URL, named by `$1`'s caller through `FAIL_DELETE_HOST`.
+# Used by scenario 9 and scenario 10 to prove a failing delete from
+# either provider, on its own, is a refusal and never a silent "done".
+write_stub_curl_one_delete_fails() {
+  local dir="$1" fail_host="$2"
+  cat > "$dir/bin/curl" <<STUB
 #!/usr/bin/env bash
 set -uo pipefail
+fail_host="$fail_host"
+STUB
+  cat >> "$dir/bin/curl" <<'STUB'
 method="GET"
 args=("$@")
+url=""
 for i in "${!args[@]}"; do
-  if [ "${args[$i]}" = "-X" ]; then
-    method="${args[$((i + 1))]}"
-  fi
+  case "${args[$i]}" in
+    -X)
+      method="${args[$((i + 1))]}"
+      ;;
+    http://*|https://*)
+      url="${args[$i]}"
+      ;;
+  esac
 done
 stdin_content="$(cat)"
-echo "CURL_CALL method=$method args=[${args[*]}]" >> "$STUB_LOG"
-if [ "$method" = "DELETE" ]; then
+{
+  echo "CURL_CALL method=$method url=$url args=[${args[*]}]"
+  echo "CURL_STDIN=[$stdin_content]"
+} >> "$STUB_LOG"
+if [ "$method" = "DELETE" ] && [[ "$url" == *"$fail_host"* ]]; then
   echo "curl: (22) The requested URL returned error: 403" >&2
   exit 22
 fi
-cat "$CURL_GET_RESPONSE_FILE"
+case "$url" in
+  *api.github.com/repos/*)
+    if [ "$method" = "DELETE" ]; then
+      echo "{}"
+    else
+      cat "$GITHUB_GET_RESPONSE_FILE"
+    fi
+    ;;
+  *api.doppler.com/v3/projects/project*)
+    if [ "$method" = "DELETE" ]; then
+      echo '{"project": {}}'
+    else
+      cat "$DOPPLER_GET_RESPONSE_FILE"
+    fi
+    ;;
+  *)
+    echo "stub curl: unrecognized URL: $url" >&2
+    exit 1
+    ;;
+esac
 STUB
   chmod +x "$dir/bin/curl"
+}
+
+# =======================================================================
+# Scenario 9: GitHub answers the delete with an HTTP error, Doppler's
+# delete would succeed -- the script must stop before ever reaching the
+# Doppler delete, and never print "done".
+# =======================================================================
+scenario9() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl_one_delete_fails "$dir" "api.github.com"
   touch "$dir/calls.log"
 
+  local output status
   output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
-  [ "$status" -ne 0 ] || fail "scenario8: a failing Doppler delete must not exit 0"
+  [ "$status" -ne 0 ] || fail "scenario9: a failing GitHub delete must not exit 0"
   echo "$output" | grep -q "teardown.sh: done" \
-    && fail "scenario8: must not print 'done' after a delete that failed"
+    && fail "scenario9: must not print 'done' after a delete that failed"
+  grep -q "CURL_CALL method=DELETE url=https://api.doppler.com" "$dir/calls.log" \
+    && fail "scenario9: must never reach the Doppler delete once the GitHub delete has failed"
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 10: GitHub's delete succeeds, Doppler answers its delete with
+# an HTTP error -- same rule, same non-zero exit, no "done", proven
+# independently of scenario 9's failure.
+# =======================================================================
+scenario10() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl_one_delete_fails "$dir" "api.doppler.com"
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+  [ "$status" -ne 0 ] || fail "scenario10: a failing Doppler delete must not exit 0"
+  echo "$output" | grep -q "teardown.sh: done" \
+    && fail "scenario10: must not print 'done' after a delete that failed"
+  grep -q "CURL_CALL method=DELETE url=https://api.github.com" "$dir/calls.log" \
+    || fail "scenario10: the GitHub delete should have run before the Doppler delete failed"
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 11: `WILLIKINS_GITHUB_TOKEN` is unset -- refuses with a named
+# message, before ever calling curl.
+# =======================================================================
+scenario11() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(
+    env -u WILLIKINS_GITHUB_TOKEN \
+      PATH="$dir/bin:$PATH" \
+      STUB_LOG="$dir/calls.log" \
+      STUB_WILLIKINS_EXIT="0" \
+      RUN_JSON_FILE="$dir/run.json" \
+      GITHUB_GET_RESPONSE_FILE="$dir/github_get_response.json" \
+      DOPPLER_GET_RESPONSE_FILE="$dir/doppler_get_response.json" \
+      WILLIKINS_DOPPLER_TOKEN="$doppler_token_marker" \
+      "$teardown" "01000000-0000-7000-8000-000000000000" "$dir/journal.jsonl" --yes 2>&1
+  ) && status=0 || status=$?
+
+  [ "$status" -ne 0 ] || fail "scenario11: expected a non-zero exit when WILLIKINS_GITHUB_TOKEN is unset"
+  echo "$output" | grep -q "WILLIKINS_GITHUB_TOKEN must be set" \
+    || fail "scenario11: refusal should name WILLIKINS_GITHUB_TOKEN; output: $output"
+  if grep -qE "^CURL_CALL" "$dir/calls.log"; then
+    fail "scenario11: must not call curl before the token check: $(cat "$dir/calls.log")"
+  fi
   rm -rf "$dir"
 }
 
@@ -461,6 +612,9 @@ scenario5
 scenario6
 scenario7
 scenario8
+scenario9
+scenario10
+scenario11
 
 if [ "$failures" -eq 0 ]; then
   echo "teardown_test.sh: all scenarios passed"
