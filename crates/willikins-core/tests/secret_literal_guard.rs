@@ -34,13 +34,24 @@
 //!
 //! # The shapes matched, and why patterns are not literals
 //!
-//! [`DOPPLER_SA_PT_CT`], [`DOPPLER_ST`], and [`GITHUB_TOKEN`] mirror what
-//! this repository's own research (`docs/research/2026-09-12-m2-dependencies.md`,
-//! section 3, citing Doppler's `auth-token-formats` docs) and GitHub's
-//! published PAT prefixes look for, deliberately using an *unbounded*
-//! `{40,}` rather than the `{40,44}` willikins' own types enforce: a real
-//! scanner has no reason to stop at 44, and neither should this one --
-//! see [`a_45_character_run_still_counts_as_long`].
+//! [`DOPPLER_NON_ST`], [`DOPPLER_ST`], and [`GITHUB_TOKEN`] mirror what
+//! the *detector* looks for, not what this workspace issues or parses.
+//! That distinction is the whole design of the three constants, and it
+//! was learned the hard way: the first version of this guard was written
+//! from `willikins-providers-doppler`'s and `-github`'s own
+//! `CREDENTIAL_PATTERN`s -- two GitHub prefixes and three Doppler kinds
+//! -- and passed green over a tree that still carried a `gho_` OAuth
+//! token quoted from GitHub's own documentation and a `dp.st.PRD.`
+//! service token with an uppercase environment segment. Both are shapes
+//! GitHub's published secret-scanning pattern list marks push-protected;
+//! neither is a shape willikins would ever authenticate as. The lists
+//! here therefore come from GitHub's own tables (read 2026-09-16, cited
+//! on each constant): six GitHub prefixes and six Doppler token kinds.
+//!
+//! The bounds are deliberately unbounded above (`{40,}`) rather than the
+//! `{40,44}` willikins' own types enforce: a real scanner has no reason
+//! to stop at 44, and neither should this one -- see
+//! [`a_45_character_run_still_counts_as_long`].
 //!
 //! A regex *pattern* that states one of these shapes -- `CREDENTIAL_PATTERN`
 //! in `willikins-providers-doppler/src/client.rs`, or
@@ -103,39 +114,75 @@ fn swept_files(dir: &Path, prefix: &str, out: &mut Vec<String>) {
     }
 }
 
-/// A Doppler service-account, personal, or CLI token: `dp.(sa|pt|ct).`
-/// then 40 or more plain alphanumeric characters, no dots or hyphens
-/// inside the run. Mirrors `willikins-providers-doppler`'s own
-/// `CREDENTIAL_PATTERN` for `sa`/`pt`; `ct` (CLI) is not a type this
-/// workspace parses, but is exactly as real a leak.
-const DOPPLER_SA_PT_CT: &str = r"dp\.(?:sa|pt|ct)\.[A-Za-z0-9]{40,}";
+/// Every Doppler token kind that is not a service token: `dp.` then one
+/// of `sa`, `pt`, `ct`, `scim` or `audit`, then 40 or more plain
+/// alphanumeric characters, no dots or hyphens inside the run.
+///
+/// The kind list is not this workspace's -- it is GitHub's. Their
+/// published secret-scanning pattern list (`/code-security/secret-scanning/
+/// introduction/supported-secret-scanning-patterns`, read 2026-09-16)
+/// carries six Doppler rows, each with push protection supported:
+/// Audit Token, CLI Token, Personal Token, SCIM Token, Service Account
+/// Token and Service Token. A guard narrower than the detector it exists
+/// to stay ahead of would let exactly the push this repository must not
+/// need a bypass for get blocked. `willikins-providers-doppler`'s own
+/// `CREDENTIAL_PATTERN` covers only `sa`/`pt` because those are the only
+/// kinds it will *authenticate* as; the other four are just as real a
+/// leak.
+const DOPPLER_NON_ST: &str = r"dp\.(?:sa|pt|ct|scim|audit)\.[A-Za-z0-9]{40,}";
 
-/// A Doppler service token: `dp.st.`, an optional lowercase
-/// environment-like segment (2-35 characters, then a dot), then 40 or
-/// more plain alphanumeric characters. Mirrors
-/// [`willikins_types::DopplerServiceToken`]'s own pattern.
-const DOPPLER_ST: &str = r"dp\.st\.(?:[a-z0-9_-]{2,35}\.)?[A-Za-z0-9]{40,}";
+/// A Doppler service token: `dp.st.`, an optional environment-like
+/// segment (2-35 characters, then a dot), then 40 or more plain
+/// alphanumeric characters.
+///
+/// Deliberately *wider* than [`willikins_types::DopplerServiceToken`]'s
+/// own pattern, which requires that segment to be lowercase because that
+/// is all Doppler issues. What Doppler issues and what a detector matches
+/// are different questions, and this guard answers the second: an
+/// uppercase segment is one keypress from a lowercase one, and nothing
+/// is known about the case-sensitivity of GitHub's side. The cost of
+/// being wide here is a `concat!` at a call site; the cost of being
+/// narrow is a blocked push -- see
+/// [`an_uppercase_environment_segment_is_still_flagged`].
+const DOPPLER_ST: &str = r"dp\.st\.(?:[A-Za-z0-9_-]{2,35}\.)?[A-Za-z0-9]{40,}";
 
-/// A GitHub personal access token, classic (`ghp_`) or fine-grained
-/// (`github_pat_`).
-const GITHUB_TOKEN: &str = r"(?:github_pat_|ghp_)[A-Za-z0-9_]{20,}";
+/// Any token GitHub issues, by the prefix it stamps on it.
+///
+/// All six, not the two this workspace authenticates with: GitHub's
+/// `about-authentication-to-github` table (read 2026-09-16) names `ghp_`
+/// (personal access, classic), `github_pat_` (fine-grained), `gho_`
+/// (OAuth access), `ghu_` (user-to-server), `ghs_` (server-to-server)
+/// and `ghr_` (refresh), and their secret-scanning pattern list marks
+/// push protection supported for every one. The first version of this
+/// guard listed only the two `willikins-providers-github`'s
+/// `CREDENTIAL_PATTERN` accepts, and a `gho_` token quoted verbatim from
+/// GitHub's own OAuth documentation sat unflagged in
+/// `docs/research/2026-09-16-m2c-authorization.md` the whole time it was
+/// green -- see [`flags_every_github_prefix`].
+const GITHUB_TOKEN: &str = r"(?:github_pat_|ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9_]{20,}";
 
 /// Every offense a compiled matcher finds in `text`, as `(line_number,
-/// matched_text)`, 1-indexed to match an editor's line numbers.
+/// matched_text)`, 1-indexed to match an editor's line numbers. Every
+/// match on a line, not the first: a line that spells two tokens must
+/// name two, or fixing the one reported uncovers the other on the next
+/// run instead of the same one.
 fn offenses_in(matcher: &Regex, text: &str) -> Vec<(usize, String)> {
     text.lines()
         .enumerate()
         .filter_map(|(index, line)| {
-            matcher
-                .find(line)
+            let found: Vec<(usize, String)> = matcher
+                .find_iter(line)
                 .map(|found| (index + 1, found.as_str().to_string()))
+                .collect();
+            (!found.is_empty()).then_some(found)
         })
+        .flatten()
         .collect()
 }
 
 #[test]
 fn no_provider_token_shaped_literal_anywhere_in_the_tree() {
-    let matcher = Regex::new(&format!("{DOPPLER_SA_PT_CT}|{DOPPLER_ST}|{GITHUB_TOKEN}"))
+    let matcher = Regex::new(&format!("{DOPPLER_NON_ST}|{DOPPLER_ST}|{GITHUB_TOKEN}"))
         .expect("the combined matcher is a valid regex");
 
     let root = repo_root();
@@ -177,7 +224,7 @@ mod tests {
     use super::*;
 
     fn matcher() -> Regex {
-        Regex::new(&format!("{DOPPLER_SA_PT_CT}|{DOPPLER_ST}|{GITHUB_TOKEN}")).unwrap()
+        Regex::new(&format!("{DOPPLER_NON_ST}|{DOPPLER_ST}|{GITHUB_TOKEN}")).unwrap()
     }
 
     /// The two shapes stated in this repository's own research note
@@ -211,6 +258,49 @@ mod tests {
         );
         assert!(matcher().is_match(classic), "{classic}");
         assert!(matcher().is_match(fine_grained), "{fine_grained}");
+    }
+
+    /// Every prefix GitHub stamps on a token it issues, not only the two
+    /// `willikins-providers-github`'s `CREDENTIAL_PATTERN` accepts. The
+    /// `gho_` case is the one that was actually missed: GitHub's OAuth
+    /// documentation spells a worked example token, this repository's
+    /// milestone 2c research note quoted that example verbatim, and the
+    /// first version of this guard did not look for the prefix.
+    #[test]
+    fn flags_every_github_prefix() {
+        let suffix = "16C7e42F292c6912E7710c838347Ae178B4a";
+        for prefix in ["ghp_", "gho_", "ghu_", "ghs_", "ghr_"] {
+            let token = format!("{prefix}{suffix}");
+            assert!(matcher().is_match(&token), "{prefix} was not flagged");
+        }
+    }
+
+    /// Every Doppler token kind GitHub's pattern list marks
+    /// push-protected, including the two (`scim`, `audit`) this workspace
+    /// has no type for and will never authenticate as. A leak is a leak
+    /// whether or not willikins can parse what leaked.
+    #[test]
+    fn flags_every_doppler_token_kind() {
+        let suffix = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        for kind in ["sa", "pt", "ct", "scim", "audit"] {
+            let token = format!("dp.{kind}.{suffix}");
+            assert!(matcher().is_match(&token), "dp.{kind}. was not flagged");
+        }
+        let service = format!("dp.st.{suffix}");
+        assert!(matcher().is_match(&service), "{service}");
+    }
+
+    /// An uppercase environment segment. `DopplerServiceToken` rejects
+    /// this shape -- Doppler only ever issues a lowercase one -- and
+    /// `willikins-types/src/doppler.rs` carried it for exactly that
+    /// reason, as a "the type refuses this" case. It is still a
+    /// token-shaped literal: what the type accepts and what a detector
+    /// matches are different questions, and only the second one decides
+    /// whether a push is blocked.
+    #[test]
+    fn an_uppercase_environment_segment_is_still_flagged() {
+        let uppercase = concat!("dp.st.PRD.", "exampleexampleexampleexampleexampleexample");
+        assert!(matcher().is_match(uppercase), "{uppercase}");
     }
 
     /// A shape only 45 characters long -- one past
@@ -251,9 +341,18 @@ mod tests {
     fn a_pattern_constant_is_never_flagged() {
         let credential_pattern = r"^dp\.(sa|pt)\.[a-zA-Z0-9]{40,44}$";
         let service_token_pattern = r"dp\.st\.(?:[a-z0-9\-_]{2,35}\.)?[a-zA-Z0-9]{40,44}";
+        // `willikins-providers-github`'s own `CREDENTIAL_PATTERN`. It has
+        // no dot to escape, so it survives for a different reason: an
+        // alternation bar follows the prefix where a token's random run
+        // would be, and `|` is not in `[A-Za-z0-9_]`.
+        let github_credential_pattern = "^(github_pat_|ghp_)[A-Za-z0-9_]+$";
         assert!(
             !matcher().is_match(credential_pattern),
             "{credential_pattern}"
+        );
+        assert!(
+            !matcher().is_match(github_credential_pattern),
+            "{github_credential_pattern}"
         );
         assert!(
             !matcher().is_match(service_token_pattern),

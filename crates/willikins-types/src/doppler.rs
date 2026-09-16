@@ -440,8 +440,12 @@ mod tests {
             "dp.st.aaaaaaaaaa.aaaaaaaaaa.aaaaaaaaaa.aaaaaaaaaa",
             // Hyphens inside the suffix.
             "dp.st.aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa",
-            // An uppercase environment segment.
-            "dp.st.PRD.exampleexampleexampleexampleexampleexample",
+            // An uppercase environment segment. `concat!`-split like its
+            // siblings below and above: this type rejects the shape, but
+            // a scanner does not ask what this type accepts — it matches
+            // `dp.st.` plus a segment plus a long run, in any case — so
+            // the literal must not be spelled contiguously here either.
+            concat!("dp.st.PRD.", "exampleexampleexampleexampleexampleexample"),
             // 45 characters, one past the longest Doppler issues.
             concat!("dp.st.", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         ] {
