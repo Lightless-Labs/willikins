@@ -7,14 +7,41 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-16) — **milestone 2 is complete**: the live smoke run passed end to end and `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md` carries `Completed: 2026-09-16`. Next: land the token-literal change and two guard tests, then milestone 2c's task 1 once the operator names a provider
+### RESUME HERE (2026-09-16) — milestone 2 is complete; milestone 2c was re-scoped on the operator's decision that willikins issues its own tokens rather than delegating to any identity provider, and its plan is rewritten. Next: land the credential-boundary guards, then 2c task 1 once the operator picks a login method
 
 - **Live state:** `main` at 348 commits, gates green at `1bc23f5` (1,704 tests; the ignored ones
   are by-hand measurements, a lock-probe child, two slow connection-holding attacks, a
   fixture generator, the two live probes and the two live write cycles). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
   `main` is pushed after every coordinator commit.
-- **What just happened (2026-09-16, morning):** task 14 part B, the live smoke run, **passed**,
+- **What just happened (2026-09-16, afternoon):** milestone 2c changed shape on an operator
+  decision and its plan is rewritten to match. They ruled out every external identity provider,
+  including a self-hosted open-source edition of a SaaS ("I won't have the entire project's authn
+  / authz depend on the 'open source' edition of a SaaS ... There is *no way* I'll shove such a
+  tool down the throat of anyone who wants to use Willikins"), because a dependency willikins
+  accepts is one every self-hoster inherits. So **willikins is its own authorization server**: it
+  issues the tokens it validates. Two research documents were written from primary sources
+  fetched 2026-09-16 and are on `main`: `docs/research/2026-09-16-m2c-own-authorization-server.md`
+  (six passes: what the MCP spec demands of an authorization server, the Rust crate landscape with
+  a pinned table carrying licences, maintenance and Dockerfile buildability, passkeys versus
+  passwords, JWT issuance and key rotation, sessions and browser security, and self-contained Rust
+  identity servers read as prior art) and `docs/research/2026-09-16-m2c-scope-revision.md` (55
+  must-implement items each marked spec or deployment, 23 deferrable, a decision-by-decision
+  revision, a 20-task shape, the pluggable seam, the open decisions and the risks). The plan
+  `docs/plans/2026-09-16-milestone-2c-authorization.md` now carries them: 24 decisions, 20 tasks,
+  26 acceptance tests, 15 new variables, 23 verify items, 6 trust boundaries (boundary 1 split,
+  because willikins now holds a signing key). Cost, measured rather than guessed: 4,000 to 6,000
+  implementation lines plus about 1.4x in tests, and **no new crates for the issuing half** —
+  `jsonwebtoken` already signs, publishes the JWKS and derives the `kid`. Two candidate frameworks
+  were rejected on evidence: `oxide-auth` has no audiences, no metadata, no resource indicators and
+  defaults PKCE off; `oauth-as` implements everything but is six weeks old, one author, unaudited,
+  36,230 lines, which is a larger trust surface than the vendor product that was rejected (it is
+  recorded as prior art to read). The operator also asked to bank pluggable auth for later, so an
+  adapter for an external provider stays possible: the rule, in the plan and in
+  `todos/2026-09-16-pluggable-auth-adapters.md`, is that the validator reads a configured issuer
+  and JWKS **even when both are willikins' own**, which makes delegation configuration rather than
+  a rewrite.
+- **Earlier (2026-09-16, morning):** task 14 part B, the live smoke run, **passed**,
   and milestone 2 is complete. Thirty seconds against the sandbox accounts: `repo`, `doppler`,
   `token` and `ci_secret` `Created` with the three root configs `Unchanged`, a second apply
   `Unchanged` throughout with `ci_secret` `Converged` and the token output `Unknown`, the
@@ -169,10 +196,15 @@ compaction, before handing off, after a milestone, and after a plan change or di
   runtime so the runtime value still satisfies `CREDENTIAL_PATTERN` while no literal in the tree
   matches a provider's detector, and add the two guard tests (the `gh` one is drafted at
   `<session scratchpad>/no_gh_writes_guard.rs`), with the invariants written into CLAUDE.md.
-  (2) Milestone 2c, whose plan is written and reviewed
-  (`docs/plans/2026-09-16-milestone-2c-authorization.md`): task 1 starts once the operator
-  answers its one open decision — accept self-hosted Logto, or name another self-hostable
-  provider. The plan's own shape, the operator's three decisions and the pass-2 exposure
+  (2) Milestone 2c, whose plan is rewritten for willikins issuing its own
+  tokens: task 1 starts once the operator answers the login-method decision (recommended:
+  passkeys through `webauthn-rs`, because this deployment has no email or SMS so a password path
+  has no reset and no escape from lockout; the cost is that OpenSSL enters the build and the
+  relying-party id freezes the domain permanently). Three further open decisions have
+  recommendations the coordinator will apply as defaults unless the operator says otherwise: the
+  signing key injected through Doppler as **two** variables so the rotation overlap is
+  expressible; pre-registered clients rather than dynamic registration or metadata documents; and
+  a one-hour access-token lifetime, which is also the key-rotation overlap window. The plan's own shape, the operator's three decisions and the pass-2 exposure
   hand-overs are in that plan; milestone 2c then gets its own tracking todo. Railway follow-ups
   for the operator remain: connect Doppler's Railway integration and remove
   `WILLIKINS_FAKE_CATALOG` when the service should go live. Everything else about how work runs
