@@ -98,10 +98,14 @@ are deliberately left out because no tool reads them.
   (`service_token_ensure_mock.rs`, `service_token_rotate_mock.rs`) are what pin the 404 case now.
 
   **What that 404 cannot settle**, recorded so it is not re-derived: Doppler documents no
-  error-body schema for any non-2xx response, so the status alone cannot separate "no such
-  project or config" from "one this Service Account is not granted" (its permission set is
-  granular within a workplace, and another workplace's projects are invisible to it outright).
-  That is the same conflation GitHub's own 404 already carries in `github.repo.ensure`.
+  error-body schema for any non-2xx response, so the status is all there is. It covers "no such
+  project or config" — the smoke run proved that much — but it cannot be shown *not* to cover
+  "one this Service Account is not granted" (its permission set is granular within a workplace,
+  and another workplace's projects lie outside it entirely). Which status an out-of-grant project
+  actually answers was never observed here, by the write cycle, the probe or the smoke run: a
+  `403` is as plausible as a `404`. GitHub's own 404 is documented to conflate the two, which is
+  what `github.repo.ensure` records; for Doppler the claim stays the weaker one, that a 404
+  cannot prove absence.
   `Observation::Foreign` would be the wrong reading of the ambiguity anyway — `plan` turns
   `Foreign` into `NameTaken` and refuses everything, which is the defect again for the ordinary
   case — and `Absent` reaches nothing a `200` did not already reach, since the ownership gate is

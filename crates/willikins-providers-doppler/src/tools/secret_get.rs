@@ -81,10 +81,13 @@ impl DopplerSecretGet {
     /// string past the bound that bounding exists to guarantee.
     ///
     /// **Why a missing parent is not tolerated here, unlike the two
-    /// service-token tools.** A `404` — which this endpoint answers for a
-    /// project or config that does not exist, though never for a secret
-    /// name that does not (see [`DopplerClient::get_secret`]) — stays a
-    /// plan-time `NotFound` rather than becoming an observation. Audited
+    /// service-token tools.** A `404` — which this endpoint does answer
+    /// for a project that does not exist (`tests/live_probe.rs`'s
+    /// 2026-09-14 run: every check needing a project, this one included,
+    /// answered `404` against an empty workplace), though never for a
+    /// secret name that does not (see [`DopplerClient::get_secret`]) —
+    /// stays a plan-time `NotFound` rather than becoming an
+    /// observation. Audited
     /// 2026-09-16 alongside the missing-parent fix in
     /// `doppler.service_token.ensure`/`.rotate` and deliberately left
     /// alone: this tool has no create path, and nothing in this
