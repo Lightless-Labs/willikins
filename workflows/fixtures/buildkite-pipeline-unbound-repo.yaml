@@ -1,6 +1,6 @@
-# Milestone 3a acceptance: buildkite.pipeline.ensure's `repo` port bound
-# to a step that no node in this document produces. `check` must return
-# exactly one error:
+# acceptance_m3a_buildkite.rs::wrong_02_a_pipeline_bound_to_a_repository_no_node_produces_is_rejected
+# buildkite.pipeline.ensure's `repo` port bound to a step that no node in
+# this document produces. `check` must return exactly one error:
 #   UnknownNode { site: Site::Port { node: pipeline, port: repo },
 #                 referenced: repo }
 name: buildkite-pipeline-unbound-repo

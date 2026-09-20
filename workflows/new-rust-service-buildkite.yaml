@@ -4,14 +4,13 @@
 # pointed at the new repository and bootstrapped to read the repository's
 # own .buildkite/pipeline.yml. The organisation runs Buildkite with
 # self-hosted agents and keeps every secret in Doppler already, so this
-# graph mints no service token and stores no CI secret: no node here is
-# ever `Reversible`'s neighbour `Irreversible` or `Destructive`, no
-# `SinkToken` is minted, and nothing in a run of this document is ever
-# redacted, because nothing in it is secret. Provider names, including the
-# Buildkite pipeline slug, are derived inside the graph by naming.v1. The
-# milestone 1 document (workflows/new-rust-service.yaml) stays exactly as
-# it is -- it is the proof of the typed-secret flow, and this document
-# does not replace it.
+# graph mints no service token and stores no CI secret: every node is
+# `Reversible`, no `SinkToken` is minted, and nothing in a run of this
+# document is ever redacted, because nothing in it is secret. Provider
+# names, including the Buildkite pipeline slug, are derived inside the
+# graph by naming.v1. The milestone 1 document
+# (workflows/new-rust-service.yaml) stays exactly as it is -- it is the
+# proof of the typed-secret flow, and this document does not replace it.
 #
 # Granting the organisation's Buildkite CI service account access to the
 # new Doppler project is still manual until doppler.project_member.ensure

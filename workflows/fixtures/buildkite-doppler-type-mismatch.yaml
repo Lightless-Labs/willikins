@@ -1,7 +1,8 @@
-# Milestone 3a acceptance: a type mismatch between a Doppler port and a
-# Buildkite port -- doppler.project.ensure's `project` output
-# (DopplerProject) bound to buildkite.pipeline.ensure's `cluster` port
-# (BuildkiteClusterId). `check` must return exactly one error:
+# acceptance_m3a_buildkite.rs::wrong_03_a_doppler_port_bound_to_a_buildkite_port_of_a_different_type_is_rejected
+# A type mismatch between a Doppler port and a Buildkite port --
+# doppler.project.ensure's `project` output (DopplerProject) bound to
+# buildkite.pipeline.ensure's `cluster` port (BuildkiteClusterId). `check`
+# must return exactly one error:
 #   TypeMismatch { node: pipeline, port: cluster,
 #                  expected: Exact(BuildkiteClusterId), found: DopplerProject }
 name: buildkite-doppler-type-mismatch

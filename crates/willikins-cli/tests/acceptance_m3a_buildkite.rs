@@ -350,25 +350,10 @@ fn acceptance_11_the_plan_is_reversible_and_auto_approves() {
     );
 }
 
-/// The container-image glob test naming the workflows the image admits is
-/// updated separately
-/// (`crates/willikins-server/tests/image_contents.rs::the_image_workflows_directory_holds_exactly_the_three_positive_documents`);
-/// this is only a reminder that both halves of acceptance test 11 exist,
-/// so a reader of this file is pointed at the other one.
-#[test]
-fn acceptance_11_see_also_image_contents_for_the_container_image_half() {
-    let image_test = workspace_root()
-        .join("crates")
-        .join("willikins-server")
-        .join("tests")
-        .join("image_contents.rs");
-    let text = std::fs::read_to_string(&image_test).unwrap();
-    assert!(
-        text.contains("new-rust-service-buildkite.yaml"),
-        "acceptance test 11: {} must name the third positive document",
-        image_test.display()
-    );
-}
+// The container-image half of acceptance test 11 -- the glob test naming
+// the workflows the image admits -- lives in
+// `crates/willikins-server/tests/image_contents.rs::the_image_workflows_directory_holds_exactly_the_three_positive_documents`,
+// updated alongside this file.
 
 // ---------------------------------------------------------------------
 // acceptance test 12: executor happy path
