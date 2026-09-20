@@ -23,6 +23,7 @@ fail() {
 # never in its environment either.
 github_token_marker="teardown-test-github-token-MARKER-3af1"
 doppler_token_marker="teardown-test-doppler-token-MARKER-8f2c"
+buildkite_token_marker="teardown-test-buildkite-token-MARKER-9c17"
 
 # The exit code the stub `willikins` leaves with (the real CLI exits 1
 # for a failed or still-running run while printing the whole record).
@@ -75,6 +76,104 @@ write_run_record() {
 JSON
 }
 
+# Args: sandbox, repo value, project value, pipeline org, pipeline slug,
+# [run state] (default "succeeded"). Like `write_run_record`, but the
+# plan also carries a `pipeline` node -- the shape
+# `workflows/new-rust-service-buildkite.yaml` produces, whose only two
+# outputs are `slug` and `url` (never the organisation on its own: that
+# is why teardown.sh parses it back out of `url`).
+write_run_record_with_pipeline() {
+  local dir="$1" repo="$2" project="$3" pipeline_org="$4" pipeline_slug="$5" \
+    state="${6:-succeeded}"
+  cat > "$dir/run.json" <<JSON
+{
+  "run_id": "01000000-0000-7000-8000-000000000000",
+  "plan_id": "01000000-0000-7000-8000-000000000001",
+  "principal": "test",
+  "started_at": "2026-01-01T00:00:00+00:00",
+  "state": "$state",
+  "nodes": [
+    {
+      "node": "repo",
+      "instance": null,
+      "status": "created",
+      "outputs": {
+        "repo": {"type": "GitHubRepo", "list": false, "state": "known", "value": "$repo"},
+        "url": {"type": "HttpsUrl", "list": false, "state": "known", "value": "https://github.com/$repo"}
+      }
+    },
+    {
+      "node": "doppler",
+      "instance": null,
+      "status": "created",
+      "outputs": {
+        "project": {"type": "DopplerProject", "list": false, "state": "known", "value": "$project"}
+      }
+    },
+    {
+      "node": "pipeline",
+      "instance": null,
+      "status": "created",
+      "outputs": {
+        "slug": {"type": "BuildkitePipelineSlug", "list": false, "state": "known", "value": "$pipeline_slug"},
+        "url": {"type": "HttpsUrl", "list": false, "state": "known", "value": "https://buildkite.com/$pipeline_org/$pipeline_slug"}
+      }
+    }
+  ],
+  "outputs": {},
+  "error": null,
+  "finished_at": "2026-01-01T00:05:00+00:00"
+}
+JSON
+}
+
+# Args: sandbox, repo value, project value, [run state] -- like
+# `write_run_record_with_pipeline`, but the `pipeline` node is present
+# and was never reached: empty outputs, `status: "not_run"`. Distinct
+# from a document with no pipeline concept at all (the node is simply
+# absent from `.nodes[]`), which `write_run_record` above already models
+# for every one of scenarios 1 through 14.
+write_run_record_with_unreached_pipeline() {
+  local dir="$1" repo="$2" project="$3" state="${4:-failed}"
+  cat > "$dir/run.json" <<JSON
+{
+  "run_id": "01000000-0000-7000-8000-000000000000",
+  "plan_id": "01000000-0000-7000-8000-000000000001",
+  "principal": "test",
+  "started_at": "2026-01-01T00:00:00+00:00",
+  "state": "$state",
+  "nodes": [
+    {
+      "node": "repo",
+      "instance": null,
+      "status": "created",
+      "outputs": {
+        "repo": {"type": "GitHubRepo", "list": false, "state": "known", "value": "$repo"},
+        "url": {"type": "HttpsUrl", "list": false, "state": "known", "value": "https://github.com/$repo"}
+      }
+    },
+    {
+      "node": "doppler",
+      "instance": null,
+      "status": "created",
+      "outputs": {
+        "project": {"type": "DopplerProject", "list": false, "state": "known", "value": "$project"}
+      }
+    },
+    {
+      "node": "pipeline",
+      "instance": null,
+      "status": {"kind": "not_run"},
+      "outputs": {}
+    }
+  ],
+  "outputs": {},
+  "error": null,
+  "finished_at": "2026-01-01T00:05:00+00:00"
+}
+JSON
+}
+
 # The stub exits with `$STUB_WILLIKINS_EXIT` (0 unless a scenario says
 # otherwise) *after* printing the record, exactly as the real `willikins
 # run --json` does: it prints the whole RunRecord and then exits 1 for a
@@ -107,6 +206,15 @@ write_doppler_get_response() {
   local dir="$1" description="$2"
   cat > "$dir/doppler_get_response.json" <<JSON
 {"project": {"description": "$description"}}
+JSON
+}
+
+# Args: sandbox, description-or-empty -- what the stub answers a
+# Buildkite pipeline read with.
+write_buildkite_get_response() {
+  local dir="$1" description="$2"
+  cat > "$dir/buildkite_get_response.json" <<JSON
+{"description": "$description"}
 JSON
 }
 
@@ -159,6 +267,13 @@ case "$url" in
       cat "$DOPPLER_GET_RESPONSE_FILE"
     fi
     ;;
+  *api.buildkite.com/v2/organizations/*/pipelines/*)
+    if [ "$method" = "DELETE" ]; then
+      echo '{}'
+    else
+      cat "$BUILDKITE_GET_RESPONSE_FILE"
+    fi
+    ;;
   *)
     echo "stub curl: unrecognized URL: $url" >&2
     exit 1
@@ -169,7 +284,12 @@ STUB
 }
 
 # Runs teardown.sh inside `dir`'s stubbed environment. Extra args (e.g.
-# `--yes`) are forwarded.
+# `--yes`) are forwarded. `WILLIKINS_BUILDKITE_TOKEN` and
+# `BUILDKITE_GET_RESPONSE_FILE` are passed unconditionally: teardown.sh
+# only ever reads either when the run record carries a `pipeline` node,
+# so scenarios 1 through 14 (none of which do) are unaffected by their
+# presence, and every scenario below that does carry one does not need
+# its own copy of this function.
 run_teardown() {
   local dir="$1"
   shift
@@ -179,8 +299,10 @@ run_teardown() {
     RUN_JSON_FILE="$dir/run.json" \
     GITHUB_GET_RESPONSE_FILE="$dir/github_get_response.json" \
     DOPPLER_GET_RESPONSE_FILE="$dir/doppler_get_response.json" \
+    BUILDKITE_GET_RESPONSE_FILE="$dir/buildkite_get_response.json" \
     WILLIKINS_GITHUB_TOKEN="$github_token_marker" \
     WILLIKINS_DOPPLER_TOKEN="$doppler_token_marker" \
+    WILLIKINS_BUILDKITE_TOKEN="$buildkite_token_marker" \
     "$teardown" "01000000-0000-7000-8000-000000000000" "$dir/journal.jsonl" "$@"
 }
 
@@ -544,6 +666,13 @@ case "$url" in
       cat "$DOPPLER_GET_RESPONSE_FILE"
     fi
     ;;
+  *api.buildkite.com/v2/organizations/*/pipelines/*)
+    if [ "$method" = "DELETE" ]; then
+      echo '{}'
+    else
+      cat "$BUILDKITE_GET_RESPONSE_FILE"
+    fi
+    ;;
   *)
     echo "stub curl: unrecognized URL: $url" >&2
     exit 1
@@ -723,6 +852,331 @@ scenario14() {
   rm -rf "$dir"
 }
 
+# =======================================================================
+# Scenario 15: a run record whose document has a `pipeline` node, dry
+# run -- exits 0, prints "would delete" for all three resources
+# (including the pipeline, its organisation parsed out of the recorded
+# `url`), calls no delete endpoint, and reads exactly three resources
+# (no fourth call for a fourth resource that does not exist).
+# =======================================================================
+scenario15() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record_with_pipeline "$dir" "Willikins-Test/teardown-test-repo" \
+    "teardown-test-project" "teardown-test-org" "teardown-test-pipeline"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_buildkite_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(run_teardown "$dir" 2>&1) && status=0 || status=$?
+
+  [ "$status" -eq 0 ] || fail "scenario15: expected exit 0, got $status; output: $output"
+  echo "$output" \
+    | grep -q "would delete Buildkite pipeline: teardown-test-org/teardown-test-pipeline" \
+    || fail "scenario15: missing 'would delete' line for the pipeline"
+  grep -q "CURL_CALL method=DELETE" "$dir/calls.log" \
+    && fail "scenario15: a dry run must not call any delete endpoint"
+  local curl_calls
+  curl_calls=$(grep -c "CURL_CALL" "$dir/calls.log" || true)
+  [ "$curl_calls" -eq 3 ] || fail "scenario15: expected 3 curl calls (three reads), got $curl_calls"
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 16: the same pipeline-bearing run, `--yes` -- deletes all
+# three resources including the Buildkite pipeline, and the Buildkite
+# token never reaches curl's argv or environment, only its stdin
+# (`--config -`), mirroring scenario 4's proof for the other two tokens.
+# =======================================================================
+scenario16() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record_with_pipeline "$dir" "Willikins-Test/teardown-test-repo" \
+    "teardown-test-project" "teardown-test-org" "teardown-test-pipeline"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_buildkite_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+
+  [ "$status" -eq 0 ] || fail "scenario16: expected exit 0, got $status; output: $output"
+  grep -q "CURL_CALL method=DELETE url=https://api.buildkite.com/v2/organizations/teardown-test-org/pipelines/teardown-test-pipeline" \
+    "$dir/calls.log" \
+    || fail "scenario16: curl DELETE was not called for the Buildkite pipeline"
+
+  if grep -q "CURL_CALL.*$buildkite_token_marker" "$dir/calls.log"; then
+    fail "scenario16: the Buildkite token leaked into curl's own arguments"
+  fi
+  if grep -qE "CURL_CALL.*bkua_" "$dir/calls.log"; then
+    fail "scenario16: a Buildkite-token-shaped argument reached curl's argv"
+  fi
+
+  local env_lines
+  env_lines=$(grep -c "^CURL_ENV=" "$dir/calls.log" || true)
+  [ "$env_lines" -eq 6 ] \
+    || fail "scenario16: expected 6 recorded curl environments, got $env_lines"
+  if grep -q "CURL_ENV.*$buildkite_token_marker" "$dir/calls.log"; then
+    fail "scenario16: the Buildkite token was in curl's own environment"
+  fi
+
+  local curl_calls config_calls failing_calls
+  curl_calls=$(grep -c "CURL_CALL" "$dir/calls.log" || true)
+  config_calls=$(grep -c "CURL_CALL.*--config -" "$dir/calls.log" || true)
+  failing_calls=$(grep -c "CURL_CALL.*--fail" "$dir/calls.log" || true)
+  [ "$curl_calls" -eq 6 ] || fail "scenario16: expected 6 curl calls, got $curl_calls"
+  [ "$config_calls" -eq 6 ] \
+    || fail "scenario16: every curl call must carry --config -; $config_calls of $curl_calls do"
+  [ "$failing_calls" -eq 6 ] \
+    || fail "scenario16: every curl call must carry --fail; $failing_calls of $curl_calls do"
+
+  grep -q "Authorization: Bearer $buildkite_token_marker" "$dir/calls.log" \
+    || fail "scenario16: the Buildkite token never reached curl's stdin (--config -)"
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 17: the Buildkite pipeline is missing (or carries the wrong)
+# description -- refuses, deletes nothing at all, even though GitHub's
+# and Doppler's own markers checked out.
+# =======================================================================
+scenario17() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record_with_pipeline "$dir" "Willikins-Test/teardown-test-repo" \
+    "teardown-test-project" "teardown-test-org" "teardown-test-pipeline"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_buildkite_get_response "$dir" "some other description"
+  write_stub_curl "$dir"
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+
+  [ "$status" -ne 0 ] \
+    || fail "scenario17: expected a non-zero exit when the pipeline description is wrong"
+  echo "$output" | grep -q "managed-by: willikins" \
+    || fail "scenario17: refusal message should name the expected description"
+  grep -q "CURL_CALL method=DELETE" "$dir/calls.log" \
+    && fail "scenario17: must never delete anything once the Buildkite check has refused"
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 18: the Buildkite ownership read fails outright -- refuses by
+# name, deletes nothing, including the GitHub repository and Doppler
+# project whose own markers did check out (all reads happen before any
+# delete).
+# =======================================================================
+scenario18() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record_with_pipeline "$dir" "Willikins-Test/teardown-test-repo" \
+    "teardown-test-project" "teardown-test-org" "teardown-test-pipeline"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_buildkite_get_response "$dir" "managed-by: willikins"
+  write_stub_curl_one_call_fails "$dir" GET "api.buildkite.com" 22
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+
+  [ "$status" -ne 0 ] || fail "scenario18: a failing Buildkite ownership read must not exit 0"
+  echo "$output" | grep -q "could not read Buildkite pipeline" \
+    || fail "scenario18: refusal should say the pipeline could not be read; output: $output"
+  if grep -q "CURL_CALL method=DELETE" "$dir/calls.log"; then
+    fail "scenario18: must delete nothing when the ownership read failed"
+  fi
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 19: a document with no `pipeline` node at all (milestone 1's
+# or 2's own shape) never needs `WILLIKINS_BUILDKITE_TOKEN` -- unset it
+# entirely and the run still tears down cleanly.
+# =======================================================================
+scenario19() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record "$dir" "Willikins-Test/teardown-test-repo" "teardown-test-project"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(
+    export WILLIKINS_GITHUB_TOKEN="$github_token_marker"
+    export WILLIKINS_DOPPLER_TOKEN="$doppler_token_marker"
+    env -u WILLIKINS_BUILDKITE_TOKEN \
+      PATH="$dir/bin:$PATH" \
+      STUB_LOG="$dir/calls.log" \
+      STUB_WILLIKINS_EXIT="0" \
+      RUN_JSON_FILE="$dir/run.json" \
+      GITHUB_GET_RESPONSE_FILE="$dir/github_get_response.json" \
+      DOPPLER_GET_RESPONSE_FILE="$dir/doppler_get_response.json" \
+      "$teardown" "01000000-0000-7000-8000-000000000000" "$dir/journal.jsonl" 2>&1
+  ) && status=0 || status=$?
+
+  [ "$status" -eq 0 ] \
+    || fail "scenario19: a document with no pipeline node must not need" \
+      "WILLIKINS_BUILDKITE_TOKEN; got $status; output: $output"
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 20: a `pipeline` node *is* present and `WILLIKINS_BUILDKITE_
+# TOKEN` is unset -- refuses by name, before calling curl at all, the
+# same rule scenarios 11 and 12 pin for the other two credentials.
+# =======================================================================
+scenario20() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record_with_pipeline "$dir" "Willikins-Test/teardown-test-repo" \
+    "teardown-test-project" "teardown-test-org" "teardown-test-pipeline"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_buildkite_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(
+    export WILLIKINS_GITHUB_TOKEN="$github_token_marker"
+    export WILLIKINS_DOPPLER_TOKEN="$doppler_token_marker"
+    env -u WILLIKINS_BUILDKITE_TOKEN \
+      PATH="$dir/bin:$PATH" \
+      STUB_LOG="$dir/calls.log" \
+      STUB_WILLIKINS_EXIT="0" \
+      RUN_JSON_FILE="$dir/run.json" \
+      GITHUB_GET_RESPONSE_FILE="$dir/github_get_response.json" \
+      DOPPLER_GET_RESPONSE_FILE="$dir/doppler_get_response.json" \
+      BUILDKITE_GET_RESPONSE_FILE="$dir/buildkite_get_response.json" \
+      "$teardown" "01000000-0000-7000-8000-000000000000" "$dir/journal.jsonl" --yes 2>&1
+  ) && status=0 || status=$?
+
+  [ "$status" -ne 0 ] \
+    || fail "scenario20: expected a non-zero exit when WILLIKINS_BUILDKITE_TOKEN is unset" \
+      "and a pipeline node is present"
+  echo "$output" | grep -q "WILLIKINS_BUILDKITE_TOKEN must be set" \
+    || fail "scenario20: refusal should name WILLIKINS_BUILDKITE_TOKEN; output: $output"
+  if grep -qE "^CURL_CALL" "$dir/calls.log"; then
+    fail "scenario20: must not call curl before the token check: $(cat "$dir/calls.log")"
+  fi
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 21: the `pipeline` node is present but was never reached (a
+# run that failed before getting there) -- refuses by name, exactly like
+# an unreached `repo` or `doppler` node always has, rather than being
+# silently skipped the way a document with no pipeline concept at all
+# is.
+# =======================================================================
+scenario21() {
+  local dir
+  dir="$(new_sandbox)"
+  write_run_record_with_unreached_pipeline "$dir" "Willikins-Test/teardown-test-repo" \
+    "teardown-test-project"
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+
+  [ "$status" -ne 0 ] \
+    || fail "scenario21: expected a non-zero exit with a present-but-unreached pipeline node"
+  echo "$output" | grep -q "pipeline node but no slug/url" \
+    || fail "scenario21: refusal should name the missing pipeline output; output: $output"
+  if grep -qE "^CURL_CALL" "$dir/calls.log"; then
+    fail "scenario21: must not call curl at all: $(cat "$dir/calls.log")"
+  fi
+  rm -rf "$dir"
+}
+
+# =======================================================================
+# Scenario 22: the `pipeline` node's `url` output does not parse into an
+# organisation and the recorded slug -- refuses by name rather than
+# guessing, before calling curl at all.
+# =======================================================================
+scenario22() {
+  local dir
+  dir="$(new_sandbox)"
+  cat > "$dir/run.json" <<'JSON'
+{
+  "run_id": "01000000-0000-7000-8000-000000000000",
+  "plan_id": "01000000-0000-7000-8000-000000000001",
+  "principal": "test",
+  "started_at": "2026-01-01T00:00:00+00:00",
+  "state": "succeeded",
+  "nodes": [
+    {
+      "node": "repo",
+      "instance": null,
+      "status": "created",
+      "outputs": {
+        "repo": {"type": "GitHubRepo", "list": false, "state": "known", "value": "Willikins-Test/teardown-test-repo"},
+        "url": {"type": "HttpsUrl", "list": false, "state": "known", "value": "https://github.com/Willikins-Test/teardown-test-repo"}
+      }
+    },
+    {
+      "node": "doppler",
+      "instance": null,
+      "status": "created",
+      "outputs": {
+        "project": {"type": "DopplerProject", "list": false, "state": "known", "value": "teardown-test-project"}
+      }
+    },
+    {
+      "node": "pipeline",
+      "instance": null,
+      "status": "created",
+      "outputs": {
+        "slug": {"type": "BuildkitePipelineSlug", "list": false, "state": "known", "value": "teardown-test-pipeline"},
+        "url": {"type": "HttpsUrl", "list": false, "state": "known", "value": "not-a-buildkite-url"}
+      }
+    }
+  ],
+  "outputs": {},
+  "error": null,
+  "finished_at": "2026-01-01T00:05:00+00:00"
+}
+JSON
+  write_stub_willikins "$dir"
+  write_github_get_response "$dir" '["managed-by-willikins"]'
+  write_doppler_get_response "$dir" "managed-by: willikins"
+  write_buildkite_get_response "$dir" "managed-by: willikins"
+  write_stub_curl "$dir"
+  touch "$dir/calls.log"
+
+  local output status
+  output=$(run_teardown "$dir" --yes 2>&1) && status=0 || status=$?
+
+  [ "$status" -ne 0 ] || fail "scenario22: expected a non-zero exit for a malformed pipeline url"
+  echo "$output" | grep -q "could not parse a Buildkite organization" \
+    || fail "scenario22: refusal should say the url could not be parsed; output: $output"
+  if grep -qE "^CURL_CALL" "$dir/calls.log"; then
+    fail "scenario22: must not call curl at all: $(cat "$dir/calls.log")"
+  fi
+  rm -rf "$dir"
+}
+
 scenario1
 scenario2
 scenario3
@@ -737,6 +1191,14 @@ scenario11
 scenario12
 scenario13
 scenario14
+scenario15
+scenario16
+scenario17
+scenario18
+scenario19
+scenario20
+scenario21
+scenario22
 
 if [ "$failures" -eq 0 ]; then
   echo "teardown_test.sh: all scenarios passed"
