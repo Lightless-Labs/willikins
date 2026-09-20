@@ -1,0 +1,48 @@
+---
+source: crates/willikins-providers-buildkite/tests/catalog_parity.rs
+expression: "spec_json(BuildkitePipelineEnsure::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Ensure a Buildkite pipeline exists in a cluster, pointed at a GitHub repository.",
+  "inputs": {
+    "cluster": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "BuildkiteClusterId"
+      }
+    },
+    "org": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "BuildkiteOrg"
+      }
+    },
+    "repo": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "GitHubRepo"
+      }
+    },
+    "slug": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "BuildkitePipelineSlug"
+      }
+    }
+  },
+  "key": [
+    "org",
+    "slug"
+  ],
+  "name": "buildkite.pipeline.ensure",
+  "outputs": {
+    "slug": "BuildkitePipelineSlug",
+    "url": "HttpsUrl"
+  },
+  "pure": false
+}

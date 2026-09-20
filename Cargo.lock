@@ -2939,6 +2939,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "willikins-providers-buildkite"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "insta",
+ "mockito",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "willikins-core",
+ "willikins-dsl",
+ "willikins-providers-doppler",
+ "willikins-providers-fake",
+ "willikins-providers-github",
+ "willikins-providers-http",
+ "willikins-server",
+ "willikins-tools",
+ "willikins-types",
+]
+
+[[package]]
 name = "willikins-providers-doppler"
 version = "0.1.0"
 dependencies = [
@@ -3043,6 +3065,7 @@ dependencies = [
  "willikins-core",
  "willikins-dsl",
  "willikins-journal",
+ "willikins-providers-buildkite",
  "willikins-providers-doppler",
  "willikins-providers-fake",
  "willikins-providers-github",
