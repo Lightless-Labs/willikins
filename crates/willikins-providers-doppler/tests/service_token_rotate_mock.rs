@@ -121,8 +121,8 @@ fn read_reports_absent_when_the_parent_project_or_config_does_not_exist_yet() {
 
 /// **2026-09-20 defect, this tool's share.** The same listing endpoint
 /// can also answer `400` "This token does not have access to requested
-/// project" for a missing parent, depending on how recently the
-/// workplace changed
+/// project" for a missing parent, whenever this token can already see
+/// any project in the workplace
 /// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
 /// `read` tolerates this the same way it tolerates the 404 above; `Absent`
 /// either way, since this step never plans as `NoOp`.

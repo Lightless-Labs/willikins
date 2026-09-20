@@ -61,8 +61,9 @@ impl DopplerProjectEnsure {
     /// hand. Pinned by `tests/project_ensure_mock.rs`.
     ///
     /// **2026-09-20 defect, fixed here.** A brand-new project name did
-    /// not always answer `404`: against a quiescent workplace (or one
-    /// where a project had just been deleted), the same absent name
+    /// not always answer `404`: as soon as this token could see *any*
+    /// project in the workplace — which is every provisioning run after
+    /// the first — the same absent name
     /// answered `400` "This token does not have access to requested
     /// project" instead, which fell through to the `Err(err) =>
     /// Err(err.into())` arm below and refused the whole plan before this

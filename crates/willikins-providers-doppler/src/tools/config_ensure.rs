@@ -78,7 +78,8 @@ impl DopplerConfigEnsure {
     /// `doppler.project.ensure::observe` fixes applies here identically:
     /// Doppler answers either `404` or a `400` naming "does not have
     /// access to requested project" for that missing parent, depending on
-    /// how recently the workplace changed, and both must read as `Absent`
+    /// whether this token can see any project in the workplace at all,
+    /// and both must read as `Absent`
     /// rather than refusing the plan. See
     /// [`looks_like_a_missing_project`]'s own doc for what that does and
     /// does not assume.

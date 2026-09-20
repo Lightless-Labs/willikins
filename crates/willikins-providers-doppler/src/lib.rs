@@ -26,7 +26,8 @@
 //! own doc comments and `fixtures/doppler/README.md` for the defect this
 //! fixed. Since 2026-09-20 the same is true of the `400` "This token
 //! does not have access to requested project" that the identical
-//! missing parent answers against a quiescent workplace: both shapes go
+//! missing parent answers once this token can see any project in the
+//! workplace at all (which is every run after the first): both shapes go
 //! through the one [`looks_like_a_missing_project`] predicate
 //! (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
 //!

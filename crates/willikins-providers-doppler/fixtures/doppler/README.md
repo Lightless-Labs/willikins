@@ -49,7 +49,7 @@ are deliberately left out because no tool reads them.
 | `error_404.json` | any `GET` (404) | **partly confirmed** live 2026-09-14: a real 404 carried a `messages` array, which the shared client labelled `provider says:`. The body itself is never recordable — `ProviderError` drops it at construction (trust boundary 5) — so the `success: false` half stays unconfirmed |
 | `error_5xx.json` | any request (5xx) | same caveat as `error_404.json` |
 | `service_tokens_list_project_missing.json` | `GET /v3/configs/config/tokens` (404, project does not exist yet) | **confirmed live 2026-09-16** by the first live smoke run (`docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s task 14 record): planning the positive fixture against a fresh Doppler account failed at node `token` with exactly this message, because at plan time `doppler.project.ensure` had not yet run. Same `success: false` caveat as `error_404.json`; the message names `willikins-smoke` (the smoke run's project) while the mock tests below reuse `third-thoughts` as the project in their `LIST_PATH` — harmless at `404`, since `looks_like_a_missing_project` reads a `404`'s message not at all. One test, `read_still_propagates_a_400_from_the_listing`, reuses this same body at status `400` instead, where the message *is* read; it still refuses, because "Could not find requested project" is not the "does not have access" phrasing the predicate looks for — the project-name mismatch stays harmless, but for a different reason than at `404`. Used by `service_token_ensure_mock.rs` and `service_token_rotate_mock.rs` to pin that a token `read` now tolerates a missing parent project or config instead of failing the whole plan |
-| `error_400_no_access.json` | any project-scoped `GET` (400, project not visible to this token) | **confirmed live 2026-09-20** by a full rehearsal against the sandbox organisations, then a dedicated six-request-per-state probe with the same full-access token: a project name that does not exist answers `404` "Could not find requested project" in the minutes after another project was *created*, and this `400` "This token does not have access to requested project" when the workplace has been quiescent, or a project was recently *deleted*. Same token, same endpoint, same shape of name — the only variable is how recently the workplace changed. Used by `project_ensure_mock.rs`, `config_ensure_mock.rs`, `service_token_ensure_mock.rs`, `service_token_rotate_mock.rs`, and `secret_get_mock.rs` to pin that every read in this crate now reads this `400` the same way it already read a `404` |
+| `error_400_no_access.json` | any project-scoped `GET` (400, project not visible to this token) | **confirmed live 2026-09-20** by a full rehearsal against the sandbox organisations, then two dedicated probes: a project name this token cannot see answers `404` "Could not find requested project" while the token's visible project set is empty, and this `400` "This token does not have access to requested project" as soon as it holds anything. Same token, same endpoint, same shape of name — the only variable is what else this token can see. Used by `project_ensure_mock.rs`, `config_ensure_mock.rs`, `service_token_ensure_mock.rs`, `service_token_rotate_mock.rs`, and `secret_get_mock.rs` to pin that every read in this crate now reads this `400` the same way it already read a `404` |
 | `error_400_already_exists.json` | `POST /v3/projects` (400, duplicate name) | **confirmed live 2026-09-14** by the write cycle ("Undocumented facts the cycle settled" below): a duplicate `POST /v3/projects` answers `400` with this exact phrasing. Used by `project_ensure_mock.rs` to prove this `400` is never misread as the *other* `400` above — the message is the only thing that tells the two apart |
 
 ## What the live run changed
@@ -119,25 +119,39 @@ are deliberately left out because no tool reads them.
   **That observation arrived 2026-09-20; see the next entry.**
 
 - **`doppler.project.ensure` (and every other Doppler read needing a project) failed to plan
-  against a workplace that had not just created something.** Found 2026-09-20 by a full
-  rehearsal against the sandbox organisations: provisioning a first project succeeded end to
-  end, but provisioning a *second* one failed outright — "planning failed: node `doppler`:
+  in any workplace that already held a project this token could see.** Found 2026-09-20 by a
+  full rehearsal against the sandbox organisations: provisioning a first project succeeded end
+  to end, but provisioning a *second* one failed outright — "planning failed: node `doppler`:
   Provider: provider says: This token does not have access to requested project
   'harbor-relay'" — for a project that did not exist yet; creating it directly through the API
-  immediately afterwards succeeded. A dedicated probe (six requests per state, same full-access
-  token) settled why: **the same absent project name answers `404` "Could not find requested
-  project" in the minutes after another project was created, and `400` "This token does not
-  have access to requested project" when the workplace has been quiescent, or shortly after a
-  project was deleted.** `doppler.project.ensure::observe` only ever tolerated the `404`; this
+  immediately afterwards succeeded.
+
+  The coordinator's first probe read the difference as timing (quiescence), which is the
+  reading the solution note's *filename* still carries. A second probe the same day, this time
+  varying one thing at a time — 0 projects vs. 1 project, and the full-access token vs. the
+  deliberately ungranted one, against the same workplace at the same moment — settled it
+  differently: **the discriminator is whether the calling token can see any project in the
+  workplace at all.** A token whose visible project set is empty gets `404` "Could not find
+  requested project" for *every* name, including a project that exists (confirmed with the
+  ungranted token against an existing project). A token that can see one or more gets `400`
+  "This token does not have access to requested project" for every name it cannot see.
+  Nothing about elapsed time enters into it.
+
+  `doppler.project.ensure::observe` only ever tolerated the `404`; this
   `400` fell through to `Err(err) => Err(err.into())` and refused the plan before
   `create_project` ever ran — for a workflow whose *entire point* is to create that project.
-  This is why the milestone 2 smoke run never caught it: it happened to run in the `404` state.
+  This is why the milestone 2 smoke run never caught it: it ran against an empty workplace,
+  the one state that answers `404`. Read this way the defect is not a corner case at all — the
+  `404` is what an operator's *first* project sees, and the `400` is what every project after
+  it sees.
 
   **What this does not settle, on purpose.** Neither the status nor this message distinguishes
   "does not exist" from "exists, outside this token's grant": a service-account token
   deliberately granted nothing was probed on 2026-09-16 (see "Service-account access" in
-  `docs/research/2026-09-12-m2-dependencies.md`) and found the *opposite* pairing — a bare
-  `404` for a project that genuinely exists but sits outside its grant. So a `404` was never
+  `docs/research/2026-09-12-m2-dependencies.md`), and again on 2026-09-20, and both times found
+  the *opposite* pairing — a bare
+  `404` for a project that genuinely exists but sits outside its grant, which the visibility
+  rule above predicts exactly. So a `404` was never
   trustworthy proof of absence either; this fix does not change that, it only stops treating
   the two statuses inconsistently. The reading every Doppler read in this crate now commits to:
   **at plan time, both answers mean "this token cannot see a project by this name right now"**,

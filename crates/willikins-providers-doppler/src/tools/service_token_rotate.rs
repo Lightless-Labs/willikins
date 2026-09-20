@@ -103,8 +103,9 @@ impl Tool for DopplerServiceTokenRotate {
         // has never been observed to give.
         //
         // **2026-09-20 defect, widened here.** The tolerance shares
-        // `is_listed`'s own fix: a live rehearsal against a quiescent
-        // Doppler workplace found the identical missing-parent `GET`
+        // `is_listed`'s own fix: a live rehearsal planning a second
+        // project, in a workplace whose first project this token could
+        // already see, found the identical missing-parent `GET`
         // answering `400` "This token does not have access to requested
         // project" rather than `404`
         // (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).

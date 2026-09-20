@@ -1,14 +1,24 @@
 ---
-title: "Doppler answers 400, not 404, for a missing project when the workplace is quiescent"
+title: "Doppler answers 400, not 404, for a project this token cannot see -- once it can see any other"
 category: providers
 tags: [doppler, rest, error-handling, not-found, permissions, live-test]
 module: willikins-providers-doppler
 symptom: "planning a brand-new Doppler project (or config, token, or secret) is refused with `Provider: provider says: This token does not have access to requested project '<name>'`, even though the project genuinely does not exist and creating it directly succeeds"
-root_cause: "Doppler's project-scoped GET endpoints answer 404 'Could not find requested project' for an absent project name in the minutes after another project in the workplace was created, but answer 400 'This token does not have access to requested project' for the identical absent name when the workplace has been quiescent, or shortly after a project was deleted; every read in this crate only ever tolerated the 404 shape as 'Absent'"
+root_cause: "Doppler's project-scoped GET endpoints answer 404 'Could not find requested project' for every project name, existing or not, while the calling token's visible project set is empty, and 400 'This token does not have access to requested project' for every name it cannot see as soon as that set holds anything; so the 404 is what an operator's first project meets and the 400 what every project after it meets, and every read in this crate only ever tolerated the 404 shape as 'Absent'"
 date: 2026-09-20
 ---
 
 # Doppler's missing project is sometimes a 400, not a 404
+
+**Addendum:** 2026-09-20 -- the discriminator is *visibility*, not time. The first reading of
+this finding, which the filename still carries, was that the `400` follows a quiescent
+workplace and the `404` a recently-changed one. A second probe the same day, varying one thing
+at a time, showed the rule is "can this token see any project in this workplace at all", with
+elapsed time playing no part. The root-cause section below has been rewritten around it; the
+filename is left alone so the fourteen references to it in `crates/willikins-providers-doppler`
+keep resolving. **Nothing about the fix changed** -- both statuses still mean "this token
+cannot see a project by this name", which is what the code acts on -- but the *risk* changed
+completely, and that is the part worth reading twice.
 
 ## Symptom
 
@@ -23,7 +33,8 @@ requested project 'harbor-relay'
 
 The project `harbor-relay` did not exist. Creating it directly through the API immediately
 afterwards succeeded. The milestone 2 smoke run, which planned a brand-new project the same
-way, had passed — against the same provider, the same credential shape, the same code.
+way, had passed — against the same provider, the same credential shape, the same code. The
+one thing that differed: this was the workplace's *second* project.
 
 ## Root cause
 
@@ -31,23 +42,51 @@ way, had passed — against the same provider, the same credential shape, the sa
 first: `doppler.config.ensure`, `doppler.service_token.ensure`, `doppler.service_token.rotate`,
 `doppler.secret.get`) only ever tolerated a `404` as "this project is absent", the fix
 `fixtures/doppler/README.md` records for 2026-09-16. Doppler does not answer `404`
-deterministically for an absent project. A dedicated probe — six requests per state, the same
-full-access sandbox token, one absent project name — found the behaviour is deterministic and
-**state-dependent**:
+deterministically for an absent project.
 
-| Workplace state | Status for an absent project name | Message |
+The first probe — six requests per state, one full-access token, one absent name — read the
+difference as timing: `404` shortly after a project was created, `400` when the workplace had
+been left alone. That reading is what this file's name still says, and it is wrong. A second
+probe the same day varied one thing at a time and found the rule:
+
+**What Doppler answers depends on whether the calling token can see any project in the
+workplace at all — not on when the workplace last changed.**
+
+| The calling token's visible project set | A name it cannot see | A name it *can* see |
 | --- | --- | --- |
-| In the minutes after another project was **created** | `404` | `Could not find requested project '<name>'` |
-| Quiescent, or shortly after a project was **deleted** | `400` | `This token does not have access to requested project '<name>'` |
+| Empty (no projects, or none granted) | `404` `Could not find requested project '<name>'` | `404` — *even though the project exists* |
+| Holds one or more projects | `400` `This token does not have access to requested project '<name>'` | `200` |
 
-Same token, same endpoint, same shape of name. The milestone 2 smoke run, and the 2026-09-20
-rehearsal's *first* project, both planned successfully, so both met the `404` state; the
-rehearsal's *second* project met the `400` state. **Why each of those runs met the state it
-met was not recorded.** Nothing captured what the Doppler workplace had done in the minutes
-before any of them, and the node that runs first in both documents creates a *GitHub*
-repository, which cannot change a Doppler workplace's state at all. The probe's table above is
-evidence about the two states the probe itself put the workplace into; it is not evidence
-about what put those three runs where they were.
+The probe, all against the same sandbox workplace on 2026-09-20, twelve requests:
+
+1. Workplace holding 0 projects, full-access token, absent name, x3 → `404` every time.
+2. Create one project. Same token, same absent name, x3 → `400` every time. The project just
+   created → `200`.
+3. **At that same moment**, with the deliberately ungranted service-account token (`GET
+   /v3/projects` answers `200 {"projects": []}`, so its visible set is empty): the absent name
+   → `404`, **and the project that demonstrably exists → `404` as well.**
+4. Delete the project. Full-access token, absent name, x3 → `404` every time; the just-deleted
+   name → `404`.
+
+Step 3 is the one that separates "the workplace is empty" from "this token sees nothing": same
+workplace, same second, same endpoint, two tokens, two different answers. It also reproduces
+the 2026-09-16 grant probe's result (`docs/research/2026-09-12-m2-dependencies.md`,
+"3.y Service-account access") exactly, which the timing reading could not account for at all.
+
+Two older observations fall out of this rule that nothing had explained before:
+
+- The milestone 2 smoke run passed because it ran against an **empty** workplace — the one
+  state that answers `404`. Not because of timing, and certainly not because the workflow's
+  first node had created a GitHub repository, which cannot touch a Doppler workplace.
+- `tests/live_write_cycle.rs`'s step 10 recorded, inside a single run, a just-deleted project
+  answering `400` and the other answering `404`. That loop deletes and re-reads one project at
+  a time: the first re-read still has the second project visible (`400`), the second has
+  nothing visible (`404`). Consistent with the rule, and unexplained without it.
+
+**What this means for an operator.** Under the timing reading the `400` looked like an unlucky
+corner case. Under the visibility rule it is the normal case: an operator's *first* project
+meets the `404` and every project after it meets the `400`. The rehearsal's second project was
+not unlucky; it was the first run to take the path every real run after the first takes.
 
 Before this fix, `observe`'s match arm read:
 
@@ -154,20 +193,25 @@ file restored from a saved copy afterwards.
 
 ## What to take from it
 
-- **A provider's status code is not a fact about the resource; it can be a fact about how
-  recently the provider's own state changed.** The exact same "this project does not exist"
-  truth produced two different, non-overlapping HTTP statuses depending on workplace
-  quiescence — nothing about the request, the credential, or the resource itself differed.
+- **A provider's status code is not a fact about the resource; here it is a fact about what
+  else the caller can see.** The exact same "this project does not exist" truth produced two
+  different, non-overlapping HTTP statuses, and the same `404` covered both "does not exist"
+  and "exists, and you cannot see it" — nothing about the request or the resource differed.
+- **A plausible explanation that fits the first probe is not the rule.** "Quiescence" fitted
+  six observations and was written into a solution note, a fixtures README and eight doc
+  comments before a second probe — one that varied a single variable at a time, and included
+  a token deliberately granted nothing — showed the real discriminator. The cost of the wrong
+  explanation was not the fix (unchanged) but the risk assessment: it turned "every run after
+  your first" into "occasionally, if you wait too long".
 - **Fixing the production read paths is half the job; the tests that encode the same
   assumption are the other half.** Three assertions in this crate's own live tests still
   demanded a `404`, and one of them would have reported two successfully-deleted projects as
   leftovers for a human to clean up. A guard written around a status is a claim about the
   provider, in exactly the way the code under it is.
-- **A live smoke test that only ever runs against a workplace state that just changed will
-  never see the state that matters most for a real operator: quiescence.** The milestone 2 and
-  3a smoke runs both happened to run in the `404` state; the defect had been live in the
-  codebase since project-create was first written, and surfaced only when a second, unhurried
-  provisioning run followed the first by more than a few minutes.
+- **A live smoke test run against an empty account never sees the state a real account is in.**
+  The milestone 2 and 3a smoke runs each provisioned one project into an empty workplace, which
+  is the only state that answers `404`. The defect had been live since project-create was first
+  written and could not surface until something provisioned a *second* project.
 - **When a status cannot be trusted to mean one specific thing, name what it is being trusted
   to mean instead**, and keep that as narrow as the evidence allows. This fix does not claim
   "400 means absent" — it claims "400 with this exact message, like a bare 404, means this
