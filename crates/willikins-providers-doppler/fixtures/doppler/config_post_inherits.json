@@ -1,0 +1,12 @@
+{
+  "config": {
+    "name": "prd",
+    "root": true,
+    "inheritable": false,
+    "inherits": [
+      {"project": "shared-apple", "config": "base"}
+    ],
+    "environment": "prd",
+    "project": "third-thoughts"
+  }
+}

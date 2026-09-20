@@ -1,4 +1,4 @@
-//! [`DopplerClient`]: typed calls for exactly the endpoints the five
+//! [`DopplerClient`]: typed calls for exactly the endpoints the seven
 //! Doppler tools need. No tool ever builds a URL or query string itself;
 //! every path this client builds is assembled from already-validated
 //! domain types ([`DopplerProject`], [`DopplerConfigName`],
@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use willikins_providers_http::{Credential, CredentialError, Http, ProviderError};
 use willikins_types::{
-    DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName,
-    SecretName,
+    DopplerConfig, DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken,
+    DopplerTokenName, SecretName,
 };
 
 /// Doppler's REST API base URL.
@@ -279,6 +279,59 @@ impl DopplerClient {
         Ok(())
     }
 
+    /// `POST /v3/configs/config/inheritable` with `project`, `config`,
+    /// and `inheritable`. Never retried, for the same reason as
+    /// [`Self::create_project`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub(crate) fn set_config_inheritable(
+        &self,
+        config: &DopplerConfig,
+        inheritable: bool,
+    ) -> Result<(), ProviderError> {
+        let body = SetInheritableBody {
+            project: config.project().to_string(),
+            config: config.name().to_string(),
+            inheritable,
+        };
+        self.http
+            .post::<ConfigEnvelope>("/v3/configs/config/inheritable", &body)?;
+        Ok(())
+    }
+
+    /// `POST /v3/configs/config/inherits` with `project`, `config`, and
+    /// `inherits` — the *whole* set `config` is to inherit, replacing
+    /// whatever it inherited before (the request schema names one array,
+    /// not an add/remove pair — research note `docs/research/
+    /// 2026-09-12-m2-dependencies.md`, "Config Inheritance"). Never
+    /// retried, for the same reason as [`Self::create_project`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub(crate) fn set_config_inherits(
+        &self,
+        config: &DopplerConfig,
+        inherits: &[DopplerConfig],
+    ) -> Result<(), ProviderError> {
+        let body = SetInheritsBody {
+            project: config.project().to_string(),
+            config: config.name().to_string(),
+            inherits: inherits
+                .iter()
+                .map(|parent| ConfigRefRequest {
+                    project: parent.project().to_string(),
+                    config: parent.name().to_string(),
+                })
+                .collect(),
+        };
+        self.http
+            .post::<ConfigEnvelope>("/v3/configs/config/inherits", &body)?;
+        Ok(())
+    }
+
     /// `GET /v3/configs/config/tokens?project=<project>&config=<config>`.
     /// The response omits `key` and `access` for every listed token
     /// (research note section 3, "Doppler service tokens").
@@ -409,15 +462,60 @@ struct ConfigEnvelope {
     config: ConfigBody,
 }
 
-/// The one field of Doppler's config object this crate consults: `root`,
+/// The fields of Doppler's config object this crate consults: `root`,
 /// which separates an environment's own root config from a branch config
-/// under it. [`Option`] rather than a defaulted `bool` so that a missing
-/// key *and* an explicit `null` both land on the same, safe answer
-/// ("not proven to be a root config") instead of one of them failing the
-/// whole parse — the same shape [`ProjectBody::description`] uses.
+/// under it, and — since `doppler.config.inheritable.ensure` and
+/// `doppler.config.inherits.ensure` — `inheritable` and `inherits`. All
+/// three are [`Option`] rather than defaulted, so a missing key *and* an
+/// explicit `null` both land on the same, safe answer ("not proven")
+/// instead of one of them failing the whole parse — the same shape
+/// [`ProjectBody::description`] uses. `inheritedBy` and `inheriting` are
+/// deliberately left out: no tool reads them (research note section
+/// "Config Inheritance": both answer bodies carry all four, but only
+/// `inheritable` and `inherits` name what a config was *asked* to be,
+/// which is the half `ensure` compares against).
 #[derive(Debug, Deserialize)]
 pub(crate) struct ConfigBody {
     pub(crate) root: Option<bool>,
+    pub(crate) inheritable: Option<bool>,
+    pub(crate) inherits: Option<Vec<ConfigRefBody>>,
+}
+
+/// One entry of a config object's `inherits` array: the project and
+/// config *names* of a base config this config inherits from (research
+/// note section "Config Inheritance": "The `project` values in these
+/// bodies are project names"). Deserialized straight into
+/// [`DopplerProject`]/[`DopplerConfigName`], so an entry naming something
+/// outside either grammar fails the parse rather than reading as a
+/// plausible-looking config `doppler.config.inherits.ensure` never asked
+/// for.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ConfigRefBody {
+    pub(crate) project: DopplerProject,
+    pub(crate) config: DopplerConfigName,
+}
+
+#[derive(Debug, Serialize)]
+struct SetInheritableBody {
+    project: String,
+    config: String,
+    inheritable: bool,
+}
+
+/// One entry of a `POST /v3/configs/config/inherits` request's `inherits`
+/// array — the request-side twin of [`ConfigRefBody`], built from an
+/// already-validated [`DopplerConfig`] rather than parsed from one.
+#[derive(Debug, Serialize)]
+struct ConfigRefRequest {
+    project: String,
+    config: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SetInheritsBody {
+    project: String,
+    config: String,
+    inherits: Vec<ConfigRefRequest>,
 }
 
 /// Doppler's token-list envelope: `{"tokens": [...]}`.

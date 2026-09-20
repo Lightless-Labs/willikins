@@ -6,5 +6,6 @@
 //! `crate::support::*`.
 
 pub(crate) use willikins_core::tool::helpers::{
-    any_secret, conflict, exact, get, list, not_found, port, require_present, scalar, tool_name,
+    any_secret, conflict, exact, get, invalid, list, not_found, port, require_present, scalar,
+    tool_name,
 };
