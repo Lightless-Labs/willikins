@@ -1033,6 +1033,19 @@ scenario19() {
   [ "$status" -eq 0 ] \
     || fail "scenario19: a document with no pipeline node must not need" \
       "WILLIKINS_BUILDKITE_TOKEN; got $status; output: $output"
+  # Exiting 0 with the variable unset already proves the credential was
+  # never demanded, but "silent about Buildkite" is the behaviour, not a
+  # side effect of the refusal order -- so pin it directly, both halves:
+  # no call reaches Buildkite's API, and nothing in the output mentions a
+  # pipeline the run never had.
+  if grep -q "api.buildkite.com" "$dir/calls.log"; then
+    fail "scenario19: a run with no pipeline node must call Buildkite not at all:" \
+      "$(cat "$dir/calls.log")"
+  fi
+  if echo "$output" | grep -qi "buildkite\|pipeline"; then
+    fail "scenario19: a run with no pipeline node must say nothing about Buildkite;" \
+      "output: $output"
+  fi
   rm -rf "$dir"
 }
 
