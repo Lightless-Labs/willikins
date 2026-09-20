@@ -1,6 +1,12 @@
 # Milestone 3a: the Buildkite provider and the operator's real workflow
 
 **Created:** 2026-09-16
+**Addendum:** 2026-09-20 — tasks 1–9 landed (secret guard, types, naming::v1's tool-facing
+output, the willikins-providers-buildkite crate with both tools and their mock tests, the fake
+tools, and the server/CLI/README wiring); the live probe (task 5) ran against `willikins-test`
+and answers five of the plan's "Verify before relying on them" items — see that section below,
+updated in place. Tasks 10 (the workflow document), 11 (adversarial pass), and 12 (live write
+cycle) remain; see the coordinator's handoff for what is still open.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system, tool contract, naming,
 "policy lives in the workflow, never in the tool")
 **Research:** `docs/research/2026-09-16-m3a-buildkite.md` — every Buildkite fact below is quoted
@@ -611,20 +617,40 @@ Dependency order. This host runs one lane at a time on `main`; no worktrees.
 ## Verify before relying on them
 
 The research note's section 5 is the full list with its reasoning. The five that change code if
-they come back differently:
+they come back differently — **items 1 and 2 were answered by the live probe on 2026-09-20**,
+against the real `willikins-test` organisation (`tests/live_probe.rs`, run with the sandbox
+token, output recorded — redacted of nothing since it named no credential — in this addendum;
+the raw responses themselves are under `fixtures/buildkite/live/`, gitignored):
 
-1. **The `404` body and status for an unknown pipeline slug** (task 5). The `Absent` arm rests on
-   the status only, so a surprising body changes nothing, but a status other than `404` changes
-   the arm.
-2. **The real scope strings from `GET /v2/access-token`** — `read_pipelines` or `read_pipeline`,
-   plural or singular — and whether the sandbox token carries all three scopes (task 5).
+1. ~~**The `404` body and status for an unknown pipeline slug**~~ **Answered.** `GET
+   /v2/organizations/willikins-test/pipelines/willikins-probe-does-not-exist` answered `404` with
+   a body carrying a `message` field (the shared client's `provider_error_from_body` found one to
+   label). The `Absent` arm's reliance on the status alone is confirmed correct and unchanged.
+2. ~~**The real scope strings from `GET /v2/access-token`**~~ **Answered.** The plural spelling:
+   the sandbox token's `scopes` array contains `read_pipelines`, `write_pipelines`, and
+   `read_clusters` verbatim (among many others the token was issued with beyond what this crate
+   needs), settling the `read_pipelines`/`read_pipeline` ambiguity in favour of the scope table's
+   spelling, not the one worked example's singular. `expires_at` was `2026-09-23T19:38:35Z`,
+   confirming the seven-day sandbox window named throughout this plan. The token's `bkua_` prefix
+   was never inspected directly — `credential_from_env`'s own pattern match already proved it
+   before the probe ran, which is the point of relying on that pattern rather than re-deriving the
+   fact from the raw value.
 3. **Whether an explicitly supplied `slug` is stored verbatim**, which is what makes the natural
-   key round-trip (task 12's create-then-read is the test).
+   key round-trip (task 12's create-then-read is the test). Still open: the probe is read-only and
+   makes no `POST`.
 4. **Whether `cluster_id` is truly rejected when omitted.** Moot under this design, which always
    sends it; it would only soften an error message.
 5. **The Buildkite organisation slug's grammar**, undocumented anywhere. `BuildkiteOrg`'s pattern
    is chosen conservatively; an organisation whose slug does not match is refused at parse time
-   with a named error, which is a fixable type change, never a mis-routed request.
+   with a named error, which is a fixable type change, never a mis-routed request. The real
+   organisation slug used throughout this milestone, `willikins-test`, parses under this pattern
+   without incident, which is as much confirmation as a read-only probe can give.
+
+Also observed, beyond the plan's own numbered list: the real `Default cluster` in `willikins-test`
+carries a non-null `default_queue_id` — this organisation's cluster was created through the
+Buildkite interface (which does seed a default queue), not through the API (which the research
+note says does not), so this is not in tension with that fact. Irrelevant to this slice, which
+never reads or sends a queue.
 
 ## Notes for the next slice (3b)
 
