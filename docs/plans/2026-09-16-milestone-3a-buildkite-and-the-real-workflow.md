@@ -22,6 +22,27 @@ catalogs. Auto-approval is asserted at the `willikins_core::apply` level
 this "journals `ApprovalAutomatic`" is not separately exercised for this document — that event is
 `Butler`'s generic behaviour, already pinned for the milestone 1 document, and was judged out of
 scope for this task's own tests rather than silently dropped.
+**Addendum:** 2026-09-20 — task 11 landed: the adversarial pass over the provider and the
+document, recorded in `docs/research/2026-09-20-m3a-adversarial-pass.md`. Four mock tests were
+proved non-vacuous by mutation and a fifth mutation found a real hole: `willikins-providers-fake`'s
+private copy of `ssh_repository_url` could be rewritten to a different URL form with every test in
+both crates still green, so the fake and the live tool agreed only by construction — the exact
+failure that cost milestone 2 its first live smoke run, and the one this plan's own task list warns
+about. Closed by `crates/willikins-providers-buildkite/tests/fake_agrees_with_live.rs`, which
+compares the two tools' observations and outputs across all five arms, seeding the fake from the
+live crate's own frozen constants. Two smaller findings: acceptance test 5's `Link`-header half was
+served but never asserted (now `the_ignored_link_headers_api_key_reaches_no_output_debug_or_error`,
+and honest in its own doc comment about being a regression guard that cannot fail today, since
+`response_facts` reads three headers by name and `Link` is not one), and the live write cycle
+carried a vacuous recording (`record_and_compare` over a JSON array, whose top-level key set is
+empty on both sides, with its result discarded by `.ok()`). The live cycle also gained both
+`Mismatch` arms — provable read-only against a pipeline that exists — and
+`the_cycles_pipeline_is_gone`, the independent after-the-run check
+`willikins-providers-doppler`'s cycle has. `Foreign` is **not** provable live and the cycle says
+so: it needs a `PATCH` on `description` that this crate deliberately does not have. One gap in
+this plan was found and deliberately not patched around: decision (d) does not say what happens
+when the re-read after a create failure itself fails, and the code propagates the re-read's error
+rather than the create's — noted for 3b.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system, tool contract, naming,
 "policy lives in the workflow, never in the tool")
 **Research:** `docs/research/2026-09-16-m3a-buildkite.md` — every Buildkite fact below is quoted
