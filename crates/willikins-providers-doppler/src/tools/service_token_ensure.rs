@@ -127,7 +127,7 @@ impl DopplerServiceTokenEnsure {
     /// (`fixtures/doppler/README.md`, "Undocumented facts the cycle
     /// settled"). Whether *this* endpoint answered the same `400` shape
     /// stayed unobserved for a while, so this tolerance was originally
-    /// left exactly one status wide, pinned by (what was then)
+    /// left exactly one status wide, pinned by
     /// `read_still_propagates_a_400_from_the_listing`.
     ///
     /// A live rehearsal against a quiescent Doppler workplace then hit
