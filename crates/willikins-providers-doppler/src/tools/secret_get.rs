@@ -14,7 +14,7 @@ use willikins_core::{
 };
 use willikins_types::{DopplerConfig, SecretName};
 
-use crate::client::DopplerClient;
+use crate::client::{DopplerClient, looks_like_a_missing_project};
 
 /// `doppler.secret.get`.
 pub struct DopplerSecretGet {
@@ -95,6 +95,22 @@ impl DopplerSecretGet {
     /// cannot be answered at plan time will not be answerable at apply
     /// time either, and refusing early is honest.
     ///
+    /// **2026-09-20: the same missing parent can also answer `400`.**
+    /// [`looks_like_a_missing_project`] is used here too — not to widen
+    /// what this tool tolerates (it still refuses; there is still no
+    /// create path to defer to), but so the refusal it gives is
+    /// consistent regardless of which shape Doppler happened to answer.
+    /// Before this, a `400` "This token does not have access to
+    /// requested project" fell through to the generic
+    /// `ToolError::from(err)` arm below and surfaced that provider text
+    /// verbatim under `ToolErrorKind::Provider` — exactly the
+    /// permission-shaped message
+    /// `docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`
+    /// explains cannot be trusted to mean "forbidden" rather than "not
+    /// created yet". Both shapes now report the same `NotFound` naming
+    /// the key, echoing none of the provider's own words, matching the
+    /// `404` arm's answer exactly.
+    ///
     /// The one gap that audit left open, recorded here rather than
     /// guessed at: a config `doppler.config.ensure` creates in the *same*
     /// plan does come with Doppler's auto-injected `DOPPLER_PROJECT`, so
@@ -118,13 +134,20 @@ impl DopplerSecretGet {
         let value = self
             .client
             .get_secret(config.project(), config.name(), &name)
-            .map_err(|err| match err.status {
-                Some(404) => not_found(format!("no secret at `{config}#{name}`")),
-                Some(status) if (200..300).contains(&status) => ToolError {
-                    kind: ToolErrorKind::Provider,
-                    message: format!("reading `{config}#{name}`: {}", err.message),
-                },
-                _ => ToolError::from(err),
+            .map_err(|err| {
+                if looks_like_a_missing_project(&err) {
+                    not_found(format!("no secret at `{config}#{name}`"))
+                } else if err
+                    .status
+                    .is_some_and(|status| (200..300).contains(&status))
+                {
+                    ToolError {
+                        kind: ToolErrorKind::Provider,
+                        message: format!("reading `{config}#{name}`: {}", err.message),
+                    }
+                } else {
+                    ToolError::from(err)
+                }
             })?;
         let Some(value) = value else {
             return Err(not_found(format!("no secret at `{config}#{name}`")));

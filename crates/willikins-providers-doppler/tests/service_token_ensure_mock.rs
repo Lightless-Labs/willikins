@@ -169,6 +169,30 @@ fn ensure_mints_when_the_parent_project_or_config_does_not_exist_yet() {
     create.assert();
 }
 
+/// **2026-09-20 defect, this tool's share.** The same listing endpoint
+/// can also answer `400` "This token does not have access to requested
+/// project" for a missing parent, depending on how recently the
+/// workplace changed
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
+/// `is_listed` now tolerates this the same way it tolerates the 404
+/// above.
+#[test]
+fn read_reports_absent_when_the_parent_answers_400_naming_no_access() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(400)
+        .with_body(fixture("error_400_no_access").to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerServiceTokenEnsure::new(client);
+    let observation = tool.read(&inputs()).unwrap();
+    let Observation::Absent { predicted } = observation else {
+        panic!("expected Absent, got {observation:?}");
+    };
+    assert!(!token_value(&predicted).is_known());
+}
+
 /// The parity hole the defect exposed: the fake and the live provider
 /// must agree on this exact question ("is a token listed, in a project
 /// the provider does not hold at all?"). The fake never models a project
@@ -458,13 +482,14 @@ fn ensure_fails_when_the_parent_is_still_missing_at_apply() {
     create.assert();
 }
 
-/// Where the tolerance stops, part two: it is exactly one status wide.
-/// Doppler also answers `400` for a project that is not there — the live
-/// write cycle saw one just-deleted project answer `400` and the other
-/// `404` in the same run (`fixtures/doppler/README.md`) — and whether
-/// this endpoint ever does was never observed, so a `400` still refuses the
-/// plan instead of being guessed at. Widening that is a deliberate act
-/// with this test to change first.
+/// Where the tolerance stops, part two: since 2026-09-20 it is one
+/// *message*, not every `400`. This body carries Doppler's other
+/// documented `400` phrasing, "Could not find requested project." (a
+/// full stop, no "does not have access"), which
+/// `looks_like_a_missing_project` deliberately does not match — the
+/// message check exists precisely so a duplicate-create conflict is
+/// never misread as absence, and this pins that any other `400` wording
+/// still fails rather than being guessed at.
 #[test]
 fn read_still_propagates_a_400_from_the_listing() {
     let mut provider = MockProvider::start();

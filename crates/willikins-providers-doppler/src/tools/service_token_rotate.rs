@@ -25,7 +25,7 @@ use willikins_core::{
 };
 use willikins_types::{DopplerConfig, DopplerTokenName};
 
-use crate::client::DopplerClient;
+use crate::client::{DopplerClient, looks_like_a_missing_project};
 
 /// `doppler.service_token.rotate`.
 pub struct DopplerServiceTokenRotate {
@@ -100,24 +100,31 @@ impl Tool for DopplerServiceTokenRotate {
         // The 404 carries the same ambiguity `is_listed`'s doc spells
         // out — it cannot prove the parent is merely absent rather than
         // outside this credential's grant, a case whose status Doppler
-        // has never been observed to give — and the same one-status
-        // width (a `400`, Doppler's other answer for a project that is
-        // not there, still fails). Here it costs even less: the
-        // observation is `Absent` either way, so tolerating it changes
-        // only whether the plan is refused, never what the plan says this
+        // has never been observed to give.
+        //
+        // **2026-09-20 defect, widened here.** The tolerance shares
+        // `is_listed`'s own fix: a live rehearsal against a quiescent
+        // Doppler workplace found the identical missing-parent `GET`
+        // answering `400` "This token does not have access to requested
+        // project" rather than `404`
+        // (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
+        // `looks_like_a_missing_project` reads both the same way. Here it
+        // costs even less than in `is_listed`: the observation is
+        // `Absent` either way, so tolerating either shape changes only
+        // whether the plan is refused, never what the plan says this
         // `Destructive` step will do. `read` still never reports
         // `Present`, so this step can never plan as `Action::NoOp`
         // (`read_always_reports_absent_even_when_a_token_is_listed`).
-        // `ensure`'s own listing call below stays strict, 404 included:
-        // a rotate that cannot list the tokens it is about to revoke must
-        // not mint a replacement
+        // `ensure`'s own listing call below stays strict, this predicate
+        // included: a rotate that cannot list the tokens it is about to
+        // revoke must not mint a replacement
         // (`ensure_still_fails_outright_on_a_listing_404`).
         match self
             .client
             .list_service_tokens(config.project(), config.name())
         {
             Ok(_) => {}
-            Err(err) if err.status == Some(404) => {}
+            Err(err) if looks_like_a_missing_project(&err) => {}
             Err(err) => return Err(err.into()),
         }
         Ok(Observation::Absent {

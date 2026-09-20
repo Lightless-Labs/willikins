@@ -18,7 +18,7 @@ use willikins_core::{
 };
 use willikins_types::{DopplerConfig, DopplerProject, EnvironmentSlug, naming};
 
-use crate::client::DopplerClient;
+use crate::client::{DopplerClient, looks_like_a_missing_project};
 
 /// `doppler.config.ensure`.
 pub struct DopplerConfigEnsure {
@@ -71,6 +71,17 @@ impl DopplerConfigEnsure {
     /// environment's root config, and is reported `Foreign`: see
     /// [`DopplerClient::get_config`]'s own docs for the branch-config
     /// name collision that makes this reachable rather than theoretical.
+    ///
+    /// This `GET` needs the parent project to exist, and at plan time —
+    /// before this workflow's own `doppler.project.ensure` node has run —
+    /// it usually does not yet. The same 2026-09-20 defect
+    /// `doppler.project.ensure::observe` fixes applies here identically:
+    /// Doppler answers either `404` or a `400` naming "does not have
+    /// access to requested project" for that missing parent, depending on
+    /// how recently the workplace changed, and both must read as `Absent`
+    /// rather than refusing the plan. See
+    /// [`looks_like_a_missing_project`]'s own doc for what that does and
+    /// does not assume.
     fn observe(
         &self,
         project: &DopplerProject,
@@ -81,7 +92,7 @@ impl DopplerConfigEnsure {
                 Ok(Observation::Present(Self::outputs_for(config)))
             }
             Ok(_) => Ok(Observation::Foreign),
-            Err(err) if err.status == Some(404) => Ok(Observation::Absent {
+            Err(err) if looks_like_a_missing_project(&err) => Ok(Observation::Absent {
                 predicted: Self::outputs_for(config),
             }),
             Err(err) => Err(err.into()),

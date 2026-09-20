@@ -12,7 +12,7 @@ use willikins_core::{
 };
 use willikins_types::DopplerProject;
 
-use crate::client::{DopplerClient, MANAGED_DESCRIPTION};
+use crate::client::{DopplerClient, MANAGED_DESCRIPTION, looks_like_a_missing_project};
 
 /// `doppler.project.ensure`.
 pub struct DopplerProjectEnsure {
@@ -59,13 +59,26 @@ impl DopplerProjectEnsure {
     /// otherwise silently claim a description-edited project as still
     /// ours risks acting on a resource a human has started managing by
     /// hand. Pinned by `tests/project_ensure_mock.rs`.
+    ///
+    /// **2026-09-20 defect, fixed here.** A brand-new project name did
+    /// not always answer `404`: against a quiescent workplace (or one
+    /// where a project had just been deleted), the same absent name
+    /// answered `400` "This token does not have access to requested
+    /// project" instead, which fell through to the `Err(err) =>
+    /// Err(err.into())` arm below and refused the whole plan before this
+    /// tool's own `create_project` ever ran — the very case a plan
+    /// exists for. [`looks_like_a_missing_project`] reads both shapes the
+    /// same way `Observation::Absent` already read a `404`; see its own
+    /// doc for what that does and does not assume, and
+    /// `docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`
+    /// for the finding.
     fn observe(&self, project: &DopplerProject) -> Result<Observation, ToolError> {
         match self.client.get_project(project) {
             Ok(body) if body.description.as_deref() == Some(MANAGED_DESCRIPTION) => {
                 Ok(Observation::Present(Self::outputs_for(project)))
             }
             Ok(_) => Ok(Observation::Foreign),
-            Err(err) if err.status == Some(404) => Ok(Observation::Absent {
+            Err(err) if looks_like_a_missing_project(&err) => Ok(Observation::Absent {
                 predicted: Self::outputs_for(project),
             }),
             Err(err) => Err(err.into()),

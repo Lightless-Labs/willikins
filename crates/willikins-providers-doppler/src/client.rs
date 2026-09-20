@@ -42,6 +42,66 @@ pub const CREDENTIAL_PATTERN: &str = r"^dp\.(sa|pt)\.[a-zA-Z0-9]{40,44}$";
 /// marker of its own.
 pub const MANAGED_DESCRIPTION: &str = "managed-by: willikins";
 
+/// A message fragment Doppler answers with on a `400` for a project name
+/// this token cannot see. Observed live 2026-09-20
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`):
+/// the *same* absent project name answers `404` "Could not find requested
+/// project" in the minutes after another project in the workplace was
+/// created, and this `400` "This token does not have access to requested
+/// project" when the workplace has been quiescent, or shortly after a
+/// project was deleted. Same token, same endpoint, same shape of name —
+/// the difference is purely how recently the workplace changed.
+///
+/// See [`looks_like_a_missing_project`] for what this crate does with
+/// that fact, and what it deliberately does not assume.
+const DOPPLER_NO_ACCESS_MESSAGE: &str = "does not have access to requested project";
+
+/// Whether `err` looks like Doppler saying "no project by this name is
+/// visible to this token": a `404`, or a `400` whose message names
+/// [`DOPPLER_NO_ACCESS_MESSAGE`].
+///
+/// **What this does not prove.** Doppler documents no error-body schema
+/// for any non-2xx response at all, so a status is all either code ever
+/// is. Neither status, nor this message, distinguishes "this project
+/// does not exist" from "this project exists, but outside this token's
+/// grant": a service-account token deliberately granted nothing was
+/// probed on 2026-09-16
+/// (`docs/research/2026-09-12-m2-dependencies.md`, "Service-account
+/// access") and found the *opposite* pairing — a bare `404` "Could not
+/// find requested project" for a project that genuinely exists but sits
+/// outside its grant. So a `404` cannot be trusted to mean "does not
+/// exist" either; it never could, and this predicate does not change
+/// that.
+///
+/// **What this crate commits to instead.** At plan time, every one of
+/// these answers means the same thing this crate can act on: "this
+/// token cannot see a project by this name right now". Every `read` in
+/// this crate already mapped a bare `404` to `Absent` (or, for the
+/// token-list endpoint, to `false`) on exactly that reasoning; widening
+/// the same reasoning to this `400` closes the gap that let a `doppler.
+/// project.ensure` node refuse to plan at all whenever the workplace
+/// happened to be quiescent — the ordinary case, not the rare one.
+/// Nothing here treats a `400`/`404` as *proof* of absence: the create
+/// call (or, for `doppler.secret.get`, apply time — there is no create
+/// path to defer to) stays the only arbiter, the same deferral
+/// `doppler.project.ensure::ensure` already relies on by re-reading
+/// after a failed create rather than parsing its error body.
+///
+/// **Where the tolerance stops.** A `400` whose message does not name
+/// [`DOPPLER_NO_ACCESS_MESSAGE`] — Doppler's *other* documented `400`,
+/// "Project name already exists in this workplace." on a duplicate
+/// create, chief among them — still fails. That message is checked for
+/// exactly because the two are otherwise both bare `400`s with no other
+/// distinguishing signal: widening past this one fragment would also
+/// swallow a duplicate create's own conflict.
+pub(crate) fn looks_like_a_missing_project(err: &ProviderError) -> bool {
+    match err.status {
+        Some(404) => true,
+        Some(400) => err.message.contains(DOPPLER_NO_ACCESS_MESSAGE),
+        _ => false,
+    }
+}
+
 /// Why [`credential_from_env`] refused to build a [`Credential`].
 ///
 /// Never carries the environment variable's value: the `WrongKind`
@@ -483,5 +543,52 @@ mod tests {
         assert!(message.contains("service-account"), "{message}");
         assert!(message.contains("personal"), "{message}");
         assert!(!message.contains(MARKER), "{message}");
+    }
+
+    #[test]
+    fn a_404_looks_like_a_missing_project() {
+        let err = ProviderError::new(Some(404), "provider says: Could not find requested project");
+        assert!(looks_like_a_missing_project(&err));
+    }
+
+    /// The exact body the 2026-09-20 rehearsal saw against a quiescent
+    /// workplace.
+    #[test]
+    fn a_400_naming_no_access_looks_like_a_missing_project() {
+        let err = ProviderError::new(
+            Some(400),
+            "provider says: This token does not have access to requested project 'harbor-relay'",
+        );
+        assert!(looks_like_a_missing_project(&err));
+    }
+
+    /// Where the tolerance stops: Doppler's *other* `400`, the duplicate
+    /// create conflict, must never be read as "missing" — the create
+    /// call, not this predicate, is the arbiter of that distinction.
+    #[test]
+    fn a_400_naming_already_exists_does_not_look_like_a_missing_project() {
+        let err = ProviderError::new(
+            Some(400),
+            "provider says: Project name already exists in this workplace.",
+        );
+        assert!(!looks_like_a_missing_project(&err));
+    }
+
+    #[test]
+    fn a_400_with_an_unrelated_message_does_not_look_like_a_missing_project() {
+        let err = ProviderError::new(Some(400), "provider says: Could not find requested project");
+        assert!(!looks_like_a_missing_project(&err));
+    }
+
+    #[test]
+    fn a_5xx_never_looks_like_a_missing_project() {
+        let err = ProviderError::new(Some(503), "provider says: Internal server error.");
+        assert!(!looks_like_a_missing_project(&err));
+    }
+
+    #[test]
+    fn a_transport_failure_never_looks_like_a_missing_project() {
+        let err = ProviderError::new(None, "request failed: connection reset");
+        assert!(!looks_like_a_missing_project(&err));
     }
 }

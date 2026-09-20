@@ -105,6 +105,53 @@ fn read_of_a_missing_secret_is_not_found_and_never_names_a_value() {
     assert!(err.message.contains("DATABASE"));
 }
 
+/// **2026-09-20 defect, this tool's share.** The same missing-project
+/// `400` other Doppler reads can answer
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`)
+/// reaches this endpoint too. Unlike the tools with a create path, this
+/// one still refuses the plan either way (there is nothing later in the
+/// plan that could make the parent exist) — what changes is that the
+/// refusal is now the same `NotFound` naming the key, not a `Provider`
+/// error echoing the provider's own "does not have access" words, which
+/// reads as a permission failure this crate has no grounds to claim.
+#[test]
+fn read_of_a_secret_whose_project_answers_400_naming_no_access_is_also_not_found() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", SECRET_PATH)
+        .with_status(400)
+        .with_body(fixture("error_400_no_access").to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerSecretGet::new(client);
+    let err = tool.read(&inputs()).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::NotFound);
+    assert!(err.message.contains("third-thoughts/prd"));
+    assert!(err.message.contains("DATABASE"));
+    assert!(
+        !err.message.contains("access") && !err.message.contains("token"),
+        "the message must echo nothing from the provider: {}",
+        err.message
+    );
+}
+
+/// A `400` naming anything other than "no access" still fails as a
+/// generic provider error — the tolerance is one message, not every
+/// `400`.
+#[test]
+fn read_still_propagates_a_400_with_an_unrelated_message() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", SECRET_PATH)
+        .with_status(400)
+        .with_body(r#"{"success": false, "messages": ["Could not find requested project."]}"#)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerSecretGet::new(client);
+    let err = tool.read(&inputs()).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+}
+
 /// What Doppler actually answers for a secret that is not there, found by
 /// `tests/live_write_cycle.rs` on 2026-09-14: **`200`**, with
 /// `value.computed` `null` — not the `404` the milestone plan's port

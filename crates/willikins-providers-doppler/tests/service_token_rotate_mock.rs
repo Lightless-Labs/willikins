@@ -119,6 +119,43 @@ fn read_reports_absent_when_the_parent_project_or_config_does_not_exist_yet() {
     assert!(matches!(observation, Observation::Absent { .. }));
 }
 
+/// **2026-09-20 defect, this tool's share.** The same listing endpoint
+/// can also answer `400` "This token does not have access to requested
+/// project" for a missing parent, depending on how recently the
+/// workplace changed
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
+/// `read` tolerates this the same way it tolerates the 404 above; `Absent`
+/// either way, since this step never plans as `NoOp`.
+#[test]
+fn read_reports_absent_when_the_parent_answers_400_naming_no_access() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(400)
+        .with_body(fixture("error_400_no_access").to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerServiceTokenRotate::new(client);
+    let observation = tool.read(&inputs()).unwrap();
+    assert!(matches!(observation, Observation::Absent { .. }));
+}
+
+/// A `400` naming anything other than "no access" still fails — the
+/// tolerance is one message, not every `400`.
+#[test]
+fn read_still_propagates_a_400_with_an_unrelated_message() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", LIST_PATH)
+        .with_status(400)
+        .with_body(r#"{"success": false, "messages": ["Could not find requested project."]}"#)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerServiceTokenRotate::new(client);
+    let err = tool.read(&inputs()).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+}
+
 /// The listing `GET` still runs during `read`, so a bad credential or
 /// config fails at plan time rather than being silently swallowed.
 #[test]
