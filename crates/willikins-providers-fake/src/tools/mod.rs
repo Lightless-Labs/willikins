@@ -6,6 +6,8 @@
 //! to the `willikins-tools` crate; [`crate::catalog`](crate::catalog())
 //! registers them from there alongside this crate's own eight tools.
 
+pub mod buildkite_cluster_get;
+pub mod buildkite_pipeline_ensure;
 pub mod doppler_config_ensure;
 pub mod doppler_project_ensure;
 pub mod doppler_secret_get;
@@ -16,6 +18,8 @@ pub mod fake_secret_list;
 pub mod github_actions_secret_ensure;
 pub mod github_repo_ensure;
 
+pub use buildkite_cluster_get::FakeBuildkiteClusterGet;
+pub use buildkite_pipeline_ensure::FakeBuildkitePipelineEnsure;
 pub use doppler_config_ensure::DopplerConfigEnsure;
 pub use doppler_project_ensure::DopplerProjectEnsure;
 pub use doppler_secret_get::DopplerSecretGet;

@@ -24,10 +24,14 @@ impl NamingV1 {
         let mut outputs = IndexMap::new();
         outputs.insert(port("github_repo"), scalar("GitHubRepo"));
         outputs.insert(port("doppler_project"), scalar("DopplerProject"));
+        outputs.insert(
+            port("buildkite_pipeline_slug"),
+            scalar("BuildkitePipelineSlug"),
+        );
         Self {
             spec: ToolSpec {
                 name: tool_name("naming.v1"),
-                description: "Derive this project's GitHub repository and Doppler project identities from its org and slug.".to_string(),
+                description: "Derive this project's GitHub repository, Doppler project, and Buildkite pipeline slug identities from its org and slug.".to_string(),
                 inputs,
                 outputs,
                 key: Vec::new(),
@@ -46,9 +50,14 @@ impl NamingV1 {
         let slug = get(inputs, "slug")?;
         let github_repo = naming::v1::github_repo(&org, &slug);
         let doppler_project = naming::v1::doppler_project(&slug);
+        let buildkite_pipeline_slug = naming::v1::buildkite_pipeline_slug(&slug);
         let mut outputs = Outputs::new();
         outputs.insert(port("github_repo"), Value::known(github_repo));
         outputs.insert(port("doppler_project"), Value::known(doppler_project));
+        outputs.insert(
+            port("buildkite_pipeline_slug"),
+            Value::known(buildkite_pipeline_slug),
+        );
         Ok(outputs)
     }
 }
@@ -118,6 +127,10 @@ mod tests {
             .get(&PortName::parse("doppler_project").unwrap())
             .unwrap();
         assert_eq!(project.render().to_string(), "third-thoughts");
+        let pipeline_slug = outputs
+            .get(&PortName::parse("buildkite_pipeline_slug").unwrap())
+            .unwrap();
+        assert_eq!(pipeline_slug.render().to_string(), "third-thoughts");
     }
 
     #[test]

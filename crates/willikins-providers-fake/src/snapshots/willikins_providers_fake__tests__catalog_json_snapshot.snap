@@ -1,12 +1,11 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
-assertion_line: 133
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
   {
     "class": "reversible",
-    "description": "Derive this project's GitHub repository and Doppler project identities from its org and slug.",
+    "description": "Derive this project's GitHub repository, Doppler project, and Buildkite pipeline slug identities from its org and slug.",
     "inputs": {
       "org": {
         "required": true,
@@ -26,6 +25,7 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "key": [],
     "name": "naming.v1",
     "outputs": {
+      "buildkite_pipeline_slug": "BuildkitePipelineSlug",
       "doppler_project": "DopplerProject",
       "github_repo": "GitHubRepo"
     },
@@ -226,6 +226,76 @@ expression: "catalog.list_tools_json()[\"tools\"]"
       "value": "DopplerSecretValue"
     },
     "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Resolve a Buildkite cluster's human-written name to its id.",
+    "inputs": {
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "BuildkiteClusterName"
+        }
+      },
+      "org": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "BuildkiteOrg"
+        }
+      }
+    },
+    "key": [],
+    "name": "buildkite.cluster.get",
+    "outputs": {
+      "cluster": "BuildkiteClusterId"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Ensure a Buildkite pipeline exists in a cluster, pointed at a GitHub repository.",
+    "inputs": {
+      "cluster": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "BuildkiteClusterId"
+        }
+      },
+      "org": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "BuildkiteOrg"
+        }
+      },
+      "repo": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubRepo"
+        }
+      },
+      "slug": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "BuildkitePipelineSlug"
+        }
+      }
+    },
+    "key": [
+      "org",
+      "slug"
+    ],
+    "name": "buildkite.pipeline.ensure",
+    "outputs": {
+      "slug": "BuildkitePipelineSlug",
+      "url": "HttpsUrl"
+    },
+    "pure": false
   },
   {
     "class": "reversible",

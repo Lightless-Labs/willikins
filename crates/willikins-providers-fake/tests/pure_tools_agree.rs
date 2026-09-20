@@ -4,19 +4,20 @@
 //! A pure tool's `ensure` is its `read` by contract (`Tool::ensure`'s own
 //! doc), and the executor of an applied plan leans on that: a `Compute`
 //! node must produce the same outputs at apply time as the plan showed.
-//! The four pure tools — `naming.v1` and `template.render` from
-//! `willikins-tools`, `doppler.secret.get` and `fake.secret_list` from
-//! this crate — are checked here in one place, through the catalog, so a
-//! fifth pure tool registered later is a one-line addition rather than a
-//! test nobody writes.
+//! The five pure tools — `naming.v1` and `template.render` from
+//! `willikins-tools`, `doppler.secret.get`, `fake.secret_list`, and
+//! (milestone 3a) `buildkite.cluster.get` from this crate — are checked
+//! here in one place, through the catalog, so a sixth pure tool
+//! registered later is a one-line addition rather than a test nobody
+//! writes.
 
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{Inputs, Observation, Outputs, PortName, SinkToken, ToolName, Value};
 use willikins_providers_fake::{FakeState, catalog};
 use willikins_types::{
-    DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg, ProjectSlug, SecretName,
-    TemplateSource, Text,
+    BuildkiteClusterName, BuildkiteOrg, DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg,
+    ProjectSlug, SecretName, TemplateSource, Text,
 };
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
@@ -37,6 +38,14 @@ fn secret_name() -> SecretName {
     SecretName::parse("DATABASE_URL").expect("a valid secret name")
 }
 
+fn buildkite_org() -> BuildkiteOrg {
+    BuildkiteOrg::parse("willikins-test").expect("a valid Buildkite org")
+}
+
+fn cluster_name() -> BuildkiteClusterName {
+    BuildkiteClusterName::parse("Default cluster").expect("a valid cluster name")
+}
+
 /// Ports compared pairwise, so a differing `Value` fails on its own port
 /// rather than inside an opaque map comparison.
 fn ports(outputs: &Outputs) -> Vec<(&PortName, &Value)> {
@@ -45,11 +54,16 @@ fn ports(outputs: &Outputs) -> Vec<(&PortName, &Value)> {
 
 #[test]
 fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
-    let state = Arc::new(Mutex::new(FakeState::new().with_doppler_secret(
-        &config(),
-        &secret_name(),
-        DopplerSecretValue::parse("s3cr3t-bytes-nobody-should-see").expect("a valid secret"),
-    )));
+    let state = Arc::new(Mutex::new(
+        FakeState::new()
+            .with_doppler_secret(
+                &config(),
+                &secret_name(),
+                DopplerSecretValue::parse("s3cr3t-bytes-nobody-should-see")
+                    .expect("a valid secret"),
+            )
+            .with_buildkite_cluster(&cluster_name(), "018e5a22-d14c-7085-bb28-db0f83f43a1c"),
+    ));
     let fake_catalog = catalog(state);
 
     let mut naming_inputs = Inputs::new();
@@ -79,11 +93,16 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
     let mut secret_list_inputs = Inputs::new();
     secret_list_inputs.insert(port("config"), Value::known(config()));
 
+    let mut cluster_get_inputs = Inputs::new();
+    cluster_get_inputs.insert(port("org"), Value::known(buildkite_org()));
+    cluster_get_inputs.insert(port("name"), Value::known(cluster_name()));
+
     let cases = [
         ("naming.v1", naming_inputs),
         ("template.render", template_inputs),
         ("doppler.secret.get", secret_get_inputs),
         ("fake.secret_list", secret_list_inputs),
+        ("buildkite.cluster.get", cluster_get_inputs),
     ];
 
     let mut checked = 0;

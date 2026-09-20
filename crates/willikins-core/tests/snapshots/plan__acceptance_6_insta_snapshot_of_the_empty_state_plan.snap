@@ -36,6 +36,12 @@ expression: "serde_json::to_string_pretty(&result).unwrap()"
           "list": false,
           "state": "known",
           "value": "third-thoughts"
+        },
+        "buildkite_pipeline_slug": {
+          "type": "BuildkitePipelineSlug",
+          "list": false,
+          "state": "known",
+          "value": "third-thoughts"
         }
       }
     },
