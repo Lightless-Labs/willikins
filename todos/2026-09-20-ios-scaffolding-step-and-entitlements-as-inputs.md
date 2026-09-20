@@ -1,5 +1,5 @@
 ---
-title: "The iOS scaffolding step, and entitlements as ordinary unbound inputs"
+title: "The iOS scaffolding step: entitlements are inputs, the build system is the document"
 created: 2026-09-20
 status: open
 priority: medium
@@ -42,15 +42,40 @@ classes visible, and the tool must not report success as though the association 
 the ensure is idempotent at all is undocumented (a 409 is listed, but it is boilerplate on every
 create), so read-then-create, never create-and-catch.
 
-## The scaffolding step itself
+## The scaffolding step itself, and what is NOT an input
 
-Also an input, also not willikins' opinion: Bazel or Tuist is the operator's process, per the
-design doc's "policy lives in the workflow, never in the tool". The step takes the build system,
-the entitlements, the bundle identifier and the derived names, and produces a repository that
-builds.
+A first draft of this note said the build system is an input too. The operator corrected it the
+same day: "Nope. It can just be a pre-assembled workflow for 'creating a new iOS app in monorepo x
+of org y'." That is the sharper reading of "policy lives in the workflow", and the distinction is
+worth stating exactly, because the first draft got it backwards.
 
-The cheap first version is not a templating engine. GitHub can create a repository from a template
-repository in one call, so the hard part — making Bazel, `rules_rust`, UniFFI and `rules_apple`
+**An input is what varies between runs of the same process.** The project slug varies. The
+entitlements vary, because this app needs HealthKit and the next one needs push notifications.
+
+**The document is what is fixed for that process.** An organisation that builds with Bazel does not
+choose Bazel per app; the Bazel step simply *is* the step in their document. A `build_system:
+bazel | tuist` input would be a switch nobody ever flips, and the cost is not only clutter.
+
+The technical reason it is the better answer, and not merely the tidier one: a parameter that
+selects *which tool runs* cannot be checked statically. `check` exists to reject everything
+knowable before anything runs, and it can do that because the graph's tools are fixed in the
+document and their ports are typed. Push tool selection into a runtime value and the DSL needs
+conditionals it deliberately does not have (control flow is `when` guards and `for_each`, nothing
+more), and a class of error moves from check time to apply time. Two small documents stay
+statically checkable where one branching document would not.
+
+So the shape is several pre-assembled documents — one per process an organisation actually has —
+each with the build system baked in, each readable end to end, each taking only what genuinely
+varies per app.
+
+Note what the operator's own example changes about the graph: "a new iOS app in monorepo x" has no
+`github.repo.ensure` node at all. The repository already exists, and the scaffolding step adds a
+directory to it, which is a commit or a pull request against an existing repository rather than a
+generate-from-template. That is a different missing capability from the one the greenfield case
+needs, and both are the same underlying gap: no tool can put a file in a repository.
+
+For the greenfield case, the cheap first version is not a templating engine. GitHub can create a
+repository from a template repository in one call, so the hard part — making Bazel, `rules_rust`, UniFFI and `rules_apple`
 actually build together — is authored once as a real repository that can be tested, and willikins
 stamps it and then edits the few files that carry derived values. Full templating, with layered
 profiles and re-rendering when a convention changes, is what the design doc describes and is a
