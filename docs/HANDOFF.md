@@ -7,14 +7,35 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-16) — milestone 2 is complete; milestone 2c was re-scoped on the operator's decision that willikins issues its own tokens rather than delegating to any identity provider, and its plan is rewritten. Next: land the credential-boundary guards, then 2c task 1 once the operator picks a login method
+### RESUME HERE (2026-09-20) — milestone 3a is complete and live-proven: willikins now provisions a GitHub repository, a Doppler project with its configs, and a Buildkite pipeline, which is the operator's real process. Next: 3b's `doppler.project_member.ensure`, the one manual step left in that process. Milestone 2c (willikins as its own authorisation server) is planned and shelved until the service needs to be reachable
 
 - **Live state:** `main` at 348 commits, gates green at `1bc23f5` (1,704 tests; the ignored ones
   are by-hand measurements, a lock-probe child, two slow connection-holding attacks, a
   fixture generator, the two live probes and the two live write cycles). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
   `main` is pushed after every coordinator commit.
-- **What just happened (2026-09-16, afternoon):** milestone 2c changed shape on an operator
+- **What just happened (2026-09-20):** milestone 3a landed, the slice that makes willikins
+  useful to the operator rather than only correct. `crates/willikins-providers-buildkite` adds
+  two tools, `buildkite.pipeline.ensure` (key `(org, slug)`, read-then-create, ours when the
+  description equals `managed-by: willikins`, `Mismatch` on repository before cluster) and
+  `buildkite.cluster.get` (pure, pages explicitly and never reads the `Link` header, which can
+  carry an api_key). `workflows/new-rust-service-buildkite.yaml` is the operator's real process:
+  repository, Doppler project and configs, pipeline. It mints no service token and stores no CI
+  secret, because their CI holds one Doppler service-account token organisation-wide, so no
+  `SinkToken` exists in the graph, every node is `Reversible` and a run needs no approval. The
+  pipeline configuration is not a port at all: one frozen constant, Buildkite's documented upload
+  bootstrap, so the repository's own `.buildkite/pipeline.yml` holds the steps and no
+  caller-supplied command can reach an agent. The repository form is built inside the client from
+  an already-parsed `GitHubRepo`, never a URL port. The live write cycle ran against the sandbox
+  organisation on 2026-09-20 and passed: cluster resolved by name, pipeline created, re-read
+  `Present`, re-ensure `changed: false`, both `Mismatch` arms proved read-only, deleted, re-read
+  `Absent`, and an independent check through `Http` confirmed zero pipelines left. The verify's
+  own best find was the failure mode milestone 2 already paid for once: the fake and the live tool
+  agreed **by construction**, since the fake kept a private copy of the repository-URL helper that
+  could be rewritten without failing anything. `tests/fake_agrees_with_live.rs` now pins all five
+  observations behaviourally. Adversarial pass recorded at
+  `docs/research/2026-09-20-m3a-adversarial-pass.md`.
+- **Earlier (2026-09-16, afternoon):** milestone 2c changed shape on an operator
   decision and its plan is rewritten to match. They ruled out every external identity provider,
   including a self-hosted open-source edition of a SaaS ("I won't have the entire project's authn
   / authz depend on the 'open source' edition of a SaaS ... There is *no way* I'll shove such a
@@ -204,36 +225,23 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
   2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
   test workplace (the earlier `dp.st.` config-scoped token could only read one config).
-- **Next action:** milestone 2c, whose plan is rewritten for willikins issuing its own
-  tokens: task 1 starts once the operator answers the login-method decision (recommended:
-  passkeys through `webauthn-rs`, because this deployment has no email or SMS so a password path
-  has no reset and no escape from lockout; the cost is that OpenSSL enters the build and the
-  relying-party id freezes the domain permanently). Three further open decisions have
-  recommendations the coordinator will apply as defaults unless the operator says otherwise: the
-  signing key injected through Doppler as **two** variables so the rotation overlap is
-  expressible; pre-registered clients rather than dynamic registration or metadata documents; and
-  a one-hour access-token lifetime, which is also the key-rotation overlap window. The plan's own shape, the operator's three decisions and the pass-2 exposure
-  hand-overs are in that plan; milestone 2c then gets its own tracking todo. Railway follow-ups
-  for the operator remain: connect Doppler's Railway integration and remove
-  `WILLIKINS_FAKE_CATALOG` when the service should go live. Everything else about how work runs
-  is unchanged: one sequential Workflow at a time on `main`, sonnet implementing test-first and
-  opus verifying, every `CONTEXT` naming the four gates exactly as CLAUDE.md spells them
-  (`-j 2`, `RUST_TEST_THREADS=2`). The old next-action text followed; it is superseded by this
-  one. closure), with its own document-review pass. **Update:** the 2c plan is written and
-  reviewed (see "What just happened"); after part B lands, the coordinator puts the two open
-  decisions to the operator (provider, host), one question at a time, and starts 2c's task 1
-  only with the milestone 2 plan marked Completed. Railway follow-ups for the operator: connect Doppler's Railway
-  integration and remove `WILLIKINS_FAKE_CATALOG` when the service should go live (the IaC
-  file is applied: CLI upgraded to 5.57.2 on 2026-09-15 with the operator's permission, the
-  file regenerated from the live project with `railway config pull`, the healthcheck added,
-  `railway config plan` showed that one change and nothing to destroy, the operator
-  approved, `railway config apply` set it, and a fresh plan is up to date; the SDK installs
-  with `npm install` from `package.json`; `railway config apply` is never run unasked). Then one sequential Workflow at a time on `main`, sonnet implementing
-  test-first and opus verifying, every `CONTEXT` string naming the four gates exactly as
-  CLAUDE.md spells them (`-j 2`, `RUST_TEST_THREADS=2`). Groups run one lane at a time. The
-  Workflow tool needs the operator's opt-in per session ("use a workflow" or
-  "ultracode"); without it, dispatch through plain Agent calls. Agents must never message
-  the coordinator mid-run (a reply resumes a duplicate of them).
+- **Next action:** milestone 3b, the one manual step left in the operator's process:
+  `doppler.project_member.ensure`, which grants a Doppler service account access to a project by
+  role and environments (`POST /v3/projects/project/members`, body `{type, slug, role,
+  environments[]}`). Until it lands, a pipeline the new document creates cannot read its Doppler
+  project's secrets until someone adds that grant by hand, which the document's own header says.
+  The grant model was settled empirically on 2026-09-16 and is in the milestone 2 plan's "Notes
+  for milestone 3": grants are per project and name environments, an environment grant reaches
+  that environment's branch configs and no others, and a workplace-wide blanket exists only as
+  admin over everything. Also open for 3b: the two Doppler inheritance tools for the operator's
+  shared base configs, credential routing across several GitHub organisations and Doppler
+  workplaces, and the re-read-error-masking gap the 3a adversarial pass recorded. Milestone 2c
+  (willikins as its own authorisation server, 24 decisions, 20 tasks, 26 acceptance tests, four
+  operator decisions settled) is fully planned and deliberately shelved: it buys a reachable
+  deployment, and the operator runs willikins locally through the CLI, where there is no
+  authentication at all. App Store Connect was researched on 2026-09-16
+  (`docs/research/2026-09-16-app-store-connect.md`): identifiers yes, app groups no, app records
+  no, and the credential itself can never be provisioned.
 - **Railway (2026-09-15):** the operator created project `Willikins` (id
   `7d8e6a12-f6cb-46fd-aa63-de8c352cdca0`, workspace "el-fitz's Projects"), environment
   `production`, service `willikins` sourced from `Lightless-Labs/willikins`, auto-deploying

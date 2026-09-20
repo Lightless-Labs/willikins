@@ -1,6 +1,7 @@
 # Milestone 3a: the Buildkite provider and the operator's real workflow
 
 **Created:** 2026-09-16
+**Completed:** 2026-09-20
 **Addendum:** 2026-09-20 — tasks 1–9 landed (secret guard, types, naming::v1's tool-facing
 output, the willikins-providers-buildkite crate with both tools and their mock tests, the fake
 tools, and the server/CLI/README wiring); the live probe (task 5) ran against `willikins-test`
