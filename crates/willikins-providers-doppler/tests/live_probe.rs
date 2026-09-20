@@ -167,12 +167,14 @@ fn check_secret(
 /// **2026-09-20.** This check asserted `404` outright until a live
 /// rehearsal found that an absent project name answers `400` "This
 /// token does not have access to requested project" instead whenever
-/// the workplace has been quiescent, or a project was deleted a moment
-/// earlier
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
-/// Which of the two a given run meets is a fact about how recently the
-/// workplace changed, not about the request — so a probe that insists
-/// on `404` reports a failure for the ordinary case. It asks
+/// the calling token can already see at least one project in the
+/// workplace
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`,
+/// whose addendum carries the probe; its filename records the first,
+/// superseded reading). Which of the two a given run meets is a fact
+/// about this token's own visible project set, not about the request —
+/// and since the probe's whole purpose is a workplace that *holds* a
+/// persistent project, `400` is the answer it should normally expect. It asks
 /// [`looks_like_a_missing_project`] the same question the five tools
 /// ask, and records which status actually came back instead of
 /// demanding one.

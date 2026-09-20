@@ -90,9 +90,13 @@ impl DopplerServiceTokenEnsure {
     /// token holds "a granular set of resources within your workplace"
     /// (same section), and another workplace's projects lie outside it
     /// entirely. **Which status Doppler answers for a project outside
-    /// the grant was never observed**, by the write cycle, the probe or
-    /// the smoke run; a `403` is as plausible as a `404`, and nothing
-    /// here may assume either. GitHub's 404 is documented to conflate
+    /// the grant has since been observed**, twice — by the 2026-09-16
+    /// grant probe (`docs/research/2026-09-12-m2-dependencies.md`, "3.y
+    /// Service-account access") and again on 2026-09-20: a `404`
+    /// "Could not find requested project", byte-identical to a project
+    /// that does not exist. Never a `403`. So this 404 provably covers
+    /// both, and the conflation is not a worry to be recorded but a
+    /// fact. GitHub's 404 is documented to conflate
     /// the two, which is why
     /// `willikins_providers_github::tools::GitHubRepoEnsure::observe`
     /// says so outright. For Doppler the honest statement is the weaker
@@ -125,12 +129,17 @@ impl DopplerServiceTokenEnsure {
     /// recorded a `GET` of a just-deleted project answering `400` for one
     /// of its two projects and `404` for the other, inside a single run
     /// (`fixtures/doppler/README.md`, "Undocumented facts the cycle
-    /// settled"). Whether *this* endpoint answered the same `400` shape
+    /// settled") — which the 2026-09-20 probe explains: step 10 deletes
+    /// and re-reads one project at a time, so the first re-read happens
+    /// while the second project is still visible (`400`) and the second
+    /// after nothing is (`404`). Whether *this* endpoint answered the
+    /// same `400` shape
     /// stayed unobserved for a while, so this tolerance was originally
     /// left exactly one status wide, pinned by
     /// `read_still_propagates_a_400_from_the_listing`.
     ///
-    /// A live rehearsal against a quiescent Doppler workplace then hit
+    /// A live rehearsal planning a second project, in a workplace whose
+    /// first project this token could already see, then hit
     /// exactly that `400` at `doppler.project.ensure`'s own `GET`, with
     /// the message "This token does not have access to requested project
     /// '<name>'" — the same fact

@@ -44,13 +44,18 @@ pub const MANAGED_DESCRIPTION: &str = "managed-by: willikins";
 
 /// A message fragment Doppler answers with on a `400` for a project name
 /// this token cannot see. Observed live 2026-09-20
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`):
-/// the *same* absent project name answers `404` "Could not find requested
-/// project" in the minutes after another project in the workplace was
-/// created, and this `400` "This token does not have access to requested
-/// project" when the workplace has been quiescent, or shortly after a
-/// project was deleted. Same token, same endpoint, same shape of name —
-/// the difference is purely how recently the workplace changed.
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`
+/// — the filename records the first, superseded reading; see that note's
+/// addendum): the *same* absent project name answers `404` "Could not
+/// find requested project" or this `400` "This token does not have
+/// access to requested project" depending on **whether the calling token
+/// can see any project in the workplace at all**. None visible: `404`,
+/// for every name, existing or not. One or more visible: `400`, for
+/// every name this token cannot see. Same token, same endpoint, same
+/// shape of name — what differs is the token's own visible project set.
+///
+/// Which means the `400` is the answer every provisioning run after the
+/// first one gets, and the `404` only the very first.
 ///
 /// See [`looks_like_a_missing_project`] for what this crate does with
 /// that fact, and what it deliberately does not assume.
@@ -79,8 +84,9 @@ const DOPPLER_NO_ACCESS_MESSAGE: &str = "does not have access to requested proje
 /// this crate already mapped a bare `404` to `Absent` (or, for the
 /// token-list endpoint, to `false`) on exactly that reasoning; widening
 /// the same reasoning to this `400` closes the gap that let a `doppler.
-/// project.ensure` node refuse to plan at all whenever the workplace
-/// happened to be quiescent — the ordinary case, not the rare one.
+/// project.ensure` node refuse to plan at all whenever this token could
+/// already see one project — which is every run after the first, not a
+/// corner case.
 /// Nothing here treats a `400`/`404` as *proof* of absence: the create
 /// call (or, for `doppler.secret.get`, apply time — there is no create
 /// path to defer to) stays the only arbiter, the same deferral
@@ -561,8 +567,9 @@ mod tests {
         assert!(looks_like_a_missing_project(&err));
     }
 
-    /// The exact body the 2026-09-20 rehearsal saw against a quiescent
-    /// workplace.
+    /// The exact body the 2026-09-20 rehearsal saw, planning a second
+    /// project in a workplace whose first one this token could already
+    /// see.
     #[test]
     fn a_400_naming_no_access_looks_like_a_missing_project() {
         let err = ProviderError::new(

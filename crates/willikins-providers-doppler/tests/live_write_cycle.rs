@@ -466,14 +466,14 @@ impl Cycle {
 /// and names it rather than deleting something it did not create here.
 ///
 /// **2026-09-20.** "Absent" was `404` and nothing else here, so this
-/// step panicked outright against a quiescent workplace -- where the
+/// step panicked outright whenever the token could already see any
+/// project in the workplace -- where the
 /// identical absent name answers `400` "This token does not have access
 /// to requested project"
 /// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
-/// A workplace that has been left alone for a few minutes is the
-/// ordinary state for this cycle, which runs on demand and deletes
-/// everything it makes, so the whole cycle could not start in the
-/// commonest case. It now asks [`looks_like_a_missing_project`] the
+/// Only a workplace holding nothing this token can see answers `404`,
+/// so the cycle could not start against any workplace that already
+/// holds a project -- which is every workplace but an empty one. It now asks [`looks_like_a_missing_project`] the
 /// same question the five tools ask. The reason to refuse -- a leftover
 /// is readable, so a human must remove it -- is the `Ok` arm, and that
 /// is unchanged.
@@ -513,7 +513,8 @@ fn step_1_absent(raw: &Http, projects: &[&DopplerProject]) {
 /// `fixtures/doppler/service_tokens_list_project_missing.json`.
 ///
 /// The `400` this doc named as the other plausible answer turned out to
-/// be the real one against a quiescent workplace, found on 2026-09-20
+/// be the real one whenever the token can already see a project in the
+/// workplace, found on 2026-09-20
 /// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`),
 /// so `is_listed`'s tolerance is no longer one status wide: it is one
 /// message wide, and covers both shapes. This step therefore passes on
@@ -1247,10 +1248,16 @@ fn step_9c_branch_config_prefix(cycle: &mut Cycle) {
 ///
 /// "Cannot be read back" rather than "is `404`". A `GET` issued
 /// immediately after the `DELETE` answers **`400`**, not `404`; a `GET`
-/// of the same name a minute later answers `404`, which is what
+/// of the same name later answers `404`, which is what
 /// `the_cycles_projects_are_gone` sees. Both were observed live on
 /// 2026-09-14, and Doppler documents no non-2xx response for any
-/// endpoint at all, so neither status is written down anywhere. What
+/// endpoint at all, so neither status is written down anywhere. The
+/// 2026-09-20 probe
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`)
+/// explains why the two differ, and it is not elapsed time: this loop
+/// deletes and re-reads one project at a time, so the first re-read
+/// still has the second project visible (`400`) and the second has
+/// nothing visible (`404`). What
 /// this test can insist on without guessing is the part that matters:
 /// the project is not readable, and a `2xx` here would mean the delete
 /// did not happen. The status actually seen is recorded as an
@@ -1407,15 +1414,16 @@ fn doppler_live_write_cycle() {
 ///
 /// **2026-09-20.** "Gone" was `404` and nothing else, and every other
 /// status -- `400` included -- was recorded as a *leftover* needing a
-/// human. That is backwards for the one status a just-deleted project
-/// is most likely to answer: [`step_10_delete`]'s own doc has said
+/// human. That is backwards for the status a deleted project answers
+/// while any other project is still visible: [`step_10_delete`]'s own
+/// doc has said
 /// since 2026-09-14 that a `GET` issued straight after the `DELETE`
-/// answers `400`, and the 2026-09-20 finding
+/// answers `400`, and the 2026-09-20 probe
 /// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`)
-/// gives that shape its name. Run promptly after the cycle -- which is
-/// how it is meant to be run -- this check reported both of the
-/// projects the cycle had just successfully deleted as leftovers to
-/// delete by hand. It now asks [`looks_like_a_missing_project`], so
+/// explains it -- the cycle's *other* fixed project was still there.
+/// Against a workplace holding anything else this token can see, this
+/// check reported projects the cycle had successfully deleted as
+/// leftovers to delete by hand. It now asks [`looks_like_a_missing_project`], so
 /// `Ok` (a readable project) is the one thing that makes a leftover,
 /// and any other status is still reported with the status it gave.
 #[test]

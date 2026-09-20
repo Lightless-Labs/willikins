@@ -69,13 +69,13 @@ fn read_reports_absent_on_404() {
     assert_eq!(value, "third-thoughts");
 }
 
-/// **2026-09-20 defect.** Against a quiescent workplace, or one where a
-/// project was recently deleted, the same absent project name answers
+/// **2026-09-20 defect.** Once this token can see any project in the
+/// workplace at all, the same absent project name answers
 /// `400` "This token does not have access to requested project" instead
 /// of `404` — and before this fix that `400` refused planning outright,
 /// which is what a live rehearsal hit: `doppler.project.ensure` could
-/// not plan a brand-new project whenever the workplace happened not to
-/// have just created one. See
+/// not plan a brand-new project in any workplace that already held one,
+/// which is every project after an operator's first. See
 /// `docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`.
 #[test]
 fn read_reports_absent_on_a_400_naming_no_access() {
@@ -100,8 +100,8 @@ fn read_reports_absent_on_a_400_naming_no_access() {
 }
 
 /// The exact body the 2026-09-20 rehearsal saw, for the exact project
-/// name it named: planning `harbor-relay` against a quiescent workplace
-/// answered `400` with `"This token does not have access to requested
+/// name it named: planning `harbor-relay` as the workplace's second
+/// project answered `400` with `"This token does not have access to requested
 /// project 'harbor-relay'"`, and was refused outright before this fix.
 #[test]
 fn read_reports_absent_on_the_exact_body_the_rehearsal_saw() {

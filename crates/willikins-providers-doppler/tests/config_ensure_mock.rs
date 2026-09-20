@@ -86,7 +86,8 @@ fn read_reports_absent_on_404() {
 /// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`):
 /// the parent project this `GET` needs can answer `400` "This token does
 /// not have access to requested project" instead of `404`, depending on
-/// how recently the workplace changed, and both must read as `Absent`.
+/// whether this token can already see any project in the workplace, and
+/// both must read as `Absent`.
 #[test]
 fn read_reports_absent_on_a_400_naming_no_access() {
     let mut provider = MockProvider::start();
