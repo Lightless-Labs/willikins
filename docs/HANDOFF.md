@@ -7,14 +7,49 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-20) — milestone 3a is complete and live-proven: willikins now provisions a GitHub repository, a Doppler project with its configs, and a Buildkite pipeline, which is the operator's real process. Next: 3b's `doppler.project_member.ensure`, the one manual step left in that process. Milestone 2c (willikins as its own authorisation server) is planned and shelved until the service needs to be reachable
+### RESUME HERE (2026-09-20, evening) — milestones 2 and 3a are complete and a full live rehearsal against the sandbox accounts found two real defects, now fixed and being verified. A five-project survey of the operator's own work produced a ranked gap list whose rank 1 blocks everything: **no tool can put a file in a repository.** That is milestone 3b and it is next. Milestone 2c (willikins as its own authorisation server) came back onto the critical path when the operator said they want to use willikins from the Claude or ChatGPT iOS apps
 
 - **Live state:** `main` at 348 commits, gates green at `1bc23f5` (1,704 tests; the ignored ones
   are by-hand measurements, a lock-probe child, two slow connection-holding attacks, a
   fixture generator, the two live probes and the two live write cycles). Remote `origin` is
   `git@github.com:Lightless-Labs/willikins.git` (public, AGPL-3.0-or-later since 2026-09-14);
   `main` is pushed after every coordinator commit.
-- **What just happened (2026-09-20):** milestone 3a landed, the slice that makes willikins
+- **What just happened (2026-09-20, the rehearsal and the survey).** The coordinator ran a full
+  rehearsal against the three sandbox accounts, which is the thing no gate can substitute for:
+  provision a realistic project with `workflows/new-rust-service-buildkite.yaml`, then a second,
+  then re-apply the first. **Project one succeeded** across GitHub, Doppler and Buildkite in about
+  a minute with no approval prompt, and the re-apply read every node `Unchanged`. **Project two
+  failed at plan time** — "planning failed: node `doppler`: ... This token does not have access to
+  requested project" for a project that did not exist. **And the teardown left an orphaned
+  Buildkite pipeline**, because `deploy/teardown.sh` had no Buildkite arm; the coordinator deleted
+  it by hand. Both defects are fixed (Workflow `wf_472215fa-c4a`): every Doppler read path now
+  tolerates the 400 as it already tolerated the 404, with a negative pin per path so an unrelated
+  400 still refuses, two fixtures, a solutions note, and a teardown arm with eight new scenarios.
+  **A correction is pending re-establishment:** the coordinator read the 404-versus-400 difference
+  as *timing* (quiescent workplace answers 400). The verifier re-probed and concluded the
+  discriminator is *visibility* — a token that can see no projects gets 404 for every name
+  including ones that exist; a token that can see any gets 400 for every name it cannot see. If
+  that holds, the defect is not intermittent: the 404 is what an operator's **first** project sees
+  and the 400 is what **every project after it** sees, which is why the milestone 2 smoke run (an
+  empty workplace) never caught it. One data point in the coordinator's own probe does not fit the
+  visibility rule, so the verifier was told to re-establish rather than inherit it, and to rename
+  `docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md` if the timing reading
+  is the false one. That lane also runs the live rehearsal again, two projects back to back, which
+  is its acceptance criterion.
+- **The survey (Workflow `wf_b88f9a04-95f`), and what it settles.** Five of the operator's real
+  projects were read (descartes, pessimal, danksworth, brassica-ex, phil-connors) and reverse
+  engineered into `docs/research/2026-09-20-project-survey-and-workflow-library.md` (732 lines):
+  the layers that recur, the drift between them, a nine-entry workflow catalogue, a ranked gap
+  list, and the operator's five upcoming projects mapped onto it. Companion design at
+  `docs/research/2026-09-20-workflow-library-design.md` (440 lines). **Rank 1 is the whole story:
+  no tool can put a file in a repository, and it blocks nine of nine catalogue entries** — the
+  existing Buildkite document creates a pipeline bootstrapped to read a `.buildkite/pipeline.yml`
+  that nothing can write, so it is inert on arrival. Rank 2 is its harder sibling, a structured
+  edit to a file another project owns, which is what adding to a monorepo is. Then App Store
+  Connect, `doppler.project_member.ensure`, naming rows, a thinner-than-needed pipeline tool, and
+  Railway. The base layer shared by all five projects contains **zero provider calls**: it is
+  entirely files. The honest tally for Walter is about one step in twelve expressible today.
+- **What just happened (2026-09-20, earlier):** milestone 3a landed, the slice that makes willikins
   useful to the operator rather than only correct. `crates/willikins-providers-buildkite` adds
   two tools, `buildkite.pipeline.ensure` (key `(org, slug)`, read-then-create, ours when the
   description equals `managed-by: willikins`, `Mismatch` on repository before cluster) and
@@ -225,23 +260,33 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `~/.config/willikins/sandbox.env` (mode 600, outside the repo): the Doppler one is, since
   2026-09-14 (afternoon), a `dp.sa.` service-account token for a dedicated, empty Doppler
   test workplace (the earlier `dp.st.` config-scoped token could only read one config).
-- **Next action:** milestone 3b, the one manual step left in the operator's process:
-  `doppler.project_member.ensure`, which grants a Doppler service account access to a project by
-  role and environments (`POST /v3/projects/project/members`, body `{type, slug, role,
-  environments[]}`). Until it lands, a pipeline the new document creates cannot read its Doppler
-  project's secrets until someone adds that grant by hand, which the document's own header says.
-  The grant model was settled empirically on 2026-09-16 and is in the milestone 2 plan's "Notes
-  for milestone 3": grants are per project and name environments, an environment grant reaches
-  that environment's branch configs and no others, and a workplace-wide blanket exists only as
-  admin over everything. Also open for 3b: the two Doppler inheritance tools for the operator's
-  shared base configs, credential routing across several GitHub organisations and Doppler
-  workplaces, and the re-read-error-masking gap the 3a adversarial pass recorded. Milestone 2c
-  (willikins as its own authorisation server, 24 decisions, 20 tasks, 26 acceptance tests, four
-  operator decisions settled) is fully planned and deliberately shelved: it buys a reachable
-  deployment, and the operator runs willikins locally through the CLI, where there is no
-  authentication at all. App Store Connect was researched on 2026-09-16
-  (`docs/research/2026-09-16-app-store-connect.md`): identifiers yes, app groups no, app records
-  no, and the credential itself can never be provisioned.
+- **Next action: milestone 3b is file-writing**, not the Doppler grant tool the last block named.
+  The operator's priority is the four projects waiting, and every catalogue entry needs files
+  before it needs anything else. The shape is mostly in the tree already: `Text` is non-secret by
+  type and `TemplateSource` exists, so the new tool is "put this `Text` at this typed repository
+  path, as a commit", and the invariant that a secret can never reach a committed file then holds
+  by construction rather than by a check anyone writes. Template files live in the trusted
+  directory beside the documents, which is what "templates are privileged content" already means.
+  The research a 3b plan needs, none of it cargo-shaped: GitHub's contents API (one file, one
+  commit each, not atomic) versus the git-data API (blobs, tree, commit, ref — atomic across many
+  files); a branch and pull request versus a direct commit, given the design doc's "the second run
+  is the feature"; and template-repository generate as the greenfield fast path. **Prove it with
+  catalogue entry 1, not Walter**: the docs scaffold is zero provider calls, all files, shared by
+  all five surveyed projects, and writing `.buildkite/pipeline.yml` makes the existing Buildkite
+  document real. Walter needs rank 2 and rank 3 as well.
+  **Then milestone 2c**, whose plan is written, reviewed and has the operator's four decisions
+  settled (passkeys, the signing key as two Doppler variables, pre-registered clients, a one-hour
+  token). It is back on the critical path because of the phone use case
+  (`todos/2026-09-20-remote-mcp-from-a-phone.md`): an agent on a phone has no local context, so
+  workflows must be self-describing and the *available values* — which GitHub organisations have
+  credentials — must be enumerable, which is per-target credential routing seen from the other
+  side. The operator can flip 3b and 2c in one word.
+  **Do not** reopen the workflow library, composition, or the phone surface: all banked, all
+  "future" by the operator's own word, in `todos/2026-09-20-agent-authored-workflows.md` and
+  `todos/2026-09-20-remote-mcp-from-a-phone.md`. **Do not** add naming rows for an org-prefixed
+  Doppler project: that is policy, which is the document.
+  **Ask the operator for a fresh Buildkite token** before the next live Buildkite test: the
+  current one expires 2026-09-23.
 - **Railway (2026-09-15):** the operator created project `Willikins` (id
   `7d8e6a12-f6cb-46fd-aa63-de8c352cdca0`, workspace "el-fitz's Projects"), environment
   `production`, service `willikins` sourced from `Lightless-Labs/willikins`, auto-deploying
