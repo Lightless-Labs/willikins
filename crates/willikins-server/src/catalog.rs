@@ -2,9 +2,10 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the nine-tool live catalog --
+//! `live_catalog` assembles the eleven-tool live catalog --
 //! `willikins-tools`' two pure tools, `willikins-providers-github`'s two
-//! live tools, `willikins-providers-doppler`'s five -- exactly as
+//! live tools, `willikins-providers-doppler`'s five, and (milestone 3a)
+//! `willikins-providers-buildkite`'s two -- exactly as
 //! `crates/willikins-providers-doppler/tests/live_catalog.rs` built it
 //! before this task; that test now calls [`live_catalog_with`] (this
 //! module's own assembly, taking `Http`s rather than `Credential`s so a
@@ -14,6 +15,9 @@
 use std::sync::Arc;
 
 use willikins_core::{Catalog, Tool};
+use willikins_providers_buildkite::{
+    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineEnsure,
+};
 use willikins_providers_doppler::{
     DopplerClient, DopplerConfigEnsure, DopplerProjectEnsure, DopplerSecretGet,
     DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
@@ -23,8 +27,8 @@ use willikins_providers_http::{Credential, Http};
 
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
-/// `tests::the_live_catalog_has_exactly_these_nine_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 9] = [
+/// `tests::the_live_catalog_has_exactly_these_eleven_tools_and_no_fake_tool_fits`.
+pub const LIVE_TOOL_NAMES: [&str; 11] = [
     "naming.v1",
     "template.render",
     "github.repo.ensure",
@@ -34,6 +38,8 @@ pub const LIVE_TOOL_NAMES: [&str; 9] = [
     "doppler.service_token.ensure",
     "doppler.service_token.rotate",
     "doppler.secret.get",
+    "buildkite.pipeline.ensure",
+    "buildkite.cluster.get",
 ];
 
 /// Assemble the live catalog from an already-built `Http` for each
@@ -47,9 +53,10 @@ pub const LIVE_TOOL_NAMES: [&str; 9] = [
 /// headers (`willikins_providers_github::http_client`,
 /// `willikins_providers_doppler::http_client`).
 #[must_use]
-pub fn live_catalog_with(github_http: Http, doppler_http: Http) -> Catalog {
+pub fn live_catalog_with(github_http: Http, doppler_http: Http, buildkite_http: Http) -> Catalog {
     let github = Arc::new(GitHubClient::new(github_http));
     let doppler = Arc::new(DopplerClient::new(doppler_http));
+    let buildkite = Arc::new(BuildkiteClient::new(buildkite_http));
 
     let mut catalog = Catalog::new(willikins_types::registry());
     let mut insert = |tool: Arc<dyn Tool>| {
@@ -71,16 +78,22 @@ pub fn live_catalog_with(github_http: Http, doppler_http: Http) -> Catalog {
         &doppler,
     ))));
     insert(Arc::new(DopplerSecretGet::new(doppler)));
+    insert(Arc::new(BuildkitePipelineEnsure::new(Arc::clone(
+        &buildkite,
+    ))));
+    insert(Arc::new(BuildkiteClusterGet::new(buildkite)));
     catalog
 }
 
 /// The live catalog, against each provider's real base URL, built from
-/// `github` and `doppler` credentials. See [`live_catalog_with`].
+/// `github`, `doppler`, and `buildkite` credentials. See
+/// [`live_catalog_with`].
 #[must_use]
-pub fn live_catalog(github: Credential, doppler: Credential) -> Catalog {
+pub fn live_catalog(github: Credential, doppler: Credential, buildkite: Credential) -> Catalog {
     live_catalog_with(
         willikins_providers_github::http_client(github),
         willikins_providers_doppler::http_client(doppler),
+        willikins_providers_buildkite::http_client(buildkite),
     )
 }
 
@@ -117,12 +130,20 @@ pub enum LiveCredentialError {
         /// See [`Self::GitHub`] for why this is not called `message`.
         error: String,
     },
+    /// `WILLIKINS_BUILDKITE_TOKEN` is missing or malformed.
+    Buildkite {
+        /// The provider crate's own message. Names the variable only.
+        /// See [`Self::GitHub`] for why this is not called `message`.
+        error: String,
+    },
 }
 
 impl std::fmt::Display for LiveCredentialError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GitHub { error } | Self::Doppler { error } => write!(f, "{error}"),
+            Self::GitHub { error } | Self::Doppler { error } | Self::Buildkite { error } => {
+                write!(f, "{error}")
+            }
         }
     }
 }
@@ -153,16 +174,21 @@ pub fn live_catalog_from_env() -> Result<Catalog, LiveCredentialError> {
             error: error.to_string(),
         }
     })?;
-    Ok(live_catalog(github, doppler))
+    let buildkite = willikins_providers_buildkite::credential_from_env().map_err(|error| {
+        LiveCredentialError::Buildkite {
+            error: error.to_string(),
+        }
+    })?;
+    Ok(live_catalog(github, doppler, buildkite))
 }
 
 impl crate::Butler {
     /// The live catalog: `willikins-tools`' two pure tools plus every
-    /// live GitHub and Doppler tool, against each provider's real API.
-    /// See this module's own docs.
+    /// live GitHub, Doppler, and Buildkite tool, against each provider's
+    /// real API. See this module's own docs.
     #[must_use]
-    pub fn live_catalog(github: Credential, doppler: Credential) -> Catalog {
-        live_catalog(github, doppler)
+    pub fn live_catalog(github: Credential, doppler: Credential, buildkite: Credential) -> Catalog {
+        live_catalog(github, doppler, buildkite)
     }
 
     /// A fresh all-fake catalog and its seedable state handle -- for
@@ -193,6 +219,8 @@ mod tests {
     fn test_catalog() -> Catalog {
         let github = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
         let doppler = Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
+        let buildkite =
+            Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken12345678");
         live_catalog_with(
             Http::new(
                 NOWHERE,
@@ -200,11 +228,12 @@ mod tests {
                 github,
             ),
             Http::new(NOWHERE, Vec::new(), doppler),
+            Http::new(NOWHERE, Vec::new(), buildkite),
         )
     }
 
     #[test]
-    fn the_live_catalog_has_exactly_these_nine_tools_and_no_fake_tool_fits() {
+    fn the_live_catalog_has_exactly_these_eleven_tools_and_no_fake_tool_fits() {
         let catalog = test_catalog();
         for name in LIVE_TOOL_NAMES {
             let tool_name = willikins_core::ToolName::parse(name).unwrap();

@@ -199,7 +199,8 @@ pub const ROTATION: &[ExpectedNode] = &[
 /// `willikins_providers_doppler::CREDENTIAL_PATTERN` pin the first four
 /// -- plus `dp.st.`, the prefix Doppler puts on a **minted service
 /// token**, which is the one secret this workflow really creates.
-pub const CREDENTIAL_PREFIXES: &[&str] = &["github_pat_", "ghp_", "dp.sa.", "dp.pt.", "dp.st."];
+pub const CREDENTIAL_PREFIXES: &[&str] =
+    &["github_pat_", "ghp_", "dp.sa.", "dp.pt.", "dp.st.", "bkua_"];
 
 /// The workspace root, from this crate's manifest directory.
 pub fn workspace_root() -> PathBuf {
@@ -420,8 +421,9 @@ pub fn assert_token_unknown(record: &Value, label: &str) {
 ///    token-shaped string at all, including the `dp.st.` service token
 ///    this workflow mints and whose bytes really do pass through the
 ///    executor;
-/// 2. the literal value of `WILLIKINS_GITHUB_TOKEN` and
-///    `WILLIKINS_DOPPLER_TOKEN`, when they are set.
+/// 2. the literal value of `WILLIKINS_GITHUB_TOKEN`,
+///    `WILLIKINS_DOPPLER_TOKEN`, and `WILLIKINS_BUILDKITE_TOKEN`, when
+///    they are set.
 ///
 /// The second sweep deliberately departs from the rule the two provider
 /// write cycles keep (they never call `std::env::var` on a credential,
@@ -439,7 +441,11 @@ pub fn assert_no_credential_bytes(label: &str, streams: &[(&str, &str)]) {
                 "{label}: {stream} carries the token-shaped prefix `{prefix}`"
             );
         }
-        for name in ["WILLIKINS_GITHUB_TOKEN", "WILLIKINS_DOPPLER_TOKEN"] {
+        for name in [
+            "WILLIKINS_GITHUB_TOKEN",
+            "WILLIKINS_DOPPLER_TOKEN",
+            "WILLIKINS_BUILDKITE_TOKEN",
+        ] {
             assert!(
                 !contains_credential_value(text, name),
                 "{label}: {stream} carries the value of {name}"

@@ -1,6 +1,7 @@
 //! The *whole* live catalog — `willikins-tools`' two pure tools,
-//! `willikins-providers-github`'s two live tools, and this crate's five
-//! live Doppler tools. Nine tools, no fake among them.
+//! `willikins-providers-github`'s two live tools, this crate's five live
+//! Doppler tools, and (milestone 3a) `willikins-providers-buildkite`'s
+//! two live tools. Eleven tools, no fake among them.
 //!
 //! The assembly itself lives in `willikins-server` now
 //! (`willikins_server::live_catalog_with`, task 10a's `Butler::live_catalog`)
@@ -34,7 +35,7 @@ use willikins_providers_http::{Credential, Http};
 const POSITIVE_FIXTURES: [&str; 2] = ["new-rust-service.yaml", "rotate-service-token.yaml"];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 9] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 11] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -52,6 +53,8 @@ fn live_catalog() -> Catalog {
     let doppler_credential =
         Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
     let github_credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+    let buildkite_credential =
+        Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken12345678");
     willikins_server::live_catalog_with(
         Http::new(
             NOWHERE,
@@ -59,10 +62,11 @@ fn live_catalog() -> Catalog {
             github_credential,
         ),
         Http::new(NOWHERE, Vec::new(), doppler_credential),
+        Http::new(NOWHERE, Vec::new(), buildkite_credential),
     )
 }
 
-/// The assembly itself: nine tools, no name collision, every spec valid
+/// The assembly itself: eleven tools, no name collision, every spec valid
 /// against the shared type registry.
 #[test]
 fn the_live_catalog_assembles_and_every_spec_validates() {
@@ -107,7 +111,7 @@ fn both_positive_fixtures_check_the_same_against_the_live_catalog() {
     }
 }
 
-/// Nothing fake survives in it: inserting any of the nine fake tools of
+/// Nothing fake survives in it: inserting any of the eleven fake tools of
 /// the same names on top is refused as a duplicate, which is what makes
 /// the two tests above statements about the live tools at all.
 #[test]
