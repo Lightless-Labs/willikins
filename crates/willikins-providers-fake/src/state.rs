@@ -13,8 +13,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use willikins_core::{ToolError, ToolErrorKind};
 use willikins_types::{
-    ActionsSecretName, DomainType, DopplerConfig, DopplerProject, DopplerSecretValue,
-    DopplerServiceToken, DopplerTokenName, GitHubRepo, ProjectSlug, RepoVisibility, SecretName,
+    ActionsSecretName, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
+    DopplerConfig, DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName,
+    GitHubRepo, ProjectSlug, RepoVisibility, SecretName,
 };
 
 /// A GitHub repository record: enough to answer `github.repo.ensure`'s
@@ -35,6 +36,25 @@ pub struct GitHubRepoRecord {
 #[serde(deny_unknown_fields)]
 pub struct DopplerProjectRecord {
     /// Whether this project was created by us.
+    pub ours: bool,
+}
+
+/// A Buildkite pipeline record: enough to answer
+/// `buildkite.pipeline.ensure`'s `read`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildkitePipelineRecord {
+    /// The SSH repository URL this pipeline points at
+    /// (`git@github.com:{owner}/{name}.git`), compared exactly against
+    /// what `read` derives from the `repo` input, mirroring
+    /// `willikins_providers_buildkite::ssh_repository_url`.
+    pub repository: String,
+    /// The cluster this pipeline belongs to, as [`crate::state`]'s own
+    /// canonical string (`BuildkiteClusterId`'s `Display`).
+    pub cluster_id: String,
+    /// Whether this pipeline was created by us (`false` means the
+    /// natural key exists but the resource is
+    /// [`Foreign`](willikins_core::Observation::Foreign)).
     pub ours: bool,
 }
 
@@ -228,6 +248,16 @@ pub struct FakeState {
     pub doppler_service_tokens: HashSet<String>,
     /// Doppler secrets, keyed by `"<config>#<SECRET_NAME>"`.
     pub doppler_secrets: SecretsMap,
+    /// Buildkite clusters, keyed by their human-written name
+    /// ([`BuildkiteClusterName::as_str`]) to a list of ids sharing that
+    /// name -- a name is not a unique natural key (research note section
+    /// 2), so a seed file can express the ambiguous case (two or more
+    /// ids under one name) the same way the live provider's own
+    /// pagination scan would find it.
+    pub buildkite_clusters: HashMap<String, Vec<String>>,
+    /// Buildkite pipelines, keyed by `"<org>/<slug>"`
+    /// ([`buildkite_pipeline_key`]).
+    pub buildkite_pipelines: HashMap<String, BuildkitePipelineRecord>,
     /// The [`ProjectSlug`] canonical strings `fake.irreversible.ensure`
     /// has created.
     pub irreversible: HashSet<String>,
@@ -286,6 +316,14 @@ pub fn doppler_service_token_key(config: &DopplerConfig, name: &DopplerTokenName
 #[must_use]
 pub fn doppler_secret_key(config: &DopplerConfig, name: &SecretName) -> String {
     format!("{config}#{name}")
+}
+
+/// The key `buildkite.pipeline.ensure` looks a pipeline up by: its
+/// `(org, slug)` natural key, joined the same way [`GitHubRepo`]'s own
+/// canonical string joins its two parts.
+#[must_use]
+pub fn buildkite_pipeline_key(org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) -> String {
+    format!("{org}/{slug}")
 }
 
 /// The key `fake.irreversible.ensure` looks its resource up by: the
@@ -365,6 +403,31 @@ impl FakeState {
     ) -> Self {
         self.doppler_secrets
             .insert(doppler_secret_key(config, name), value);
+        self
+    }
+
+    /// Seed a Buildkite cluster: `name` resolves to `id`, appended to any
+    /// other id already seeded under the same name (so a second call with
+    /// the same `name` and a different `id` seeds the ambiguous case).
+    #[must_use]
+    pub fn with_buildkite_cluster(mut self, name: &BuildkiteClusterName, id: &str) -> Self {
+        self.buildkite_clusters
+            .entry(name.as_str().to_string())
+            .or_default()
+            .push(id.to_string());
+        self
+    }
+
+    /// Seed a Buildkite pipeline.
+    #[must_use]
+    pub fn with_buildkite_pipeline(
+        mut self,
+        org: &BuildkiteOrg,
+        slug: &BuildkitePipelineSlug,
+        record: BuildkitePipelineRecord,
+    ) -> Self {
+        self.buildkite_pipelines
+            .insert(buildkite_pipeline_key(org, slug), record);
         self
     }
 

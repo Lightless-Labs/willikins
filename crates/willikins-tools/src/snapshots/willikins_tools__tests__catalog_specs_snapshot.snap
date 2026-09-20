@@ -5,7 +5,7 @@ expression: specs
 [
   {
     "name": "naming.v1",
-    "description": "Derive this project's GitHub repository and Doppler project identities from its org and slug.",
+    "description": "Derive this project's GitHub repository, Doppler project, and Buildkite pipeline slug identities from its org and slug.",
     "inputs": {
       "org": {
         "ty": {
@@ -24,7 +24,8 @@ expression: specs
     },
     "outputs": {
       "github_repo": "GitHubRepo",
-      "doppler_project": "DopplerProject"
+      "doppler_project": "DopplerProject",
+      "buildkite_pipeline_slug": "BuildkitePipelineSlug"
     },
     "key": [],
     "class": "reversible",
