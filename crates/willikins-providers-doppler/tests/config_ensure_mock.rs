@@ -81,6 +81,55 @@ fn read_reports_absent_on_404() {
     assert_eq!(value, "third-thoughts/prd");
 }
 
+/// **2026-09-20 defect, this tool's share.** Same cause as
+/// `doppler.project.ensure`'s identical fix
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`):
+/// the parent project this `GET` needs can answer `400` "This token does
+/// not have access to requested project" instead of `404`, depending on
+/// how recently the workplace changed, and both must read as `Absent`.
+#[test]
+fn read_reports_absent_on_a_400_naming_no_access() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(400)
+        .with_body(fixture("error_400_no_access").to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerConfigEnsure::new(client);
+    let observation = tool.read(&inputs()).unwrap();
+    let Observation::Absent { predicted } = observation else {
+        panic!("expected Absent, got {observation:?}");
+    };
+    let value = predicted
+        .get(&PortName::parse("config").unwrap())
+        .unwrap()
+        .render()
+        .to_string();
+    assert_eq!(value, "third-thoughts/prd");
+}
+
+/// A `400` naming anything other than "no access" still fails.
+#[test]
+fn read_still_propagates_a_400_with_an_unrelated_message() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(400)
+        .with_body(r#"{"success": false, "messages": ["Could not find requested project."]}"#)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerConfigEnsure::new(client);
+    let err = tool.read(&inputs()).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+}
+
 #[test]
 fn read_reports_present_on_200() {
     let mut provider = MockProvider::start();

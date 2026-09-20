@@ -13,7 +13,7 @@ use willikins_core::{
 };
 use willikins_types::{DopplerConfig, DopplerTokenName};
 
-use crate::client::DopplerClient;
+use crate::client::{DopplerClient, looks_like_a_missing_project};
 
 /// `doppler.service_token.ensure`.
 pub struct DopplerServiceTokenEnsure {
@@ -120,16 +120,29 @@ impl DopplerServiceTokenEnsure {
     /// credential Doppler *does* answer about (401 or 403) never reaches
     /// this arm.
     ///
-    /// The tolerance is exactly one status wide, on purpose. Doppler also
-    /// answers **`400`** for a project that is not there: the live write
-    /// cycle's step 10 recorded a `GET` of a just-deleted project
-    /// answering `400` for one of its two projects and `404` for the
-    /// other, inside a single run (`fixtures/doppler/README.md`,
-    /// "Undocumented facts the cycle settled"). Whether this endpoint
-    /// ever does the same was never observed, so a `400` is left failing
-    /// rather than guessed at, pinned by
-    /// `read_still_propagates_a_400_from_the_listing`: widening it stays
-    /// a deliberate act with a test to change first.
+    /// **2026-09-20 defect, widened here.** Doppler also answers **`400`**
+    /// for a project that is not there: the live write cycle's step 10
+    /// recorded a `GET` of a just-deleted project answering `400` for one
+    /// of its two projects and `404` for the other, inside a single run
+    /// (`fixtures/doppler/README.md`, "Undocumented facts the cycle
+    /// settled"). Whether *this* endpoint answered the same `400` shape
+    /// stayed unobserved for a while, so this tolerance was originally
+    /// left exactly one status wide, pinned by (what was then)
+    /// `read_still_propagates_a_400_from_the_listing`.
+    ///
+    /// A live rehearsal against a quiescent Doppler workplace then hit
+    /// exactly that `400` at `doppler.project.ensure`'s own `GET`, with
+    /// the message "This token does not have access to requested project
+    /// '<name>'" — the same fact
+    /// `docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`
+    /// records. [`looks_like_a_missing_project`] is the one predicate
+    /// every read in this crate now shares for "the parent this call
+    /// needed is not visible to this token right now", and this method
+    /// uses it too: the tolerance is no longer one status, it is one
+    /// *message* — a `400` naming anything else (a duplicate-create
+    /// conflict elsewhere, or simply an unrelated failure) still fails,
+    /// which `read_still_propagates_a_400_from_the_listing` still pins
+    /// with its own, differently-worded `400` body.
     fn is_listed(
         &self,
         config: &DopplerConfig,
@@ -140,7 +153,7 @@ impl DopplerServiceTokenEnsure {
             .list_service_tokens(config.project(), config.name())
         {
             Ok(listed) => Ok(listed.iter().any(|entry| entry.name == name.as_str())),
-            Err(err) if err.status == Some(404) => Ok(false),
+            Err(err) if looks_like_a_missing_project(&err) => Ok(false),
             Err(err) => Err(err.into()),
         }
     }

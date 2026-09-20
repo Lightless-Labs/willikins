@@ -69,6 +69,88 @@ fn read_reports_absent_on_404() {
     assert_eq!(value, "third-thoughts");
 }
 
+/// **2026-09-20 defect.** Against a quiescent workplace, or one where a
+/// project was recently deleted, the same absent project name answers
+/// `400` "This token does not have access to requested project" instead
+/// of `404` — and before this fix that `400` refused planning outright,
+/// which is what a live rehearsal hit: `doppler.project.ensure` could
+/// not plan a brand-new project whenever the workplace happened not to
+/// have just created one. See
+/// `docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`.
+#[test]
+fn read_reports_absent_on_a_400_naming_no_access() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v3/projects/project?project=third-thoughts")
+        .with_status(400)
+        .with_body(fixture("error_400_no_access").to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerProjectEnsure::new(client);
+    let observation = tool.read(&inputs()).unwrap();
+    let Observation::Absent { predicted } = observation else {
+        panic!("expected Absent, got {observation:?}");
+    };
+    let value = predicted
+        .get(&PortName::parse("project").unwrap())
+        .unwrap()
+        .render()
+        .to_string();
+    assert_eq!(value, "third-thoughts");
+}
+
+/// The exact body the 2026-09-20 rehearsal saw, for the exact project
+/// name it named: planning `harbor-relay` against a quiescent workplace
+/// answered `400` with `"This token does not have access to requested
+/// project 'harbor-relay'"`, and was refused outright before this fix.
+#[test]
+fn read_reports_absent_on_the_exact_body_the_rehearsal_saw() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v3/projects/project?project=harbor-relay")
+        .with_status(400)
+        .with_body(
+            serde_json::json!({
+                "success": false,
+                "messages": ["This token does not have access to requested project 'harbor-relay'"],
+            })
+            .to_string(),
+        )
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerProjectEnsure::new(client);
+    let harbor_relay = DopplerProject::parse("harbor-relay").unwrap();
+    let mut inputs = willikins_core::Inputs::new();
+    inputs.insert(
+        PortName::parse("project").unwrap(),
+        Value::known(harbor_relay),
+    );
+    let observation = tool.read(&inputs).unwrap();
+    assert!(
+        matches!(observation, Observation::Absent { .. }),
+        "got {observation:?}"
+    );
+}
+
+/// A `400` naming anything other than "no access" — Doppler's *other*
+/// documented `400`, "Could not find requested project." with a full
+/// stop rather than the "does not have access" phrasing — still fails
+/// rather than being read as absent: the tolerance is one message, not
+/// every `400`.
+#[test]
+fn read_still_propagates_a_400_with_an_unrelated_message() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v3/projects/project?project=third-thoughts")
+        .with_status(400)
+        .with_body(r#"{"success": false, "messages": ["Could not find requested project."]}"#)
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerProjectEnsure::new(client);
+    let err = tool.read(&inputs()).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+}
+
 #[test]
 fn read_reports_present_when_owned() {
     let mut provider = MockProvider::start();
@@ -299,6 +381,38 @@ fn an_error_after_create_that_still_reads_absent_reports_the_original_error() {
     let token = SinkToken::new();
     let err = tool.ensure(&inputs(), &token).unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::Provider);
+}
+
+/// The create call is the arbiter the 2026-09-20 fix relies on: a `GET`
+/// that reads `400` "no access" (so `Absent`) followed by a `POST` that
+/// answers `400` "Project name already exists in this workplace." (a
+/// genuine duplicate, the other Doppler `400`) must not be swallowed as
+/// though the project were still absent. The re-read after the failed
+/// create sees the identical `400` "no access" body again (the project
+/// really was created by someone else a moment before, and this token
+/// still cannot see it), so `ensure` reports the create's own error —
+/// naming the duplicate, not "no access" — rather than looping forever
+/// or silently succeeding.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_duplicate_create_is_still_distinguished_from_an_absent_project() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v3/projects/project?project=third-thoughts")
+        .with_status(400)
+        .with_body(fixture("error_400_no_access").to_string())
+        .create();
+    provider
+        .mock("POST", "/v3/projects")
+        .with_status(400)
+        .with_body(fixture("error_400_already_exists").to_string())
+        .create();
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = DopplerProjectEnsure::new(client);
+    let token = SinkToken::new();
+    let err = tool.ensure(&inputs(), &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    assert!(err.message.contains("already exists"), "{}", err.message);
 }
 
 /// `ensure` on a `Foreign` project writes nothing at all.
