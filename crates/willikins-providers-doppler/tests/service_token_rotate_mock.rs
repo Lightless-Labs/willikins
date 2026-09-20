@@ -123,7 +123,7 @@ fn read_reports_absent_when_the_parent_project_or_config_does_not_exist_yet() {
 /// can also answer `400` "This token does not have access to requested
 /// project" for a missing parent, whenever this token can already see
 /// any project in the workplace
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`).
 /// `read` tolerates this the same way it tolerates the 404 above; `Absent`
 /// either way, since this step never plans as `NoOp`.
 #[test]

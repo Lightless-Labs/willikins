@@ -8,17 +8,17 @@ root_cause: "Doppler's project-scoped GET endpoints answer 404 'Could not find r
 date: 2026-09-20
 ---
 
-# Doppler's missing project is sometimes a 400, not a 404
+# Doppler's missing project is a 400, not a 404, once the token can see any project
 
-**Addendum:** 2026-09-20 -- the discriminator is *visibility*, not time. The first reading of
-this finding, which the filename still carries, was that the `400` follows a quiescent
-workplace and the `404` a recently-changed one. A second probe the same day, varying one thing
-at a time, showed the rule is "can this token see any project in this workplace at all", with
-elapsed time playing no part. The root-cause section below has been rewritten around it; the
-filename is left alone so the fourteen references to it in `crates/willikins-providers-doppler`
-keep resolving. **Nothing about the fix changed** -- both statuses still mean "this token
-cannot see a project by this name", which is what the code acts on -- but the *risk* changed
-completely, and that is the part worth reading twice.
+**Corrected:** 2026-09-20 -- the discriminator is *visibility*, not time, and this file was
+renamed to say so. The first reading of this finding was that the `400` follows a quiescent
+workplace and the `404` one that has just changed; it was written into this note, the fixtures
+README and eight doc comments before a second probe, varying one thing at a time, showed the
+rule is "can this token see any project in this workplace at all". A third probe, recorded
+below, re-established that from scratch and additionally ruled out any lag between the two.
+**Nothing about the fix changed** -- both statuses still mean "this token cannot see a project
+by this name", which is what the code acts on -- but the *risk* changed completely, and that
+is the part worth reading twice.
 
 ## Symptom
 
@@ -46,7 +46,7 @@ deterministically for an absent project.
 
 The first probe — six requests per state, one full-access token, one absent name — read the
 difference as timing: `404` shortly after a project was created, `400` when the workplace had
-been left alone. That reading is what this file's name still says, and it is wrong. A second
+been left alone. That reading is what this file's name used to say, and it is wrong. A second
 probe the same day varied one thing at a time and found the rule:
 
 **What Doppler answers depends on whether the calling token can see any project in the
@@ -88,6 +88,68 @@ corner case. Under the visibility rule it is the normal case: an operator's *fir
 meets the `404` and every project after it meets the `400`. The rehearsal's second project was
 not unlucky; it was the first run to take the path every real run after the first takes.
 
+### Re-established independently, and the timing reading ruled out
+
+The visibility rule was inherited from a second probe, and a rule that merely fits its own
+samples is exactly what the timing reading had already turned out to be. So it was
+re-established from scratch on 2026-09-20 by a third probe, designed to separate the two
+readings rather than to confirm either. They disagree about one thing: whether the answer
+changes *immediately* when what the token can see changes, or only after some minutes. So this
+probe sampled the same absent name on a clock either side of a create and a delete -- at t+0s,
++10s, +20s, +30s, +60s, +120s and +300s -- instead of once per state. Fifty-eight requests,
+one sandbox workplace, one absent name, two tokens:
+
+| Step | State | The absent name | The created project | `GET /v3/projects` |
+| --- | --- | --- | --- | --- |
+| 0 | workplace empty, full-access token, x3 | `404` | — | `200`, 0 projects |
+| 0 | same moment, ungranted token | `404` | — | `200`, 0 projects |
+| 1 | one project created; full token, 7 timed samples t+0s…t+300s | `400` **at every sample, from t+0s on** | `200` | `200`, 1 project |
+| 2 | the same moment as step 1's t+0s, ungranted token | `404` | **`404`, though it demonstrably exists** | `200`, 0 projects |
+| 3 | duplicate `POST /v3/projects` | — | `400` `Project name already exists in this workplace.` | — |
+| 4 | that project deleted; full token, 7 timed samples t+0s…t+300s | `404` **at every sample, from t+0s on** | `404` | `200`, 0 projects |
+
+Both readings are settled by this, in opposite directions:
+
+- **The timing reading is false, and false in both of its halves.** It predicted `404` "in the
+  minutes after another project was created": the answer was `400` one second after the create
+  and still `400` five minutes later. It predicted `400` "when the workplace has been
+  quiescent, or shortly after a project was deleted": the answer was `404` one second after
+  the delete and still `404` five minutes later. Fourteen timed samples, not one off the rule,
+  and no lag or transient anywhere in them.
+- **The visibility rule is exact.** Step 2 is the decisive one: same workplace, same second,
+  same endpoint, same existing project, two tokens -- `200` for the one that can see a
+  project, `404` for the one that can see none. What matters is not whether the *workplace* is
+  empty but whether the *token's own view of it* is.
+
+The coordinator's first probe recorded one `404` immediately after a create with two projects
+visible. No reading explains that, and seven timed samples at exactly that state could not
+reproduce it. It is treated here as a mis-recorded sample rather than as evidence of a
+transient: nothing is built on it, and nothing needs to be.
+
+### The same rule at the config level, and why one predicate is enough
+
+The four project-scoped `GET`s this crate makes were then probed side by side in one
+workplace, to check the fix reached the *shape* and not just the endpoint the rehearsal
+happened to hit:
+
+| Read | Parent project missing, ≥1 project visible | Parent project missing, 0 visible | Config missing, project visible |
+| --- | --- | --- | --- |
+| `GET /v3/projects/project` | `400` no-access | `404` | — |
+| `GET /v3/configs/config` | `400` no-access | `404` | `404` `Could not find requested config '<name>'` |
+| `GET /v3/configs/config/tokens` | `400` no-access | `404` | `404` `Could not find requested config '<name>'` |
+| `GET /v3/configs/config/secret` | `400` no-access | `404` | `404` `Could not find requested config '<name>'` |
+
+Two things follow, and both are what makes the fix complete rather than local:
+
+- **The split is a property of the project lookup every one of these endpoints does first**,
+  not of the project endpoint alone. All four answer the identical pair for a missing parent
+  project, so one predicate reading one message fragment covers every read the client exposes.
+- **There is no `400` "does not have access to requested *config*" shape to have missed.** A
+  config that does not exist under a project this token *can* see answers a plain `404`,
+  whatever else is visible -- so the `404` arm already covers the config level, and widening
+  the fragment to match "requested config" too would buy nothing while giving the predicate a
+  second thing to be wrong about.
+
 Before this fix, `observe`'s match arm read:
 
 ```rust
@@ -104,9 +166,18 @@ Neither the status nor this message proves absence. A separate probe on 2026-09-
 service-account token deliberately granted nothing, found the **opposite pairing**: a project
 that genuinely *exists* but sits outside the token's grant answered a bare `404` "Could not
 find requested project" (recorded in `docs/research/2026-09-12-m2-dependencies.md`,
-"Service-account access"). So a `404` was never trustworthy proof of absence either — this fix
-does not manufacture that proof, it only stops treating the two statuses inconsistently when
-neither one has it.
+"Service-account access"). The 2026-09-20 probe above reproduced that pairing directly, in
+step 2, against a project it had created seconds earlier: same workplace, same second, one
+token reading `200` and another reading `404` "Could not find requested project" for the same
+existing project.
+
+So **neither half of the answer can be trusted, and they fail in opposite directions**: the
+`404` says "could not find" for a project that is merely invisible to the caller, and the
+`400` says "does not have access" for a project that does not exist at all. Reading the `400`
+as a permission problem and the `404` as absence would be wrong in both cases, which is why
+this crate reads neither as a statement about the resource. A `404` was never trustworthy
+proof of absence either — this fix does not manufacture that proof, it only stops treating the
+two statuses inconsistently when neither one has it.
 
 The reading this crate commits to, and the only one it commits to: **at plan time, both
 answers mean "this token cannot see a project by this name right now"**. That is exactly the
@@ -155,11 +226,13 @@ Those five are every read the crate's client exposes (`get_project`, `get_config
 `list_service_tokens`, `get_secret`). The crate's *tests* were a second home for the same
 assumption, missed by the first pass and fixed on the same day: `tests/live_write_cycle.rs`'s
 `step_1_absent` panicked on anything but a `404`, so the whole live write cycle could not start
-against a quiescent workplace — its commonest state, since it deletes everything it makes; the
+against any workplace already holding a project this token could see — which is every
+workplace but an empty one; the
 same file's `the_cycles_projects_are_gone` leftover check counted a `400` as a leftover needing
-a human, which is backwards for the status a *just-deleted* project most likely answers (that
-file's own step 10 has recorded since 2026-09-14 that a `GET` straight after the `DELETE`
-answers `400`); and `tests/live_probe.rs`'s `check_missing_project_error_shape` recorded a
+a human, which is backwards for the status a deleted project answers while any other
+project is still visible (that file's own step 10 has recorded since 2026-09-14 that a `GET`
+straight after the `DELETE` answers `400`, which the visibility rule explains: the cycle's
+*other* project was still there); and `tests/live_probe.rs`'s `check_missing_project_error_shape` recorded a
 failure for any status but `404`. All three now ask the same predicate, which is `pub` for that
 reason.
 
@@ -173,23 +246,66 @@ a create's error through the predicate**, and no call is retried on a `400` at a
 predicate could not today produce a retry loop or a silently-swallowed conflict. The narrowness
 is defensive, not load-bearing: it exists so the next read that reaches for this predicate, or
 the next endpoint that answers a duplicate-shaped `400` to a `GET`, cannot quietly inherit "any
-`400` means absent". Widening it was tried as a mutation (`Some(400) => true`) on 2026-09-20:
-it fails both client unit tests that pin the stopping point, the four
-`read_still_propagates_a_400_with_an_unrelated_message` tests, `service_token_ensure_mock`'s
-`read_still_propagates_a_400_from_the_listing`, and three `provider_messages.rs` tests — but
-*not* `a_duplicate_create_is_still_distinguished_from_an_absent_project`, which pins that
-`ensure` surfaces the create's own error and not that the predicate is narrow. Both directions
-are pinned; they are just pinned by different tests than the fix's own commit message implies.
+`400` means absent".
 
-Every mock-test file touched by this fix pins both directions: the no-access `400` reads as
-absent (or, for `secret.get`, `NotFound`), and a `400` naming anything else — including the
-exact already-exists text — still fails. `project_ensure_mock.rs` additionally pins the create
-call itself as the arbiter: a `GET` reading the no-access `400` (so `Absent`), followed by a
-`POST` that fails with the already-exists `400`, surfaces the create's own conflict rather than
-silently succeeding. Reverting the predicate to `404`-only (`Some(400) => false`) fails exactly
-the eight tests the fix added for the tolerant direction, one per affected read path plus the
-client's own unit test and the rehearsal-body test — checked by mutation on 2026-09-20, with the
-file restored from a saved copy afterwards.
+### Both directions proved by mutation
+
+Run on 2026-09-20 against `cargo test -p willikins-providers-doppler`, each time by saving
+`client.rs` to a scratch copy, editing the predicate, running the crate's tests, and restoring
+from that copy (never `git checkout`), with the file's diff checked afterwards:
+
+**Revert the fix** (`Some(400) => ...` arm deleted, leaving `404`-only) — eight of this
+crate's own tests fail, one per read path plus the predicate's own unit test and the
+rehearsal-body test:
+
+| Target | Test |
+| --- | --- |
+| `src/client.rs` | `a_400_naming_no_access_looks_like_a_missing_project` |
+| `config_ensure_mock.rs` | `read_reports_absent_on_a_400_naming_no_access` |
+| `project_ensure_mock.rs` | `read_reports_absent_on_a_400_naming_no_access` |
+| `project_ensure_mock.rs` | `read_reports_absent_on_the_exact_body_the_rehearsal_saw` |
+| `project_ensure_mock.rs` | `a_duplicate_create_is_still_distinguished_from_an_absent_project` |
+| `secret_get_mock.rs` | `read_of_a_secret_whose_project_answers_400_naming_no_access_is_also_not_found` |
+| `service_token_ensure_mock.rs` | `read_reports_absent_when_the_parent_answers_400_naming_no_access` |
+| `service_token_rotate_mock.rs` | `read_reports_absent_when_the_parent_answers_400_naming_no_access` |
+
+**Widen it past the message** (`Some(400) => true`) — ten fail, and they are a *different* set:
+both client unit tests that pin the stopping point
+(`a_400_naming_already_exists_does_not_look_like_a_missing_project` and
+`a_400_with_an_unrelated_message_...`), the four
+`read_still_propagates_a_400_with_an_unrelated_message` tests,
+`service_token_ensure_mock`'s `read_still_propagates_a_400_from_the_listing`, and three
+`provider_messages.rs` tests.
+
+The two sets overlap in nothing, which is the point: the tolerant direction and the stopping
+point are pinned by different tests, so neither can be lost without a test going red.
+`a_duplicate_create_is_still_distinguished_from_an_absent_project` sits only in the first set —
+widening the predicate does not break it, because what it pins is that `ensure` surfaces the
+*create's* own error after a failed create, which holds however the `GET` before it was read.
+That is worth stating plainly, because the fix's own commit message implied that test guarded
+the predicate's narrowness, and it does not.
+
+Both mutations also failed two tests belonging to `doppler.config.inheritable.ensure` and
+`doppler.config.inherits.ensure`, tools added to this crate afterwards: they reach for the same
+predicate, which is the intended outcome of having exactly one.
+
+### Confirmed end to end by the rehearsal that found it
+
+The whole rehearsal was re-run against the sandbox organisations on 2026-09-20 with the fix in
+place, starting from three empty accounts, on `workflows/new-rust-service-buildkite.yaml`:
+
+1. First project: `repo` created, `doppler` created, three configs `unchanged` (Doppler
+   auto-creates the root configs with the project), `pipeline` created. The workplace was
+   empty, so its `doppler` read met the `404`.
+2. **Second project, immediately afterwards — the run that used to fail.** The workplace now
+   held a project this token could see, so its `doppler` read met the `400`, which is the
+   exact state the defect was found in. It planned and applied: `repo` created, `doppler`
+   created, configs `unchanged`, `pipeline` created.
+3. Re-apply of the first project: every provider node `unchanged`.
+
+Then both were torn down through `deploy/teardown.sh` (dry run, then `--yes`), and all three
+accounts were confirmed empty by reading each provider's own list endpoint directly rather
+than by trusting the teardown's own report.
 
 ## What to take from it
 
@@ -203,6 +319,13 @@ file restored from a saved copy afterwards.
   a token deliberately granted nothing — showed the real discriminator. The cost of the wrong
   explanation was not the fix (unchanged) but the risk assessment: it turned "every run after
   your first" into "occasionally, if you wait too long".
+- **To kill a timing hypothesis, sample on a clock; probing once per state cannot do it.**
+  Both the first and the second probe took one reading per state, which is why the second
+  could establish what the rule *is* without establishing that the first was wrong about
+  *when* — a lagged visibility rule would have fitted both sets of samples. Seven readings
+  either side of a create and a delete, from one second out to five minutes, settled it: the
+  answer flips with the token's view and never drifts back. A single sample per state is a
+  measurement of the state; only repeated samples are a measurement of the rule.
 - **Fixing the production read paths is half the job; the tests that encode the same
   assumption are the other half.** Three assertions in this crate's own live tests still
   demanded a `404`, and one of them would have reported two successfully-deleted projects as

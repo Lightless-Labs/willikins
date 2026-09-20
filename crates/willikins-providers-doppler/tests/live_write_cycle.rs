@@ -470,11 +470,12 @@ impl Cycle {
 /// project in the workplace -- where the
 /// identical absent name answers `400` "This token does not have access
 /// to requested project"
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`).
 /// Only a workplace holding nothing this token can see answers `404`,
 /// so the cycle could not start against any workplace that already
-/// holds a project -- which is every workplace but an empty one. It now asks [`looks_like_a_missing_project`] the
-/// same question the five tools ask. The reason to refuse -- a leftover
+/// holds a project -- which is every workplace but an empty one. It
+/// now asks [`looks_like_a_missing_project`] the same question the five
+/// tools ask. The reason to refuse -- a leftover
 /// is readable, so a human must remove it -- is the `Ok` arm, and that
 /// is unchanged.
 fn step_1_absent(raw: &Http, projects: &[&DopplerProject]) {
@@ -515,7 +516,7 @@ fn step_1_absent(raw: &Http, projects: &[&DopplerProject]) {
 /// The `400` this doc named as the other plausible answer turned out to
 /// be the real one whenever the token can already see a project in the
 /// workplace, found on 2026-09-20
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`),
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`),
 /// so `is_listed`'s tolerance is no longer one status wide: it is one
 /// message wide, and covers both shapes. This step therefore passes on
 /// either, and still fails on any other status — which remains the
@@ -1253,7 +1254,7 @@ fn step_9c_branch_config_prefix(cycle: &mut Cycle) {
 /// 2026-09-14, and Doppler documents no non-2xx response for any
 /// endpoint at all, so neither status is written down anywhere. The
 /// 2026-09-20 probe
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`)
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`)
 /// explains why the two differ, and it is not elapsed time: this loop
 /// deletes and re-reads one project at a time, so the first re-read
 /// still has the second project visible (`400`) and the second has
@@ -1419,7 +1420,7 @@ fn doppler_live_write_cycle() {
 /// doc has said
 /// since 2026-09-14 that a `GET` issued straight after the `DELETE`
 /// answers `400`, and the 2026-09-20 probe
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`)
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`)
 /// explains it -- the cycle's *other* fixed project was still there.
 /// Against a workplace holding anything else this token can see, this
 /// check reported projects the cycle had successfully deleted as

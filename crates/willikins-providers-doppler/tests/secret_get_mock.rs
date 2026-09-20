@@ -108,7 +108,7 @@ fn read_of_a_missing_secret_is_not_found_and_never_names_a_value() {
 /// **2026-09-20 defect, this tool's share.** The same missing-project
 /// `400` other Doppler reads can answer once this token can see any
 /// project in the workplace
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`)
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`)
 /// reaches this endpoint too. Unlike the tools with a create path, this
 /// one still refuses the plan either way (there is nothing later in the
 /// plan that could make the parent exist) — what changes is that the

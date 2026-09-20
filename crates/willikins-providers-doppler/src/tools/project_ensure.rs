@@ -71,7 +71,7 @@ impl DopplerProjectEnsure {
     /// exists for. [`looks_like_a_missing_project`] reads both shapes the
     /// same way `Observation::Absent` already read a `404`; see its own
     /// doc for what that does and does not assume, and
-    /// `docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`
+    /// `docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`
     /// for the finding.
     fn observe(&self, project: &DopplerProject) -> Result<Observation, ToolError> {
         match self.client.get_project(project) {

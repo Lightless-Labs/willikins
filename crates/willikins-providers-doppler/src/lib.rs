@@ -29,7 +29,7 @@
 //! missing parent answers once this token can see any project in the
 //! workplace at all (which is every run after the first): both shapes go
 //! through the one [`looks_like_a_missing_project`] predicate
-//! (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
+//! (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`).
 //!
 //! This mirrors `willikins_providers_fake::tools::DopplerServiceTokenRotate`'s
 //! own, already-shipped decision, and for the same reason its module doc

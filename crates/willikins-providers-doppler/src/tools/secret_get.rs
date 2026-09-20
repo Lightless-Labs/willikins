@@ -105,7 +105,7 @@ impl DopplerSecretGet {
     /// `ToolError::from(err)` arm below and surfaced that provider text
     /// verbatim under `ToolErrorKind::Provider` — exactly the
     /// permission-shaped message
-    /// `docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`
+    /// `docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`
     /// explains cannot be trusted to mean "forbidden" rather than "not
     /// created yet". Both shapes now report the same `NotFound` naming
     /// the key, echoing none of the provider's own words, matching the

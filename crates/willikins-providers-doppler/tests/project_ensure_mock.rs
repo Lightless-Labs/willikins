@@ -76,7 +76,7 @@ fn read_reports_absent_on_404() {
 /// which is what a live rehearsal hit: `doppler.project.ensure` could
 /// not plan a brand-new project in any workplace that already held one,
 /// which is every project after an operator's first. See
-/// `docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`.
+/// `docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`.
 #[test]
 fn read_reports_absent_on_a_400_naming_no_access() {
     let mut provider = MockProvider::start();
