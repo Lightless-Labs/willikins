@@ -247,7 +247,7 @@ fn walk(dir: &std::path::Path, prefix: &str, out: &mut Vec<String>) {
 /// glob is not recursive, so it sees only `workflows/`'s own entries,
 /// and `.dockerignore` removes the rest from the build context first.
 #[test]
-fn the_image_workflows_directory_holds_exactly_the_three_positive_documents() {
+fn the_image_workflows_directory_holds_exactly_the_seven_positive_documents() {
     let patterns = dockerignore_patterns();
     let mut all = Vec::new();
     walk(&repo_root().join("workflows"), "workflows/", &mut all);
@@ -272,13 +272,17 @@ fn the_image_workflows_directory_holds_exactly_the_three_positive_documents() {
         "new-rust-service.yaml",
         "new-rust-service-buildkite.yaml",
         "rotate-service-token.yaml",
+        "doppler-project.yaml",
+        "doppler-ios.yaml",
+        "doppler-backend.yaml",
+        "doppler-backend-for-ios.yaml",
     ]
     .into_iter()
     .map(str::to_string)
     .collect();
     assert_eq!(
         admitted, expected,
-        "/app/workflows must hold exactly the three positive documents"
+        "/app/workflows must hold exactly the seven positive documents"
     );
 }
 
