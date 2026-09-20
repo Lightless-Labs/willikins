@@ -318,7 +318,8 @@ directory of files, a `BUILD.bazel` (a two-line comment stub for a name reservat
 for an app), crates appended to the root `Cargo.toml` `members`, new rows in
 `[workspace.dependencies]`, a row in `build/visibility/BUILD.bazel`'s `package_group`, a
 lockfile regeneration, and — per pocket-claw — an **app-scoped** `.buildkite/` directory plus a
-pipeline whose `filter_condition` does the path filtering Buildkite has no native equivalent for.
+pipeline whose `filter_condition` gates the *release* route on a tag regex. Whether a monorepo
+app should also be path-filtered on ordinary commits is **unsettled** — see §4.2.
 
 **A backend** (phil-connors only, so strictly this is n=1): a Dockerfile and registry; a deploy
 target with topology config-as-code cannot express; a database as a separate service with a
@@ -444,6 +445,16 @@ phil-connors / danksworth, brassica-ex), with phil-connors visibly crossing. Per
 `todos/2026-09-20-ios-scaffolding-step-and-entitlements-as-inputs.md` this belongs to the document,
 never to an input.
 
+**Path filtering in a monorepo pipeline: unsettled, and the sample says two things.**
+pocket-claw's `provider-settings.json` `filter_condition` is a **tag** gate — it matches
+`^pocket-companion-testflight-…` to select the release route — not a path filter; CI still runs on
+every push. phil-connors went the other way on purpose: `validate.sh`'s header records that the
+Buildkite port **dropped** the Actions `changes` path filter, because *"on our own hardware the
+minutes are free and a skipped step is a coverage hole rather than a saving"*. Buildkite has no
+native `paths-ignore`, so the options are "don't filter" (phil-connors' stated position) or a
+diff-inspecting dynamic upload step, which nobody has written. A catalogue entry must not assume
+this is solved.
+
 **Apple flavour.** descartes demonstrates Developer ID + notarytool (direct distribution);
 pessimal, phil-connors and danksworth demonstrate Apple Distribution + provisioning profile + ASC
 (App Store/TestFlight). Same provider, different object graph. Two documents, not a switch.
@@ -489,7 +500,7 @@ document has an equivalent of.
 | 4 | `new-ios-app-repo` | G | Own `MODULE.bazel`/`.bazelrc`/`.bazelversion`/`platforms/`, `tools/uniffi/`, Apple App ID + capabilities + profile + ASC record, Doppler `prd_ios_deployment`, a Buildkite pipeline with `build_pull_request_forks: false` | `slug`, `org`, `buildkite_org`, `bundle_id_prefix`, `apple_team`, `entitlements`, `cluster` | pessimal |
 | 5 | `new-ios-app-in-monorepo` | M | No repo, no licence, no MODULE.bazel. A directory: `BUILD.bazel` with real `rust_library`/`swift_library`/`rules_apple` targets, `ios/Resources/` (Info.plist, entitlements per bundle, `PrivacyInfo.xcprivacy`, AppIcon), a Rust core crate + UniFFI wiring; **edits** the root `Cargo.toml` members and `build/visibility/BUILD.bazel`'s `package_group`; Apple identifiers | `monorepo`, `app_path`, `slug`, `bundle_id_prefix`, `apple_team`, `entitlements`, `extension_bundles` | danksworth's Apple half + phil-connors/pessimal's UniFFI half. **This is Walter.** |
 | 6 | `new-rust-crate-in-monorepo` | M | Files only: role directories, thin inheriting `Cargo.toml`s, a `BUILD.bazel` (stub or real); **edits** root `members` and `[workspace.dependencies]`; regenerates `Cargo.lock` | `monorepo`, `app_path`, `slug`, `crate_roles`, `new_workspace_deps` | brassica-ex |
-| 7 | `buildkite-pipeline-for-monorepo-app` | M | An app-scoped `.buildkite/` directory, a pipeline whose bootstrap uploads *that* file, `provider-settings` incl. `build_tags`, `build_pull_request_forks: false` and the `filter_condition` regex that replaces `paths-ignore`, agent queue, concurrency group, pinned image | `monorepo`, `app_path`, `buildkite_org`, `cluster`, `queue`, `tag_regex` | pocket-claw (`apps/pocket-claw/.buildkite/`) |
+| 7 | `buildkite-pipeline-for-monorepo-app` | M | An app-scoped `.buildkite/` directory, a pipeline whose bootstrap uploads *that* file, `provider-settings` incl. `build_tags`, `build_pull_request_forks: false` and a `filter_condition` tag regex gating the release route, agent queue, concurrency group, pinned image | `monorepo`, `app_path`, `buildkite_org`, `cluster`, `queue`, `release_tag_regex` | pocket-claw (`apps/pocket-claw/.buildkite/`) |
 | 8 | `apple-signing-config` (fragment) | both | A Doppler `prd_<purpose>` config, an assertion that the required secret **names** exist (cert p12 + password, ASC key id/issuer/p8), the CI service account grant. Never the values. | `doppler_project`, `purpose`, `required_secret_names` | descartes (`prd_notarisation`), pessimal (`prd_ios_deployment`), phil-connors (`prd_deployment`) |
 | 9 | `add-railway-backend` (fragment) | both | Railway project/service/environment, a Postgres service, the cross-service `DATABASE_URL` reference, a volume, a runtime config `prd_backend_<target>` and its service token | `railway_project`, `service`, `environment`, `doppler_project` | phil-connors (`railway.toml` + `infra/railway/provision.sh`) |
 
@@ -545,14 +556,16 @@ Buildkite-plus-Doppler has the agent *pull* them.
 Needed: an org-prefixed Doppler project (`lightless-labs-<slug>`) alongside the bare form; a
 purpose config (`prd_<purpose>`); a Rust crate name (`<org>_<app>_<role>`); a Swift module prefix; a
 bundle identifier; a Bazel package path; a release-tag prefix. **Separately and urgently:**
-`DopplerConfigName`'s grammar rejects `prd_app-ios`, a config that exists in production. That is a
-bug in the type, fixable without touching `naming::v1`.
+`DopplerConfigName`'s grammar rejects `prd_app-ios`, a config that exists in production:
+`crates/willikins-types/src/doppler.rs:26` sets `pattern = "[a-z0-9_]+"`, and a dedicated test
+(`doppler_config_name_rejects_hyphens`) pins the rejection. That is a bug in the type, fixable
+without touching `naming::v1`.
 
 ### Rank 6 — **`buildkite.pipeline.ensure` is too thin**. Unblocks #3,#4,#5,#7.
 
 It takes `org`, `slug`, `repo`, `cluster`. It cannot set `build_pull_request_forks` (pessimal lists
 that under **Cautions** — a public repo on a cluster holding signing certificates), `build_tags`,
-the `filter_condition` regex that is the *only* path filter a monorepo pipeline has, a non-root
+the `filter_condition` regex that gates the release route by tag, a non-root
 pipeline file path (this monorepo puts them at `apps/<slug>/.buildkite/`), the agent queue, or the
 concurrency group. A pipeline created today is pointed at a repo and otherwise inert.
 
@@ -637,7 +650,7 @@ Missing: file-writing (Rank 1); **structured edits** to the root `Cargo.toml` me
 `build/visibility/BUILD.bazel` package_group (Rank 2); the Apple provider for the App ID,
 **HealthKit** capability, the watch-app bundle and its App Group, and the profiles (Rank 3);
 `project_member.ensure` (Rank 4); the naming v2 rows (Rank 5); the pipeline fields, especially the
-`filter_condition` that keeps every commit to every sibling from building Walter (Rank 6).
+`filter_condition` tag gate on its release route (Rank 6).
 Free for Walter: the CI image, the cluster, the team distribution certificate, the ASC API key, the
 root `MODULE.bazel`/`.bazelrc` — all **ensure-and-share**, never create. Two non-obvious blockers:
 `cog.toml`'s `tag_prefix = "v"` cannot serve nine apps in one tag namespace, and the monorepo pins
