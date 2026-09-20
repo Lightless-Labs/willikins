@@ -1,0 +1,20 @@
+# Milestone 3a acceptance: buildkite.pipeline.ensure's `repo` port bound
+# to a step that no node in this document produces. `check` must return
+# exactly one error:
+#   UnknownNode { site: Site::Port { node: pipeline, port: repo },
+#                 referenced: repo }
+name: buildkite-pipeline-unbound-repo
+description: A pipeline node whose repo port references a node that does not exist.
+steps:
+  cluster:
+    tool: buildkite.cluster.get
+    with:
+      org: willikins-test
+      name: Default cluster
+  pipeline:
+    tool: buildkite.pipeline.ensure
+    with:
+      org: willikins-test
+      slug: third-thoughts
+      repo: ${{ steps.repo.repo }}
+      cluster: ${{ steps.cluster.cluster }}

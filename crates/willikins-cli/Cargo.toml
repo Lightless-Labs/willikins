@@ -66,7 +66,13 @@ willikins-providers-doppler.workspace = true
 # repository through the sandbox PAT directly (the same credential and
 # client `deploy/teardown.sh` authenticates with), never through `gh`.
 willikins-providers-github.workspace = true
-willikins-providers-http.workspace = true
+# `test-support` enables `Credential::for_testing`, used by
+# `tests/acceptance_m3a_buildkite.rs` to build the live-shaped catalog
+# without a network or an environment variable (cargo unifies features
+# across the build, so `willikins-server`'s own dev-dependency edge does
+# not reach this crate's build of the same dependency; it must be enabled
+# here too).
+willikins-providers-http = { workspace = true, features = ["test-support"] }
 proptest.workspace = true
 serde_yaml_ng.workspace = true
 # The MCP half of acceptance test 11: an in-process rmcp client over a
