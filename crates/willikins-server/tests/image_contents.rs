@@ -8,10 +8,10 @@
 //! 1. Every `COPY` source in the file is one of a named, small set, so a
 //!    new one cannot appear without this test being updated on purpose.
 //! 2. The trusted workflow directory inside the image holds exactly the
-//!    two positive documents. Nothing under `workflows/fixtures/` can
+//!    three positive documents. Nothing under `workflows/fixtures/` can
 //!    reach it, by the `COPY` glob and by `.dockerignore` independently.
 //!    `Butler::start` scans that directory flat and refuses to start on
-//!    the first negative fixture it reads, so a third document there is
+//!    the first negative fixture it reads, so a fourth document there is
 //!    a dead deployment.
 //! 3. The image's own command is `serve --http` and nothing else: no
 //!    `--fake`, no bind address, no principal. Only the environment may
@@ -247,7 +247,7 @@ fn walk(dir: &std::path::Path, prefix: &str, out: &mut Vec<String>) {
 /// glob is not recursive, so it sees only `workflows/`'s own entries,
 /// and `.dockerignore` removes the rest from the build context first.
 #[test]
-fn the_image_workflows_directory_holds_exactly_the_two_positive_documents() {
+fn the_image_workflows_directory_holds_exactly_the_three_positive_documents() {
     let patterns = dockerignore_patterns();
     let mut all = Vec::new();
     walk(&repo_root().join("workflows"), "workflows/", &mut all);
@@ -268,13 +268,17 @@ fn the_image_workflows_directory_holds_exactly_the_two_positive_documents() {
         .map(|relative| relative.trim_start_matches("workflows/").to_string())
         .collect();
 
-    let expected: BTreeSet<String> = ["new-rust-service.yaml", "rotate-service-token.yaml"]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
+    let expected: BTreeSet<String> = [
+        "new-rust-service.yaml",
+        "new-rust-service-buildkite.yaml",
+        "rotate-service-token.yaml",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
     assert_eq!(
         admitted, expected,
-        "/app/workflows must hold exactly the two positive documents"
+        "/app/workflows must hold exactly the three positive documents"
     );
 }
 

@@ -1,0 +1,64 @@
+# Milestone 3a's positive fixture: the operator's actual process for a new
+# Rust service -- a GitHub repository, a Doppler project with one root
+# config per environment, and a Buildkite pipeline in an existing cluster,
+# pointed at the new repository and bootstrapped to read the repository's
+# own .buildkite/pipeline.yml. The organisation runs Buildkite with
+# self-hosted agents and keeps every secret in Doppler already, so this
+# graph mints no service token and stores no CI secret: no node here is
+# ever `Reversible`'s neighbour `Irreversible` or `Destructive`, no
+# `SinkToken` is minted, and nothing in a run of this document is ever
+# redacted, because nothing in it is secret. Provider names, including the
+# Buildkite pipeline slug, are derived inside the graph by naming.v1. The
+# milestone 1 document (workflows/new-rust-service.yaml) stays exactly as
+# it is -- it is the proof of the typed-secret flow, and this document
+# does not replace it.
+#
+# Granting the organisation's Buildkite CI service account access to the
+# new Doppler project is still manual until doppler.project_member.ensure
+# lands (milestone 3b): a pipeline this document creates cannot read the
+# new project's secrets until an operator adds that grant by hand.
+name: new-rust-service-buildkite
+description: Provision a GitHub repository, a Doppler project, and a Buildkite pipeline for a Rust service, the operator's real process.
+inputs:
+  slug: { type: ProjectSlug, description: Canonical project slug }
+  org: { type: GitHubOrg, description: GitHub organization that owns the repository }
+  buildkite_org: { type: BuildkiteOrg, description: Buildkite organization the pipeline is created in }
+  cluster: { type: BuildkiteClusterName, default: Default cluster, description: The Buildkite cluster the pipeline runs in }
+  visibility: { type: RepoVisibility, default: private }
+  environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
+steps:
+  names:
+    tool: naming.v1
+    with:
+      org: ${{ inputs.org }}
+      slug: ${{ inputs.slug }}
+  repo:
+    tool: github.repo.ensure
+    with:
+      repo: ${{ steps.names.github_repo }}
+      visibility: ${{ inputs.visibility }}
+  doppler:
+    tool: doppler.project.ensure
+    with:
+      project: ${{ steps.names.doppler_project }}
+  configs:
+    tool: doppler.config.ensure
+    for_each: ${{ inputs.environments }}
+    with:
+      project: ${{ steps.doppler.project }}
+      environment: ${{ item }}
+  buildkite_cluster:
+    tool: buildkite.cluster.get
+    with:
+      org: ${{ inputs.buildkite_org }}
+      name: ${{ inputs.cluster }}
+  pipeline:
+    tool: buildkite.pipeline.ensure
+    with:
+      org: ${{ inputs.buildkite_org }}
+      slug: ${{ steps.names.buildkite_pipeline_slug }}
+      repo: ${{ steps.repo.repo }}
+      cluster: ${{ steps.buildkite_cluster.cluster }}
+outputs:
+  repo_url: ${{ steps.repo.url }}
+  pipeline_url: ${{ steps.pipeline.url }}
