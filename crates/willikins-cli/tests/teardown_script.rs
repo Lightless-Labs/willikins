@@ -5,9 +5,10 @@
 //! ownership markers present, either one missing, `--yes` vs. dry run,
 //! neither token ever reaching `curl`'s argv *or* its environment,
 //! either credential unset, a failing read or delete from either
-//! provider, a run record with no `doppler` output) lives there,
-//! stubbing `willikins` and `curl` on `PATH` so nothing here ever makes
-//! a real network call.
+//! provider, a run record with no `doppler` output, the Buildkite arm's
+//! own dry run/`--yes`/foreign/failed-read/missing-token/unreached-node/
+//! malformed-url scenarios) lives there, stubbing `willikins` and `curl`
+//! on `PATH` so nothing here ever makes a real network call.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -44,7 +45,12 @@ fn teardown_sh_passes_its_own_scenario_suite() {
 // prints. This test closes that circle: it applies the positive fixture
 // with the real binary, feeds the real `run --json` document to the real
 // script, and compares what the script names with what the document
-// holds.
+// holds. A second test below closes the same circle for the Buildkite
+// arm, against `workflows/new-rust-service-buildkite.yaml` instead --
+// `deploy/teardown_test.sh`'s own hand-written pipeline-bearing records
+// prove the arm's logic, but not that `.outputs.slug.value` and
+// `.outputs.url.value` on the real `pipeline` node are shaped the way
+// this test's own hand-written fixtures assumed.
 // ---------------------------------------------------------------------
 
 fn write_executable(path: &std::path::Path, body: &str) {
@@ -73,6 +79,56 @@ fn apply_the_positive_fixture(journal: &std::path::Path) -> String {
             "slug=third-thoughts",
             "--input",
             "org=lightless-labs",
+            "--journal",
+            journal.to_str().unwrap(),
+        ])
+        .env_clear()
+        .output()
+        .expect("failed to run willikins apply");
+    assert!(
+        applied.status.success(),
+        "apply failed: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    let text = String::from_utf8_lossy(&applied.stdout).into_owned();
+    serde_json::Deserializer::from_str(&text)
+        .into_iter::<serde_json::Value>()
+        .filter_map(Result::ok)
+        .find_map(|doc| doc["run_id"].as_str().map(str::to_string))
+        .unwrap_or_else(|| panic!("no run_id in apply's output: {text}"))
+}
+
+/// Apply milestone 3a's positive fixture -- the one document whose plan
+/// carries a `pipeline` node -- against the fake catalog, seeded with
+/// the one Buildkite cluster it looks up
+/// (`workflows/fixtures/state/buildkite-cluster.json`), recording into
+/// `journal`, and return the run id it produced. The `buildkite_org`
+/// value mirrors `acceptance_m3a_buildkite.rs`'s own `positive_inputs`.
+#[cfg(unix)]
+fn apply_the_positive_buildkite_fixture(journal: &std::path::Path) -> String {
+    let applied = Command::new(env!("CARGO_BIN_EXE_willikins"))
+        .args([
+            "--json",
+            "apply",
+            repo_root()
+                .join("workflows")
+                .join("new-rust-service-buildkite.yaml")
+                .to_str()
+                .unwrap(),
+            "--input",
+            "slug=third-thoughts",
+            "--input",
+            "org=lightless-labs",
+            "--input",
+            "buildkite_org=willikins-test",
+            "--fake-state",
+            repo_root()
+                .join("workflows")
+                .join("fixtures")
+                .join("state")
+                .join("buildkite-cluster.json")
+                .to_str()
+                .unwrap(),
             "--journal",
             journal.to_str().unwrap(),
         ])
@@ -129,10 +185,12 @@ fn node_output(record: &serde_json::Value, node: &str, port: &str) -> String {
 
 /// Stubs for the two commands the script calls, so it makes no network
 /// call and touches no real resource. `willikins` here replays the
-/// document the real binary printed; `curl` answers both providers'
-/// ownership reads, telling them apart by which URL each call carries
-/// (this test never passes `--yes`, so neither delete endpoint is ever
-/// called).
+/// document the real binary printed; `curl` answers every provider's
+/// ownership read, telling them apart by which URL each call carries
+/// (this test never passes `--yes`, so no delete endpoint is ever
+/// called). The Buildkite arm is only ever reached by the second test
+/// below, whose document has a `pipeline` node; the first test's
+/// document does not, so that arm never fires for it.
 #[cfg(unix)]
 fn write_stubs(bin: &std::path::Path, record_path: &std::path::Path) {
     std::fs::create_dir_all(bin).unwrap();
@@ -157,6 +215,7 @@ fn write_stubs(bin: &std::path::Path, record_path: &std::path::Path) {
          case \"$url\" in\n\
          \x20\x20*api.github.com*) echo '{\"topics\": [\"managed-by-willikins\"]}' ;;\n\
          \x20\x20*api.doppler.com*) echo '{\"project\": {\"description\": \"managed-by: willikins\"}}' ;;\n\
+         \x20\x20*api.buildkite.com*) echo '{\"description\": \"managed-by: willikins\"}' ;;\n\
          \x20\x20*) echo \"stub curl: unrecognized URL: $url\" >&2; exit 1 ;;\n\
          esac\n",
     );
@@ -212,5 +271,86 @@ fn teardown_reads_the_document_the_real_willikins_run_prints() {
     assert!(
         text.contains(&format!("would delete Doppler project:   {project}")),
         "the script did not name the project the run recorded ({project}): {text}"
+    );
+}
+
+/// The same circle, closed for the Buildkite arm: applies milestone 3a's
+/// positive fixture (the one document whose plan has a `pipeline` node)
+/// with the real binary, feeds the real `run --json` document to the
+/// real script, and checks the organisation and slug teardown.sh reports
+/// against the run record's own `pipeline` node outputs -- parsed here
+/// the same way the script parses them (strip the known `url` prefix and
+/// the already-read `slug` suffix), never hardcoded to the
+/// `buildkite_org` input this test happens to supply.
+#[test]
+#[cfg(unix)]
+fn teardown_reads_the_buildkite_pipeline_the_real_run_record_prints() {
+    let temp = tempfile::tempdir().unwrap();
+    let journal = temp.path().join("journal.jsonl");
+
+    let run_id = apply_the_positive_buildkite_fixture(&journal);
+    let record_text = run_record_json(&run_id, &journal);
+    let record: serde_json::Value =
+        serde_json::from_str(&record_text).expect("run --json prints one JSON document");
+    let repo = node_output(&record, "repo", "repo");
+    let project = node_output(&record, "doppler", "project");
+    let pipeline_slug = node_output(&record, "pipeline", "slug");
+    let pipeline_url = node_output(&record, "pipeline", "url");
+    let buildkite_org = pipeline_url
+        .strip_prefix("https://buildkite.com/")
+        .and_then(|rest| rest.strip_suffix(&format!("/{pipeline_slug}")))
+        .unwrap_or_else(|| panic!("pipeline url {pipeline_url} did not parse"))
+        .to_string();
+
+    let record_path = temp.path().join("run.json");
+    std::fs::write(&record_path, &record_text).unwrap();
+    let bin = temp.path().join("bin");
+    write_stubs(&bin, &record_path);
+
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new("bash")
+        .arg(repo_root().join("deploy").join("teardown.sh"))
+        .arg(&run_id)
+        .arg(journal.to_str().unwrap())
+        .env_clear()
+        .env("PATH", path)
+        .env("HOME", temp.path())
+        .env(
+            "WILLIKINS_GITHUB_TOKEN",
+            "github_pat_teardown-shape-test-token",
+        )
+        .env("WILLIKINS_DOPPLER_TOKEN", "dp.sa.teardown-shape-test-token")
+        // Shorter than the 20-character run `secret_literal_guard.rs`
+        // flags after a Buildkite prefix (`crates/willikins-core/tests/
+        // secret_literal_guard.rs`'s `BUILDKITE_TOKEN`) -- the shape
+        // teardown.sh's own `--config -` header takes is what matters
+        // here, not a pattern-valid credential.
+        .env("WILLIKINS_BUILDKITE_TOKEN", "bkua_test")
+        .output()
+        .expect("failed to run deploy/teardown.sh");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "teardown.sh refused: {text}");
+    assert!(
+        text.contains(&format!("would delete GitHub repository: {repo}")),
+        "the script did not name the repository the run recorded ({repo}): {text}"
+    );
+    assert!(
+        text.contains(&format!("would delete Doppler project:   {project}")),
+        "the script did not name the project the run recorded ({project}): {text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "would delete Buildkite pipeline: {buildkite_org}/{pipeline_slug}"
+        )),
+        "the script did not name the pipeline the run recorded \
+         ({buildkite_org}/{pipeline_slug}): {text}"
     );
 }
