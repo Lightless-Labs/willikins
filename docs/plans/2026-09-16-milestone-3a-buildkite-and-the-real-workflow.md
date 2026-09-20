@@ -5,8 +5,23 @@
 output, the willikins-providers-buildkite crate with both tools and their mock tests, the fake
 tools, and the server/CLI/README wiring); the live probe (task 5) ran against `willikins-test`
 and answers five of the plan's "Verify before relying on them" items — see that section below,
-updated in place. Tasks 10 (the workflow document), 11 (adversarial pass), and 12 (live write
-cycle) remain; see the coordinator's handoff for what is still open.
+updated in place. Tasks 11 (adversarial pass) and 12 (live write cycle) remain; see the
+coordinator's handoff for what is still open.
+**Addendum:** 2026-09-20 — task 10 landed: `workflows/new-rust-service-buildkite.yaml` (decision
+e, unchanged from the design above) and its acceptance tests 11–14
+(`crates/willikins-cli/tests/acceptance_m3a_buildkite.rs`), plus the three deliberately-wrong
+fixtures under `workflows/fixtures/` proving the typed-secret and typed-port guarantees hold on
+the Buildkite provider's own ports. Two things this task touched that the plan itself did not
+name: `crates/willikins-server/tests/acceptance_13_trusted_directory.rs` also pins the real
+`workflows/` directory's exact contents (not only `image_contents.rs`'s container-image glob
+test) and needed the same update, since it starts a `Butler` against that directory directly;
+and `willikins-cli`'s `Cargo.toml` gained `willikins-providers-http`'s `test-support` dev-feature,
+needed for `Credential::for_testing` in the type-parity check between the fake and live-shaped
+catalogs. Auto-approval is asserted at the `willikins_core::apply` level
+(`Approval::Auto` is accepted, `requires_approval` is `false`) but the plan's own wording that
+this "journals `ApprovalAutomatic`" is not separately exercised for this document — that event is
+`Butler`'s generic behaviour, already pinned for the milestone 1 document, and was judged out of
+scope for this task's own tests rather than silently dropped.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system, tool contract, naming,
 "policy lives in the workflow, never in the tool")
 **Research:** `docs/research/2026-09-16-m3a-buildkite.md` — every Buildkite fact below is quoted
