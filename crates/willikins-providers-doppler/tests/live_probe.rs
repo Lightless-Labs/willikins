@@ -64,6 +64,7 @@
 mod common;
 
 use serde_json::Value;
+use willikins_providers_doppler::looks_like_a_missing_project;
 use willikins_providers_http::ProviderError;
 use willikins_types::{DomainType, DopplerProject};
 
@@ -156,12 +157,25 @@ fn check_secret(
 }
 
 /// The plan's "Verify before relying on them" item 4: the Doppler
-/// error-body shape, observed from a `404` on a project that cannot
-/// exist. [`ProviderError`]'s own construction already drops the raw
-/// body (trust boundary 5), so what this can observe is only whether the
+/// error-body shape, observed on a project that cannot exist.
+/// [`ProviderError`]'s own construction already drops the raw body
+/// (trust boundary 5), so what this can observe is only whether the
 /// shared client found a `messages` array to label (`provider says:
-/// ...`) or found nothing recognisable (`provider returned status 404`)
-/// — never the body itself.
+/// ...`) or found nothing recognisable (`provider returned status
+/// <n>`) — never the body itself.
+///
+/// **2026-09-20.** This check asserted `404` outright until a live
+/// rehearsal found that an absent project name answers `400` "This
+/// token does not have access to requested project" instead whenever
+/// the workplace has been quiescent, or a project was deleted a moment
+/// earlier
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
+/// Which of the two a given run meets is a fact about how recently the
+/// workplace changed, not about the request — so a probe that insists
+/// on `404` reports a failure for the ordinary case. It asks
+/// [`looks_like_a_missing_project`] the same question the five tools
+/// ask, and records which status actually came back instead of
+/// demanding one.
 fn check_missing_project_error_shape(
     http: &willikins_providers_http::Http,
     failures: &mut Vec<String>,
@@ -169,15 +183,19 @@ fn check_missing_project_error_shape(
     match http.get::<Value>("/v3/projects/project?project=willikins-probe-does-not-exist") {
         Ok(_) => {
             println!("GET /v3/projects/project (missing): fail");
-            failures.push("expected 404 for a nonexistent project".to_string());
+            failures.push("expected a missing-project error for a nonexistent project".to_string());
         }
-        Err(err) if err.status == Some(404) => {
+        Err(err) if looks_like_a_missing_project(&err) => {
             let shape = if err.message.starts_with("provider says: ") {
                 "a `messages` array was present"
             } else {
                 "no recognisable message field was present"
             };
-            println!("GET /v3/projects/project (missing): pass (404 error body shape: {shape})");
+            let status = err.status;
+            println!(
+                "GET /v3/projects/project (missing): pass \
+                 (status {status:?}, error body shape: {shape})"
+            );
         }
         Err(err) => {
             println!("GET /v3/projects/project (missing): fail");

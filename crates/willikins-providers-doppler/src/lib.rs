@@ -24,7 +24,11 @@
 //! `doppler.config.ensure` nodes have run — see
 //! `tools::service_token_rotate`'s and `tools::service_token_ensure`'s
 //! own doc comments and `fixtures/doppler/README.md` for the defect this
-//! fixed.
+//! fixed. Since 2026-09-20 the same is true of the `400` "This token
+//! does not have access to requested project" that the identical
+//! missing parent answers against a quiescent workplace: both shapes go
+//! through the one [`looks_like_a_missing_project`] predicate
+//! (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
 //!
 //! This mirrors `willikins_providers_fake::tools::DopplerServiceTokenRotate`'s
 //! own, already-shipped decision, and for the same reason its module doc
@@ -47,6 +51,7 @@ pub mod tools;
 pub use client::{
     CREDENTIAL_PATTERN, CREDENTIAL_VAR, DOPPLER_API_BASE_URL, DopplerClient,
     DopplerCredentialError, MANAGED_DESCRIPTION, credential_from_env, http_client,
+    looks_like_a_missing_project,
 };
 pub use tools::{
     DopplerConfigEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerServiceTokenEnsure,
