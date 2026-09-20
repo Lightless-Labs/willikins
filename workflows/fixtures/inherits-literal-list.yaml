@@ -1,0 +1,24 @@
+# Doppler-provisioning error class 1 (crates/willikins-dsl/tests/doppler_provisioning.rs):
+# a bare (non-`${{ }}`) string bound to `inherits`, a `list<DopplerConfig>`
+# port. `check` returns exactly one error:
+#   InvalidLiteral { node: inherit, port: inherits, error }
+# whose `error.reason` is "lists cannot be literals" -- the DSL's `with:`
+# grammar has no literal-list syntax at all (every `with:` value is a
+# single string), so this is the only way a workflow author's mistyped
+# list ever reaches `check`, rather than a YAML structural error caught
+# before it.
+name: inherits-literal-list
+description: A bare string bound to a list<DopplerConfig> port.
+inputs:
+  project: { type: DopplerProject }
+steps:
+  config:
+    tool: doppler.config.ensure
+    with:
+      project: ${{ inputs.project }}
+      environment: prd
+  inherit:
+    tool: doppler.config.inherits.ensure
+    with:
+      config: ${{ steps.config.config }}
+      inherits: lightless-labs-shared/ios_base

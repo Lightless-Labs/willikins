@@ -1,0 +1,43 @@
+# The base of the operator's Doppler layout: create a Doppler project and
+# one root config per environment. Every other doppler-* document in this
+# directory (doppler-ios.yaml, doppler-backend.yaml,
+# doppler-backend-for-ios.yaml) takes an existing project as an input
+# rather than creating one, so this is the first document run for any new
+# real project; its own `project` output is exactly what those three
+# expect as their own `project` input -- run this, then one of them,
+# against the project it made.
+#
+# `project` is taken directly as a `DopplerProject` (the project's own
+# name, which Doppler also uses as its id -- `docs/research/2026-09-12-m2-dependencies.md`'s
+# "Doppler environments" section's "Corrected 2026-09-14" note records
+# that, against a real workplace, a project's `id`, `name`, and `slug`
+# are all the same value) rather than derived here from a
+# `ProjectSlug` through `naming.v1`: that tool also requires a
+# `GitHubOrg`, which a Doppler-only document has no use for, and its own
+# `doppler_project` output is exactly the kebab join a `ProjectSlug`
+# would give this input directly anyway. An operator who wants the
+# derived form types `naming::v1::doppler_project(slug)`'s result in by
+# hand, or runs `new-rust-service.yaml` instead when a GitHub repository
+# is also wanted. There is no separate "workspace id" to output: a
+# Doppler workplace is the whole team account, not a per-project value.
+#
+# What the operator must have created by hand first: nothing. This is
+# the document that starts a new real project's Doppler side.
+name: doppler-project
+description: Create a Doppler project and its per-environment root configs.
+inputs:
+  project: { type: DopplerProject, description: Doppler project name (also its id) }
+  environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
+steps:
+  doppler:
+    tool: doppler.project.ensure
+    with:
+      project: ${{ inputs.project }}
+  configs:
+    tool: doppler.config.ensure
+    for_each: ${{ inputs.environments }}
+    with:
+      project: ${{ steps.doppler.project }}
+      environment: ${{ item }}
+outputs:
+  project: ${{ steps.doppler.project }}

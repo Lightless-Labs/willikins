@@ -1,0 +1,25 @@
+# Doppler-provisioning error class 2 (crates/willikins-dsl/tests/doppler_provisioning.rs):
+# `steps.configs.config` (a `for_each` node's own port, which aggregates
+# to `list<DopplerConfig>`) bound directly to `doppler.config.inherits.ensure`'s
+# scalar `config` port, with no `for_each:` on this node to consume the
+# list one item at a time -- the mistake doppler-ios.yaml's own `inherit`
+# node avoids by looping over `steps.configs.config` instead of reading it
+# once. `check` returns exactly one error:
+#   TypeMismatch { node: inherit, port: config, expected: Exact(DopplerConfig), found: list<DopplerConfig> }
+name: config-list-into-scalar-port
+description: A for_each node's aggregated list bound to a scalar port.
+inputs:
+  project: { type: DopplerProject }
+  environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
+steps:
+  configs:
+    tool: doppler.config.ensure
+    for_each: ${{ inputs.environments }}
+    with:
+      project: ${{ inputs.project }}
+      environment: ${{ item }}
+  inherit:
+    tool: doppler.config.inherits.ensure
+    with:
+      config: ${{ steps.configs.config }}
+      inherits: ${{ steps.configs.config }}

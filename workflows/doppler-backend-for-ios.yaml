@@ -1,0 +1,46 @@
+# Gives an EXISTING Doppler project (from doppler-project.yaml, or any
+# project already named the way this document expects) what a backend
+# that serves an iOS app needs in the operator's world: each
+# environment's root config inherits BOTH the shared iOS base config(s)
+# and the shared backend base config(s), via Doppler config inheritance
+# -- a reference, not a copy, so rotating either shared key propagates
+# without this workflow running again.
+#
+# Same shape as doppler-ios.yaml and doppler-backend.yaml; see
+# doppler-ios.yaml's header for why `base_configs` is an ordinary
+# overridable input carrying a fixed default rather than a true literal,
+# and why `configs` re-derives (never re-creates a second time) each
+# environment's root config. `base_configs`' default here is the union
+# of doppler-ios.yaml's and doppler-backend.yaml's own defaults, written
+# out again rather than referenced: a workflow document cannot import
+# another document's default value, so the two lists are kept in sync by
+# hand across all three documents when a shared base config is added or
+# removed.
+#
+# What the operator must have created by hand first: the Doppler project
+# named by `project` (typically with doppler-project.yaml), and every
+# shared base config named in `base_configs`' default below -- filled in
+# and marked inheritable (via the Doppler dashboard, or a separate run of
+# `doppler.config.inheritable.ensure` -- no document here calls it).
+# This document only ever reads from them, never writes to them.
+name: doppler-backend-for-ios
+description: Make an existing Doppler project's configs inherit both the shared iOS and shared backend base config(s).
+inputs:
+  project: { type: DopplerProject, description: Existing Doppler project (e.g. from doppler-project) }
+  environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
+  base_configs: { type: list<DopplerConfig>, default: [lightless-labs-shared/ios_base, lightless-labs-shared/backend_base], description: Fixed by this document -- edit the default to your workplace's shared iOS and backend base config(s). }
+steps:
+  configs:
+    tool: doppler.config.ensure
+    for_each: ${{ inputs.environments }}
+    with:
+      project: ${{ inputs.project }}
+      environment: ${{ item }}
+  inherit:
+    tool: doppler.config.inherits.ensure
+    for_each: ${{ steps.configs.config }}
+    with:
+      config: ${{ item }}
+      inherits: ${{ inputs.base_configs }}
+outputs:
+  project: ${{ inputs.project }}

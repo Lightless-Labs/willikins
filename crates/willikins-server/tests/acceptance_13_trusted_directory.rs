@@ -32,8 +32,9 @@ fn config(
     }
 }
 
-/// Starting against the real trusted directory (the three positive
-/// fixtures) succeeds and journals `ServerStarted` naming all three files.
+/// Starting against the real trusted directory (the positive fixtures,
+/// milestone 1's three plus the four `doppler-*` provisioning documents)
+/// succeeds and journals `ServerStarted` naming every file.
 #[test]
 fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_started() {
     let clock = common::manual_clock();
@@ -53,15 +54,17 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
             _ => None,
         });
     let hashes = started.expect("ServerStarted must be journaled");
-    assert!(hashes.contains_key("new-rust-service.yaml"), "{hashes:?}");
-    assert!(
-        hashes.contains_key("new-rust-service-buildkite.yaml"),
-        "{hashes:?}"
-    );
-    assert!(
-        hashes.contains_key("rotate-service-token.yaml"),
-        "{hashes:?}"
-    );
+    for file in [
+        "new-rust-service.yaml",
+        "new-rust-service-buildkite.yaml",
+        "rotate-service-token.yaml",
+        "doppler-project.yaml",
+        "doppler-ios.yaml",
+        "doppler-backend.yaml",
+        "doppler-backend-for-ios.yaml",
+    ] {
+        assert!(hashes.contains_key(file), "{file}: {hashes:?}");
+    }
     drop(entries);
 
     let summaries = butler
@@ -69,14 +72,19 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
         .expect("list_workflows succeeds against the real directory");
     let names: Vec<&str> = summaries.iter().map(|s| s.name.as_str()).collect();
     // `scan_directory` sorts filenames, and `-` (0x2D) sorts before `.`
-    // (0x2E), so `new-rust-service-buildkite.yaml` sorts before
-    // `new-rust-service.yaml`.
+    // (0x2E), so e.g. `doppler-backend-for-ios.yaml` sorts before
+    // `doppler-backend.yaml`, and `new-rust-service-buildkite.yaml` sorts
+    // before `new-rust-service.yaml`.
     assert_eq!(
         names,
         [
+            "doppler-backend-for-ios",
+            "doppler-backend",
+            "doppler-ios",
+            "doppler-project",
             "new-rust-service-buildkite",
             "new-rust-service",
-            "rotate-service-token"
+            "rotate-service-token",
         ]
     );
 }
