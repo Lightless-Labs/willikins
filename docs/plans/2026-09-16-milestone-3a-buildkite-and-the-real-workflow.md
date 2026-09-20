@@ -43,6 +43,22 @@ so: it needs a `PATCH` on `description` that this crate deliberately does not ha
 this plan was found and deliberately not patched around: decision (d) does not say what happens
 when the re-read after a create failure itself fails, and the code propagates the re-read's error
 rather than the create's — noted for 3b.
+**Addendum:** 2026-09-20 — task 12's live half ran: one opt-in write cycle against the real
+`willikins-test` organisation, with the sandbox token sourced only inside the single command that
+ran it. Every step passed. The pipeline `willikins-live-write-cycle` was absent before the run,
+`buildkite.cluster.get` resolved `Default cluster`, `buildkite.pipeline.ensure` created the
+pipeline (`changed: true`), re-read it as `Present`, re-ensured it as `changed: false`, refused
+both mismatched inputs with `Conflict` while leaving it untouched, and the client deleted it, after
+which `read` reported `Absent`. An independent read-only check through `Http` directly
+(`the_cycles_pipeline_is_gone`) then confirmed the slug is gone and reported what the organisation
+holds: **zero pipelines, one cluster named `Default cluster`** — exactly as found. No defect was
+found by the live run, and nothing in the run's output carried a credential byte.
+The run answers the plan's own **verify item 3** (see that section, updated in place) and settles
+two things the mock suite could only assume: a live `cluster_id` comes back non-null and byte-equal
+to the lowercase UUID that was sent (otherwise the post-create `read` would have been
+`Mismatch { cluster }`, not `Present`), and a live `description` round-trips as the exact
+`managed-by: willikins` bytes (otherwise it would have been `Foreign`). The plan's `Completed`
+header is left for the coordinator, whose row task 12 is.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system, tool contract, naming,
 "policy lives in the workflow, never in the tool")
 **Research:** `docs/research/2026-09-16-m3a-buildkite.md` — every Buildkite fact below is quoted
@@ -671,9 +687,13 @@ the raw responses themselves are under `fixtures/buildkite/live/`, gitignored):
    was never inspected directly — `credential_from_env`'s own pattern match already proved it
    before the probe ran, which is the point of relying on that pattern rather than re-deriving the
    fact from the raw value.
-3. **Whether an explicitly supplied `slug` is stored verbatim**, which is what makes the natural
-   key round-trip (task 12's create-then-read is the test). Still open: the probe is read-only and
-   makes no `POST`.
+3. ~~**Whether an explicitly supplied `slug` is stored verbatim**~~ **Answered.** The live write
+   cycle (2026-09-20) created a pipeline with an explicit `slug` of `willikins-live-write-cycle`
+   and then read it back at `GET /v2/organizations/willikins-test/pipelines/willikins-live-write-cycle`,
+   which answered `200` — so the supplied slug is stored verbatim and the natural key round-trips.
+   The same read reported `Present` rather than `Mismatch`, which additionally settles that the
+   `repository` and `cluster_id` sent on create come back byte-identical, and that `description`
+   does too.
 4. **Whether `cluster_id` is truly rejected when omitted.** Moot under this design, which always
    sends it; it would only soften an error message.
 5. **The Buildkite organisation slug's grammar**, undocumented anywhere. `BuildkiteOrg`'s pattern
