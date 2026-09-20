@@ -1,0 +1,9 @@
+{
+  "config": {
+    "name": "prd",
+    "root": true,
+    "inheritable": true,
+    "environment": "prd",
+    "project": "third-thoughts"
+  }
+}

@@ -1,0 +1,23 @@
+---
+source: crates/willikins-providers-doppler/tests/catalog_parity.rs
+expression: "spec_json(DopplerConfigInheritableEnsure::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Ensure a Doppler config is inheritable.",
+  "inputs": {
+    "config": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerConfig"
+      }
+    }
+  },
+  "key": [
+    "config"
+  ],
+  "name": "doppler.config.inheritable.ensure",
+  "outputs": {},
+  "pure": false
+}

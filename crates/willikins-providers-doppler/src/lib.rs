@@ -1,5 +1,6 @@
 //! Live Doppler provider tools: `doppler.project.ensure`,
-//! `doppler.config.ensure`, `doppler.service_token.ensure`,
+//! `doppler.config.ensure`, `doppler.config.inheritable.ensure`,
+//! `doppler.config.inherits.ensure`, `doppler.service_token.ensure`,
 //! `doppler.service_token.rotate`, and `doppler.secret.get`.
 //!
 //! See `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s
@@ -55,6 +56,6 @@ pub use client::{
     looks_like_a_missing_project,
 };
 pub use tools::{
-    DopplerConfigEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerServiceTokenEnsure,
-    DopplerServiceTokenRotate,
+    DopplerConfigEnsure, DopplerConfigInheritableEnsure, DopplerConfigInheritsEnsure,
+    DopplerProjectEnsure, DopplerSecretGet, DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
 };

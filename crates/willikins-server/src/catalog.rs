@@ -2,9 +2,11 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the eleven-tool live catalog --
+//! `live_catalog` assembles the thirteen-tool live catalog --
 //! `willikins-tools`' two pure tools, `willikins-providers-github`'s two
-//! live tools, `willikins-providers-doppler`'s five, and (milestone 3a)
+//! live tools, `willikins-providers-doppler`'s seven (milestone 3 added
+//! `doppler.config.inheritable.ensure` and
+//! `doppler.config.inherits.ensure`), and (milestone 3a)
 //! `willikins-providers-buildkite`'s two -- exactly as
 //! `crates/willikins-providers-doppler/tests/live_catalog.rs` built it
 //! before this task; that test now calls [`live_catalog_with`] (this
@@ -19,22 +21,25 @@ use willikins_providers_buildkite::{
     BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineEnsure,
 };
 use willikins_providers_doppler::{
-    DopplerClient, DopplerConfigEnsure, DopplerProjectEnsure, DopplerSecretGet,
-    DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
+    DopplerClient, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
+    DopplerConfigInheritsEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerServiceTokenEnsure,
+    DopplerServiceTokenRotate,
 };
 use willikins_providers_github::{GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure};
 use willikins_providers_http::{Credential, Http};
 
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
-/// `tests::the_live_catalog_has_exactly_these_eleven_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 11] = [
+/// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
+pub const LIVE_TOOL_NAMES: [&str; 13] = [
     "naming.v1",
     "template.render",
     "github.repo.ensure",
     "github.actions_secret.ensure",
     "doppler.project.ensure",
     "doppler.config.ensure",
+    "doppler.config.inheritable.ensure",
+    "doppler.config.inherits.ensure",
     "doppler.service_token.ensure",
     "doppler.service_token.rotate",
     "doppler.secret.get",
@@ -71,6 +76,12 @@ pub fn live_catalog_with(github_http: Http, doppler_http: Http, buildkite_http: 
     insert(Arc::new(GitHubActionsSecretEnsure::new(github)));
     insert(Arc::new(DopplerProjectEnsure::new(Arc::clone(&doppler))));
     insert(Arc::new(DopplerConfigEnsure::new(Arc::clone(&doppler))));
+    insert(Arc::new(DopplerConfigInheritableEnsure::new(Arc::clone(
+        &doppler,
+    ))));
+    insert(Arc::new(DopplerConfigInheritsEnsure::new(Arc::clone(
+        &doppler,
+    ))));
     insert(Arc::new(DopplerServiceTokenEnsure::new(Arc::clone(
         &doppler,
     ))));
@@ -233,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn the_live_catalog_has_exactly_these_eleven_tools_and_no_fake_tool_fits() {
+    fn the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits() {
         let catalog = test_catalog();
         for name in LIVE_TOOL_NAMES {
             let tool_name = willikins_core::ToolName::parse(name).unwrap();

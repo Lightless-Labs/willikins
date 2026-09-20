@@ -242,6 +242,13 @@ pub struct FakeState {
     /// Doppler configs that exist, keyed by [`DopplerConfig`]'s canonical
     /// string (`"<project>/<name>"`).
     pub doppler_configs: HashSet<String>,
+    /// Doppler configs marked inheritable, keyed the same way as
+    /// [`Self::doppler_configs`]. Membership is the only fact recorded.
+    pub doppler_config_inheritable: HashSet<String>,
+    /// What each Doppler config inherits: [`doppler_config_key`] to the
+    /// set of base configs' own canonical strings. A config absent from
+    /// this map inherits nothing, the same as an empty set.
+    pub doppler_config_inherits: HashMap<String, HashSet<String>>,
     /// Doppler service tokens that exist, keyed by
     /// `"<config>#<token name>"`. Membership is the only fact recorded: a
     /// service token's value cannot be re-read once issued.
@@ -378,6 +385,30 @@ impl FakeState {
     #[must_use]
     pub fn with_doppler_config(mut self, config: &DopplerConfig) -> Self {
         self.doppler_configs.insert(doppler_config_key(config));
+        self
+    }
+
+    /// Seed a Doppler config as inheritable.
+    #[must_use]
+    pub fn with_doppler_config_inheritable(mut self, config: &DopplerConfig) -> Self {
+        self.doppler_config_inheritable
+            .insert(doppler_config_key(config));
+        self
+    }
+
+    /// Seed what a Doppler config inherits, replacing any set already
+    /// seeded for it (mirrors the live `POST`, which replaces the whole
+    /// array rather than adding to it).
+    #[must_use]
+    pub fn with_doppler_config_inherits(
+        mut self,
+        config: &DopplerConfig,
+        inherits: &[DopplerConfig],
+    ) -> Self {
+        self.doppler_config_inherits.insert(
+            doppler_config_key(config),
+            inherits.iter().map(doppler_config_key).collect(),
+        );
         self
     }
 

@@ -145,6 +145,51 @@ expression: "catalog.list_tools_json()[\"tools\"]"
   },
   {
     "class": "reversible",
+    "description": "Ensure a Doppler config is inheritable.",
+    "inputs": {
+      "config": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerConfig"
+        }
+      }
+    },
+    "key": [
+      "config"
+    ],
+    "name": "doppler.config.inheritable.ensure",
+    "outputs": {},
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Ensure a Doppler config inherits a set of base configs.",
+    "inputs": {
+      "config": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerConfig"
+        }
+      },
+      "inherits": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "list<DopplerConfig>"
+        }
+      }
+    },
+    "key": [
+      "config"
+    ],
+    "name": "doppler.config.inherits.ensure",
+    "outputs": {},
+    "pure": false
+  },
+  {
+    "class": "reversible",
     "description": "Ensure a Doppler service token exists. Its value can never be re-read once issued.",
     "inputs": {
       "config": {
