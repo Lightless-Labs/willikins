@@ -177,3 +177,87 @@ fn a_403_is_provider_naming_the_missing_permission_and_never_the_credential() {
     assert!(err.message.contains("permission"), "{}", err.message);
     assert!(!err.message.contains("bkua_"), "{}", err.message);
 }
+
+// ---------------------------------------------------------------------
+// Acceptance test 5's `Link` half: the ignored pagination header
+// ---------------------------------------------------------------------
+
+/// Buildkite's own documented `Link` example embeds an `api_key` query
+/// parameter (trust boundary 7), which is why this crate pages with
+/// explicit `page`/`per_page` parameters and never reads, follows, or logs
+/// `Link`. `a_match_on_the_second_page_is_present_and_pages_with_page_and_per_page`
+/// already proves the *paging* is explicit — it would still pass if the
+/// header's bytes leaked into an output or a message, because it never
+/// looks. This marker is what makes the leak detectable.
+///
+/// **What this test is worth, stated plainly.** It cannot fail today:
+/// `willikins_providers_http`'s `response_facts` reads three headers by
+/// name (`Retry-After`, `x-ratelimit-remaining`, `x-ratelimit-reset`) and
+/// `Link` is not one of them, so no header byte can reach a
+/// `ProviderError` at all. It is a regression guard, not a discovery: the
+/// milestone 3a plan's own risk list contemplates growing `response_facts`
+/// to read Buildkite's `RateLimit-Reset` and `RateLimit-User-Reset`, and
+/// this is what makes that change fail loudly if it ever generalises to
+/// "record the response's headers" instead of two more named ones.
+const LINK_API_KEY_MARKER: &str = "FIXTURE-LINK-API-KEY-DO-NOT-LEAK";
+
+fn link_header() -> String {
+    format!(
+        "<https://api.buildkite.com/v2/organizations/willikins-test/clusters?page=2&per_page=100&api_key={LINK_API_KEY_MARKER}>; rel=\"next\""
+    )
+}
+
+/// Every arm the tool can reach — one match, none, two, and a provider
+/// error — served with that header. The marker may appear in no
+/// observation, no rendered output, and no error message.
+#[test]
+fn the_ignored_link_headers_api_key_reaches_no_output_debug_or_error() {
+    let one = serde_json::json!([cluster_json(
+        "018e5a22-d14c-7085-bb28-db0f83f43a1c",
+        "Default cluster"
+    )]);
+    let none = serde_json::json!([cluster_json("some-id", "Other cluster")]);
+    let two = serde_json::json!([
+        cluster_json("018e5a22-d14c-7085-bb28-db0f83f43a1c", "Default cluster"),
+        cluster_json("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "Default cluster"),
+    ]);
+
+    for (case, status, body) in [
+        ("one match", 200, one.to_string()),
+        ("no match", 200, none.to_string()),
+        ("two matches", 200, two.to_string()),
+        ("provider error", 500, r#"{"message":"boom"}"#.to_string()),
+    ] {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v2/organizations/willikins-test/clusters")
+            .match_query(mockito::Matcher::Any)
+            .with_status(status)
+            .with_header("Link", &link_header())
+            .with_body(body)
+            .create();
+        let tool = BuildkiteClusterGet::new(client_against(provider.url()));
+
+        let surfaces: Vec<String> = match tool.read(&inputs()) {
+            Ok(observation) => {
+                let mut seen = vec![format!("{observation:?}")];
+                if let Observation::Present(outputs) = &observation {
+                    for (_, value) in outputs.iter() {
+                        seen.push(value.render().to_string());
+                        seen.push(format!("{value:?}"));
+                    }
+                }
+                seen
+            }
+            Err(err) => vec![err.message.clone(), format!("{err:?}")],
+        };
+
+        assert!(!surfaces.is_empty(), "{case}: nothing was captured");
+        for text in surfaces {
+            assert!(
+                !text.contains(LINK_API_KEY_MARKER),
+                "{case}: the ignored Link header's api_key leaked into: {text}"
+            );
+        }
+    }
+}
