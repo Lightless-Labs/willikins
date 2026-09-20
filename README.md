@@ -118,14 +118,14 @@ public domain. Reach it only over Railway's private network, or run `serve --std
 trusted machine. Milestone 3 adds a stronger authentication path. The operator can add a
 public domain once that path exists.
 
-### The two provider credentials
+### The three provider credentials
 
-The server needs two credentials to reach live providers: `WILLIKINS_GITHUB_TOKEN` and
-`WILLIKINS_DOPPLER_TOKEN`. Doppler's own Railway integration is the only way these two
-credentials reach the service. Set up this integration in the Railway dashboard. Point it at
-the Doppler config that holds both tokens. Do not set either variable by hand in the Railway
-dashboard or through the Railway CLI. A hand-set credential does not rotate when the Doppler
-config changes.
+The server needs three credentials to reach live providers: `WILLIKINS_GITHUB_TOKEN`,
+`WILLIKINS_DOPPLER_TOKEN`, and `WILLIKINS_BUILDKITE_TOKEN`. Doppler's own Railway integration
+is the only way these credentials reach the service. Set up this integration in the Railway
+dashboard. Point it at the Doppler config that holds all three tokens. Do not set any of them
+by hand in the Railway dashboard or through the Railway CLI. A hand-set credential does not
+rotate when the Doppler config changes.
 
 ### The fake-catalog variable
 
@@ -234,6 +234,7 @@ live test reads.
 | `WILLIKINS_READ_RATE_PER_MINUTE` | `60` | Never; optional. | A whole number. |
 | `WILLIKINS_GITHUB_TOKEN` | none | Live mode only (`WILLIKINS_FAKE_CATALOG` unset). | `github_pat_...` (fine-grained) or `ghp_...` (classic). |
 | `WILLIKINS_DOPPLER_TOKEN` | none | Live mode only. | `dp.sa.<40-44 characters>` (service account) or `dp.pt.<40-44 characters>` (personal). |
+| `WILLIKINS_BUILDKITE_TOKEN` | none | Live mode only. | `bkua_<20+ characters>` (API access token), needing `read_pipelines`, `write_pipelines`, and `read_clusters`. There is no narrower grant: `write_pipelines` also covers delete, so this credential can destroy any pipeline in the organisation it reaches — the mitigation is which organisation the token is scoped to, not the scope itself. |
 | `WILLIKINS_FAKE_CATALOG` | unset | Never; optional. | Exactly `1`, or unset. Any other value refuses to start. |
 
 These variables exist only for the opt-in live tests run by hand during development. Never

@@ -71,8 +71,8 @@ enum Command {
         #[arg(long = "fake-state", value_name = "FILE")]
         fake_state: Option<String>,
         /// Plan against the real providers, with credentials from
-        /// `WILLIKINS_GITHUB_TOKEN` and `WILLIKINS_DOPPLER_TOKEN`. Without
-        /// it, the fake providers.
+        /// `WILLIKINS_GITHUB_TOKEN`, `WILLIKINS_DOPPLER_TOKEN`, and
+        /// `WILLIKINS_BUILDKITE_TOKEN`. Without it, the fake providers.
         #[arg(long)]
         live: bool,
     },

@@ -86,8 +86,9 @@ pub struct ApplyArgs {
     /// is not a valid token -- so the file would not even reload.
     #[arg(long = "fake-state-out", value_name = "FILE")]
     pub fake_state_out: Option<String>,
-    /// Real providers, credentials from `WILLIKINS_GITHUB_TOKEN` and
-    /// `WILLIKINS_DOPPLER_TOKEN`. Without it, the fake providers.
+    /// Real providers, credentials from `WILLIKINS_GITHUB_TOKEN`,
+    /// `WILLIKINS_DOPPLER_TOKEN`, and `WILLIKINS_BUILDKITE_TOKEN`.
+    /// Without it, the fake providers.
     #[arg(long)]
     pub live: bool,
     /// When the freshly planned work needs human approval, grant it as
