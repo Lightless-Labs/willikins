@@ -126,7 +126,7 @@ use willikins_core::{
 use willikins_providers_doppler::{
     DopplerClient, DopplerConfigEnsure, DopplerProjectEnsure, DopplerSecretGet,
     DopplerServiceTokenEnsure, DopplerServiceTokenRotate, MANAGED_DESCRIPTION, credential_from_env,
-    http_client,
+    http_client, looks_like_a_missing_project,
 };
 use willikins_providers_http::Http;
 use willikins_types::{
@@ -464,10 +464,23 @@ impl Cycle {
 /// Step 1: neither fixed name may exist. A leftover from an aborted run
 /// is the operator's to remove by hand, so the test refuses to proceed
 /// and names it rather than deleting something it did not create here.
+///
+/// **2026-09-20.** "Absent" was `404` and nothing else here, so this
+/// step panicked outright against a quiescent workplace -- where the
+/// identical absent name answers `400` "This token does not have access
+/// to requested project"
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
+/// A workplace that has been left alone for a few minutes is the
+/// ordinary state for this cycle, which runs on demand and deletes
+/// everything it makes, so the whole cycle could not start in the
+/// commonest case. It now asks [`looks_like_a_missing_project`] the
+/// same question the five tools ask. The reason to refuse -- a leftover
+/// is readable, so a human must remove it -- is the `Ok` arm, and that
+/// is unchanged.
 fn step_1_absent(raw: &Http, projects: &[&DopplerProject]) {
     for project in projects {
         match raw.get::<Json>(&project_path(project)) {
-            Err(err) if err.status == Some(404) => {}
+            Err(err) if looks_like_a_missing_project(&err) => {}
             Ok(_) => panic!(
                 "step 1: `{project}` already exists, left behind by an aborted run; \
                  a leftover is the operator's to delete by hand, so this test refuses to proceed"
@@ -478,7 +491,7 @@ fn step_1_absent(raw: &Http, projects: &[&DopplerProject]) {
             ),
         }
     }
-    println!("step 1 (both fixed project names are 404): pass");
+    println!("step 1 (neither fixed project name is visible to this token): pass");
 }
 
 /// Step 2b: the 2026-09-16 smoke-run defect, live. Both token tools
@@ -497,12 +510,15 @@ fn step_1_absent(raw: &Http, projects: &[&DopplerProject]) {
 /// **Not yet run live** (added 2026-09-16, after the smoke run, in a
 /// session with no credentials). It depends on the status that run itself
 /// observed — `404`, "Could not find requested project" — recorded as
-/// `fixtures/doppler/service_tokens_list_project_missing.json`. If Doppler
-/// answers something else here, a `400` most plausibly (it answers that
-/// for a project deleted moments earlier; see step 10), this step fails,
-/// and that failure is the finding:
-/// `DopplerServiceTokenEnsure::is_listed`'s tolerance is one status wide
-/// on purpose.
+/// `fixtures/doppler/service_tokens_list_project_missing.json`.
+///
+/// The `400` this doc named as the other plausible answer turned out to
+/// be the real one against a quiescent workplace, found on 2026-09-20
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`),
+/// so `is_listed`'s tolerance is no longer one status wide: it is one
+/// message wide, and covers both shapes. This step therefore passes on
+/// either, and still fails on any other status — which remains the
+/// finding it exists to surface.
 fn step_2b_token_read_before_the_project_exists(cycle: &mut Cycle) {
     let config = derived_config(&cycle.project, "dev");
     let inputs = cycle.token_inputs(&config);
@@ -1388,6 +1404,20 @@ fn doppler_live_write_cycle() {
 /// The after-the-run confirmation, read-only: both of the cycle's
 /// projects are gone. Gated behind a second variable so the cycle's own
 /// command never runs the two concurrently.
+///
+/// **2026-09-20.** "Gone" was `404` and nothing else, and every other
+/// status -- `400` included -- was recorded as a *leftover* needing a
+/// human. That is backwards for the one status a just-deleted project
+/// is most likely to answer: [`step_10_delete`]'s own doc has said
+/// since 2026-09-14 that a `GET` issued straight after the `DELETE`
+/// answers `400`, and the 2026-09-20 finding
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`)
+/// gives that shape its name. Run promptly after the cycle -- which is
+/// how it is meant to be run -- this check reported both of the
+/// projects the cycle had just successfully deleted as leftovers to
+/// delete by hand. It now asks [`looks_like_a_missing_project`], so
+/// `Ok` (a readable project) is the one thing that makes a leftover,
+/// and any other status is still reported with the status it gave.
 #[test]
 #[ignore = "opt-in read-only check that the write cycle left nothing behind; run with \
             WILLIKINS_LIVE_TESTS=1 and WILLIKINS_LIVE_LEFTOVER_CHECK=1"]
@@ -1404,7 +1434,7 @@ fn the_cycles_projects_are_gone() {
     let mut leftovers = Vec::new();
     for candidate in [project, foreign] {
         match raw.get::<Json>(&project_path(&candidate)) {
-            Err(err) if err.status == Some(404) => {
+            Err(err) if looks_like_a_missing_project(&err) => {
                 println!("leftover check (`{candidate}` is gone): pass");
             }
             Ok(_) => {

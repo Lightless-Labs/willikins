@@ -94,7 +94,17 @@ const DOPPLER_NO_ACCESS_MESSAGE: &str = "does not have access to requested proje
 /// exactly because the two are otherwise both bare `400`s with no other
 /// distinguishing signal: widening past this one fragment would also
 /// swallow a duplicate create's own conflict.
-pub(crate) fn looks_like_a_missing_project(err: &ProviderError) -> bool {
+///
+/// **Why this is public.** The crate's own live tests
+/// (`tests/live_probe.rs`, `tests/live_write_cycle.rs`) ask Doppler the
+/// same question about the same endpoint -- "is this project name
+/// absent?" -- and were written when a `404` was believed to be the
+/// only answer to it. They are integration tests, outside the crate,
+/// so sharing this one predicate is the only way they can read a
+/// missing project exactly as the five tools do; the alternative was a
+/// second copy of the message fragment in a test file, which is how
+/// one predicate becomes two that drift.
+pub fn looks_like_a_missing_project(err: &ProviderError) -> bool {
     match err.status {
         Some(404) => true,
         Some(400) => err.message.contains(DOPPLER_NO_ACCESS_MESSAGE),
