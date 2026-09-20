@@ -1,0 +1,30 @@
+---
+source: crates/willikins-providers-buildkite/tests/catalog_parity.rs
+expression: "spec_json(BuildkiteClusterGet::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Resolve a Buildkite cluster's human-written name to its id.",
+  "inputs": {
+    "name": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "BuildkiteClusterName"
+      }
+    },
+    "org": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "BuildkiteOrg"
+      }
+    }
+  },
+  "key": [],
+  "name": "buildkite.cluster.get",
+  "outputs": {
+    "cluster": "BuildkiteClusterId"
+  },
+  "pure": true
+}

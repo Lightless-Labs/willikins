@@ -1,0 +1,10 @@
+{
+  "id": "ad93b461-96ab-4a1e-9281-260ead506a0e",
+  "url": "https://api.buildkite.com/v2/organizations/lightless-labs/pipelines/third-thoughts",
+  "web_url": "https://buildkite.com/lightless-labs/third-thoughts",
+  "name": "third-thoughts",
+  "description": "managed-by: willikins",
+  "slug": "third-thoughts",
+  "repository": "git@github.com:lightless-labs/third-thoughts.git",
+  "cluster_id": "018e5a22-d14c-7085-bb28-db0f83f43a1c"
+}
