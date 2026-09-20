@@ -143,7 +143,7 @@ impl DopplerServiceTokenEnsure {
     /// exactly that `400` at `doppler.project.ensure`'s own `GET`, with
     /// the message "This token does not have access to requested project
     /// '<name>'" — the same fact
-    /// `docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`
+    /// `docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`
     /// records. [`looks_like_a_missing_project`] is the one predicate
     /// every read in this crate now shares for "the parent this call
     /// needed is not visible to this token right now", and this method

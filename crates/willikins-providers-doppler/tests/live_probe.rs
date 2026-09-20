@@ -169,7 +169,7 @@ fn check_secret(
 /// token does not have access to requested project" instead whenever
 /// the calling token can already see at least one project in the
 /// workplace
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`,
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`,
 /// whose addendum carries the probe; its filename records the first,
 /// superseded reading). Which of the two a given run meets is a fact
 /// about this token's own visible project set, not about the request —

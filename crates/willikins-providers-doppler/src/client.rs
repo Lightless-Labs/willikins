@@ -44,9 +44,8 @@ pub const MANAGED_DESCRIPTION: &str = "managed-by: willikins";
 
 /// A message fragment Doppler answers with on a `400` for a project name
 /// this token cannot see. Observed live 2026-09-20
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`
-/// — the filename records the first, superseded reading; see that note's
-/// addendum): the *same* absent project name answers `404` "Could not
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`):
+/// the *same* absent project name answers `404` "Could not
 /// find requested project" or this `400` "This token does not have
 /// access to requested project" depending on **whether the calling token
 /// can see any project in the workplace at all**. None visible: `404`,

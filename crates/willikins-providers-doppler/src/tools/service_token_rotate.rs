@@ -108,7 +108,7 @@ impl Tool for DopplerServiceTokenRotate {
         // already see, found the identical missing-parent `GET`
         // answering `400` "This token does not have access to requested
         // project" rather than `404`
-        // (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`).
+        // (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`).
         // `looks_like_a_missing_project` reads both the same way. Here it
         // costs even less than in `is_listed`: the observation is
         // `Absent` either way, so tolerating either shape changes only

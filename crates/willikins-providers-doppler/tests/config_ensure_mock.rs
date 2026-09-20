@@ -83,7 +83,7 @@ fn read_reports_absent_on_404() {
 
 /// **2026-09-20 defect, this tool's share.** Same cause as
 /// `doppler.project.ensure`'s identical fix
-/// (`docs/solutions/providers/doppler-400s-a-missing-project-when-quiescent.md`):
+/// (`docs/solutions/providers/doppler-400s-a-missing-project-once-any-project-is-visible.md`):
 /// the parent project this `GET` needs can answer `400` "This token does
 /// not have access to requested project" instead of `404`, depending on
 /// whether this token can already see any project in the workplace, and
