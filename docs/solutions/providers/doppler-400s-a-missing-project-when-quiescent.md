@@ -40,11 +40,14 @@ full-access sandbox token, one absent project name — found the behaviour is de
 | In the minutes after another project was **created** | `404` | `Could not find requested project '<name>'` |
 | Quiescent, or shortly after a project was **deleted** | `400` | `This token does not have access to requested project '<name>'` |
 
-Same token, same endpoint, same shape of name. The milestone 2 smoke run happened to run in
-the `404` state (nothing had been deleted, and the workflow's own `github.repo.ensure` node —
-which runs first — had just created something in the same account). The 2026-09-20 rehearsal's
-*first* project provisioned cleanly for the same reason; its *second* project hit the `400`
-state, because by then the workplace had been quiescent for a few minutes.
+Same token, same endpoint, same shape of name. The milestone 2 smoke run, and the 2026-09-20
+rehearsal's *first* project, both planned successfully, so both met the `404` state; the
+rehearsal's *second* project met the `400` state. **Why each of those runs met the state it
+met was not recorded.** Nothing captured what the Doppler workplace had done in the minutes
+before any of them, and the node that runs first in both documents creates a *GitHub*
+repository, which cannot change a Doppler workplace's state at all. The probe's table above is
+evidence about the two states the probe itself put the workplace into; it is not evidence
+about what put those three runs where they were.
 
 Before this fix, `observe`'s match arm read:
 
@@ -109,16 +112,45 @@ not there yet" in:
   which shape Doppler answered, rather than leaking the provider's own "does not have access"
   words under `ToolErrorKind::Provider`.
 
+Those five are every read the crate's client exposes (`get_project`, `get_config`,
+`list_service_tokens`, `get_secret`). The crate's *tests* were a second home for the same
+assumption, missed by the first pass and fixed on the same day: `tests/live_write_cycle.rs`'s
+`step_1_absent` panicked on anything but a `404`, so the whole live write cycle could not start
+against a quiescent workplace — its commonest state, since it deletes everything it makes; the
+same file's `the_cycles_projects_are_gone` leftover check counted a `400` as a leftover needing
+a human, which is backwards for the status a *just-deleted* project most likely answers (that
+file's own step 10 has recorded since 2026-09-14 that a `GET` straight after the `DELETE`
+answers `400`); and `tests/live_probe.rs`'s `check_missing_project_error_shape` recorded a
+failure for any status but `404`. All three now ask the same predicate, which is `pub` for that
+reason.
+
 The tolerance stays exactly one *message* wide, not "any `400`". Doppler's other documented
 `400` — a duplicate `POST /v3/projects`, `"Project name already exists in this workplace."`
-(confirmed live 2026-09-14, `fixtures/doppler/README.md`) — must never be read as absence: that
-would turn a genuine name conflict into an infinite "still absent" loop. Every mock-test file
-touched by this fix pins both directions: the no-access `400` reads as absent (or, for
-`secret.get`, `NotFound`), and a `400` naming anything else — including the exact
-already-exists text — still fails. `project_ensure_mock.rs` additionally pins the create call
-itself as the arbiter: a `GET` reading the no-access `400` (so `Absent`), followed by a `POST`
-that fails with the already-exists `400`, must surface the create's own conflict, not loop or
-silently succeed.
+(confirmed live 2026-09-14, `fixtures/doppler/README.md`) — must never be read as absence.
+
+Being precise about how much that narrowness is currently doing: **nothing in this crate routes
+a create's error through the predicate**, and no call is retried on a `400` at all
+(`willikins_providers_http`'s `is_retryable_status` is `429` and `5xx` only), so a wider
+predicate could not today produce a retry loop or a silently-swallowed conflict. The narrowness
+is defensive, not load-bearing: it exists so the next read that reaches for this predicate, or
+the next endpoint that answers a duplicate-shaped `400` to a `GET`, cannot quietly inherit "any
+`400` means absent". Widening it was tried as a mutation (`Some(400) => true`) on 2026-09-20:
+it fails both client unit tests that pin the stopping point, the four
+`read_still_propagates_a_400_with_an_unrelated_message` tests, `service_token_ensure_mock`'s
+`read_still_propagates_a_400_from_the_listing`, and three `provider_messages.rs` tests — but
+*not* `a_duplicate_create_is_still_distinguished_from_an_absent_project`, which pins that
+`ensure` surfaces the create's own error and not that the predicate is narrow. Both directions
+are pinned; they are just pinned by different tests than the fix's own commit message implies.
+
+Every mock-test file touched by this fix pins both directions: the no-access `400` reads as
+absent (or, for `secret.get`, `NotFound`), and a `400` naming anything else — including the
+exact already-exists text — still fails. `project_ensure_mock.rs` additionally pins the create
+call itself as the arbiter: a `GET` reading the no-access `400` (so `Absent`), followed by a
+`POST` that fails with the already-exists `400`, surfaces the create's own conflict rather than
+silently succeeding. Reverting the predicate to `404`-only (`Some(400) => false`) fails exactly
+the eight tests the fix added for the tolerant direction, one per affected read path plus the
+client's own unit test and the rehearsal-body test — checked by mutation on 2026-09-20, with the
+file restored from a saved copy afterwards.
 
 ## What to take from it
 
@@ -126,6 +158,11 @@ silently succeed.
   recently the provider's own state changed.** The exact same "this project does not exist"
   truth produced two different, non-overlapping HTTP statuses depending on workplace
   quiescence — nothing about the request, the credential, or the resource itself differed.
+- **Fixing the production read paths is half the job; the tests that encode the same
+  assumption are the other half.** Three assertions in this crate's own live tests still
+  demanded a `404`, and one of them would have reported two successfully-deleted projects as
+  leftovers for a human to clean up. A guard written around a status is a claim about the
+  provider, in exactly the way the code under it is.
 - **A live smoke test that only ever runs against a workplace state that just changed will
   never see the state that matters most for a real operator: quiescence.** The milestone 2 and
   3a smoke runs both happened to run in the `404` state; the defect had been live in the
