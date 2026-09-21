@@ -15,7 +15,8 @@ use willikins_core::{ToolError, ToolErrorKind};
 use willikins_types::{
     ActionsSecretName, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
     DopplerConfig, DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName,
-    GitHubRepo, ProjectSlug, RepoVisibility, SecretName,
+    GitHubRepo, ProjectSlug, RepoVisibility, SecretName, SigNozIngestionKeyName,
+    SigNozIngestionKeyValue,
 };
 
 /// A GitHub repository record: enough to answer `github.repo.ensure`'s
@@ -165,6 +166,42 @@ impl<'de> Deserialize<'de> for NextToken {
     }
 }
 
+/// [`NextToken`]'s own twin for [`SigNozIngestionKeyValue`]: a single,
+/// optionally seeded value, consumed by [`FakeState::mint_signoz_key`].
+/// Serializes the same one-way, redacted shape [`NextToken`] does, for
+/// the identical reason.
+#[derive(Debug, Clone, Default)]
+pub struct NextSigNozKey(Option<SigNozIngestionKeyValue>);
+
+impl NextSigNozKey {
+    /// Take the seeded value, if any, leaving `None` behind.
+    fn take(&mut self) -> Option<SigNozIngestionKeyValue> {
+        self.0.take()
+    }
+}
+
+impl Serialize for NextSigNozKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match &self.0 {
+            Some(value) => serializer.serialize_str(&value.to_string()),
+            None => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NextSigNozKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let inner = Option::<SigNozIngestionKeyValue>::deserialize(deserializer)?;
+        Ok(Self(inner))
+    }
+}
+
 /// The key [`FakeState::fail_ensure_once`], [`FakeState::ensure_calls`],
 /// and [`FakeState::read_calls`] all share: `"<tool>#<key>"`, where `<key>`
 /// is the same key string the tool's own state map already uses (so a
@@ -197,6 +234,27 @@ fn generate_token(seed: &str) -> DopplerServiceToken {
     body.truncate(42);
     DopplerServiceToken::parse(&format!("dp.st.{body}")).unwrap_or_else(|err| {
         unreachable!("a generated fake token must match its own pattern: {err}")
+    })
+}
+
+/// [`generate_token`]'s own twin for [`SigNozIngestionKeyValue`], whose
+/// pattern is far more permissive (no fixed prefix, minimum length 1) —
+/// the generated body is still varied by `seed` the same way, for the
+/// same reason.
+fn generate_signoz_key(seed: &str) -> SigNozIngestionKeyValue {
+    use std::collections::hash_map::DefaultHasher;
+    use std::fmt::Write as _;
+    use std::hash::{Hash, Hasher};
+
+    let mut body = String::with_capacity(32);
+    for salt in 0u8..2 {
+        let mut hasher = DefaultHasher::new();
+        seed.hash(&mut hasher);
+        salt.hash(&mut hasher);
+        let _ = write!(body, "{:016x}", hasher.finish());
+    }
+    SigNozIngestionKeyValue::parse(&format!("fake-signoz-key-{body}")).unwrap_or_else(|err| {
+        unreachable!("a generated fake `SigNoz` key must match its own pattern: {err}")
     })
 }
 
@@ -255,6 +313,16 @@ pub struct FakeState {
     pub doppler_service_tokens: HashSet<String>,
     /// Doppler secrets, keyed by `"<config>#<SECRET_NAME>"`.
     pub doppler_secrets: SecretsMap,
+    /// Keys `doppler.secret.set` has been called against, keyed the same
+    /// way as [`Self::doppler_secrets`]. Deliberately a separate,
+    /// value-free set rather than writing into [`Self::doppler_secrets`]
+    /// itself: `doppler.secret.set`'s `read` never reports `Present` (see
+    /// its live tool's own module docs), so nothing in this crate should
+    /// let a document read back what it wrote through the fake provider
+    /// either — a document composing `secret.set` then `secret.get` at
+    /// the same key must see the same "no free read" shape the live
+    /// providers give it.
+    pub doppler_secret_writes: HashSet<String>,
     /// Buildkite clusters, keyed by their human-written name
     /// ([`BuildkiteClusterName::as_str`]) to a list of ids sharing that
     /// name -- a name is not a unique natural key (research note section
@@ -273,6 +341,16 @@ pub struct FakeState {
     /// `doppler.service_token.rotate`), consumed on first use. See
     /// [`NextToken`]'s own doc for why this seeds but never round-trips.
     pub next_token: NextToken,
+    /// `SigNoz` ingestion keys that exist, keyed by
+    /// [`SigNozIngestionKeyName`]'s own canonical string. Membership is
+    /// the only fact recorded: an ingestion key's value cannot be
+    /// re-read once minted, the same reason
+    /// [`Self::doppler_service_tokens`] records membership alone.
+    pub signoz_ingestion_keys: HashSet<String>,
+    /// A key to hand out the next time `signoz.ingestion_key.ensure`'s
+    /// create path mints one, consumed on first use. See
+    /// [`NextSigNozKey`]'s own doc.
+    pub next_signoz_key: NextSigNozKey,
     /// Pending injected failures, each `"<tool>#<key>"` ([`call_key`]).
     /// The next `ensure` matching an entry returns
     /// [`willikins_core::ToolErrorKind::Provider`] and consumes the entry
@@ -323,6 +401,14 @@ pub fn doppler_service_token_key(config: &DopplerConfig, name: &DopplerTokenName
 #[must_use]
 pub fn doppler_secret_key(config: &DopplerConfig, name: &SecretName) -> String {
     format!("{config}#{name}")
+}
+
+/// The key `signoz.ingestion_key.ensure` looks an ingestion key up by:
+/// its own name (there is no compound key -- unlike a Doppler service
+/// token, a `SigNoz` ingestion key is not scoped to a config).
+#[must_use]
+pub fn signoz_ingestion_key_key(name: &SigNozIngestionKeyName) -> String {
+    name.to_string()
 }
 
 /// The key `buildkite.pipeline.ensure` looks a pipeline up by: its
@@ -476,6 +562,22 @@ impl FakeState {
         self
     }
 
+    /// Seed a `SigNoz` ingestion key's existence (never a value).
+    #[must_use]
+    pub fn with_signoz_ingestion_key(mut self, name: &SigNozIngestionKeyName) -> Self {
+        self.signoz_ingestion_keys
+            .insert(signoz_ingestion_key_key(name));
+        self
+    }
+
+    /// Seed the next `SigNoz` key a mint will hand out (see
+    /// [`NextSigNozKey`]).
+    #[must_use]
+    pub fn with_next_signoz_key(mut self, key: SigNozIngestionKeyValue) -> Self {
+        self.next_signoz_key = NextSigNozKey(Some(key));
+        self
+    }
+
     /// Seed a one-shot injected failure for the next `ensure` at
     /// `tool`/`key` ([`call_key`]).
     #[must_use]
@@ -525,6 +627,21 @@ impl FakeState {
         self.next_token
             .take()
             .unwrap_or_else(|| generate_token(&format!("{}#{call_count}", call_key(tool, key))))
+    }
+
+    /// [`Self::mint_token`]'s own twin for [`SigNozIngestionKeyValue`]:
+    /// [`Self::next_signoz_key`] if seeded (consumed), else a generated
+    /// value varied by `call_count`.
+    #[must_use]
+    pub fn mint_signoz_key(
+        &mut self,
+        tool: &str,
+        key: &str,
+        call_count: u32,
+    ) -> SigNozIngestionKeyValue {
+        self.next_signoz_key.take().unwrap_or_else(|| {
+            generate_signoz_key(&format!("{}#{call_count}", call_key(tool, key)))
+        })
     }
 }
 

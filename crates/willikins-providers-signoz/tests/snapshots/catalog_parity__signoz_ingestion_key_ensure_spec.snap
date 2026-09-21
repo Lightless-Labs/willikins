@@ -1,0 +1,25 @@
+---
+source: crates/willikins-providers-signoz/tests/catalog_parity.rs
+expression: "spec_json(SigNozIngestionKeyEnsure::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Ensure a SigNoz ingestion key exists. Its value can never be re-read once minted.",
+  "inputs": {
+    "name": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "SigNozIngestionKeyName"
+      }
+    }
+  },
+  "key": [
+    "name"
+  ],
+  "name": "signoz.ingestion_key.ensure",
+  "outputs": {
+    "key": "SigNozIngestionKeyValue"
+  },
+  "pure": false
+}

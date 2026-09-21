@@ -4,11 +4,13 @@
 //!
 //! `naming.v1` and `template.render` — pure and provider-independent —
 //! live in the `willikins-tools` crate; [`catalog`] registers them
-//! alongside this crate's own thirteen tools (milestone 3a added
+//! alongside this crate's own tools (milestone 3a added
 //! `buildkite.cluster.get` and `buildkite.pipeline.ensure`; milestone 3
 //! added `doppler.config.inheritable.ensure` and
-//! `doppler.config.inherits.ensure`), so the catalog this crate produces
-//! holds fifteen tools, in the order [`catalog`] inserts them.
+//! `doppler.config.inherits.ensure`; the `SigNoz` task added
+//! `signoz.ingestion_key.ensure` and `doppler.secret.set`), so the
+//! catalog this crate produces holds seventeen tools, in the order
+//! [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
 //!
@@ -67,6 +69,8 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::DopplerServiceTokenEnsure::new(state.clone()));
     insert!(tools::DopplerServiceTokenRotate::new(state.clone()));
     insert!(tools::DopplerSecretGet::new(state.clone()));
+    insert!(tools::DopplerSecretSet::new(state.clone()));
+    insert!(tools::SigNozIngestionKeyEnsure::new(state.clone()));
     insert!(tools::FakeBuildkiteClusterGet::new(state.clone()));
     insert!(tools::FakeBuildkitePipelineEnsure::new(state.clone()));
     insert!(tools::FakeSecretList::new());
@@ -106,6 +110,8 @@ mod tests {
             "doppler.service_token.ensure",
             "doppler.service_token.rotate",
             "doppler.secret.get",
+            "doppler.secret.set",
+            "signoz.ingestion_key.ensure",
             "buildkite.cluster.get",
             "buildkite.pipeline.ensure",
             "fake.secret_list",
@@ -114,7 +120,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 15);
+        assert_eq!(names.len(), 17);
     }
 
     #[test]

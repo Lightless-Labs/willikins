@@ -274,6 +274,61 @@ expression: "catalog.list_tools_json()[\"tools\"]"
   },
   {
     "class": "reversible",
+    "description": "Write a secret into a Doppler config. `config` must be the output of an earlier node — never a literal or a workflow input.",
+    "inputs": {
+      "config": {
+        "derived_only": true,
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerConfig"
+        }
+      },
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "SecretName"
+        }
+      },
+      "value": {
+        "required": true,
+        "ty": {
+          "kind": "any_secret"
+        }
+      }
+    },
+    "key": [
+      "config",
+      "name"
+    ],
+    "name": "doppler.secret.set",
+    "outputs": {},
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Ensure a SigNoz ingestion key exists. Its value can never be re-read once minted.",
+    "inputs": {
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "SigNozIngestionKeyName"
+        }
+      }
+    },
+    "key": [
+      "name"
+    ],
+    "name": "signoz.ingestion_key.ensure",
+    "outputs": {
+      "key": "SigNozIngestionKeyValue"
+    },
+    "pure": false
+  },
+  {
+    "class": "reversible",
     "description": "Resolve a Buildkite cluster's human-written name to its id.",
     "inputs": {
       "name": {

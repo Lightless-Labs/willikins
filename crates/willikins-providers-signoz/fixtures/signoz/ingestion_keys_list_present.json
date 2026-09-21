@@ -1,0 +1,16 @@
+{
+  "status": "success",
+  "data": [
+    {
+      "id": "018e5a22-0000-7000-a000-000000000001",
+      "name": "willikins-example-key",
+      "created_at": "2026-09-21T00:00:00Z",
+      "updated_at": "2026-09-21T00:00:00Z",
+      "expires_at": null,
+      "limits": [],
+      "tags": [],
+      "value": "FIXTURE-VALUE-MARKER-DO-NOT-LEAK",
+      "workspace_id": "018e5a22-0000-7000-a000-00000000ffff"
+    }
+  ]
+}

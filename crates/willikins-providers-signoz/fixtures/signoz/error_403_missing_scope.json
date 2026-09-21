@@ -1,0 +1,8 @@
+{
+  "status": "error",
+  "error": {
+    "type": "forbidden",
+    "code": "forbidden",
+    "message": "missing scope: ingestion-key:create"
+  }
+}
