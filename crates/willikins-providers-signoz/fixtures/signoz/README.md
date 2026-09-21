@@ -4,7 +4,12 @@ Recorded and hand-authored response bodies used by this crate's mock-server
 tests. See `docs/research/2026-09-20-signoz-ingestion-keys.md` for the
 primary source these shapes rest on — every fact it states was confirmed
 live against the operator's own account on 2026-09-21 (that research
-document's own header).
+document's own header) — **except the list envelope, which that document's
+section 5 explicitly listed as unverified ("the exact list/search response
+shape"), and which the first two fixture rows below originally guessed
+wrong.** The two list fixtures now carry the shape observed live on
+2026-09-21: `data` is an object holding `keys` and `_pagination`, not a
+bare array.
 
 None of these carry a real API key or a real minted ingestion key value.
 `ingestion_keys_list_present.json`'s `value` field is a deliberately
@@ -16,8 +21,8 @@ journal — never a real SigNoz ingestion key.
 
 | File | Verified | Notes |
 | --- | --- | --- |
-| `ingestion_keys_list_absent.json` | Documented shape | `{status, data: []}` — an empty list, from the research note's documented `GET .../ingestion_keys` envelope. |
-| `ingestion_keys_list_present.json` | Documented shape, `value` field confirmed live | One entry, with every field the research note's "confirmed live" list names (`created_at, expires_at, id, limits, name, tags, updated_at, value, workspace_id`). `value`'s presence here is the whole reason `signoz.ingestion_key.ensure` exists in the shape it does — see the tool's own module doc. |
+| `ingestion_keys_list_absent.json` | **Observed live 2026-09-21** | `{status, data: {keys: [], _pagination: {}}}` — an empty list. The envelope wraps its entries in `data.keys`; an earlier draft of this fixture guessed `data: []` (generalising from create's own `{status, data}`) and every `read` against the real API would have failed in `Http::finish`'s parse path. |
+| `ingestion_keys_list_present.json` | **Envelope observed live 2026-09-21**, `value` field confirmed live | One entry under `data.keys`, with every field the research note's "confirmed live" list names (`created_at, expires_at, id, limits, name, tags, updated_at, value, workspace_id`). `value`'s presence here is the whole reason `signoz.ingestion_key.ensure` exists in the shape it does — see the tool's own module doc. |
 | `ingestion_key_post_created.json` | Documented shape | `{status, data: {id, value}}` — create's `201` response. `value` here is `SIGNOZ_KEY_PLACEHOLDER`, a plain non-secret-shaped string that still satisfies `SigNozIngestionKeyValue`'s permissive parse (no exact grammar is documented, unlike a Doppler or GitHub token), so no runtime substitution is needed the way the Doppler fixtures' token placeholder needs. |
 | `error_409_already_exists.json` | Documented shape, confirmed live | `{status: "error", error: {type: "already-exists", code: "already_exists", message: "key: <name> already exists"}}` — the research note's own quoted shape for a duplicate `name`. |
 | `error_403_missing_scope.json` | Documented, not verbatim | The research note states a `403` names one of `ingestion-key:create`/`ingestion-key:list`/`ingestion-key:delete` verbatim and was observed live, but its exact body text was not re-quoted into the research note itself. This fixture is a representative shape, not a captured one — and it costs this crate nothing either way: `willikins_providers_http::http::provider_error_from_body` drops every `401`/`403` body outright before any of it becomes a `String`, so no willikins code branches on this fixture's exact text (`tests/ingestion_key_ensure_mock.rs`'s `a_403_is_the_fixed_missing_permission_message_and_echoes_no_scope_text` pins that). |

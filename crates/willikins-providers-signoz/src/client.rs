@@ -187,7 +187,7 @@ impl SigNozClient {
     pub fn list_ingestion_keys(&self) -> Result<Vec<IngestionKeyListEntry>, ProviderError> {
         self.http
             .get::<IngestionKeyListEnvelope>("/api/v2/gateway/ingestion_keys")
-            .map(|envelope| envelope.data)
+            .map(|envelope| envelope.data.keys)
     }
 
     /// `POST /api/v2/gateway/ingestion_keys` with exactly `name` — no
@@ -255,11 +255,11 @@ pub fn looks_like_a_duplicate_name(err: &ProviderError) -> bool {
     err.status == Some(409)
 }
 
-/// One entry of `GET /api/v2/gateway/ingestion_keys`'s `data` array —
-/// `id` and `name` only. See [`SigNozClient::list_ingestion_keys`]'s doc
-/// comment for why `value` (and every other field the response carries)
-/// is deliberately absent from this struct rather than merely unread,
-/// and why `id`, unlike `value`, is kept.
+/// One entry of `GET /api/v2/gateway/ingestion_keys`'s `data.keys` array
+/// — `id` and `name` only. See [`SigNozClient::list_ingestion_keys`]'s
+/// doc comment for why `value` (and every other field the response
+/// carries) is deliberately absent from this struct rather than merely
+/// unread, and why `id`, unlike `value`, is kept.
 #[derive(Debug, Clone, Deserialize)]
 pub struct IngestionKeyListEntry {
     /// The key's opaque id, needed only by the live write cycle's own
@@ -269,12 +269,42 @@ pub struct IngestionKeyListEntry {
     pub name: String,
 }
 
-/// `GET /api/v2/gateway/ingestion_keys`'s envelope: `{"status": ...,
-/// "data": [...]}` (research section 3's documented response shape,
-/// generalised from create's own `{status, data}` envelope).
+/// `GET /api/v2/gateway/ingestion_keys`'s envelope, **observed live
+/// against the operator's own account on 2026-09-21**: `{"status": ...,
+/// "data": {"keys": [...], "_pagination": {...}}}`. The entries are
+/// wrapped in a `data.keys` object, not returned as a bare `data` array.
+///
+/// This is the one shape in this crate that was *not* settled by
+/// `docs/research/2026-09-20-signoz-ingestion-keys.md`: its section 5
+/// lists "the exact list/search response shape" as a thing to verify
+/// before relying on it, and an earlier draft of this struct guessed
+/// `data: Vec<_>` by generalising from create's own `{status, data}`
+/// envelope. That guess parses none of the real responses, so every
+/// `read` against the live API failed in `Http::finish`'s
+/// deliberately content-free parse-error path. The mock fixtures
+/// encoded the same guess, which is why no offline test caught it.
+///
+/// `_pagination` is deliberately undeclared (serde discards it): this
+/// client reads page one only. A workplace holding more ingestion keys
+/// than one page returns would make [`SigNozClient::list_ingestion_keys`]
+/// miss a key it does have, and `signoz.ingestion_key.ensure` would then
+/// report `Absent` for a key that exists and attempt a create that the
+/// `409` belt-and-braces path catches — a safe failure, but not a silent
+/// one to rely on. Paging is not added here because it has never been
+/// observed live (the operator's account returns an empty `_pagination`
+/// at eight keys) and a tool being run live for the first time is the
+/// wrong place to add unexercised code.
 #[derive(Debug, Deserialize)]
 struct IngestionKeyListEnvelope {
-    data: Vec<IngestionKeyListEntry>,
+    data: IngestionKeyListData,
+}
+
+/// `GET /api/v2/gateway/ingestion_keys`'s `data` object. Only `keys` is
+/// declared; `_pagination` is discarded by serde. See
+/// [`IngestionKeyListEnvelope`].
+#[derive(Debug, Deserialize)]
+struct IngestionKeyListData {
+    keys: Vec<IngestionKeyListEntry>,
 }
 
 #[derive(Debug, Serialize)]
