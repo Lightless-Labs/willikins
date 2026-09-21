@@ -324,6 +324,34 @@ These came up from memory during the conversation and have not been checked.
   yet made. The decision stands; only its second half waits. A pending plan may wait a day
   for its human, and an approved plan must be applied within the hour, so the human's pace
   and the plan's staleness are bounded separately.
+- **Credentials are ports, resolvers are nodes** (2026-09-21, operator; supersedes the bullet
+  below, which this addendum keeps for its history). A tool declares the credential it needs as a
+  typed port, like any other input. A document may bind that port to the output of a **resolver
+  node** — an ordinary pure tool that reads a secret and returns it: `doppler.secret.get` is
+  already exactly this (`pure: true`), and `env.get` is the zero-dependency one that needs no
+  credential of its own and is therefore both the natural root of any chain and the default for
+  anyone who has never heard of a vault. A port nothing binds is an unmet requirement, reported by
+  `describe` exactly as an unbound input is, and satisfied from execution context. Swapping where
+  credentials come from is swapping a node, which is to say writing a different document, which is
+  where policy lives.
+  *Why this works, mechanically:* pure nodes are evaluated during `plan` (the plan prints them as
+  `Compute`), so a credential resolved by a pure node exists before the provider reads that
+  planning depends on. That is the property the whole plan-then-apply split rests on, and it
+  survives. The restriction that follows is narrow and acceptable: a credential may come from a
+  *reading* node, never from one that creates something, because an impure node's output does not
+  exist until apply.
+  *What does not change:* a credential's value never enters a plan, a journal line or an error —
+  the existing redaction is by construction, not by rule. `check` must allow a secret to bind only
+  to a secret-accepting port, which is the rule it already enforces, generalised to credential
+  ports. And an unmet credential is satisfied from the environment rather than from a command-line
+  argument, because inputs are journaled so a plan can be rebuilt: that is why `check` refuses a
+  secret-typed workflow input (acceptance test 2, `workflows/fixtures/secret-input.yaml`), and that
+  refusal stands. A credential is produced by a resolver or taken from context; it is never typed
+  at a prompt.
+  *What it buys:* one credential to hold instead of one per provider, if the operator wants that;
+  no dependency on any particular secret store, since env is a node like any other; documents that
+  say what they need, which is what an agent with no local context requires; and per-target routing
+  for free, because a document names which credential rather than the environment implying it.
 - **"One bootstrap token" lives in the platform, not the binary** (refines "Doppler as the
   vault, one bootstrap token"). The butler's own provider credentials stay in Doppler, and
   Doppler's native Railway integration syncs them into the service's environment; the
