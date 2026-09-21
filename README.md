@@ -127,6 +127,14 @@ dashboard. Point it at the Doppler config that holds all three tokens. Do not se
 by hand in the Railway dashboard or through the Railway CLI. A hand-set credential does not
 rotate when the Doppler config changes.
 
+The CLI is narrower: `willikins plan <file> --live` and `willikins apply <file> --live` only
+require the credential(s) that one document's own tools actually call -- a document that calls
+only `doppler.*` tools needs only `WILLIKINS_DOPPLER_TOKEN` set, not all three. A missing or
+malformed credential the document does need still refuses before any network call, naming the
+variable and which document and tool needed it. `willikins apply --plan-id` is the exception: it
+resolves a plan against a whole trusted `--workflows-dir`, not one document it can inspect up
+front, so it keeps the server's own all-three requirement.
+
 ### The fake-catalog variable
 
 Set `WILLIKINS_FAKE_CATALOG=1` to make the server serve the fake, in-memory catalog. No
