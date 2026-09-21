@@ -70,9 +70,11 @@ enum Command {
         /// Mutually exclusive with `--live`.
         #[arg(long = "fake-state", value_name = "FILE")]
         fake_state: Option<String>,
-        /// Plan against the real providers, with credentials from
-        /// `WILLIKINS_GITHUB_TOKEN`, `WILLIKINS_DOPPLER_TOKEN`, and
-        /// `WILLIKINS_BUILDKITE_TOKEN`. Without it, the fake providers.
+        /// Plan against the real providers. Without it, the fake
+        /// providers. Only the credential(s) this document's own tools
+        /// need are required -- `WILLIKINS_GITHUB_TOKEN`,
+        /// `WILLIKINS_DOPPLER_TOKEN`, and/or `WILLIKINS_BUILDKITE_TOKEN`,
+        /// whichever of the three it actually calls.
         #[arg(long)]
         live: bool,
     },
@@ -140,7 +142,14 @@ fn main() -> ExitCode {
 
 /// Load `file` as a workflow document, printing a [`DocumentError`] to
 /// stderr and returning `None` (the caller exits 2) on failure.
-fn load_workflow(file: &str, json: bool) -> Result<willikins_core::Workflow, ExitCode> {
+///
+/// `pub(crate)`: `cmd_plan` and `commands::cmd_apply_file` both need the
+/// parsed [`willikins_core::Workflow`] itself, before `check`, to build a
+/// `--live` catalog scoped to the document's own tools (see
+/// `commands::build_catalog_for_document`) -- so they call this directly
+/// rather than through [`load_and_check`], which bundles this with a
+/// `check` against an already-built catalog.
+pub(crate) fn load_workflow(file: &str, json: bool) -> Result<willikins_core::Workflow, ExitCode> {
     willikins_dsl::load_document(Path::new(file)).map_err(|err| {
         print_document_error(&err, json);
         ExitCode::from(2)
@@ -182,7 +191,23 @@ pub(crate) fn load_and_check(
     json: bool,
 ) -> Result<Checked, ExitCode> {
     let workflow = load_workflow(file, json)?;
-    willikins_core::check(&workflow, catalog).map_err(|errors| {
+    check_workflow(&workflow, catalog, json)
+}
+
+/// [`load_and_check`]'s check-only half: `check` an already-parsed
+/// `workflow` against `catalog`, printing any [`CheckError`]s (text or
+/// JSON, per `json`) to stdout and returning `Err(ExitCode::from(1))`.
+///
+/// `pub(crate)`: split out from [`load_and_check`] so a caller that
+/// already parsed `workflow` itself -- to build a `--live` catalog scoped
+/// to that document's own tools before `check` runs against it -- does
+/// not parse the file twice.
+pub(crate) fn check_workflow(
+    workflow: &willikins_core::Workflow,
+    catalog: &Catalog,
+    json: bool,
+) -> Result<Checked, ExitCode> {
+    willikins_core::check(workflow, catalog).map_err(|errors| {
         if json {
             println!("{}", render::check_errors_json(&errors));
         } else {
@@ -284,16 +309,27 @@ fn cmd_plan(
     live: bool,
     json: bool,
 ) -> ExitCode {
+    // The workflow is parsed before the catalog is built (not after, as
+    // `validate`/`describe` do through `load_and_check`): a `--live`
+    // catalog scoped to this one document (`build_catalog_for_document`)
+    // needs to know which tools it calls first, so a Doppler-only
+    // document never has to provide `WILLIKINS_GITHUB_TOKEN` or
+    // `WILLIKINS_BUILDKITE_TOKEN` just to be checked.
+    let workflow = match load_workflow(file, json) {
+        Ok(workflow) => workflow,
+        Err(code) => return code,
+    };
     // Shared with `apply`'s own catalog construction (task 11): the same
     // `--live`/`--fake-state` semantics, so the two subcommands can never
     // silently drift apart on which providers a given flag combination
     // selects. `plan` never seeds `--fake-state-out`, so the `FakeState`
     // handle this also returns is simply dropped here.
-    let (catalog, _fake_state) = match commands::build_catalog(live, fake_state, json) {
-        Ok(built) => built,
-        Err(code) => return code,
-    };
-    let checked = match load_and_check(file, &catalog, json) {
+    let (catalog, _fake_state) =
+        match commands::build_catalog_for_document(live, fake_state, &workflow, json) {
+            Ok(built) => built,
+            Err(code) => return code,
+        };
+    let checked = match check_workflow(&workflow, &catalog, json) {
         Ok(checked) => checked,
         Err(code) => return code,
     };
