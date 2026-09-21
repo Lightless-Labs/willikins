@@ -71,8 +71,9 @@ impl Credential {
 
     /// Set the `Authorization: Bearer <token>` header on `request`.
     ///
-    /// The single non-test, non-derive call site of
-    /// `secrecy::ExposeSecret::expose_secret` in the workspace.
+    /// One of two non-test, non-derive call sites of
+    /// `secrecy::ExposeSecret::expose_secret` in the workspace (the other
+    /// is [`Self::authorize_header`]).
     ///
     /// Crate-private on purpose: the returned builder carries the bearer
     /// token in a header any caller could read back with
@@ -82,13 +83,43 @@ impl Credential {
     /// goes through [`crate::Http`], which sends the header and never
     /// hands it back.
     #[must_use]
-    // The one allowed production call site outside the derive's own
-    // codegen, named in `clippy.toml`'s `disallowed-methods` reason and
-    // walked by `crates/willikins-core/tests/expose_secret_guard.rs`.
+    // One of the two allowed production call sites outside the derive's
+    // own codegen, named in `clippy.toml`'s `disallowed-methods` reason
+    // and walked by `crates/willikins-core/tests/expose_secret_guard.rs`.
     #[allow(clippy::disallowed_methods)]
     pub(crate) fn authorize<B>(&self, request: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
         let token = self.secret.expose_secret();
         request.header("Authorization", format!("Bearer {token}"))
+    }
+
+    /// Set `header_name: <token>` on `request` verbatim — no `Bearer `
+    /// prefix, no `Authorization` name. The generalised sibling of
+    /// [`Self::authorize`], for a provider whose documented scheme puts
+    /// the credential in a header of its own (`SigNoz`: `SigNoz-Api-Key`,
+    /// per `docs/research/2026-09-20-signoz-ingestion-keys.md` section 1
+    /// — never `Authorization`).
+    ///
+    /// Exists so a provider crate never builds the header by hand at its
+    /// own call site, which would be a second, guard-invisible place this
+    /// crate's bytes leave [`SecretString`]: this method, like
+    /// [`Self::authorize`], is the *only* sanctioned place, and both are
+    /// walked the same way by `expose_secret_guard.rs`.
+    ///
+    /// Crate-private for the same reason [`Self::authorize`] is: the
+    /// returned builder could otherwise be asked for its own header back.
+    #[must_use]
+    // The second allowed production call site outside the derive's own
+    // codegen — see `authorize`'s doc comment, and
+    // `crates/willikins-core/tests/expose_secret_guard.rs`'s
+    // `willikins-providers-http` exemption, which names both functions.
+    #[allow(clippy::disallowed_methods)]
+    pub(crate) fn authorize_header<B>(
+        &self,
+        request: ureq::RequestBuilder<B>,
+        header_name: &'static str,
+    ) -> ureq::RequestBuilder<B> {
+        let token = self.secret.expose_secret();
+        request.header(header_name, token)
     }
 }
 

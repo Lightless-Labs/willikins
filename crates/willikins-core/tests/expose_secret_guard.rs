@@ -237,7 +237,7 @@ fn path_is_expose_secret_ufcs(
 #[derive(Clone, Copy)]
 enum Exemption {
     WholeFile,
-    OneFunction(&'static str),
+    OneFunction(&'static [&'static str]),
     None,
 }
 
@@ -267,7 +267,7 @@ impl<'a> FileWalker<'a> {
     }
 
     fn is_exempt_fn_name(&self, ident: &syn::Ident) -> bool {
-        matches!(self.exemption, Exemption::OneFunction(name) if ident == name)
+        matches!(self.exemption, Exemption::OneFunction(names) if names.iter().any(|name| ident == name))
     }
 }
 
@@ -386,7 +386,7 @@ fn resolve_mod_file(parent_file: &Path, mod_name: &str) -> PathBuf {
 /// exempt the whole file.
 fn walk_crate(
     root: &Path,
-    exempt_relative_path: Option<(&Path, Option<&'static str>)>,
+    exempt_relative_path: Option<(&Path, Option<&'static [&'static str]>)>,
     violations: &mut Vec<Violation>,
 ) -> HashSet<PathBuf> {
     let mut queue: Vec<(PathBuf, bool)> = vec![(root.to_path_buf(), false)];
@@ -398,7 +398,7 @@ fn walk_crate(
         }
         let exemption = match exempt_relative_path {
             Some((rel, None)) if path.ends_with(rel) => Exemption::WholeFile,
-            Some((rel, Some(fn_name))) if path.ends_with(rel) => Exemption::OneFunction(fn_name),
+            Some((rel, Some(fn_names))) if path.ends_with(rel) => Exemption::OneFunction(fn_names),
             _ => Exemption::None,
         };
         let whole_file_exempt = matches!(exemption, Exemption::WholeFile);
@@ -436,12 +436,12 @@ fn walk_crate(
 /// (non-test) code.
 fn walk_single_file(
     path: &Path,
-    exempt_relative_path: Option<(&Path, Option<&'static str>)>,
+    exempt_relative_path: Option<(&Path, Option<&'static [&'static str]>)>,
     violations: &mut Vec<Violation>,
 ) {
     let exemption = match exempt_relative_path {
         Some((rel, None)) if path.ends_with(rel) => Exemption::WholeFile,
-        Some((rel, Some(fn_name))) if path.ends_with(rel) => Exemption::OneFunction(fn_name),
+        Some((rel, Some(fn_names))) if path.ends_with(rel) => Exemption::OneFunction(fn_names),
         _ => Exemption::None,
     };
     if matches!(exemption, Exemption::WholeFile) {
@@ -502,11 +502,12 @@ fn every_expose_secret_call_site_is_the_codegen_emitter_authorize_a_test_item_or
             continue;
         };
         let crate_name = crate_dir.file_name().and_then(|n| n.to_str());
-        let exempt: Option<(PathBuf, Option<&'static str>)> = match crate_name {
+        let exempt: Option<(PathBuf, Option<&'static [&'static str]>)> = match crate_name {
             Some("willikins-derive") => Some((PathBuf::from("codegen.rs"), None)),
-            Some("willikins-providers-http") => {
-                Some((PathBuf::from("credential.rs"), Some("authorize")))
-            }
+            Some("willikins-providers-http") => Some((
+                PathBuf::from("credential.rs"),
+                Some(&["authorize", "authorize_header"][..]),
+            )),
             _ => None,
         };
         let exempt_ref = exempt.as_ref().map(|(p, f)| (p.as_path(), *f));
@@ -552,36 +553,42 @@ fn derive_codegen_rs_references_expose_secret_and_is_exempt_as_a_whole_file() {
     );
 }
 
-/// Proof `Credential::authorize`'s exemption is not vacuous, and is
-/// scoped to that one function: walking `credential.rs` with an
-/// exemption naming a function that does not exist in it must still
-/// find the real call site.
+/// Proof `Credential::authorize`'s and `Credential::authorize_header`'s
+/// exemption is not vacuous, and is scoped to exactly those two
+/// functions: walking `credential.rs` with an exemption naming a function
+/// that does not exist in it must still find both real call sites.
 #[test]
-fn credential_rs_calls_expose_secret_inside_authorize_and_nowhere_else() {
+fn credential_rs_calls_expose_secret_inside_authorize_and_authorize_header_and_nowhere_else() {
     let path = crates_root().join("willikins-providers-http/src/credential.rs");
 
     let mut with_correct_exemption = Vec::new();
     let _ = walk_crate(
         &path,
-        Some((Path::new("credential.rs"), Some("authorize"))),
+        Some((
+            Path::new("credential.rs"),
+            Some(&["authorize", "authorize_header"][..]),
+        )),
         &mut with_correct_exemption,
     );
     assert!(
         with_correct_exemption.is_empty(),
-        "authorize's call site should be exempt: {with_correct_exemption:?}"
+        "authorize's and authorize_header's call sites should be exempt: {with_correct_exemption:?}"
     );
 
     let mut with_wrong_exemption = Vec::new();
     let _ = walk_crate(
         &path,
-        Some((Path::new("credential.rs"), Some("not_a_real_function"))),
+        Some((
+            Path::new("credential.rs"),
+            Some(&["not_a_real_function"][..]),
+        )),
         &mut with_wrong_exemption,
     );
     assert_eq!(
         with_wrong_exemption.len(),
-        1,
-        "expected exactly one call site in credential.rs when `authorize` is not \
-         the exempted function: {with_wrong_exemption:?}"
+        2,
+        "expected exactly two call sites in credential.rs (authorize and \
+         authorize_header) when neither is the exempted function: {with_wrong_exemption:?}"
     );
 }
 
@@ -743,7 +750,7 @@ fn one_named_function_exemption_only_exempts_that_function() {
                   fn other(s: &SecretString) { s.expose_secret(); }";
     let file = syn::parse_file(source).unwrap();
     let aliases = collect_expose_secret_aliases(&file);
-    let mut walker = FileWalker::new(&aliases, Exemption::OneFunction("authorize"));
+    let mut walker = FileWalker::new(&aliases, Exemption::OneFunction(&["authorize"]));
     for item in &file.items {
         walker.visit_item(item);
     }
