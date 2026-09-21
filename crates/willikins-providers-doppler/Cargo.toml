@@ -1,6 +1,6 @@
 [package]
 name = "willikins-providers-doppler"
-description = "Live Doppler provider tools: doppler.project.ensure, doppler.config.ensure, doppler.config.inheritable.ensure, doppler.config.inherits.ensure, doppler.service_token.ensure, doppler.service_token.rotate, doppler.secret.get"
+description = "Live Doppler provider tools: doppler.project.ensure, doppler.config.ensure, doppler.config.inheritable.ensure, doppler.config.inherits.ensure, doppler.service_token.ensure, doppler.service_token.rotate, doppler.secret.get, doppler.secret.set"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

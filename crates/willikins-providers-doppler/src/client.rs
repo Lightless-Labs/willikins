@@ -427,6 +427,57 @@ impl DopplerClient {
             .get::<SecretBody>(&path)
             .map(|body| body.value.computed)
     }
+
+    /// `POST /v3/configs/config/secrets` with `{"project", "config",
+    /// "secrets": {"<name>": "<value>"}}` — Doppler's documented simple
+    /// upsert shape (research note `docs/research/2026-09-12-m2-dependencies.md`,
+    /// section "Doppler secrets": "Either `secrets` or `change_requests`
+    /// is required (can't use both)"). This client always sends the flat
+    /// `secrets` map, never `change_requests`: the one key it sets is
+    /// merged into whatever the config already holds, not a wholesale
+    /// replace of the config's other secrets. Never retried, for the same
+    /// reason as [`Self::create_project`]: a caller that needs to know
+    /// whether a retried, ambiguous failure still wrote re-reads (though
+    /// `doppler.secret.set`'s own `read` never does — see its module
+    /// docs for why).
+    ///
+    /// The response body (which echoes the value back, per the same
+    /// endpoint's documented shape) is parsed only as an opaque
+    /// [`serde_json::Value`] and immediately discarded: this client never
+    /// inspects a field of it, the same way [`Self::create_environment`]
+    /// discards its own response.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub(crate) fn set_secret(
+        &self,
+        project: &DopplerProject,
+        config: &DopplerConfigName,
+        name: &SecretName,
+        value: &str,
+    ) -> Result<(), ProviderError> {
+        let mut secrets = serde_json::Map::new();
+        secrets.insert(
+            name.to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+        let body = SetSecretsBody {
+            project: project.to_string(),
+            config: config.to_string(),
+            secrets,
+        };
+        self.http
+            .post::<serde_json::Value>("/v3/configs/config/secrets", &body)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SetSecretsBody {
+    project: String,
+    config: String,
+    secrets: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Doppler's project envelope: `{"project": {...}}`.
