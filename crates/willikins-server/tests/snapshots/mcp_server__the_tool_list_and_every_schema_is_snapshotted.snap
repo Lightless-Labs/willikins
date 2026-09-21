@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-server/tests/mcp_server.rs
-assertion_line: 164
 expression: snapshot
 ---
 [
@@ -1412,6 +1411,29 @@ expression: snapshot
                 "port": {
                   "$ref": "#/$defs/PortName",
                   "description": "The secret-accepting port it was bound to."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "port"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A [`crate::tool::PortSpec::derived_only`] port was bound to\nanything other than the output of an earlier, non-pure node: a\nliteral, a workflow input, a `for_each` item, or a pure node's\noutput all report this. `doppler.secret.set`'s `config` port is\nthe first user — see that field's own doc comment for why a pure\nnode's output is refused too.",
+              "properties": {
+                "kind": {
+                  "const": "UnderivedBinding",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node whose binding is not a derived one."
+                },
+                "port": {
+                  "$ref": "#/$defs/PortName",
+                  "description": "The `derived_only` port it was bound to."
                 }
               },
               "required": [

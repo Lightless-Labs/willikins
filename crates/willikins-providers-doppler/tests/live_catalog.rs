@@ -2,7 +2,7 @@
 //! `willikins-providers-github`'s two live tools, this crate's seven live
 //! Doppler tools (milestone 3 added `doppler.config.inheritable.ensure`
 //! and `doppler.config.inherits.ensure`), and (milestone 3a)
-//! `willikins-providers-buildkite`'s two live tools. Thirteen tools, no
+//! `willikins-providers-buildkite`'s two live tools. Fifteen tools, no
 //! fake among them.
 //!
 //! The assembly itself lives in `willikins-server` now
@@ -37,7 +37,7 @@ use willikins_providers_http::{Credential, Http};
 const POSITIVE_FIXTURES: [&str; 2] = ["new-rust-service.yaml", "rotate-service-token.yaml"];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 13] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 15] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -57,6 +57,8 @@ fn live_catalog() -> Catalog {
     let github_credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
     let buildkite_credential =
         Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken12345678");
+    let signoz_credential =
+        Credential::for_testing("WILLIKINS_TEST_SIGNOZ_API_KEY", "testsignozapikey00000000");
     willikins_server::live_catalog_with(
         Http::new(
             NOWHERE,
@@ -65,10 +67,11 @@ fn live_catalog() -> Catalog {
         ),
         Http::new(NOWHERE, Vec::new(), doppler_credential),
         Http::new(NOWHERE, Vec::new(), buildkite_credential),
+        Http::new(NOWHERE, Vec::new(), signoz_credential),
     )
 }
 
-/// The assembly itself: thirteen tools, no name collision, every spec valid
+/// The assembly itself: fifteen tools, no name collision, every spec valid
 /// against the shared type registry.
 #[test]
 fn the_live_catalog_assembles_and_every_spec_validates() {
@@ -113,7 +116,7 @@ fn both_positive_fixtures_check_the_same_against_the_live_catalog() {
     }
 }
 
-/// Nothing fake survives in it: inserting any of the thirteen fake tools of
+/// Nothing fake survives in it: inserting any of the fifteen fake tools of
 /// the same names on top is refused as a duplicate, which is what makes
 /// the two tests above statements about the live tools at all.
 #[test]

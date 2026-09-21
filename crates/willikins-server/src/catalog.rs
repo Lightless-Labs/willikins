@@ -2,12 +2,14 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the thirteen-tool live catalog --
+//! `live_catalog` assembles the fifteen-tool live catalog --
 //! `willikins-tools`' two pure tools, `willikins-providers-github`'s two
-//! live tools, `willikins-providers-doppler`'s seven (milestone 3 added
+//! live tools, `willikins-providers-doppler`'s eight (milestone 3 added
 //! `doppler.config.inheritable.ensure` and
-//! `doppler.config.inherits.ensure`), and (milestone 3a)
-//! `willikins-providers-buildkite`'s two -- exactly as
+//! `doppler.config.inherits.ensure`; the `SigNoz` task added
+//! `doppler.secret.set`), `willikins-providers-buildkite`'s two
+//! (milestone 3a), and `willikins-providers-signoz`'s one (the `SigNoz`
+//! task) -- exactly as
 //! `crates/willikins-providers-doppler/tests/live_catalog.rs` built it
 //! before this task; that test now calls [`live_catalog_with`] (this
 //! module's own assembly, taking `Http`s rather than `Credential`s so a
@@ -22,16 +24,17 @@ use willikins_providers_buildkite::{
 };
 use willikins_providers_doppler::{
     DopplerClient, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
-    DopplerConfigInheritsEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerServiceTokenEnsure,
-    DopplerServiceTokenRotate,
+    DopplerConfigInheritsEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerSecretSet,
+    DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
 };
 use willikins_providers_github::{GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure};
 use willikins_providers_http::{Credential, Http};
+use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 13] = [
+pub const LIVE_TOOL_NAMES: [&str; 15] = [
     "naming.v1",
     "template.render",
     "github.repo.ensure",
@@ -43,6 +46,8 @@ pub const LIVE_TOOL_NAMES: [&str; 13] = [
     "doppler.service_token.ensure",
     "doppler.service_token.rotate",
     "doppler.secret.get",
+    "doppler.secret.set",
+    "signoz.ingestion_key.ensure",
     "buildkite.pipeline.ensure",
     "buildkite.cluster.get",
 ];
@@ -66,7 +71,7 @@ fn insert_github_tools(catalog: &mut Catalog, http: Http) {
     insert(catalog, Arc::new(GitHubActionsSecretEnsure::new(github)));
 }
 
-/// Insert `willikins-providers-doppler`'s seven live tools, built from
+/// Insert `willikins-providers-doppler`'s eight live tools, built from
 /// `http`.
 fn insert_doppler_tools(catalog: &mut Catalog, http: Http) {
     let doppler = Arc::new(DopplerClient::new(http));
@@ -94,7 +99,18 @@ fn insert_doppler_tools(catalog: &mut Catalog, http: Http) {
         catalog,
         Arc::new(DopplerServiceTokenRotate::new(Arc::clone(&doppler))),
     );
-    insert(catalog, Arc::new(DopplerSecretGet::new(doppler)));
+    insert(
+        catalog,
+        Arc::new(DopplerSecretGet::new(Arc::clone(&doppler))),
+    );
+    insert(catalog, Arc::new(DopplerSecretSet::new(doppler)));
+}
+
+/// Insert `willikins-providers-signoz`'s one live tool, built from
+/// `http`.
+fn insert_signoz_tools(catalog: &mut Catalog, http: Http) {
+    let signoz = Arc::new(SigNozClient::new(http));
+    insert(catalog, Arc::new(SigNozIngestionKeyEnsure::new(signoz)));
 }
 
 /// Insert `willikins-providers-buildkite`'s two live tools, built from
@@ -125,12 +141,15 @@ fn insert(catalog: &mut Catalog, tool: Arc<dyn Tool>) {
 /// `willikins-providers-doppler/tests/live_catalog.rs`) can supply an
 /// `Http` pointed at a mock server or nowhere without duplicating the
 /// tool list, while production code goes through
-/// [`Butler::live_catalog`], which builds these two `Http`s from
-/// `Credential`s against each provider's real base URL and default
+/// [`Butler::live_catalog`], which builds three of these four `Http`s
+/// from `Credential`s against each provider's real base URL and default
 /// headers (`willikins_providers_github::http_client`,
-/// `willikins_providers_doppler::http_client`).
+/// `willikins_providers_doppler::http_client`,
+/// `willikins_providers_buildkite::http_client`) -- the fourth, `SigNoz`'s,
+/// it takes pre-built, since that provider needs a tenant host as well
+/// as a credential (see [`live_catalog`]'s own doc comment).
 ///
-/// Always inserts all 13 tools, unconditionally requiring all three
+/// Always inserts all 15 tools, unconditionally requiring all four
 /// `Http`s -- this is the "many documents, refuse up front" shape a
 /// long-lived server (and `willikins apply --plan-id`, which resolves a
 /// plan against an arbitrary document in a whole trusted directory) needs.
@@ -138,24 +157,41 @@ fn insert(catalog: &mut Catalog, tool: Arc<dyn Tool>) {
 /// [`live_catalog_for_document`], which only requires the providers that
 /// document's own tools actually use.
 #[must_use]
-pub fn live_catalog_with(github_http: Http, doppler_http: Http, buildkite_http: Http) -> Catalog {
+pub fn live_catalog_with(
+    github_http: Http,
+    doppler_http: Http,
+    buildkite_http: Http,
+    signoz_http: Http,
+) -> Catalog {
     let mut catalog = Catalog::new(willikins_types::registry());
     insert_pure_tools(&mut catalog);
     insert_github_tools(&mut catalog, github_http);
     insert_doppler_tools(&mut catalog, doppler_http);
     insert_buildkite_tools(&mut catalog, buildkite_http);
+    insert_signoz_tools(&mut catalog, signoz_http);
     catalog
 }
 
 /// The live catalog, against each provider's real base URL, built from
-/// `github`, `doppler`, and `buildkite` credentials. See
-/// [`live_catalog_with`].
+/// `github`, `doppler`, and `buildkite` credentials, plus an
+/// already-built `SigNoz` `Http` (`signoz_http`) — unlike the other three,
+/// `SigNoz` needs both a credential *and* a tenant host
+/// ([`willikins_providers_signoz::HOST_VAR`]) to build one, so its
+/// caller ([`live_catalog_from_env`]) builds it up front rather than
+/// this function taking a bare `Credential` it could not turn into an
+/// `Http` alone. See [`live_catalog_with`].
 #[must_use]
-pub fn live_catalog(github: Credential, doppler: Credential, buildkite: Credential) -> Catalog {
+pub fn live_catalog(
+    github: Credential,
+    doppler: Credential,
+    buildkite: Credential,
+    signoz_http: Http,
+) -> Catalog {
     live_catalog_with(
         willikins_providers_github::http_client(github),
         willikins_providers_doppler::http_client(doppler),
         willikins_providers_buildkite::http_client(buildkite),
+        signoz_http,
     )
 }
 
@@ -208,12 +244,30 @@ pub enum LiveCredentialError {
         /// not called `message`.
         error: String,
     },
+    /// `WILLIKINS_SIGNOZ_API_KEY` is missing or malformed, *or*
+    /// `WILLIKINS_SIGNOZ_HOST` is unset -- `SigNoz` is the one provider
+    /// this crate needs two environment variables to reach, not one, so
+    /// this variant covers both failures rather than gaining a fourth
+    /// enum case for the host alone: either way the operator is missing
+    /// something this provider needs before it can be reached at all,
+    /// and `kind: "SigNoz"` already tells them which provider. See
+    /// [`Self::GitHub`] for why this is not called `message`.
+    SigNoz {
+        /// The provider crate's own message -- from
+        /// `willikins_providers_signoz::SigNozCredentialError` or
+        /// `willikins_providers_signoz::SigNozHostError`, whichever
+        /// failed first. Never the credential's value.
+        error: String,
+    },
 }
 
 impl std::fmt::Display for LiveCredentialError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GitHub { error } | Self::Doppler { error } | Self::Buildkite { error } => {
+            Self::GitHub { error }
+            | Self::Doppler { error }
+            | Self::Buildkite { error }
+            | Self::SigNoz { error } => {
                 write!(f, "{error}")
             }
         }
@@ -259,7 +313,36 @@ pub fn live_catalog_from_env() -> Result<Catalog, LiveCredentialError> {
             error: error.to_string(),
         }
     })?;
-    Ok(live_catalog(github, doppler, buildkite))
+    let signoz_http = signoz_http_from_env()?;
+    Ok(live_catalog(github, doppler, buildkite, signoz_http))
+}
+
+/// Build a `SigNoz` [`Http`] from [`willikins_providers_signoz::CREDENTIAL_VAR`]
+/// and [`willikins_providers_signoz::HOST_VAR`], both read from the
+/// process environment -- the one step [`live_catalog_from_env`] and
+/// [`live_catalog_for_document`] share, since `SigNoz` needs both a
+/// credential and a host to reach at all (see [`live_catalog`]'s own doc
+/// comment for why that is not folded into a bare `Credential` parameter
+/// the way the other three providers' are).
+///
+/// # Errors
+///
+/// [`LiveCredentialError::SigNoz`] naming whichever failed first: the
+/// credential, then the host.
+fn signoz_http_from_env() -> Result<Http, LiveCredentialError> {
+    let credential = willikins_providers_signoz::credential_from_env().map_err(|error| {
+        LiveCredentialError::SigNoz {
+            error: error.to_string(),
+        }
+    })?;
+    let base_url = willikins_providers_signoz::base_url_from_env().map_err(|error| {
+        LiveCredentialError::SigNoz {
+            error: error.to_string(),
+        }
+    })?;
+    Ok(willikins_providers_signoz::http_client(
+        base_url, credential,
+    ))
 }
 
 // ---------------------------------------------------------------------
@@ -272,6 +355,7 @@ enum Provider {
     GitHub,
     Doppler,
     Buildkite,
+    SigNoz,
 }
 
 /// `willikins-providers-github`'s live tool names. Kept as its own array
@@ -284,7 +368,7 @@ const GITHUB_TOOL_NAMES: [&str; 2] = ["github.repo.ensure", "github.actions_secr
 
 /// `willikins-providers-doppler`'s live tool names. See
 /// [`GITHUB_TOOL_NAMES`].
-const DOPPLER_TOOL_NAMES: [&str; 7] = [
+const DOPPLER_TOOL_NAMES: [&str; 8] = [
     "doppler.project.ensure",
     "doppler.config.ensure",
     "doppler.config.inheritable.ensure",
@@ -292,11 +376,19 @@ const DOPPLER_TOOL_NAMES: [&str; 7] = [
     "doppler.service_token.ensure",
     "doppler.service_token.rotate",
     "doppler.secret.get",
+    "doppler.secret.set",
 ];
 
 /// `willikins-providers-buildkite`'s live tool names. See
 /// [`GITHUB_TOOL_NAMES`].
 const BUILDKITE_TOOL_NAMES: [&str; 2] = ["buildkite.pipeline.ensure", "buildkite.cluster.get"];
+
+/// `willikins-providers-signoz`'s live tool names. See
+/// [`GITHUB_TOOL_NAMES`]. `doppler.secret.set` needs the *Doppler*
+/// credential (it is a Doppler API call), not `SigNoz`'s, so it lives in
+/// [`DOPPLER_TOOL_NAMES`] above, not here, even though it exists to
+/// receive what this provider mints.
+const SIGNOZ_TOOL_NAMES: [&str; 1] = ["signoz.ingestion_key.ensure"];
 
 /// Which provider `tool` belongs to, or `None` for a pure tool
 /// (`naming.v1`, `template.render`) or a name no live tool carries at all
@@ -311,6 +403,8 @@ fn provider_of(tool: &ToolName) -> Option<Provider> {
         Some(Provider::Doppler)
     } else if BUILDKITE_TOOL_NAMES.contains(&name) {
         Some(Provider::Buildkite)
+    } else if SIGNOZ_TOOL_NAMES.contains(&name) {
+        Some(Provider::SigNoz)
     } else {
         None
     }
@@ -445,16 +539,30 @@ pub fn live_catalog_for_document(document: &Workflow) -> Result<Catalog, Documen
             willikins_providers_buildkite::http_client(credential),
         );
     }
+    if let Some(tool) = first_tool_for(document, Provider::SigNoz) {
+        let tool = tool.clone();
+        let signoz_http = signoz_http_from_env().map_err(|source| DocumentCredentialError {
+            source,
+            document: document.name.clone(),
+            tool: tool.clone(),
+        })?;
+        insert_signoz_tools(&mut catalog, signoz_http);
+    }
     Ok(catalog)
 }
 
 impl crate::Butler {
     /// The live catalog: `willikins-tools`' two pure tools plus every
-    /// live GitHub, Doppler, and Buildkite tool, against each provider's
-    /// real API. See this module's own docs.
+    /// live GitHub, Doppler, Buildkite, and `SigNoz` tool, against each
+    /// provider's real API. See this module's own docs.
     #[must_use]
-    pub fn live_catalog(github: Credential, doppler: Credential, buildkite: Credential) -> Catalog {
-        live_catalog(github, doppler, buildkite)
+    pub fn live_catalog(
+        github: Credential,
+        doppler: Credential,
+        buildkite: Credential,
+        signoz_http: Http,
+    ) -> Catalog {
+        live_catalog(github, doppler, buildkite, signoz_http)
     }
 
     /// A fresh all-fake catalog and its seedable state handle -- for
@@ -488,6 +596,8 @@ mod tests {
         let doppler = Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
         let buildkite =
             Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken12345678");
+        let signoz =
+            Credential::for_testing("WILLIKINS_TEST_SIGNOZ_API_KEY", "testsignozapikey00000000");
         live_catalog_with(
             Http::new(
                 NOWHERE,
@@ -496,6 +606,7 @@ mod tests {
             ),
             Http::new(NOWHERE, Vec::new(), doppler),
             Http::new(NOWHERE, Vec::new(), buildkite),
+            Http::new(NOWHERE, Vec::new(), signoz),
         )
     }
 
@@ -564,6 +675,7 @@ mod tests {
         from_provider_arrays.extend(GITHUB_TOOL_NAMES);
         from_provider_arrays.extend(DOPPLER_TOOL_NAMES);
         from_provider_arrays.extend(BUILDKITE_TOOL_NAMES);
+        from_provider_arrays.extend(SIGNOZ_TOOL_NAMES);
 
         assert_eq!(
             from_provider_arrays.len(),
@@ -588,6 +700,10 @@ mod tests {
         for name in BUILDKITE_TOOL_NAMES {
             let tool = willikins_core::ToolName::parse(name).unwrap();
             assert_eq!(provider_of(&tool), Some(Provider::Buildkite), "{name}");
+        }
+        for name in SIGNOZ_TOOL_NAMES {
+            let tool = willikins_core::ToolName::parse(name).unwrap();
+            assert_eq!(provider_of(&tool), Some(Provider::SigNoz), "{name}");
         }
     }
 

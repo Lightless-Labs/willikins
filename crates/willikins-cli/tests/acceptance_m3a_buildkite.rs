@@ -131,6 +131,8 @@ fn live_shaped_catalog() -> Catalog {
     let doppler = Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
     let buildkite =
         Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken12345678");
+    let signoz =
+        Credential::for_testing("WILLIKINS_TEST_SIGNOZ_API_KEY", "testsignozapikey00000000");
     willikins_server::live_catalog_with(
         Http::new(
             NOWHERE,
@@ -139,6 +141,7 @@ fn live_shaped_catalog() -> Catalog {
         ),
         Http::new(NOWHERE, Vec::new(), doppler),
         Http::new(NOWHERE, Vec::new(), buildkite),
+        Http::new(NOWHERE, Vec::new(), signoz),
     )
 }
 
