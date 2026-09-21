@@ -1,0 +1,69 @@
+# Mint a SigNoz ingestion key and write it into a Doppler config -- the
+# first willikins document in which a real secret is created by one tool
+# and consumed by another with nothing in between ever reading it. The
+# minted value travels from `signoz.ingestion_key.ensure`'s `key` output
+# straight into `doppler.secret.set`'s `value` port as a `Value` the type
+# system refuses to render: it reaches no plan, no journal line, no error
+# and no terminal. That claim was demonstrable before only against a
+# GitHub Actions secret, which the operator does not use; every secret in
+# their world lives in Doppler, and this is the document that makes the
+# claim true there.
+#
+# `doppler.secret.set`'s `config` port is `derived_only` (see that tool's
+# own module docs for the provenance argument): it can only be bound to
+# the output of an earlier, non-pure node, never to a literal or a
+# workflow input. That is why this document ensures the config itself and
+# binds `${{ steps.config.config }}`, rather than taking the config as an
+# input -- a document that named one outright is refused by `check` with
+# `UnderivedBinding`, which is the whole point. `workflows/fixtures/`
+# carries both refusals as negative fixtures.
+#
+# The *project*, by contrast, is an ordinary input, and deliberately so:
+# this document is meant to be run against a real project that already
+# exists. `doppler.project.ensure` is not in this graph, because it reads
+# any project whose description is not willikins' own managed marker as
+# `Foreign` and refuses it -- correct for a tool that creates projects,
+# and exactly wrong for wiring a key into a project a human made years
+# ago. `doppler.config.ensure` has no such marker: it accepts any existing
+# root config as `Present`, and creates the config when the environment
+# has none yet. Run `doppler-project.yaml` first if the project itself
+# does not exist.
+#
+# What the operator must have created by hand first: the Doppler project.
+# On the SigNoz side, the API key in WILLIKINS_SIGNOZ_API_KEY needs
+# `ingestion-key:create` and `ingestion-key:list`, and WILLIKINS_SIGNOZ_HOST
+# must name the tenant host.
+#
+# Convergence: a second apply plans every node NoOp. The ingestion key is
+# never re-read once minted (by design), so `key` comes back Unknown on
+# that second run and `doppler.secret.set` swallows it on its own NoOp --
+# see that tool's module docs for why its `read` reports existence rather
+# than value equality.
+name: signoz-ingestion-key
+description: Mint a SigNoz ingestion key and store it in a Doppler config of an existing project.
+inputs:
+  project: { type: DopplerProject, description: An existing Doppler project (its name is also its id) }
+  environment: { type: EnvironmentSlug, default: prd, description: Which root config receives the key }
+  key_name: { type: SigNozIngestionKeyName, description: The SigNoz ingestion key's name }
+  secret_name:
+    type: SecretName
+    default: SIGNOZ_INGESTION_KEY
+    description: The Doppler secret the minted key is written to
+steps:
+  config:
+    tool: doppler.config.ensure
+    with:
+      project: ${{ inputs.project }}
+      environment: ${{ inputs.environment }}
+  key:
+    tool: signoz.ingestion_key.ensure
+    with:
+      name: ${{ inputs.key_name }}
+  sink:
+    tool: doppler.secret.set
+    with:
+      config: ${{ steps.config.config }}
+      name: ${{ inputs.secret_name }}
+      value: ${{ steps.key.key }}
+outputs:
+  config: ${{ steps.config.config }}
