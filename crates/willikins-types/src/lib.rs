@@ -148,6 +148,7 @@ pub mod naming;
 pub mod propose;
 pub mod registry;
 pub mod reserved;
+pub mod signoz;
 pub mod slug;
 pub mod text;
 pub mod word;
@@ -167,6 +168,7 @@ pub use naming::NamingScheme;
 pub use propose::{ProposeError, propose_slug};
 pub use registry::{TypeName, TypeRef, TypeRegistry};
 pub use reserved::is_reserved;
+pub use signoz::{SigNozIngestionKeyName, SigNozIngestionKeyValue};
 pub use slug::{ComponentSlug, EnvironmentSlug, ProjectSlug};
 pub use text::{TemplateSource, Text};
 pub use word::{Word, WordList};
@@ -201,6 +203,8 @@ registry::domain_types! {
     BuildkiteClusterName,
     WorkflowName,
     Description,
+    SigNozIngestionKeyName,
+    SigNozIngestionKeyValue,
 }
 
 /// Assert that `T::example()` parses as `T`.
