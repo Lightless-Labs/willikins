@@ -188,14 +188,24 @@ pub enum LiveCredentialError {
     },
     /// `WILLIKINS_DOPPLER_TOKEN` is missing or malformed.
     Doppler {
-        /// The provider crate's own message. Names the variable only.
-        /// See [`Self::GitHub`] for why this is not called `message`.
+        /// The provider crate's own message. Never the value -- but,
+        /// unlike [`Self::GitHub`], not always the variable either:
+        /// `DopplerCredentialError::WrongKind` (a `dp.st.` service
+        /// token, or anything else the provisioning pattern rejects)
+        /// describes the token *kinds* that can provision and names no
+        /// variable at all. What identifies it is this enum's own
+        /// `kind` tag, and -- through
+        /// [`DocumentCredentialError`] -- the document and tool that
+        /// needed it. See [`Self::GitHub`] for why this is not called
+        /// `message`.
         error: String,
     },
     /// `WILLIKINS_BUILDKITE_TOKEN` is missing or malformed.
     Buildkite {
-        /// The provider crate's own message. Names the variable only.
-        /// See [`Self::GitHub`] for why this is not called `message`.
+        /// The provider crate's own message. Never the value, and --
+        /// like [`Self::Doppler`], whose note says why -- not always
+        /// the variable either. See [`Self::GitHub`] for why this is
+        /// not called `message`.
         error: String,
     },
 }
