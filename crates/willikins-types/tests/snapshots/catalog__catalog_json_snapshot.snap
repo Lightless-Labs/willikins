@@ -423,5 +423,39 @@ expression: redacted
       ],
       "maxLength": 1024
     }
+  },
+  {
+    "name": "SigNozIngestionKeyName",
+    "secret": false,
+    "description": "The name of a SigNoz ingestion key.",
+    "example": "willikins-example-key",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SigNozIngestionKeyName",
+      "description": "The name of a SigNoz ingestion key.",
+      "type": "string",
+      "examples": [
+        "willikins-example-key"
+      ],
+      "maxLength": 128,
+      "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9_-]*)$"
+    }
+  },
+  {
+    "name": "SigNozIngestionKeyValue",
+    "secret": true,
+    "description": "A SigNoz ingestion key's minted value.",
+    "example": "[ELIDED SECRET EXAMPLE]",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SigNozIngestionKeyValue",
+      "description": "A SigNoz ingestion key's minted value.",
+      "type": "string",
+      "examples": [
+        "[ELIDED SECRET EXAMPLE]"
+      ],
+      "maxLength": 4096,
+      "minLength": 1
+    }
   }
 ]
