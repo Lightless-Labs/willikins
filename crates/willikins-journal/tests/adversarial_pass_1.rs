@@ -826,6 +826,7 @@ impl SecretListSink {
                     TypeName::parse("DopplerServiceToken").unwrap(),
                 )),
                 required: true,
+                derived_only: false,
             },
         );
         Self {

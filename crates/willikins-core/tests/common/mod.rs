@@ -268,6 +268,7 @@ impl FixedTokenService {
             willikins_core::PortSpec {
                 ty: willikins_core::PortType::Exact(ty("DopplerConfig")),
                 required: true,
+                derived_only: false,
             },
         );
         inputs.insert(
@@ -275,6 +276,7 @@ impl FixedTokenService {
             willikins_core::PortSpec {
                 ty: willikins_core::PortType::Exact(ty("DopplerTokenName")),
                 required: true,
+                derived_only: false,
             },
         );
         let mut outputs = IndexMap::new();
@@ -514,6 +516,7 @@ impl RequiresKnownInputTool {
             willikins_core::PortSpec {
                 ty: willikins_core::PortType::Exact(ty("GitHubOrg")),
                 required: true,
+                derived_only: false,
             },
         );
         Self {
@@ -630,6 +633,7 @@ impl ConstantForEachTool {
             willikins_core::PortSpec {
                 ty: willikins_core::PortType::Exact(ty("EnvironmentSlug")),
                 required: true,
+                derived_only: false,
             },
         );
         let mut outputs = IndexMap::new();

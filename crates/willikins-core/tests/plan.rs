@@ -321,6 +321,7 @@ fn dummy_spec(
             PortSpec {
                 ty: port_ty.clone(),
                 required: *required,
+                derived_only: false,
             },
         );
     }

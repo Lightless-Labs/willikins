@@ -413,6 +413,7 @@ impl RecordingSinkTool {
             PortSpec {
                 ty: PortType::Exact(ty("GitHubOrg")),
                 required: true,
+                derived_only: false,
             },
         );
         Self {

@@ -42,6 +42,7 @@ impl DopplerConfigInheritsEnsure {
             PortSpec {
                 ty: PortType::Exact(list("DopplerConfig")),
                 required: true,
+                derived_only: false,
             },
         );
         Self {

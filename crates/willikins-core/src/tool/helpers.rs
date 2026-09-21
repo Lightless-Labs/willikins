@@ -63,6 +63,7 @@ pub fn exact(name: &str, required: bool) -> PortSpec {
     PortSpec {
         ty: PortType::Exact(scalar(name)),
         required,
+        derived_only: false,
     }
 }
 
@@ -71,6 +72,19 @@ pub fn any_secret(required: bool) -> PortSpec {
     PortSpec {
         ty: PortType::AnySecret,
         required,
+        derived_only: false,
+    }
+}
+
+/// A required [`PortSpec`] accepting exactly the scalar type `name`, which
+/// `check` refuses to bind to anything but the output of an earlier,
+/// non-pure node — see [`PortSpec::derived_only`]. Always required: a port
+/// a document may leave unbound has no provenance to police.
+pub fn exact_derived_only(name: &str) -> PortSpec {
+    PortSpec {
+        ty: PortType::Exact(scalar(name)),
+        required: true,
+        derived_only: true,
     }
 }
 

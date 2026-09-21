@@ -100,6 +100,7 @@ fn spec_of(
             PortSpec {
                 ty: ty.clone(),
                 required: *required,
+                derived_only: false,
             },
         );
     }
