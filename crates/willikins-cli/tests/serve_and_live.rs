@@ -286,6 +286,91 @@ fn plan_live_on_a_document_using_github_still_refuses_with_only_a_doppler_token_
     assert_eq!(json["tool"], "github.repo.ensure", "{json}");
 }
 
+/// A `dp.st.` service token: correctly shaped for Doppler, and refused
+/// by `willikins_providers_doppler::credential_from_env` as the wrong
+/// *kind* (a service token is secrets-only within one config and cannot
+/// provision). Assembled from parts for the same reason
+/// [`doppler_test_token`] is.
+fn doppler_service_token() -> String {
+    concat!("dp.st.", "OhbVrpoiVgRV5IfLBcbfnoGMbJmTPSIAoCLrZ3aWZk").to_string()
+}
+
+/// Narrowing the credential *set* must not weaken the credential
+/// *check*: a provider the document does use is still validated for
+/// shape up front, before `check` and before any network call. The
+/// refusal is `kind: "Doppler"` and carries this document and the tool
+/// that needed it, exactly as a missing credential does.
+///
+/// The companion to
+/// [`plan_live_on_a_doppler_only_document_needs_only_the_doppler_token`]:
+/// that one proves a well-shaped token is *accepted*, this one proves a
+/// badly shaped one is still *rejected* rather than deferred to apply.
+#[test]
+fn plan_live_on_a_doppler_only_document_still_refuses_a_wrong_kind_doppler_token() {
+    let token = doppler_service_token();
+    let output = run(
+        &[
+            "--json",
+            "plan",
+            workflow("workflows/doppler-project.yaml").to_str().unwrap(),
+            "--input",
+            "project=wlk-shape-test",
+            "--live",
+        ],
+        &[("WILLIKINS_DOPPLER_TOKEN", token.as_str())],
+    );
+    assert_eq!(exit_code(&output), 2, "stderr: {}", stderr(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stderr(&output).trim()).expect("valid JSON on stderr");
+    assert_eq!(json["kind"], "Doppler", "{json}");
+    assert_eq!(json["document"], "doppler-project", "{json}");
+    assert_eq!(json["tool"], "doppler.project.ensure", "{json}");
+    assert!(
+        stdout(&output).is_empty(),
+        "nothing reached check: {}",
+        stdout(&output)
+    );
+}
+
+/// The other half of the narrowing, and the part a "validate everything
+/// up front" catalog could not do: a credential that is set but
+/// *malformed* for a provider this document never calls is not looked at
+/// at all. Both `WILLIKINS_GITHUB_TOKEN` and `WILLIKINS_BUILDKITE_TOKEN`
+/// hold values no provider's pattern accepts, and the run still gets
+/// past the catalog and `check` to the missing-input refusal (exit 1, on
+/// stdout) -- before `willikins_core::plan` calls any tool's `read()`, so
+/// this makes no network call either.
+#[test]
+fn plan_live_ignores_a_malformed_credential_for_a_provider_the_document_never_uses() {
+    let token = doppler_test_token();
+    let output = run(
+        &[
+            "plan",
+            workflow("workflows/doppler-project.yaml").to_str().unwrap(),
+            "--live",
+        ],
+        &[
+            ("WILLIKINS_DOPPLER_TOKEN", token.as_str()),
+            ("WILLIKINS_GITHUB_TOKEN", "not-a-github-token"),
+            ("WILLIKINS_BUILDKITE_TOKEN", "not-a-buildkite-token"),
+        ],
+    );
+    assert_eq!(
+        exit_code(&output),
+        1,
+        "the unused providers' malformed credentials should never be read -- \
+         stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("missing `project`"),
+        "stdout: {}",
+        stdout(&output)
+    );
+    assert!(stderr(&output).is_empty(), "stderr: {}", stderr(&output));
+}
+
 #[test]
 fn live_and_fake_state_are_mutually_exclusive() {
     let output = run(
