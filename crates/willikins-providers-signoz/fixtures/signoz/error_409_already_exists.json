@@ -1,0 +1,8 @@
+{
+  "status": "error",
+  "error": {
+    "type": "already-exists",
+    "code": "already_exists",
+    "message": "key: willikins-example-key already exists"
+  }
+}

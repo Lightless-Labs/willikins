@@ -3036,6 +3036,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "willikins-providers-signoz"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "insta",
+ "mockito",
+ "rand 0.9.5",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "willikins-core",
+ "willikins-providers-fake",
+ "willikins-providers-http",
+ "willikins-types",
+]
+
+[[package]]
 name = "willikins-server"
 version = "0.1.0"
 dependencies = [
@@ -3070,6 +3088,7 @@ dependencies = [
  "willikins-providers-fake",
  "willikins-providers-github",
  "willikins-providers-http",
+ "willikins-providers-signoz",
  "willikins-tools",
  "willikins-types",
 ]

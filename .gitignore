@@ -6,6 +6,7 @@ nohup.out
 /crates/willikins-providers-github/fixtures/github/live/
 /crates/willikins-providers-doppler/fixtures/doppler/live/
 /crates/willikins-providers-buildkite/fixtures/buildkite/live/
+/crates/willikins-providers-signoz/fixtures/signoz/live/
 
 # Railway IaC: the TypeScript SDK `railway config plan` evaluates .railway/railway.ts with.
 node_modules/

@@ -1,0 +1,8 @@
+{
+  "status": "error",
+  "error": {
+    "type": "internal",
+    "code": "internal_error",
+    "message": "internal server error"
+  }
+}
