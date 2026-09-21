@@ -58,8 +58,34 @@ fn read_reports_present_when_inheritable_is_true() {
     assert!(matches!(observation, Observation::Present(_)));
 }
 
+/// An explicit `inheritable: false` reads `Absent`. This needs its own
+/// fixture, and not `config_get_present` (whose body omits the key
+/// altogether): with only the omitted-key body in the suite, weakening
+/// the read from `== Some(true)` to `.is_some()` left every test in this
+/// file green -- checked by mutation on 2026-09-20, with the file
+/// restored from a saved copy afterwards. The two bodies are different
+/// facts about the same config and both are reachable: Doppler answers
+/// `false` for a config that was marked inheritable and then unmarked.
 #[test]
-fn read_reports_absent_when_inheritable_is_false() {
+fn read_reports_absent_when_inheritable_is_explicitly_false() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(200)
+        .with_body(fixture("config_get_inheritable_false").to_string())
+        .create();
+    let tool = DopplerConfigInheritableEnsure::new(client_against(provider.url()));
+    let observation = tool.read(&inputs()).unwrap();
+    assert!(matches!(observation, Observation::Absent { .. }));
+}
+
+/// The other half: a body that omits `inheritable` entirely -- the common
+/// case, a config Doppler was never asked to mark inheritable.
+#[test]
+fn read_reports_absent_when_inheritable_is_absent_from_the_body() {
     let mut provider = MockProvider::start();
     provider
         .mock(
