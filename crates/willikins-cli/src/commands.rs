@@ -86,9 +86,13 @@ pub struct ApplyArgs {
     /// is not a valid token -- so the file would not even reload.
     #[arg(long = "fake-state-out", value_name = "FILE")]
     pub fake_state_out: Option<String>,
-    /// Real providers, credentials from `WILLIKINS_GITHUB_TOKEN`,
-    /// `WILLIKINS_DOPPLER_TOKEN`, and `WILLIKINS_BUILDKITE_TOKEN`.
-    /// Without it, the fake providers.
+    /// Real providers. Without it, the fake providers. Only the
+    /// credential(s) this document's own tools need are required --
+    /// `WILLIKINS_GITHUB_TOKEN`, `WILLIKINS_DOPPLER_TOKEN`, and/or
+    /// `WILLIKINS_BUILDKITE_TOKEN`, whichever of the three it actually
+    /// calls. (`--plan-id` mode is the exception: it resolves against a
+    /// whole trusted `--workflows-dir`, not this one document, so it
+    /// still requires all three.)
     #[arg(long)]
     pub live: bool,
     /// When the freshly planned work needs human approval, grant it as
@@ -346,15 +350,25 @@ fn fail_apply(
 /// `clippy::type_complexity`.
 pub(crate) type CatalogAndState = (willikins_core::Catalog, Option<Arc<Mutex<FakeState>>>);
 
-/// Build the catalog `plan`/`apply` run against: the live catalog from
-/// the process environment when `live` (real credentials, real network
-/// calls; refuses before any of them with a kind-tagged
+/// Build the catalog `apply --plan-id` runs against: the live catalog
+/// from the process environment when `live` (real credentials, real
+/// network calls; refuses before any of them with a kind-tagged
 /// [`willikins_server::LiveCredentialError`] when a credential is missing
 /// or malformed), otherwise the fake providers, optionally seeded from
 /// `fake_state_path` -- returning the seeded [`FakeState`] handle too, so
 /// `apply`'s own `--fake-state-out` can dump it back out once a run
 /// reaches its final state. `live` and `fake_state_path` are mutually
 /// exclusive.
+///
+/// Unconditionally requires all three credentials in `live` mode, even
+/// though a given plan may only need one or two of them: `--plan-id`
+/// resolves against a whole trusted `--workflows-dir`, not one document
+/// it can inspect up front (`Butler::start` scans and checks the
+/// directory as a whole), the same "many documents, refuse before any of
+/// them" posture `willikins_server::cli::run_serve` needs. A single
+/// document's `plan <file>`/`apply <file>` instead calls
+/// [`build_catalog_for_document`], scoped to that one document's own
+/// tools.
 pub(crate) fn build_catalog(
     live: bool,
     fake_state_path: Option<&str>,
@@ -370,6 +384,41 @@ pub(crate) fn build_catalog(
             willikins_server::live_catalog_from_env().map_err(|error| fail_config(&error, json))?;
         return Ok((catalog, None));
     }
+    build_fake_catalog(fake_state_path)
+}
+
+/// Build the catalog `plan <file>`/`apply <file>` run against: like
+/// [`build_catalog`], but in `live` mode, only the credential(s)
+/// `workflow`'s own nodes actually call tools from are required --
+/// [`willikins_server::live_catalog_for_document`] computes that set from
+/// `workflow.nodes` rather than demanding every provider unconditionally,
+/// so a Doppler-only document needs only `WILLIKINS_DOPPLER_TOKEN`. The
+/// refusal, a kind-tagged
+/// [`willikins_server::DocumentCredentialError`], names the missing or
+/// malformed variable and, unlike [`build_catalog`]'s own refusal, which
+/// document and which of its tools needed it.
+pub(crate) fn build_catalog_for_document(
+    live: bool,
+    fake_state_path: Option<&str>,
+    workflow: &willikins_core::Workflow,
+    json: bool,
+) -> Result<CatalogAndState, ExitCode> {
+    if live {
+        if fake_state_path.is_some() {
+            return Err(usage_error(
+                "--live and --fake-state are mutually exclusive",
+            ));
+        }
+        let catalog = willikins_server::live_catalog_for_document(workflow)
+            .map_err(|error| fail_config(&error, json))?;
+        return Ok((catalog, None));
+    }
+    build_fake_catalog(fake_state_path)
+}
+
+/// [`build_catalog`] and [`build_catalog_for_document`]'s shared non-live
+/// branch: the fake providers, optionally seeded from `fake_state_path`.
+fn build_fake_catalog(fake_state_path: Option<&str>) -> Result<CatalogAndState, ExitCode> {
     let state = match fake_state_path {
         Some(path) => {
             let contents = std::fs::read_to_string(path).map_err(|error| {
@@ -541,15 +590,26 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
         Err(code) => return code,
     };
 
-    let (catalog, fake_state) = match build_catalog(args.live, args.fake_state.as_deref(), json) {
-        Ok(built) => built,
+    // Parsed before the catalog is built (see `main::cmd_plan`'s own
+    // comment): a `--live` catalog scoped to this one document
+    // (`build_catalog_for_document`) needs to know which tools it calls
+    // first, so a Doppler-only document never has to provide
+    // `WILLIKINS_GITHUB_TOKEN` or `WILLIKINS_BUILDKITE_TOKEN` just to be
+    // checked.
+    let workflow = match crate::load_workflow(file, json) {
+        Ok(workflow) => workflow,
         Err(code) => return code,
     };
+    let (catalog, fake_state) =
+        match build_catalog_for_document(args.live, args.fake_state.as_deref(), &workflow, json) {
+            Ok(built) => built,
+            Err(code) => return code,
+        };
     if args.fake_state_out.is_some() && fake_state.is_none() {
         return usage_error("apply: --fake-state-out needs the fake providers (drop --live)");
     }
 
-    let checked = match crate::load_and_check(file, &catalog, json) {
+    let checked = match crate::check_workflow(&workflow, &catalog, json) {
         Ok(checked) => checked,
         Err(code) => return code,
     };
