@@ -68,7 +68,7 @@ fn a_marker_credential_reaches_no_observation_ensured_or_error() {
     provider
         .mock("GET", "/api/v2/gateway/ingestion_keys")
         .with_status(200)
-        .with_body(r#"{"status":"success","data":[]}"#)
+        .with_body(r#"{"status":"success","data":{"keys":[],"_pagination":{}}}"#)
         .create();
     let client = client_against(provider.url());
     let observation = SigNozIngestionKeyEnsure::new(client.clone())
@@ -121,7 +121,9 @@ fn every_request_carries_the_marker_in_signoz_api_key_and_never_in_authorization
                         value.to_str().unwrap_or("<non-utf8>").to_string(),
                     ));
                 }
-                r#"{"status":"success","data":[]}"#.as_bytes().to_vec()
+                r#"{"status":"success","data":{"keys":[],"_pagination":{}}}"#
+                    .as_bytes()
+                    .to_vec()
             }
         })
         .create();
@@ -179,7 +181,7 @@ fn ensure_never_makes_or_needs_a_sink_token_to_read_the_value_back() {
         .mock("GET", "/api/v2/gateway/ingestion_keys")
         .with_status(200)
         .with_body(
-            r#"{"status":"success","data":[{"id":"018e5a22-0000-7000-a000-000000000001","name":"willikins-example-key"}]}"#,
+            r#"{"status":"success","data":{"keys":[{"id":"018e5a22-0000-7000-a000-000000000001","name":"willikins-example-key"}],"_pagination":{}}}"#,
         )
         .create();
     let client = client_against(provider.url());
