@@ -62,6 +62,7 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
         "doppler-ios.yaml",
         "doppler-backend.yaml",
         "doppler-backend-for-ios.yaml",
+        "signoz-ingestion-key.yaml",
     ] {
         assert!(hashes.contains_key(file), "{file}: {hashes:?}");
     }
@@ -85,6 +86,7 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
             "new-rust-service-buildkite",
             "new-rust-service",
             "rotate-service-token",
+            "signoz-ingestion-key",
         ]
     );
 }
