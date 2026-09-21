@@ -226,6 +226,18 @@ pub enum CheckError {
         /// The secret-accepting port it was bound to.
         port: PortName,
     },
+    /// A [`crate::tool::PortSpec::derived_only`] port was bound to
+    /// anything other than the output of an earlier, non-pure node: a
+    /// literal, a workflow input, a `for_each` item, or a pure node's
+    /// output all report this. `doppler.secret.set`'s `config` port is
+    /// the first user — see that field's own doc comment for why a pure
+    /// node's output is refused too.
+    UnderivedBinding {
+        /// The node whose binding is not a derived one.
+        node: NodeName,
+        /// The `derived_only` port it was bound to.
+        port: PortName,
+    },
     /// A secret value, read from another node's output, was bound to a
     /// port that does not accept secrets. Takes precedence over
     /// [`Self::TypeMismatch`] for the same edge.
@@ -393,6 +405,12 @@ impl fmt::Display for CheckError {
                 f,
                 "node `{node}`, port `{port}`: a literal cannot supply a secret value"
             ),
+            Self::UnderivedBinding { node, port } => write!(
+                f,
+                "node `{node}`, port `{port}`: this port may only be bound to the output of an \
+                 earlier, non-pure node — never a literal, a workflow input, a for_each item, \
+                 or a pure node's output"
+            ),
             Self::SecretToNonSecretSink { from, to } => write!(
                 f,
                 "secret value from node `{}`, port `{}` flows into non-secret sink at `{to}`",
@@ -494,6 +512,7 @@ impl CheckError {
             Self::InvalidLiteral { .. } => "InvalidLiteral",
             Self::TypeMismatch { .. } => "TypeMismatch",
             Self::SecretLiteral { .. } => "SecretLiteral",
+            Self::UnderivedBinding { .. } => "UnderivedBinding",
             Self::SecretToNonSecretSink { .. } => "SecretToNonSecretSink",
             Self::SecretWorkflowInput { .. } => "SecretWorkflowInput",
             Self::SecretForEachSource { .. } => "SecretForEachSource",
@@ -700,6 +719,29 @@ impl<'a> Resolver<'a> {
             .insert(port.clone(), ty);
     }
 
+    /// Whether `source` — a resolved binding's `(node, port)` origin, as
+    /// [`Self::resolve`] returns it — is one [`PortSpec::derived_only`]
+    /// accepts: the output of an earlier node whose own tool is **not**
+    /// pure.
+    ///
+    /// `None` (a literal, a workflow input, or a `for_each` `item`, none
+    /// of which carries a source) is never accepted — a `derived_only`
+    /// port polices provenance, and none of those three has any. A pure
+    /// node's output is refused too, deliberately: a pure tool is
+    /// evaluated from its own inputs alone (`plan` runs it during
+    /// planning, from whatever literals or inputs feed it), so accepting
+    /// one here would let a document launder a literal through a
+    /// passthrough node and defeat the whole restriction — see
+    /// `PortSpec::derived_only`'s own doc comment. A node whose spec
+    /// could not be resolved (an unknown tool, already reported
+    /// elsewhere) is conservatively refused rather than assumed derived.
+    fn is_derived_binding(&self, source: Option<&(NodeName, PortName)>) -> bool {
+        let Some((from_node, _)) = source else {
+            return false;
+        };
+        matches!(self.specs.get(from_node), Some(Some(spec)) if !spec.pure)
+    }
+
     /// Check one node: its `for_each` binding, every one of its tool's
     /// input ports, and any `with` key that is not one of them.
     fn check_node(
@@ -829,6 +871,13 @@ impl<'a> Resolver<'a> {
         };
 
         if let Binding::Literal(text) = binding {
+            if port_spec.derived_only {
+                errors.push(CheckError::UnderivedBinding {
+                    node: node.clone(),
+                    port: port.clone(),
+                });
+                return;
+            }
             if let Some(found) =
                 check_literal(node, port, text, &port_spec.ty, self.registry, errors)
             {
@@ -845,6 +894,14 @@ impl<'a> Resolver<'a> {
         let Some((found, source)) = self.resolve(site_idx, &site, item_ctx, binding, errors) else {
             return;
         };
+
+        if port_spec.derived_only && !self.is_derived_binding(source.as_ref()) {
+            errors.push(CheckError::UnderivedBinding {
+                node: node.clone(),
+                port: port.clone(),
+            });
+            return;
+        }
 
         if is_secret(&found, self.registry)
             && !port_accepts_secret(&port_spec.ty, self.registry)
@@ -1302,6 +1359,7 @@ mod tests {
                 PortSpec {
                     ty: port_ty.clone(),
                     required: *required,
+                    derived_only: false,
                 },
             );
         }
@@ -1623,6 +1681,7 @@ mod tests {
             PortSpec {
                 ty: PortType::Exact(list_ty("GitHubOrg")),
                 required: true,
+                derived_only: false,
             },
         );
         let spec = ToolSpec {
@@ -2136,6 +2195,10 @@ mod tests {
                 node: node_name("n"),
                 port: port("p"),
             },
+            CheckError::UnderivedBinding {
+                node: node_name("n"),
+                port: port("p"),
+            },
             CheckError::SecretToNonSecretSink {
                 from: (node_name("a"), port("out")),
                 to: port_site("b", "in"),
@@ -2199,6 +2262,7 @@ mod tests {
         InvalidLiteral,
         TypeMismatch,
         SecretLiteral,
+        UnderivedBinding,
         SecretToNonSecretSink,
         SecretWorkflowInput,
         SecretForEachSource,

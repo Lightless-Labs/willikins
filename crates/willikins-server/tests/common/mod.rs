@@ -228,6 +228,7 @@ impl BlockingTool {
             PortSpec {
                 ty: willikins_core::PortType::Exact(willikins_core::helpers::scalar("ProjectSlug")),
                 required: true,
+                derived_only: false,
             },
         );
         let tool = Self {
@@ -332,6 +333,7 @@ impl PanickingTool {
             PortSpec {
                 ty: willikins_core::PortType::Exact(willikins_core::helpers::scalar("ProjectSlug")),
                 required: true,
+                derived_only: false,
             },
         );
         Self {
@@ -391,6 +393,7 @@ impl ListSourceTool {
             PortSpec {
                 ty: willikins_core::PortType::Exact(willikins_core::helpers::scalar("ProjectSlug")),
                 required: true,
+                derived_only: false,
             },
         );
         let mut outputs = IndexMap::new();
@@ -468,6 +471,7 @@ impl CountingTool {
                     "EnvironmentSlug",
                 )),
                 required: true,
+                derived_only: false,
             },
         );
         let tool = Self {

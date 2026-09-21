@@ -250,6 +250,7 @@ fn spec_with(key: Vec<PortName>, pure: bool, class: Class) -> ToolSpec {
         PortSpec {
             ty: PortType::Exact(TypeRef::scalar(type_name("GitHubOrg"))),
             required: true,
+            derived_only: false,
         },
     );
     ToolSpec {

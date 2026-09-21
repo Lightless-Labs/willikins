@@ -128,6 +128,7 @@ mod tests {
                 PortSpec {
                     ty: PortType::Exact(TypeRef::scalar(TypeName::parse("GitHubOrg").unwrap())),
                     required: true,
+                    derived_only: false,
                 },
             );
             let mut outputs = IndexMap::new();
@@ -179,6 +180,7 @@ mod tests {
                 PortSpec {
                     ty: PortType::Exact(TypeRef::scalar(TypeName::parse("GitHubRepo").unwrap())),
                     required: true,
+                    derived_only: false,
                 },
             );
             let mut outputs = IndexMap::new();

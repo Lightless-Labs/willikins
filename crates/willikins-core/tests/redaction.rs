@@ -53,6 +53,7 @@ impl CarelessTool {
             PortSpec {
                 ty: PortType::AnySecret,
                 required: true,
+                derived_only: false,
             },
         );
         Self {

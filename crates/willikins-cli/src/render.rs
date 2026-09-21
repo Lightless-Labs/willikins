@@ -191,6 +191,12 @@ fn check_error_detail(error: &CheckError) -> String {
         CheckError::SecretLiteral { node, port } => {
             format!("{node}.{port}: a literal cannot supply a secret value")
         }
+        CheckError::UnderivedBinding { node, port } => {
+            format!(
+                "{node}.{port}: this port may only be bound to the output of an earlier, \
+                 non-pure node"
+            )
+        }
         CheckError::SecretToNonSecretSink { from, to } => {
             format!("{}.{} -> {to}", from.0, from.1)
         }

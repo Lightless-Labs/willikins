@@ -335,6 +335,7 @@ impl ReadBlockingTool {
             PortSpec {
                 ty: willikins_core::PortType::Exact(willikins_core::helpers::scalar("ProjectSlug")),
                 required: true,
+                derived_only: false,
             },
         );
         let tool = Self {

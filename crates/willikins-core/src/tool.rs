@@ -127,6 +127,27 @@ pub struct PortSpec {
     pub ty: PortType,
     /// Whether a workflow must bind this port for the tool to run at all.
     pub required: bool,
+    /// Whether this port may only be bound to the output of an earlier,
+    /// **non-pure** node — never a literal, a workflow input, a `for_each`
+    /// item, or a pure node's output. See `check.rs`'s
+    /// `CheckError::UnderivedBinding` for why a pure node's output is
+    /// refused too: a pure tool can be evaluated from literals alone, so
+    /// allowing its output here would let a document launder a literal
+    /// through a passthrough node and defeat the whole restriction.
+    /// `doppler.secret.set`'s `config` port is the first (and, for now,
+    /// only) user: a document may write a secret only into a config the
+    /// same graph actually produced, never one it names by fiat.
+    ///
+    /// `#[serde(skip_serializing_if)]` on `false` (the default for every
+    /// port but that one): fifteen existing tools' specs serialize
+    /// byte-identically to before this field existed, so a JSON
+    /// snapshot's diff for this change is confined to the one tool that
+    /// actually sets it, and no journal or plan record (which never
+    /// serializes a `PortSpec` at all — `Plan::fingerprint`'s
+    /// `InstanceFingerprint` carries only rendered output values, never
+    /// a tool's port shapes) is affected either way.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub derived_only: bool,
 }
 
 /// The declared shape of a tool: its ports, its natural key, and how much
@@ -506,6 +527,7 @@ mod tests {
             PortSpec {
                 ty: PortType::Exact(github_repo_ty()),
                 required: true,
+                derived_only: false,
             },
         );
         inputs.insert(
@@ -513,6 +535,7 @@ mod tests {
             PortSpec {
                 ty: PortType::Exact(visibility_ty()),
                 required: true,
+                derived_only: false,
             },
         );
         let mut outputs = IndexMap::new();
