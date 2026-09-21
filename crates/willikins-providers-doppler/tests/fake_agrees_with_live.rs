@@ -131,6 +131,34 @@ fn inheritable_present_agrees() {
     assert_eq!(shape(&live), shape(&fake));
 }
 
+/// An explicit `inheritable: false` agrees too, and it is the case a
+/// mutation hides: the fake records membership, so it cannot tell
+/// "never marked" from "marked and unmarked", while the live tool reads
+/// a real field that can say either. Weakening the live read to
+/// `.is_some()` makes this test the one that disagrees.
+#[test]
+fn inheritable_explicitly_false_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(200)
+        .with_body(fixture("config_get_inheritable_false").to_string())
+        .create();
+
+    let live = live_inheritable_tool(provider.url())
+        .read(&config_inputs())
+        .unwrap();
+    let fake = willikins_providers_fake::tools::DopplerConfigInheritableEnsure::new(Arc::new(
+        Mutex::new(FakeState::new()),
+    ))
+    .read(&config_inputs())
+    .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
 /// The missing-parent tolerance both crates' reads share: a `404` (fake
 /// has no concept of "the parent is missing" -- an empty state already
 /// answers the same way `Absent` does).
