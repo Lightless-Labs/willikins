@@ -1383,6 +1383,13 @@ fn a_document_that_checks_only_against_the_fake_catalog_refuses_a_live_startup()
             "WILLIKINS_TEST_ADVERSARIAL_BUILDKITE",
             "bkua_inert12345678901234",
         ),
+        willikins_providers_signoz::http_client(
+            "http://127.0.0.1:1",
+            willikins_providers_http::Credential::for_testing(
+                "WILLIKINS_TEST_ADVERSARIAL_SIGNOZ",
+                "inert-signoz-api-key-0000000000",
+            ),
+        ),
     );
     let error = willikins_server::Butler::start(config(live))
         .err()
