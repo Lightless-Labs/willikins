@@ -14,10 +14,14 @@
 //! domain type, never enters `willikins_types`' type registry, is never a
 //! [`willikins_core::Value`], and this crate does not depend on
 //! `willikins-types` with the `executor` feature and mints no
-//! `willikins_types::SinkToken`. Its bytes are read in exactly one
-//! function, `Credential::authorize` (crate-private, so the builder it
-//! returns cannot be handed out with the header still on it);
-//! `clippy.toml` disallows
+//! `willikins_types::SinkToken`. Its bytes are read in exactly two
+//! functions, `Credential::authorize` and `Credential::authorize_header`
+//! (both crate-private, so the builder either returns cannot be handed
+//! out with the header still on it) — the second exists for a provider
+//! whose documented scheme is not `Authorization: Bearer` (`SigNoz`:
+//! `SigNoz-Api-Key`), and both are the only place `Http` ever attaches a
+//! credential, via `Http`'s own `apply_credential`. `clippy.toml`
+//! disallows
 //! `secrecy::ExposeSecret::expose_secret` everywhere else in the
 //! workspace, and `crates/willikins-core/tests/expose_secret_guard.rs`
 //! makes that a test rather than a reviewer's grep.

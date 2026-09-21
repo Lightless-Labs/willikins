@@ -52,6 +52,16 @@ pub struct Http {
     base_url: String,
     default_headers: Vec<(String, String)>,
     credential: Credential,
+    /// `None`: every request carries `credential` via
+    /// [`Credential::authorize`] (`Authorization: Bearer <token>`), the
+    /// shape every provider but `SigNoz` uses. `Some(name)`: every request
+    /// carries it via [`Credential::authorize_header`] instead, verbatim
+    /// under the header named `name` — `SigNoz`'s documented
+    /// `SigNoz-Api-Key` (`docs/research/2026-09-20-signoz-ingestion-keys.md`,
+    /// section 1). Set once at construction, never per call, so a
+    /// provider crate cannot build the header itself at a call site this
+    /// crate's guards cannot see.
+    credential_header: Option<&'static str>,
     sleeper: Arc<dyn Sleeper>,
 }
 
@@ -64,6 +74,20 @@ impl Http {
         base_url: impl Into<String>,
         default_headers: Vec<(String, String)>,
         credential: Credential,
+    ) -> Self {
+        Self::with_credential_header(base_url, default_headers, credential, None)
+    }
+
+    /// Build a client exactly like [`Self::new`], except the credential
+    /// is sent under the header named `header_name` (verbatim, no
+    /// `Bearer ` prefix) instead of `Authorization`. `header_name: None`
+    /// is [`Self::new`]'s own behaviour.
+    #[must_use]
+    pub fn with_credential_header(
+        base_url: impl Into<String>,
+        default_headers: Vec<(String, String)>,
+        credential: Credential,
+        header_name: Option<&'static str>,
     ) -> Self {
         let config = Agent::config_builder()
             .timeout_connect(Some(CONNECT_TIMEOUT))
@@ -85,6 +109,7 @@ impl Http {
             base_url: base_url.into(),
             default_headers,
             credential,
+            credential_header: header_name,
             sleeper: sleeper::real(),
         }
     }
@@ -108,6 +133,19 @@ impl Http {
         builder
     }
 
+    /// Attach [`Self::credential`] to `builder`, via
+    /// [`Credential::authorize_header`] when [`Self::credential_header`]
+    /// names one, [`Credential::authorize`] (the `Authorization: Bearer`
+    /// default) otherwise. The one call site every request method below
+    /// goes through, so a provider crate never chooses between the two
+    /// itself.
+    fn apply_credential<B>(&self, builder: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
+        match self.credential_header {
+            Some(name) => self.credential.authorize_header(builder, name),
+            None => self.credential.authorize(builder),
+        }
+    }
+
     /// `GET path`, retried.
     ///
     /// # Errors
@@ -118,7 +156,7 @@ impl Http {
         let url = self.url(path);
         let (status, body, facts) = self.run_retrying(true, || {
             let builder = self.apply_headers(self.agent.get(url.as_str()));
-            self.credential.authorize(builder).call()
+            self.apply_credential(builder).call()
         })?;
         Self::finish(status, &body, facts)
     }
@@ -136,7 +174,7 @@ impl Http {
         let url = self.url(path);
         let (status, response_body, facts) = self.run_retrying(true, || {
             let builder = self.apply_headers(self.agent.put(url.as_str()));
-            self.credential.authorize(builder).send_json(body)
+            self.apply_credential(builder).send_json(body)
         })?;
         Self::finish(status, &response_body, facts)
     }
@@ -155,7 +193,7 @@ impl Http {
         let url = self.url(path);
         let (status, response_body, facts) = self.run_retrying(true, || {
             let builder = self.apply_headers(self.agent.put(url.as_str()));
-            self.credential.authorize(builder).send_json(body)
+            self.apply_credential(builder).send_json(body)
         })?;
         if (200..300).contains(&status) {
             Ok(())
@@ -180,7 +218,7 @@ impl Http {
         let url = self.url(path);
         let (status, response_body, facts) = self.run_retrying(false, || {
             let builder = self.apply_headers(self.agent.post(url.as_str()));
-            self.credential.authorize(builder).send_json(body)
+            self.apply_credential(builder).send_json(body)
         })?;
         Self::finish(status, &response_body, facts)
     }
@@ -196,7 +234,7 @@ impl Http {
         let url = self.url(path);
         let (status, body, facts) = self.run_retrying(true, || {
             let builder = self.apply_headers(self.agent.delete(url.as_str()));
-            self.credential.authorize(builder).call()
+            self.apply_credential(builder).call()
         })?;
         if (200..300).contains(&status) {
             Ok(())
@@ -222,7 +260,7 @@ impl Http {
             let builder = self
                 .apply_headers(self.agent.delete(url.as_str()))
                 .force_send_body();
-            self.credential.authorize(builder).send_json(body)
+            self.apply_credential(builder).send_json(body)
         })?;
         if (200..300).contains(&status) {
             Ok(())
