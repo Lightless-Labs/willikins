@@ -223,7 +223,7 @@ impl std::error::Error for LiveCredentialError {}
 /// or might need to serve, more than the one document it was just handed.
 /// A `plan <file> --live` / `apply <file> --live` invocation, which does
 /// have exactly one document up front, goes through
-/// [`live_catalog_for_document`] instead (the wart `todos/` recorded:
+/// [`live_catalog_for_document`] instead (the operator's own wart report:
 /// running a Doppler-only document used to demand
 /// `WILLIKINS_GITHUB_TOKEN` and `WILLIKINS_BUILDKITE_TOKEN` too).
 ///
