@@ -1,7 +1,8 @@
 //! Live Doppler provider tools: `doppler.project.ensure`,
 //! `doppler.config.ensure`, `doppler.config.inheritable.ensure`,
 //! `doppler.config.inherits.ensure`, `doppler.service_token.ensure`,
-//! `doppler.service_token.rotate`, and `doppler.secret.get`.
+//! `doppler.service_token.rotate`, `doppler.secret.get`, and
+//! `doppler.secret.set`.
 //!
 //! See `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s
 //! `willikins-providers-doppler` crate contract and trust boundaries 1
@@ -57,5 +58,6 @@ pub use client::{
 };
 pub use tools::{
     DopplerConfigEnsure, DopplerConfigInheritableEnsure, DopplerConfigInheritsEnsure,
-    DopplerProjectEnsure, DopplerSecretGet, DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
+    DopplerProjectEnsure, DopplerSecretGet, DopplerSecretSet, DopplerServiceTokenEnsure,
+    DopplerServiceTokenRotate,
 };

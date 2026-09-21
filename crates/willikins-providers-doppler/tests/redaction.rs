@@ -2,12 +2,21 @@
 //! milestone plan's "Redaction" bullet for this crate): a secret marker
 //! and a token marker seeded in fixtures appear in no error, no `Debug`,
 //! no `Observation`'s rendering, and no recorded request. Unlike
-//! `willikins-providers-github`'s Actions secret `PUT`, none of these
-//! five tools ever sends a secret value or a token value in a request
-//! body — `doppler.service_token.rotate`'s `DELETE` identifies a token by
-//! its `slug`, never its `key` — so "except where the API requires the
-//! value" is nowhere for this crate, and every recorded request line is
-//! checked, not only headers.
+//! `willikins-providers-github`'s Actions secret `PUT`, none of the five
+//! tools this file drives ever sends a secret value or a token value in
+//! a request body — `doppler.service_token.rotate`'s `DELETE` identifies
+//! a token by its `slug`, never its `key` — so "except where the API
+//! requires the value" is nowhere among them, and every recorded request
+//! line is checked, not only headers.
+//!
+//! **`doppler.secret.set` (added after this file) is the crate's one
+//! exception**, by design: it is a sink, and a sink's whole job is to
+//! send a value the API requires in the request body. It is deliberately
+//! not driven through this shared file's "no recorded request line
+//! carries the marker" assertion, which would be false for it on
+//! purpose; its own file (`tests/secret_set_mock.rs`) proves the
+//! narrower claim that *does* hold — the value reaches the `POST` body
+//! and nowhere else (no error, no `Debug`, no `Observation`).
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
