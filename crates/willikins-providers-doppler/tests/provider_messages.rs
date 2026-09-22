@@ -120,6 +120,9 @@ fn provider_text_cannot_impersonate_willikins_own_redaction_marker() {
 /// Doppler said about the token.
 #[test]
 fn a_401_or_403_body_never_reaches_the_message_even_as_messages() {
+    // The 401/403 split (milestone 3c, decision (a)): the two statuses no
+    // longer share one message. `401` deliberately says nothing about a
+    // permission; `403` keeps its permission wording byte for byte.
     for status in [401, 403] {
         let err = error_for(
             status,
@@ -128,6 +131,11 @@ fn a_401_or_403_body_never_reaches_the_message_even_as_messages() {
         assert_eq!(err.kind, ToolErrorKind::Provider, "status {status}");
         assert!(!err.message.contains("leakedvalue"), "{}", err.message);
         assert!(!err.message.contains("provider says"), "{}", err.message);
-        assert!(err.message.contains("permission"), "{}", err.message);
+        if status == 401 {
+            assert_eq!(err.message, willikins_providers_http::UNAUTHENTICATED);
+            assert!(!err.message.contains("permission"), "{}", err.message);
+        } else {
+            assert_eq!(err.message, willikins_providers_http::MISSING_PERMISSION);
+        }
     }
 }

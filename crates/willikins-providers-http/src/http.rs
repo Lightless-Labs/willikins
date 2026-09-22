@@ -23,7 +23,8 @@ use ureq::http::header::RETRY_AFTER;
 
 use crate::credential::Credential;
 use crate::error::{
-    MISSING_PERMISSION, ProviderError, ProviderFacts, bounded_message, provider_says,
+    MISSING_PERMISSION, ProviderError, ProviderFacts, UNAUTHENTICATED, bounded_message,
+    provider_says,
 };
 use crate::retry_after;
 use crate::sleeper::{self, Sleeper};
@@ -103,9 +104,11 @@ impl Http {
             // credential does not travel, but the body that comes back
             // would still be parsed as that provider's answer), and a
             // same-host redirect re-sent without authorization would come
-            // back `401` and be reported as a missing permission. Zero
-            // redirects means the `3xx` itself is returned and surfaces as
-            // a `ProviderError` naming the status.
+            // back `401` and be reported as `UNAUTHENTICATED`, not a
+            // missing permission (the 401/403 split, milestone 3c
+            // decision (a)). Zero redirects means the `3xx` itself is
+            // returned and surfaces as a `ProviderError` naming the
+            // status.
             .max_redirects(0)
             .build();
         Self {
@@ -455,9 +458,15 @@ fn backoff_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
 fn provider_error_from_body(status: u16, body: &str) -> ProviderError {
     // A `401` or `403` body is dropped here, before anything can hold it:
     // GitHub's says "Bad credentials", Doppler's names the token, and
-    // neither tells an operator anything the fixed message does not.
-    if matches!(status, 401 | 403) {
-        return ProviderError::new(Some(status), MISSING_PERMISSION);
+    // neither tells an operator anything the fixed message does not. The
+    // two statuses get different fixed messages (the 401/403 split,
+    // milestone 3c decision (a)): a `401` means the credential itself was
+    // not accepted; a `403` means it was accepted but lacks a permission.
+    if status == 401 {
+        return ProviderError::new(Some(401), UNAUTHENTICATED);
+    }
+    if status == 403 {
+        return ProviderError::new(Some(403), MISSING_PERMISSION);
     }
 
     let parsed: Option<serde_json::Value> = serde_json::from_str(body).ok();
