@@ -352,6 +352,28 @@ These came up from memory during the conversation and have not been checked.
   no dependency on any particular secret store, since env is a node like any other; documents that
   say what they need, which is what an agent with no local context requires; and per-target routing
   for free, because a document names which credential rather than the environment implying it.
+- **`willikins-providers-appstore` lands the first two real Apple tools** (2026-09-22).
+  `appstore.bundle_id.ensure` and `appstore.bundle_id_capability.ensure` register and converge
+  a bundle identifier and its capabilities, taking the credential's three parts
+  (`AppleIssuerId`, `AppleKeyId`, `AppleSigningKey`) as three independent ports exactly as the
+  "Credentials are ports, resolvers are nodes" addendum above describes — no client is held at
+  construction, since the credential is only known once a document's own inputs resolve; each
+  call mints a fresh JWT instead (`willikins_providers_http::AppleSigningCredential::new`,
+  itself corrected to take no `SinkToken`, since `Tool::read` needs to sign too and never
+  receives one — see `AppleSigningKey::reveal_for_signing`, that type's own narrow, documented
+  token-less exception). Two small pure tools, `apple.issuer_id.parse` and `apple.key_id.parse`,
+  joined `willikins-tools` alongside them: `doppler.value.get` emits `Text`, nominal typing
+  means a `Text` cannot bind to either credential id's `exact(...)` port directly, and these are
+  the parse nodes a document needs between the two — `workflows/appstore-bundle-id-from-doppler.yaml`
+  is the document that needed them and would not `check` without them.
+  **A gap this surfaced, not fixed here:** `willikins_core::plan`'s existing invariant makes
+  *every* `Observation::Mismatch` a hard `PlanError::AttributeMismatch` before any node's
+  `ensure` runs, and `apply` never calls `ensure` for a `NoOp`-planned node either — so there is
+  no `Action::Update` reachable from any tool in this workspace today. `appstore.bundle_id.ensure`'s
+  `ensure` genuinely converges a drifted `name` via `PATCH` when called directly (tested), but a
+  document hitting that drift fails at `plan()` instead, same as every other tool's terminal
+  mismatch. Left as a recorded gap rather than a cross-cutting change to `Observation`/`Action`
+  this task's scope did not cover.
 - **"One bootstrap token" lives in the platform, not the binary** (refines "Doppler as the
   vault, one bootstrap token"). The butler's own provider credentials stay in Doppler, and
   Doppler's native Railway integration syncs them into the service's environment; the
