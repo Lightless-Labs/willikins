@@ -14,6 +14,19 @@ Program Roles profile rows). Every Apple fact below is quoted verbatim in one of
 **Depends on:** the bundle-identifier provider that landed 2026-09-22 without a plan of its own (see
 "Retrospective"), whose `AppstoreClient`, credential ports and paginated exact-compare read this
 milestone reuses unchanged.
+**Addendum:** 2026-09-22 (task 1 lane) — decision (g)'s certificate-write guard was written against a
+literal `.post(`/`.patch(`/`.delete(` substring, matching `no_gh_writes_guard.rs`'s own style. Proving
+it non-vacuous (a scratch `POST` planted in `client.rs`, per this plan's own instruction) found that
+every real write call in this crate is spelled with an explicit turbofish
+(`self.http.post::<BundleIdResponse>(...)`, `AppstoreClient::create_bundle_id`'s own shape) — so the
+literal-substring version missed the planted mutation entirely (`only_get_ever_touches_the_certificates_path_in_this_crate`
+reported `ok` with the write live in `client.rs`). Fixed by matching `.post`/`.patch`/`.delete` with an
+optional `::<...>` in between (`write_token_regex` in the guard file); the turbofish shape is now a
+named regression case (`tests::a_turbofish_post_to_certificates_is_flagged`,
+`a_turbofish_delete_to_certificates_is_flagged`), and the scratch mutation was never committed —
+`client.rs` was restored from a saved copy and `git diff --stat` on it was empty before the guard was
+committed. Worth carrying forward to any future statement-scanning guard in this workspace: a plain
+method-name substring is not enough when the codebase's own convention is a turbofish call.
 
 ## Goal
 
