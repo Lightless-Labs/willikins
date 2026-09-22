@@ -1,0 +1,51 @@
+---
+source: crates/willikins-providers-appstore/tests/catalog_parity.rs
+expression: "spec_json(AppstoreCertificateGet::new(NOWHERE).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Select an App Store Connect distribution certificate by type and serial number.",
+  "inputs": {
+    "certificate_type": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleCertificateType"
+      }
+    },
+    "issuer_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleIssuerId"
+      }
+    },
+    "key": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleSigningKey"
+      }
+    },
+    "key_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleKeyId"
+      }
+    },
+    "serial_number": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleCertificateSerial"
+      }
+    }
+  },
+  "key": [],
+  "name": "appstore.certificate.get",
+  "outputs": {
+    "certificate": "AppleCertificateId"
+  },
+  "pure": true
+}

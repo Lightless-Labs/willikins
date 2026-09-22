@@ -8,7 +8,9 @@
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{Tool, ToolSpec};
-use willikins_providers_appstore::{AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure};
+use willikins_providers_appstore::{
+    AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet,
+};
 
 const NOWHERE: &str = "http://127.0.0.1:1";
 
@@ -36,10 +38,18 @@ fn appstore_bundle_id_capability_ensure_spec_equals_the_fake_tool() {
 }
 
 #[test]
+fn appstore_certificate_get_spec_equals_the_fake_tool() {
+    let live = AppstoreCertificateGet::new(NOWHERE);
+    let fake = willikins_providers_fake::tools::FakeAppstoreCertificateGet::new(fake_state());
+    assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
+}
+
+#[test]
 fn every_spec_validates_against_the_type_registry() {
     for spec in [
         AppstoreBundleIdEnsure::new(NOWHERE).spec(),
         AppstoreBundleIdCapabilityEnsure::new(NOWHERE).spec(),
+        AppstoreCertificateGet::new(NOWHERE).spec(),
     ] {
         spec.validate(willikins_types::registry())
             .expect("valid spec");
@@ -47,7 +57,7 @@ fn every_spec_validates_against_the_type_registry() {
 }
 
 #[test]
-fn snapshot_both_live_tool_specs() {
+fn snapshot_every_live_tool_spec() {
     insta::assert_json_snapshot!(
         "appstore_bundle_id_ensure_spec",
         spec_json(AppstoreBundleIdEnsure::new(NOWHERE).spec())
@@ -55,5 +65,9 @@ fn snapshot_both_live_tool_specs() {
     insta::assert_json_snapshot!(
         "appstore_bundle_id_capability_ensure_spec",
         spec_json(AppstoreBundleIdCapabilityEnsure::new(NOWHERE).spec())
+    );
+    insta::assert_json_snapshot!(
+        "appstore_certificate_get_spec",
+        spec_json(AppstoreCertificateGet::new(NOWHERE).spec())
     );
 }

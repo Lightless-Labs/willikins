@@ -15,9 +15,9 @@
 //! `appstore.bundle_id.ensure` and `appstore.bundle_id_capability.ensure`,
 //! plus the two parse tools `doppler.value.get`'s `Text` output needs
 //! before it can bind to either one's typed credential ports,
-//! `apple.issuer_id.parse` and `apple.key_id.parse`), so the catalog
-//! this crate produces holds twenty-five tools, in the order [`catalog`]
-//! inserts them.
+//! `apple.issuer_id.parse` and `apple.key_id.parse`; milestone 3c added
+//! `appstore.certificate.get`), so the catalog this crate produces holds
+//! twenty-six tools, in the order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
 //!
@@ -90,6 +90,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::FakeAppstoreBundleIdCapabilityEnsure::new(
         state.clone()
     ));
+    insert!(tools::FakeAppstoreCertificateGet::new(state.clone()));
     insert!(tools::FakeSecretList::new());
     // The last use of `state`: moved rather than cloned, so this
     // function's own `state` parameter is genuinely consumed.
@@ -139,13 +140,14 @@ mod tests {
             "buildkite.pipeline.ensure",
             "appstore.bundle_id.ensure",
             "appstore.bundle_id_capability.ensure",
+            "appstore.certificate.get",
             "fake.secret_list",
             "fake.irreversible.ensure",
             "template.render",
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 25);
+        assert_eq!(names.len(), 26);
     }
 
     #[test]

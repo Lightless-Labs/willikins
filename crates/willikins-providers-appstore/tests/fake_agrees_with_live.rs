@@ -11,15 +11,18 @@
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{Inputs, Observation, PortName, Tool, Value};
-use willikins_providers_appstore::{AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure};
+use willikins_providers_appstore::{
+    AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet,
+};
 use willikins_providers_fake::FakeState;
 use willikins_providers_fake::tools::{
-    FakeAppstoreBundleIdCapabilityEnsure, FakeAppstoreBundleIdEnsure,
+    FakeAppstoreBundleIdCapabilityEnsure, FakeAppstoreBundleIdEnsure, FakeAppstoreCertificateGet,
 };
 use willikins_providers_http::testing::MockProvider;
 use willikins_types::{
     AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCapabilityType,
-    AppleIssuerId, AppleKeyId, AppleSigningKey, DomainType,
+    AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId, AppleSigningKey,
+    DomainType,
 };
 
 fn issuer_id() -> AppleIssuerId {
@@ -261,4 +264,168 @@ fn capability_absent_and_present_agree() {
 
         assert_eq!(shape(&live), shape(&fake), "{case}");
     }
+}
+
+// ---------------------------------------------------------------------
+// `appstore.certificate.get`
+// ---------------------------------------------------------------------
+
+fn certificate_type() -> AppleCertificateType {
+    AppleCertificateType::parse("DISTRIBUTION").unwrap()
+}
+
+fn serial_number() -> AppleCertificateSerial {
+    AppleCertificateSerial::parse("7B3F2A9C1D4E5F607182930A1B2C3D4E").unwrap()
+}
+
+fn certificate_inputs() -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(port("issuer_id"), Value::known(issuer_id()));
+    inputs.insert(port("key_id"), Value::known(key_id()));
+    inputs.insert(port("key"), Value::known(key()));
+    inputs.insert(port("certificate_type"), Value::known(certificate_type()));
+    inputs.insert(port("serial_number"), Value::known(serial_number()));
+    inputs
+}
+
+fn certificate_list_body(id: &str, activated: Option<bool>, expired: bool) -> String {
+    let mut attributes = serde_json::json!({
+        "certificateType": "DISTRIBUTION",
+        "serialNumber": "7B3F2A9C1D4E5F607182930A1B2C3D4E",
+        "expirationDate": if expired { "2020-01-01T00:00:00.000+0000" } else { "2099-01-01T00:00:00.000+0000" },
+    });
+    if let Some(activated) = activated {
+        attributes["activated"] = serde_json::json!(activated);
+    }
+    serde_json::json!({
+        "data": [{
+            "id": id,
+            "attributes": attributes,
+        }]
+    })
+    .to_string()
+}
+
+/// Seeds and serves *the same real world* for both sides, exactly the
+/// method [`assert_bundle_id_agree`] uses. `id` is fixed (`"CERT1"`)
+/// rather than derived, since certificates carry no equivalent of
+/// [`fake_apple_bundle_id_id`] -- this fake's `appstore.certificate.get`
+/// never creates a record, only a seed file does (this crate's own
+/// certificate-write guard rules out a create path entirely).
+fn assert_certificate_agree(case: &str, state: FakeState, served: Option<String>) {
+    let mut provider = MockProvider::start();
+    let mock = provider
+        .mock("GET", "/v1/certificates")
+        .match_query(mockito::Matcher::Any);
+    let _mock = match served {
+        Some(body) => mock.with_status(200).with_body(body).create(),
+        None => mock
+            .with_status(200)
+            .with_body(serde_json::json!({"data": []}).to_string())
+            .create(),
+    };
+
+    let live = AppstoreCertificateGet::new(provider.url())
+        .read(&certificate_inputs())
+        .unwrap_or_else(|err| panic!("{case}: the live tool failed: {err}"));
+    let fake = FakeAppstoreCertificateGet::new(Arc::new(Mutex::new(state)))
+        .read(&certificate_inputs())
+        .unwrap_or_else(|err| panic!("{case}: the fake tool failed: {err}"));
+
+    assert_eq!(
+        shape(&live),
+        shape(&fake),
+        "{case}: live says {live:?}, fake says {fake:?}"
+    );
+    assert_eq!(rendered(&live), rendered(&fake), "{case}: outputs differ");
+}
+
+fn assert_certificate_error_kinds_agree(case: &str, state: FakeState, served: Option<String>) {
+    let mut provider = MockProvider::start();
+    let mock = provider
+        .mock("GET", "/v1/certificates")
+        .match_query(mockito::Matcher::Any);
+    let _mock = match served {
+        Some(body) => mock.with_status(200).with_body(body).create(),
+        None => mock
+            .with_status(200)
+            .with_body(serde_json::json!({"data": []}).to_string())
+            .create(),
+    };
+
+    let live = AppstoreCertificateGet::new(provider.url())
+        .read(&certificate_inputs())
+        .expect_err(&format!("{case}: the live tool should refuse"));
+    let fake = FakeAppstoreCertificateGet::new(Arc::new(Mutex::new(state)))
+        .read(&certificate_inputs())
+        .expect_err(&format!("{case}: the fake tool should refuse"));
+    assert_eq!(live.kind, fake.kind, "{case}");
+}
+
+#[test]
+fn certificate_not_found_agrees() {
+    assert_certificate_error_kinds_agree("not-found", FakeState::new(), None);
+}
+
+#[test]
+fn certificate_present_agrees() {
+    let state = FakeState::new().with_apple_certificate(
+        &certificate_type(),
+        &serial_number(),
+        "CERT1",
+        false,
+        None,
+    );
+    assert_certificate_agree(
+        "present",
+        state,
+        Some(certificate_list_body("CERT1", None, false)),
+    );
+}
+
+#[test]
+fn certificate_expired_agrees() {
+    let state = FakeState::new().with_apple_certificate(
+        &certificate_type(),
+        &serial_number(),
+        "CERT1",
+        true,
+        None,
+    );
+    assert_certificate_error_kinds_agree(
+        "expired",
+        state,
+        Some(certificate_list_body("CERT1", None, true)),
+    );
+}
+
+#[test]
+fn certificate_deactivated_agrees() {
+    let state = FakeState::new().with_apple_certificate(
+        &certificate_type(),
+        &serial_number(),
+        "CERT1",
+        false,
+        Some(false),
+    );
+    assert_certificate_error_kinds_agree(
+        "deactivated",
+        state,
+        Some(certificate_list_body("CERT1", Some(false), false)),
+    );
+}
+
+#[test]
+fn certificate_conflict_on_two_matches_agrees() {
+    let state = FakeState::new()
+        .with_apple_certificate(&certificate_type(), &serial_number(), "CERT1", false, None)
+        .with_apple_certificate(&certificate_type(), &serial_number(), "CERT2", false, None);
+    let served = serde_json::json!({
+        "data": [
+            {"id": "CERT1", "attributes": {"certificateType": "DISTRIBUTION", "serialNumber": "7B3F2A9C1D4E5F607182930A1B2C3D4E"}},
+            {"id": "CERT2", "attributes": {"certificateType": "DISTRIBUTION", "serialNumber": "7B3F2A9C1D4E5F607182930A1B2C3D4E"}},
+        ]
+    })
+    .to_string();
+    assert_certificate_error_kinds_agree("conflict-two-matches", state, Some(served));
 }

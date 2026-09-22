@@ -5,8 +5,9 @@
 //! `doppler.secret.set`; the App Store Connect credential correction
 //! added `doppler.value.get`), (milestone 3a)
 //! `willikins-providers-buildkite`'s two live tools, and (the App Store
-//! Connect provider crate) `willikins-providers-appstore`'s two live
-//! tools. Twenty-three tools, no fake among them.
+//! Connect provider crate, plus milestone 3c's `appstore.certificate.get`)
+//! `willikins-providers-appstore`'s three live tools. Twenty-four tools,
+//! no fake among them.
 //!
 //! The assembly itself lives in `willikins-server` now
 //! (`willikins_server::live_catalog_with`, task 10a's `Butler::live_catalog`)
@@ -54,7 +55,7 @@ const POSITIVE_FIXTURES: [&str; 6] = [
 ];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 23] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 24] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -88,7 +89,7 @@ fn live_catalog() -> Catalog {
     )
 }
 
-/// The assembly itself: twenty-three tools, no name collision, every spec
+/// The assembly itself: twenty-four tools, no name collision, every spec
 /// valid against the shared type registry.
 #[test]
 fn the_live_catalog_assembles_and_every_spec_validates() {
@@ -133,7 +134,7 @@ fn both_positive_fixtures_check_the_same_against_the_live_catalog() {
     }
 }
 
-/// Nothing fake survives in it: inserting any of the twenty-three fake tools
+/// Nothing fake survives in it: inserting any of the twenty-four fake tools
 /// of the same names on top is refused as a duplicate, which is what
 /// makes the two tests above statements about the live tools at all.
 #[test]
