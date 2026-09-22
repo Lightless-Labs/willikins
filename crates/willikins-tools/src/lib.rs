@@ -1,5 +1,6 @@
-//! Pure, provider-independent tools: `naming.v1`, `template.render`, and
-//! `env.get`.
+//! Pure, provider-independent tools: `naming.v1`, `template.render`,
+//! `env.get`, `base64.decode`, `apple.signing_key.parse`,
+//! `apple.issuer_id.parse`, and `apple.key_id.parse`.
 //!
 //! All three are pure — no key, no external state, `ensure` is the
 //! identity of `read` — so they need nothing beyond `willikins-core` and
@@ -10,12 +11,16 @@
 //! design addendum "Credentials are ports, resolvers are nodes"
 //! (`docs/plans/2026-09-11-willikins-design.md`) gave it a consumer.
 
+mod apple_issuer_id_parse;
+mod apple_key_id_parse;
 mod apple_signing_key_parse;
 mod base64_decode;
 mod env_get;
 mod naming_v1;
 mod template_render;
 
+pub use apple_issuer_id_parse::AppleIssuerIdParse;
+pub use apple_key_id_parse::AppleKeyIdParse;
 pub use apple_signing_key_parse::AppleSigningKeyParse;
 pub use base64_decode::Base64Decode;
 pub use env_get::EnvGet;
@@ -37,6 +42,8 @@ pub fn register(catalog: &mut Catalog) -> Result<(), CatalogError> {
     catalog.insert(std::sync::Arc::new(EnvGet::new()))?;
     catalog.insert(std::sync::Arc::new(Base64Decode::new()))?;
     catalog.insert(std::sync::Arc::new(AppleSigningKeyParse::new()))?;
+    catalog.insert(std::sync::Arc::new(AppleIssuerIdParse::new()))?;
+    catalog.insert(std::sync::Arc::new(AppleKeyIdParse::new()))?;
     Ok(())
 }
 
@@ -62,6 +69,8 @@ mod tests {
                 "env.get",
                 "base64.decode",
                 "apple.signing_key.parse",
+                "apple.issuer_id.parse",
+                "apple.key_id.parse",
             ]
         );
     }
