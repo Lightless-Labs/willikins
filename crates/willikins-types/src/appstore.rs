@@ -671,6 +671,194 @@ pub struct AppleCertificateSerial(String);
 )]
 pub struct AppleCertificateId(String);
 
+// ---------------------------------------------------------------------
+// Profile types: `appstore.profile.ensure`'s own ports. Milestone 3c
+// (`docs/plans/2026-09-22-milestone-3c-app-store-signing.md`, "the type
+// table") is every fact these four types rest on.
+// ---------------------------------------------------------------------
+
+/// A provisioning profile's `profileType`: the single in-scope member of
+/// Apple's `profileType` enum this milestone admits (decision (b) --
+/// "refused by type"). Every other member (`IOS_APP_DEVELOPMENT`,
+/// `IOS_APP_ADHOC`, `IOS_APP_INHOUSE`, `MAC_APP_STORE`, and so on) is
+/// refused at parse time: the refusal is the grammar, exactly as
+/// [`AppleCertificateType`]'s own doc explains for certificates.
+/// `TVOS_APP_STORE`, `MAC_APP_STORE`, and `MAC_CATALYST_APP_STORE` are
+/// candidates for a later, additive grammar widening (decision (b));
+/// `IOS_APP_INHOUSE` is excluded outright (TN3125 gives an In-House
+/// profile `ProvisionsAllDevices`).
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "IOS_APP_STORE",
+    description = "An App Store Connect provisioning profile type: IOS_APP_STORE only (every other profile type is out of scope and refused by this grammar).",
+    example = "IOS_APP_STORE"
+)]
+pub struct AppleProfileType(String);
+
+/// The maximum length of an [`AppleProfileName`], in characters.
+const PROFILE_NAME_MAX_LEN: usize = 255;
+
+/// A profile's human-written `name` attribute: what the operator sees in
+/// the portal and what an `exportOptions.plist`'s `provisioningProfiles`
+/// map references (decision (e)). Compared byte-exact on `read`, exactly
+/// like [`AppleBundleIdName`] -- and hand-written for the identical
+/// reason: Apple states no bound, so this is this crate's own
+/// conservative choice (1 to 255 characters, no control character, none
+/// of the invisible or bidirectional characters
+/// [`is_invisible_or_bidi_control`] rejects), not a claim Apple enforces
+/// it.
+///
+/// Not secret -- like a bundle id's `name`, it is the one free-text
+/// attribute any reader of App Store Connect's UI already sees.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AppleProfileName(String);
+
+impl AppleProfileName {
+    /// The name text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for AppleProfileName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for AppleProfileName {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        Self::parse(input)
+    }
+}
+
+impl DomainType for AppleProfileName {
+    const TYPE_NAME: &'static str = "AppleProfileName";
+
+    fn description() -> &'static str {
+        "A provisioning profile's human-written `name` attribute."
+    }
+
+    fn example() -> &'static str {
+        "willikins-probe-delete-me-example"
+    }
+
+    fn parse(input: &str) -> Result<Self, ParseError> {
+        if input.is_empty() {
+            return Err(ParseError::new(Self::TYPE_NAME, "must not be empty"));
+        }
+        let len = input.chars().count();
+        if len > PROFILE_NAME_MAX_LEN {
+            return Err(ParseError::new(
+                Self::TYPE_NAME,
+                format!("is {len} characters, the limit is {PROFILE_NAME_MAX_LEN}"),
+            ));
+        }
+        if let Some(c) = input.chars().find(|c| c.is_control()) {
+            return Err(ParseError::new(
+                Self::TYPE_NAME,
+                format!("must not contain control characters (found {c:?})"),
+            ));
+        }
+        if let Some(c) = input.chars().find(|&c| is_invisible_or_bidi_control(c)) {
+            return Err(ParseError::new(
+                Self::TYPE_NAME,
+                format!(
+                    "must not contain invisible or bidirectional control character (found {c:?})"
+                ),
+            ));
+        }
+        Ok(Self(input.to_owned()))
+    }
+
+    fn json_schema() -> schemars::Schema {
+        schemars::schema_for!(Self)
+    }
+}
+
+impl serde::Serialize for AppleProfileName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for AppleProfileName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+impl schemars::JsonSchema for AppleProfileName {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("AppleProfileName")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": PROFILE_NAME_MAX_LEN,
+            "description": "A provisioning profile's human-written `name` attribute.",
+            "examples": ["willikins-probe-delete-me-example"]
+        })
+    }
+}
+
+crate::impl_domain_object_non_secret!(AppleProfileName);
+
+/// A profile's Apple-assigned opaque record id -- the handle
+/// `appstore.profile.ensure` deletes by (the live write cycle's own
+/// cleanup, decision (h)) and the id its `Present`/create outputs carry.
+/// Apple documents no grammar for this id either; same undocumented-grammar
+/// reasoning as [`AppleCertificateId`] and [`AppleBundleIdId`].
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "[A-Za-z0-9]{2,64}",
+    description = "An App Store Connect provisioning profile's Apple-assigned opaque record id.",
+    example = "PR0F1LE1D9999"
+)]
+pub struct AppleProfileId(String);
+
+/// A provisioning profile's `profileContent`: a base64-wrapped,
+/// CMS-signed property list carrying the public certificate, entitlements,
+/// team and App ID prefix, name, uuid and expiry (decision (f)). Secret --
+/// see decision (f) for why: it must reach `doppler.secret.set`'s
+/// `any_secret(true)` `value` port, over-classification is recoverable and
+/// under-classification is not, and it is still the operator's own data.
+///
+/// Grammar: standard base64, 1 to 65536 characters -- the same bound as
+/// [`crate::doppler::DopplerSecretValue`] and [`crate::OpaqueSecret`], so
+/// anything that parses fits the Doppler sink's own type. Observed live on
+/// the operator's own account: 16240 to 18960 characters across 13
+/// existing `IOS_APP_STORE` profiles (milestone 3c pre-flight), 3.4x
+/// headroom under this bound.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "[A-Za-z0-9+/]+={0,2}",
+    max_len = 65536,
+    secret,
+    description = "An App Store Connect provisioning profile's base64-encoded content (a CMS-signed property list). Secret.",
+    // "example" is itself a run of the base64 alphabet (letters only, no
+    // padding needed) so it satisfies this type's own grammar, and it is
+    // the literal word `redaction_adversarial.rs`'s
+    // `no_catalog_entry_carries_a_secret_looking_example` requires every
+    // secret type's published example to contain -- the same reasoning
+    // `AppleSigningKey::example`'s own doc gives for why a real-looking
+    // secret is never used as a catalog example.
+    example = "example"
+)]
+pub struct AppleProfileContent(secrecy::SecretString);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1036,5 +1224,108 @@ mod tests {
         crate::assert_example_parses::<AppleCertificateType>();
         crate::assert_example_parses::<AppleCertificateSerial>();
         crate::assert_example_parses::<AppleCertificateId>();
+    }
+
+    // -------------------------------------------------------------
+    // Profile types
+    // -------------------------------------------------------------
+
+    #[test]
+    fn profile_type_accepts_ios_app_store_only() {
+        assert!(AppleProfileType::parse("IOS_APP_STORE").is_ok());
+    }
+
+    #[test]
+    fn profile_type_refuses_every_other_documented_member() {
+        for other in [
+            "IOS_APP_DEVELOPMENT",
+            "IOS_APP_ADHOC",
+            "IOS_APP_INHOUSE",
+            "MAC_APP_STORE",
+            "MAC_APP_DIRECT",
+            "TVOS_APP_STORE",
+            "MAC_CATALYST_APP_STORE",
+            "ios_app_store",
+            "",
+        ] {
+            assert!(
+                AppleProfileType::parse(other).is_err(),
+                "expected `{other}` to be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn profile_name_accepts_a_name_and_rejects_empty_or_control() {
+        assert!(AppleProfileName::parse("willikins-probe-delete-me-123").is_ok());
+        assert!(AppleProfileName::parse("").is_err());
+        assert!(AppleProfileName::parse("has\u{0}control").is_err());
+    }
+
+    #[test]
+    fn profile_name_rejects_over_max_len() {
+        let too_long = "a".repeat(256);
+        assert!(AppleProfileName::parse(&too_long).is_err());
+        let ok = "a".repeat(255);
+        assert!(AppleProfileName::parse(&ok).is_ok());
+    }
+
+    #[test]
+    fn profile_name_is_not_secret_and_serializes_plainly() {
+        let name = AppleProfileName::parse("willikins-probe-delete-me-example").unwrap();
+        assert!(!name.is_secret());
+        assert_eq!(
+            serde_json::to_string(&name).unwrap(),
+            "\"willikins-probe-delete-me-example\""
+        );
+    }
+
+    #[test]
+    fn profile_id_accepts_apples_shape_and_refuses_too_short() {
+        assert!(AppleProfileId::parse("PR0F1LE1D9999").is_ok());
+        assert!(AppleProfileId::parse("x").is_err());
+    }
+
+    #[test]
+    fn profile_content_accepts_base64_and_refuses_a_non_base64_character() {
+        assert!(AppleProfileContent::parse("aGVsbG8gd29ybGQ=").is_ok());
+        assert!(AppleProfileContent::parse("not base64!").is_err());
+        assert!(AppleProfileContent::parse("").is_err());
+    }
+
+    #[test]
+    fn profile_content_refuses_more_than_65536_characters() {
+        let too_long = "A".repeat(65537);
+        assert!(AppleProfileContent::parse(&too_long).is_err());
+        let ok = "A".repeat(65536);
+        assert!(AppleProfileContent::parse(&ok).is_ok());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn profile_content_is_secret_redacted_and_exposes_only_with_a_token() {
+        let content = AppleProfileContent::parse("aGVsbG8gd29ybGQ=").unwrap();
+        assert!(content.is_secret());
+        assert_eq!(format!("{content:?}"), "[REDACTED AppleProfileContent]");
+        assert_eq!(format!("{content}"), "[REDACTED AppleProfileContent]");
+        assert_eq!(content.expose(&SinkToken::new()), "aGVsbG8gd29ybGQ=");
+    }
+
+    // `AppleProfileContent` implementing no `Serialize` at all is proved
+    // generically, not per-type: `tests/derive_compile_fail.rs`'s
+    // `secret_serialize.rs` fixture already proves `#[domain(secret)]`
+    // generates no `Serialize` impl for *any* type using this derive
+    // path, and `AppleProfileContent` uses that exact codegen path
+    // (`gen_secret`) unchanged -- a second, type-specific trybuild
+    // fixture would compile-fail on the identical bound for the
+    // identical reason and prove nothing `secret_serialize.rs` does not
+    // already prove.
+
+    #[test]
+    fn profile_types_examples_parse_as_their_own_types() {
+        crate::assert_example_parses::<AppleProfileType>();
+        crate::assert_example_parses::<AppleProfileName>();
+        crate::assert_example_parses::<AppleProfileId>();
+        crate::assert_example_parses::<AppleProfileContent>();
     }
 }
