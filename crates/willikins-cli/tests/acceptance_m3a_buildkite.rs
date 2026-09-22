@@ -355,7 +355,7 @@ fn acceptance_11_the_plan_is_reversible_and_auto_approves() {
 
 // The container-image half of acceptance test 11 -- the glob test naming
 // the workflows the image admits -- lives in
-// `crates/willikins-server/tests/image_contents.rs::the_image_workflows_directory_holds_exactly_the_eight_positive_documents`,
+// `crates/willikins-server/tests/image_contents.rs::the_image_workflows_directory_holds_exactly_the_ten_positive_documents`,
 // updated alongside this file.
 
 // ---------------------------------------------------------------------
