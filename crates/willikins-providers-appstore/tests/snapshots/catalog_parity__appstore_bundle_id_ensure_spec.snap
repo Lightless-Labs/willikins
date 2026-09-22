@@ -1,0 +1,63 @@
+---
+source: crates/willikins-providers-appstore/tests/catalog_parity.rs
+assertion_line: 51
+expression: "spec_json(AppstoreBundleIdEnsure::new(NOWHERE).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Register or converge an App Store Connect bundle identifier.",
+  "inputs": {
+    "identifier": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleBundleIdentifier"
+      }
+    },
+    "issuer_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleIssuerId"
+      }
+    },
+    "key": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleSigningKey"
+      }
+    },
+    "key_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleKeyId"
+      }
+    },
+    "name": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleBundleIdName"
+      }
+    },
+    "platform": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleBundleIdPlatform"
+      }
+    }
+  },
+  "key": [
+    "identifier"
+  ],
+  "name": "appstore.bundle_id.ensure",
+  "outputs": {
+    "id": "AppleBundleIdId",
+    "identifier": "AppleBundleIdentifier",
+    "name": "AppleBundleIdName"
+  },
+  "pure": false
+}
