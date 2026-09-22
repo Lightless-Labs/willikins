@@ -1,8 +1,18 @@
-//! `base64.decode`: an opaque-secret-to-opaque-secret transform. Pure, and
-//! the first tool in this crate whose input port is itself secret — see
+//! `base64.decode`: a secret-to-opaque-secret transform. Pure, and the
+//! first tool in this crate whose input port is itself secret — see
 //! `willikins_types::secret`'s module doc for why that is possible at all
-//! (a pure tool's `Tool::read` is never given a `SinkToken`) and why the
-//! escape hatch it uses is confined to `OpaqueSecret` alone.
+//! (a pure tool's `Tool::read` is never given a `SinkToken`).
+//!
+//! **Input port: `AnySecret`, not `exact("OpaqueSecret", ...)`.** A
+//! document chaining `doppler.secret.get` straight into this tool needs
+//! to bind a `DopplerSecretValue` here, not an `OpaqueSecret` — see
+//! `willikins_types::secret`'s module doc, "The Doppler bridge — 'wall
+//! one'". This tool never names `DopplerSecretValue` itself; it reads
+//! its input through `willikins_types::secret::reveal_transform_input`,
+//! which does the dispatch once for every transform and parse tool.
+//! Output stays `OpaqueSecret` regardless of which secret type arrived,
+//! so downstream nodes (`apple.signing_key.parse`, another
+//! `base64.decode`) see the same shape either way.
 //!
 //! # What this accepts, and why
 //!
@@ -45,7 +55,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_PAD_INDIFFERENT;
 
 use willikins_core::tool::helpers::{
-    exact, get, invalid, port, require_present, scalar, tool_name,
+    any_secret, invalid, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
@@ -62,13 +72,13 @@ impl Base64Decode {
     #[must_use]
     pub fn new() -> Self {
         let mut inputs = IndexMap::new();
-        inputs.insert(port("value"), exact("OpaqueSecret", true));
+        inputs.insert(port("value"), any_secret(true));
         let mut outputs = IndexMap::new();
         outputs.insert(port("value"), scalar("OpaqueSecret"));
         Self {
             spec: ToolSpec {
                 name: tool_name("base64.decode"),
-                description: "Base64-decode an opaque secret (RFC 4648 standard alphabet, \
+                description: "Base64-decode a secret value (RFC 4648 standard alphabet, \
                                padding either way, ASCII whitespace stripped first); the \
                                decoded bytes must be UTF-8."
                     .to_string(),
@@ -83,8 +93,18 @@ impl Base64Decode {
 
     fn compute(&self, inputs: &Inputs) -> Result<Outputs, ToolError> {
         require_present(&self.spec, inputs)?;
-        let value: OpaqueSecret = get(inputs, "value")?;
-        let decoded = value.reveal_for_transform(decode)?;
+        let value = inputs
+            .get(&port("value"))
+            .ok_or_else(|| invalid("port `value` is required"))?;
+        if !value.is_known() {
+            return Err(invalid("port `value` is unknown"));
+        }
+        let object = value
+            .as_scalar()
+            .ok_or_else(|| invalid("port `value` must be a scalar secret"))?;
+        let decoded = willikins_types::secret::reveal_transform_input(object, decode, || {
+            invalid("port `value` is a secret type this transform cannot read")
+        })?;
         let mut outputs = Outputs::new();
         outputs.insert(port("value"), Value::known(decoded));
         Ok(outputs)
@@ -143,6 +163,15 @@ mod tests {
         inputs.insert(
             PortName::parse("value").unwrap(),
             Value::known(OpaqueSecret::parse(value).unwrap()),
+        );
+        inputs
+    }
+
+    fn inputs_with_doppler_secret(value: &str) -> Inputs {
+        let mut inputs = Inputs::new();
+        inputs.insert(
+            PortName::parse("value").unwrap(),
+            Value::known(willikins_types::DopplerSecretValue::parse(value).unwrap()),
         );
         inputs
     }
@@ -233,5 +262,44 @@ mod tests {
     fn read_rejects_a_missing_port() {
         let err = Base64Decode::new().read(&Inputs::new()).unwrap_err();
         assert!(err.message.contains("value"), "{}", err.message);
+    }
+
+    #[test]
+    fn spec_value_port_accepts_any_secret() {
+        assert_eq!(
+            Base64Decode::new()
+                .spec()
+                .inputs
+                .get(&port("value"))
+                .unwrap()
+                .ty,
+            willikins_core::PortType::AnySecret
+        );
+    }
+
+    #[test]
+    fn decodes_a_doppler_secret_value_exactly_like_an_opaque_secret() {
+        // Wall one: `doppler.secret.get`'s own output type binds here
+        // and decodes, with no adapter node between.
+        let inputs = inputs_with_doppler_secret("aGVsbG8gd29ybGQ=");
+        assert_eq!(decoded(&Base64Decode::new(), &inputs), "hello world");
+    }
+
+    #[test]
+    fn decode_output_is_still_redacted_opaque_secret() {
+        // The widening must not launder a secret into a plain value: the
+        // output stays `OpaqueSecret`, still secret, whatever type the
+        // input actually was.
+        let inputs = inputs_with_doppler_secret("aGVsbG8gd29ybGQ=");
+        let Observation::Present(outputs) = Base64Decode::new().read(&inputs).unwrap() else {
+            panic!("expected Present");
+        };
+        let value = outputs.get(&PortName::parse("value").unwrap()).unwrap();
+        assert_eq!(value.render().to_string(), "[REDACTED OpaqueSecret]");
+        assert_eq!(
+            willikins_types::registry()
+                .is_secret(&willikins_types::TypeName::parse("OpaqueSecret").unwrap()),
+            Some(true)
+        );
     }
 }

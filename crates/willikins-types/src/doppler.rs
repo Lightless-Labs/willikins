@@ -87,6 +87,35 @@ pub struct DopplerServiceToken(secrecy::SecretString);
 )]
 pub struct DopplerSecretValue(secrecy::SecretString);
 
+impl DopplerSecretValue {
+    /// Apply `f` to this secret's raw bytes, exactly like
+    /// [`crate::OpaqueSecret::reveal_for_transform`] — see that method's
+    /// doc for the full reasoning (a pure transform/parse tool's
+    /// `Tool::read` never receives a `SinkToken`, so a resolver chain
+    /// ending at `base64.decode` or `apple.signing_key.parse` needs a
+    /// token-less way to hand its output's bytes to the next node's
+    /// `f`).
+    ///
+    /// This is the **second and last** such token-less exception
+    /// (`clippy.toml`'s `disallowed-methods` reason for
+    /// `secrecy::ExposeSecret::expose_secret` and
+    /// `crates/willikins-core/tests/expose_secret_guard.rs`'s exemption
+    /// list both name it), and it exists only because `doppler.secret.get`
+    /// predates [`crate::OpaqueSecret`] and still emits this type rather
+    /// than that one — see this module's own doc and `crate::secret`'s
+    /// module doc, "Wall one". It is not a general license for every
+    /// secret domain type to grow this method: `OpaqueSecret`'s own doc
+    /// explains why the derive macro deliberately does not offer it, and
+    /// that reasoning is unchanged. This method collapses back to one
+    /// (`OpaqueSecret`'s) the day `doppler.secret.get` is migrated to
+    /// emit `OpaqueSecret` instead, which this module's doc already
+    /// flagged as the alternative not yet built.
+    #[allow(clippy::disallowed_methods)]
+    pub fn reveal_for_transform<T, E>(&self, f: impl FnOnce(&str) -> Result<T, E>) -> Result<T, E> {
+        f(secrecy::ExposeSecret::expose_secret(&self.0))
+    }
+}
+
 /// A Doppler config identity: `project/name`.
 ///
 /// Hand-written because its canonical string is a documented join of two
