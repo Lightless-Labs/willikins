@@ -3327,9 +3327,11 @@ name = "willikins-providers-appstore"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "chrono",
  "indexmap",
  "insta",
  "mockito",
+ "regex",
  "serde",
  "serde_json",
  "willikins-core",

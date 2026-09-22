@@ -24,6 +24,17 @@ examples in shape only.
 | `capability_post_created.json` | Documented shape | `POST /v1/bundleIdCapabilities`'s success response. |
 | `error_403.json` | Documented shape | The generic `ErrorResponse` shape (research note, section 2); `willikins-providers-http`'s own `provider_error_from_body` maps any `403` to a fixed `MISSING_PERMISSION` message regardless of body content, so this fixture's exact fields are not load-bearing. |
 | `error_5xx.json` | Documented shape | Same `ErrorResponse` shape, generic `5xx` case. |
+| `certificate_list_one.json` | Documented shape + pre-flight | `GET /v1/certificates?filter[certificateType]=...&filter[serialNumber]=...`'s list shape, one exact match, `DISTRIBUTION`, unexpired, `activated` absent (the pre-flight's own observation: absent on all 5 real certificates) -- `appstore.certificate.get`'s `Present` arm. |
+| `certificate_list_empty.json` | Documented shape | The same list endpoint with zero rows -- the `NotFound` arm. |
+| `certificate_list_substring_neighbor.json` | Documented shape + pre-flight | One row whose `serialNumber` is a strict *superstring* of the requested serial (`...3D4E` + `FF`) -- proves the byte-exact compare, not the (proven-substring, pre-flight) filter, decides the match; the requested serial reads `NotFound`. |
+| `certificate_list_neighbor_only_page_one.json` | Documented shape | The same substring-neighbor row, used as page one of a two-page pagination test whose page two is `certificate_list_one.json` -- mirrors `bundle_id_list_prefix_neighbor.json` + `bundle_id_list_one.json`'s own pairing. |
+| `certificate_list_two.json` | Documented shape | Two rows both matching `certificateType` and `serialNumber` exactly -- the `Conflict` (ambiguous) arm; a defensive fixture, since Apple documents serial numbers as unique in practice. |
+| `certificate_list_expired.json` | Documented shape | One exact match whose `expirationDate` is in the past -- the `Conflict` (expired) arm. |
+| `certificate_list_deactivated.json` | Documented shape + pre-flight | One exact match with `"activated": false` -- the `Conflict` (deactivated) arm. `activated` is never `false` on the operator's own 5 certificates (pre-flight), so this shape is invented from the documented attribute, not observed live. |
+| `certificate_list_activated_true.json` | Documented shape | One exact match with `"activated": true` -- the `Present` arm, distinct from the (also-`Present`) absent-`activated` case `certificate_list_one.json` already covers. |
+| `certificate_list_wrong_type.json` | Documented shape | One row whose `serialNumber` matches exactly but `certificateType` does not (`DEVELOPER_ID_APPLICATION_G2`) -- proves the byte-exact compare checks *both* fields, not serial alone; the requested type+serial pair reads `NotFound`. |
+
+None of the certificate fixtures' ids, serials, or names are the operator's own -- `C3RT1F1CATE1`..`C3RT1F1CATE7` and the `7B3F...`/`AA11...` serials are invented, chosen only to match the pre-flight's own *observed shape* (uppercase hex; the pre-flight saw 30 to 32 characters on all 5 real certificates, and these fixtures use up to 36 -- still well inside `AppleCertificateSerial`'s generous `{1,64}` bound, not a claim that 36 was itself observed live; a `DISTRIBUTION` certificate's `name` beginning `Apple Distribution`).
 
 **Nothing here is live-verified yet.** This crate makes no live API call
 during ordinary `cargo test --workspace` — see `tests/live_probe.rs`

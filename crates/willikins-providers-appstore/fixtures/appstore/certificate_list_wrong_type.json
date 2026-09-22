@@ -1,0 +1,17 @@
+{
+  "data": [
+    {
+      "type": "certificates",
+      "id": "C3RT1F1CATE7",
+      "attributes": {
+        "name": "Developer ID Application: Example Org (T6G4XCV351)",
+        "certificateType": "DEVELOPER_ID_APPLICATION_G2",
+        "displayName": "Developer ID Application",
+        "serialNumber": "7B3F2A9C1D4E5F607182930A1B2C3D4E",
+        "platform": "MAC_OS",
+        "expirationDate": "2099-01-01T00:00:00.000+0000"
+      }
+    }
+  ],
+  "links": {"self": "https://api.appstoreconnect.apple.com/v1/certificates"}
+}

@@ -1,5 +1,5 @@
 //! [`AppstoreClient`]: typed calls for exactly the App Store Connect
-//! endpoints the two tools in this crate need, plus the JSON:API request
+//! endpoints the three tools in this crate need, plus the JSON:API request
 //! and response shapes those calls use.
 //!
 //! No tool ever builds a URL itself; every path this client builds is
@@ -35,7 +35,8 @@ use willikins_core::{ToolError, ToolErrorKind};
 use willikins_providers_http::{Credential, Http, ProviderError};
 use willikins_types::{
     AppleBundleIdId, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
-    AppleCapabilityType, AppleIssuerId, AppleKeyId, AppleSigningKey,
+    AppleCapabilityType, AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId,
+    AppleSigningKey,
 };
 
 /// App Store Connect's REST API base URL
@@ -325,6 +326,55 @@ impl AppstoreClient {
             .post::<CapabilityCreateResponse>("/v1/bundleIdCapabilities", &body)?;
         Ok(())
     }
+
+    /// `GET /v1/certificates?filter[certificateType]={type}&filter[serialNumber]={serial}`,
+    /// every page of it -- the only certificate call this client makes
+    /// (`tests/no_certificate_writes_guard.rs` in this crate proves no
+    /// other kind exists).
+    ///
+    /// Both filters narrow the request, but neither is trusted as an
+    /// exact match: `filter[serialNumber]` is proven substring, the same
+    /// live read on 2026-09-22 that settled `filter[identifier]`
+    /// (`docs/research/2026-09-16-app-store-connect.md`, "Reading back by
+    /// key", and this milestone's pre-flight, which reproduced the same
+    /// substring behaviour for `filter[serialNumber]` directly). So this
+    /// paginates exactly like [`Self::list_bundle_ids`], for the same
+    /// reason: the exact match can land on any page, and the caller's own
+    /// byte-for-byte comparison of both `certificateType` and
+    /// `serialNumber` (`appstore.certificate.get::find_one`) is what
+    /// actually decides a match.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::list_bundle_ids`].
+    pub(crate) fn list_certificates(
+        &self,
+        certificate_type: &AppleCertificateType,
+        serial_number: &AppleCertificateSerial,
+    ) -> Result<Vec<CertificateResource>, ProviderError> {
+        let mut path = format!(
+            "/v1/certificates?filter[certificateType]={certificate_type}&filter[serialNumber]={serial_number}&limit={PAGE_LIMIT}"
+        );
+        let mut rows: Vec<CertificateResource> = Vec::new();
+        for _ in 0..MAX_PAGES {
+            let response: CertificateListResponse = self.http.get(&path)?;
+            rows.extend(response.data);
+            let Some(next) = response.links.and_then(|links| links.next) else {
+                return Ok(rows);
+            };
+            let Some((_, query)) = next.split_once('?') else {
+                return Ok(rows);
+            };
+            path = format!("/v1/certificates?{query}");
+        }
+        Err(ProviderError::new(
+            None,
+            format!(
+                "App Store Connect returned more than {MAX_PAGES} pages of certificates for \
+                 one filter; refusing to keep paging"
+            ),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -469,6 +519,50 @@ struct CapabilityCreateData {
 #[derive(Debug, Serialize)]
 struct CapabilityCreateBody {
     data: CapabilityCreateData,
+}
+
+/// One `certificates` resource's attributes -- exactly the four
+/// [`AppstoreCertificateGet`](crate::tools::AppstoreCertificateGet) reads:
+/// `certificateType` and `serialNumber` for the exact-compare selection,
+/// `expirationDate` and `activated` for the health check. Never `name`,
+/// `displayName`, `platform`, or `certificateContent` -- none of which
+/// this crate has any reason to read back (`displayName` cannot
+/// discriminate at all; a certificate's raw `.p12` content is never
+/// willikins' to touch).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CertificateAttributes {
+    #[serde(rename = "certificateType")]
+    pub(crate) certificate_type: String,
+    #[serde(rename = "serialNumber")]
+    pub(crate) serial_number: String,
+    /// An RFC 3339 timestamp, parsed by the tool (not this client) once
+    /// it already knows this is *the* matched resource -- see
+    /// `appstore.certificate.get`'s own module doc. `None` is not
+    /// observed live (all 5 of the operator's certificates carried one
+    /// during the pre-flight) but the schema does not guarantee it.
+    #[serde(rename = "expirationDate")]
+    pub(crate) expiration_date: Option<String>,
+    /// **Absent** on every one of the operator's own 5 certificates,
+    /// even when requested through `fields[certificates]` (milestone 3c
+    /// pre-flight) -- `Option`, not a defaulted `bool`, so the tool can
+    /// tell "absent" (not deactivated) apart from an explicit `false`
+    /// (deactivated) rather than serde silently picking one.
+    pub(crate) activated: Option<bool>,
+}
+
+/// One `certificates` resource.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CertificateResource {
+    pub(crate) id: String,
+    pub(crate) attributes: CertificateAttributes,
+}
+
+#[derive(Debug, Deserialize)]
+struct CertificateListResponse {
+    data: Vec<CertificateResource>,
+    /// See [`BundleIdListResponse::links`] -- same reasoning, same
+    /// `Option` (absent on a response with no further pages).
+    links: Option<Links>,
 }
 
 #[cfg(test)]

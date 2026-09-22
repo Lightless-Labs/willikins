@@ -1,0 +1,18 @@
+{
+  "data": [
+    {
+      "type": "certificates",
+      "id": "C3RT1F1CATE5",
+      "attributes": {
+        "name": "Apple Distribution: Example Org (T6G4XCV349)",
+        "certificateType": "DISTRIBUTION",
+        "displayName": "Apple Distribution",
+        "serialNumber": "AA11BB22CC33DD44EE55FF6607182930B",
+        "platform": "IOS",
+        "expirationDate": "2099-01-01T00:00:00.000+0000",
+        "activated": false
+      }
+    }
+  ],
+  "links": {"self": "https://api.appstoreconnect.apple.com/v1/certificates"}
+}
