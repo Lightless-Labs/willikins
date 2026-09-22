@@ -1,12 +1,21 @@
-//! App Store Connect domain types: [`AppleSigningKey`], the EC P-256
-//! private key half of the credential triple
+//! App Store Connect domain types: [`AppleIssuerId`], [`AppleKeyId`] and
+//! [`AppleSigningKey`], the three parts of the credential triple
 //! `docs/research/2026-09-16-app-store-connect.md` describes (issuer-ID
 //! UUID, key ID, P-256 private key — "of which only the last is
-//! secret"). The other two parts are not domain types: they carry no
-//! shape of their own beyond being *some* text, and the credential triple
-//! that bundles them with this key lives in `willikins-providers-http` as
-//! an execution-context type, not a graph one — see that crate's
-//! `apple_credential` module for why.
+//! secret"). All three are domain types and all three are ordinary graph
+//! ports: the issuer id and key id are non-secret and carry real
+//! grammars of their own (a UUID; a short alphanumeric identifier), so
+//! each is free to be bound to a literal, a workflow input, an
+//! `env.get` output or a `doppler.value.get`/`doppler.secret.get` output,
+//! at the document author's choice — never something bundled inside a
+//! credential struct, because a part that is not a domain type cannot be
+//! a port, and a part that is not a port can only come from the
+//! execution context, which couples every document to wherever *one*
+//! operator keeps their ids. `willikins-providers-http`'s
+//! `apple_credential` module is the assembly point that reads all three
+//! already-resolved ports and mints a JWT from them; see that module's
+//! doc for why the assembly point itself is an execution-context type,
+//! not a graph one, while the parts it assembles are graph types.
 //!
 //! # Why this type is hand-written rather than `#[derive(DomainType)]`
 //!
@@ -64,6 +73,61 @@ use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey, LineEnding};
 
 use crate::object::{DomainObject, Rendered};
 use crate::{DomainType, ParseError, SinkToken};
+
+/// An App Store Connect API key's issuer id: a UUID, team keys only
+/// (`docs/research/2026-09-16-app-store-connect.md`, section 1 — Apple's
+/// own example is `57246542-96fe-1a63-e053-0824d011072a`). Not secret: it
+/// appears in cleartext as the `iss` claim of every JWT this credential
+/// mints.
+///
+/// Grammar and derive choice both follow [`crate::BuildkiteClusterId`]
+/// exactly: lowercase hex only (a mis-cased id would compare unequal to
+/// whatever a document or provider response holds), and no separate
+/// `min_len`/`max_len` because the pattern's five hyphen-separated hex
+/// groups (8-4-4-4-12) already fix the length at 36 characters. A new
+/// type rather than a reuse of `BuildkiteClusterId` itself: both are
+/// UUIDs today, but a type name at a port carries provider meaning, and
+/// a `BuildkiteClusterId` binding to an Apple issuer-id port by accident
+/// — because the underlying grammars happen to coincide — is exactly
+/// what a distinct type name at each port exists to rule out. `#[derive(
+/// DomainType)]` is used, not hand-written: unlike [`AppleSigningKey`],
+/// nothing about a UUID needs semantic validation a regex cannot express
+/// (checking a point lies on a curve, say) — a pattern match is the whole
+/// grammar.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    description = "An App Store Connect API key's issuer id (a UUID, team keys only).",
+    example = "57246542-96fe-1a63-e053-0824d011072a"
+)]
+pub struct AppleIssuerId(String);
+
+/// An App Store Connect API key's key id: goes in the JWT header's `kid`
+/// (`docs/research/2026-09-16-app-store-connect.md`, section 1 — Apple's
+/// own example is `2X9R4HXF34`). Not secret: it appears in cleartext in
+/// the header of every JWT this credential mints.
+///
+/// Apple documents no grammar for this id at all — the research note's
+/// "Unresolved" list is silent on it, and no help or specification page
+/// fetched there states a length or character set. The pattern here is
+/// the shape Apple's own examples and every widely observed real key id
+/// use — uppercase letters and digits, ten characters — following
+/// [`crate::BuildkiteOrg`]'s precedent for a grammar Apple never
+/// publishes: chosen conservatively from the shape the provider issues,
+/// not invented. Bounded a little wider than the observed examples --
+/// the pattern's own `{2,32}` quantifier, not a separate `max_len` --
+/// so a real key id in a length Apple has not been observed to use is
+/// not refused by a type that guessed too narrowly; a bundle
+/// identifier's own undocumented grammar
+/// (`docs/research/2026-09-16-app-store-connect.md`, section 2) is the
+/// cautionary tale against pretending an unstated grammar is exact.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "[A-Z0-9]{2,32}",
+    description = "An App Store Connect API key's key id (goes in the JWT `kid` header).",
+    example = "2X9R4HXF34"
+)]
+pub struct AppleKeyId(String);
 
 /// The type name, repeated at every hand-written impl site below exactly
 /// as `#[derive(DomainType)]` would embed `stringify!(Self)`.
@@ -411,5 +475,51 @@ mod tests {
     fn deserialize_rejects_a_non_key_string() {
         let json = serde_json::to_string("not a key").unwrap();
         assert!(serde_json::from_str::<AppleSigningKey>(&json).is_err());
+    }
+
+    #[test]
+    fn issuer_id_and_key_id_are_registered_and_not_secret() {
+        // The property the whole "credentials are ports, resolvers are
+        // nodes" design rests on for these two parts: only the key is
+        // secret, so only the key may ever refuse a workflow input.
+        const { assert!(!AppleIssuerId::IS_SECRET) };
+        const { assert!(!AppleKeyId::IS_SECRET) };
+        let registry = crate::registry();
+        assert_eq!(
+            registry.is_secret(&crate::TypeName::parse("AppleIssuerId").unwrap()),
+            Some(false)
+        );
+        assert_eq!(
+            registry.is_secret(&crate::TypeName::parse("AppleKeyId").unwrap()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn issuer_id_accepts_apples_own_example() {
+        assert!(AppleIssuerId::parse("57246542-96fe-1a63-e053-0824d011072a").is_ok());
+    }
+
+    #[test]
+    fn issuer_id_refuses_uppercase_and_non_uuid_shapes() {
+        assert!(AppleIssuerId::parse("57246542-96FE-1a63-e053-0824d011072a").is_err());
+        assert!(AppleIssuerId::parse("not-a-uuid").is_err());
+    }
+
+    #[test]
+    fn key_id_accepts_apples_own_example() {
+        assert!(AppleKeyId::parse("2X9R4HXF34").is_ok());
+    }
+
+    #[test]
+    fn key_id_refuses_lowercase_and_punctuation() {
+        assert!(AppleKeyId::parse("2x9r4hxf34").is_err());
+        assert!(AppleKeyId::parse("2X9R-4HXF34").is_err());
+    }
+
+    #[test]
+    fn issuer_id_and_key_id_examples_parse_as_their_own_types() {
+        crate::assert_example_parses::<AppleIssuerId>();
+        crate::assert_example_parses::<AppleKeyId>();
     }
 }
