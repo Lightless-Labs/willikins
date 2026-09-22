@@ -15,6 +15,7 @@ mod secret_get;
 mod secret_set;
 mod service_token_ensure;
 mod service_token_rotate;
+mod value_get;
 
 pub use config_ensure::DopplerConfigEnsure;
 pub use config_inheritable_ensure::DopplerConfigInheritableEnsure;
@@ -24,3 +25,4 @@ pub use secret_get::DopplerSecretGet;
 pub use secret_set::DopplerSecretSet;
 pub use service_token_ensure::DopplerServiceTokenEnsure;
 pub use service_token_rotate::DopplerServiceTokenRotate;
+pub use value_get::DopplerValueGet;

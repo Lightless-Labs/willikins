@@ -33,6 +33,61 @@ expression: "catalog.list_tools_json()[\"tools\"]"
   },
   {
     "class": "reversible",
+    "description": "Read a WILLIKINS_-namespaced environment variable's value.",
+    "inputs": {
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "EnvVarName"
+        }
+      }
+    },
+    "key": [],
+    "name": "env.get",
+    "outputs": {
+      "value": "OpaqueSecret"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Base64-decode a secret value (RFC 4648 standard alphabet, padding either way, ASCII whitespace stripped first); the decoded bytes must be UTF-8.",
+    "inputs": {
+      "value": {
+        "required": true,
+        "ty": {
+          "kind": "any_secret"
+        }
+      }
+    },
+    "key": [],
+    "name": "base64.decode",
+    "outputs": {
+      "value": "OpaqueSecret"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Parse a decoded secret as an EC P-256 (PKCS#8 or SEC1 PEM) App Store Connect signing key.",
+    "inputs": {
+      "value": {
+        "required": true,
+        "ty": {
+          "kind": "any_secret"
+        }
+      }
+    },
+    "key": [],
+    "name": "apple.signing_key.parse",
+    "outputs": {
+      "value": "AppleSigningKey"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
     "description": "Ensure a GitHub repository exists.",
     "inputs": {
       "repo": {
@@ -305,6 +360,32 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "name": "doppler.secret.set",
     "outputs": {},
     "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Read a Doppler variable's value as non-secret text. Choosing this tool over `doppler.secret.get` is the document's own declaration that the value is not a secret.",
+    "inputs": {
+      "config": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerConfig"
+        }
+      },
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "SecretName"
+        }
+      }
+    },
+    "key": [],
+    "name": "doppler.value.get",
+    "outputs": {
+      "value": "Text"
+    },
+    "pure": true
   },
   {
     "class": "reversible",

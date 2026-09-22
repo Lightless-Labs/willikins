@@ -16,7 +16,7 @@ use willikins_types::{
     ActionsSecretName, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
     DopplerConfig, DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName,
     GitHubRepo, ProjectSlug, RepoVisibility, SecretName, SigNozIngestionKeyName,
-    SigNozIngestionKeyValue,
+    SigNozIngestionKeyValue, Text,
 };
 
 /// A GitHub repository record: enough to answer `github.repo.ensure`'s
@@ -313,6 +313,20 @@ pub struct FakeState {
     pub doppler_service_tokens: HashSet<String>,
     /// Doppler secrets, keyed by `"<config>#<SECRET_NAME>"`.
     pub doppler_secrets: SecretsMap,
+    /// Doppler variables read as non-secret [`Text`] by
+    /// `doppler.value.get`, keyed the same way as [`Self::doppler_secrets`]
+    /// (`doppler_secret_key`). Deliberately a separate map rather than a
+    /// second read of `doppler_secrets`: `DopplerSecretValue` offers no
+    /// plaintext accessor outside a `SinkToken`-gated `expose` (this
+    /// crate never mints one outside its own tests), so there is no
+    /// token-less way for this map to be derived from that one. A live
+    /// Doppler variable answers both tools identically because they hit
+    /// the same endpoint; a fake-state seed file that wants both
+    /// `doppler.secret.get` and `doppler.value.get` to agree on one
+    /// variable must seed both maps at the same key with the same text --
+    /// this crate does not enforce that agreement, the same way it does
+    /// not enforce any other seeded fixture's internal consistency.
+    pub doppler_values: HashMap<String, Text>,
     /// Keys `doppler.secret.set` has been called against, keyed the same
     /// way as [`Self::doppler_secrets`]. Deliberately a separate,
     /// value-free set rather than writing into [`Self::doppler_secrets`]
@@ -519,6 +533,21 @@ impl FakeState {
         value: DopplerSecretValue,
     ) -> Self {
         self.doppler_secrets
+            .insert(doppler_secret_key(config, name), value);
+        self
+    }
+
+    /// Seed a Doppler variable's value for `doppler.value.get`. See
+    /// [`Self::doppler_values`] for why this is not derived from
+    /// [`Self::with_doppler_secret`].
+    #[must_use]
+    pub fn with_doppler_value(
+        mut self,
+        config: &DopplerConfig,
+        name: &SecretName,
+        value: Text,
+    ) -> Self {
+        self.doppler_values
             .insert(doppler_secret_key(config, name), value);
         self
     }

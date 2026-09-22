@@ -1,8 +1,10 @@
-//! The *whole* live catalog — `willikins-tools`' two pure tools,
-//! `willikins-providers-github`'s two live tools, this crate's seven live
+//! The *whole* live catalog — `willikins-tools`' five pure tools,
+//! `willikins-providers-github`'s two live tools, this crate's nine live
 //! Doppler tools (milestone 3 added `doppler.config.inheritable.ensure`
-//! and `doppler.config.inherits.ensure`), and (milestone 3a)
-//! `willikins-providers-buildkite`'s two live tools. Fifteen tools, no
+//! and `doppler.config.inherits.ensure`; the `SigNoz` task added
+//! `doppler.secret.set`; the App Store Connect credential correction
+//! added `doppler.value.get`), and (milestone 3a)
+//! `willikins-providers-buildkite`'s two live tools. Nineteen tools, no
 //! fake among them.
 //!
 //! The assembly itself lives in `willikins-server` now
@@ -23,8 +25,10 @@
 //! until this file, nothing proved the assembly `willikins-server` needs
 //! is even constructible: that the nine specs' names do not collide, that
 //! every one validates against the shared type registry, and that the
-//! milestone's two positive fixtures still `check` against it, resolving
-//! the same types in the same order as against the all-fake catalog.
+//! milestone's two positive fixtures -- plus the two App Store Connect
+//! credential documents the credential-ports correction added -- still
+//! `check` against it, resolving the same types in the same order as
+//! against the all-fake catalog.
 //!
 //! No tool here is ever called. `check` is pure, so every client points
 //! at a port nothing listens on, and every `Credential` is a
@@ -33,11 +37,18 @@
 use willikins_core::Catalog;
 use willikins_providers_http::{Credential, Http};
 
-/// The two positive fixtures the milestone's goal names.
-const POSITIVE_FIXTURES: [&str; 2] = ["new-rust-service.yaml", "rotate-service-token.yaml"];
+/// The milestone's original two positive fixtures, plus the two App
+/// Store Connect credential documents proving the credential's three
+/// parts are genuinely free ports.
+const POSITIVE_FIXTURES: [&str; 4] = [
+    "new-rust-service.yaml",
+    "rotate-service-token.yaml",
+    "apple-signing-credential-from-doppler.yaml",
+    "apple-signing-credential-from-inputs.yaml",
+];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 15] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 19] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -71,8 +82,8 @@ fn live_catalog() -> Catalog {
     )
 }
 
-/// The assembly itself: fifteen tools, no name collision, every spec valid
-/// against the shared type registry.
+/// The assembly itself: nineteen tools, no name collision, every spec
+/// valid against the shared type registry.
 #[test]
 fn the_live_catalog_assembles_and_every_spec_validates() {
     let catalog = live_catalog();
@@ -88,7 +99,7 @@ fn the_live_catalog_assembles_and_every_spec_validates() {
     }
 }
 
-/// The two positive fixtures `check` against the fully-live catalog, and
+/// All four positive fixtures `check` against the fully-live catalog, and
 /// resolve exactly what they resolve against the all-fake one: the same
 /// types, output types, order, and class.
 #[test]
@@ -116,9 +127,9 @@ fn both_positive_fixtures_check_the_same_against_the_live_catalog() {
     }
 }
 
-/// Nothing fake survives in it: inserting any of the fifteen fake tools of
-/// the same names on top is refused as a duplicate, which is what makes
-/// the two tests above statements about the live tools at all.
+/// Nothing fake survives in it: inserting any of the nineteen fake tools
+/// of the same names on top is refused as a duplicate, which is what
+/// makes the two tests above statements about the live tools at all.
 #[test]
 fn no_fake_tool_fits_into_the_live_catalog() {
     let (_fake_state, fake_catalog) = willikins_providers_fake::empty();
