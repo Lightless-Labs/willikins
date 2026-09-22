@@ -63,6 +63,40 @@
 //!
 //! No `gh` command is run. Nothing here prints a credential, a JWT, or
 //! any bundle id's identifier or name.
+//!
+//! # The signing pre-flight (`appstore_signing_probe`), milestone 3c
+//!
+//! A second `#[test]` in this file, under the same gate, answers the
+//! three questions `docs/plans/2026-09-22-milestone-3c-app-store-signing.md`
+//! gates on, **as counts and statuses only**:
+//!
+//! - **(c)** does the credential still authenticate at all
+//!   (`GET /v1/bundleIds?limit=1`, status only);
+//! - **(d)** certificates, counted by `certificateType`, by `activated`
+//!   and by whether `expirationDate` is past, and whether at least one
+//!   certificate of a distribution type is unexpired and not
+//!   deactivated;
+//! - **(e)** whether `GET /v1/profiles` answers `200` or `403` for this
+//!   key, and the profiles counted by `profileType` and `profileState`,
+//!   with the lengths of their `profileContent` and the sizes of their
+//!   device and certificate relationships.
+//!
+//! **Certificates and profiles belong to the operator.** A certificate's
+//! display name, name, serial number or id, and a profile's name, uuid,
+//! id or content, never leave this function: the certificate read does
+//! not request `certificateContent`; the names it requests are reduced
+//! to a *count of distinct values* and to whether they begin with one of
+//! Apple's own type labels (`Apple Distribution`, `iOS Distribution`),
+//! which are Apple's words, not the operator's; and the serial numbers
+//! are reduced to their shape (character class and length). One usable
+//! certificate's serial is held in memory to learn what
+//! `filter[serialNumber]` matches (whole string, strict prefix, strict
+//! suffix -- the method that settled `filter[identifier]`), and only row
+//! counts and hit booleans are printed. Every call is a `GET`.
+//!
+//! A `200` on either list proves only that this key may *read*. It says
+//! nothing about permission to *create* a profile; the milestone's live
+//! write cycle is the first thing that will know.
 
 use willikins_types::{AppleIssuerId, AppleKeyId, AppleSigningKey, DomainType};
 
@@ -274,4 +308,432 @@ fn appstore_live_probe() {
         (false, true) => "SUFFIX (unexpected -- report, do not rely on this)",
     };
     println!("PROBE(b) VERDICT: filter[identifier] matches {verdict}");
+}
+
+// ---------------------------------------------------------------------
+// The signing pre-flight, milestone 3c. Read-only; counts and statuses.
+// ---------------------------------------------------------------------
+
+/// The certificate types Apple's own certificates-overview table says
+/// can "submit [an app] to App Store Connect" ("Apple Distribution",
+/// "iOS Distribution", "Mac App Distribution"), as the API's
+/// `CertificateType` spells the ones this milestone could use. The
+/// label-to-enum mapping is itself unverified; the probe reports the
+/// label prefixes it sees per type so a reader can check it.
+const DISTRIBUTION_FAMILY: [&str; 3] = ["DISTRIBUTION", "IOS_DISTRIBUTION", "MAC_APP_DISTRIBUTION"];
+
+/// A `GET` that answers its status instead of panicking: a `403` on a
+/// list is an answer this probe must report, not a crash.
+fn get_or_status(
+    http: &willikins_providers_http::Http,
+    path: &str,
+) -> Result<serde_json::Value, Option<u16>> {
+    http.get::<serde_json::Value>(path)
+        .map_err(|err| err.status)
+}
+
+/// Every row of a collection, following `links.next` exactly as
+/// [`all_identifiers`] does, plus every `included` resource, plus
+/// Apple's `meta.paging.total` when it sends one. Refuses past 50 pages.
+struct Collection {
+    rows: Vec<serde_json::Value>,
+    included: Vec<serde_json::Value>,
+    reported_total: Option<u64>,
+}
+
+fn collect(http: &willikins_providers_http::Http, first: &str) -> Result<Collection, Option<u16>> {
+    let mut path = first.to_string();
+    let mut out = Collection {
+        rows: Vec::new(),
+        included: Vec::new(),
+        reported_total: None,
+    };
+    for _ in 0..50 {
+        let page = get_or_status(http, &path)?;
+        if out.reported_total.is_none() {
+            out.reported_total = page
+                .pointer("/meta/paging/total")
+                .and_then(serde_json::Value::as_u64);
+        }
+        for (key, sink) in [("data", &mut out.rows), ("included", &mut out.included)] {
+            if let Some(items) = page.get(key).and_then(serde_json::Value::as_array) {
+                sink.extend(items.iter().cloned());
+            }
+        }
+        let Some(next) = page
+            .pointer("/links/next")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Ok(out);
+        };
+        path = next
+            .strip_prefix(willikins_providers_appstore::APPSTORE_API_BASE_URL)
+            .unwrap_or_else(|| panic!("links.next is not on Apple's own host"))
+            .to_string();
+    }
+    panic!("more than 50 pages -- refusing to keep paging");
+}
+
+fn report_total(label: &str, collection: &Collection) {
+    let counted = collection.rows.len();
+    match collection.reported_total {
+        Some(total) if u64::try_from(counted).ok() == Some(total) => {
+            println!("{label} rows counted: {counted}; meta.paging.total agrees: {total}");
+        }
+        Some(total) => println!(
+            "{label} rows counted: {counted}; meta.paging.total DISAGREES: {total} -- STOP and report"
+        ),
+        None => println!("{label} rows counted: {counted}; meta.paging.total: ABSENT"),
+    }
+}
+
+/// Now, in UTC, as `YYYY-MM-DDTHH:MM:SS` -- the civil-from-days
+/// conversion, so the probe needs no date crate.
+fn utc_now_prefix() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX);
+    let rem = secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}",
+        rem / 3_600,
+        (rem % 3_600) / 60,
+        rem % 60
+    )
+}
+
+/// Whether an Apple `date-time` is in the past: `Some(true)` expired,
+/// `Some(false)` not, `None` when it is absent or carries an offset this
+/// probe does not compare (only `Z` and `+00:00` are compared, on their
+/// first 19 characters).
+fn expired(date: Option<&str>, now: &str) -> Option<bool> {
+    let date = date?;
+    let utc = date.ends_with('Z') || date.ends_with("+00:00");
+    if !utc || date.len() < 19 || !date.is_char_boundary(19) {
+        return None;
+    }
+    Some(&date[..19] <= now)
+}
+
+fn attr<'a>(row: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+    row.get("attributes").and_then(|a| a.get(name))
+}
+
+fn attr_str<'a>(row: &'a serde_json::Value, name: &str) -> Option<&'a str> {
+    attr(row, name).and_then(serde_json::Value::as_str)
+}
+
+#[derive(Default, Debug)]
+struct CertTally {
+    total: usize,
+    expired: usize,
+    unexpired: usize,
+    expiry_unparsed: usize,
+    activated_true: usize,
+    activated_false: usize,
+    activated_absent: usize,
+    usable: usize,
+    label_apple_distribution: usize,
+    label_ios_distribution: usize,
+    label_other: usize,
+    serial_upper_hex: usize,
+    serial_lower_hex: usize,
+    serial_other_shape: usize,
+    serial_min_len: Option<usize>,
+    serial_max_len: usize,
+}
+
+#[derive(Default, Debug)]
+struct ProfileTally {
+    total: usize,
+    expired_by_date: usize,
+    unexpired_by_date: usize,
+    expiry_unparsed: usize,
+    content_min_chars: Option<usize>,
+    content_max_chars: usize,
+    content_absent: usize,
+    with_devices: usize,
+    without_devices: usize,
+    devices_max_seen: usize,
+    certificates_per_profile: std::collections::BTreeMap<usize, usize>,
+    signing_certificate_types: std::collections::BTreeMap<String, usize>,
+}
+
+#[test]
+#[ignore = "opt-in read-only signing pre-flight against the operator's LIVE App Store Connect \
+            account (milestone 3c); run with WILLIKINS_LIVE_PROBE=1 and the credential resolved \
+            out of Doppler in the same command. GET only; prints counts and statuses only."]
+#[allow(clippy::too_many_lines)] // one linear read-only report, kept in one place on purpose
+fn appstore_signing_probe() {
+    if std::env::var("WILLIKINS_LIVE_PROBE").as_deref() != Ok("1") {
+        println!("skip: WILLIKINS_LIVE_PROBE is not 1");
+        return;
+    }
+    let http = live_http();
+    let now = utc_now_prefix();
+
+    // (c) Does the credential authenticate at all?
+    match get_or_status(&http, "/v1/bundleIds?limit=1&fields[bundleIds]=platform") {
+        Ok(_) => println!("PROBE(c) credential authenticates: GET /v1/bundleIds answered 200"),
+        Err(status) => {
+            println!(
+                "PROBE(c) credential FAILED: GET /v1/bundleIds answered {status:?} -- STOP; \
+                 GATE BLOCKED"
+            );
+            return;
+        }
+    }
+
+    // (d) Certificates. Never requests serialNumber or certificateContent.
+    match get_or_status(
+        &http,
+        "/v1/certificates?limit=1&fields[certificates]=certificateType",
+    ) {
+        Ok(_) => println!("PROBE(d) GET /v1/certificates status: 200"),
+        Err(status) => println!("PROBE(d) GET /v1/certificates status: {status:?}"),
+    }
+    let mut any_usable = false;
+    // One usable certificate's serial, held in memory only, to learn what
+    // `filter[serialNumber]` matches. Never printed.
+    let mut sample_serial: Option<String> = None;
+    match collect(
+        &http,
+        "/v1/certificates?limit=200&fields[certificates]=certificateType,displayName,name,\
+         expirationDate,activated,serialNumber",
+    ) {
+        Err(status) => println!("PROBE(d) certificate listing FAILED with status {status:?}"),
+        Ok(certs) => {
+            report_total("PROBE(d) certificates", &certs);
+            let mut by_type: std::collections::BTreeMap<String, CertTally> =
+                std::collections::BTreeMap::new();
+            let mut usable_display_names: std::collections::BTreeMap<
+                String,
+                std::collections::BTreeSet<&str>,
+            > = std::collections::BTreeMap::new();
+            for row in &certs.rows {
+                let kind = attr_str(row, "certificateType")
+                    .unwrap_or("<none>")
+                    .to_string();
+                let tally = by_type.entry(kind.clone()).or_default();
+                tally.total += 1;
+                let is_expired = expired(attr_str(row, "expirationDate"), &now);
+                match is_expired {
+                    Some(true) => tally.expired += 1,
+                    Some(false) => tally.unexpired += 1,
+                    None => tally.expiry_unparsed += 1,
+                }
+                let activated = attr(row, "activated").and_then(serde_json::Value::as_bool);
+                match activated {
+                    Some(true) => tally.activated_true += 1,
+                    Some(false) => tally.activated_false += 1,
+                    None => tally.activated_absent += 1,
+                }
+                // Apple's own type label, never the operator's part of
+                // the name: only a prefix test, reduced to a count.
+                let name = attr_str(row, "name").unwrap_or_default();
+                if name.starts_with("Apple Distribution") {
+                    tally.label_apple_distribution += 1;
+                } else if name.starts_with("iOS Distribution") {
+                    tally.label_ios_distribution += 1;
+                } else {
+                    tally.label_other += 1;
+                }
+                // The serial's *shape* only: its character class and
+                // length, never its value.
+                let serial = attr_str(row, "serialNumber").unwrap_or_default();
+                let hex = !serial.is_empty() && serial.chars().all(|c| c.is_ascii_hexdigit());
+                if hex && !serial.chars().any(|c| c.is_ascii_lowercase()) {
+                    tally.serial_upper_hex += 1;
+                } else if hex && !serial.chars().any(|c| c.is_ascii_uppercase()) {
+                    tally.serial_lower_hex += 1;
+                } else {
+                    tally.serial_other_shape += 1;
+                }
+                tally.serial_max_len = tally.serial_max_len.max(serial.len());
+                tally.serial_min_len = Some(
+                    tally
+                        .serial_min_len
+                        .map_or(serial.len(), |m| m.min(serial.len())),
+                );
+                if DISTRIBUTION_FAMILY.contains(&kind.as_str())
+                    && is_expired == Some(false)
+                    && activated != Some(false)
+                {
+                    tally.usable += 1;
+                    any_usable = true;
+                    if sample_serial.is_none() && serial.len() >= 3 && serial.is_ascii() {
+                        sample_serial = Some(serial.to_string());
+                    }
+                    usable_display_names
+                        .entry(kind.clone())
+                        .or_default()
+                        .insert(attr_str(row, "displayName").unwrap_or_default());
+                }
+            }
+            for (kind, tally) in &by_type {
+                println!("PROBE(d) certificateType {kind}: {tally:?}");
+            }
+            for (kind, names) in &usable_display_names {
+                println!(
+                    "PROBE(d) usable {kind}: distinct displayName values among them: {}",
+                    names.len()
+                );
+            }
+        }
+    }
+    // What does `filter[serialNumber]` match? The same method that settled
+    // `filter[identifier]`: the whole string, a strict prefix, a strict
+    // suffix; only row counts and whether the original came back.
+    if let Some(serial) = &sample_serial {
+        let probe = |needle: &str| -> String {
+            match get_or_status(
+                &http,
+                &format!(
+                    "/v1/certificates?limit=200&fields[certificates]=serialNumber\
+                     &filter[serialNumber]={needle}"
+                ),
+            ) {
+                Err(status) => format!("status {status:?}"),
+                Ok(page) => {
+                    let rows = page
+                        .get("data")
+                        .and_then(serde_json::Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    let hit = rows
+                        .iter()
+                        .any(|row| attr_str(row, "serialNumber") == Some(serial.as_str()));
+                    format!("{} rows, original present: {hit}", rows.len())
+                }
+            }
+        };
+        println!(
+            "PROBE(d) filter[serialNumber] whole string: {}",
+            probe(serial)
+        );
+        println!(
+            "PROBE(d) filter[serialNumber] strict prefix: {}",
+            probe(&serial[..serial.len() - 1])
+        );
+        println!(
+            "PROBE(d) filter[serialNumber] strict suffix: {}",
+            probe(&serial[1..])
+        );
+    } else {
+        println!("PROBE(d) filter[serialNumber] SKIPPED: no usable certificate to probe with");
+    }
+    println!(
+        "PROBE(d) GATE: at least one unexpired, not-deactivated distribution-family \
+         certificate exists: {any_usable}"
+    );
+
+    // (e) Profiles.
+    let profiles_status =
+        match get_or_status(&http, "/v1/profiles?limit=1&fields[profiles]=profileType") {
+            Ok(_) => Some(200),
+            Err(status) => status,
+        };
+    println!("PROBE(e) GET /v1/profiles status: {profiles_status:?}");
+    if profiles_status != Some(200) {
+        println!("PROBE(e) GATE BLOCKED: GET /v1/profiles did not answer 200");
+        return;
+    }
+    match collect(
+        &http,
+        "/v1/profiles?limit=200&fields[profiles]=profileType,profileState,expirationDate,\
+         profileContent,certificates,devices&include=certificates,devices\
+         &fields[certificates]=certificateType&fields[devices]=platform\
+         &limit[certificates]=50&limit[devices]=50",
+    ) {
+        Err(status) => println!("PROBE(e) profile listing FAILED with status {status:?}"),
+        Ok(profiles) => {
+            report_total("PROBE(e) profiles", &profiles);
+            let certificate_types: std::collections::BTreeMap<&str, &str> = profiles
+                .included
+                .iter()
+                .filter(|row| {
+                    row.get("type").and_then(serde_json::Value::as_str) == Some("certificates")
+                })
+                .filter_map(|row| {
+                    Some((
+                        row.get("id").and_then(serde_json::Value::as_str)?,
+                        attr_str(row, "certificateType").unwrap_or("<none>"),
+                    ))
+                })
+                .collect();
+            let mut by_kind: std::collections::BTreeMap<(String, String), ProfileTally> =
+                std::collections::BTreeMap::new();
+            for row in &profiles.rows {
+                let key = (
+                    attr_str(row, "profileType").unwrap_or("<none>").to_string(),
+                    attr_str(row, "profileState")
+                        .unwrap_or("<none>")
+                        .to_string(),
+                );
+                let tally = by_kind.entry(key).or_default();
+                tally.total += 1;
+                match expired(attr_str(row, "expirationDate"), &now) {
+                    Some(true) => tally.expired_by_date += 1,
+                    Some(false) => tally.unexpired_by_date += 1,
+                    None => tally.expiry_unparsed += 1,
+                }
+                match attr_str(row, "profileContent") {
+                    Some(content) => {
+                        let chars = content.chars().count();
+                        tally.content_max_chars = tally.content_max_chars.max(chars);
+                        tally.content_min_chars =
+                            Some(tally.content_min_chars.map_or(chars, |m| m.min(chars)));
+                    }
+                    None => tally.content_absent += 1,
+                }
+                let related = |name: &str| -> Vec<&serde_json::Value> {
+                    row.pointer(&format!("/relationships/{name}/data"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| items.iter().collect())
+                        .unwrap_or_default()
+                };
+                let devices = related("devices");
+                if devices.is_empty() {
+                    tally.without_devices += 1;
+                } else {
+                    tally.with_devices += 1;
+                }
+                tally.devices_max_seen = tally.devices_max_seen.max(devices.len());
+                let certificates = related("certificates");
+                *tally
+                    .certificates_per_profile
+                    .entry(certificates.len())
+                    .or_default() += 1;
+                for certificate in certificates {
+                    let kind = certificate
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|id| certificate_types.get(id).copied())
+                        .unwrap_or("<not included>");
+                    *tally
+                        .signing_certificate_types
+                        .entry(kind.to_string())
+                        .or_default() += 1;
+                }
+            }
+            for ((kind, state), tally) in &by_kind {
+                println!("PROBE(e) profileType {kind} / profileState {state}: {tally:?}");
+            }
+        }
+    }
+    println!(
+        "PROBE(e) NOTE: a 200 on a list proves read access only; permission to CREATE a profile \
+         is unknown until the milestone's live write cycle"
+    );
 }
