@@ -13,7 +13,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use willikins_core::{ToolError, ToolErrorKind};
 use willikins_types::{
-    ActionsSecretName, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
+    ActionsSecretName, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
+    AppleCapabilityType, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
     DopplerConfig, DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName,
     GitHubRepo, ProjectSlug, RepoVisibility, SecretName, SigNozIngestionKeyName,
     SigNozIngestionKeyValue, Text,
@@ -57,6 +58,31 @@ pub struct BuildkitePipelineRecord {
     /// natural key exists but the resource is
     /// [`Foreign`](willikins_core::Observation::Foreign)).
     pub ours: bool,
+}
+
+/// An App Store Connect bundle id record: enough to answer
+/// `appstore.bundle_id.ensure`'s `read`. No `ours` flag: unlike a
+/// Buildkite pipeline, a bundle id has no ownership-marker field at all
+/// (`willikins_types::AppleBundleIdName`'s own doc), so this fake has
+/// none either -- every seeded or created record converges by `name`
+/// (`PATCH`, in the live tool's terms) rather than ever reading
+/// `Foreign`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppleBundleIdRecord {
+    /// The Apple-assigned opaque id this fake hands out. A seed file may
+    /// set this explicitly to pin a specific id a document asserts
+    /// against; [`fake_apple_bundle_id_id`] is what a freshly created
+    /// record (via `ensure`) derives it from instead.
+    pub id: String,
+    /// The bundle id's `name` attribute, compared exactly on `read` the
+    /// same way the live tool compares it.
+    pub name: String,
+    /// The bundle id's `platform` attribute
+    /// ([`AppleBundleIdPlatform`]'s own canonical string), immutable
+    /// once seeded or created -- this fake has no `PATCH`-equivalent for
+    /// it either, matching Apple's own schema.
+    pub platform: String,
 }
 
 /// A map from a Doppler secret's key (`project/config#SECRET`) to its
@@ -347,6 +373,19 @@ pub struct FakeState {
     /// Buildkite pipelines, keyed by `"<org>/<slug>"`
     /// ([`buildkite_pipeline_key`]).
     pub buildkite_pipelines: HashMap<String, BuildkitePipelineRecord>,
+    /// App Store Connect bundle ids, keyed by their identifier string
+    /// ([`AppleBundleIdentifier::as_str`]) -- App Store Connect's own
+    /// natural key (research note, section 2). No `Foreign` concept
+    /// exists here (`willikins_types::AppleBundleIdName`'s own doc):
+    /// every seeded or created record is "ours" by construction.
+    pub apple_bundle_ids: HashMap<String, AppleBundleIdRecord>,
+    /// Which [`AppleCapabilityType`] members are enabled on which
+    /// bundle id, keyed the same way as [`Self::apple_bundle_ids`].
+    /// `appstore.bundle_id_capability.ensure`'s fake `read` refuses
+    /// outright (mirroring the live tool) when the key names no entry
+    /// in [`Self::apple_bundle_ids`] at all, rather than treating an
+    /// empty set here as "absent".
+    pub apple_bundle_id_capabilities: HashMap<String, HashSet<String>>,
     /// The [`ProjectSlug`] canonical strings `fake.irreversible.ensure`
     /// has created.
     pub irreversible: HashSet<String>,
@@ -431,6 +470,25 @@ pub fn signoz_ingestion_key_key(name: &SigNozIngestionKeyName) -> String {
 #[must_use]
 pub fn buildkite_pipeline_key(org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) -> String {
     format!("{org}/{slug}")
+}
+
+/// Deterministically derive the opaque id a fake
+/// `appstore.bundle_id.ensure`'s create path hands out for `identifier`,
+/// so a document `plan`ning a fresh create can still predict the id a
+/// later `apply` will confirm, and so a hand-authored seed file that
+/// wants a specific id can still override it explicitly on
+/// [`AppleBundleIdRecord::id`] (this function is only what `ensure`
+/// itself calls on create, never something `read` enforces). A real
+/// Apple id carries no derivable relationship to the identifier string
+/// at all -- this is a fake-only convenience, not a claim about the
+/// live provider.
+#[must_use]
+pub fn fake_apple_bundle_id_id(identifier: &str) -> String {
+    let mut hash: u32 = 5381;
+    for byte in identifier.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(u32::from(byte));
+    }
+    format!("FAKE{hash:08X}")
 }
 
 /// The key `fake.irreversible.ensure` looks its resource up by: the
@@ -574,6 +632,43 @@ impl FakeState {
     ) -> Self {
         self.buildkite_pipelines
             .insert(buildkite_pipeline_key(org, slug), record);
+        self
+    }
+
+    /// Seed an App Store Connect bundle id, deriving its id from
+    /// `identifier` via [`fake_apple_bundle_id_id`].
+    #[must_use]
+    pub fn with_apple_bundle_id(
+        mut self,
+        identifier: &AppleBundleIdentifier,
+        name: &AppleBundleIdName,
+        platform: &AppleBundleIdPlatform,
+    ) -> Self {
+        self.apple_bundle_ids.insert(
+            identifier.as_str().to_string(),
+            AppleBundleIdRecord {
+                id: fake_apple_bundle_id_id(identifier.as_str()),
+                name: name.as_str().to_string(),
+                platform: platform.to_string(),
+            },
+        );
+        self
+    }
+
+    /// Seed one capability as already enabled on `identifier`'s bundle
+    /// id. Does not seed the bundle id itself -- pair with
+    /// [`Self::with_apple_bundle_id`] when the test also needs the
+    /// parent to exist.
+    #[must_use]
+    pub fn with_apple_bundle_id_capability(
+        mut self,
+        identifier: &AppleBundleIdentifier,
+        capability: &AppleCapabilityType,
+    ) -> Self {
+        self.apple_bundle_id_capabilities
+            .entry(identifier.as_str().to_string())
+            .or_default()
+            .insert(capability.to_string());
         self
     }
 
