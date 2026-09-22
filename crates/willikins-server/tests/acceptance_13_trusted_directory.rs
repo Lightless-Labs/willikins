@@ -65,6 +65,8 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
         "signoz-ingestion-key.yaml",
         "apple-signing-credential-from-doppler.yaml",
         "apple-signing-credential-from-inputs.yaml",
+        "appstore-bundle-id-from-doppler.yaml",
+        "appstore-bundle-id-from-inputs.yaml",
     ] {
         assert!(hashes.contains_key(file), "{file}: {hashes:?}");
     }
@@ -83,6 +85,8 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
         [
             "apple-signing-credential-from-doppler",
             "apple-signing-credential-from-inputs",
+            "appstore-bundle-id-from-doppler",
+            "appstore-bundle-id-from-inputs",
             "doppler-backend-for-ios",
             "doppler-backend",
             "doppler-ios",
