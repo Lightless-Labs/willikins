@@ -1,0 +1,13 @@
+{
+  "data": {
+    "type": "bundleIdCapabilities",
+    "id": "CAP1234567",
+    "attributes": {
+      "capabilityType": "PUSH_NOTIFICATIONS",
+      "settings": []
+    },
+    "relationships": {
+      "bundleId": {"data": {"type": "bundleIds", "id": "T6G4XCV345"}}
+    }
+  }
+}

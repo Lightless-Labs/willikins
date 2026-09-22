@@ -1,0 +1,12 @@
+{
+  "data": {
+    "type": "bundleIds",
+    "id": "T6G4XCV345",
+    "attributes": {
+      "identifier": "com.example.MyApp",
+      "name": "third-thoughts",
+      "platform": "UNIVERSAL",
+      "seedId": "ABCDE12345"
+    }
+  }
+}

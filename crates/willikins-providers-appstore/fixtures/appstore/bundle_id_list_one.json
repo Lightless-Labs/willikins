@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "type": "bundleIds",
+      "id": "T6G4XCV345",
+      "attributes": {
+        "identifier": "com.example.MyApp",
+        "name": "third-thoughts",
+        "platform": "UNIVERSAL",
+        "seedId": "ABCDE12345"
+      }
+    }
+  ],
+  "links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIds"}
+}

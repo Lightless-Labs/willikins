@@ -3323,6 +3323,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "willikins-providers-appstore"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "indexmap",
+ "insta",
+ "mockito",
+ "serde",
+ "serde_json",
+ "willikins-core",
+ "willikins-dsl",
+ "willikins-providers-doppler",
+ "willikins-providers-fake",
+ "willikins-providers-http",
+ "willikins-server",
+ "willikins-tools",
+ "willikins-types",
+]
+
+[[package]]
 name = "willikins-providers-buildkite"
 version = "0.1.0"
 dependencies = [
@@ -3469,6 +3489,7 @@ dependencies = [
  "willikins-core",
  "willikins-dsl",
  "willikins-journal",
+ "willikins-providers-appstore",
  "willikins-providers-buildkite",
  "willikins-providers-doppler",
  "willikins-providers-fake",

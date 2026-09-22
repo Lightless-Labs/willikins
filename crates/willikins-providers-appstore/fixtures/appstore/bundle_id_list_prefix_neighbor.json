@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "type": "bundleIds",
+      "id": "N31GHB0R99",
+      "attributes": {
+        "identifier": "com.example.MyApp.extension",
+        "name": "a neighbor with the same prefix",
+        "platform": "UNIVERSAL",
+        "seedId": "ABCDE12345"
+      }
+    }
+  ]
+}
