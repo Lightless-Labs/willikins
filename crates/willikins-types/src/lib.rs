@@ -159,7 +159,8 @@ pub mod workflow_name;
 
 pub use appstore::{
     AppleBundleIdId, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
-    AppleCapabilityType, AppleIssuerId, AppleKeyId, AppleSigningKey,
+    AppleCapabilityType, AppleCertificateId, AppleCertificateSerial, AppleCertificateType,
+    AppleIssuerId, AppleKeyId, AppleSigningKey,
 };
 pub use buildkite::{
     BuildkiteClusterId, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug,
@@ -224,6 +225,9 @@ registry::domain_types! {
     AppleBundleIdPlatform,
     AppleBundleIdId,
     AppleCapabilityType,
+    AppleCertificateType,
+    AppleCertificateSerial,
+    AppleCertificateId,
 }
 
 /// Assert that `T::example()` parses as `T`.

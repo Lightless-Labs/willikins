@@ -605,6 +605,72 @@ pub struct AppleBundleIdId(String);
 )]
 pub struct AppleCapabilityType(String);
 
+// ---------------------------------------------------------------------
+// Certificate types: `appstore.certificate.get`'s own ports. Milestone
+// 3c (`docs/plans/2026-09-22-milestone-3c-app-store-signing.md`, "the
+// type table") is every fact these three types rest on; the two research
+// notes it cites are every fact *they* rest on.
+// ---------------------------------------------------------------------
+
+/// A certificate's `certificateType`: the two members of Apple's
+/// eighteen-member `CertificateType` enum that can sign an
+/// `IOS_APP_STORE` profile (the in-scope profile type a later milestone
+/// task adds) -- `DISTRIBUTION` ("Apple Distribution", observed live: the
+/// operator's one usable certificate's `name` begins with that label) and
+/// `IOS_DISTRIBUTION` ("iOS Distribution", documented but never observed
+/// live -- no such certificate exists on the team; carried forward as
+/// milestone 3c's verify item 8). Every other of the eighteen (`APPLE_PAY`,
+/// `DEVELOPMENT`, `MAC_APP_DISTRIBUTION`, and so on) is refused at parse
+/// time: the refusal of every non-distribution type is the grammar.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "DISTRIBUTION|IOS_DISTRIBUTION",
+    description = "An App Store Connect certificate type: DISTRIBUTION or IOS_DISTRIBUTION (the two that can sign an App Store distribution profile).",
+    example = "DISTRIBUTION"
+)]
+pub struct AppleCertificateType(String);
+
+/// A certificate's `serialNumber`: the one part of a certificate record
+/// visible from the *private-key* side (it is in the `.p12` a signer
+/// holds -- `openssl x509 -serial` -- and in Keychain Access), which is
+/// why `appstore.certificate.get` selects by this rather than by the
+/// opaque [`AppleCertificateId`] or the team-wide-identical `displayName`
+/// (milestone 3c, decision (c)).
+///
+/// Observed live on all 5 certificates on the operator's team: uppercase
+/// hexadecimal, 30 to 32 characters. Uppercase only, deliberately: the
+/// selection read compares `serialNumber` byte-for-byte (`filter[serialNumber]`
+/// is proven substring, milestone 3c's pre-flight), so a lowercase paste
+/// of a real serial would compare unequal and read `NotFound` for a
+/// certificate that exists, rather than silently normalising a case Apple
+/// itself never issues. The `{1,64}` bound is generous above the observed
+/// length, the same undocumented-grammar caution [`AppleKeyId`]'s own doc
+/// states; this value also reaches a query string, so the grammar keeps
+/// `&` and `=` out of it by construction (the character class admits
+/// neither).
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "[0-9A-F]{1,64}",
+    description = "An App Store Connect certificate's serial number (uppercase hexadecimal).",
+    example = "7B3F2A9C1D4E5F607182930A1B2C3D4E5F60"
+)]
+pub struct AppleCertificateSerial(String);
+
+/// A certificate's Apple-assigned opaque record id -- what
+/// `appstore.certificate.get` outputs once its selection (`certificate_type`
+/// + `serial_number`) resolves to exactly one match. Apple documents no
+/// grammar for this id at all; the same undocumented-grammar reasoning as
+/// [`AppleBundleIdId`] and [`AppleKeyId`] applies, so this pattern is
+/// chosen the same conservative way rather than pinned to any one
+/// observed example.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "[A-Za-z0-9]{2,64}",
+    description = "An App Store Connect certificate's Apple-assigned opaque record id.",
+    example = "C3RT1F1CATE9"
+)]
+pub struct AppleCertificateId(String);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -908,5 +974,67 @@ mod tests {
         crate::assert_example_parses::<AppleBundleIdPlatform>();
         crate::assert_example_parses::<AppleBundleIdId>();
         crate::assert_example_parses::<AppleCapabilityType>();
+    }
+
+    // -------------------------------------------------------------
+    // Certificate types
+    // -------------------------------------------------------------
+
+    #[test]
+    fn certificate_type_accepts_the_two_distribution_members() {
+        assert!(AppleCertificateType::parse("DISTRIBUTION").is_ok());
+        assert!(AppleCertificateType::parse("IOS_DISTRIBUTION").is_ok());
+    }
+
+    #[test]
+    fn certificate_type_refuses_a_non_distribution_member_and_lowercase() {
+        assert!(AppleCertificateType::parse("DEVELOPER_ID_APPLICATION_G2").is_err());
+        assert!(AppleCertificateType::parse("DEVELOPMENT").is_err());
+        assert!(AppleCertificateType::parse("distribution").is_err());
+        assert!(AppleCertificateType::parse("").is_err());
+    }
+
+    #[test]
+    fn certificate_type_is_registered_and_not_secret() {
+        const { assert!(!AppleCertificateType::IS_SECRET) };
+        assert_eq!(
+            crate::registry().is_secret(&crate::TypeName::parse("AppleCertificateType").unwrap()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn certificate_serial_accepts_the_observed_shape() {
+        assert!(AppleCertificateSerial::parse("7B3F2A9C1D4E5F607182930A1B2C3D4E5F60").is_ok());
+        assert!(AppleCertificateSerial::parse("00").is_ok());
+    }
+
+    #[test]
+    fn certificate_serial_refuses_lowercase_ampersand_equals_and_empty() {
+        assert!(AppleCertificateSerial::parse("7b3f2a9c1d4e5f60").is_err());
+        assert!(AppleCertificateSerial::parse("7B3F&2A9C").is_err());
+        assert!(AppleCertificateSerial::parse("7B3F=2A9C").is_err());
+        assert!(AppleCertificateSerial::parse("").is_err());
+    }
+
+    #[test]
+    fn certificate_serial_refuses_more_than_64_characters() {
+        let too_long = "A".repeat(65);
+        assert!(AppleCertificateSerial::parse(&too_long).is_err());
+        let ok = "A".repeat(64);
+        assert!(AppleCertificateSerial::parse(&ok).is_ok());
+    }
+
+    #[test]
+    fn certificate_id_accepts_apples_shape_and_refuses_too_short() {
+        assert!(AppleCertificateId::parse("C3RT1F1CATE9").is_ok());
+        assert!(AppleCertificateId::parse("x").is_err());
+    }
+
+    #[test]
+    fn certificate_types_examples_parse_as_their_own_types() {
+        crate::assert_example_parses::<AppleCertificateType>();
+        crate::assert_example_parses::<AppleCertificateSerial>();
+        crate::assert_example_parses::<AppleCertificateId>();
     }
 }
