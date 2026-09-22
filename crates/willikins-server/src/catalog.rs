@@ -2,12 +2,15 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the fifteen-tool live catalog --
-//! `willikins-tools`' two pure tools, `willikins-providers-github`'s two
-//! live tools, `willikins-providers-doppler`'s eight (milestone 3 added
+//! `live_catalog` assembles the nineteen-tool live catalog --
+//! `willikins-tools`' five pure tools (`naming.v1`, `template.render`,
+//! `env.get`, `base64.decode`, `apple.signing_key.parse`),
+//! `willikins-providers-github`'s two
+//! live tools, `willikins-providers-doppler`'s nine (milestone 3 added
 //! `doppler.config.inheritable.ensure` and
 //! `doppler.config.inherits.ensure`; the `SigNoz` task added
-//! `doppler.secret.set`), `willikins-providers-buildkite`'s two
+//! `doppler.secret.set`; the App Store Connect credential correction
+//! added `doppler.value.get`), `willikins-providers-buildkite`'s two
 //! (milestone 3a), and `willikins-providers-signoz`'s one (the `SigNoz`
 //! task) -- exactly as
 //! `crates/willikins-providers-doppler/tests/live_catalog.rs` built it
@@ -25,7 +28,7 @@ use willikins_providers_buildkite::{
 use willikins_providers_doppler::{
     DopplerClient, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
     DopplerConfigInheritsEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerSecretSet,
-    DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
+    DopplerServiceTokenEnsure, DopplerServiceTokenRotate, DopplerValueGet,
 };
 use willikins_providers_github::{GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure};
 use willikins_providers_http::{Credential, Http};
@@ -34,9 +37,12 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 15] = [
+pub const LIVE_TOOL_NAMES: [&str; 19] = [
     "naming.v1",
     "template.render",
+    "env.get",
+    "base64.decode",
+    "apple.signing_key.parse",
     "github.repo.ensure",
     "github.actions_secret.ensure",
     "doppler.project.ensure",
@@ -47,17 +53,28 @@ pub const LIVE_TOOL_NAMES: [&str; 15] = [
     "doppler.service_token.rotate",
     "doppler.secret.get",
     "doppler.secret.set",
+    "doppler.value.get",
     "signoz.ingestion_key.ensure",
     "buildkite.pipeline.ensure",
     "buildkite.cluster.get",
 ];
 
-/// Insert `willikins-tools`' two pure tools -- no provider, no
+/// Insert `willikins-tools`' five pure tools -- no provider, no
 /// credential, always present regardless of which providers a document
-/// uses.
+/// uses. `env.get`, `base64.decode`, and `apple.signing_key.parse` joined
+/// `naming.v1` and `template.render` here once the App Store Connect
+/// credential correction gave a resolver chain (`env.get` or
+/// `doppler.secret.get`, optionally through `base64.decode`, ending at
+/// `apple.signing_key.parse`) real documents to run in.
 fn insert_pure_tools(catalog: &mut Catalog) {
     insert(catalog, Arc::new(willikins_tools::NamingV1::new()));
     insert(catalog, Arc::new(willikins_tools::TemplateRender::new()));
+    insert(catalog, Arc::new(willikins_tools::EnvGet::new()));
+    insert(catalog, Arc::new(willikins_tools::Base64Decode::new()));
+    insert(
+        catalog,
+        Arc::new(willikins_tools::AppleSigningKeyParse::new()),
+    );
 }
 
 /// Insert `willikins-providers-github`'s two live tools, built from
@@ -71,7 +88,7 @@ fn insert_github_tools(catalog: &mut Catalog, http: Http) {
     insert(catalog, Arc::new(GitHubActionsSecretEnsure::new(github)));
 }
 
-/// Insert `willikins-providers-doppler`'s eight live tools, built from
+/// Insert `willikins-providers-doppler`'s nine live tools, built from
 /// `http`.
 fn insert_doppler_tools(catalog: &mut Catalog, http: Http) {
     let doppler = Arc::new(DopplerClient::new(http));
@@ -103,7 +120,11 @@ fn insert_doppler_tools(catalog: &mut Catalog, http: Http) {
         catalog,
         Arc::new(DopplerSecretGet::new(Arc::clone(&doppler))),
     );
-    insert(catalog, Arc::new(DopplerSecretSet::new(doppler)));
+    insert(
+        catalog,
+        Arc::new(DopplerSecretSet::new(Arc::clone(&doppler))),
+    );
+    insert(catalog, Arc::new(DopplerValueGet::new(doppler)));
 }
 
 /// Insert `willikins-providers-signoz`'s one live tool, built from
@@ -362,13 +383,13 @@ enum Provider {
 /// (rather than slicing [`LIVE_TOOL_NAMES`]) so it names exactly the tools
 /// [`insert_github_tools`] inserts; `tests::the_provider_tool_name_arrays_partition_live_tool_names`
 /// pins that this array, [`DOPPLER_TOOL_NAMES`], [`BUILDKITE_TOOL_NAMES`],
-/// and the two pure tool names together are exactly [`LIVE_TOOL_NAMES`],
+/// and the five pure tool names together are exactly [`LIVE_TOOL_NAMES`],
 /// so the two lists cannot silently drift apart.
 const GITHUB_TOOL_NAMES: [&str; 2] = ["github.repo.ensure", "github.actions_secret.ensure"];
 
 /// `willikins-providers-doppler`'s live tool names. See
 /// [`GITHUB_TOOL_NAMES`].
-const DOPPLER_TOOL_NAMES: [&str; 8] = [
+const DOPPLER_TOOL_NAMES: [&str; 9] = [
     "doppler.project.ensure",
     "doppler.config.ensure",
     "doppler.config.inheritable.ensure",
@@ -377,6 +398,7 @@ const DOPPLER_TOOL_NAMES: [&str; 8] = [
     "doppler.service_token.rotate",
     "doppler.secret.get",
     "doppler.secret.set",
+    "doppler.value.get",
 ];
 
 /// `willikins-providers-buildkite`'s live tool names. See
@@ -463,8 +485,8 @@ impl std::error::Error for DocumentCredentialError {}
 /// is known exactly, so the requirement is computed from `document.nodes`
 /// here rather than guessed or demanded wholesale.
 ///
-/// `naming.v1` and `template.render` are always inserted (no provider, no
-/// credential). Each of GitHub/Doppler/Buildkite is inserted -- with its
+/// `willikins-tools`' five pure tools are always inserted (no provider,
+/// no credential). Each of GitHub/Doppler/Buildkite is inserted -- with its
 /// credential read and validated from the environment -- only when
 /// `document` has at least one node calling one of that provider's
 /// tools. A provider `document` never calls needs no credential at all,
@@ -552,7 +574,7 @@ pub fn live_catalog_for_document(document: &Workflow) -> Result<Catalog, Documen
 }
 
 impl crate::Butler {
-    /// The live catalog: `willikins-tools`' two pure tools plus every
+    /// The live catalog: `willikins-tools`' five pure tools plus every
     /// live GitHub, Doppler, Buildkite, and `SigNoz` tool, against each
     /// provider's real API. See this module's own docs.
     #[must_use]
@@ -662,7 +684,7 @@ mod tests {
     }
 
     /// Every array feeding [`live_catalog_for_document`]'s per-provider
-    /// gate, together with the two pure tool names, is exactly
+    /// gate, together with the five pure tool names, is exactly
     /// [`LIVE_TOOL_NAMES`] -- so a tool added to one list and not the
     /// other (e.g. a new Doppler tool added to [`insert_doppler_tools`]
     /// but not [`DOPPLER_TOOL_NAMES`]) fails here instead of silently
@@ -671,7 +693,13 @@ mod tests {
     fn the_provider_tool_name_arrays_partition_live_tool_names() {
         use std::collections::BTreeSet;
 
-        let mut from_provider_arrays: Vec<&str> = vec!["naming.v1", "template.render"];
+        let mut from_provider_arrays: Vec<&str> = vec![
+            "naming.v1",
+            "template.render",
+            "env.get",
+            "base64.decode",
+            "apple.signing_key.parse",
+        ];
         from_provider_arrays.extend(GITHUB_TOOL_NAMES);
         from_provider_arrays.extend(DOPPLER_TOOL_NAMES);
         from_provider_arrays.extend(BUILDKITE_TOOL_NAMES);
@@ -709,7 +737,13 @@ mod tests {
 
     #[test]
     fn provider_of_is_none_for_a_pure_tool() {
-        for name in ["naming.v1", "template.render"] {
+        for name in [
+            "naming.v1",
+            "template.render",
+            "env.get",
+            "base64.decode",
+            "apple.signing_key.parse",
+        ] {
             let tool = willikins_core::ToolName::parse(name).unwrap();
             assert_eq!(provider_of(&tool), None, "{name}");
         }

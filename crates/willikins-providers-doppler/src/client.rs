@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use willikins_providers_http::{Credential, CredentialError, Http, ProviderError};
 use willikins_types::{
     DopplerConfig, DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken,
-    DopplerTokenName, SecretName,
+    DopplerTokenName, SecretName, Text,
 };
 
 /// Doppler's REST API base URL.
@@ -428,6 +428,31 @@ impl DopplerClient {
             .map(|body| body.value.computed)
     }
 
+    /// Identical endpoint and shape to [`Self::get_secret`], deserialized
+    /// into [`Text`] instead of [`DopplerSecretValue`] — the whole reason
+    /// `doppler.value.get` exists (see that tool's module doc). Doppler's
+    /// response carries no `secret`/`non-secret` distinction of its own;
+    /// the difference is entirely which Rust type this client parses
+    /// `value.computed` into, which is exactly the "choosing a tool is
+    /// the author's declaration of non-secrecy" design the tool's module
+    /// doc states.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_secret`].
+    pub(crate) fn get_value(
+        &self,
+        project: &DopplerProject,
+        config: &DopplerConfigName,
+        name: &SecretName,
+    ) -> Result<Option<Text>, ProviderError> {
+        let path =
+            format!("/v3/configs/config/secret?project={project}&config={config}&name={name}");
+        self.http
+            .get::<TextValueBody>(&path)
+            .map(|body| body.value.computed)
+    }
+
     /// `POST /v3/configs/config/secrets` with `{"project", "config",
     /// "secrets": {"<name>": "<value>"}}` — Doppler's documented simple
     /// upsert shape (research note `docs/research/2026-09-12-m2-dependencies.md`,
@@ -635,6 +660,19 @@ struct SecretBody {
 #[derive(Debug, Deserialize)]
 struct SecretValueBody {
     computed: Option<DopplerSecretValue>,
+}
+
+/// The same envelope [`SecretBody`] parses, deserialized into [`Text`]
+/// instead: [`DopplerClient::get_value`]'s response shape.
+#[derive(Debug, Deserialize)]
+struct TextValueBody {
+    value: TextValueValueBody,
+}
+
+/// See [`SecretValueBody`] -- identical reasoning, non-secret payload.
+#[derive(Debug, Deserialize)]
+struct TextValueValueBody {
+    computed: Option<Text>,
 }
 
 #[cfg(test)]

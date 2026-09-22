@@ -1,0 +1,30 @@
+---
+source: crates/willikins-providers-doppler/tests/catalog_parity.rs
+expression: "spec_json(DopplerValueGet::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Read a Doppler variable's value as non-secret text. Choosing this tool over `doppler.secret.get` is the document's own declaration that the value is not a secret.",
+  "inputs": {
+    "config": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerConfig"
+      }
+    },
+    "name": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "SecretName"
+      }
+    }
+  },
+  "key": [],
+  "name": "doppler.value.get",
+  "outputs": {
+    "value": "Text"
+  },
+  "pure": true
+}

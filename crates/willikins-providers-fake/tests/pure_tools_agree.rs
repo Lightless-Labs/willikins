@@ -4,20 +4,32 @@
 //! A pure tool's `ensure` is its `read` by contract (`Tool::ensure`'s own
 //! doc), and the executor of an applied plan leans on that: a `Compute`
 //! node must produce the same outputs at apply time as the plan showed.
-//! The five pure tools — `naming.v1` and `template.render` from
-//! `willikins-tools`, `doppler.secret.get`, `fake.secret_list`, and
-//! (milestone 3a) `buildkite.cluster.get` from this crate — are checked
-//! here in one place, through the catalog, so a sixth pure tool
-//! registered later is a one-line addition rather than a test nobody
-//! writes.
+//! `naming.v1`, `template.render`, `env.get`, `base64.decode`, and
+//! `apple.signing_key.parse` from `willikins-tools`, `doppler.secret.get`,
+//! `doppler.value.get`, `fake.secret_list`, and (milestone 3a)
+//! `buildkite.cluster.get` from this crate — are checked here in one
+//! place, through the catalog, so a new pure tool registered later is a
+//! one-line addition rather than a test nobody writes.
+//!
+//! **`env.get` is the one exception, and it is excluded by name, not
+//! silently uncounted.** Proving it agrees on a `Present` case would mean
+//! mutating the real process environment, and `std::env::set_var` is
+//! `unsafe` under edition 2024, which this workspace's
+//! `unsafe_code = "forbid"` lint blocks outright -- the same wall
+//! `willikins-tools/src/env_get.rs`'s own module doc documents. That
+//! crate's own `ensure_agrees_with_read` test proves the identical
+//! property over the `NotFound` path instead (no mutation needed, since
+//! `WILLIKINS_TEST_ENV_GET_ABSENT` is simply never set); this file's
+//! catalog-driven sweep cannot reach the `Present` path without breaking
+//! that rule, so it does not try.
 
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{Inputs, Observation, Outputs, PortName, SinkToken, ToolName, Value};
 use willikins_providers_fake::{FakeState, catalog};
 use willikins_types::{
-    BuildkiteClusterName, BuildkiteOrg, DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg,
-    ProjectSlug, SecretName, TemplateSource, Text,
+    AppleSigningKey, BuildkiteClusterName, BuildkiteOrg, DomainType, DopplerConfig,
+    DopplerSecretValue, GitHubOrg, OpaqueSecret, ProjectSlug, SecretName, TemplateSource, Text,
 };
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
@@ -36,6 +48,10 @@ fn config() -> DopplerConfig {
 
 fn secret_name() -> SecretName {
     SecretName::parse("DATABASE_URL").expect("a valid secret name")
+}
+
+fn value_name() -> SecretName {
+    SecretName::parse("ASC_API_KEY_ISSUER_ID").expect("a valid secret name")
 }
 
 fn buildkite_org() -> BuildkiteOrg {
@@ -61,6 +77,11 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
                 &secret_name(),
                 DopplerSecretValue::parse("s3cr3t-bytes-nobody-should-see")
                     .expect("a valid secret"),
+            )
+            .with_doppler_value(
+                &config(),
+                &value_name(),
+                Text::parse("57246542-96fe-1a63-e053-0824d011072a").expect("a valid text value"),
             )
             .with_buildkite_cluster(&cluster_name(), "018e5a22-d14c-7085-bb28-db0f83f43a1c"),
     ));
@@ -97,10 +118,30 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
     cluster_get_inputs.insert(port("org"), Value::known(buildkite_org()));
     cluster_get_inputs.insert(port("name"), Value::known(cluster_name()));
 
+    let mut value_get_inputs = Inputs::new();
+    value_get_inputs.insert(port("config"), Value::known(config()));
+    value_get_inputs.insert(port("name"), Value::known(value_name()));
+
+    let mut base64_decode_inputs = Inputs::new();
+    base64_decode_inputs.insert(
+        port("value"),
+        // base64 of "hello world".
+        Value::known(OpaqueSecret::parse("aGVsbG8gd29ybGQ=").expect("valid opaque secret")),
+    );
+
+    let mut apple_key_parse_inputs = Inputs::new();
+    apple_key_parse_inputs.insert(
+        port("value"),
+        Value::known(OpaqueSecret::parse(AppleSigningKey::example()).expect("valid opaque secret")),
+    );
+
     let cases = [
         ("naming.v1", naming_inputs),
         ("template.render", template_inputs),
+        ("base64.decode", base64_decode_inputs),
+        ("apple.signing_key.parse", apple_key_parse_inputs),
         ("doppler.secret.get", secret_get_inputs),
+        ("doppler.value.get", value_get_inputs),
         ("fake.secret_list", secret_list_inputs),
         ("buildkite.cluster.get", cluster_get_inputs),
     ];
@@ -134,7 +175,14 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         checked += 1;
     }
 
-    let pure_in_catalog = fake_catalog.specs().filter(|spec| spec.pure).count();
+    // `env.get` is pure but deliberately has no case above -- see this
+    // file's own module doc. Named explicitly here, not folded into a
+    // fudge factor, so a *second* untestable-this-way tool still trips
+    // the assertion below rather than silently widening the gap.
+    let pure_in_catalog = fake_catalog
+        .specs()
+        .filter(|spec| spec.pure && spec.name.as_str() != "env.get")
+        .count();
     assert_eq!(
         checked, pure_in_catalog,
         "a pure tool was added to the catalog without a case here"

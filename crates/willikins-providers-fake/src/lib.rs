@@ -8,9 +8,11 @@
 //! `buildkite.cluster.get` and `buildkite.pipeline.ensure`; milestone 3
 //! added `doppler.config.inheritable.ensure` and
 //! `doppler.config.inherits.ensure`; the `SigNoz` task added
-//! `signoz.ingestion_key.ensure` and `doppler.secret.set`), so the
-//! catalog this crate produces holds seventeen tools, in the order
-//! [`catalog`] inserts them.
+//! `signoz.ingestion_key.ensure` and `doppler.secret.set`; the App Store
+//! Connect credential correction added `doppler.value.get` and the three
+//! resolver-chain pure tools, `env.get`, `base64.decode`, and
+//! `apple.signing_key.parse`), so the catalog this crate produces holds
+//! twenty-one tools, in the order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
 //!
@@ -60,6 +62,9 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
         };
     }
     insert!(willikins_tools::NamingV1::new());
+    insert!(willikins_tools::EnvGet::new());
+    insert!(willikins_tools::Base64Decode::new());
+    insert!(willikins_tools::AppleSigningKeyParse::new());
     insert!(tools::GitHubRepoEnsure::new(state.clone()));
     insert!(tools::GitHubActionsSecretEnsure::new(state.clone()));
     insert!(tools::DopplerProjectEnsure::new(state.clone()));
@@ -70,6 +75,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::DopplerServiceTokenRotate::new(state.clone()));
     insert!(tools::DopplerSecretGet::new(state.clone()));
     insert!(tools::DopplerSecretSet::new(state.clone()));
+    insert!(tools::DopplerValueGet::new(state.clone()));
     insert!(tools::SigNozIngestionKeyEnsure::new(state.clone()));
     insert!(tools::FakeBuildkiteClusterGet::new(state.clone()));
     insert!(tools::FakeBuildkitePipelineEnsure::new(state.clone()));
@@ -101,6 +107,9 @@ mod tests {
         let names: Vec<&str> = catalog.specs().map(|spec| spec.name.as_str()).collect();
         for expected in [
             "naming.v1",
+            "env.get",
+            "base64.decode",
+            "apple.signing_key.parse",
             "github.repo.ensure",
             "github.actions_secret.ensure",
             "doppler.project.ensure",
@@ -111,6 +120,7 @@ mod tests {
             "doppler.service_token.rotate",
             "doppler.secret.get",
             "doppler.secret.set",
+            "doppler.value.get",
             "signoz.ingestion_key.ensure",
             "buildkite.cluster.get",
             "buildkite.pipeline.ensure",
@@ -120,7 +130,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 17);
+        assert_eq!(names.len(), 21);
     }
 
     #[test]
