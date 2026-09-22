@@ -42,6 +42,20 @@ use willikins_types::{
 /// (`docs/research/2026-09-16-app-store-connect.md`, section 1).
 pub const APPSTORE_API_BASE_URL: &str = "https://api.appstoreconnect.apple.com";
 
+/// Rows per page this client asks App Store Connect for when listing.
+/// Apple's documented maximum for a collection is 200; asking for it
+/// keeps the number of round trips down without relying on whatever
+/// default Apple would otherwise apply (this crate has never observed
+/// one, and does not assume it).
+const PAGE_LIMIT: usize = 200;
+
+/// The most pages [`AppstoreClient::list_bundle_ids`] will follow before
+/// refusing. At [`PAGE_LIMIT`] rows each this is 10 000 bundle ids
+/// matching one substring, which is not a real account; reaching it
+/// means a paging bug, and spinning forever is the one outcome worse
+/// than an error.
+const MAX_PAGES: usize = 50;
+
 /// The label [`willikins_providers_http::Credential::from_bearer_token`]
 /// carries for this crate's minted JWTs. `Debug`-only; no environment
 /// variable of this name is ever read (this crate has no environment
@@ -115,26 +129,73 @@ impl AppstoreClient {
         Self { http }
     }
 
-    /// `GET /v1/bundleIds?filter[identifier]={identifier}`.
+    /// `GET /v1/bundleIds?filter[identifier]={identifier}`, every page of
+    /// it.
     ///
     /// Returns every row the provider's filter matched — **never**
-    /// treated as an exact match by this client itself, since
-    /// `filter[identifier]`'s own matching semantics are undocumented
-    /// (research note, section 2); the caller
-    /// (`appstore.bundle_id.ensure`) compares each returned `identifier`
-    /// byte-for-byte before deciding anything.
+    /// treated as an exact match by this client itself. That was already
+    /// the rule when `filter[identifier]`'s semantics were merely
+    /// undocumented; a live read against a real account on 2026-09-22
+    /// settled them, and the answer is the worst of the three:
+    /// **`filter[identifier]` matches by substring** (research note,
+    /// section 2, "Reading back by key"). A strict prefix of a real
+    /// identifier and a strict suffix of the same identifier each
+    /// returned that identifier's own row.
+    ///
+    /// Two consequences, both load-bearing:
+    ///
+    /// 1. The caller's byte-for-byte comparison
+    ///    (`appstore.bundle_id.ensure::find_one`) is **the** thing that
+    ///    decides a match, not a belt-and-braces double-check. Without
+    ///    it a read for `com.acme.app` would report `Present` for
+    ///    `com.acme.app.extension`.
+    /// 2. **This call must paginate.** Under substring matching the
+    ///    result set is "every identifier on the team containing this
+    ///    string", which is unbounded in a way an exact filter never
+    ///    would be. A single unpaginated page would silently drop the
+    ///    exact match whenever it sorted past the page boundary, and the
+    ///    tool would read `Absent` for something that exists — then
+    ///    `POST`, take Apple's duplicate error, re-read `Absent` again,
+    ///    and fail. So this asks for [`PAGE_LIMIT`] rows and follows
+    ///    `links.next` until Apple stops sending one.
+    ///
+    /// `links.next` is an absolute URL. Only its query string is used,
+    /// re-attached to this client's own `/v1/bundleIds` path, so a
+    /// response can never redirect this client at a host or a path of
+    /// the provider's choosing.
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderError`] for any non-2xx response or a transport
-    /// failure.
+    /// Returns [`ProviderError`] for any non-2xx response, a transport
+    /// failure, or more than [`MAX_PAGES`] pages (which would mean a
+    /// paging bug, not a real account).
     pub(crate) fn list_bundle_ids(
         &self,
         identifier: &AppleBundleIdentifier,
     ) -> Result<Vec<BundleIdResource>, ProviderError> {
-        let path = format!("/v1/bundleIds?filter[identifier]={identifier}");
-        let response: BundleIdListResponse = self.http.get(&path)?;
-        Ok(response.data)
+        let mut path = format!("/v1/bundleIds?filter[identifier]={identifier}&limit={PAGE_LIMIT}");
+        let mut rows: Vec<BundleIdResource> = Vec::new();
+        for _ in 0..MAX_PAGES {
+            let response: BundleIdListResponse = self.http.get(&path)?;
+            rows.extend(response.data);
+            let Some(next) = response.links.and_then(|links| links.next) else {
+                return Ok(rows);
+            };
+            let Some((_, query)) = next.split_once('?') else {
+                // A `next` with no query is not a page this client can
+                // follow; treat the listing as finished rather than
+                // re-requesting page one forever.
+                return Ok(rows);
+            };
+            path = format!("/v1/bundleIds?{query}");
+        }
+        Err(ProviderError::new(
+            None,
+            format!(
+                "App Store Connect returned more than {MAX_PAGES} pages of bundle ids for one \
+                 filter; refusing to keep paging"
+            ),
+        ))
     }
 
     /// `POST /v1/bundleIds` with exactly `identifier`, `name`, and
@@ -294,9 +355,21 @@ struct BundleIdResponse {
     data: BundleIdResource,
 }
 
+/// JSON:API's `links` object, of which this client reads only `next` --
+/// the cursor URL Apple sends while more pages remain, and omits on the
+/// last one.
+#[derive(Debug, Deserialize)]
+struct Links {
+    next: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct BundleIdListResponse {
     data: Vec<BundleIdResource>,
+    /// Absent on a response with no further pages -- and absent from
+    /// every mock fixture in this crate that predates pagination, which
+    /// is why it is `Option` rather than defaulted.
+    links: Option<Links>,
 }
 
 #[derive(Debug, Serialize)]

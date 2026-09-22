@@ -5,14 +5,30 @@
 //!
 //! # Read: filter, then compare client-side
 //!
-//! `filter[identifier]`'s own matching semantics are undocumented
-//! (research note, section 2's "Unresolved" list): whether it matches
-//! exactly, by prefix, or by substring is not stated anywhere Apple
-//! publishes. So this tool never trusts the filter alone -- every row
-//! the provider returns is compared against `identifier` byte-for-byte
+//! `filter[identifier]` **matches by substring** -- observed live
+//! against a real App Store Connect account on 2026-09-22, settling what
+//! was until then the research note's single load-bearing unknown
+//! (section 2, "Reading back by key"): a strict prefix of a real
+//! identifier and a strict suffix of the same identifier each returned
+//! that identifier's own row. Apple documents only "filter by attribute
+//! 'identifier'" and says nothing about how.
+//!
+//! So this tool never trusts the filter -- every row the provider
+//! returns is compared against `identifier` byte-for-byte
 //! (`BundleIdResource::attributes::identifier == identifier.as_str()`)
-//! before it counts as a match, which makes the answer correct
-//! regardless of which of the three the filter turns out to implement.
+//! before it counts as a match. That comparison was written when the
+//! semantics were merely unknown; now that they are known it is the only
+//! thing standing between a read for `com.acme.app` and a `Present`
+//! reported for `com.acme.app.extension`. It is load-bearing, not
+//! defensive, and `tests/bundle_id_ensure_mock.rs`'s
+//! `read_reports_absent_when_only_a_prefix_neighbor_matches_the_filter`
+//! is its proof.
+//!
+//! Substring matching is also why
+//! [`crate::client::AppstoreClient::list_bundle_ids`] paginates: the
+//! result set is "every identifier on the team containing this string",
+//! and an exact match that sorted onto a later page would otherwise read
+//! `Absent` for something that exists. See that method's own doc.
 //!
 //! # No `Foreign` observation
 //!
