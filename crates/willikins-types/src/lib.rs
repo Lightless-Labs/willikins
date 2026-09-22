@@ -139,21 +139,25 @@ impl TypeInfo {
 
 pub use willikins_derive::DomainType;
 
+pub mod appstore;
 pub mod buildkite;
 pub mod description;
 pub mod doppler;
+pub mod env;
 pub mod github;
 pub mod name;
 pub mod naming;
 pub mod propose;
 pub mod registry;
 pub mod reserved;
+pub mod secret;
 pub mod signoz;
 pub mod slug;
 pub mod text;
 pub mod word;
 pub mod workflow_name;
 
+pub use appstore::AppleSigningKey;
 pub use buildkite::{
     BuildkiteClusterId, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug,
 };
@@ -162,12 +166,14 @@ pub use doppler::{
     DopplerConfig, DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken,
     DopplerTokenName, SecretName,
 };
+pub use env::EnvVarName;
 pub use github::{ActionsSecretName, GitHubOrg, GitHubRepo, HttpsUrl, RepoVisibility};
 pub use name::ProjectName;
 pub use naming::NamingScheme;
 pub use propose::{ProposeError, propose_slug};
 pub use registry::{TypeName, TypeRef, TypeRegistry};
 pub use reserved::is_reserved;
+pub use secret::OpaqueSecret;
 pub use signoz::{SigNozIngestionKeyName, SigNozIngestionKeyValue};
 pub use slug::{ComponentSlug, EnvironmentSlug, ProjectSlug};
 pub use text::{TemplateSource, Text};
@@ -190,6 +196,7 @@ registry::domain_types! {
     GitHubRepo,
     HttpsUrl,
     ActionsSecretName,
+    EnvVarName,
     DopplerProject,
     DopplerConfigName,
     DopplerConfig,
@@ -205,6 +212,8 @@ registry::domain_types! {
     Description,
     SigNozIngestionKeyName,
     SigNozIngestionKeyValue,
+    OpaqueSecret,
+    AppleSigningKey,
 }
 
 /// Assert that `T::example()` parses as `T`.

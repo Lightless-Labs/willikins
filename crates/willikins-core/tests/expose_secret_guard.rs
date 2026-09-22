@@ -379,14 +379,35 @@ fn resolve_mod_file(parent_file: &Path, mod_name: &str) -> PathBuf {
     );
 }
 
+/// One crate's set of exempt files: each a relative path from the
+/// crate's `src/` directory (e.g. `credential.rs`), paired with either
+/// the function names exempt inside it or `None` to exempt the whole
+/// file. Almost always zero or one entry; `willikins-types` has two
+/// (`secret.rs`'s `reveal_for_transform`, `appstore.rs`'s hand-written
+/// `expose`/`eq`) because it holds two independently hand-written secret
+/// types.
+type Exemptions<'a> = &'a [(PathBuf, Option<&'static [&'static str]>)];
+
+/// Resolve `path`'s [`Exemption`] against `exemptions`: the first entry
+/// whose relative path `path` ends with, or [`Exemption::None`] if none
+/// matches.
+fn exemption_for(path: &Path, exemptions: Exemptions<'_>) -> Exemption {
+    for (rel, fn_names) in exemptions {
+        if path.ends_with(rel) {
+            return match fn_names {
+                None => Exemption::WholeFile,
+                Some(names) => Exemption::OneFunction(names),
+            };
+        }
+    }
+    Exemption::None
+}
+
 /// Walk one crate's `src/` module graph starting from `root`, resolving
-/// `exempt` (a relative path from the crate's `src/` directory, e.g.
-/// `credential.rs`) to the one file this crate's own call site lives in —
-/// with `fn_name` naming the one exempt function inside it, or `None` to
-/// exempt the whole file.
+/// each file's exemption against `exemptions`.
 fn walk_crate(
     root: &Path,
-    exempt_relative_path: Option<(&Path, Option<&'static [&'static str]>)>,
+    exemptions: Exemptions<'_>,
     violations: &mut Vec<Violation>,
 ) -> HashSet<PathBuf> {
     let mut queue: Vec<(PathBuf, bool)> = vec![(root.to_path_buf(), false)];
@@ -396,11 +417,7 @@ fn walk_crate(
         if !visited.insert(path.clone()) {
             continue;
         }
-        let exemption = match exempt_relative_path {
-            Some((rel, None)) if path.ends_with(rel) => Exemption::WholeFile,
-            Some((rel, Some(fn_names))) if path.ends_with(rel) => Exemption::OneFunction(fn_names),
-            _ => Exemption::None,
-        };
+        let exemption = exemption_for(&path, exemptions);
         let whole_file_exempt = matches!(exemption, Exemption::WholeFile);
 
         let source = std::fs::read_to_string(&path)
@@ -434,16 +451,8 @@ fn walk_crate(
 
 /// Walk one file that the module-graph walk never reached, as ordinary
 /// (non-test) code.
-fn walk_single_file(
-    path: &Path,
-    exempt_relative_path: Option<(&Path, Option<&'static [&'static str]>)>,
-    violations: &mut Vec<Violation>,
-) {
-    let exemption = match exempt_relative_path {
-        Some((rel, None)) if path.ends_with(rel) => Exemption::WholeFile,
-        Some((rel, Some(fn_names))) if path.ends_with(rel) => Exemption::OneFunction(fn_names),
-        _ => Exemption::None,
-    };
+fn walk_single_file(path: &Path, exemptions: Exemptions<'_>, violations: &mut Vec<Violation>) {
+    let exemption = exemption_for(path, exemptions);
     if matches!(exemption, Exemption::WholeFile) {
         return;
     }
@@ -502,16 +511,22 @@ fn every_expose_secret_call_site_is_the_codegen_emitter_authorize_a_test_item_or
             continue;
         };
         let crate_name = crate_dir.file_name().and_then(|n| n.to_str());
-        let exempt: Option<(PathBuf, Option<&'static [&'static str]>)> = match crate_name {
-            Some("willikins-derive") => Some((PathBuf::from("codegen.rs"), None)),
-            Some("willikins-providers-http") => Some((
+        let exemptions: Vec<(PathBuf, Option<&'static [&'static str]>)> = match crate_name {
+            Some("willikins-derive") => vec![(PathBuf::from("codegen.rs"), None)],
+            Some("willikins-providers-http") => vec![(
                 PathBuf::from("credential.rs"),
                 Some(&["authorize", "authorize_header"][..]),
-            )),
-            _ => None,
+            )],
+            Some("willikins-types") => vec![
+                (
+                    PathBuf::from("secret.rs"),
+                    Some(&["reveal_for_transform"][..]),
+                ),
+                (PathBuf::from("appstore.rs"), Some(&["expose", "eq"][..])),
+            ],
+            _ => Vec::new(),
         };
-        let exempt_ref = exempt.as_ref().map(|(p, f)| (p.as_path(), *f));
-        let visited = walk_crate(&root, exempt_ref, &mut violations);
+        let visited = walk_crate(&root, &exemptions, &mut violations);
 
         // Second pass: everything cargo compiles that the module graph
         // never mentions — `build.rs`, a `src/bin/` entry point, a bench,
@@ -522,7 +537,7 @@ fn every_expose_secret_call_site_is_the_codegen_emitter_authorize_a_test_item_or
             if visited.contains(&path) {
                 continue;
             }
-            walk_single_file(&path, exempt_ref, &mut violations);
+            walk_single_file(&path, &exemptions, &mut violations);
         }
     }
 
@@ -564,10 +579,10 @@ fn credential_rs_calls_expose_secret_inside_authorize_and_authorize_header_and_n
     let mut with_correct_exemption = Vec::new();
     let _ = walk_crate(
         &path,
-        Some((
-            Path::new("credential.rs"),
+        &[(
+            PathBuf::from("credential.rs"),
             Some(&["authorize", "authorize_header"][..]),
-        )),
+        )],
         &mut with_correct_exemption,
     );
     assert!(
@@ -578,10 +593,10 @@ fn credential_rs_calls_expose_secret_inside_authorize_and_authorize_header_and_n
     let mut with_wrong_exemption = Vec::new();
     let _ = walk_crate(
         &path,
-        Some((
-            Path::new("credential.rs"),
+        &[(
+            PathBuf::from("credential.rs"),
             Some(&["not_a_real_function"][..]),
-        )),
+        )],
         &mut with_wrong_exemption,
     );
     assert_eq!(
@@ -620,7 +635,7 @@ fn a_file_outside_the_module_graph_is_walked_and_tests_and_target_are_skipped() 
     assert_eq!(files, vec![build_rs.clone()], "{files:?}");
 
     let mut violations = Vec::new();
-    walk_single_file(&build_rs, None, &mut violations);
+    walk_single_file(&build_rs, &[], &mut violations);
     assert_eq!(violations.len(), 1, "{violations:?}");
 
     std::fs::remove_dir_all(&dir).expect("cleans up");

@@ -81,9 +81,22 @@ fn catalog_json_snapshot() {
     // `TypeInfo.example` and the copy repeated inside its JSON schema's
     // own `examples` array -- before the snapshot is taken. The other
     // test in this file still parses the real, unredacted value.
+    // Matched against the JSON-*encoded* form of each example, not the
+    // raw Rust string: `AppleSigningKey`'s example is the first secret
+    // example to carry embedded newlines (a multi-line PEM), and
+    // `serde_json::to_string_pretty` escapes those as a literal `\n`
+    // two-character sequence in `json` -- a `.replace(info.example, ...)`
+    // using the raw (real-newline) string would never match and the PEM
+    // would leak into the snapshot unredacted. Re-encoding `info.example`
+    // the same way `type_infos()` was serialized, then trimming the
+    // surrounding quotes `serde_json::to_string` adds, recovers exactly
+    // the substring that appears inside `json`, for any example
+    // regardless of which characters it contains.
     let mut redacted = json;
     for info in type_infos().iter().filter(|info| info.secret) {
-        redacted = redacted.replace(info.example, "[ELIDED SECRET EXAMPLE]");
+        let json_encoded = serde_json::to_string(info.example).unwrap();
+        let inner = &json_encoded[1..json_encoded.len() - 1];
+        redacted = redacted.replace(inner, "[ELIDED SECRET EXAMPLE]");
     }
     insta::assert_snapshot!(redacted);
 }
