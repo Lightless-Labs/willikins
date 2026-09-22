@@ -1,5 +1,10 @@
 //! Live App Store Connect provider tools: `appstore.bundle_id.ensure`,
-//! `appstore.bundle_id_capability.ensure`.
+//! `appstore.bundle_id_capability.ensure`, and (milestone 3c)
+//! `appstore.certificate.get`. `appstore.certificate.get` is the only
+//! read-only, pure tool of the three -- see its own module doc -- and the
+//! only certificate operation this crate performs at all, anywhere:
+//! `tests/no_certificate_writes_guard.rs` enforces that a certificate
+//! write is structurally absent, not merely unused.
 //!
 //! See `docs/research/2026-09-16-app-store-connect.md` for every fact
 //! this crate rests on, and `docs/plans/2026-09-11-willikins-design.md`'s
@@ -44,4 +49,4 @@ pub mod tools;
 pub use client::{
     APPSTORE_API_BASE_URL, AppstoreClient, CAPABILITIES_NEEDING_PORTAL_CONFIGURATION,
 };
-pub use tools::{AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure};
+pub use tools::{AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet};

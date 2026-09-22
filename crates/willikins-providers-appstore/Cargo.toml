@@ -1,6 +1,6 @@
 [package]
 name = "willikins-providers-appstore"
-description = "Live App Store Connect provider tools: appstore.bundle_id.ensure, appstore.bundle_id_capability.ensure"
+description = "Live App Store Connect provider tools: appstore.bundle_id.ensure, appstore.bundle_id_capability.ensure, appstore.certificate.get"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -28,9 +28,16 @@ willikins-providers-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 indexmap.workspace = true
+# `appstore.certificate.get`'s own expiry check (milestone 3c): parses a
+# certificate's `expirationDate` (RFC 3339) against the wall clock.
+# Already a workspace dependency and in `Cargo.lock` (used by
+# `willikins-types`' own `Description` and elsewhere) -- no new
+# third-party crate enters the tree.
+chrono.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
+regex.workspace = true
 willikins-providers-http = { workspace = true, features = ["test-support"] }
 willikins-providers-fake.workspace = true
 willikins-dsl.workspace = true
