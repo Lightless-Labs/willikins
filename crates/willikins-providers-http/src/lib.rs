@@ -27,15 +27,18 @@
 //! `apple_credential::AppleSigningCredential` is a different shape and
 //! this paragraph does not describe it: it *is* built from a graph
 //! secret (`willikins_types::AppleSigningKey`), read exactly once
-//! through that type's own `expose(&SinkToken)` — never through
-//! `expose_secret` — with a real `SinkToken` the caller already holds,
-//! not one this crate mints. This crate does not itself request the
-//! `executor` cargo feature that guards `SinkToken::new`; it depends on
-//! `willikins-core`, which does, so the feature is on regardless of what
-//! this crate asks for — the only place that matters in practice is this
-//! crate's own `#[cfg(test)]` code (`apple_credential`'s tests mint their
-//! own token, the same way every other provider crate's tests do), never
-//! anything reachable from `Tool::read`.
+//! through that type's own token-less `reveal_for_signing` — never
+//! through `expose_secret` directly — because `willikins-providers-appstore`'s
+//! `Tool::read` needs to build one too, and `Tool::read` never receives a
+//! `SinkToken` at all (see `apple_credential`'s own module doc, "`new`
+//! takes no `SinkToken`", for why an earlier `&SinkToken`-taking version
+//! of this constructor did not survive that provider crate's own
+//! `read`). `Credential::from_bearer_token` is the one place this
+//! crate's own execution-context `Credential` accepts a value it did not
+//! itself read from the environment or a test — a minted
+//! `AppleSigningCredential::sign` output is exactly such a value, and
+//! that constructor's own doc explains why wrapping it there is not a
+//! reopening of "sibling, not variant".
 
 mod apple_credential;
 mod credential;

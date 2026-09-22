@@ -3,11 +3,15 @@
 //!
 //! See `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s
 //! `willikins-providers-http` crate contract: connect timeout 10 s, total
-//! timeout 30 s, `GET`/`PUT`/`DELETE` retried up to three times on `429`,
-//! `5xx`, and transport errors with jittered exponential backoff that
-//! honours `Retry-After`; `POST` is never retried. Every response body is
-//! parsed into a caller-supplied typed struct; an error body is parsed for
-//! its provider `message` field only.
+//! timeout 30 s, `GET`/`PUT`/`PATCH`/`DELETE` retried up to three times on
+//! `429`, `5xx`, and transport errors with jittered exponential backoff
+//! that honours `Retry-After`; `POST` is never retried. `PATCH` joined
+//! the retried set for `willikins-providers-appstore`
+//! (`PATCH /v1/bundleIds/{id}`, App Store Connect's own convergence verb
+//! for a bundle id's `name`), on the same idempotence reasoning `PUT`
+//! already gets. Every response body is parsed into a caller-supplied
+//! typed struct; an error body is parsed for its provider `message` field
+//! only.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -174,6 +178,28 @@ impl Http {
         let url = self.url(path);
         let (status, response_body, facts) = self.run_retrying(true, || {
             let builder = self.apply_headers(self.agent.put(url.as_str()));
+            self.apply_credential(builder).send_json(body)
+        })?;
+        Self::finish(status, &response_body, facts)
+    }
+
+    /// `PATCH path` with a JSON-serialized `body`, retried -- App Store
+    /// Connect's own convergence verb (`PATCH /v1/bundleIds/{id}`, say),
+    /// which no provider before this crate's Apple client needed.
+    /// Idempotent the same way `PUT` is, so it is retried like
+    /// [`Http::get`]/[`Http::put`] rather than treated like [`Http::post`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Http::get`].
+    pub fn patch<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &impl Serialize,
+    ) -> Result<T, ProviderError> {
+        let url = self.url(path);
+        let (status, response_body, facts) = self.run_retrying(true, || {
+            let builder = self.apply_headers(self.agent.patch(url.as_str()));
             self.apply_credential(builder).send_json(body)
         })?;
         Self::finish(status, &response_body, facts)
@@ -645,6 +671,30 @@ mod tests {
 
         let other_err = http.get::<Thing>("/other").expect_err("422");
         assert!(!other_err.already_exists);
+    }
+
+    #[test]
+    fn patch_succeeds_and_is_retried_like_put() {
+        let mut server = mockito::Server::new();
+        let failing = server
+            .mock("PATCH", "/thing")
+            .with_status(503)
+            .with_body("{}")
+            .expect(1)
+            .create();
+        let succeeding = server
+            .mock("PATCH", "/thing")
+            .with_status(200)
+            .with_body(r#"{"name":"widget"}"#)
+            .expect(1)
+            .create();
+        let (http, _sleeper) = client(server.url());
+        let thing: Thing = http
+            .patch("/thing", &serde_json::json!({"name": "widget"}))
+            .expect("succeeds after one retry");
+        assert_eq!(thing.name, "widget");
+        failing.assert();
+        succeeding.assert();
     }
 
     #[test]

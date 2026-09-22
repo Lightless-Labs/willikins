@@ -121,6 +121,41 @@ impl Credential {
         let token = self.secret.expose_secret();
         request.header(header_name, token)
     }
+
+    /// Build a `Credential` carrying an already-minted bearer token — an
+    /// Apple ES256 JWT from [`crate::AppleSigningCredential::sign`], say —
+    /// rather than one read from the environment.
+    ///
+    /// Skips the format check [`Credential::from_env`] runs: there is
+    /// nothing to validate against, since the caller already minted
+    /// `token` from an already-typed, already-validated credential
+    /// ([`crate::AppleSigningCredential`]), not read it raw from
+    /// anywhere. `var` is a fixed label for [`std::fmt::Debug`] only — no
+    /// environment variable is read or exists for this credential.
+    ///
+    /// This does not reopen `apple_credential`'s "sibling, not variant"
+    /// decision (that module's own doc): `AppleSigningCredential` still
+    /// never becomes a `Credential`, and its own construction and
+    /// lifetime stay exactly as unlike `from_env`'s as that doc
+    /// describes. This constructor only gives the *output* of
+    /// `AppleSigningCredential::sign` — a verbatim bearer string, no
+    /// different in shape from any other provider's token once minted —
+    /// a way into [`Http`](crate::Http)'s existing `Authorization:
+    /// Bearer` attachment path ([`Credential::authorize`]), rather than
+    /// making `willikins-providers-appstore` duplicate `Http`'s ~300
+    /// lines of retry, backoff, and error-mapping logic to attach one
+    /// itself.
+    ///
+    /// Calls `SecretString::from`, never `expose_secret`: this
+    /// constructor adds no new call site for
+    /// `crates/willikins-core/tests/expose_secret_guard.rs` to walk.
+    #[must_use]
+    pub fn from_bearer_token(var: &'static str, token: impl Into<String>) -> Credential {
+        Credential {
+            var,
+            secret: SecretString::from(token.into()),
+        }
+    }
 }
 
 /// Test-only construction, skipping both the environment read and the
