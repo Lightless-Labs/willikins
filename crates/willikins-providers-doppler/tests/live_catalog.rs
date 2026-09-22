@@ -1,11 +1,12 @@
-//! The *whole* live catalog — `willikins-tools`' five pure tools,
+//! The *whole* live catalog — `willikins-tools`' seven pure tools,
 //! `willikins-providers-github`'s two live tools, this crate's nine live
 //! Doppler tools (milestone 3 added `doppler.config.inheritable.ensure`
 //! and `doppler.config.inherits.ensure`; the `SigNoz` task added
 //! `doppler.secret.set`; the App Store Connect credential correction
-//! added `doppler.value.get`), and (milestone 3a)
-//! `willikins-providers-buildkite`'s two live tools. Nineteen tools, no
-//! fake among them.
+//! added `doppler.value.get`), (milestone 3a)
+//! `willikins-providers-buildkite`'s two live tools, and (the App Store
+//! Connect provider crate) `willikins-providers-appstore`'s two live
+//! tools. Twenty-three tools, no fake among them.
 //!
 //! The assembly itself lives in `willikins-server` now
 //! (`willikins_server::live_catalog_with`, task 10a's `Butler::live_catalog`)
@@ -26,9 +27,11 @@
 //! is even constructible: that the nine specs' names do not collide, that
 //! every one validates against the shared type registry, and that the
 //! milestone's two positive fixtures -- plus the two App Store Connect
-//! credential documents the credential-ports correction added -- still
-//! `check` against it, resolving the same types in the same order as
-//! against the all-fake catalog.
+//! credential documents the credential-ports correction added, plus the
+//! two documents that chain those parts into a real
+//! `appstore.bundle_id.ensure` call -- still `check` against it,
+//! resolving the same types in the same order as against the all-fake
+//! catalog.
 //!
 //! No tool here is ever called. `check` is pure, so every client points
 //! at a port nothing listens on, and every `Credential` is a
@@ -39,16 +42,19 @@ use willikins_providers_http::{Credential, Http};
 
 /// The milestone's original two positive fixtures, plus the two App
 /// Store Connect credential documents proving the credential's three
-/// parts are genuinely free ports.
-const POSITIVE_FIXTURES: [&str; 4] = [
+/// parts are genuinely free ports, plus the two documents that chain
+/// those parts all the way into a real `appstore.bundle_id.ensure` call.
+const POSITIVE_FIXTURES: [&str; 6] = [
     "new-rust-service.yaml",
     "rotate-service-token.yaml",
     "apple-signing-credential-from-doppler.yaml",
     "apple-signing-credential-from-inputs.yaml",
+    "appstore-bundle-id-from-doppler.yaml",
+    "appstore-bundle-id-from-inputs.yaml",
 ];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 19] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 23] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -82,7 +88,7 @@ fn live_catalog() -> Catalog {
     )
 }
 
-/// The assembly itself: nineteen tools, no name collision, every spec
+/// The assembly itself: twenty-three tools, no name collision, every spec
 /// valid against the shared type registry.
 #[test]
 fn the_live_catalog_assembles_and_every_spec_validates() {
@@ -99,7 +105,7 @@ fn the_live_catalog_assembles_and_every_spec_validates() {
     }
 }
 
-/// All four positive fixtures `check` against the fully-live catalog, and
+/// All six positive fixtures `check` against the fully-live catalog, and
 /// resolve exactly what they resolve against the all-fake one: the same
 /// types, output types, order, and class.
 #[test]
@@ -127,7 +133,7 @@ fn both_positive_fixtures_check_the_same_against_the_live_catalog() {
     }
 }
 
-/// Nothing fake survives in it: inserting any of the nineteen fake tools
+/// Nothing fake survives in it: inserting any of the twenty-three fake tools
 /// of the same names on top is refused as a duplicate, which is what
 /// makes the two tests above statements about the live tools at all.
 #[test]
