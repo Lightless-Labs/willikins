@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-types/tests/catalog.rs
+assertion_line: 101
 expression: redacted
 ---
 [
@@ -204,6 +205,23 @@ expression: redacted
       ],
       "maxLength": 200,
       "pattern": "^[A-Z_][A-Z0-9_]*$"
+    }
+  },
+  {
+    "name": "EnvVarName",
+    "secret": false,
+    "description": "The name of a WILLIKINS_-namespaced environment variable.",
+    "example": "WILLIKINS_DOPPLER_TOKEN",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "EnvVarName",
+      "description": "The name of a WILLIKINS_-namespaced environment variable.",
+      "type": "string",
+      "examples": [
+        "WILLIKINS_DOPPLER_TOKEN"
+      ],
+      "maxLength": 128,
+      "pattern": "^(?:WILLIKINS_[A-Z][A-Z0-9_]*)$"
     }
   },
   {
@@ -456,6 +474,36 @@ expression: redacted
       ],
       "maxLength": 4096,
       "minLength": 1
+    }
+  },
+  {
+    "name": "OpaqueSecret",
+    "secret": true,
+    "description": "An opaque secret value passed between a resolver and a transform or parse tool. Asserts nothing about its shape.",
+    "example": "[ELIDED SECRET EXAMPLE]",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "OpaqueSecret",
+      "description": "An opaque secret value passed between a resolver and a transform or parse tool. Asserts nothing about its shape.",
+      "type": "string",
+      "examples": [
+        "[ELIDED SECRET EXAMPLE]"
+      ],
+      "maxLength": 65536,
+      "minLength": 1
+    }
+  },
+  {
+    "name": "AppleSigningKey",
+    "secret": true,
+    "description": "An EC P-256 private key, PKCS#8 or SEC1 PEM-encoded (canonicalised to PKCS#8). Secret.",
+    "example": "[ELIDED SECRET EXAMPLE]",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AppleSigningKey",
+      "description": "An EC P-256 private key, PKCS#8 or SEC1 PEM-encoded (canonicalised to PKCS#8). Secret.",
+      "type": "string",
+      "maxLength": 4096
     }
   }
 ]
