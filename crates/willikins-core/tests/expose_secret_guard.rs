@@ -526,7 +526,10 @@ fn every_expose_secret_call_site_is_the_codegen_emitter_authorize_a_test_item_or
                     PathBuf::from("secret.rs"),
                     Some(&["reveal_for_transform"][..]),
                 ),
-                (PathBuf::from("appstore.rs"), Some(&["expose", "eq"][..])),
+                (
+                    PathBuf::from("appstore.rs"),
+                    Some(&["expose", "eq", "reveal_for_signing"][..]),
+                ),
                 (
                     PathBuf::from("doppler.rs"),
                     Some(&["reveal_for_transform"][..]),

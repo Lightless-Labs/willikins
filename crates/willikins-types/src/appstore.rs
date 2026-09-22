@@ -68,9 +68,11 @@
 //! [`SinkToken`]: crate::SinkToken
 
 use std::fmt;
+use std::str::FromStr;
 
 use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey, LineEnding};
 
+use crate::name::is_invisible_or_bidi_control;
 use crate::object::{DomainObject, Rendered};
 use crate::{DomainType, ParseError, SinkToken};
 
@@ -164,6 +166,55 @@ impl AppleSigningKey {
     #[allow(clippy::disallowed_methods)]
     pub fn expose(&self, _token: &SinkToken) -> &str {
         secrecy::ExposeSecret::expose_secret(&self.0)
+    }
+
+    /// Apply `f` to this key's raw PKCS#8 PEM bytes, producing whatever
+    /// `f` produces — token-less, unlike [`Self::expose`].
+    ///
+    /// # Why this exists, and why it is safe despite taking no
+    /// [`SinkToken`]
+    ///
+    /// `willikins_types::secret`'s module doc establishes one token-less
+    /// exception (`OpaqueSecret::reveal_for_transform`, and
+    /// `DopplerSecretValue`'s twin) for a pure transform or parse tool's
+    /// `Tool::read`, which never receives a `SinkToken` — and that doc is
+    /// explicit that the exception is **not** for "a tool that does real
+    /// work" (a tool touching a real resource takes a *specific* secret
+    /// domain type, never `OpaqueSecret`, precisely so a reviewer can see
+    /// what the value actually is).
+    ///
+    /// `appstore.bundle_id.ensure` and
+    /// `appstore.bundle_id_capability.ensure` are exactly that kind of
+    /// real-work tool, and they hit the same wall from a different
+    /// direction: their `key` input is a real [`AppleSigningKey`], bound
+    /// through a resolver chain ending at this type's own `parse`
+    /// (`docs/plans/2026-09-11-willikins-design.md`'s "Credentials are
+    /// ports, resolvers are nodes" addendum), and their `Tool::read`
+    /// must mint a JWT from it to make the authenticated `GET` that
+    /// `plan` depends on — `read` never receives a `SinkToken` either.
+    /// The key is not being *moved* anywhere a document or an agent
+    /// could read it back: it is being *used as a credential* to
+    /// authorize one outbound request, precisely the role
+    /// `willikins_providers_http::Credential::authorize` already plays
+    /// for every other provider's `read`, with a real, non-`Debug`,
+    /// non-`Display` [`willikins_providers_http::AppleToken`] as the
+    /// only thing that ever leaves the closure `f` runs in. That is a
+    /// narrower claim than "any secret may flow through here" — it is
+    /// "this specific type's bytes may be used, once, to sign" — so it
+    /// earns its own named exception rather than reusing
+    /// `reveal_for_transform`'s (which stays scoped to
+    /// [`crate::OpaqueSecret`] and [`crate::doppler::DopplerSecretValue`]
+    /// alone, as that method's own doc says).
+    ///
+    /// [`SinkToken`]: crate::SinkToken
+    // The third production call site of `expose_secret` outside the
+    // derive's own codegen -- named in `clippy.toml`'s
+    // `disallowed-methods` reason and walked by
+    // `crates/willikins-core/tests/expose_secret_guard.rs`, which exempts
+    // exactly this function (alongside `expose` and `eq`) in this file.
+    #[allow(clippy::disallowed_methods)]
+    pub fn reveal_for_signing<T, E>(&self, f: impl FnOnce(&str) -> Result<T, E>) -> Result<T, E> {
+        f(secrecy::ExposeSecret::expose_secret(&self.0))
     }
 }
 
@@ -343,6 +394,217 @@ impl DomainObject for AppleSigningKey {
     }
 }
 
+// ---------------------------------------------------------------------
+// Bundle identifier and capability types: `appstore.bundle_id.ensure`
+// and `appstore.bundle_id_capability.ensure`'s own ports.
+// `docs/research/2026-09-16-app-store-connect.md`, section 2, is every
+// fact these types rest on.
+// ---------------------------------------------------------------------
+
+/// A bundle identifier string, such as `com.example.MyApp`: the natural
+/// key `appstore.bundle_id.ensure` reads and creates by
+/// (`filter[identifier]`, compared byte-for-byte client-side since the
+/// filter's own matching semantics are undocumented -- research note,
+/// section 2). Immutable once created (`BundleIdUpdateRequest` declares
+/// only `name`): a document that gets this wrong creates a second,
+/// permanent identifier rather than converging the first.
+///
+/// Apple documents no format for this string at all -- not a `pattern`,
+/// not a `maxLength`, verified programmatically across the create schema
+/// (research note, section 2). The pattern and the 255-character bound
+/// below are chosen conservatively from the shape every Apple example
+/// and real-world bundle id uses (reverse-DNS: `com.example.MyApp`),
+/// following [`crate::BuildkiteOrg`]'s precedent for an undocumented
+/// grammar -- generous enough that a real identifier is not refused by a
+/// type that guessed too narrowly, not a claim that Apple enforces this
+/// bound. Verify against a live `POST` before relying on the exact
+/// figure (research note's own "Unresolved" list, same section).
+///
+/// Not secret -- it is the one part of a bundle id record every reader
+/// of App Store Connect's UI already sees.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*",
+    max_len = 255,
+    description = "An App Store Connect bundle identifier string, such as `com.example.MyApp`. Immutable once created.",
+    example = "com.example.MyApp"
+)]
+pub struct AppleBundleIdentifier(String);
+
+/// The maximum length of an [`AppleBundleIdName`], in characters.
+const BUNDLE_ID_NAME_MAX_LEN: usize = 255;
+
+/// A bundle id's human-written `name` attribute: the *only* free-text
+/// attribute App Store Connect's bundle id resource has (research note,
+/// section 2: "the ownership marker willikins uses everywhere else ...
+/// has no slot here"). This crate's own design decision for that gap: `name` is an
+/// ordinary port, compared exactly on `read`, and a differing `name`
+/// converges through `PATCH` rather than reading `Foreign` — there is no
+/// `Foreign` observation for this resource at all (contrast
+/// `buildkite.pipeline.ensure`'s ownership marker in its `description`
+/// field). This is a real, stated trade: two different callers naming
+/// the same `identifier` with different `name`s will silently rewrite
+/// each other's, rather than conflict, exactly the gap the research note
+/// warns "either the marker lives in `name` or `Foreign` is
+/// undetectable" describes. `appstore.bundle_id.ensure`'s own module doc
+/// repeats this.
+///
+/// Hand-written, mirroring [`crate::BuildkiteClusterName`] exactly: 1 to
+/// 255 characters (Apple states no bound; this is this crate's own
+/// conservative choice), no control character and none of the invisible
+/// or bidirectional characters [`is_invisible_or_bidi_control`] rejects
+/// -- a `name` reaches a `PATCH` body and a rendered output alike.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AppleBundleIdName(String);
+
+impl AppleBundleIdName {
+    /// The name text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for AppleBundleIdName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for AppleBundleIdName {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        Self::parse(input)
+    }
+}
+
+impl DomainType for AppleBundleIdName {
+    const TYPE_NAME: &'static str = "AppleBundleIdName";
+
+    fn description() -> &'static str {
+        "A bundle id's human-written `name` attribute."
+    }
+
+    fn example() -> &'static str {
+        "third-thoughts"
+    }
+
+    fn parse(input: &str) -> Result<Self, ParseError> {
+        if input.is_empty() {
+            return Err(ParseError::new(Self::TYPE_NAME, "must not be empty"));
+        }
+        let len = input.chars().count();
+        if len > BUNDLE_ID_NAME_MAX_LEN {
+            return Err(ParseError::new(
+                Self::TYPE_NAME,
+                format!("is {len} characters, the limit is {BUNDLE_ID_NAME_MAX_LEN}"),
+            ));
+        }
+        if let Some(c) = input.chars().find(|c| c.is_control()) {
+            return Err(ParseError::new(
+                Self::TYPE_NAME,
+                format!("must not contain control characters (found {c:?})"),
+            ));
+        }
+        if let Some(c) = input.chars().find(|&c| is_invisible_or_bidi_control(c)) {
+            return Err(ParseError::new(
+                Self::TYPE_NAME,
+                format!(
+                    "must not contain invisible or bidirectional control character (found {c:?})"
+                ),
+            ));
+        }
+        Ok(Self(input.to_owned()))
+    }
+
+    fn json_schema() -> schemars::Schema {
+        schemars::schema_for!(Self)
+    }
+}
+
+impl serde::Serialize for AppleBundleIdName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for AppleBundleIdName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+impl schemars::JsonSchema for AppleBundleIdName {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("AppleBundleIdName")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": BUNDLE_ID_NAME_MAX_LEN,
+            "description": "A bundle id's human-written `name` attribute.",
+            "examples": ["third-thoughts"]
+        })
+    }
+}
+
+crate::impl_domain_object_non_secret!(AppleBundleIdName);
+
+/// A bundle id's `platform`: a closed three-member enum
+/// (`BundleIdPlatform` in Apple's own schema — research note, section
+/// 2). `UNIVERSAL` is Apple's own guidance for a single App ID shared
+/// across platforms; there is no `TV_OS` or `WATCH_OS` member. Immutable
+/// once created, exactly like [`AppleBundleIdentifier`] — a platform
+/// mismatch on `read` is a terminal [`willikins_core::Observation::Mismatch`]
+/// (no `PATCH` can repair it).
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "IOS|MAC_OS|UNIVERSAL",
+    description = "An App Store Connect bundle id's platform: IOS, MAC_OS, or UNIVERSAL. Immutable once created.",
+    example = "UNIVERSAL"
+)]
+pub struct AppleBundleIdPlatform(String);
+
+/// A bundle id's Apple-assigned opaque record id -- the handle a
+/// downstream tool (`appstore.bundle_id_capability.ensure`'s own
+/// `read`, internally; a future certificate or profile tool) needs once
+/// a bundle id is known to exist. Apple documents no grammar for this
+/// id at all; every observed example is a short run of uppercase
+/// letters and digits (the same shape [`crate::AppleKeyId`] uses, for
+/// the same undocumented-grammar reason its own doc gives), so this
+/// pattern is chosen the same way, generously bounded above the
+/// observed length rather than pinned to it.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "[A-Za-z0-9]{2,64}",
+    description = "An App Store Connect bundle id's Apple-assigned opaque record id.",
+    example = "T6G4XCV345"
+)]
+pub struct AppleBundleIdId(String);
+
+/// A bundle id capability's `capabilityType`: the closed 28-member enum
+/// Apple's specification declares (research note, section 2, quoting
+/// `CapabilityType`'s full enum verbatim). Every member is reproduced
+/// here exactly as the specification spells it, in the specification's
+/// own order, so a reviewer can diff the two directly.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "ICLOUD|IN_APP_PURCHASE|GAME_CENTER|PUSH_NOTIFICATIONS|WALLET|INTER_APP_AUDIO|MAPS|ASSOCIATED_DOMAINS|PERSONAL_VPN|APP_GROUPS|HEALTHKIT|HOMEKIT|WIRELESS_ACCESSORY_CONFIGURATION|APPLE_PAY|DATA_PROTECTION|SIRIKIT|NETWORK_EXTENSIONS|MULTIPATH|HOT_SPOT|NFC_TAG_READING|CLASSKIT|AUTOFILL_CREDENTIAL_PROVIDER|ACCESS_WIFI_INFORMATION|NETWORK_CUSTOM_PROTOCOL|COREMEDIA_HLS_LOW_LATENCY|SYSTEM_EXTENSION_INSTALL|USER_MANAGEMENT|APPLE_ID_AUTH",
+    description = "An App Store Connect bundle id capability type.",
+    example = "PUSH_NOTIFICATIONS"
+)]
+pub struct AppleCapabilityType(String);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -521,5 +783,130 @@ mod tests {
     fn issuer_id_and_key_id_examples_parse_as_their_own_types() {
         crate::assert_example_parses::<AppleIssuerId>();
         crate::assert_example_parses::<AppleKeyId>();
+    }
+
+    // -------------------------------------------------------------
+    // `AppleSigningKey::reveal_for_signing`
+    // -------------------------------------------------------------
+
+    #[test]
+    fn reveal_for_signing_hands_the_same_bytes_expose_does() {
+        let key = AppleSigningKey::parse(AppleSigningKey::example()).unwrap();
+        let via_expose = key.expose(&token()).to_string();
+        let via_reveal = key
+            .reveal_for_signing(|pem| Ok::<_, std::convert::Infallible>(pem.to_string()))
+            .unwrap();
+        assert_eq!(via_expose, via_reveal);
+    }
+
+    #[test]
+    fn reveal_for_signing_lets_the_closures_error_escape() {
+        let key = AppleSigningKey::parse(AppleSigningKey::example()).unwrap();
+        let err = key
+            .reveal_for_signing(|_pem| Err::<(), &'static str>("refused"))
+            .unwrap_err();
+        assert_eq!(err, "refused");
+    }
+
+    // -------------------------------------------------------------
+    // Bundle identifier and capability types
+    // -------------------------------------------------------------
+
+    #[test]
+    fn bundle_identifier_accepts_a_reverse_dns_string() {
+        assert!(AppleBundleIdentifier::parse("com.example.MyApp").is_ok());
+    }
+
+    #[test]
+    fn bundle_identifier_refuses_a_slash_or_leading_dot() {
+        assert!(AppleBundleIdentifier::parse("com/example").is_err());
+        assert!(AppleBundleIdentifier::parse(".com.example").is_err());
+        assert!(AppleBundleIdentifier::parse("").is_err());
+    }
+
+    #[test]
+    fn bundle_identifier_is_registered_and_not_secret() {
+        const { assert!(!AppleBundleIdentifier::IS_SECRET) };
+        assert_eq!(
+            crate::registry().is_secret(&crate::TypeName::parse("AppleBundleIdentifier").unwrap()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn bundle_id_name_round_trips_and_rejects_control_characters() {
+        let name = AppleBundleIdName::parse("third-thoughts").unwrap();
+        assert_eq!(name.as_str(), "third-thoughts");
+        assert_eq!(name.to_string(), "third-thoughts");
+        assert!(AppleBundleIdName::parse("bad\nname").is_err());
+        assert!(AppleBundleIdName::parse("").is_err());
+    }
+
+    #[test]
+    fn bundle_id_name_refuses_an_invisible_character() {
+        assert!(AppleBundleIdName::parse("evil\u{200b}name").is_err());
+    }
+
+    #[test]
+    fn bundle_id_platform_accepts_the_three_documented_members() {
+        for platform in ["IOS", "MAC_OS", "UNIVERSAL"] {
+            assert!(AppleBundleIdPlatform::parse(platform).is_ok(), "{platform}");
+        }
+        assert!(AppleBundleIdPlatform::parse("TV_OS").is_err());
+        assert!(AppleBundleIdPlatform::parse("ios").is_err());
+    }
+
+    #[test]
+    fn bundle_id_id_accepts_apples_shape() {
+        assert!(AppleBundleIdId::parse("T6G4XCV345").is_ok());
+        assert!(AppleBundleIdId::parse("x").is_err());
+    }
+
+    #[test]
+    fn capability_type_accepts_every_documented_member() {
+        for capability in [
+            "ICLOUD",
+            "IN_APP_PURCHASE",
+            "GAME_CENTER",
+            "PUSH_NOTIFICATIONS",
+            "WALLET",
+            "INTER_APP_AUDIO",
+            "MAPS",
+            "ASSOCIATED_DOMAINS",
+            "PERSONAL_VPN",
+            "APP_GROUPS",
+            "HEALTHKIT",
+            "HOMEKIT",
+            "WIRELESS_ACCESSORY_CONFIGURATION",
+            "APPLE_PAY",
+            "DATA_PROTECTION",
+            "SIRIKIT",
+            "NETWORK_EXTENSIONS",
+            "MULTIPATH",
+            "HOT_SPOT",
+            "NFC_TAG_READING",
+            "CLASSKIT",
+            "AUTOFILL_CREDENTIAL_PROVIDER",
+            "ACCESS_WIFI_INFORMATION",
+            "NETWORK_CUSTOM_PROTOCOL",
+            "COREMEDIA_HLS_LOW_LATENCY",
+            "SYSTEM_EXTENSION_INSTALL",
+            "USER_MANAGEMENT",
+            "APPLE_ID_AUTH",
+        ] {
+            assert!(
+                AppleCapabilityType::parse(capability).is_ok(),
+                "{capability}"
+            );
+        }
+        assert!(AppleCapabilityType::parse("NOT_A_REAL_CAPABILITY").is_err());
+    }
+
+    #[test]
+    fn bundle_id_types_examples_parse_as_their_own_types() {
+        crate::assert_example_parses::<AppleBundleIdentifier>();
+        crate::assert_example_parses::<AppleBundleIdPlatform>();
+        crate::assert_example_parses::<AppleBundleIdId>();
+        crate::assert_example_parses::<AppleCapabilityType>();
     }
 }
