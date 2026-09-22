@@ -1,6 +1,9 @@
 # App Store Connect API research: identifiers, app groups, app records
 
 **Created:** 2026-09-16
+**Live verification:** 2026-09-22 — the first authenticated calls to a real App Store Connect
+account this note has ever had. See "Settled live, 2026-09-22" below; the "Verify with a browser"
+items it settles are struck through there rather than silently deleted.
 **Plan:** none yet — App Store Connect is a *future* provider. The table shape below is borrowed
 from `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md` and is a sketch, not a design.
 **Previous:** `docs/research/2026-09-12-m2-dependencies.md`
@@ -329,7 +332,7 @@ settle. A probe needs a credential this session did not have and did not seek.
 
 **Reading back by key**
 
-- Does `filter[identifier]` (and `filter[udid]`, `filter[name]`, `filter[bundleId]`) match exactly, by prefix, or by substring? Apple's description is the auto-generated "filter by attribute 'x'" and nothing more. Until settled, every read compares the returned attribute byte-for-byte itself. Third-party reports of substring behaviour exist in fastlane issue threads; they were not fetched and are **(unverified)**, flagged only so nobody treats exactness as safe by default.
+- ~~Does `filter[identifier]` match exactly, by prefix, or by substring?~~ **SETTLED 2026-09-22: substring.** See "Settled live" below. The third-party fastlane reports were right. `filter[udid]`, `filter[name]` and `filter[bundleId]` were *not* probed and remain unknown — do not generalise this answer to them without a probe of their own.
 - Is `bundleId` unique per app record in App Store Connect? The filter is array-valued and no Apple sentence states one-app-per-bundleId.
 - Is a provisioning profile's `name` unique per team? It is the only natural-key filter profiles have.
 
@@ -457,3 +460,76 @@ likely to be missed by a plan written from the specification alone.
 **The deliverable, in one sentence.** Bundle identifiers, fully; the app record, read-only, with
 creation left to a person and everything downstream of it reachable; app groups, not at all — and a
 provider that does two of those three is still worth building.
+
+## Settled live, 2026-09-22
+
+The first authenticated calls this note has ever had. Made from
+`crates/willikins-providers-appstore/tests/live_probe.rs` (`GET` only) and
+`tests/live_write_cycle.rs` (one throwaway identifier, created and deleted in the same test),
+against a **real, production** developer account with a Team key. Everything below is an
+observation, not a document quote — which makes it stronger than the prose for these particular
+questions and weaker for anything about accounts other than this one.
+
+### `filter[identifier]` matches by **substring**
+
+The single most load-bearing unknown in this note, and the answer is the worst of the three.
+
+Method: take one identifier the account already holds; call
+`GET /v1/bundleIds?filter[identifier]=<needle>` three times, with the whole string, with a strict
+prefix of it (last character dropped), and with a strict suffix of it (first character dropped);
+record for each whether the *original* identifier's row came back. All three returned it. A prefix
+hit alone would mean prefix matching; a prefix hit *and* a suffix hit can only be substring.
+
+Two consequences, both now implemented:
+
+1. **The client-side byte-for-byte comparison is load-bearing, not defensive.** A read for
+   `com.acme.app` really does get `com.acme.app.extension` back from Apple, and only
+   `appstore.bundle_id.ensure`'s own `identifier == requested` compare keeps it from reporting
+   `Present` for the wrong record.
+2. **Reads must paginate.** Under substring matching the result set is "every identifier on the
+   team containing this string" — unbounded in a way an exact filter never would be — so the exact
+   match can sort onto a later page. `AppstoreClient::list_bundle_ids` now requests `limit=200` and
+   follows `links.next`. Before it did, an exact match past the page boundary would have read
+   `Absent` for a record that exists, and `ensure` would then have `POST`ed it, taken Apple's
+   duplicate error, re-read `Absent` again, and failed.
+
+Not probed, and therefore still unknown: whether the match is case-sensitive, and whether Apple's
+*other* `filter[...]` parameters behave the same way.
+
+### Paging
+
+- `meta.paging.total` **is** sent on `GET /v1/bundleIds`, and agreed exactly with the number of
+  rows counted by following `links.next` to exhaustion.
+- `limit=200` is accepted. **No default page size was observed** — every call in this pass set
+  `limit` explicitly — so nothing here licenses a claim about what Apple does when `limit` is
+  omitted, and `list_bundle_ids` does not rely on one.
+- `links.next` is an absolute URL on Apple's own host. `list_bundle_ids` re-attaches only its query
+  string to its own path, so a response can never steer the client at a host or path of the
+  provider's choosing.
+
+### The credential and the JWT
+
+- A self-signed ES256 JWT with `kid` = key id, `iss` = issuer id, `aud` = the literal
+  `appstoreconnect-v1` and a 15-minute lifetime was accepted on every call, first try. No handshake,
+  no token endpoint, exactly as documented.
+- The key stored base64-wrapped in Doppler decoded to a PEM that `AppleSigningKey::parse` accepted
+  and `jsonwebtoken` signed with — so for *this* key the `.p8` is PKCS#8 (`-----BEGIN PRIVATE
+  KEY-----`). One key is not a rule: the "is the `.p8` always PKCS#8?" verify item stands, which is
+  exactly why `AppleSigningKey::parse` accepts SEC1 too and canonicalises.
+
+### The write quartet
+
+One identifier, on an obviously-foreign reverse domain, created and deleted inside a single guarded
+test:
+
+- `POST /v1/bundleIds` with `identifier`/`name`/`platform` returned `201` and an Apple-assigned id.
+- A second `ensure` against the unchanged record reported `changed: false` — the tool converges.
+- `DELETE /v1/bundleIds/{id}` succeeded, and a re-read reported `Absent`.
+- The account's identifier count was identical before and after, confirmed both by the test and by
+  an independent read afterwards.
+
+**Still unresolved, and deliberately not probed:** the `ErrorResponse.code` leaf a duplicate create
+returns (probing it needs a *second* create of an identifier that already exists, which on a live
+account means either colliding with a real record or creating a second throwaway — neither was
+authorised); what a refused `DELETE` returns; and every capability question, since no capability was
+touched on any identifier, existing or throwaway.
