@@ -63,6 +63,8 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
         "doppler-backend.yaml",
         "doppler-backend-for-ios.yaml",
         "signoz-ingestion-key.yaml",
+        "apple-signing-credential-from-doppler.yaml",
+        "apple-signing-credential-from-inputs.yaml",
     ] {
         assert!(hashes.contains_key(file), "{file}: {hashes:?}");
     }
@@ -79,6 +81,8 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
     assert_eq!(
         names,
         [
+            "apple-signing-credential-from-doppler",
+            "apple-signing-credential-from-inputs",
             "doppler-backend-for-ios",
             "doppler-backend",
             "doppler-ios",
