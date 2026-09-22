@@ -141,27 +141,33 @@ fn every_request_carries_the_jwt_in_authorization_and_in_no_other_header() {
     ));
 
     let captured = captured.lock().unwrap().clone();
-    let mut authorized = false;
-    for (name, value) in &captured {
-        if name.eq_ignore_ascii_case("authorization") {
+    let jwt = captured
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .map(|(_, value)| {
             assert!(value.starts_with("Bearer "), "{value}");
+            let jwt = value.strip_prefix("Bearer ").unwrap().to_string();
             assert_eq!(
-                value.split('.').count(),
+                jwt.split('.').count(),
                 3,
-                "the Authorization header must carry a three-part JWT: {value}"
+                "the Authorization header must carry a three-part JWT: {jwt}"
             );
-            authorized = true;
-        } else {
+            jwt
+        })
+        .expect("the request must have carried an Authorization header");
+
+    // The real check: no *other* header carries the same JWT bytes. A
+    // generic "looks token-shaped" heuristic (three dot-separated parts,
+    // say) is too fragile -- `ureq`'s own `user-agent` header
+    // (`ureq/3.4.2`) has three dot-separated segments too.
+    for (name, value) in &captured {
+        if !name.eq_ignore_ascii_case("authorization") {
             assert!(
-                !value.contains("Bearer") && value.split('.').count() != 3,
-                "header `{name}` looks like it is carrying the token too: {value}"
+                !value.contains(&jwt),
+                "header `{name}` carries the JWT too: {value}"
             );
         }
     }
-    assert!(
-        authorized,
-        "the request must have carried an Authorization header"
-    );
 }
 
 /// A failing call still never leaks anything beyond the bounded,

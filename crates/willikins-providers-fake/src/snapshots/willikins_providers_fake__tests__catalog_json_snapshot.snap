@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
+assertion_line: 174
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -83,6 +84,44 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "name": "apple.signing_key.parse",
     "outputs": {
       "value": "AppleSigningKey"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Parse text as an App Store Connect API key's issuer id.",
+    "inputs": {
+      "value": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "Text"
+        }
+      }
+    },
+    "key": [],
+    "name": "apple.issuer_id.parse",
+    "outputs": {
+      "value": "AppleIssuerId"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Parse text as an App Store Connect API key's key id.",
+    "inputs": {
+      "value": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "Text"
+        }
+      }
+    },
+    "key": [],
+    "name": "apple.key_id.parse",
+    "outputs": {
+      "value": "AppleKeyId"
     },
     "pure": true
   },
@@ -475,6 +514,114 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "outputs": {
       "slug": "BuildkitePipelineSlug",
       "url": "HttpsUrl"
+    },
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Register or converge an App Store Connect bundle identifier.",
+    "inputs": {
+      "identifier": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleBundleIdentifier"
+        }
+      },
+      "issuer_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleIssuerId"
+        }
+      },
+      "key": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleSigningKey"
+        }
+      },
+      "key_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleKeyId"
+        }
+      },
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleBundleIdName"
+        }
+      },
+      "platform": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleBundleIdPlatform"
+        }
+      }
+    },
+    "key": [
+      "identifier"
+    ],
+    "name": "appstore.bundle_id.ensure",
+    "outputs": {
+      "id": "AppleBundleIdId",
+      "identifier": "AppleBundleIdentifier",
+      "name": "AppleBundleIdName"
+    },
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Switch on one capability of an already-registered App Store Connect bundle id.",
+    "inputs": {
+      "capability": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleCapabilityType"
+        }
+      },
+      "identifier": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleBundleIdentifier"
+        }
+      },
+      "issuer_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleIssuerId"
+        }
+      },
+      "key": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleSigningKey"
+        }
+      },
+      "key_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleKeyId"
+        }
+      }
+    },
+    "key": [
+      "identifier",
+      "capability"
+    ],
+    "name": "appstore.bundle_id_capability.ensure",
+    "outputs": {
+      "capability": "AppleCapabilityType"
     },
     "pure": false
   },

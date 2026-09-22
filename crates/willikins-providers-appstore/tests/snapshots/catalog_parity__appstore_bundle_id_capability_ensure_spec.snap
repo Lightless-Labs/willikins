@@ -1,0 +1,55 @@
+---
+source: crates/willikins-providers-appstore/tests/catalog_parity.rs
+assertion_line: 55
+expression: "spec_json(AppstoreBundleIdCapabilityEnsure::new(NOWHERE).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Switch on one capability of an already-registered App Store Connect bundle id.",
+  "inputs": {
+    "capability": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleCapabilityType"
+      }
+    },
+    "identifier": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleBundleIdentifier"
+      }
+    },
+    "issuer_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleIssuerId"
+      }
+    },
+    "key": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleSigningKey"
+      }
+    },
+    "key_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleKeyId"
+      }
+    }
+  },
+  "key": [
+    "identifier",
+    "capability"
+  ],
+  "name": "appstore.bundle_id_capability.ensure",
+  "outputs": {
+    "capability": "AppleCapabilityType"
+  },
+  "pure": false
+}

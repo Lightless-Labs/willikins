@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-tools/src/lib.rs
+assertion_line: 91
 expression: specs
 ---
 [
@@ -107,6 +108,44 @@ expression: specs
     },
     "outputs": {
       "value": "AppleSigningKey"
+    },
+    "key": [],
+    "class": "reversible",
+    "pure": true
+  },
+  {
+    "name": "apple.issuer_id.parse",
+    "description": "Parse text as an App Store Connect API key's issuer id.",
+    "inputs": {
+      "value": {
+        "ty": {
+          "kind": "exact",
+          "type": "Text"
+        },
+        "required": true
+      }
+    },
+    "outputs": {
+      "value": "AppleIssuerId"
+    },
+    "key": [],
+    "class": "reversible",
+    "pure": true
+  },
+  {
+    "name": "apple.key_id.parse",
+    "description": "Parse text as an App Store Connect API key's key id.",
+    "inputs": {
+      "value": {
+        "ty": {
+          "kind": "exact",
+          "type": "Text"
+        },
+        "required": true
+      }
+    },
+    "outputs": {
+      "value": "AppleKeyId"
     },
     "key": [],
     "class": "reversible",
