@@ -21,10 +21,12 @@ serde.workspace = true
 serde_json.workspace = true
 rand.workspace = true
 thiserror.workspace = true
+jsonwebtoken.workspace = true
 mockito = { workspace = true, optional = true }
 
 [dev-dependencies]
 trybuild.workspace = true
+base64.workspace = true
 # Self dev-dependency enabling `test-support` for this crate's own
 # `tests/` and `#[cfg(test)]` code, the same trick `willikins-core` uses
 # for its own `test-support` feature: `--all-targets` never builds a

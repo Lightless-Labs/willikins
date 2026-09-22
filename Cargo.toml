@@ -70,6 +70,7 @@ rand = "0.9"
 mockito = "1"
 base64 = "0.23"
 p256 = "0.13"
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 crypto_box = { version = "0.9", features = ["seal"] }
 sha2 = "0.11"
 rmcp = "3"
