@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-tools/src/lib.rs
-assertion_line: 82
 expression: specs
 ---
 [
@@ -79,12 +78,11 @@ expression: specs
   },
   {
     "name": "base64.decode",
-    "description": "Base64-decode an opaque secret (RFC 4648 standard alphabet, padding either way, ASCII whitespace stripped first); the decoded bytes must be UTF-8.",
+    "description": "Base64-decode a secret value (RFC 4648 standard alphabet, padding either way, ASCII whitespace stripped first); the decoded bytes must be UTF-8.",
     "inputs": {
       "value": {
         "ty": {
-          "kind": "exact",
-          "type": "OpaqueSecret"
+          "kind": "any_secret"
         },
         "required": true
       }
@@ -98,12 +96,11 @@ expression: specs
   },
   {
     "name": "apple.signing_key.parse",
-    "description": "Parse a decoded opaque secret as an EC P-256 (PKCS#8 or SEC1 PEM) App Store Connect signing key.",
+    "description": "Parse a decoded secret as an EC P-256 (PKCS#8 or SEC1 PEM) App Store Connect signing key.",
     "inputs": {
       "value": {
         "ty": {
-          "kind": "exact",
-          "type": "OpaqueSecret"
+          "kind": "any_secret"
         },
         "required": true
       }
