@@ -14,10 +14,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use willikins_core::{ToolError, ToolErrorKind};
 use willikins_types::{
     ActionsSecretName, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
-    AppleCapabilityType, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
-    DopplerConfig, DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName,
-    GitHubRepo, ProjectSlug, RepoVisibility, SecretName, SigNozIngestionKeyName,
-    SigNozIngestionKeyValue, Text,
+    AppleCapabilityType, AppleCertificateSerial, AppleCertificateType, BuildkiteClusterName,
+    BuildkiteOrg, BuildkitePipelineSlug, DomainType, DopplerConfig, DopplerProject,
+    DopplerSecretValue, DopplerServiceToken, DopplerTokenName, GitHubRepo, ProjectSlug,
+    RepoVisibility, SecretName, SigNozIngestionKeyName, SigNozIngestionKeyValue, Text,
 };
 
 /// A GitHub repository record: enough to answer `github.repo.ensure`'s
@@ -83,6 +83,32 @@ pub struct AppleBundleIdRecord {
     /// once seeded or created -- this fake has no `PATCH`-equivalent for
     /// it either, matching Apple's own schema.
     pub platform: String,
+}
+
+/// An App Store Connect certificate record: enough to answer
+/// `appstore.certificate.get`'s `read`. Read-only from this fake's own
+/// tool -- nothing in this crate ever creates or deletes one, mirroring
+/// the live provider's own certificate-write guard
+/// (`crates/willikins-providers-appstore/tests/no_certificate_writes_guard.rs`)
+/// -- so only a seed file ever populates [`FakeState::apple_certificates`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppleCertificateRecord {
+    /// The Apple-assigned opaque id this fake hands out.
+    pub id: String,
+    /// Whether this certificate is expired -- this fake tracks only the
+    /// boolean fact `appstore.certificate.get`'s read needs (a `Conflict`
+    /// if true), not a real `expirationDate` timestamp.
+    #[serde(default)]
+    pub expired: bool,
+    /// The certificate's `activated` attribute. `None` (the default)
+    /// mirrors what the live provider observed on every one of the
+    /// operator's real certificates during the milestone 3c pre-flight:
+    /// absent, which `appstore.certificate.get`'s read treats as "not
+    /// deactivated". `Some(false)` is the only value that makes a
+    /// certificate unusable; `Some(true)` behaves exactly like `None`.
+    #[serde(default)]
+    pub activated: Option<bool>,
 }
 
 /// A map from a Doppler secret's key (`project/config#SECRET`) to its
@@ -386,6 +412,14 @@ pub struct FakeState {
     /// in [`Self::apple_bundle_ids`] at all, rather than treating an
     /// empty set here as "absent".
     pub apple_bundle_id_capabilities: HashMap<String, HashSet<String>>,
+    /// App Store Connect certificates, keyed by `(certificate_type,
+    /// serial_number)` ([`apple_certificate_key`]) to a list of records
+    /// sharing that pair -- mirrors [`Self::buildkite_clusters`]'s own
+    /// shape: a seed file can express the ambiguous case (two records
+    /// under one key) the same way the live provider's own client-side
+    /// exact compare would find it, even though Apple's real serial
+    /// numbers are unique in practice.
+    pub apple_certificates: HashMap<String, Vec<AppleCertificateRecord>>,
     /// The [`ProjectSlug`] canonical strings `fake.irreversible.ensure`
     /// has created.
     pub irreversible: HashSet<String>,
@@ -470,6 +504,17 @@ pub fn signoz_ingestion_key_key(name: &SigNozIngestionKeyName) -> String {
 #[must_use]
 pub fn buildkite_pipeline_key(org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) -> String {
     format!("{org}/{slug}")
+}
+
+/// The key `appstore.certificate.get` looks a certificate up by: its
+/// `(certificate_type, serial_number)` natural key, joined the same way
+/// [`buildkite_pipeline_key`] joins its two parts.
+#[must_use]
+pub fn apple_certificate_key(
+    certificate_type: &AppleCertificateType,
+    serial_number: &AppleCertificateSerial,
+) -> String {
+    format!("{certificate_type}#{serial_number}")
 }
 
 /// Deterministically derive the opaque id a fake
@@ -669,6 +714,31 @@ impl FakeState {
             .entry(identifier.as_str().to_string())
             .or_default()
             .insert(capability.to_string());
+        self
+    }
+
+    /// Seed an App Store Connect certificate: `certificate_type` +
+    /// `serial_number` resolves to a record with `id`, appended to any
+    /// other record already seeded under the same pair (so a second call
+    /// with the same type and serial seeds the ambiguous case, mirroring
+    /// [`Self::with_buildkite_cluster`]).
+    #[must_use]
+    pub fn with_apple_certificate(
+        mut self,
+        certificate_type: &AppleCertificateType,
+        serial_number: &AppleCertificateSerial,
+        id: &str,
+        expired: bool,
+        activated: Option<bool>,
+    ) -> Self {
+        self.apple_certificates
+            .entry(apple_certificate_key(certificate_type, serial_number))
+            .or_default()
+            .push(AppleCertificateRecord {
+                id: id.to_string(),
+                expired,
+                activated,
+            });
         self
     }
 
