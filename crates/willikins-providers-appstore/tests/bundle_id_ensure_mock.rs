@@ -105,6 +105,60 @@ fn read_reports_absent_when_only_a_prefix_neighbor_matches_the_filter() {
     assert!(matches!(observation, Observation::Absent { .. }));
 }
 
+/// The test the live filter probe made necessary.
+///
+/// `filter[identifier]` matches by **substring** (observed live,
+/// 2026-09-22 -- `docs/research/2026-09-16-app-store-connect.md`,
+/// "Reading back by key"), so a filter for `com.example.MyApp` returns
+/// every identifier on the team containing that string. That set is
+/// unbounded in a way an exact filter never would be, and the exact
+/// match can therefore land on a later page. Before
+/// `AppstoreClient::list_bundle_ids` followed `links.next`, this read
+/// returned `Absent` for an identifier that plainly exists -- and
+/// `ensure` would then have gone on to `POST` it, taken Apple's
+/// duplicate error, re-read `Absent` a second time, and failed.
+#[test]
+fn read_finds_an_exact_match_that_the_substring_filter_put_on_a_later_page() {
+    let mut provider = MockProvider::start();
+
+    // Page 1: only substring neighbours, plus a `next` cursor.
+    let mut page_one = fixture("bundle_id_list_prefix_neighbor");
+    page_one["links"] = serde_json::json!({
+        "self": format!("{}/v1/bundleIds", provider.url()),
+        "next": format!("{}/v1/bundleIds?cursor=PAGE2&limit=200", provider.url()),
+    });
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "filter[identifier]".into(),
+            "com.example.MyApp".into(),
+        ))
+        .with_status(200)
+        .with_body(page_one.to_string())
+        .create();
+
+    // Page 2, reached only by following `next`: the exact match. Its own
+    // `links` carries no `next`, which is how Apple signals the last
+    // page and how this client knows to stop.
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "cursor".into(),
+            "PAGE2".into(),
+        ))
+        .with_status(200)
+        .with_body(fixture("bundle_id_list_one").to_string())
+        .create();
+
+    let tool = AppstoreBundleIdEnsure::new(provider.url());
+    let observation = tool.read(&inputs()).unwrap();
+    let Observation::Present(outputs) = observation else {
+        panic!("expected Present from page two, got {observation:?}");
+    };
+    let id = outputs.get(&PortName::parse("id").unwrap()).unwrap();
+    assert_eq!(id.render().to_string(), "T6G4XCV345");
+}
+
 #[test]
 fn read_reports_present_when_identifier_name_and_platform_all_match() {
     let mut provider = MockProvider::start();
