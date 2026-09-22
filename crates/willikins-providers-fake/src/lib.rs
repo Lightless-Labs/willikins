@@ -11,8 +11,13 @@
 //! `signoz.ingestion_key.ensure` and `doppler.secret.set`; the App Store
 //! Connect credential correction added `doppler.value.get` and the three
 //! resolver-chain pure tools, `env.get`, `base64.decode`, and
-//! `apple.signing_key.parse`), so the catalog this crate produces holds
-//! twenty-one tools, in the order [`catalog`] inserts them.
+//! `apple.signing_key.parse`; the App Store Connect provider crate added
+//! `appstore.bundle_id.ensure` and `appstore.bundle_id_capability.ensure`,
+//! plus the two parse tools `doppler.value.get`'s `Text` output needs
+//! before it can bind to either one's typed credential ports,
+//! `apple.issuer_id.parse` and `apple.key_id.parse`), so the catalog
+//! this crate produces holds twenty-five tools, in the order [`catalog`]
+//! inserts them.
 //!
 //! # Every `ensure` reads its own state first
 //!
@@ -65,6 +70,8 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(willikins_tools::EnvGet::new());
     insert!(willikins_tools::Base64Decode::new());
     insert!(willikins_tools::AppleSigningKeyParse::new());
+    insert!(willikins_tools::AppleIssuerIdParse::new());
+    insert!(willikins_tools::AppleKeyIdParse::new());
     insert!(tools::GitHubRepoEnsure::new(state.clone()));
     insert!(tools::GitHubActionsSecretEnsure::new(state.clone()));
     insert!(tools::DopplerProjectEnsure::new(state.clone()));
@@ -79,6 +86,10 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::SigNozIngestionKeyEnsure::new(state.clone()));
     insert!(tools::FakeBuildkiteClusterGet::new(state.clone()));
     insert!(tools::FakeBuildkitePipelineEnsure::new(state.clone()));
+    insert!(tools::FakeAppstoreBundleIdEnsure::new(state.clone()));
+    insert!(tools::FakeAppstoreBundleIdCapabilityEnsure::new(
+        state.clone()
+    ));
     insert!(tools::FakeSecretList::new());
     // The last use of `state`: moved rather than cloned, so this
     // function's own `state` parameter is genuinely consumed.
@@ -110,6 +121,8 @@ mod tests {
             "env.get",
             "base64.decode",
             "apple.signing_key.parse",
+            "apple.issuer_id.parse",
+            "apple.key_id.parse",
             "github.repo.ensure",
             "github.actions_secret.ensure",
             "doppler.project.ensure",
@@ -124,13 +137,15 @@ mod tests {
             "signoz.ingestion_key.ensure",
             "buildkite.cluster.get",
             "buildkite.pipeline.ensure",
+            "appstore.bundle_id.ensure",
+            "appstore.bundle_id_capability.ensure",
             "fake.secret_list",
             "fake.irreversible.ensure",
             "template.render",
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 21);
+        assert_eq!(names.len(), 25);
     }
 
     #[test]

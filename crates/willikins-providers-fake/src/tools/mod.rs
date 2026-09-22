@@ -6,6 +6,8 @@
 //! to the `willikins-tools` crate; [`crate::catalog`](crate::catalog())
 //! registers them from there alongside this crate's own eight tools.
 
+pub mod appstore_bundle_id_capability_ensure;
+pub mod appstore_bundle_id_ensure;
 pub mod buildkite_cluster_get;
 pub mod buildkite_pipeline_ensure;
 pub mod doppler_config_ensure;
@@ -23,6 +25,8 @@ pub mod github_actions_secret_ensure;
 pub mod github_repo_ensure;
 pub mod signoz_ingestion_key_ensure;
 
+pub use appstore_bundle_id_capability_ensure::FakeAppstoreBundleIdCapabilityEnsure;
+pub use appstore_bundle_id_ensure::FakeAppstoreBundleIdEnsure;
 pub use buildkite_cluster_get::FakeBuildkiteClusterGet;
 pub use buildkite_pipeline_ensure::FakeBuildkitePipelineEnsure;
 pub use doppler_config_ensure::DopplerConfigEnsure;

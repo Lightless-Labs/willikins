@@ -4,8 +4,9 @@
 //! A pure tool's `ensure` is its `read` by contract (`Tool::ensure`'s own
 //! doc), and the executor of an applied plan leans on that: a `Compute`
 //! node must produce the same outputs at apply time as the plan showed.
-//! `naming.v1`, `template.render`, `env.get`, `base64.decode`, and
-//! `apple.signing_key.parse` from `willikins-tools`, `doppler.secret.get`,
+//! `naming.v1`, `template.render`, `env.get`, `base64.decode`,
+//! `apple.signing_key.parse`, `apple.issuer_id.parse`, and
+//! `apple.key_id.parse` from `willikins-tools`, `doppler.secret.get`,
 //! `doppler.value.get`, `fake.secret_list`, and (milestone 3a)
 //! `buildkite.cluster.get` from this crate — are checked here in one
 //! place, through the catalog, so a new pure tool registered later is a
@@ -69,6 +70,11 @@ fn ports(outputs: &Outputs) -> Vec<(&PortName, &Value)> {
 }
 
 #[test]
+// One `inputs` value per pure tool in the catalog, built up in a flat
+// sequence rather than split across helpers so each case's inputs stay
+// next to the tool name that uses them -- length is the honest cost of
+// that, not a sign the test does too much.
+#[allow(clippy::too_many_lines)]
 fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
     let state = Arc::new(Mutex::new(
         FakeState::new()
@@ -135,11 +141,27 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         Value::known(OpaqueSecret::parse(AppleSigningKey::example()).expect("valid opaque secret")),
     );
 
+    let mut apple_issuer_id_parse_inputs = Inputs::new();
+    apple_issuer_id_parse_inputs.insert(
+        port("value"),
+        Value::known(
+            Text::parse("57246542-96fe-1a63-e053-0824d011072a").expect("valid text value"),
+        ),
+    );
+
+    let mut apple_key_id_parse_inputs = Inputs::new();
+    apple_key_id_parse_inputs.insert(
+        port("value"),
+        Value::known(Text::parse("2X9R4HXF34").expect("valid text value")),
+    );
+
     let cases = [
         ("naming.v1", naming_inputs),
         ("template.render", template_inputs),
         ("base64.decode", base64_decode_inputs),
         ("apple.signing_key.parse", apple_key_parse_inputs),
+        ("apple.issuer_id.parse", apple_issuer_id_parse_inputs),
+        ("apple.key_id.parse", apple_key_id_parse_inputs),
         ("doppler.secret.get", secret_get_inputs),
         ("doppler.value.get", value_get_inputs),
         ("fake.secret_list", secret_list_inputs),
