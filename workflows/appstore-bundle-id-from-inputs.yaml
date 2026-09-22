@@ -1,0 +1,43 @@
+# The other half of the proof appstore-bundle-id-from-doppler.yaml
+# starts: what somebody who keeps a .p8 on disk and runs no vault would
+# write. The two ids -- AppleIssuerId and AppleKeyId, both non-secret --
+# arrive as plain workflow inputs, which `check` allows because only the
+# key is secret; the key itself still cannot be a workflow input (`check`
+# refuses a secret-typed one unconditionally), so it comes from an
+# environment variable instead, read raw with no base64 layer -- that
+# wrapping is the Doppler-document operator's own habit, not a rule this
+# document has to follow.
+#
+# If this document could not be written -- if the two ids had to come
+# from the same place the key does -- the credential's three parts would
+# still be coupled and the correction this task exists to make would not
+# be finished.
+name: appstore-bundle-id-from-inputs
+description: Resolve the App Store Connect credential from plain inputs and one environment variable, and register a bundle identifier.
+inputs:
+  issuer_id: { type: AppleIssuerId, description: "The App Store Connect API key's issuer id" }
+  key_id: { type: AppleKeyId, description: "The App Store Connect API key's key id" }
+  identifier: { type: AppleBundleIdentifier, description: "The bundle identifier string to register, e.g. com.example.MyApp" }
+  name: { type: AppleBundleIdName, description: "The bundle id's human-written name" }
+  platform: { type: AppleBundleIdPlatform, description: "IOS, MAC_OS, or UNIVERSAL" }
+steps:
+  key_raw:
+    tool: env.get
+    with:
+      name: WILLIKINS_ASC_API_KEY_PEM
+  key:
+    tool: apple.signing_key.parse
+    with:
+      value: ${{ steps.key_raw.value }}
+  bundle_id:
+    tool: appstore.bundle_id.ensure
+    with:
+      issuer_id: ${{ inputs.issuer_id }}
+      key_id: ${{ inputs.key_id }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.identifier }}
+      name: ${{ inputs.name }}
+      platform: ${{ inputs.platform }}
+outputs:
+  id: ${{ steps.bundle_id.id }}
+  identifier: ${{ steps.bundle_id.identifier }}

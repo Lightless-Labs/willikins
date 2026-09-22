@@ -1,0 +1,71 @@
+# The operator's own chain, extended to a real Apple tool: all three
+# parts of the App Store Connect credential resolved out of their sandbox
+# Doppler workplace, project `app-store-connect`, config `prd` --
+# ASC_API_KEY_ISSUER_ID and ASC_API_KEY_ID as plain Doppler variables
+# (read through `doppler.value.get`, never `doppler.secret.get`: choosing
+# that tool over this one is the declaration that these two are not
+# secrets), and ASC_API_KEY_BASE64 -- the private key, base64-wrapped,
+# THIS OPERATOR'S habit and not a standard -- decoded and parsed in two
+# separate steps, then handed to `appstore.bundle_id.ensure` alongside
+# `identifier`/`name`/`platform`.
+#
+# This document is one half of the proof that the credential's three
+# parts are genuinely free ports, not something bundled: see
+# appstore-bundle-id-from-inputs.yaml for the other half, where the two
+# ids arrive as plain workflow inputs instead and the key is read from a
+# bare environment variable with no base64 layer. Both documents reach
+# the same real tool, `appstore.bundle_id.ensure`, which is the proof
+# `workflows/apple-signing-credential-from-doppler.yaml`'s own header
+# comment named as still missing when it was written ("There is no Apple
+# tool in this workspace yet to hand the three resolved parts to").
+name: appstore-bundle-id-from-doppler
+description: Resolve the App Store Connect credential from Doppler and register a bundle identifier.
+inputs:
+  config: { type: DopplerConfig, description: "Doppler config holding the credential, e.g. app-store-connect/prd" }
+  identifier: { type: AppleBundleIdentifier, description: "The bundle identifier string to register, e.g. com.example.MyApp" }
+  name: { type: AppleBundleIdName, description: "The bundle id's human-written name" }
+  platform: { type: AppleBundleIdPlatform, description: "IOS, MAC_OS, or UNIVERSAL" }
+steps:
+  issuer_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ISSUER_ID
+  issuer_id:
+    tool: apple.issuer_id.parse
+    with:
+      value: ${{ steps.issuer_id_text.value }}
+  key_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ID
+  key_id:
+    tool: apple.key_id.parse
+    with:
+      value: ${{ steps.key_id_text.value }}
+  key_base64:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_BASE64
+  key_decoded:
+    tool: base64.decode
+    with:
+      value: ${{ steps.key_base64.value }}
+  key:
+    tool: apple.signing_key.parse
+    with:
+      value: ${{ steps.key_decoded.value }}
+  bundle_id:
+    tool: appstore.bundle_id.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.identifier }}
+      name: ${{ inputs.name }}
+      platform: ${{ inputs.platform }}
+outputs:
+  id: ${{ steps.bundle_id.id }}
+  identifier: ${{ steps.bundle_id.identifier }}
