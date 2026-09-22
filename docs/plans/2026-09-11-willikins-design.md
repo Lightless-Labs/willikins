@@ -8,6 +8,7 @@
 **Addendum:** 2026-09-11 — task 2 verification: pascal is not injective for digit-only words; accepted, since pascal never feeds a natural key.
 **Addendum:** 2026-09-14 — license changed from MIT to AGPL-3.0-or-later at the operator's request when the public repository (github.com/Lightless-Labs/willikins) was created; the decisions table row updated. CI decision recorded for milestone 3: every secret lives in Doppler and Buildkite holds one CI/CD Doppler service-account token, so no per-repository secret is ever pushed into CI; willikins must be able to provision the Buildkite pipeline when a workflow asks for it, so the Buildkite provider moves from milestone 4 to milestone 3 in the list below.
 **Addendum:** 2026-09-15 — milestone 2c added to the list below: OAuth 2.1 on the MCP transport and a browser login on the approvals page, scheduled right after milestone 2 because static bearer tokens are sandbox-grade and the service gets no public domain until then.
+**Addendum:** 2026-09-22 — first live verification of the App Store Connect provider against a real developer account: `filter[identifier]` matches by **substring**, not exactly, so the byte-for-byte compare is load-bearing and the read now paginates. A provider's filter is a narrowing hint, never a key. See "Credentials are ports, resolvers are nodes" below and `docs/research/2026-09-16-app-store-connect.md`.
 **Addendum:** 2026-09-12 — milestone 2 plan: two kinds of secret (graph secrets behind `SinkToken`, execution-context credentials behind one `authorize` function and a clippy entry); TLS terminated at the platform edge; the remote server plans and applies by workflow name only; a tool refuses rather than reconciles a non-key attribute it should not change; composition split out of milestone 2 into its own plan. See "Milestone 2 decisions".
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
@@ -374,6 +375,22 @@ These came up from memory during the conversation and have not been checked.
   document hitting that drift fails at `plan()` instead, same as every other tool's terminal
   mismatch. Left as a recorded gap rather than a cross-cutting change to `Observation`/`Action`
   this task's scope did not cover.
+- **`filter[identifier]` matches by substring, so the read paginates** (2026-09-22, the first
+  live verification this design has had against a real App Store Connect account). The
+  App Store Connect research note listed "does `filter[identifier]` match exactly, by prefix, or
+  by substring?" as its single load-bearing unknown, and the answer turned out to be the worst of
+  the three: filtering for a strict prefix of a real identifier, and separately for a strict
+  suffix of the same one, each returned that identifier's row. Two things follow.
+  `appstore.bundle_id.ensure`'s client-side byte-for-byte comparison, written when the semantics
+  were merely unknown, is now the only thing standing between a read for `com.acme.app` and a
+  `Present` reported for `com.acme.app.extension` — load-bearing, not defensive. And the read must
+  paginate, because a substring filter's result set is "every identifier on the team containing
+  this string", so the exact match can sort onto a later page; an unpaginated read would have
+  reported `Absent` for a record that exists, then created it, taken Apple's duplicate error, and
+  failed. `AppstoreClient::list_bundle_ids` now requests `limit=200` and follows `links.next`.
+  The general lesson for every future provider: **a provider's filter is a narrowing hint, never
+  a key**, and a read keyed on a filtered list owes the key an exact comparison *and* a page loop.
+  Details and method in `docs/research/2026-09-16-app-store-connect.md`, "Settled live, 2026-09-22".
 - **"One bootstrap token" lives in the platform, not the binary** (refines "Doppler as the
   vault, one bootstrap token"). The butler's own provider credentials stay in Doppler, and
   Doppler's native Railway integration syncs them into the service's environment; the
