@@ -33,10 +33,23 @@
 //! plain `cargo test --workspace` never builds it. `#[ignore]` on top of
 //! that, and inert even under `--ignored` unless `WILLIKINS_LIVE_TESTS=1`.
 //!
+//! The three credential parts live in the operator's **sandbox Doppler
+//! workplace**, project `app-store-connect`, config `prd` -- *not* in
+//! `~/.config/willikins/sandbox.env`, which holds only the Doppler token
+//! that unlocks them. Resolve them in the same command, so no value ever
+//! reaches a file, a log, or a command line:
+//!
 //! ```text
-//! source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_TESTS=1 \
-//!   RUST_TEST_THREADS=2 cargo test -p willikins-providers-appstore \
-//!   --features live-tests --test live_write_cycle -j 2 -- --ignored --nocapture
+//! source ~/.config/willikins/sandbox.env \
+//!   && J=$(curl -sf -H "Authorization: Bearer $WILLIKINS_DOPPLER_TOKEN" \
+//!        "https://api.doppler.com/v3/configs/config/secrets/download?project=app-store-connect&config=prd&format=json") \
+//!   && export ASC_API_KEY_ISSUER_ID=$(jq -r .ASC_API_KEY_ISSUER_ID <<<"$J") \
+//!             ASC_API_KEY_ID=$(jq -r .ASC_API_KEY_ID <<<"$J") \
+//!             ASC_API_KEY_BASE64=$(jq -r .ASC_API_KEY_BASE64 <<<"$J") \
+//!   && unset J \
+//!   && WILLIKINS_LIVE_TESTS=1 RUST_TEST_THREADS=2 cargo test \
+//!        -p willikins-providers-appstore --features live-tests \
+//!        --test live_write_cycle -j 2 -- --ignored --nocapture
 //! ```
 //!
 //! No `gh` command is run. Nothing here prints a credential, a JWT, or
@@ -57,18 +70,84 @@ fn credential_parts() -> (AppleIssuerId, AppleKeyId, AppleSigningKey) {
     let issuer_id = std::env::var("ASC_API_KEY_ISSUER_ID").expect("ASC_API_KEY_ISSUER_ID is set");
     let key_id = std::env::var("ASC_API_KEY_ID").expect("ASC_API_KEY_ID is set");
     let key_base64 = std::env::var("ASC_API_KEY_BASE64").expect("ASC_API_KEY_BASE64 is set");
-    let key_pem = String::from_utf8(
-        base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            key_base64.trim(),
-        )
-        .expect("ASC_API_KEY_BASE64 decodes as base64"),
+    let key_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        key_base64.trim(),
     )
-    .expect("the decoded key is valid UTF-8");
+    .unwrap_or_else(|_| panic!("ASC_API_KEY_BASE64 does not decode as base64"));
+    // `String::from_utf8`'s `FromUtf8Error` carries the bytes it
+    // rejected in its `Debug`, so an `.expect()` here would print the
+    // decoded private key into the test log on exactly the run where
+    // something went wrong. Drop the error instead.
+    let key_pem = String::from_utf8(key_bytes)
+        .unwrap_or_else(|_| panic!("the decoded ASC_API_KEY_BASE64 is not valid UTF-8"));
     (
         AppleIssuerId::parse(&issuer_id).expect("ASC_API_KEY_ISSUER_ID is a valid issuer id"),
         AppleKeyId::parse(&key_id).expect("ASC_API_KEY_ID is a valid key id"),
-        AppleSigningKey::parse(&key_pem).expect("ASC_API_KEY_BASE64 decodes to a valid key"),
+        AppleSigningKey::parse(&key_pem)
+            .unwrap_or_else(|_| panic!("ASC_API_KEY_BASE64 does not decode to a valid P-256 key")),
+    )
+}
+
+/// The account's real bundle identifier **count**, by paginating
+/// `GET /v1/bundleIds?limit=200` and counting rows. Never returns or
+/// prints an identifier: the whole point is to prove that the count
+/// after this run equals the count before it, which a filtered read for
+/// a string nothing matches cannot do.
+fn count_bundle_ids(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+) -> usize {
+    let http = willikins_providers_http::Http::new(
+        willikins_providers_appstore::APPSTORE_API_BASE_URL,
+        Vec::new(),
+        bearer_for(issuer_id, key_id, key),
+    );
+    let mut path = "/v1/bundleIds?limit=200".to_string();
+    let mut total = 0usize;
+    for _ in 0..50 {
+        let page: serde_json::Value = http
+            .get(&path)
+            .unwrap_or_else(|err| panic!("GET {path} failed: {err}"));
+        total += page
+            .get("data")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, Vec::len);
+        let Some(next) = page
+            .pointer("/links/next")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return total;
+        };
+        path = next
+            .strip_prefix(willikins_providers_appstore::APPSTORE_API_BASE_URL)
+            .unwrap_or_else(|| panic!("links.next is not on Apple's own host"))
+            .to_string();
+    }
+    panic!("more than 50 pages of bundle ids -- refusing to keep paging");
+}
+
+/// One freshly minted ES256 JWT, wrapped as a bearer `Credential`.
+#[allow(clippy::disallowed_methods)] // a live test mints its own token
+fn bearer_for(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+) -> willikins_providers_http::Credential {
+    let credential = willikins_providers_http::AppleSigningCredential::new(issuer_id, key_id, key)
+        .expect("builds a credential from the sandbox key");
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    )
+    .unwrap_or(i64::MAX);
+    let token = credential.sign(now).expect("signs a token");
+    willikins_providers_http::Credential::from_bearer_token(
+        "WILLIKINS_APPSTORE_LIVE_WRITE_CYCLE",
+        token.as_str().to_owned(),
     )
 }
 
@@ -138,44 +217,29 @@ fn appstore_live_write_cycle() {
     let client = Arc::new(AppstoreClient::new(willikins_providers_http::Http::new(
         willikins_providers_appstore::APPSTORE_API_BASE_URL,
         Vec::new(),
-        {
-            let credential =
-                willikins_providers_http::AppleSigningCredential::new(&issuer_id, &key_id, &key)
-                    .expect("builds a credential from the sandbox key");
-            let now = i64::try_from(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-            )
-            .unwrap_or(i64::MAX);
-            let token = credential.sign(now).expect("signs a token");
-            willikins_providers_http::Credential::from_bearer_token(
-                "WILLIKINS_APPSTORE_LIVE_WRITE_CYCLE",
-                token.as_str().to_owned(),
-            )
-        },
+        bearer_for(&issuer_id, &key_id, &key),
     )));
 
-    // Report the count before this run touches anything.
-    let count_before = client
-        .list_bundle_ids(&AppleBundleIdentifier::parse("com.willikins.probe.count-only").unwrap())
-        .map_or(0, |matches| matches.len());
-    println!(
-        "sanity read before this run (must be 0, since no real identifier is this string): \
-         {count_before}"
-    );
+    // The real count before this run touches anything -- the figure the
+    // count after the delete must equal exactly.
+    let count_before = count_bundle_ids(&issuer_id, &key_id, &key);
+    println!("WRITE-CYCLE bundle id count BEFORE: {count_before}");
 
     let identifier = throwaway_identifier();
     let tool = AppstoreBundleIdEnsure::new(willikins_providers_appstore::APPSTORE_API_BASE_URL);
 
+    // Cloned, not moved: the same three parts are needed again after the
+    // delete, to re-count the account and prove it is where it started.
     let mut inputs = willikins_core::Inputs::new();
     inputs.insert(
         PortName::parse("issuer_id").unwrap(),
-        Value::known(issuer_id),
+        Value::known(issuer_id.clone()),
     );
-    inputs.insert(PortName::parse("key_id").unwrap(), Value::known(key_id));
-    inputs.insert(PortName::parse("key").unwrap(), Value::known(key));
+    inputs.insert(
+        PortName::parse("key_id").unwrap(),
+        Value::known(key_id.clone()),
+    );
+    inputs.insert(PortName::parse("key").unwrap(), Value::known(key.clone()));
     inputs.insert(
         PortName::parse("identifier").unwrap(),
         Value::known(identifier.clone()),
@@ -237,6 +301,15 @@ fn appstore_live_write_cycle() {
         "expected Absent after delete, got {after_delete:?}"
     );
     guard.disarm();
+
+    // Re-list and prove the account is exactly where it started.
+    let count_after = count_bundle_ids(&issuer_id, &key_id, &key);
+    println!("WRITE-CYCLE bundle id count AFTER: {count_after}");
+    assert_eq!(
+        count_before, count_after,
+        "the account's bundle id count changed across this run -- something this test created \
+         was not cleaned up, or something else changed the account while it ran"
+    );
 
     println!("throwaway identifier `{identifier}` deleted; write cycle complete");
 }
