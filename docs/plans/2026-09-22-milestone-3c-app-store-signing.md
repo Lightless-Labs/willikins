@@ -14,6 +14,41 @@ Program Roles profile rows). Every Apple fact below is quoted verbatim in one of
 **Depends on:** the bundle-identifier provider that landed 2026-09-22 without a plan of its own (see
 "Retrospective"), whose `AppstoreClient`, credential ports and paginated exact-compare read this
 milestone reuses unchanged.
+**Addendum:** 2026-09-22 (task 2 lane) — the SHARED VALUES row for the profile tool's `certificate`
+port, and decision (c)'s closing sentence, said `exact_derived_only("AppleCertificateId")` so "a
+document cannot paste a certificate id literal and route around the selection tool's refusals". That
+is unbuildable as written: `willikins-core/src/check.rs`'s `Resolver::is_derived_binding` refuses a
+`derived_only` port bound to **any** pure node's output, not only a literal or a passthrough, and its
+own doc comment says why — "a pure tool is evaluated from its own inputs alone (`plan` runs it during
+planning ...), so accepting one here would let a document launder a literal through a passthrough node
+and defeat the whole restriction". `appstore.certificate.get` is `pure: true` (decision (c), landed in
+task 1: `ToolSpec`, its fake twin, and `catalog_parity`/`fake_agrees_with_live` all already pin it).
+So the positive document this same plan asks for — `certificate` bound from the certificate node's own
+output — would fail `check` with `UnderivedBinding` on its own tool the moment it was written, and
+every fixture built on it would be moot. Two ways out: flip `appstore.certificate.get` to `pure: false`
+(rippling through task 1's already-committed `ToolSpec`, fake twin, and parity snapshot, for a tool that
+does exactly one real-world thing — a read — and whose own module doc explicitly models it on
+`buildkite.cluster.get`'s `pure: true`), or drop `derived_only` from the port. Widening `check.rs`'s
+`derived_only` rule with a "pure but not identity" carve-out is a cross-cutting change to a shared
+invariant (`doppler.secret.set`'s own provenance rule rests on the same mechanism) and is out of scope
+for a profile tool.
+
+**Decision:** drop `derived_only`; `appstore.profile.ensure`'s `certificate` port is
+`exact("AppleCertificateId", true)`, an ordinary required non-secret port, same as every other
+port on this tool. This is a real, stated trade, in the same category as `appstore.bundle_id.ensure`'s
+own documented gap (its module doc, "This is a real, stated trade"): an operator who already holds a
+valid `AppleCertificateId` (read by hand, or from a previous run's output) can paste it as a literal,
+bypassing `appstore.certificate.get`'s ambiguity and health refusals for *that one call*. It does not
+weaken the type system's own invariant (a secret output binds only to a secret-accepting input) —
+`AppleCertificateId` is not secret and never was. Every other document that *wants* the selection
+tool's refusals still gets them by construction, by chaining `appstore.certificate.get` before
+`appstore.profile.ensure` and binding `certificate` from its output, which is what the positive
+document in this plan does; nothing stops a document from doing that today, and nothing in `check`
+needs to force it. If a later, cross-cutting milestone gives `check.rs` a narrower "derived, or the
+output of a pure node whose own inputs came from a derived-only-satisfying source" rule, this port can
+tighten to it then. The SHARED VALUES table and decision (c)/(e) below are corrected to read `(no)`,
+not `(no, derived only)`.
+
 **Addendum:** 2026-09-22 (task 1 lane) — decision (g)'s certificate-write guard was written against a
 literal `.post(`/`.patch(`/`.delete(` substring, matching `no_gh_writes_guard.rs`'s own style. Proving
 it non-vacuous (a scratch `POST` planted in `client.rs`, per this plan's own instruction) found that
@@ -101,7 +136,7 @@ Implementers read this table instead of their prompts. Nothing here may be retyp
 | Profile tool | `appstore.profile.ensure` |
 | Certificate tool inputs | `issuer_id: AppleIssuerId` (no), `key_id: AppleKeyId` (no), `key: AppleSigningKey` (**secret**), `certificate_type: AppleCertificateType` (no), `serial_number: AppleCertificateSerial` (no) — all required |
 | Certificate tool outputs | `certificate: AppleCertificateId` (no) |
-| Profile tool inputs | `issuer_id: AppleIssuerId` (no), `key_id: AppleKeyId` (no), `key: AppleSigningKey` (**secret**), `identifier: AppleBundleIdentifier` (no), `name: AppleProfileName` (no), `profile_type: AppleProfileType` (no), `certificate: AppleCertificateId` (no, **derived only**) — all required |
+| Profile tool inputs | `issuer_id: AppleIssuerId` (no), `key_id: AppleKeyId` (no), `key: AppleSigningKey` (**secret**), `identifier: AppleBundleIdentifier` (no), `name: AppleProfileName` (no), `profile_type: AppleProfileType` (no), `certificate: AppleCertificateId` (no — an ordinary required port, **not** derived-only; see the 2026-09-22 task-2 Addendum above) — all required |
 | Profile tool outputs | `profile: AppleProfileId` (no), `content: AppleProfileContent` (**secret**) |
 | Profile tool key | `identifier`, `name` |
 | In-scope profile types | `IOS_APP_STORE` only. `AppleProfileType`'s grammar admits nothing else |
@@ -271,9 +306,11 @@ deactivated** → `ToolError::Conflict` saying so. No certificate is ever picked
 one: that is exactly the guess the design rejects ("correct until someone adds a second one"), and this
 team had three earlier today.
 
-The profile tool's `certificate` port is `exact_derived_only("AppleCertificateId")`, the pattern
-`doppler.secret.set`'s `config` uses: a document cannot paste a certificate id literal and route around
-the selection tool's refusals.
+The profile tool's `certificate` port is an ordinary required non-secret `AppleCertificateId` port, not
+`exact_derived_only` — see the 2026-09-22 task-2 Addendum in this plan's header for why the
+`exact_derived_only("AppleCertificateId")` this decision originally specified is unbuildable
+(`check.rs` refuses a `derived_only` port bound to any pure node's output, and
+`appstore.certificate.get` is pure) and what residual trade dropping it accepts.
 
 ### (d) No `PATCH`: ensure creates or reports; drift is terminal
 
@@ -420,7 +457,7 @@ SHA-256 digests (never the value), delete the throwaway config — the method th
 | Tool | Inputs | Outputs | Key | Class | Pure |
 | --- | --- | --- | --- | --- | --- |
 | `appstore.certificate.get` | `issuer_id`, `key_id`, `key`, `certificate_type`, `serial_number` | `certificate: AppleCertificateId` | — | `Reversible` | yes |
-| `appstore.profile.ensure` | `issuer_id`, `key_id`, `key`, `identifier`, `name`, `profile_type`, `certificate` (derived only) | `profile: AppleProfileId`, `content: AppleProfileContent` (secret) | `identifier`, `name` | `Reversible` | no |
+| `appstore.profile.ensure` | `issuer_id`, `key_id`, `key`, `identifier`, `name`, `profile_type`, `certificate` (ordinary, not derived-only — task-2 Addendum) | `profile: AppleProfileId`, `content: AppleProfileContent` (secret) | `identifier`, `name` | `Reversible` | no |
 
 `Reversible` for the profile: a profile can be deleted and recreated with no effect beyond its
 `uuid`, and nothing a profile create does touches the certificate or the identifier.
@@ -435,8 +472,10 @@ certificate node; a `doppler.config.ensure` for the destination (because `dopple
 `config` port is derived-only); and `doppler.secret.set` binding `value` ←
 `steps.profile.content`, under a `SecretName` input the document chooses (policy in the workflow).
 Negative fixtures under `workflows/fixtures/`, each with a header naming its acceptance test and exact
-error: a development profile type; a literal certificate id bound to `certificate`; the profile's
-`content` bound to a non-secret port.
+error: a development profile type; the bundle id node's opaque `id` output (`AppleBundleIdId`) bound to
+`certificate` instead of an `AppleCertificateId` (`certificate` is an ordinary typed port, not
+derived-only — task-2 Addendum — so it still refuses a wrong *type*, just not a right-typed literal);
+the profile's `content` bound to a non-secret port.
 
 ## Acceptance tests
 
