@@ -3,11 +3,77 @@
 Current state of the project and active work. Read this at session start. Update before
 compaction, before handing off, after a milestone, and after a plan change or discovery.
 
-**Last updated:** 2026-09-14 (midday)
+**Last updated:** 2026-09-22
 
 ## Current Status
 
-### RESUME HERE (2026-09-20, evening) — milestones 2 and 3a are complete and a full live rehearsal against the sandbox accounts found two real defects, now fixed and being verified. A five-project survey of the operator's own work produced a ranked gap list whose rank 1 blocks everything: **no tool can put a file in a repository.** That is milestone 3b and it is next. Milestone 2c (willikins as its own authorisation server) came back onto the critical path when the operator said they want to use willikins from the Claude or ChatGPT iOS apps
+### RESUME HERE (2026-09-22) — the resolver chain is on `main`; the App Store Connect lane is in flight; secrecy inference is the agreed next milestone
+
+- **Live state:** `main` at `c86276c`. All four gates green on that tree: fmt, clippy,
+  **153 suites / 2047 tests**, `cargo check -p willikins-types`. One file is deliberately
+  untracked — `crates/willikins-providers-http/src/apple_credential.rs` — see "the
+  correction" below. Do not commit it as it stands.
+- **What just landed (`438bf24`), and where it came from.** A lane was killed mid-flight on
+  2026-09-21 for building the credential in the wrong shape. Its *completed* work was good
+  and the coordinator gated and committed it rather than discarding it: `env.get` (the
+  zero-dependency resolver the operator asked for by name, its `EnvVarName` port bounded to
+  the `WILLIKINS_` namespace so a document cannot express a bind to `PATH`), `base64.decode`
+  (transform, `OpaqueSecret` to `OpaqueSecret`), and `apple.signing_key.parse` (parse,
+  producing `AppleSigningKey`; accepts PKCS#8 **and** SEC1 and canonicalises to PKCS#8,
+  because the container format is a property of the key rather than of anyone's storage
+  habit). `OpaqueSecret` is the blob-in-port-clothing between them. The commit also widens
+  `tests/expose_secret_guard.rs` from one exempt file per crate to a list; both new
+  exemptions are **function-scoped**, not whole-file, and the negative test still proves a
+  wrong function name produces violations.
+- **The correction the killed lane earned.** It wrote the Apple credential as a bundled
+  triple taking `issuer_id: impl Into<String>` and `key_id: impl Into<String>`, and
+  `appstore.rs` still claims the two ids are "not domain types: they carry no shape of
+  their own". That is wrong on the facts (the issuer id is a UUID, the key id a short
+  alphanumeric) and wrong on the design, because a part that is not a domain type cannot be
+  a port, and a part that is not a port can only come from execution context. The operator:
+  *"But all this is specific to *my* workflow, correct? Others might wish to provide them
+  via env variables or as input params"*. **Only the private key is secret** — the research
+  note says so in as many words. So: three separate ports, the two ids non-secret and
+  bindable to a literal, a workflow input or any node output; the key secret and therefore
+  never a workflow input, because inputs are journaled.
+- **Two walls found while relaunching, both confirmed empirically, both decided.**
+  1. `doppler.secret.get` emits `DopplerSecretValue` but `base64.decode` declared
+     `exact("OpaqueSecret", true)`, so the operator's own chain did not `check`. The fix is
+     **not** to migrate `DopplerSecretValue` (~80 references); it is `any_secret(true)`, the
+     helper `doppler.secret.set` already uses to receive a SigNoz key. Taint is unaffected.
+  2. Non-secret ports cannot be fed from a secret-only vault read. Resolved by the operator
+     choosing an **ungated** `doppler.value.get`: choosing that tool over `doppler.secret.get`
+     *is* the author's declaration of non-secrecy. Deliberately no gate on Doppler's
+     `computedVisibility`, because *"I only ever mark Doppler secrets as masked, no
+     restricted, so....."* — an `unmasked` gate would refuse their entire vault. Its module
+     doc must state plainly that an author who points it at a genuine secret has
+     declassified it and nothing will stop them.
+- **In flight:** Workflow `wf_25122a8e-46b` (script at `scratchpad/asc.js`), three phases —
+  sonnet lands the two id types and rewires the signer, sonnet lands
+  `crates/willikins-providers-appstore`, opus attacks it and probes the live account. It
+  must ship **two** workflow documents, the operator's all-from-Doppler chain and one taking
+  the ids as plain workflow inputs; the second is the proof the ports are genuinely free.
+- **The live Apple account is the operator's production developer account.** Read-only
+  first, report the identifier count, then at most ONE throwaway identifier on an obviously
+  foreign reverse domain, created and deleted in the same guarded test with the count
+  re-checked. Never touch anything that already exists. Precedent: the SigNoz lane did
+  exactly this on their production SigNoz account.
+- **Next milestone, already agreed and specified:** secrecy inference, in
+  `todos/2026-09-22-secrecy-inference.md`. Infer a resolved value's secrecy from use sites
+  instead of declaring it at the source — a join over use sites, solved **backwards** from
+  the ports that require secrets, in a single reverse-topological pass because the graph is
+  a DAG. It needs a per-tool secrecy signature (transparent / polymorphic source / fixed)
+  and it deletes `doppler.value.get` by making it redundant. It must be enforceable with
+  types in two layers, with the honest limit that rustc cannot check a YAML document read at
+  runtime. Sequencing was the operator's call: Apple first, inference next.
+- **Still open from before:** willikins renders 401 and 403 identically, which once let a
+  lane believe it had verified live. File-writing (milestone 3b, rank 1 in the survey) is
+  deprioritised by the operator — *"File-writing is like, the least inconvenient part for
+  me."* Milestone 2c (own authorisation server) remains shelved but on the critical path for
+  using willikins from the Claude or ChatGPT iOS apps. The two Doppler tokens pasted in chat
+  on 2026-09-21 should be rotated.
+
+### Earlier (2026-09-20, evening) — milestones 2 and 3a are complete and a full live rehearsal against the sandbox accounts found two real defects, now fixed and being verified. A five-project survey of the operator's own work produced a ranked gap list whose rank 1 blocks everything: **no tool can put a file in a repository.** That is milestone 3b and it is next. Milestone 2c (willikins as its own authorisation server) came back onto the critical path when the operator said they want to use willikins from the Claude or ChatGPT iOS apps
 
 - **Live state:** `main` at 348 commits, gates green at `1bc23f5` (1,704 tests; the ignored ones
   are by-hand measurements, a lock-probe child, two slow connection-holding attacks, a
