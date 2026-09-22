@@ -157,7 +157,7 @@ pub mod text;
 pub mod word;
 pub mod workflow_name;
 
-pub use appstore::AppleSigningKey;
+pub use appstore::{AppleIssuerId, AppleKeyId, AppleSigningKey};
 pub use buildkite::{
     BuildkiteClusterId, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug,
 };
@@ -214,6 +214,8 @@ registry::domain_types! {
     SigNozIngestionKeyValue,
     OpaqueSecret,
     AppleSigningKey,
+    AppleIssuerId,
+    AppleKeyId,
 }
 
 /// Assert that `T::example()` parses as `T`.
