@@ -1,0 +1,9 @@
+{
+  "errors": [
+    {
+      "status": "500",
+      "code": "GENERAL_ERROR",
+      "title": "An internal server error occurred"
+    }
+  ]
+}

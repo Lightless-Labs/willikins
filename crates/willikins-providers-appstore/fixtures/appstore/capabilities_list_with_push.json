@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "type": "bundleIdCapabilities",
+      "id": "CAP1234567",
+      "attributes": {
+        "capabilityType": "PUSH_NOTIFICATIONS",
+        "settings": []
+      },
+      "relationships": {
+        "bundleId": {"links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities/CAP1234567/relationships/bundleId"}}
+      }
+    }
+  ]
+}

@@ -12,6 +12,7 @@ members = [
   "crates/willikins-providers-doppler",
   "crates/willikins-providers-buildkite",
   "crates/willikins-providers-signoz",
+  "crates/willikins-providers-appstore",
   "crates/willikins-journal",
   "crates/willikins-server",
   "crates/willikins-cli",
@@ -37,6 +38,7 @@ willikins-providers-github = { path = "crates/willikins-providers-github" }
 willikins-providers-doppler = { path = "crates/willikins-providers-doppler" }
 willikins-providers-buildkite = { path = "crates/willikins-providers-buildkite" }
 willikins-providers-signoz = { path = "crates/willikins-providers-signoz" }
+willikins-providers-appstore = { path = "crates/willikins-providers-appstore" }
 willikins-journal = { path = "crates/willikins-journal" }
 willikins-server = { path = "crates/willikins-server" }
 

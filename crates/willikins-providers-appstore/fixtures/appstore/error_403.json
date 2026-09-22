@@ -1,0 +1,10 @@
+{
+  "errors": [
+    {
+      "status": "403",
+      "code": "FORBIDDEN_ERROR",
+      "title": "The given operation is not allowed",
+      "detail": "The provided credential does not have access to this resource"
+    }
+  ]
+}

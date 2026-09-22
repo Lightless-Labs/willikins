@@ -1,0 +1,19 @@
+{
+  "data": {
+    "type": "bundleIds",
+    "id": "T6G4XCV345",
+    "attributes": {
+      "identifier": "com.example.MyApp",
+      "name": "third-thoughts",
+      "platform": "UNIVERSAL",
+      "seedId": "ABCDE12345"
+    },
+    "relationships": {
+      "profiles": {"links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIds/T6G4XCV345/relationships/profiles"}},
+      "bundleIdCapabilities": {"links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIds/T6G4XCV345/relationships/bundleIdCapabilities"}},
+      "app": {"links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIds/T6G4XCV345/relationships/app"}}
+    },
+    "links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIds/T6G4XCV345"}
+  },
+  "links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIds/T6G4XCV345"}
+}
