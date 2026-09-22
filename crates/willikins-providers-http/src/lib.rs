@@ -55,8 +55,8 @@ pub mod testing;
 pub use apple_credential::{AppleCredentialError, AppleSigningCredential, AppleToken};
 pub use credential::{Credential, CredentialError};
 pub use error::{
-    MAX_MESSAGE_CHARS, MISSING_PERMISSION, ProviderError, ProviderFacts, bounded_message,
-    provider_says,
+    MAX_MESSAGE_CHARS, MISSING_PERMISSION, ProviderError, ProviderFacts, UNAUTHENTICATED,
+    bounded_message, provider_says,
 };
 pub use http::{Http, MAX_RETRY_AFTER};
 pub use sleeper::{RealSleeper, Sleeper};

@@ -12,11 +12,33 @@ use std::time::Duration;
 
 use willikins_core::{ToolError, ToolErrorKind};
 
-/// What a `401` or `403` says instead of anything the provider sent.
-/// Applied where the error is *built*, not only where it becomes a
-/// [`ToolError`]: a `ProviderError` is public, carries a public `message`,
-/// and a provider crate may hold (or log) one long before any conversion.
+/// What a `403` says instead of anything the provider sent. Applied where
+/// the error is *built*, not only where it becomes a [`ToolError`]: a
+/// `ProviderError` is public, carries a public `message`, and a provider
+/// crate may hold (or log) one long before any conversion.
 pub const MISSING_PERMISSION: &str = "the credential is missing a permission this request needs";
+
+/// What a `401` says instead of anything the provider sent -- split from
+/// [`MISSING_PERMISSION`] because the two statuses mean different things
+/// and, before this split, read identically: a malformed or expired JWT
+/// (`401`) and a role that genuinely lacks a permission (`403`) both said
+/// "the credential is missing a permission this request needs", which is
+/// how a lane once believed it had verified a live App Store Connect
+/// credential when the JWT itself was rejected. Deliberately carries no
+/// word "permission" -- the point is that it reads differently from
+/// [`MISSING_PERMISSION`], not merely that it is a different string.
+///
+/// **Honest limit, specific to App Store Connect** (and any provider like
+/// it): Apple's own status table says a `403` there can also mean "your
+/// API key is revoked" or "your token is incorrectly formatted" --
+/// exactly what this constant describes -- alongside "the requested
+/// operation is not allowed". So for such a provider a `403` is not proof
+/// of a role problem; this split is honest about the HTTP **status**, not
+/// about the cause behind it. A provider crate that knows more about its
+/// own `403` (GitHub's secondary rate limit, say) says so in its own
+/// client doc; this shared message stays status-shaped.
+pub const UNAUTHENTICATED: &str =
+    "the provider did not accept the credential itself (401): it is malformed, expired, or revoked";
 
 /// Repeat a provider's own words under a label, bounded and escaped.
 ///
@@ -179,9 +201,14 @@ impl From<ProviderError> for ToolError {
                 message: err.message,
             },
             // Belt and braces: `provider_error_from_body` already
-            // dropped the body for these two statuses, so this arm only
-            // matters for a `ProviderError` a provider crate built itself.
-            Some(401 | 403) => ToolError {
+            // dropped the body for these two statuses, so these two arms
+            // only matter for a `ProviderError` a provider crate built
+            // itself.
+            Some(401) => ToolError {
+                kind: ToolErrorKind::Provider,
+                message: UNAUTHENTICATED.to_string(),
+            },
+            Some(403) => ToolError {
                 kind: ToolErrorKind::Provider,
                 message: MISSING_PERMISSION.to_string(),
             },
@@ -255,13 +282,19 @@ mod tests {
         assert_eq!(tool_err.kind, ToolErrorKind::Provider);
     }
 
+    /// Was `permission_message_never_carries_the_body_on_401`, asserting
+    /// `contains("permission")`. The 401/403 split (milestone 3c, decision
+    /// (a)) changes what a `401` says: it is now [`UNAUTHENTICATED`],
+    /// carries no body, and -- the property that motivated the split --
+    /// no longer reads as a permission problem at all.
     #[test]
-    fn permission_message_never_carries_the_body_on_401() {
+    fn unauthenticated_message_never_carries_the_body_on_401() {
         let err = ProviderError::new(Some(401), "Bad credentials: ghp_SECRETVALUE");
         let tool_err: ToolError = err.into();
         assert_eq!(tool_err.kind, ToolErrorKind::Provider);
         assert!(!tool_err.message.contains("SECRETVALUE"));
-        assert!(tool_err.message.contains("permission"));
+        assert_eq!(tool_err.message, UNAUTHENTICATED);
+        assert!(!tool_err.message.contains("permission"));
     }
 
     #[test]
@@ -270,6 +303,18 @@ mod tests {
         let tool_err: ToolError = err.into();
         assert_eq!(tool_err.kind, ToolErrorKind::Provider);
         assert!(!tool_err.message.contains("SECRETVALUE"));
+        assert_eq!(tool_err.message, MISSING_PERMISSION);
+    }
+
+    /// Acceptance test 1 (milestone 3c): the two messages differ, and
+    /// `403`'s own wording is unchanged by the split.
+    #[test]
+    fn the_401_and_403_messages_differ_and_403_is_byte_for_byte_unchanged() {
+        let unauthenticated: ToolError = ProviderError::new(Some(401), "irrelevant body").into();
+        let missing_permission: ToolError = ProviderError::new(Some(403), "irrelevant body").into();
+        assert_ne!(unauthenticated.message, missing_permission.message);
+        assert_eq!(unauthenticated.message, UNAUTHENTICATED);
+        assert_eq!(missing_permission.message, MISSING_PERMISSION);
     }
 
     #[test]

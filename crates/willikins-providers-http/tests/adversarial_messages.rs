@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use willikins_core::{ToolError, ToolErrorKind};
-use willikins_providers_http::{Credential, Http, MAX_MESSAGE_CHARS, Sleeper};
+use willikins_providers_http::{
+    Credential, Http, MAX_MESSAGE_CHARS, MISSING_PERMISSION, Sleeper, UNAUTHENTICATED,
+};
 
 /// A distinctive string no message rule may ever let through.
 const MARKER: &str = "wlkn-adversarial-marker-8h3qz1v";
@@ -130,11 +132,29 @@ fn a_401_or_403_body_never_reaches_the_provider_error_message() {
             "ProviderError carried the {status} body: {}",
             err.message
         );
-        assert!(
-            err.message.contains("permission"),
-            "the {status} message should name the permission problem: {}",
-            err.message
-        );
+        // The 401/403 split (milestone 3c, decision (a)): the two
+        // statuses now read differently. A `401` means the credential
+        // itself was rejected and deliberately says nothing about a
+        // permission; a `403` still names the permission problem, byte
+        // for byte unchanged.
+        if status == 401 {
+            assert_eq!(
+                err.message, UNAUTHENTICATED,
+                "the 401 message: {}",
+                err.message
+            );
+            assert!(
+                !err.message.contains("permission"),
+                "the 401 message should not claim a permission problem: {}",
+                err.message
+            );
+        } else {
+            assert_eq!(
+                err.message, MISSING_PERMISSION,
+                "the 403 message: {}",
+                err.message
+            );
+        }
         let tool_err: ToolError = err.into();
         assert_eq!(tool_err.kind, ToolErrorKind::Provider);
         assert!(!tool_err.message.contains(MARKER));
