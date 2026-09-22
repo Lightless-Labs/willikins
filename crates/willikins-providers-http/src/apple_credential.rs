@@ -55,25 +55,45 @@
 //! never needed because it is never handed a domain type at all), but
 //! its own construction and its own one real method.
 //!
+//! # `new` takes no `SinkToken` — `willikins-providers-appstore`'s own
+//! `Tool::read` needs this constructor too, and `read` never receives one
+//!
+//! An earlier version of this constructor took `&SinkToken`, on the
+//! premise that the only caller would be inside `Tool::ensure` (mirroring
+//! `github.actions_secret.ensure`'s own use of `DomainObject::expose`).
+//! That premise does not survive contact with `willikins-providers-appstore`:
+//! `appstore.bundle_id.ensure`'s `Tool::read` must also mint a JWT, to
+//! make the authenticated `GET` `plan` depends on — and
+//! `willikins_core::Tool::read`'s contract is that it never receives a
+//! token, precisely so a provider `read` has no legitimate way to leak a
+//! secret. Since both `read` and `ensure` need the same construction,
+//! this type now builds it the same way either caller reaches it:
+//! through [`AppleSigningKey::reveal_for_signing`], that type's own
+//! narrow, token-less exception (see its doc for the full reasoning —
+//! the key is being *used as a credential*, the same role
+//! [`Credential::authorize`] plays for an environment-sourced one, never
+//! *moved* anywhere a document or an agent could read it back). This is
+//! not a general loosening: `AppleSigningKey` is still the only secret
+//! type this crate ever reads directly, and the only thing that ever
+//! leaves [`Self::new`] is this opaque credential and, from
+//! [`Self::sign`], an [`AppleToken`] with no [`std::fmt::Display`] at
+//! all.
+//!
 //! # What this does not yet build
 //!
-//! There is no Apple HTTP client in this workspace yet — that is a
-//! future provider crate, milestone 5's, mirroring
-//! `willikins-providers-github`/`-doppler`'s `Client` types. This type's
-//! [`AppleSigningCredential::sign`] is deliberately `pub`, not
-//! crate-private the way `Credential::authorize` is: that method stays
-//! private because `Http::apply_credential` is the *only* other thing in
-//! this crate that ever attaches it, but no such integration exists for a
-//! credential that must re-sign per call rather than being set once, so
-//! there is nothing in this crate yet to keep it private *from*. Building
-//! that integration (or the Apple client's own request path) is left to
-//! the provider crate that needs it; recorded as a gap here rather than
-//! guessed at.
+//! There is no Apple HTTP client in this workspace yet at the crate
+//! level — `willikins-providers-appstore` builds its own
+//! [`willikins_providers_http::Http`] per call, from a freshly minted
+//! [`AppleSigningCredential`], rather than holding one long-lived client
+//! the way `willikins-providers-buildkite`/`-doppler`/`-github` do (see
+//! that crate's own client module doc for why: there is no credential at
+//! construction time to build a long-lived `Http` from, and a document's
+//! `identifier`/`key_id`/`key` inputs are only known once `read` or
+//! `ensure` actually runs).
 
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::Serialize;
 
-use willikins_types::SinkToken;
 use willikins_types::{AppleIssuerId, AppleKeyId, AppleSigningKey};
 
 /// The audience every App Store Connect API JWT must carry. Apple's own
@@ -121,13 +141,12 @@ impl AppleSigningCredential {
     /// Build a credential from its already-resolved parts.
     ///
     /// Reads `key`'s PKCS#8 PEM bytes exactly once, through
-    /// [`AppleSigningKey::expose`], to build the
-    /// [`EncodingKey`] this type holds instead. `token` is not minted
-    /// here: it is a real [`SinkToken`] the caller already holds (inside
-    /// `Tool::ensure`, or a future Apple tool's own credential-binding
-    /// code), passed through exactly as `github.actions_secret.ensure`
-    /// passes one to `DomainObject::expose` — see that tool's module
-    /// doc.
+    /// [`AppleSigningKey::reveal_for_signing`] (this module's own doc,
+    /// "`new` takes no `SinkToken`"), to build the [`EncodingKey`] this
+    /// type holds instead. No token is needed, or accepted: the bytes
+    /// exist only inside the closure `reveal_for_signing` runs and
+    /// become, at most, this `EncodingKey` — never a `String` this
+    /// function's caller could hold onto or print.
     ///
     /// # Errors
     ///
@@ -151,10 +170,9 @@ impl AppleSigningCredential {
         issuer_id: &AppleIssuerId,
         key_id: &AppleKeyId,
         key: &AppleSigningKey,
-        token: &SinkToken,
     ) -> Result<Self, AppleCredentialError> {
-        let pem = key.expose(token);
-        let key = EncodingKey::from_ec_pem(pem.as_bytes())
+        let key = key
+            .reveal_for_signing(|pem| EncodingKey::from_ec_pem(pem.as_bytes()))
             .map_err(|_| AppleCredentialError::InvalidKey)?;
         Ok(Self {
             issuer_id: issuer_id.as_str().to_owned(),
@@ -264,11 +282,6 @@ mod tests {
     use super::*;
     use willikins_types::DomainType;
 
-    fn token() -> SinkToken {
-        #[allow(clippy::disallowed_methods)] // a test mints its own token
-        SinkToken::new()
-    }
-
     fn issuer_id() -> AppleIssuerId {
         AppleIssuerId::parse("57246542-96fe-1a63-e053-0824d011072a").unwrap()
     }
@@ -279,7 +292,7 @@ mod tests {
 
     fn credential() -> AppleSigningCredential {
         let key = AppleSigningKey::parse(AppleSigningKey::example()).unwrap();
-        AppleSigningCredential::new(&issuer_id(), &key_id(), &key, &token()).unwrap()
+        AppleSigningCredential::new(&issuer_id(), &key_id(), &key).unwrap()
     }
 
     /// Base64url-decode one dot-separated JWT segment to its JSON text,
