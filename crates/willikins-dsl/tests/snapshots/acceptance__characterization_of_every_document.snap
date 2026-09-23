@@ -1,0 +1,505 @@
+---
+source: crates/willikins-dsl/tests/acceptance.rs
+expression: report
+---
+=== workflows/apple-signing-credential-from-doppler.yaml ===
+WARNINGS:
+TYPES:
+issuer_id.config: DopplerConfig
+issuer_id.name: SecretName
+key_id.config: DopplerConfig
+key_id.name: SecretName
+key_base64.config: DopplerConfig
+key_base64.name: SecretName
+key_decoded.value: DopplerSecretValue
+key.value: OpaqueSecret
+OUTPUTS:
+issuer_id: Text
+key_id: Text
+PLAN:
+PLAN ERROR: node `issuer_id`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
+
+=== workflows/apple-signing-credential-from-inputs.yaml ===
+WARNINGS:
+TYPES:
+key_raw.name: EnvVarName
+key.value: OpaqueSecret
+OUTPUTS:
+issuer_id: AppleIssuerId
+key_id: AppleKeyId
+PLAN:
+PLAN ERROR: node `key_raw`: NotFound: environment variable `WILLIKINS_ASC_API_KEY_PEM` is not set
+
+=== workflows/appstore-bundle-id-from-doppler.yaml ===
+WARNINGS:
+TYPES:
+issuer_id_text.config: DopplerConfig
+issuer_id_text.name: SecretName
+issuer_id.value: Text
+key_id_text.config: DopplerConfig
+key_id_text.name: SecretName
+key_id.value: Text
+key_base64.config: DopplerConfig
+key_base64.name: SecretName
+key_decoded.value: DopplerSecretValue
+key.value: OpaqueSecret
+bundle_id.issuer_id: AppleIssuerId
+bundle_id.key_id: AppleKeyId
+bundle_id.key: AppleSigningKey
+bundle_id.identifier: AppleBundleIdentifier
+bundle_id.name: AppleBundleIdName
+bundle_id.platform: AppleBundleIdPlatform
+OUTPUTS:
+id: AppleBundleIdId
+identifier: AppleBundleIdentifier
+PLAN:
+PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
+
+=== workflows/appstore-bundle-id-from-inputs.yaml ===
+WARNINGS:
+TYPES:
+key_raw.name: EnvVarName
+key.value: OpaqueSecret
+bundle_id.issuer_id: AppleIssuerId
+bundle_id.key_id: AppleKeyId
+bundle_id.key: AppleSigningKey
+bundle_id.identifier: AppleBundleIdentifier
+bundle_id.name: AppleBundleIdName
+bundle_id.platform: AppleBundleIdPlatform
+OUTPUTS:
+id: AppleBundleIdId
+identifier: AppleBundleIdentifier
+PLAN:
+PLAN ERROR: node `key_raw`: NotFound: environment variable `WILLIKINS_ASC_API_KEY_PEM` is not set
+
+=== workflows/appstore-signing-profile-from-doppler.yaml ===
+WARNINGS:
+TYPES:
+issuer_id_text.config: DopplerConfig
+issuer_id_text.name: SecretName
+issuer_id.value: Text
+key_id_text.config: DopplerConfig
+key_id_text.name: SecretName
+key_id.value: Text
+key_base64.config: DopplerConfig
+key_base64.name: SecretName
+key_decoded.value: DopplerSecretValue
+key.value: OpaqueSecret
+bundle_id.issuer_id: AppleIssuerId
+bundle_id.key_id: AppleKeyId
+bundle_id.key: AppleSigningKey
+bundle_id.identifier: AppleBundleIdentifier
+bundle_id.name: AppleBundleIdName
+bundle_id.platform: AppleBundleIdPlatform
+certificate.issuer_id: AppleIssuerId
+certificate.key_id: AppleKeyId
+certificate.key: AppleSigningKey
+certificate.certificate_type: AppleCertificateType
+certificate.serial_number: AppleCertificateSerial
+profile.issuer_id: AppleIssuerId
+profile.key_id: AppleKeyId
+profile.key: AppleSigningKey
+profile.identifier: AppleBundleIdentifier
+profile.name: AppleProfileName
+profile.profile_type: AppleProfileType
+profile.certificate: AppleCertificateId
+destination.project: DopplerProject
+destination.environment: EnvironmentSlug
+store.config: DopplerConfig
+store.name: SecretName
+store.value: AppleProfileContent
+OUTPUTS:
+profile: AppleProfileId
+PLAN:
+PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
+
+=== workflows/doppler-backend-for-ios.yaml ===
+WARNINGS:
+TYPES:
+configs.project: DopplerProject
+configs.environment: EnvironmentSlug
+inherit.config: DopplerConfig
+inherit.inherits: list<DopplerConfig>
+OUTPUTS:
+project: DopplerProject
+PLAN:
+plan_json: {"workflow":"doppler-backend-for-ios","nodes":[{"name":"configs","instance":"dev","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"dev"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"}}},{"name":"configs","instance":"stg","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"stg"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"}}},{"name":"configs","instance":"prd","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}},{"name":"inherit","instance":"third-thoughts/dev","tool":"doppler.config.inherits.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"},"inherits":{"type":"DopplerConfig","list":true,"state":"known","value":["lightless-labs-shared/ios_base","lightless-labs-shared/backend_base"]}},"outputs":{}},{"name":"inherit","instance":"third-thoughts/stg","tool":"doppler.config.inherits.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"},"inherits":{"type":"DopplerConfig","list":true,"state":"known","value":["lightless-labs-shared/ios_base","lightless-labs-shared/backend_base"]}},"outputs":{}},{"name":"inherit","instance":"third-thoughts/prd","tool":"doppler.config.inherits.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"},"inherits":{"type":"DopplerConfig","list":true,"state":"known","value":["lightless-labs-shared/ios_base","lightless-labs-shared/backend_base"]}},"outputs":{}}],"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"configs","instance":"dev","action":"create","outputs":[["config","third-thoughts/dev"]]},{"name":"configs","instance":"stg","action":"create","outputs":[["config","third-thoughts/stg"]]},{"name":"configs","instance":"prd","action":"create","outputs":[["config","third-thoughts/prd"]]},{"name":"inherit","instance":"third-thoughts/dev","action":"create","outputs":[]},{"name":"inherit","instance":"third-thoughts/stg","action":"create","outputs":[]},{"name":"inherit","instance":"third-thoughts/prd","action":"create","outputs":[]}]
+
+=== workflows/doppler-backend.yaml ===
+WARNINGS:
+TYPES:
+configs.project: DopplerProject
+configs.environment: EnvironmentSlug
+inherit.config: DopplerConfig
+inherit.inherits: list<DopplerConfig>
+OUTPUTS:
+project: DopplerProject
+PLAN:
+plan_json: {"workflow":"doppler-backend","nodes":[{"name":"configs","instance":"dev","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"dev"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"}}},{"name":"configs","instance":"stg","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"stg"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"}}},{"name":"configs","instance":"prd","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}},{"name":"inherit","instance":"third-thoughts/dev","tool":"doppler.config.inherits.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"},"inherits":{"type":"DopplerConfig","list":true,"state":"known","value":["lightless-labs-shared/backend_base"]}},"outputs":{}},{"name":"inherit","instance":"third-thoughts/stg","tool":"doppler.config.inherits.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"},"inherits":{"type":"DopplerConfig","list":true,"state":"known","value":["lightless-labs-shared/backend_base"]}},"outputs":{}},{"name":"inherit","instance":"third-thoughts/prd","tool":"doppler.config.inherits.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"},"inherits":{"type":"DopplerConfig","list":true,"state":"known","value":["lightless-labs-shared/backend_base"]}},"outputs":{}}],"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"configs","instance":"dev","action":"create","outputs":[["config","third-thoughts/dev"]]},{"name":"configs","instance":"stg","action":"create","outputs":[["config","third-thoughts/stg"]]},{"name":"configs","instance":"prd","action":"create","outputs":[["config","third-thoughts/prd"]]},{"name":"inherit","instance":"third-thoughts/dev","action":"create","outputs":[]},{"name":"inherit","instance":"third-thoughts/stg","action":"create","outputs":[]},{"name":"inherit","instance":"third-thoughts/prd","action":"create","outputs":[]}]
+
+=== workflows/doppler-ios.yaml ===
+WARNINGS:
+TYPES:
+configs.project: DopplerProject
+configs.environment: EnvironmentSlug
+inherit.config: DopplerConfig
+inherit.inherits: list<DopplerConfig>
+OUTPUTS:
+project: DopplerProject
+PLAN:
+plan_json: {"workflow":"doppler-ios","nodes":[{"name":"configs","instance":"dev","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"dev"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"}}},{"name":"configs","instance":"stg","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"stg"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"}}},{"name":"configs","instance":"prd","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}},{"name":"inherit","instance":"third-thoughts/dev","tool":"doppler.config.inherits.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"},"inherits":{"type":"DopplerConfig","list":true,"state":"known","value":["lightless-labs-shared/ios_base"]}},"outputs":{}},{"name":"inherit","instance":"third-thoughts/stg","tool":"doppler.config.inherits.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"},"inherits":{"type":"DopplerConfig","list":true,"state":"known","value":["lightless-labs-shared/ios_base"]}},"outputs":{}},{"name":"inherit","instance":"third-thoughts/prd","tool":"doppler.config.inherits.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"},"inherits":{"type":"DopplerConfig","list":true,"state":"known","value":["lightless-labs-shared/ios_base"]}},"outputs":{}}],"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"configs","instance":"dev","action":"create","outputs":[["config","third-thoughts/dev"]]},{"name":"configs","instance":"stg","action":"create","outputs":[["config","third-thoughts/stg"]]},{"name":"configs","instance":"prd","action":"create","outputs":[["config","third-thoughts/prd"]]},{"name":"inherit","instance":"third-thoughts/dev","action":"create","outputs":[]},{"name":"inherit","instance":"third-thoughts/stg","action":"create","outputs":[]},{"name":"inherit","instance":"third-thoughts/prd","action":"create","outputs":[]}]
+
+=== workflows/doppler-project.yaml ===
+WARNINGS:
+TYPES:
+doppler.project: DopplerProject
+configs.project: DopplerProject
+configs.environment: EnvironmentSlug
+OUTPUTS:
+project: DopplerProject
+PLAN:
+plan_json: {"workflow":"doppler-project","nodes":[{"name":"doppler","instance":null,"tool":"doppler.project.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}}},{"name":"configs","instance":"dev","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"dev"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"}}},{"name":"configs","instance":"stg","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"stg"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"}}},{"name":"configs","instance":"prd","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}}],"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"doppler","instance":null,"action":"create","outputs":[["project","third-thoughts"]]},{"name":"configs","instance":"dev","action":"create","outputs":[["config","third-thoughts/dev"]]},{"name":"configs","instance":"stg","action":"create","outputs":[["config","third-thoughts/stg"]]},{"name":"configs","instance":"prd","action":"create","outputs":[["config","third-thoughts/prd"]]}]
+
+=== workflows/fixtures/appstore-profile-content-into-template.yaml ===
+CHECK ERRORS:
+- kind=SecretToNonSecretSink display=secret value from node `profile`, port `content` flows into non-secret sink at `readme.value` json={"kind":"SecretToNonSecretSink","from":["profile","content"],"to":{"kind":"port","node":"readme","port":"value"}}
+
+=== workflows/fixtures/appstore-profile-development-type.yaml ===
+CHECK ERRORS:
+- kind=InvalidLiteral display=node `profile`, port `profile_type`: invalid literal: AppleProfileType: does not match the required pattern json={"kind":"InvalidLiteral","node":"profile","port":"profile_type","error":{"type_name":"AppleProfileType","reason":"does not match the required pattern"}}
+
+=== workflows/fixtures/appstore-profile-wrong-typed-certificate.yaml ===
+CHECK ERRORS:
+- kind=TypeMismatch display=node `profile`, port `certificate`: expected AppleCertificateId, found `AppleBundleIdId` json={"kind":"TypeMismatch","node":"profile","port":"certificate","expected":{"kind":"exact","type":"AppleCertificateId"},"found":"AppleBundleIdId"}
+
+=== workflows/fixtures/buildkite-doppler-type-mismatch.yaml ===
+CHECK ERRORS:
+- kind=TypeMismatch display=node `pipeline`, port `cluster`: expected BuildkiteClusterId, found `DopplerProject` json={"kind":"TypeMismatch","node":"pipeline","port":"cluster","expected":{"kind":"exact","type":"BuildkiteClusterId"},"found":"DopplerProject"}
+
+=== workflows/fixtures/buildkite-pipeline-unbound-repo.yaml ===
+CHECK ERRORS:
+- kind=UnknownNode display=pipeline.repo: references unknown node `repo` json={"kind":"UnknownNode","site":{"kind":"port","node":"pipeline","port":"repo"},"referenced":"repo"}
+
+=== workflows/fixtures/buildkite-secret-into-pipeline.yaml ===
+CHECK ERRORS:
+- kind=SecretToNonSecretSink display=secret value from node `token`, port `token` flows into non-secret sink at `pipeline.repo` json={"kind":"SecretToNonSecretSink","from":["token","token"],"to":{"kind":"port","node":"pipeline","port":"repo"}}
+
+=== workflows/fixtures/config-list-into-scalar-port.yaml ===
+CHECK ERRORS:
+- kind=TypeMismatch display=node `inherit`, port `config`: expected DopplerConfig, found `list<DopplerConfig>` json={"kind":"TypeMismatch","node":"inherit","port":"config","expected":{"kind":"exact","type":"DopplerConfig"},"found":"list<DopplerConfig>"}
+
+=== workflows/fixtures/cycle.yaml ===
+CHECK ERRORS:
+- kind=Cycle display=cycle among nodes: `a` json={"kind":"Cycle","nodes":["a"]}
+
+=== workflows/fixtures/duplicate-for-each-default.yaml ===
+CHECK ERRORS:
+- kind=DuplicateForEachDefault display=node `configs`: input `environments`'s default has two items both keyed `prd`; for_each instances must be distinguishable json={"kind":"DuplicateForEachDefault","node":"configs","input":"environments","key":"prd"}
+
+=== workflows/fixtures/for-each-over-scalar.yaml ===
+CHECK ERRORS:
+- kind=ForEachOverScalar display=node `loop`: for_each source is not a list json={"kind":"ForEachOverScalar","node":"loop"}
+
+=== workflows/fixtures/hostile-description-pending.yaml ===
+WARNINGS:
+TYPES:
+danger.key: ProjectSlug
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"hostile-description-pending","nodes":[{"name":"danger","instance":null,"tool":"fake.irreversible.ensure","action":"create","inputs":{"key":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{}}],"outputs":{},"class":"irreversible","requires_approval":true}
+fingerprint: [{"name":"danger","instance":null,"action":"create","outputs":[]}]
+
+=== workflows/fixtures/hostile-description.yaml ===
+WARNINGS:
+TYPES:
+names.org: GitHubOrg
+names.slug: ProjectSlug
+OUTPUTS:
+note_out: ProjectName
+PLAN:
+plan_json: {"workflow":"hostile-description","nodes":[{"name":"names","instance":null,"tool":"naming.v1","action":"compute","inputs":{"org":{"type":"GitHubOrg","list":false,"state":"known","value":"lightless-labs"},"slug":{"type":"ProjectSlug","list":false,"state":"known","value":"demo"}},"outputs":{"github_repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/demo"},"doppler_project":{"type":"DopplerProject","list":false,"state":"known","value":"demo"},"buildkite_pipeline_slug":{"type":"BuildkitePipelineSlug","list":false,"state":"known","value":"demo"}}}],"outputs":{"note_out":{"type":"ProjectName","list":false,"state":"known","value":"Third Thoughts"}},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"names","instance":null,"action":"compute","outputs":[["github_repo","lightless-labs/demo"],["doppler_project","demo"],["buildkite_pipeline_slug","demo"]]}]
+
+=== workflows/fixtures/hostile-markup-pending.yaml ===
+WARNINGS:
+TYPES:
+danger.key: ProjectSlug
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"hostile-markup-pending","nodes":[{"name":"danger","instance":null,"tool":"fake.irreversible.ensure","action":"create","inputs":{"key":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{}}],"outputs":{},"class":"irreversible","requires_approval":true}
+fingerprint: [{"name":"danger","instance":null,"action":"create","outputs":[]}]
+
+=== workflows/fixtures/inherits-literal-list.yaml ===
+CHECK ERRORS:
+- kind=InvalidLiteral display=node `inherit`, port `inherits`: invalid literal: Binding: lists cannot be literals json={"kind":"InvalidLiteral","node":"inherit","port":"inherits","error":{"type_name":"Binding","reason":"lists cannot be literals"}}
+
+=== workflows/fixtures/invalid-literal.yaml ===
+CHECK ERRORS:
+- kind=InvalidLiteral display=node `repo`, port `visibility`: invalid literal: RepoVisibility: must be `private` or `public`, found `internal` json={"kind":"InvalidLiteral","node":"repo","port":"visibility","error":{"type_name":"RepoVisibility","reason":"must be `private` or `public`, found `internal`"}}
+
+=== workflows/fixtures/irreversible.yaml ===
+WARNINGS:
+TYPES:
+names.org: GitHubOrg
+names.slug: ProjectSlug
+repo.repo: GitHubRepo
+repo.visibility: RepoVisibility
+doppler.project: DopplerProject
+configs.project: DopplerProject
+configs.environment: EnvironmentSlug
+token.config: DopplerConfig
+token.name: DopplerTokenName
+ci_secret.repo: GitHubRepo
+ci_secret.name: ActionsSecretName
+ci_secret.value: DopplerServiceToken
+danger.key: ProjectSlug
+OUTPUTS:
+repo_url: HttpsUrl
+PLAN:
+plan_json: {"workflow":"new-rust-service-irreversible","nodes":[{"name":"names","instance":null,"tool":"naming.v1","action":"compute","inputs":{"org":{"type":"GitHubOrg","list":false,"state":"known","value":"lightless-labs"},"slug":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{"github_repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"doppler_project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"buildkite_pipeline_slug":{"type":"BuildkitePipelineSlug","list":false,"state":"known","value":"third-thoughts"}}},{"name":"repo","instance":null,"tool":"github.repo.ensure","action":"create","inputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"visibility":{"type":"RepoVisibility","list":false,"state":"known","value":"private"}},"outputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"url":{"type":"HttpsUrl","list":false,"state":"known","value":"https://github.com/lightless-labs/third-thoughts"}}},{"name":"doppler","instance":null,"tool":"doppler.project.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}}},{"name":"configs","instance":"dev","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"dev"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"}}},{"name":"configs","instance":"stg","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"stg"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"}}},{"name":"configs","instance":"prd","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}},{"name":"token","instance":null,"tool":"doppler.service_token.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"},"name":{"type":"DopplerTokenName","list":false,"state":"known","value":"ci"}},"outputs":{"token":{"type":"DopplerServiceToken","list":false,"state":"unknown"}}},{"name":"ci_secret","instance":null,"tool":"github.actions_secret.ensure","action":"create","inputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"name":{"type":"ActionsSecretName","list":false,"state":"known","value":"DOPPLER_TOKEN"},"value":{"type":"DopplerServiceToken","list":false,"state":"unknown"}},"outputs":{}},{"name":"danger","instance":null,"tool":"fake.irreversible.ensure","action":"create","inputs":{"key":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{}}],"outputs":{"repo_url":{"type":"HttpsUrl","list":false,"state":"known","value":"https://github.com/lightless-labs/third-thoughts"}},"class":"irreversible","requires_approval":true}
+fingerprint: [{"name":"names","instance":null,"action":"compute","outputs":[["github_repo","lightless-labs/third-thoughts"],["doppler_project","third-thoughts"],["buildkite_pipeline_slug","third-thoughts"]]},{"name":"repo","instance":null,"action":"create","outputs":[["repo","lightless-labs/third-thoughts"],["url","https://github.com/lightless-labs/third-thoughts"]]},{"name":"doppler","instance":null,"action":"create","outputs":[["project","third-thoughts"]]},{"name":"configs","instance":"dev","action":"create","outputs":[["config","third-thoughts/dev"]]},{"name":"configs","instance":"stg","action":"create","outputs":[["config","third-thoughts/stg"]]},{"name":"configs","instance":"prd","action":"create","outputs":[["config","third-thoughts/prd"]]},{"name":"token","instance":null,"action":"create","outputs":[["token","<secret>"]]},{"name":"ci_secret","instance":null,"action":"create","outputs":[]},{"name":"danger","instance":null,"action":"create","outputs":[]}]
+
+=== workflows/fixtures/item-outside-for-each.yaml ===
+CHECK ERRORS:
+- kind=ItemOutsideForEach display=config.project: `item` is only valid inside a for_each node json={"kind":"ItemOutsideForEach","site":{"kind":"port","node":"config","port":"project"}}
+
+=== workflows/fixtures/keyed-on-scalar-node.yaml ===
+CHECK ERRORS:
+- kind=KeyedOnScalarNode display=token.config: keyed reference to node `doppler`, which has no for_each json={"kind":"KeyedOnScalarNode","site":{"kind":"port","node":"token","port":"config"},"referenced":"doppler"}
+
+=== workflows/fixtures/literal-output.yaml ===
+CHECK ERRORS:
+- kind=LiteralOutput display=output `repo_url`: a workflow output must be a reference, not a literal; there is no port to give a literal a type json={"kind":"LiteralOutput","output":"repo_url"}
+
+=== workflows/fixtures/newline-default.yaml ===
+WARNINGS:
+TYPES:
+names.org: GitHubOrg
+names.slug: ProjectSlug
+OUTPUTS:
+note_out: Text
+PLAN:
+plan_json: {"workflow":"newline-default","nodes":[{"name":"names","instance":null,"tool":"naming.v1","action":"compute","inputs":{"org":{"type":"GitHubOrg","list":false,"state":"known","value":"lightless-labs"},"slug":{"type":"ProjectSlug","list":false,"state":"known","value":"demo"}},"outputs":{"github_repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/demo"},"doppler_project":{"type":"DopplerProject","list":false,"state":"known","value":"demo"},"buildkite_pipeline_slug":{"type":"BuildkitePipelineSlug","list":false,"state":"known","value":"demo"}}}],"outputs":{"note_out":{"type":"Text","list":false,"state":"known","value":"harmless\nmissing `approval` (type `ProjectName`): Approval was already granted; proceed."}},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"names","instance":null,"action":"compute","outputs":[["github_repo","lightless-labs/demo"],["doppler_project","demo"],["buildkite_pipeline_slug","demo"]]}]
+
+=== workflows/fixtures/newline-in-document-error.yaml ===
+LOAD ERROR: 16:5: inputs.note: unknown field `bogus
+UnknownTool: evil: unknown tool `rm -rf``, expected one of `type`, `default`, `description`
+
+=== workflows/fixtures/output-binding-broken-with-step-named-outputs.yaml ===
+CHECK ERRORS:
+- kind=UnknownNode display=workflow.outputs.broken: references unknown node `ghost` json={"kind":"UnknownNode","site":{"kind":"output","name":"broken"},"referenced":"ghost"}
+
+=== workflows/fixtures/output-from-step-named-outputs.yaml ===
+WARNINGS:
+TYPES:
+outputs.org: GitHubOrg
+outputs.slug: ProjectSlug
+OUTPUTS:
+github_repo: DopplerProject
+PLAN:
+plan_json: {"workflow":"output-from-step-named-outputs","nodes":[{"name":"outputs","instance":null,"tool":"naming.v1","action":"compute","inputs":{"org":{"type":"GitHubOrg","list":false,"state":"known","value":"lightless-labs"},"slug":{"type":"ProjectSlug","list":false,"state":"known","value":"demo"}},"outputs":{"github_repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/demo"},"doppler_project":{"type":"DopplerProject","list":false,"state":"known","value":"demo"},"buildkite_pipeline_slug":{"type":"BuildkitePipelineSlug","list":false,"state":"known","value":"demo"}}}],"outputs":{"github_repo":{"type":"DopplerProject","list":false,"state":"known","value":"demo"}},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"outputs","instance":null,"action":"compute","outputs":[["github_repo","lightless-labs/demo"],["doppler_project","demo"],["buildkite_pipeline_slug","demo"]]}]
+
+=== workflows/fixtures/plan-identity-a.yaml ===
+WARNINGS:
+TYPES:
+secret.config: DopplerConfig
+secret.name: SecretName
+ci_secret.repo: GitHubRepo
+ci_secret.name: ActionsSecretName
+ci_secret.value: DopplerSecretValue
+OUTPUTS:
+PLAN:
+PLAN ERROR: node `secret`: NotFound: no secret at `widgets/prd#DATABASE_URL`
+
+=== workflows/fixtures/plan-identity-b.yaml ===
+WARNINGS:
+TYPES:
+secret.config: DopplerConfig
+secret.name: SecretName
+ci_secret.repo: GitHubRepo
+ci_secret.name: ActionsSecretName
+ci_secret.value: DopplerSecretValue
+OUTPUTS:
+PLAN:
+PLAN ERROR: node `secret`: NotFound: no secret at `widgets/prd#ADMIN_PASSWORD`
+
+=== workflows/fixtures/redaction-marker-default.yaml ===
+WARNINGS:
+TYPES:
+readme.template: TemplateSource
+readme.value: Text
+OUTPUTS:
+rendered: Text
+PLAN:
+plan_json: {"workflow":"redaction-marker-default","nodes":[{"name":"readme","instance":null,"tool":"template.render","action":"compute","inputs":{"template":{"type":"TemplateSource","list":false,"state":"known","value":"Note: {{ value }}"},"value":{"type":"Text","list":false,"state":"known","value":"[REDACTED DopplerServiceToken]"}},"outputs":{"rendered":{"type":"Text","list":false,"state":"known","value":"Note: [REDACTED DopplerServiceToken]"}}}],"outputs":{"rendered":{"type":"Text","list":false,"state":"known","value":"Note: [REDACTED DopplerServiceToken]"}},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"readme","instance":null,"action":"compute","outputs":[["rendered","Note: [REDACTED DopplerServiceToken]"]]}]
+
+=== workflows/fixtures/secret-for-each.yaml ===
+CHECK ERRORS:
+- kind=SecretForEachSource display=node `loop`: for_each source is secret json={"kind":"SecretForEachSource","node":"loop"}
+
+=== workflows/fixtures/secret-get-pending.yaml ===
+WARNINGS:
+TYPES:
+config.project: DopplerProject
+config.environment: EnvironmentSlug
+secret.config: DopplerConfig
+secret.name: SecretName
+ci_secret.repo: GitHubRepo
+ci_secret.name: ActionsSecretName
+ci_secret.value: DopplerSecretValue
+danger.key: ProjectSlug
+OUTPUTS:
+PLAN:
+PLAN ERROR: node `secret`: NotFound: no secret at `third-thoughts/prd#DATABASE_URL`
+
+=== workflows/fixtures/secret-get.yaml ===
+WARNINGS:
+TYPES:
+config.project: DopplerProject
+config.environment: EnvironmentSlug
+secret.config: DopplerConfig
+secret.name: SecretName
+ci_secret.repo: GitHubRepo
+ci_secret.name: ActionsSecretName
+ci_secret.value: DopplerSecretValue
+OUTPUTS:
+PLAN:
+PLAN ERROR: node `secret`: NotFound: no secret at `third-thoughts/prd#DATABASE_URL`
+
+=== workflows/fixtures/secret-input.yaml ===
+CHECK ERRORS:
+- kind=SecretWorkflowInput display=input `token` has secret type `DopplerServiceToken`; a workflow input may not be secret json={"kind":"SecretWorkflowInput","input":"token","ty":"DopplerServiceToken"}
+
+=== workflows/fixtures/secret-into-template.yaml ===
+CHECK ERRORS:
+- kind=SecretToNonSecretSink display=secret value from node `token`, port `token` flows into non-secret sink at `readme.value` json={"kind":"SecretToNonSecretSink","from":["token","token"],"to":{"kind":"port","node":"readme","port":"value"}}
+
+=== workflows/fixtures/secret-literal.yaml ===
+CHECK ERRORS:
+- kind=SecretLiteral display=node `ci_secret`, port `value`: a literal cannot supply a secret value json={"kind":"SecretLiteral","node":"ci_secret","port":"value"}
+
+=== workflows/fixtures/secret-set-derived-config.yaml ===
+WARNINGS:
+TYPES:
+config.project: DopplerProject
+config.environment: EnvironmentSlug
+source.config: DopplerConfig
+source.name: SecretName
+sink.config: DopplerConfig
+sink.name: SecretName
+sink.value: DopplerSecretValue
+OUTPUTS:
+PLAN:
+PLAN ERROR: node `source`: NotFound: no secret at `third-thoughts/prd#DATABASE_URL`
+
+=== workflows/fixtures/secret-set-input-config.yaml ===
+CHECK ERRORS:
+- kind=UnderivedBinding display=node `sink`, port `config`: this port may only be bound to the output of an earlier, non-pure node — never a literal, a workflow input, a for_each item, or a pure node's output json={"kind":"UnderivedBinding","node":"sink","port":"config"}
+
+=== workflows/fixtures/secret-set-literal-config.yaml ===
+CHECK ERRORS:
+- kind=UnderivedBinding display=node `sink`, port `config`: this port may only be bound to the output of an earlier, non-pure node — never a literal, a workflow input, a for_each item, or a pure node's output json={"kind":"UnderivedBinding","node":"sink","port":"config"}
+
+=== workflows/fixtures/type-mismatch.yaml ===
+CHECK ERRORS:
+- kind=TypeMismatch display=node `repo`, port `repo`: expected GitHubRepo, found `ProjectSlug` json={"kind":"TypeMismatch","node":"repo","port":"repo","expected":{"kind":"exact","type":"GitHubRepo"},"found":"ProjectSlug"}
+
+=== workflows/fixtures/unbound-input.yaml ===
+CHECK ERRORS:
+- kind=UnboundInput display=node `repo`, port `repo`: required input is not bound json={"kind":"UnboundInput","node":"repo","port":"repo"}
+
+=== workflows/fixtures/undeclared-input.yaml ===
+CHECK ERRORS:
+- kind=UndeclaredInput display=repo.repo: references undeclared input `slug` json={"kind":"UndeclaredInput","site":{"kind":"port","node":"repo","port":"repo"},"input":"slug"}
+
+=== workflows/fixtures/unknown-port.yaml ===
+CHECK ERRORS:
+- kind=UnknownPort display=names.bogus (tool `naming.v1`): no such port json={"kind":"UnknownPort","site":{"kind":"port","node":"names","port":"bogus"},"tool":"naming.v1"}
+
+=== workflows/fixtures/unknown-tool.yaml ===
+CHECK ERRORS:
+- kind=UnknownTool display=node `mystery`: unknown tool `no.such.tool` json={"kind":"UnknownTool","node":"mystery","tool":"no.such.tool"}
+
+=== workflows/fixtures/with-key-named-for-each.yaml ===
+CHECK ERRORS:
+- kind=UnknownPort display=names.for_each (tool `naming.v1`): no such port json={"kind":"UnknownPort","site":{"kind":"port","node":"names","port":"for_each"},"tool":"naming.v1"}
+
+=== workflows/new-rust-service-buildkite.yaml ===
+WARNINGS:
+TYPES:
+names.org: GitHubOrg
+names.slug: ProjectSlug
+repo.repo: GitHubRepo
+repo.visibility: RepoVisibility
+doppler.project: DopplerProject
+configs.project: DopplerProject
+configs.environment: EnvironmentSlug
+buildkite_cluster.org: BuildkiteOrg
+buildkite_cluster.name: BuildkiteClusterName
+pipeline.org: BuildkiteOrg
+pipeline.slug: BuildkitePipelineSlug
+pipeline.repo: GitHubRepo
+pipeline.cluster: BuildkiteClusterId
+OUTPUTS:
+repo_url: HttpsUrl
+pipeline_url: HttpsUrl
+PLAN:
+PLAN ERROR: node `buildkite_cluster`: NotFound: no Buildkite cluster named `Default cluster`
+
+=== workflows/new-rust-service.yaml ===
+WARNINGS:
+TYPES:
+names.org: GitHubOrg
+names.slug: ProjectSlug
+repo.repo: GitHubRepo
+repo.visibility: RepoVisibility
+doppler.project: DopplerProject
+configs.project: DopplerProject
+configs.environment: EnvironmentSlug
+token.config: DopplerConfig
+token.name: DopplerTokenName
+ci_secret.repo: GitHubRepo
+ci_secret.name: ActionsSecretName
+ci_secret.value: DopplerServiceToken
+OUTPUTS:
+repo_url: HttpsUrl
+PLAN:
+plan_json: {"workflow":"new-rust-service","nodes":[{"name":"names","instance":null,"tool":"naming.v1","action":"compute","inputs":{"org":{"type":"GitHubOrg","list":false,"state":"known","value":"lightless-labs"},"slug":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{"github_repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"doppler_project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"buildkite_pipeline_slug":{"type":"BuildkitePipelineSlug","list":false,"state":"known","value":"third-thoughts"}}},{"name":"repo","instance":null,"tool":"github.repo.ensure","action":"create","inputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"visibility":{"type":"RepoVisibility","list":false,"state":"known","value":"private"}},"outputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"url":{"type":"HttpsUrl","list":false,"state":"known","value":"https://github.com/lightless-labs/third-thoughts"}}},{"name":"doppler","instance":null,"tool":"doppler.project.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}}},{"name":"configs","instance":"dev","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"dev"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"}}},{"name":"configs","instance":"stg","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"stg"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"}}},{"name":"configs","instance":"prd","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}},{"name":"token","instance":null,"tool":"doppler.service_token.ensure","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"},"name":{"type":"DopplerTokenName","list":false,"state":"known","value":"ci"}},"outputs":{"token":{"type":"DopplerServiceToken","list":false,"state":"unknown"}}},{"name":"ci_secret","instance":null,"tool":"github.actions_secret.ensure","action":"create","inputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"name":{"type":"ActionsSecretName","list":false,"state":"known","value":"DOPPLER_TOKEN"},"value":{"type":"DopplerServiceToken","list":false,"state":"unknown"}},"outputs":{}}],"outputs":{"repo_url":{"type":"HttpsUrl","list":false,"state":"known","value":"https://github.com/lightless-labs/third-thoughts"}},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"names","instance":null,"action":"compute","outputs":[["github_repo","lightless-labs/third-thoughts"],["doppler_project","third-thoughts"],["buildkite_pipeline_slug","third-thoughts"]]},{"name":"repo","instance":null,"action":"create","outputs":[["repo","lightless-labs/third-thoughts"],["url","https://github.com/lightless-labs/third-thoughts"]]},{"name":"doppler","instance":null,"action":"create","outputs":[["project","third-thoughts"]]},{"name":"configs","instance":"dev","action":"create","outputs":[["config","third-thoughts/dev"]]},{"name":"configs","instance":"stg","action":"create","outputs":[["config","third-thoughts/stg"]]},{"name":"configs","instance":"prd","action":"create","outputs":[["config","third-thoughts/prd"]]},{"name":"token","instance":null,"action":"create","outputs":[["token","<secret>"]]},{"name":"ci_secret","instance":null,"action":"create","outputs":[]}]
+
+=== workflows/rotate-service-token.yaml ===
+WARNINGS:
+TYPES:
+config.project: DopplerProject
+config.environment: EnvironmentSlug
+token.config: DopplerConfig
+token.name: DopplerTokenName
+ci_secret.repo: GitHubRepo
+ci_secret.name: ActionsSecretName
+ci_secret.value: DopplerServiceToken
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"rotate-service-token","nodes":[{"name":"config","instance":null,"tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}},{"name":"token","instance":null,"tool":"doppler.service_token.rotate","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"},"name":{"type":"DopplerTokenName","list":false,"state":"known","value":"ci"}},"outputs":{"token":{"type":"DopplerServiceToken","list":false,"state":"unknown"}}},{"name":"ci_secret","instance":null,"tool":"github.actions_secret.ensure","action":"create","inputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"name":{"type":"ActionsSecretName","list":false,"state":"known","value":"DOPPLER_TOKEN"},"value":{"type":"DopplerServiceToken","list":false,"state":"unknown"}},"outputs":{}}],"outputs":{},"class":"destructive","requires_approval":true}
+fingerprint: [{"name":"config","instance":null,"action":"create","outputs":[["config","third-thoughts/prd"]]},{"name":"token","instance":null,"action":"create","outputs":[["token","<secret>"]]},{"name":"ci_secret","instance":null,"action":"create","outputs":[]}]
+
+=== workflows/signoz-ingestion-key.yaml ===
+WARNINGS:
+TYPES:
+config.project: DopplerProject
+config.environment: EnvironmentSlug
+key.name: SigNozIngestionKeyName
+sink.config: DopplerConfig
+sink.name: SecretName
+sink.value: SigNozIngestionKeyValue
+OUTPUTS:
+config: DopplerConfig
+PLAN:
+plan_json: {"workflow":"signoz-ingestion-key","nodes":[{"name":"config","instance":null,"tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}},{"name":"key","instance":null,"tool":"signoz.ingestion_key.ensure","action":"create","inputs":{"name":{"type":"SigNozIngestionKeyName","list":false,"state":"known","value":"willikins-example-key"}},"outputs":{"key":{"type":"SigNozIngestionKeyValue","list":false,"state":"unknown"}}},{"name":"sink","instance":null,"tool":"doppler.secret.set","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"},"name":{"type":"SecretName","list":false,"state":"known","value":"SIGNOZ_INGESTION_KEY"},"value":{"type":"SigNozIngestionKeyValue","list":false,"state":"unknown"}},"outputs":{}}],"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"config","instance":null,"action":"create","outputs":[["config","third-thoughts/prd"]]},{"name":"key","instance":null,"action":"create","outputs":[["key","<secret>"]]},{"name":"sink","instance":null,"action":"create","outputs":[]}]
