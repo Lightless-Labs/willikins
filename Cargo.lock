@@ -3334,6 +3334,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "ureq",
  "willikins-core",
  "willikins-dsl",
  "willikins-providers-doppler",
