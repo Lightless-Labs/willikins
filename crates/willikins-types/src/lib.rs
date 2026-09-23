@@ -249,7 +249,12 @@ registry::domain_types! {
 /// Milestone 3d adds the mechanism with no production row; milestone 3d's
 /// own task 3 adds the first and, to date, only one.
 fn conversion_rows() -> Vec<registry::Conversion> {
-    conversions![]
+    conversions![
+        // Every bundle identifier is a valid profile name, byte for byte:
+        // the containment proof is on the `From` impl in `appstore.rs`,
+        // pinned by `every_bundle_identifier_is_a_valid_profile_name`.
+        AppleBundleIdentifier => AppleProfileName,
+    ]
 }
 
 /// Assert that `T::example()` parses as `T`.

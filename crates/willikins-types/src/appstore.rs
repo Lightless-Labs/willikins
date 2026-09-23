@@ -816,6 +816,50 @@ impl schemars::JsonSchema for AppleProfileName {
 
 crate::impl_domain_object_non_secret!(AppleProfileName);
 
+/// Every bundle identifier is a valid profile name, byte for byte. This is
+/// a fact about the two grammars, not a naming policy -- milestone 3d
+/// (`docs/plans/2026-09-23-milestone-3d-conversions.md`, decision (h))
+/// registers it as a conversion so a document may bind an
+/// [`AppleBundleIdentifier`] directly to a `name` port of type
+/// [`AppleProfileName`]; which name a profile actually gets stays the
+/// document's own choice.
+///
+/// The proof, by containment. Let `s` be any string
+/// [`AppleBundleIdentifier::parse`] accepts:
+///
+/// - `s` matches `^(?:[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)$`, so it is
+///   **non-empty** (the leading `+` needs at least one alphanumeric
+///   character), and every character of `s` is one of the 64 ASCII
+///   characters `[A-Za-z0-9.-]`.
+/// - None of those 64 characters is `char::is_control`
+///   (`U+0000`-`U+001F`, `U+007F`-`U+009F`), and none is a member of
+///   [`is_invisible_or_bidi_control`], whose smallest code point is
+///   `U+00AD`.
+/// - `s.chars().count() <= 255` by [`AppleBundleIdentifier`]'s own
+///   `max_len`, and [`AppleProfileName`]'s own bound is the same 255,
+///   counted the same way.
+///
+/// Those are all four of [`AppleProfileName::parse`]'s refusals (empty,
+/// over 255 characters, a control character, an invisible or
+/// bidirectional character), so `AppleProfileName::parse(s)` accepts every
+/// such `s`. Both types store their input verbatim, so the result is
+/// byte-identical to the source -- the conversion is total and it is the
+/// identity on the string. Pinned by
+/// `every_bundle_identifier_is_a_valid_profile_name` below, over the
+/// bundle-identifier grammar, and by
+/// `every_string_a_bundle_identifier_accepts_a_profile_name_also_accepts`,
+/// stated as the implication directly over arbitrary strings.
+///
+/// The reverse is **not** a fact -- `"has space"` is a valid profile name
+/// and not a valid bundle identifier -- so no reverse row is registered;
+/// pinned by the negative fixture
+/// `workflows/fixtures/appstore-profile-name-into-identifier.yaml`.
+impl From<AppleBundleIdentifier> for AppleProfileName {
+    fn from(identifier: AppleBundleIdentifier) -> Self {
+        Self(identifier.as_str().to_owned())
+    }
+}
+
 /// A profile's Apple-assigned opaque record id -- the handle
 /// `appstore.profile.ensure` deletes by (the live write cycle's own
 /// cleanup, decision (h)) and the id its `Present`/create outputs carry.
@@ -1330,5 +1374,89 @@ mod tests {
         crate::assert_example_parses::<AppleProfileName>();
         crate::assert_example_parses::<AppleProfileId>();
         crate::assert_example_parses::<AppleProfileContent>();
+    }
+
+    // -------------------------------------------------------------
+    // `AppleBundleIdentifier => AppleProfileName` (milestone 3d, decision
+    // (h)): the one conversion this milestone registers. Every bundle
+    // identifier is a valid profile name, byte for byte.
+    // -------------------------------------------------------------
+
+    mod bundle_identifier_to_profile_name {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        proptest! {
+            /// Strategy 1: generate directly from the bundle-identifier
+            /// grammar (segments of 1-8 alphanumerics joined by `.` or
+            /// `-`, up to 41 segments), discarding any candidate over 255
+            /// characters -- `AppleBundleIdentifier::parse` itself would
+            /// refuse those, so they prove nothing about the conversion.
+            /// Every surviving candidate parses as both types, converts,
+            /// and round-trips byte for byte.
+            #[test]
+            fn every_bundle_identifier_is_a_valid_profile_name(
+                raw in "[A-Za-z0-9]{1,8}([.-][A-Za-z0-9]{1,8}){0,40}"
+            ) {
+                prop_assume!(raw.chars().count() <= 255);
+                let identifier = AppleBundleIdentifier::parse(&raw)
+                    .unwrap_or_else(|err| panic!("{raw:?} must be a valid AppleBundleIdentifier: {err}"));
+                let profile_name = AppleProfileName::parse(identifier.as_str())
+                    .unwrap_or_else(|err| panic!("{raw:?} must also be a valid AppleProfileName: {err}"));
+                let converted = AppleProfileName::from(identifier.clone());
+                prop_assert_eq!(&converted, &profile_name);
+                prop_assert_eq!(converted.as_str(), identifier.as_str());
+            }
+
+            /// Strategy 2: the implication stated directly over arbitrary
+            /// strings, with no grammar-shaped generator to bias
+            /// coverage -- whenever an arbitrary string happens to parse
+            /// as an [`AppleBundleIdentifier`], it also parses as an
+            /// [`AppleProfileName`], to the identical string.
+            #[test]
+            fn every_string_a_bundle_identifier_accepts_a_profile_name_also_accepts(s in ".*") {
+                if let Ok(identifier) = AppleBundleIdentifier::parse(&s) {
+                    let profile_name = AppleProfileName::parse(identifier.as_str())
+                        .unwrap_or_else(|err| panic!("{s:?} parsed as AppleBundleIdentifier but not AppleProfileName: {err}"));
+                    prop_assert_eq!(profile_name.as_str(), identifier.as_str());
+                }
+            }
+        }
+
+        #[test]
+        fn a_255_character_identifier_converts() {
+            let raw = "a".repeat(255);
+            let identifier = AppleBundleIdentifier::parse(&raw)
+                .expect("255 characters is the limit, not over it");
+            let profile_name = AppleProfileName::from(identifier);
+            assert_eq!(profile_name.as_str(), raw);
+        }
+
+        #[test]
+        fn a_256_character_string_is_not_a_bundle_identifier_at_all() {
+            let raw = "a".repeat(256);
+            assert!(AppleBundleIdentifier::parse(&raw).is_err());
+        }
+
+        /// Pins that `AppleBundleIdentifier`'s pattern is anchored with
+        /// `$`, not `\z`: a trailing newline is *not* accepted by matching
+        /// before it, the way some regex engines' `$` would. Verify item 4.
+        #[test]
+        fn a_trailing_newline_is_refused() {
+            assert!(AppleBundleIdentifier::parse("com.example.MyApp\n").is_err());
+        }
+
+        /// The reverse is not a fact: a string with a space is a valid
+        /// profile name and not a valid bundle identifier, so no reverse
+        /// row exists (pinned at the document level by the negative
+        /// fixture `appstore-profile-name-into-identifier.yaml`).
+        #[test]
+        fn a_profile_name_with_a_space_is_not_a_bundle_identifier() {
+            let name =
+                AppleProfileName::parse("has space").expect("a space is a valid profile name");
+            assert_eq!(name.as_str(), "has space");
+            assert!(AppleBundleIdentifier::parse("has space").is_err());
+        }
     }
 }
