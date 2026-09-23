@@ -1,0 +1,19 @@
+error[E0277]: the trait bound `B: From<A>` is not satisfied
+  --> tests/conversions/fail/missing_from_impl.rs:16:48
+   |
+16 |     let _ = willikins_types::conversions![A => B];
+   |                                                ^ unsatisfied trait bound
+   |
+help: the trait `From<A>` is not implemented for `B`
+  --> tests/conversions/fail/missing_from_impl.rs:13:1
+   |
+13 | struct B(String);
+   | ^^^^^^^^
+note: required by a bound in `conversion`
+  --> src/__private.rs
+   |
+   | pub fn conversion<A, B>() -> Conversion
+   |        ---------- required by a bound in this function
+...
+   |     B: DomainType + DomainObject + From<A> + 'static,
+   |                                    ^^^^^^^ required by this bound in `conversion`
