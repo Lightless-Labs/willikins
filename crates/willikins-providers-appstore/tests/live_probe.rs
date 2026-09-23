@@ -737,3 +737,125 @@ fn appstore_signing_probe() {
          is unknown until the milestone's live write cycle"
     );
 }
+
+// ---------------------------------------------------------------------
+// Counts and leftovers, milestone 3c task 3. Read-only; counts only.
+// ---------------------------------------------------------------------
+
+/// The throwaway prefixes `tests/live_write_cycle.rs` names everything it
+/// creates with -- by design never one of the operator's own.
+const THROWAWAY_IDENTIFIER_PREFIX: &str = "com.willikins.probe.delete-me.";
+const THROWAWAY_PROFILE_NAME_PREFIX: &str = "willikins-probe-delete-me-";
+
+/// How many rows' `expirationDate` parse as RFC 3339 -- the parse both
+/// `appstore.certificate.get` and `appstore.profile.ensure` apply, which
+/// refuses Apple's answer outright if Apple spells the offset any other
+/// way (`+0000`, say, which every task-1 and task-2 fixture used).
+fn report_dates(label: &str, rows: &[serde_json::Value]) {
+    let (mut parses, mut refused, mut absent) = (0usize, 0usize, 0usize);
+    for row in rows {
+        match attr_str(row, "expirationDate") {
+            Some(date) if chrono::DateTime::parse_from_rfc3339(date).is_ok() => parses += 1,
+            Some(_) => refused += 1,
+            None => absent += 1,
+        }
+    }
+    println!(
+        "GRAMMAR {label} expirationDate parses as RFC 3339: {parses}; refused: {refused}; \
+         absent: {absent}"
+    );
+}
+
+/// The three counts the live write cycle must leave unchanged
+/// (certificates by type, profiles by type and state, bundle identifiers),
+/// plus how many bundle identifiers and profiles carry a throwaway prefix.
+/// Run once before the write cycle and once after it, each time as its
+/// own process with its own freshly minted JWT, so the "after" read is
+/// independent of the cycle's own client. `GET` only; no name,
+/// identifier, serial, id or uuid is printed -- only counts.
+#[test]
+#[ignore = "opt-in read-only count of the operator's LIVE App Store Connect certificates, \
+            profiles and bundle identifiers, plus throwaway leftovers; run with \
+            WILLIKINS_LIVE_PROBE=1 and the credential resolved out of Doppler in the same \
+            command. GET only; prints counts only."]
+fn appstore_counts_and_leftovers_probe() {
+    if std::env::var("WILLIKINS_LIVE_PROBE").as_deref() != Ok("1") {
+        println!("skip: WILLIKINS_LIVE_PROBE is not 1");
+        return;
+    }
+    let http = live_http();
+
+    let certificates = collect(
+        &http,
+        "/v1/certificates?limit=200&fields[certificates]=certificateType,expirationDate",
+    )
+    .unwrap_or_else(|status| panic!("certificate listing failed with status {status:?}"));
+    report_total("COUNTS certificates", &certificates);
+    let mut certificates_by_type: std::collections::BTreeMap<&str, usize> =
+        std::collections::BTreeMap::new();
+    for row in &certificates.rows {
+        *certificates_by_type
+            .entry(attr_str(row, "certificateType").unwrap_or("<none>"))
+            .or_default() += 1;
+    }
+    println!("COUNTS certificates by type: {certificates_by_type:?}");
+    report_dates("certificates", &certificates.rows);
+
+    let profiles = collect(
+        &http,
+        "/v1/profiles?limit=200&fields[profiles]=name,profileType,profileState,profileContent,\
+         expirationDate",
+    )
+    .unwrap_or_else(|status| panic!("profile listing failed with status {status:?}"));
+    report_total("COUNTS profiles", &profiles);
+    let mut profiles_by_kind: std::collections::BTreeMap<(&str, &str), usize> =
+        std::collections::BTreeMap::new();
+    let mut throwaway_profiles = 0usize;
+    // Whether every real profile's content parses as the secret type
+    // `appstore.profile.ensure` deserializes it into: a content Apple
+    // spells outside `AppleProfileContent`'s grammar would make a create's
+    // own `201` unparseable, and the created profile's id unrecoverable.
+    let (mut content_parses, mut content_refused, mut content_absent) = (0usize, 0usize, 0usize);
+    for row in &profiles.rows {
+        match attr_str(row, "profileContent") {
+            Some(content) if willikins_types::AppleProfileContent::parse(content).is_ok() => {
+                content_parses += 1;
+            }
+            Some(_) => content_refused += 1,
+            None => content_absent += 1,
+        }
+        *profiles_by_kind
+            .entry((
+                attr_str(row, "profileType").unwrap_or("<none>"),
+                attr_str(row, "profileState").unwrap_or("<none>"),
+            ))
+            .or_default() += 1;
+        if attr_str(row, "name").is_some_and(|name| name.starts_with(THROWAWAY_PROFILE_NAME_PREFIX))
+        {
+            throwaway_profiles += 1;
+        }
+    }
+    println!("COUNTS profiles by (type, state): {profiles_by_kind:?}");
+    report_dates("profiles", &profiles.rows);
+    println!(
+        "GRAMMAR profileContent parses as AppleProfileContent: {content_parses}; refused: \
+         {content_refused}; absent: {content_absent}"
+    );
+
+    let (identifiers, reported_total) = all_identifiers(&http);
+    println!(
+        "COUNTS bundle ids rows counted: {}; meta.paging.total: {reported_total:?}",
+        identifiers.len()
+    );
+    let throwaway_identifiers = identifiers
+        .iter()
+        .filter(|(identifier, _)| identifier.starts_with(THROWAWAY_IDENTIFIER_PREFIX))
+        .count();
+
+    println!(
+        "LEFTOVERS bundle ids starting {THROWAWAY_IDENTIFIER_PREFIX}: {throwaway_identifiers}"
+    );
+    println!(
+        "LEFTOVERS profiles named starting {THROWAWAY_PROFILE_NAME_PREFIX}: {throwaway_profiles}"
+    );
+}
