@@ -1,6 +1,15 @@
 # Milestone 3d: total conversions between domain types, parsed into the checked graph
 
 **Created:** 2026-09-23
+**Addendum:** 2026-09-23 (C2) — verify item 1 settled empirically. A `const _: () = assert!(…)`
+nested in block position inside `conversion_rows()`'s `vec![…]` (where `conversions!` emits it)
+**is** evaluated by `cargo check`, the same as `object.rs:105`'s item-position precedent: the
+`secret_to_public.rs` trybuild fixture fails with exactly E0080 and the secrecy message, nothing
+else, on Rust 1.97/trybuild 1.0.121. Decision (b)'s item-position fallback (splitting into an
+`conversion_asserts!` invoked at module level) is **not needed** and was not built. The belt
+(`__private::conversion`'s inline `const { }`) was left in place regardless, unexercised by any
+fixture, per decision (b)'s own reasoning that trybuild cannot prove a monomorphization-gated
+check either way. `missing_from_impl.rs` fails with exactly E0277 naming `From<A>`, nothing else.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system: "parse, don't validate",
 "a secret output may only flow to a secret-accepting input. No coercion."; "policy lives in the
 workflow, never in the tool"; the workflow-inputs rule "no secret input types")

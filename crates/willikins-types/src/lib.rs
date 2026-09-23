@@ -176,7 +176,7 @@ pub use github::{ActionsSecretName, GitHubOrg, GitHubRepo, HttpsUrl, RepoVisibil
 pub use name::ProjectName;
 pub use naming::NamingScheme;
 pub use propose::{ProposeError, propose_slug};
-pub use registry::{TypeName, TypeRef, TypeRegistry};
+pub use registry::{Conversion, TypeName, TypeRef, TypeRegistry};
 pub use reserved::is_reserved;
 pub use secret::OpaqueSecret;
 pub use signoz::{SigNozIngestionKeyName, SigNozIngestionKeyValue};
@@ -233,6 +233,23 @@ registry::domain_types! {
     AppleProfileName,
     AppleProfileId,
     AppleProfileContent,
+}
+
+/// Every total conversion between two registered domain types, one row per
+/// fact about their grammars. A row is admissible only if every value of
+/// the source type is, byte for byte, a valid value of the target type
+/// (proved by a property test beside its `From` impl, never merely
+/// asserted), and the target is at least as secret as the source (proved
+/// at compile time by [`registry::conversions`]). A public-to-secret row is
+/// admitted by that rule -- redaction only increases -- but must say, in
+/// its own plan, why it does not let a document feed a real secret through
+/// a public-typed input port; see
+/// `docs/plans/2026-09-23-milestone-3d-conversions.md`, decision (b).
+///
+/// Milestone 3d adds the mechanism with no production row; milestone 3d's
+/// own task 3 adds the first and, to date, only one.
+fn conversion_rows() -> Vec<registry::Conversion> {
+    conversions![]
 }
 
 /// Assert that `T::example()` parses as `T`.

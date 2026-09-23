@@ -41,4 +41,7 @@
 fn compile_fail() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/derive/fail/*.rs");
+    // Milestone 3d: `conversions!`'s own compile-time guarantees.
+    // `docs/plans/2026-09-23-milestone-3d-conversions.md`, decision (b).
+    t.compile_fail("tests/conversions/fail/*.rs");
 }
