@@ -35,8 +35,9 @@ use willikins_core::{ToolError, ToolErrorKind};
 use willikins_providers_http::{Credential, Http, ProviderError};
 use willikins_types::{
     AppleBundleIdId, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
-    AppleCapabilityType, AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId,
-    AppleSigningKey,
+    AppleCapabilityType, AppleCertificateId, AppleCertificateSerial, AppleCertificateType,
+    AppleIssuerId, AppleKeyId, AppleProfileContent, AppleProfileId, AppleProfileName,
+    AppleProfileType, AppleSigningKey,
 };
 
 /// App Store Connect's REST API base URL
@@ -375,6 +376,131 @@ impl AppstoreClient {
             ),
         ))
     }
+
+    /// `GET /v1/bundleIds/{id}/profiles?limit=200&fields[profiles]=name,profileType,profileState,expirationDate`,
+    /// every page of it -- a relationship read, scoped by construction to
+    /// the bundle id whose opaque `id` the caller already resolved
+    /// exactly (`appstore.profile.ensure`'s own module doc, decision (e):
+    /// "The read uses the relationship, not the filter"). Requests only
+    /// the four attributes the name-matching search needs; `profileContent`
+    /// and the `certificates` relationship are read only by
+    /// [`Self::get_profile`], once a row here has already matched by
+    /// name.
+    ///
+    /// Still paginates, for the same caution [`Self::list_bundle_ids`]
+    /// and [`Self::list_certificates`] give: nothing about a relationship
+    /// read guarantees Apple returns every match on page one, and the
+    /// caller's own byte-exact `name` compare is what actually decides a
+    /// match, not this method.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::list_bundle_ids`].
+    pub(crate) fn list_bundle_id_profiles(
+        &self,
+        bundle_id: &AppleBundleIdId,
+    ) -> Result<Vec<ProfileResource>, ProviderError> {
+        let mut path = format!(
+            "/v1/bundleIds/{bundle_id}/profiles?limit={PAGE_LIMIT}&fields[profiles]=name,profileType,profileState,expirationDate"
+        );
+        let mut rows: Vec<ProfileResource> = Vec::new();
+        for _ in 0..MAX_PAGES {
+            let response: ProfileListResponse = self.http.get(&path)?;
+            rows.extend(response.data);
+            let Some(next) = response.links.and_then(|links| links.next) else {
+                return Ok(rows);
+            };
+            let Some((_, query)) = next.split_once('?') else {
+                return Ok(rows);
+            };
+            path = format!("/v1/bundleIds/{bundle_id}/profiles?{query}");
+        }
+        Err(ProviderError::new(
+            None,
+            format!(
+                "App Store Connect returned more than {MAX_PAGES} pages of profiles for one \
+                 bundle id; refusing to keep paging"
+            ),
+        ))
+    }
+
+    /// `GET /v1/profiles/{id}?include=certificates&fields[profiles]=name,profileType,profileState,expirationDate,profileContent,certificates`
+    /// -- the single-instance read [`Self::list_bundle_id_profiles`]'s
+    /// caller uses once a row has matched by `name`, to read the two
+    /// things the list read deliberately omits: `profileContent` and the
+    /// `certificates` relationship (decision (d)/(e)).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::list_bundle_ids`].
+    pub(crate) fn get_profile(
+        &self,
+        id: &AppleProfileId,
+    ) -> Result<ProfileResource, ProviderError> {
+        let path = format!(
+            "/v1/profiles/{id}?include=certificates&fields[profiles]=name,profileType,profileState,expirationDate,profileContent,certificates"
+        );
+        let response: ProfileResponse = self.http.get(&path)?;
+        Ok(response.data)
+    }
+
+    /// `POST /v1/profiles`, `data.type` `profiles`, attributes `name` +
+    /// `profileType`, relationships `bundleId` (one) and `certificates`
+    /// (exactly one) -- **no `devices` key at all** (decision (b): the
+    /// absence of a `devices` key is part of what keeps a development or
+    /// ad hoc profile structurally unreachable through this client).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::list_bundle_ids`].
+    pub(crate) fn create_profile(
+        &self,
+        name: &AppleProfileName,
+        profile_type: &AppleProfileType,
+        bundle_id: &AppleBundleIdId,
+        certificate: &AppleCertificateId,
+    ) -> Result<ProfileResource, ProviderError> {
+        let body = ProfileCreateBody {
+            data: ProfileCreateData {
+                type_: "profiles",
+                attributes: ProfileCreateAttributes {
+                    name: name.to_string(),
+                    profile_type: profile_type.to_string(),
+                },
+                relationships: ProfileCreateRelationships {
+                    bundle_id: RelationshipRef {
+                        data: RelationshipData {
+                            type_: "bundleIds",
+                            id: bundle_id.to_string(),
+                        },
+                    },
+                    certificates: RelationshipListRef {
+                        data: vec![RelationshipData {
+                            type_: "certificates",
+                            id: certificate.to_string(),
+                        }],
+                    },
+                },
+            },
+        };
+        let response: ProfileResponse = self.http.post("/v1/profiles", &body)?;
+        Ok(response.data)
+    }
+
+    /// `DELETE /v1/profiles/{id}`.
+    ///
+    /// **Used only by the opt-in live write cycle**
+    /// (`tests/live_write_cycle.rs`, behind the `live-tests` feature), to
+    /// remove every throwaway profile it created -- no tool in this crate
+    /// calls it. `pub`, not `pub(crate)`, mirroring
+    /// [`Self::delete_bundle_id`]'s own doc exactly.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::list_bundle_ids`].
+    pub fn delete_profile(&self, id: &AppleProfileId) -> Result<(), ProviderError> {
+        self.http.delete(&format!("/v1/profiles/{id}"))
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -502,6 +628,19 @@ struct RelationshipRef {
     data: RelationshipData,
 }
 
+/// A to-many relationship, on the *write* side: `certificates` in a
+/// profile create body. Deliberately a different type from
+/// [`CertificatesRelationship`] (the *read* side): `RelationshipData`'s
+/// `type_` field is `&'static str` for a convenient write-side literal,
+/// which cannot implement `Deserialize` at all (there is no way to
+/// deserialize an owned response body into a `&'static str`) -- so the
+/// read path never reuses this type, rather than fighting the borrow
+/// checker to make one struct serve both directions.
+#[derive(Debug, Serialize)]
+struct RelationshipListRef {
+    data: Vec<RelationshipData>,
+}
+
 #[derive(Debug, Serialize)]
 struct CapabilityRelationships {
     #[serde(rename = "bundleId")]
@@ -563,6 +702,111 @@ struct CertificateListResponse {
     /// See [`BundleIdListResponse::links`] -- same reasoning, same
     /// `Option` (absent on a response with no further pages).
     links: Option<Links>,
+}
+
+/// One element of a to-many relationship's `data` array, on the *read*
+/// side -- only `id` is ever read (never `type`, which serde silently
+/// discards since this struct has no `deny_unknown_fields`). See
+/// [`RelationshipListRef`]'s own doc for why the read side is a separate
+/// type from the write side rather than one struct serving both.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RelationshipDataRef {
+    pub(crate) id: String,
+}
+
+/// A to-many relationship's `data` array, on the *read* side --
+/// `certificates` on a `profiles` resource, specifically.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CertificatesRelationship {
+    pub(crate) data: Vec<RelationshipDataRef>,
+}
+
+/// A `profiles` resource's `relationships` object -- only `certificates`
+/// is ever read (decision (d): a profile's certificate relationship must
+/// be exactly one element, or the read reports `Mismatch { certificate }`).
+/// `Option`-wrapped at [`ProfileResource::relationships`], not here,
+/// because the *list* read (`fields[profiles]` with no relationship
+/// named) omits this object entirely -- only [`AppstoreClient::get_profile`]'s
+/// single-instance read ever populates it.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ProfileRelationships {
+    pub(crate) certificates: CertificatesRelationship,
+}
+
+/// One `profiles` resource's attributes -- every field
+/// [`crate::tools::AppstoreProfileEnsure`] reads, across both the list
+/// search (`name`, `profileType`, `profileState`, `expirationDate`) and
+/// the single-instance read that adds `profileContent`. `profile_content`
+/// deserializes straight into [`AppleProfileContent`], never a bare
+/// `String`: this struct derives `Debug` (so callers can log a
+/// [`ProfileResource`] for a transport-level `Provider` error without
+/// hand-writing a `Debug` impl), and a bare `String` field here would
+/// print the operator's real profile content the moment anything
+/// `{:?}`-formats this struct -- `AppleProfileContent`'s own redacted
+/// `Debug` is what keeps that impossible by construction rather than by
+/// discipline.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ProfileAttributes {
+    pub(crate) name: String,
+    #[serde(rename = "profileType")]
+    pub(crate) profile_type: String,
+    #[serde(rename = "profileState")]
+    pub(crate) profile_state: String,
+    #[serde(rename = "expirationDate")]
+    pub(crate) expiration_date: Option<String>,
+    #[serde(rename = "profileContent")]
+    pub(crate) profile_content: Option<AppleProfileContent>,
+}
+
+/// One `profiles` resource.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ProfileResource {
+    pub(crate) id: String,
+    pub(crate) attributes: ProfileAttributes,
+    /// `None` on every row [`AppstoreClient::list_bundle_id_profiles`]
+    /// returns (that read's own `fields[profiles]` never names a
+    /// relationship); `Some` on [`AppstoreClient::get_profile`]'s and
+    /// [`AppstoreClient::create_profile`]'s responses.
+    pub(crate) relationships: Option<ProfileRelationships>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProfileResponse {
+    data: ProfileResource,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProfileListResponse {
+    data: Vec<ProfileResource>,
+    /// See [`BundleIdListResponse::links`] -- same reasoning.
+    links: Option<Links>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfileCreateAttributes {
+    name: String,
+    #[serde(rename = "profileType")]
+    profile_type: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfileCreateRelationships {
+    #[serde(rename = "bundleId")]
+    bundle_id: RelationshipRef,
+    certificates: RelationshipListRef,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfileCreateData {
+    #[serde(rename = "type")]
+    type_: &'static str,
+    attributes: ProfileCreateAttributes,
+    relationships: ProfileCreateRelationships,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfileCreateBody {
+    data: ProfileCreateData,
 }
 
 #[cfg(test)]
