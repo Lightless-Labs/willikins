@@ -37,7 +37,7 @@ use crate::plan::{
 use crate::site::Site;
 use crate::tool::{Ensured, Inputs, Outputs, PortName, ToolError};
 use crate::value::Value;
-use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
+use crate::workflow::{Binding, InputName, Node, NodeName, OutputName};
 use crate::{Catalog, ToolName};
 use willikins_types::SinkToken;
 
@@ -569,7 +569,7 @@ pub fn apply(
         while group_end < fresh.nodes.len() && fresh.nodes[group_end].name == name {
             let planned = &fresh.nodes[group_end];
             let resolved_inputs =
-                resolve_instance_inputs(workflow, inputs, catalog, &results, node, planned)?;
+                resolve_instance_inputs(checked, inputs, catalog, &results, node, planned)?;
 
             if spec.pure {
                 let outputs = planned.outputs.clone();
@@ -738,6 +738,7 @@ pub fn apply(
         inputs,
         catalog,
         results: &results,
+        edges: &checked.types,
     };
     for (out_name, binding) in &workflow.outputs {
         if matches!(binding, Binding::Literal(_)) {
@@ -778,9 +779,10 @@ fn not_run_tail(remaining: &[PlannedNode]) -> Vec<AppliedNode> {
 /// bound by [`Binding::Literal`], [`Binding::Input`], or [`Binding::Item`],
 /// none of which can change mid-run), then re-resolve every
 /// [`Binding::Step`] or [`Binding::Keyed`] port against `results`, this
-/// run's own accumulating outputs.
+/// run's own accumulating outputs, delivering each through the edge
+/// `check` recorded for it, exactly as [`plan`] delivered the rest.
 fn resolve_instance_inputs(
-    workflow: &Workflow,
+    checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
     catalog: &Catalog,
     results: &HashMap<NodeName, NodeResult>,
@@ -789,10 +791,11 @@ fn resolve_instance_inputs(
 ) -> Result<Inputs, ApplyError> {
     let mut resolved = planned.inputs.clone();
     let ctx = ResolveCtx {
-        workflow,
+        workflow: &checked.workflow,
         inputs,
         catalog,
         results,
+        edges: &checked.types,
     };
     for (port, binding) in &node.with {
         if matches!(binding, Binding::Step { .. } | Binding::Keyed { .. }) {
@@ -802,7 +805,7 @@ fn resolve_instance_inputs(
             };
             let value = resolve_binding(&ctx, &site, binding, None)
                 .map_err(|error| ApplyError::Plan { error })?;
-            resolved.insert(port.clone(), value);
+            resolved.insert(port.clone(), ctx.deliver(&planned.name, port, value));
         }
     }
     Ok(resolved)

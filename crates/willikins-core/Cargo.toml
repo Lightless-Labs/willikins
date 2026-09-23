@@ -32,6 +32,9 @@ proptest = { workspace = true, optional = true }
 [dev-dependencies]
 insta.workspace = true
 jsonschema.workspace = true
+# `tests/apply.rs`'s synthetic secret types (milestone 3d's secret-to-secret
+# conversion test) are derived over `secrecy::SecretString` storage.
+secrecy.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn = { workspace = true, features = ["visit"] }

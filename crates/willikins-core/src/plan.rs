@@ -62,7 +62,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 use crate::catalog::Catalog;
-use crate::check::Checked;
+use crate::check::{Checked, Edge};
 use crate::class::Class;
 use crate::site::Site;
 use crate::tool::{Inputs, Observation, Outputs, PortName, Tool, ToolError, ToolName, ToolSpec};
@@ -348,12 +348,28 @@ pub(crate) enum NodeResult {
 /// The read-only context every binding resolution needs: the workflow (for
 /// its node and input declarations), the caller's resolved workflow
 /// inputs, the catalog (to re-derive a referenced node's tool spec), and
-/// every already-planned node's result.
+/// every already-planned node's result; plus the edges `check` recorded,
+/// through which a node's input ports receive their values.
 pub(crate) struct ResolveCtx<'a> {
     pub(crate) workflow: &'a Workflow,
     pub(crate) inputs: &'a IndexMap<InputName, Value>,
     pub(crate) catalog: &'a Catalog,
     pub(crate) results: &'a HashMap<NodeName, NodeResult>,
+    pub(crate) edges: &'a IndexMap<NodeName, IndexMap<PortName, Edge>>,
+}
+
+impl ResolveCtx<'_> {
+    /// The value `node`.`port` receives: `value` delivered through the
+    /// edge `check` recorded ([`Edge::deliver`]). A missing edge means
+    /// `check` recorded no conversion for this port, so the value passes
+    /// through unchanged: that is the behaviour before milestone 3d
+    /// exactly, and needs no assertion.
+    pub(crate) fn deliver(&self, node: &NodeName, port: &PortName, value: Value) -> Value {
+        match self.edges.get(node).and_then(|ports| ports.get(port)) {
+            Some(edge) => edge.deliver(value),
+            None => value,
+        }
+    }
 }
 
 /// Plan `checked` against `catalog`, resolving its workflow inputs from
@@ -401,6 +417,7 @@ pub fn plan(
             inputs,
             catalog,
             results: &results,
+            edges: &checked.types,
         };
 
         let result = match &node.for_each {
@@ -460,6 +477,7 @@ pub fn plan(
         inputs,
         catalog,
         results: &results,
+        edges: &checked.types,
     };
     for (out_name, binding) in &workflow.outputs {
         // A literal output has no declared type to resolve against; see
@@ -513,7 +531,7 @@ fn bind_ports(
                 node: node_name.clone(),
                 port: port.clone(),
             };
-            resolve_binding(ctx, &site, binding, item)?
+            ctx.deliver(node_name, port, resolve_binding(ctx, &site, binding, item)?)
         };
         inputs.insert(port.clone(), value);
     }
