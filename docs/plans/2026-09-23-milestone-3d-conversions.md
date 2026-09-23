@@ -235,16 +235,33 @@ They are wired into the **existing** `tests/derive_compile_fail.rs` by adding a 
 `t.compile_fail("tests/conversions/fail/*.rs")` line to its one test function. That adds no new
 test binary: this host has 143 of them and a 60 GB `target/`.
 
-- `secret_to_public.rs` defines a local secret type (copy `Leaky` from
-  `non_secret_macro_on_secret_type.rs`, `IS_SECRET = true`) and a local public type with
-  `#[derive(DomainType)]`. It writes `impl From<Leaky> for Public` (whose body may be `todo!()`;
-  nothing runs), then `let _ = willikins_types::conversions![Leaky => Public];`. It must fail
-  with E0080 carrying the secrecy message.
-- `missing_from_impl.rs` has two public local types and no `From` impl, then `conversions![A => B]`.
-  It must fail with E0277 (`the trait bound B: From<A> is not satisfied`).
+- `secret_to_public.rs` defines a local secret type `Leaky`, starting from the `DomainType` impl in
+  `non_secret_macro_on_secret_type.rs` (`IS_SECRET = true`). **That `Leaky` has no
+  `DomainObject` impl**, because the point of that fixture was that the macro refused to give it
+  one. `__private::conversion` is bounded `A: DomainObject`, so without one the fixture fails E0277
+  for the wrong reason. The fixture therefore also gives `Leaky` a hand-written **secret**
+  `DomainObject` impl: `is_secret` → `true`, `render` → `Rendered::Redacted { type_name: "Leaky" }`,
+  `expose(&self, _token: &SinkToken)` → its string, plus `as_any`, `dyn_eq` and `clone_box`, the
+  shape a hand-written secret type in the crate already has. Next it defines a local public type
+  with `#[derive(DomainType)]` and `impl From<Leaky> for Public` (the body may be `todo!()`;
+  nothing runs), then `let _ = willikins_types::conversions![Leaky => Public];`. The fixture must
+  fail with **E0080 carrying the secrecy message, and nothing else**.
+- `missing_from_impl.rs` has two public local types (both derived, so both implement `DomainType`
+  and `DomainObject`) and no `From` impl, then `conversions![A => B]`. It must fail with **E0277
+  naming `From<A>`, and nothing else**.
 
 Both `.stderr` files are generated once with `TRYBUILD=overwrite`, then **read** and committed. That
-is one scoped cargo run of about 90 seconds.
+is one scoped cargo run of about 90 seconds. trybuild's `compile_fail` passes on *any* error that
+matches the committed `.stderr`. A fixture that fails for an unrelated reason (a missing bound, a
+typo) is therefore a green test that proves nothing, and the reviewer of C2 must confirm that each
+`.stderr` shows exactly the intended error.
+
+If `secret_to_public.rs` **compiles** (that is, a `const _` item nested in block position inside a
+function body is not evaluated under `cargo check`; see verify item 1), hoist the assertion to item
+position. Split the macro into an item-position `conversion_asserts!` invoked at module level in
+`lib.rs`, emitting one `const _` per row exactly as `object.rs:105` does, and have the expression
+macro emit only the row. The fixture then invokes both, and the guarantee rests on the item-position
+form.
 
 **Why the macro's `const _` is the guarantee and the inline `const { }` is only a belt.** trybuild
 runs `cargo check` for a compile-fail-only project (verified above). An inline `const` block inside
@@ -635,8 +652,11 @@ no new binary is created.
   `profile_name`.
 - `crates/willikins-cli/tests/appstore_profile_apply_redaction.rs`: this test forced a create by
   passing a profile name the seed lacked. It can no longer choose the name, so it passes
-  `identifier=com.example.willikins-demo-two` instead, drops `profile_name`, and its dump assertion
-  looks for `com.example.willikins-demo-two` (or the fake's created-profile id prefix).
+  `identifier=com.example.willikins-demo-two` instead, and drops `profile_name`. Its dump assertion
+  must look for the created **profile's** key, `com.example.willikins-demo-two#com.example.willikins-demo-two`,
+  or for the fake's created-profile id. It must **never** look for the bare identifier: after this
+  change the seed puts that string in the dump whether or not a profile was created, so the
+  assertion would pass without proving anything.
 - The three negative fixtures that declare `profile_name` (`appstore-profile-content-into-template`,
   `-development-type`, `-wrong-typed-certificate`) are **not touched**. Their errors stay
   byte-identical.
@@ -673,8 +693,8 @@ shape.
    existing document has a converted edge, every plan is identical by construction: `deliver` is
    the only new step on `plan`'s and `apply`'s path.
 3. **The signing document against its predecessor.** The pre-change document is kept verbatim as a
-   test constant (or as `workflows/fixtures/appstore-signing-profile-two-inputs.yaml` if no
-   fixture-iterating test requires every fixture to be negative; verify item 7). Plan the new
+   test constant in the test that uses it, and not as a file under `workflows/fixtures/`, which
+   holds one document per negative case. Plan the new
    document with `positive_inputs()` minus `profile_name`, and the old one with
    `profile_name = "com.example.willikins-demo"`, both against the same seed. Assert
    `serde_json::to_value(&new_plan) == serde_json::to_value(&old_plan)` (the whole plan: nodes,
@@ -686,7 +706,7 @@ shape.
    snapshots pass untouched.
 5. **For the verifier:** `git diff <base>..<head> -- 'crates/**/snapshots/**'` shows only the C1
    snapshot's creation and its C7 changes. `git diff <base>..<head> -- workflows/fixtures/` shows the
-   seed file, the new negative fixture and, if chosen, the two-input fixture, and nothing else.
+   seed file and the new negative fixture, and nothing else.
 
 ## Acceptance tests
 
@@ -722,9 +742,14 @@ shape.
 
 ## Verify before relying on them
 
-1. Does `cargo check` on Rust 1.97 report an inline `const { assert!(…) }` inside a generic function
-   that fails for one instantiation? It decides whether a third, direct-call trybuild fixture can
-   exist. Record the answer in decision (b) either way.
+1. Two `const` evaluations under `cargo check` on Rust 1.97, which is trybuild's mode. (a) **The
+   guarantee:** is a `const _: () = assert!(…)` item **nested in block position** inside a function
+   body (where `conversions!` emits it, inside `vec![…]` inside `conversion_rows()`) evaluated? The
+   precedent at `object.rs:105` is a module-level item, so it does not settle this. The
+   `secret_to_public.rs` fixture is the proof: if it compiles, take decision (b)'s item-position
+   fallback. (b) **The belt:** is an inline `const { assert!(…) }` inside a generic function that
+   fails for one instantiation reported? That decides whether a third, direct-call fixture can
+   exist. Record both answers in decision (b).
 2. Does clippy's `disallowed_methods` fire on `catalog.registry().probe_conversion(..)` (an
    auto-deref'd `&'static TypeRegistry`)? Prove it by mutation: plant one call in `plan.rs`, see
    clippy fail, then remove it.
@@ -741,12 +766,9 @@ shape.
    (`com.example.willikins-demo-two` is seeded, so the redaction test does not depend on this, but a
    first-time run does)? Read `observe_from`/`outputs_for`. The existing `identifier` key binding
    implies yes.
-7. Does any test that iterates `workflows/fixtures/` require every fixture to fail? That decides
-   where the two-input predecessor lives (equivalence item 3). `plan-identity-a.yaml` and
-   `secret-get.yaml` suggest positive fixtures are already tolerated.
-8. The exact E0080 and E0277 texts on Rust 1.97, from `TRYBUILD=overwrite`: read them before
+7. The exact E0080 and E0277 texts on Rust 1.97, from `TRYBUILD=overwrite`: read them before
    committing them.
-9. Is the MCP tool list, with its descriptions, snapshotted anywhere? If so, the `list_tools`
+8. Is the MCP tool list, with its descriptions, snapshotted anywhere? If so, the `list_tools`
    description change updates that snapshot in C6.
 
 ## Gates
