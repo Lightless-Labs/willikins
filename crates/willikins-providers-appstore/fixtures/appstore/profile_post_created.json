@@ -1,0 +1,20 @@
+{
+  "data": {
+    "type": "profiles",
+    "id": "PR0F1LE1D0001",
+    "attributes": {
+      "name": "willikins-example-profile",
+      "profileType": "IOS_APP_STORE",
+      "profileState": "ACTIVE",
+      "expirationDate": "2099-01-01T00:00:00.000+00:00",
+      "profileContent": "d2lsbGlraW5zLWV4YW1wbGUtcHJvZmlsZS1jb250ZW50LWV4YW1wbGU="
+    },
+    "relationships": {
+      "certificates": {
+        "data": [
+          {"type": "certificates", "id": "C3RT1F1CATE1"}
+        ]
+      }
+    }
+  }
+}

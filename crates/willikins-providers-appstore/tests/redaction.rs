@@ -8,11 +8,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use willikins_core::{PortName, Tool, Value};
-use willikins_providers_appstore::AppstoreBundleIdEnsure;
-use willikins_providers_http::testing::MockProvider;
+use willikins_core::{Observation, PortName, SinkToken, Tool, Value};
+use willikins_providers_appstore::{AppstoreBundleIdEnsure, AppstoreProfileEnsure};
+use willikins_providers_http::testing::{MockProvider, load_fixture};
 use willikins_types::{
-    AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleIssuerId, AppleKeyId,
+    AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCertificateId,
+    AppleIssuerId, AppleKeyId, AppleProfileContent, AppleProfileName, AppleProfileType,
     AppleSigningKey, DomainType,
 };
 
@@ -192,5 +193,155 @@ fn the_minted_jwt_reaches_no_error_message_on_a_failing_call() {
     assert!(
         !format!("{err:?}").contains("BEGIN"),
         "the error must never carry PEM markers"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Acceptance test 8: `appstore.profile.ensure`'s `content` output. A
+// distinctive marker planted in the mock's `profileContent` never
+// appears in an `Observation`'s or `Ensured`'s rendering, `Debug`, or a
+// `ToolError` -- only `AppleProfileContent::expose`, called with a
+// `SinkToken` a test mints itself, ever recovers the real bytes.
+// ---------------------------------------------------------------------
+
+fn profile_fixtures_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures")
+}
+
+fn profile_fixture(name: &str) -> serde_json::Value {
+    load_fixture(&profile_fixtures_dir(), "appstore", name)
+}
+
+/// A base64 string containing the marker as plain ASCII text, so the
+/// marker's own bytes appear verbatim in the encoded fixture the mock
+/// serves -- exactly the shape a real `profileContent` marker search
+/// needs to be a real proof, not a coincidence of the fixture's own
+/// wording.
+const MARKER: &str = "REDACTIONMARKERPROBE";
+
+fn profile_inputs() -> willikins_core::Inputs {
+    let mut inputs = willikins_core::Inputs::new();
+    inputs.insert(
+        PortName::parse("issuer_id").unwrap(),
+        Value::known(issuer_id()),
+    );
+    inputs.insert(PortName::parse("key_id").unwrap(), Value::known(key_id()));
+    inputs.insert(PortName::parse("key").unwrap(), Value::known(key()));
+    inputs.insert(
+        PortName::parse("identifier").unwrap(),
+        Value::known(identifier()),
+    );
+    inputs.insert(
+        PortName::parse("name").unwrap(),
+        Value::known(AppleProfileName::parse("willikins-example-profile").unwrap()),
+    );
+    inputs.insert(
+        PortName::parse("profile_type").unwrap(),
+        Value::known(AppleProfileType::parse("IOS_APP_STORE").unwrap()),
+    );
+    inputs.insert(
+        PortName::parse("certificate").unwrap(),
+        Value::known(AppleCertificateId::parse("C3RT1F1CATE1").unwrap()),
+    );
+    inputs
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_profile_content_marker_never_reaches_an_observations_render_or_debug() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(profile_fixture("bundle_id_list_one").to_string())
+        .create();
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/profiles")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(profile_fixture("profile_list_one").to_string())
+        .create();
+    let marked_content = format!("{MARKER}AAAAAAAAAAAAAAAAAAAAAAAAAAAAA==");
+    let mut instance = profile_fixture("profile_get_present_healthy");
+    instance["data"]["attributes"]["profileContent"] =
+        serde_json::Value::String(marked_content.clone());
+    provider
+        .mock("GET", "/v1/profiles/PR0F1LE1D0001")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(instance.to_string())
+        .create();
+
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    let observation = tool.read(&profile_inputs()).expect("reads Present");
+    let debug = format!("{observation:?}");
+    assert!(!debug.contains(MARKER), "marker leaked into Debug: {debug}");
+
+    let Observation::Present(outputs) = &observation else {
+        panic!("expected Present, got {observation:?}");
+    };
+    let rendered = outputs
+        .get(&PortName::parse("content").unwrap())
+        .unwrap()
+        .render()
+        .to_string();
+    assert!(
+        !rendered.contains(MARKER),
+        "marker leaked into the rendered output: {rendered}"
+    );
+    assert_eq!(rendered, "[REDACTED AppleProfileContent]");
+
+    // The one place the real bytes are recoverable: `expose`, gated by a
+    // `SinkToken` this test mints itself.
+    let token = SinkToken::new();
+    let content = outputs
+        .get(&PortName::parse("content").unwrap())
+        .unwrap()
+        .downcast::<AppleProfileContent>()
+        .unwrap();
+    assert_eq!(content.expose(&token), marked_content);
+}
+
+#[test]
+fn a_profile_content_marker_never_reaches_a_toolerror() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(profile_fixture("bundle_id_list_one").to_string())
+        .create();
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/profiles")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(profile_fixture("profile_list_one").to_string())
+        .create();
+    // A malformed `profileContent` (containing the marker) makes the
+    // single-instance read fail to parse -- proving the marker survives
+    // neither a successful nor a failing path.
+    let mut instance = profile_fixture("profile_get_present_healthy");
+    instance["data"]["attributes"]["profileContent"] =
+        serde_json::Value::String(format!("not base64 {MARKER} !!!"));
+    provider
+        .mock("GET", "/v1/profiles/PR0F1LE1D0001")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(instance.to_string())
+        .create();
+
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    let err = tool
+        .read(&profile_inputs())
+        .expect_err("malformed content refuses");
+    assert!(
+        !err.message.contains(MARKER),
+        "marker leaked into a ToolError: {}",
+        err.message
+    );
+    assert!(
+        !format!("{err:?}").contains(MARKER),
+        "marker leaked into a ToolError's Debug"
     );
 }

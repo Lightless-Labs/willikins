@@ -49,4 +49,7 @@ pub mod tools;
 pub use client::{
     APPSTORE_API_BASE_URL, AppstoreClient, CAPABILITIES_NEEDING_PORTAL_CONFIGURATION,
 };
-pub use tools::{AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet};
+pub use tools::{
+    AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet,
+    AppstoreProfileEnsure,
+};
