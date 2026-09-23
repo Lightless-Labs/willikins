@@ -14,6 +14,21 @@ Program Roles profile rows). Every Apple fact below is quoted verbatim in one of
 **Depends on:** the bundle-identifier provider that landed 2026-09-22 without a plan of its own (see
 "Retrospective"), whose `AppstoreClient`, credential ports and paginated exact-compare read this
 milestone reuses unchanged.
+**Addendum:** 2026-09-22 (task 3 lane) — decision (h) step 6's duplicate-name probe needs the response
+body a failing `POST /v1/profiles` carries (its `errors[].code` leaf) and, on a `2xx`, its `data.id`
+(to record the second throwaway profile for cleanup immediately, never by a follow-up list-and-guess,
+which would be the same delete-by-filter trust boundary 4 forbids, one step removed). Neither is
+reachable through `willikins-providers-http`'s typed `Http` client: `provider_error_from_body`
+discards a non-2xx body by design (every tool in this workspace relies on that discarding, decision
+(a) included), and `Http::post`'s generic `T` still returns `Err(ProviderError)` on non-2xx regardless
+of what `T` is. So `tests/live_write_cycle.rs` makes this one call with a raw `ureq::Agent`, bypassing
+the typed client entirely — a real, narrow deviation from "this crate never parses a provider error's
+body," scoped to one function (`raw_post`), one file (`tests/live_write_cycle.rs`), gated the same as
+the rest of that file (`live-tests` feature, `#[ignore]`, `WILLIKINS_LIVE_TESTS=1`). `ureq` (already a
+transitive workspace dependency through `willikins-providers-http`) is added to this crate's
+`[dev-dependencies]` for it. Nothing `raw_post` returns is ever printed beyond a status and an
+`errors[].code` string, or kept beyond the id it records into the live cycle's own cleanup guard.
+
 **Addendum:** 2026-09-22 (task 2 lane) — the SHARED VALUES row for the profile tool's `certificate`
 port, and decision (c)'s closing sentence, said `exact_derived_only("AppleCertificateId")` so "a
 document cannot paste a certificate id literal and route around the selection tool's refusals". That

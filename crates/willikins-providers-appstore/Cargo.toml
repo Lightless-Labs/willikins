@@ -1,6 +1,6 @@
 [package]
 name = "willikins-providers-appstore"
-description = "Live App Store Connect provider tools: appstore.bundle_id.ensure, appstore.bundle_id_capability.ensure, appstore.certificate.get"
+description = "Live App Store Connect provider tools: appstore.bundle_id.ensure, appstore.bundle_id_capability.ensure, appstore.certificate.get, appstore.profile.ensure"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -38,6 +38,15 @@ chrono.workspace = true
 [dev-dependencies]
 base64.workspace = true
 regex.workspace = true
+# `tests/live_write_cycle.rs`'s own duplicate-name probe (decision (h)
+# step 6) needs one raw request outside `willikins-providers-http`'s
+# typed client: that client deliberately never parses a provider error's
+# body (every other call site in this workspace relies on that), but this
+# one diagnostic step's whole point is to read the response's own
+# `errors[].code` leaf. Already a workspace dependency (this crate's own
+# `willikins-providers-http` dependency uses it internally) -- no new
+# third-party crate enters the tree.
+ureq.workspace = true
 willikins-providers-http = { workspace = true, features = ["test-support"] }
 willikins-providers-fake.workspace = true
 willikins-dsl.workspace = true
