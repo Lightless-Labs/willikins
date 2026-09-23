@@ -1231,3 +1231,596 @@ fn a_cleared_approval_flag_does_not_bypass_the_gate() {
         locked.ensure_calls
     );
 }
+
+// ---------------------------------------------------------------------
+// Milestone 3d, decision (f): `plan` and `apply` deliver a binding
+// through the edge `check` recorded, and never look a conversion up
+// themselves. Synthetic types in a custom registry, so the conversions
+// here register nothing in production. Acceptance tests 6 and 7 and
+// equivalence item 2 of `docs/plans/2026-09-23-milestone-3d-conversions.md`.
+// ---------------------------------------------------------------------
+
+mod conversions {
+    use std::sync::{Arc, Mutex};
+
+    use indexmap::IndexMap;
+    use willikins_core::{
+        Approval, Binding, Catalog, Class, Ensured, InputName, InputSpec, Inputs, Node, NodeName,
+        Observation, Outputs, PortName, PortSpec, PortType, RecordingObserver, Tool, ToolError,
+        ToolName, ToolSpec, TypeName, TypeRef, TypeRegistry, Value, Workflow, apply, check, plan,
+    };
+    use willikins_types::registry::TypeEntry;
+    use willikins_types::{DomainType, SinkToken};
+
+    #[derive(willikins_types::DomainType)]
+    #[domain(
+        pattern = "[a-z]+",
+        description = "A conversion test source type.",
+        example = "a"
+    )]
+    struct ConvA(String);
+
+    #[derive(willikins_types::DomainType)]
+    #[domain(
+        pattern = "[a-z]+",
+        description = "A conversion test target type.",
+        example = "b"
+    )]
+    struct ConvB(String);
+
+    #[derive(willikins_types::DomainType)]
+    #[domain(
+        min_len = 8,
+        secret,
+        description = "A secret conversion test source type.",
+        example = "sekret-source"
+    )]
+    struct SecA(secrecy::SecretString);
+
+    #[derive(willikins_types::DomainType)]
+    #[domain(
+        min_len = 8,
+        secret,
+        description = "A secret conversion test target type.",
+        example = "sekret-target"
+    )]
+    struct SecB(secrecy::SecretString);
+
+    impl From<ConvA> for ConvB {
+        fn from(a: ConvA) -> Self {
+            Self::parse(a.as_str()).unwrap_or_else(|_| unreachable!("the same grammar"))
+        }
+    }
+
+    impl From<SecA> for SecB {
+        fn from(a: SecA) -> Self {
+            // Test-only: a secret-to-secret conversion has to read its
+            // source to build its target.
+            #[allow(clippy::disallowed_methods)]
+            let token = SinkToken::new();
+            Self::parse(a.expose(&token)).unwrap_or_else(|_| unreachable!("the same grammar"))
+        }
+    }
+
+    /// The bytes of the one secret these tests carry. Assembled at run
+    /// time so no dump can match the source literal by accident.
+    fn secret_bytes() -> String {
+        "BYTES".repeat(4)
+    }
+
+    fn registry() -> &'static TypeRegistry {
+        Box::leak(Box::new(TypeRegistry::new(
+            vec![
+                TypeEntry::of::<ConvA>(),
+                TypeEntry::of::<ConvB>(),
+                TypeEntry::of::<SecA>(),
+                TypeEntry::of::<SecB>(),
+            ],
+            willikins_types::conversions![ConvA => ConvB, SecA => SecB],
+        )))
+    }
+
+    fn name(text: &str) -> TypeName {
+        TypeName::parse(text).unwrap()
+    }
+    fn scalar(text: &str) -> TypeRef {
+        TypeRef::scalar(name(text))
+    }
+    fn port(text: &str) -> PortName {
+        PortName::parse(text).unwrap()
+    }
+    fn node(text: &str) -> NodeName {
+        NodeName::parse(text).unwrap()
+    }
+    fn input(text: &str) -> InputName {
+        InputName::parse(text).unwrap()
+    }
+    fn a(text: &str) -> ConvA {
+        ConvA::parse(text).unwrap()
+    }
+
+    fn spec(tool: &str, inputs: &[(&str, &str)], outputs: &[(&str, &str)], pure: bool) -> ToolSpec {
+        let mut in_map = IndexMap::new();
+        for (port_name, ty) in inputs {
+            in_map.insert(
+                port(port_name),
+                PortSpec {
+                    ty: PortType::Exact(scalar(ty)),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+        }
+        let mut out_map = IndexMap::new();
+        for (port_name, ty) in outputs {
+            out_map.insert(port(port_name), scalar(ty));
+        }
+        ToolSpec {
+            name: ToolName::parse(tool).unwrap(),
+            description: format!("Conversion test double `{tool}`."),
+            inputs: in_map,
+            outputs: out_map,
+            key: Vec::new(),
+            class: Class::Reversible,
+            pure,
+        }
+    }
+
+    /// A sink that records every input set it is called with, by `read`
+    /// and by `ensure`, and produces no output.
+    struct Recorder {
+        spec: ToolSpec,
+        reads: Mutex<Vec<Inputs>>,
+        ensures: Mutex<Vec<Inputs>>,
+    }
+
+    impl Tool for Recorder {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+        fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
+            self.reads.lock().unwrap().push(inputs.clone());
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+        fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            self.ensures.lock().unwrap().push(inputs.clone());
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+    }
+
+    /// A non-pure source whose `read` cannot predict its `out` (a
+    /// `ConvA`), and whose `ensure` produces `ConvA("fromensure")`.
+    struct UnknownAtPlan {
+        spec: ToolSpec,
+    }
+
+    impl Tool for UnknownAtPlan {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+            let mut predicted = Outputs::new();
+            predicted.insert(port("out"), Value::unknown(scalar("ConvA")));
+            Ok(Observation::Absent { predicted })
+        }
+        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            let mut outputs = Outputs::new();
+            outputs.insert(port("out"), Value::known(a("fromensure")));
+            Ok(Ensured {
+                outputs,
+                changed: true,
+            })
+        }
+    }
+
+    /// A pure echo of its `ConvA` input, for the `Keyed` edge.
+    struct Echo {
+        spec: ToolSpec,
+    }
+
+    impl Tool for Echo {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+        fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
+            let mut outputs = Outputs::new();
+            outputs.insert(port("out"), inputs.get(&port("in")).unwrap().clone());
+            Ok(Observation::Present(outputs))
+        }
+        fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            let Observation::Present(outputs) = self.read(inputs)? else {
+                unreachable!("Echo always reads Present")
+            };
+            Ok(Ensured {
+                outputs,
+                changed: false,
+            })
+        }
+    }
+
+    /// A pure source of one known `SecA` secret.
+    struct MintSecret {
+        spec: ToolSpec,
+    }
+
+    impl Tool for MintSecret {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+            let mut outputs = Outputs::new();
+            outputs.insert(
+                port("secret"),
+                Value::known(SecA::parse(&secret_bytes()).unwrap()),
+            );
+            Ok(Observation::Present(outputs))
+        }
+        fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            let Observation::Present(outputs) = self.read(inputs)? else {
+                unreachable!("MintSecret always reads Present")
+            };
+            Ok(Ensured {
+                outputs,
+                changed: false,
+            })
+        }
+    }
+
+    struct Fixture {
+        catalog: Catalog,
+        sink_b: Arc<Recorder>,
+        sink_secret: Arc<Recorder>,
+    }
+
+    fn fixture() -> Fixture {
+        let mut catalog = Catalog::new(registry());
+        let sink_b = Arc::new(Recorder {
+            spec: spec("conv.sink_b", &[("b", "ConvB")], &[], false),
+            reads: Mutex::new(Vec::new()),
+            ensures: Mutex::new(Vec::new()),
+        });
+        let sink_secret = Arc::new(Recorder {
+            spec: spec("conv.sink_secret", &[("s", "SecB")], &[], false),
+            reads: Mutex::new(Vec::new()),
+            ensures: Mutex::new(Vec::new()),
+        });
+        catalog
+            .insert(Arc::clone(&sink_b) as Arc<dyn Tool>)
+            .unwrap();
+        catalog
+            .insert(Arc::clone(&sink_secret) as Arc<dyn Tool>)
+            .unwrap();
+        catalog
+            .insert(Arc::new(UnknownAtPlan {
+                spec: spec("conv.source", &[], &[("out", "ConvA")], false),
+            }))
+            .unwrap();
+        catalog
+            .insert(Arc::new(Echo {
+                spec: spec("conv.echo", &[("in", "ConvA")], &[("out", "ConvA")], true),
+            }))
+            .unwrap();
+        catalog
+            .insert(Arc::new(MintSecret {
+                spec: spec("conv.mint", &[], &[("secret", "SecA")], true),
+            }))
+            .unwrap();
+        Fixture {
+            catalog,
+            sink_b,
+            sink_secret,
+        }
+    }
+
+    fn workflow_name(text: &str) -> willikins_types::WorkflowName {
+        willikins_types::WorkflowName::parse(text).unwrap()
+    }
+
+    fn sink_b_node(binding: Binding) -> Node {
+        Node::new(ToolName::parse("conv.sink_b").unwrap()).port(port("b"), binding)
+    }
+
+    fn only_b(inputs: &Inputs) -> &Value {
+        inputs
+            .get(&port("b"))
+            .expect("the sink's `b` port is bound")
+    }
+
+    fn b_text(value: &Value) -> &str {
+        value
+            .downcast::<ConvB>()
+            .expect("the sink's `b` port receives a known ConvB")
+            .as_str()
+    }
+
+    /// Acceptance 6, the `Input` edge: an `A` workflow input known at
+    /// plan time reaches the `B` port as `Known(B)`, in the planned node's
+    /// inputs, in what `read` saw, and in what `ensure` was called with.
+    #[test]
+    fn a_known_input_edge_delivers_known_b_at_plan_and_apply() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-input"))
+            .input(input("a"), InputSpec::new(scalar("ConvA")))
+            .node(node("sink"), sink_b_node(Binding::Input(input("a"))));
+        let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
+        let mut inputs = IndexMap::new();
+        inputs.insert(input("a"), Value::known(a("hello")));
+
+        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans");
+        let delivered = only_b(&planned.nodes[0].inputs);
+        assert_eq!(delivered.ty(), &scalar("ConvB"));
+        assert_eq!(b_text(delivered), "hello");
+        assert_eq!(
+            serde_json::to_string(delivered).unwrap(),
+            r#"{"type":"ConvB","list":false,"state":"known","value":"hello"}"#
+        );
+        assert_eq!(
+            b_text(only_b(&fixture.sink_b.reads.lock().unwrap()[0])),
+            "hello"
+        );
+
+        let mut observer = RecordingObserver::new();
+        apply(
+            &checked,
+            &inputs,
+            &fixture.catalog,
+            &planned,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect("applies");
+        let ensures = fixture.sink_b.ensures.lock().unwrap();
+        assert_eq!(ensures.len(), 1);
+        assert_eq!(only_b(&ensures[0]).ty(), &scalar("ConvB"));
+        assert_eq!(b_text(only_b(&ensures[0])), "hello");
+    }
+
+    /// Acceptance 6, the `Step` edge unknown at plan time: `plan` delivers
+    /// `Unknown(A)` as `Unknown(B)`, and `apply` re-resolves the step
+    /// against the run's real result and delivers `Known(B)` through the
+    /// same edge before `ensure`.
+    #[test]
+    fn an_unknown_step_edge_plans_unknown_b_and_ensures_known_b() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-step"))
+            .node(
+                node("source"),
+                Node::new(ToolName::parse("conv.source").unwrap()),
+            )
+            .node(
+                node("sink"),
+                sink_b_node(Binding::Step {
+                    node: node("source"),
+                    port: port("out"),
+                }),
+            );
+        let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
+        let inputs = IndexMap::new();
+
+        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans");
+        let sink = planned
+            .nodes
+            .iter()
+            .find(|n| n.name == node("sink"))
+            .unwrap();
+        let delivered = only_b(&sink.inputs);
+        assert_eq!(delivered, &Value::unknown(scalar("ConvB")));
+        assert_eq!(
+            serde_json::to_string(delivered).unwrap(),
+            r#"{"type":"ConvB","list":false,"state":"unknown"}"#
+        );
+
+        let mut observer = RecordingObserver::new();
+        apply(
+            &checked,
+            &inputs,
+            &fixture.catalog,
+            &planned,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect("applies");
+        let ensures = fixture.sink_b.ensures.lock().unwrap();
+        assert_eq!(ensures.len(), 1);
+        assert_eq!(only_b(&ensures[0]).ty(), &scalar("ConvB"));
+        assert_eq!(b_text(only_b(&ensures[0])), "fromensure");
+    }
+
+    /// Acceptance 6, the `Keyed` and `Item` edges: a `for_each` over a
+    /// `list<A>` input delivers each item into a `B` port, and a keyed
+    /// read of an `A` output delivers into a `B` port.
+    #[test]
+    fn keyed_and_item_edges_deliver_known_b() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-keyed-item"))
+            .input(input("xs"), InputSpec::new(TypeRef::list_of(name("ConvA"))))
+            .node(
+                node("each"),
+                sink_b_node(Binding::Item).for_each(Binding::Input(input("xs"))),
+            )
+            .node(
+                node("echo"),
+                Node::new(ToolName::parse("conv.echo").unwrap())
+                    .port(port("in"), Binding::Item)
+                    .for_each(Binding::Input(input("xs"))),
+            )
+            .node(
+                node("sink"),
+                sink_b_node(Binding::Keyed {
+                    node: node("echo"),
+                    key: "y".to_string(),
+                    port: port("out"),
+                }),
+            );
+        let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
+        let mut inputs = IndexMap::new();
+        inputs.insert(input("xs"), Value::known_list(vec![a("x"), a("y")]));
+
+        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans");
+        let delivered: Vec<(String, Option<String>, String)> = planned
+            .nodes
+            .iter()
+            .filter(|n| n.name != node("echo"))
+            .map(|n| {
+                let value = only_b(&n.inputs);
+                assert_eq!(value.ty(), &scalar("ConvB"));
+                (
+                    n.name.to_string(),
+                    n.instance.clone(),
+                    b_text(value).to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            delivered,
+            vec![
+                ("each".to_owned(), Some("x".to_owned()), "x".to_owned()),
+                ("each".to_owned(), Some("y".to_owned()), "y".to_owned()),
+                ("sink".to_owned(), None, "y".to_owned()),
+            ]
+        );
+
+        let mut observer = RecordingObserver::new();
+        apply(
+            &checked,
+            &inputs,
+            &fixture.catalog,
+            &planned,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect("applies");
+        let ensures = fixture.sink_b.ensures.lock().unwrap();
+        let texts: Vec<&str> = ensures.iter().map(|i| b_text(only_b(i))).collect();
+        assert_eq!(texts, vec!["x", "y", "y"]);
+    }
+
+    /// Acceptance 7: a secret converted into a secret port renders
+    /// `[REDACTED SecB]` in the plan and in every observer event, and its
+    /// bytes appear nowhere, while the sink still receives them.
+    #[test]
+    fn a_converted_secret_is_redacted_as_its_target_everywhere() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-secret"))
+            .node(
+                node("mint"),
+                Node::new(ToolName::parse("conv.mint").unwrap()),
+            )
+            .node(
+                node("sink"),
+                Node::new(ToolName::parse("conv.sink_secret").unwrap()).port(
+                    port("s"),
+                    Binding::Step {
+                        node: node("mint"),
+                        port: port("secret"),
+                    },
+                ),
+            );
+        let checked = check(&workflow, &fixture.catalog).expect("SecA converts to SecB");
+        let inputs = IndexMap::new();
+
+        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans");
+        let sink = planned
+            .nodes
+            .iter()
+            .find(|n| n.name == node("sink"))
+            .unwrap();
+        let delivered = sink.inputs.get(&port("s")).unwrap();
+        assert_eq!(delivered.ty(), &scalar("SecB"));
+        assert_eq!(delivered.render().to_string(), "[REDACTED SecB]");
+
+        let mut observer = RecordingObserver::new();
+        let applied = apply(
+            &checked,
+            &inputs,
+            &fixture.catalog,
+            &planned,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect("applies");
+
+        let bytes = secret_bytes();
+        for (what, dump) in [
+            ("plan json", serde_json::to_string(&planned).unwrap()),
+            ("plan debug", format!("{planned:?}")),
+            ("applied json", serde_json::to_string(&applied).unwrap()),
+            (
+                "events json",
+                serde_json::to_string(&observer.events).unwrap(),
+            ),
+            ("events debug", format!("{:?}", observer.events)),
+        ] {
+            assert!(!dump.contains(&bytes), "{what} leaked the converted secret");
+        }
+        let events = serde_json::to_string(&observer.events).unwrap();
+        assert!(events.contains("[REDACTED SecB]"), "events: {events}");
+
+        #[allow(clippy::disallowed_methods)]
+        let token = SinkToken::new();
+        let ensures = fixture.sink_secret.ensures.lock().unwrap();
+        let received = ensures[0].get(&port("s")).unwrap();
+        assert_eq!(received.ty(), &scalar("SecB"));
+        assert_eq!(
+            received.downcast::<SecB>().unwrap().expose(&token),
+            bytes,
+            "the sink receives the converted secret's own bytes"
+        );
+    }
+
+    /// Equivalence item 2: an edge with no conversion delivers its
+    /// argument unchanged, equal and serializing identically. This is what
+    /// keeps every pre-3d document's plan byte-identical.
+    #[test]
+    fn an_exact_edge_delivers_its_argument_unchanged() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-exact"))
+            .input(input("b"), InputSpec::new(scalar("ConvB")))
+            .node(node("sink"), sink_b_node(Binding::Input(input("b"))));
+        let checked = check(&workflow, &fixture.catalog).expect("B binds to B exactly");
+        let edge = &checked.types[&node("sink")][&port("b")];
+        assert!(edge.conversion().is_none());
+        for value in [
+            Value::known(ConvB::parse("same").unwrap()),
+            Value::unknown(scalar("ConvB")),
+            // Even a value of another type passes through untouched: an
+            // exact edge never converts anything.
+            Value::known(a("other")),
+        ] {
+            let delivered = edge.deliver(value.clone());
+            assert_eq!(delivered, value);
+            assert_eq!(
+                serde_json::to_string(&delivered).unwrap(),
+                serde_json::to_string(&value).unwrap()
+            );
+        }
+    }
+
+    /// A value whose own type is not the conversion's source is never
+    /// handed to the converter: it passes through unchanged, so the one
+    /// runtime downcast in the generated converter cannot be reached with
+    /// the wrong type, even by a caller that supplies a wrong-typed
+    /// workflow input to `plan` directly.
+    #[test]
+    fn a_converted_edge_passes_a_foreign_value_through_unchanged() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-foreign"))
+            .input(input("a"), InputSpec::new(scalar("ConvA")))
+            .node(node("sink"), sink_b_node(Binding::Input(input("a"))));
+        let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
+        let edge = &checked.types[&node("sink")][&port("b")];
+        assert!(edge.conversion().is_some());
+        let foreign = Value::known(ConvB::parse("already").unwrap());
+        assert_eq!(edge.deliver(foreign.clone()), foreign);
+
+        let mut inputs = IndexMap::new();
+        inputs.insert(input("a"), foreign.clone());
+        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans without a panic");
+        assert_eq!(only_b(&planned.nodes[0].inputs), &foreign);
+    }
+}

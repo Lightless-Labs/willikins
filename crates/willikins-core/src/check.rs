@@ -173,6 +173,21 @@ impl Edge {
             },
         }
     }
+
+    /// Apply this edge to a value resolved for it: `value` unchanged when
+    /// the edge carries no conversion (every edge of every document that
+    /// predates milestone 3d, which is what keeps their plans
+    /// byte-identical), else [`Value::converted`] through the conversion
+    /// `check` recorded. `plan` and `apply` reach this only through their
+    /// shared resolution context, and never look a conversion up
+    /// themselves.
+    #[must_use]
+    pub fn deliver(&self, value: Value) -> Value {
+        match &self.conversion {
+            None => value,
+            Some(conversion) => value.converted(conversion),
+        }
+    }
 }
 
 /// A non-fatal observation returned alongside a successful [`check`].

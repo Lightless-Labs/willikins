@@ -216,6 +216,59 @@ impl Value {
         })
     }
 
+    /// This value delivered through `conversion` (milestone 3d, decision
+    /// (f)). Total over every state, and never panics:
+    ///
+    /// - `Unknown(A)` becomes `Unknown(B)`, keeping the list flag;
+    /// - a known scalar `A` converts to a known `B`;
+    /// - a known list of `A` converts element-wise (`check` never builds a
+    ///   list edge today, but no state panics here);
+    /// - a value whose declared type is not the conversion's source, or
+    ///   any of whose objects is not of that type, is returned unchanged.
+    ///   `check` only records a conversion on an edge whose binding it
+    ///   resolved to the source type, so this arm is unreachable for a
+    ///   well-typed run; it exists so that the generated converter's one
+    ///   downcast (`willikins_types::__private`) can never be handed an
+    ///   object of the wrong type, even by a caller that passes `plan` a
+    ///   wrong-typed workflow input. The value then reaches the tool
+    ///   exactly as it would have before conversions existed, and the tool
+    ///   refuses it by type.
+    #[must_use]
+    pub fn converted(&self, conversion: &Conversion) -> Value {
+        let from = conversion.from();
+        let is_source = |object: &Arc<dyn DomainObject>| object.type_name() == from.as_str();
+        if self.ty.name != *from {
+            return self.clone();
+        }
+        let state = match &self.state {
+            ValueState::Unknown => ValueState::Unknown,
+            ValueState::Known(Known::Scalar(object)) => {
+                if !is_source(object) {
+                    return self.clone();
+                }
+                ValueState::Known(Known::Scalar(conversion.apply(object.as_ref())))
+            }
+            ValueState::Known(Known::List(items)) => {
+                if !items.iter().all(is_source) {
+                    return self.clone();
+                }
+                ValueState::Known(Known::List(
+                    items
+                        .iter()
+                        .map(|object| conversion.apply(object.as_ref()))
+                        .collect(),
+                ))
+            }
+        };
+        Self {
+            ty: TypeRef {
+                name: conversion.to().clone(),
+                list: self.ty.list,
+            },
+            state,
+        }
+    }
+
     /// This value's declared type.
     #[must_use]
     pub fn ty(&self) -> &TypeRef {
@@ -942,5 +995,74 @@ mod tests {
                 "{name} must be rejected by Value's schema: {instance}"
             );
         }
+    }
+
+    // Milestone 3d, decision (f): `Value::converted` is total over every
+    // state and never hands the converter an object of the wrong type.
+
+    fn identifier_to_profile_name() -> Conversion {
+        let mut rows = willikins_types::conversions![
+            willikins_types::AppleBundleIdentifier => willikins_types::AppleProfileName
+        ];
+        rows.remove(0)
+    }
+
+    fn identifier(text: &str) -> willikins_types::AppleBundleIdentifier {
+        willikins_types::AppleBundleIdentifier::parse(text).unwrap()
+    }
+
+    fn profile_name_ty(list: bool) -> TypeRef {
+        TypeRef {
+            name: TypeName::parse("AppleProfileName").unwrap(),
+            list,
+        }
+    }
+
+    #[test]
+    fn converted_covers_every_state() {
+        let conversion = identifier_to_profile_name();
+
+        let scalar = Value::known(identifier("com.example.one")).converted(&conversion);
+        assert_eq!(scalar.ty(), &profile_name_ty(false));
+        assert_eq!(scalar.render().to_string(), "com.example.one");
+
+        let list = Value::known_list(vec![
+            identifier("com.example.one"),
+            identifier("com.example.two"),
+        ])
+        .converted(&conversion);
+        assert_eq!(list.ty(), &profile_name_ty(true));
+        assert_eq!(
+            serde_json::to_string(&list).unwrap(),
+            r#"{"type":"AppleProfileName","list":true,"state":"known","value":["com.example.one","com.example.two"]}"#
+        );
+
+        let unknown = Value::unknown(TypeRef::scalar(
+            TypeName::parse("AppleBundleIdentifier").unwrap(),
+        ))
+        .converted(&conversion);
+        assert_eq!(unknown, Value::unknown(profile_name_ty(false)));
+
+        let unknown_list = Value::unknown(TypeRef::list_of(
+            TypeName::parse("AppleBundleIdentifier").unwrap(),
+        ))
+        .converted(&conversion);
+        assert_eq!(unknown_list, Value::unknown(profile_name_ty(true)));
+    }
+
+    #[test]
+    fn converted_passes_a_value_of_another_type_through_unchanged() {
+        let conversion = identifier_to_profile_name();
+        let other = Value::known(github_org("lightless-labs"));
+        assert_eq!(other.converted(&conversion), other);
+
+        // A list declared as the source type but holding a foreign object
+        // (only `known_dyn_list` can build one) is left alone too, rather
+        // than reaching the converter's downcast.
+        let forged = Value::known_dyn_list(
+            TypeName::parse("AppleBundleIdentifier").unwrap(),
+            vec![Arc::new(github_org("lightless-labs")) as Arc<dyn DomainObject>],
+        );
+        assert_eq!(forged.converted(&conversion), forged);
     }
 }
