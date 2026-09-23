@@ -7,8 +7,9 @@
 //! `naming.v1`, `template.render`, `env.get`, `base64.decode`,
 //! `apple.signing_key.parse`, `apple.issuer_id.parse`, and
 //! `apple.key_id.parse` from `willikins-tools`, `doppler.secret.get`,
-//! `doppler.value.get`, `fake.secret_list`, and (milestone 3a)
-//! `buildkite.cluster.get` from this crate — are checked here in one
+//! `doppler.value.get`, `fake.secret_list`, (milestone 3a)
+//! `buildkite.cluster.get`, and (milestone 3c) `appstore.certificate.get`
+//! from this crate — are checked here in one
 //! place, through the catalog, so a new pure tool registered later is a
 //! one-line addition rather than a test nobody writes.
 //!
@@ -29,8 +30,9 @@ use std::sync::{Arc, Mutex};
 use willikins_core::{Inputs, Observation, Outputs, PortName, SinkToken, ToolName, Value};
 use willikins_providers_fake::{FakeState, catalog};
 use willikins_types::{
-    AppleSigningKey, BuildkiteClusterName, BuildkiteOrg, DomainType, DopplerConfig,
-    DopplerSecretValue, GitHubOrg, OpaqueSecret, ProjectSlug, SecretName, TemplateSource, Text,
+    AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId, AppleSigningKey,
+    BuildkiteClusterName, BuildkiteOrg, DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg,
+    OpaqueSecret, ProjectSlug, SecretName, TemplateSource, Text,
 };
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
@@ -57,6 +59,14 @@ fn value_name() -> SecretName {
 
 fn buildkite_org() -> BuildkiteOrg {
     BuildkiteOrg::parse("willikins-test").expect("a valid Buildkite org")
+}
+
+fn certificate_type() -> AppleCertificateType {
+    AppleCertificateType::parse("DISTRIBUTION").expect("a valid certificate type")
+}
+
+fn serial_number() -> AppleCertificateSerial {
+    AppleCertificateSerial::parse("7B3F2A9C1D4E5F607182930A1B2C3D4E").expect("a valid serial")
 }
 
 fn cluster_name() -> BuildkiteClusterName {
@@ -89,7 +99,14 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
                 &value_name(),
                 Text::parse("57246542-96fe-1a63-e053-0824d011072a").expect("a valid text value"),
             )
-            .with_buildkite_cluster(&cluster_name(), "018e5a22-d14c-7085-bb28-db0f83f43a1c"),
+            .with_buildkite_cluster(&cluster_name(), "018e5a22-d14c-7085-bb28-db0f83f43a1c")
+            .with_apple_certificate(
+                &certificate_type(),
+                &serial_number(),
+                "C3RT1F1CATE1",
+                false,
+                None,
+            ),
     ));
     let fake_catalog = catalog(state);
 
@@ -155,6 +172,25 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         Value::known(Text::parse("2X9R4HXF34").expect("valid text value")),
     );
 
+    let mut certificate_get_inputs = Inputs::new();
+    certificate_get_inputs.insert(
+        port("issuer_id"),
+        Value::known(
+            AppleIssuerId::parse("57246542-96fe-1a63-e053-0824d011072a")
+                .expect("a valid issuer id"),
+        ),
+    );
+    certificate_get_inputs.insert(
+        port("key_id"),
+        Value::known(AppleKeyId::parse("2X9R4HXF34").expect("a valid key id")),
+    );
+    certificate_get_inputs.insert(
+        port("key"),
+        Value::known(AppleSigningKey::parse(AppleSigningKey::example()).expect("a valid key")),
+    );
+    certificate_get_inputs.insert(port("certificate_type"), Value::known(certificate_type()));
+    certificate_get_inputs.insert(port("serial_number"), Value::known(serial_number()));
+
     let cases = [
         ("naming.v1", naming_inputs),
         ("template.render", template_inputs),
@@ -166,6 +202,7 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         ("doppler.value.get", value_get_inputs),
         ("fake.secret_list", secret_list_inputs),
         ("buildkite.cluster.get", cluster_get_inputs),
+        ("appstore.certificate.get", certificate_get_inputs),
     ];
 
     let mut checked = 0;
