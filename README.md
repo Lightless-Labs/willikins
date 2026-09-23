@@ -54,6 +54,16 @@ GitHub and Doppler have live tools:
 - GitHub: the repository and the Actions secret.
 - Doppler: the project, the config, the service token, the service token rotation, and the
   secret read.
+- App Store Connect: the bundle identifier, the bundle identifier capability, the
+  distribution certificate (`appstore.certificate.get`), and the App Store provisioning
+  profile (`appstore.profile.ensure`).
+
+The certificate tool only reads. It selects 1 certificate by 2 inputs: the certificate type
+(`DISTRIBUTION` or `IOS_DISTRIBUTION`) and the serial number. Use the serial number of the
+certificate whose `.p12` file your signing machine holds. The tool refuses when no
+certificate or more than 1 certificate matches. The profile tool makes only the
+`IOS_APP_STORE` type. Its content is a secret, and a workflow can store it in Doppler.
+Willikins never creates, changes, or revokes a certificate.
 
 Buildkite is not live. Milestone 3 adds a Buildkite provider that makes 1 pipeline for each
 repository. Railway and App Store Connect are possible providers after milestone 3.
