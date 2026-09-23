@@ -3,11 +3,69 @@
 Current state of the project and active work. Read this at session start. Update before
 compaction, before handing off, after a milestone, and after a plan change or discovery.
 
-**Last updated:** 2026-09-22
+**Last updated:** 2026-09-23
 
 ## Current Status
 
-### RESUME HERE (2026-09-22, evening) — App Store Connect is live-proven: willikins can register a bundle identifier against the operator's real Apple account. Secrecy inference is the agreed next milestone
+### RESUME HERE (2026-09-23) — milestone 3c is complete and live-proven: willikins selects a distribution certificate and produces an App Store provisioning profile, and can hand its content to Doppler for Buildkite
+
+- **Live state:** `main` at the handoff commit on top of `589ef10`. Re-gated by the coordinator at
+  `589ef10`, independently of the lanes: fmt, workspace clippy, **171 suites / 2292 tests**, 18
+  ignored, `cargo check -p willikins-types`; `secret_literal_guard`, `no_gh_writes_guard` and the new
+  `no_certificate_writes_guard` all ran. One untracked file, `todos/2026-09-23-cargo-target-60gb-...`,
+  was written by another session doing host maintenance — leave it to them.
+- **What landed (Workflow `wf_4cf92639-a85`, plan `docs/plans/2026-09-22-milestone-3c-app-store-signing.md`,
+  Completed).** `appstore.certificate.get` (pure, read-only, selects by `certificate_type` plus
+  `serial_number`, refuses on zero and on more than one, never repeats the serial);
+  `appstore.profile.ensure` (`IOS_APP_STORE` only, refused by type otherwise, create-or-report because
+  there is no PATCH, content typed `AppleProfileContent` and SECRET so it can reach
+  `doppler.secret.set`); the 401/403 split (`UNAUTHENTICATED` versus `MISSING_PERMISSION`, bodies
+  still dropped for both); `tests/no_certificate_writes_guard.rs`; and
+  `workflows/appstore-signing-profile-from-doppler.yaml`.
+- **PROVEN LIVE on the operator's production Apple account, 2026-09-23.** 5 API-visible certificates,
+  13 profiles, 21 bundle identifiers before, after, on an independent recount, and after `plan
+  --live`. One throwaway identifier and one throwaway profile created and deleted by their own
+  create ids. Certificates only ever received `GET`. The key CAN create and delete profiles.
+  Profile names are unique per identifier (duplicate create → `409 ENTITY_ERROR`); per team is still
+  open. Created content has no device keys (a real App Store profile by TN3125's test), about 16k
+  characters.
+- **The API sees 5 of the team's 11 certificates.** From the operator's portal screenshots: Apple
+  Push Services and every cloud-managed certificate are absent from `GET /v1/certificates`. The
+  post-flight's unchanged count covers API-visible certificates only — still the right guarantee,
+  since what the API cannot list no willikins path can reach. Recorded in the plan's coordinator
+  addendum and the m3c research note.
+- **What the verifier caught, none of which the implementers' own gates did:** eight honest ways
+  past the first certificate-write guard (let-bound and const paths, UFCS, `Method::DELETE`, `PUT`,
+  a path-taking helper, a `format!` brace split, `create_certificate`-style names); a JSON:API 201
+  that carries relationship links but no data, which would have failed to parse *after* Apple
+  created the profile and orphaned it; every fixture date spelled `.000+0000` where Apple sends
+  `+00:00`, so mocks exercised a shape Apple never returns; the serial quoted in refusals; the live
+  harness recording a profile id only after an assertion and documenting the Doppler token on
+  `curl`'s argv; and the fake state printing profile content in plaintext. **Neither implementer
+  ever left a green tree** — the certificate tool's own tests had never passed.
+- **The host is now the dominant constraint.** One full gate takes about two hours. `target/` is
+  **60 GB** and the volume sits at 95% (about 20 GiB free); the verifier's first final gate died on
+  ENOSPC, and a host-wide `cargo-sweep` then deleted this workspace's rlibs mid-build. Another
+  session's todo proposes one integration-test binary per crate (143 → ~13). Worth doing before the
+  next milestone, but it is theirs.
+- **Open, the operator's to confirm:** that Buildkite holds the `.p12` of the one Distribution
+  certificate, since a profile must embed the certificate whose private key the signer holds.
+  Documents name it by serial (`openssl x509 -serial`).
+- **Open, willikins':** the CLI takes inputs only as `--input` arguments, so a serial sits on argv
+  for the run — an input file or stdin option is a small follow-up. `plan --live` renders the issuer
+  id, key id and certificate id in plaintext; all are non-secret types, and secrecy inference is where
+  that gets revisited. There is no way to order a capability node before a profile node without a
+  data edge, and a capability change invalidates a profile, so a document combining them is not yet
+  safely expressible. The two unexpired INVALID profiles on the account have an unknown cause.
+- **Next, candidates in no fixed order:** secrecy inference (`todos/2026-09-22-secrecy-inference.md`,
+  agreed and specified); implementing capability `settings` (closes Sign in with Apple and Data
+  protection properly — the API can finish both and willikins ignores `settings` today); the
+  `plan`/`Mismatch` gap (a drifted bundle-id *name* is a hard plan error rather than a PATCH — it
+  bites real identifiers Xcode named "XC …"); file-writing (the only route to app groups, via the
+  entitlements file and Xcode); the CSR chain for creating certificates (buildable; the private key
+  must reach the vault before the CSR is submitted, or a failure burns a certificate slot).
+
+### Earlier (2026-09-22, evening) — App Store Connect is live-proven: willikins can register a bundle identifier against the operator's real Apple account. Secrecy inference is the agreed next milestone
 
 - **Live state:** `main` at `b96b569`, working tree clean. Gates re-run by the coordinator
   over the landed lane, independently of the agents' own claims, and green: fmt, clippy,
