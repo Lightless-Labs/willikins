@@ -658,7 +658,7 @@ pub struct AppleCertificateSerial(String);
 
 /// A certificate's Apple-assigned opaque record id -- what
 /// `appstore.certificate.get` outputs once its selection (`certificate_type`
-/// + `serial_number`) resolves to exactly one match. Apple documents no
+/// and `serial_number`) resolves to exactly one match. Apple documents no
 /// grammar for this id at all; the same undocumented-grammar reasoning as
 /// [`AppleBundleIdId`] and [`AppleKeyId`] applies, so this pattern is
 /// chosen the same conservative way rather than pinned to any one
@@ -848,14 +848,17 @@ pub struct AppleProfileId(String);
     max_len = 65536,
     secret,
     description = "An App Store Connect provisioning profile's base64-encoded content (a CMS-signed property list). Secret.",
-    // "example" is itself a run of the base64 alphabet (letters only, no
-    // padding needed) so it satisfies this type's own grammar, and it is
-    // the literal word `redaction_adversarial.rs`'s
-    // `no_catalog_entry_carries_a_secret_looking_example` requires every
-    // secret type's published example to contain -- the same reasoning
-    // `AppleSigningKey::example`'s own doc gives for why a real-looking
-    // secret is never used as a catalog example.
-    example = "example"
+    // A run of the base64 alphabet (letters only, no padding needed) so it
+    // satisfies this type's own grammar, containing the literal word
+    // `redaction_adversarial.rs`'s `no_catalog_entry_carries_a_secret_looking_example`
+    // requires every secret type's published example to carry -- the same
+    // reasoning `AppleSigningKey::example`'s own doc gives for why a
+    // real-looking secret is never used as a catalog example. Never the
+    // bare word `example` itself: `tests/catalog.rs`'s snapshot redacts
+    // each secret type's example wherever it appears in the catalog JSON,
+    // and a bare `example` would also rewrite every `"example"` key of
+    // every other type (the task-3 adversarial pass caught exactly that).
+    example = "WillikinsProfileContentexample"
 )]
 pub struct AppleProfileContent(secrecy::SecretString);
 

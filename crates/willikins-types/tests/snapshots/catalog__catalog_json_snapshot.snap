@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-types/tests/catalog.rs
-assertion_line: 101
 expression: redacted
 ---
 [
@@ -618,6 +617,120 @@ expression: redacted
         "PUSH_NOTIFICATIONS"
       ],
       "pattern": "^(?:ICLOUD|IN_APP_PURCHASE|GAME_CENTER|PUSH_NOTIFICATIONS|WALLET|INTER_APP_AUDIO|MAPS|ASSOCIATED_DOMAINS|PERSONAL_VPN|APP_GROUPS|HEALTHKIT|HOMEKIT|WIRELESS_ACCESSORY_CONFIGURATION|APPLE_PAY|DATA_PROTECTION|SIRIKIT|NETWORK_EXTENSIONS|MULTIPATH|HOT_SPOT|NFC_TAG_READING|CLASSKIT|AUTOFILL_CREDENTIAL_PROVIDER|ACCESS_WIFI_INFORMATION|NETWORK_CUSTOM_PROTOCOL|COREMEDIA_HLS_LOW_LATENCY|SYSTEM_EXTENSION_INSTALL|USER_MANAGEMENT|APPLE_ID_AUTH)$"
+    }
+  },
+  {
+    "name": "AppleCertificateType",
+    "secret": false,
+    "description": "An App Store Connect certificate type: DISTRIBUTION or IOS_DISTRIBUTION (the two that can sign an App Store distribution profile).",
+    "example": "DISTRIBUTION",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AppleCertificateType",
+      "description": "An App Store Connect certificate type: DISTRIBUTION or IOS_DISTRIBUTION (the two that can sign an App Store distribution profile).",
+      "type": "string",
+      "examples": [
+        "DISTRIBUTION"
+      ],
+      "pattern": "^(?:DISTRIBUTION|IOS_DISTRIBUTION)$"
+    }
+  },
+  {
+    "name": "AppleCertificateSerial",
+    "secret": false,
+    "description": "An App Store Connect certificate's serial number (uppercase hexadecimal).",
+    "example": "7B3F2A9C1D4E5F607182930A1B2C3D4E5F60",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AppleCertificateSerial",
+      "description": "An App Store Connect certificate's serial number (uppercase hexadecimal).",
+      "type": "string",
+      "examples": [
+        "7B3F2A9C1D4E5F607182930A1B2C3D4E5F60"
+      ],
+      "pattern": "^(?:[0-9A-F]{1,64})$"
+    }
+  },
+  {
+    "name": "AppleCertificateId",
+    "secret": false,
+    "description": "An App Store Connect certificate's Apple-assigned opaque record id.",
+    "example": "C3RT1F1CATE9",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AppleCertificateId",
+      "description": "An App Store Connect certificate's Apple-assigned opaque record id.",
+      "type": "string",
+      "examples": [
+        "C3RT1F1CATE9"
+      ],
+      "pattern": "^(?:[A-Za-z0-9]{2,64})$"
+    }
+  },
+  {
+    "name": "AppleProfileType",
+    "secret": false,
+    "description": "An App Store Connect provisioning profile type: IOS_APP_STORE only (every other profile type is out of scope and refused by this grammar).",
+    "example": "IOS_APP_STORE",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AppleProfileType",
+      "description": "An App Store Connect provisioning profile type: IOS_APP_STORE only (every other profile type is out of scope and refused by this grammar).",
+      "type": "string",
+      "examples": [
+        "IOS_APP_STORE"
+      ],
+      "pattern": "^(?:IOS_APP_STORE)$"
+    }
+  },
+  {
+    "name": "AppleProfileName",
+    "secret": false,
+    "description": "A provisioning profile's human-written `name` attribute.",
+    "example": "willikins-probe-delete-me-example",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AppleProfileName",
+      "description": "A provisioning profile's human-written `name` attribute.",
+      "type": "string",
+      "examples": [
+        "willikins-probe-delete-me-example"
+      ],
+      "maxLength": 255,
+      "minLength": 1
+    }
+  },
+  {
+    "name": "AppleProfileId",
+    "secret": false,
+    "description": "An App Store Connect provisioning profile's Apple-assigned opaque record id.",
+    "example": "PR0F1LE1D9999",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AppleProfileId",
+      "description": "An App Store Connect provisioning profile's Apple-assigned opaque record id.",
+      "type": "string",
+      "examples": [
+        "PR0F1LE1D9999"
+      ],
+      "pattern": "^(?:[A-Za-z0-9]{2,64})$"
+    }
+  },
+  {
+    "name": "AppleProfileContent",
+    "secret": true,
+    "description": "An App Store Connect provisioning profile's base64-encoded content (a CMS-signed property list). Secret.",
+    "example": "[ELIDED SECRET EXAMPLE]",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AppleProfileContent",
+      "description": "An App Store Connect provisioning profile's base64-encoded content (a CMS-signed property list). Secret.",
+      "type": "string",
+      "examples": [
+        "[ELIDED SECRET EXAMPLE]"
+      ],
+      "maxLength": 65536,
+      "pattern": "^(?:[A-Za-z0-9+/]+={0,2})$"
     }
   }
 ]

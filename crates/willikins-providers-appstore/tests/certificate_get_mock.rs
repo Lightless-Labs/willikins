@@ -61,7 +61,11 @@ fn inputs() -> willikins_core::Inputs {
 /// Matches `GET /v1/certificates` regardless of its query string -- every
 /// test here asks for the same `certificate_type`/`serial_number` pair,
 /// so the path alone disambiguates from the pagination test's own second
-/// mock (matched by its `cursor` query param instead).
+/// mock (matched by its `cursor` query param instead). `Matcher::Any` is
+/// load-bearing: a mockito mock with no `match_query` does not match a
+/// request that carries one, and every request this tool sends does --
+/// without it every test here read mockito's own `501` (the task-3
+/// adversarial pass found this whole file failing as committed).
 fn mock_list(
     provider: &mut MockProvider,
     status: usize,
@@ -69,6 +73,7 @@ fn mock_list(
 ) -> mockito::Mock {
     provider
         .mock("GET", "/v1/certificates")
+        .match_query(mockito::Matcher::Any)
         .with_status(status)
         .with_body(body.to_string())
         .create()
@@ -277,6 +282,7 @@ fn every_request_this_tool_sends_is_a_get() {
     let mut provider = MockProvider::start();
     let get_mock = provider
         .mock("GET", "/v1/certificates")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("certificate_list_one").to_string())
         .expect_at_least(1)
