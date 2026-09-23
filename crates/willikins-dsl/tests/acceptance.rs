@@ -191,8 +191,17 @@ fn characterize(path: &str) -> String {
 
     writeln!(report, "TYPES:").unwrap();
     for (node, ports) in &checked.types {
-        for (port, ty) in ports {
-            writeln!(report, "{node}.{port}: {ty}").unwrap();
+        for (port, edge) in ports {
+            // The binding's own type, exactly what `Checked::types` held
+            // before milestone 3d; ` -> <to>` only when `check` recorded
+            // a conversion on the edge (equivalence item 1).
+            let ty = edge.ty();
+            match edge.conversion() {
+                None => writeln!(report, "{node}.{port}: {ty}").unwrap(),
+                Some(conversion) => {
+                    writeln!(report, "{node}.{port}: {ty} -> {}", conversion.to()).unwrap();
+                }
+            }
         }
     }
 

@@ -10,6 +10,7 @@
 **Addendum:** 2026-09-15 — milestone 2c added to the list below: OAuth 2.1 on the MCP transport and a browser login on the approvals page, scheduled right after milestone 2 because static bearer tokens are sandbox-grade and the service gets no public domain until then.
 **Addendum:** 2026-09-22 — first live verification of the App Store Connect provider against a real developer account: `filter[identifier]` matches by **substring**, not exactly, so the byte-for-byte compare is load-bearing and the read now paginates. A provider's filter is a narrowing hint, never a key. See "Credentials are ports, resolvers are nodes" below and `docs/research/2026-09-16-app-store-connect.md`.
 **Addendum:** 2026-09-12 — milestone 2 plan: two kinds of secret (graph secrets behind `SinkToken`, execution-context credentials behind one `authorize` function and a clippy entry); TLS terminated at the platform edge; the remote server plans and applies by workflow name only; a tool refuses rather than reconciles a non-key attribute it should not change; composition split out of milestone 2 into its own plan. See "Milestone 2 decisions".
+**Addendum:** 2026-09-23 — total conversions (milestone 3d): a port of type B accepts a scalar A iff A = B or a registered row A → B exists; one hop, no transitive search; secrecy only goes up, checked at compile time; check records the chosen conversion in Checked, and plan and apply apply it without the table. See `docs/plans/2026-09-23-milestone-3d-conversions.md`.
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
 runs reusable, composable project-provisioning workflows against GitHub, Doppler, Buildkite,
@@ -52,6 +53,14 @@ a secret. The agent plans; the butler acts.
 - A derive macro per provider crate gives each type its format rule, secrecy property,
   redaction, and JSON schema in one place. The type catalog is published over MCP so the
   agent authors against named types with known constraints.
+- A total conversion between two domain types is a registered row `A => B` in
+  `willikins_types::conversion_rows`, admitted only as a fact about the two grammars, never as a
+  naming policy: every value of `A` is, byte for byte, a valid `B`, proved by a property test
+  beside its `From` impl. Secrecy is monotone: a row's target is at least as secret as its source,
+  asserted at compile time by `conversions!`, so a secret-to-public row does not build. A
+  public-to-secret row is admitted by the type rule but must state, in its own plan, why it does
+  not reopen the "no secret input types" path. Resolution is one hop: `check` probes the table
+  once per edge and records the chosen conversion on the edge; `plan` and `apply` never look it up.
 
 ### Tool contract
 
@@ -64,7 +73,9 @@ a secret. The agent plans; the butler acts.
   closed. An open step would make the isolation theatre: a prompt-injected agent could mint a
   token and ship it anywhere.
 - A secret output may only flow to a secret-accepting input. No coercion. Template rendering
-  accepts no secrets at all.
+  accepts no secrets at all. ("No coercion" means no coercion of a secret into a non-secret sink.
+  A registered conversion can only raise secrecy, so none can produce one, and the secret check
+  still runs before any conversion is considered.)
 
 ### Workflow DSL
 

@@ -444,8 +444,9 @@ fn finding_02_an_output_referencing_a_step_named_outputs_resolves() {
     // The node's own port types are untouched by the workflow output...
     assert_eq!(
         checked.types[&willikins_core::NodeName::parse("outputs").unwrap()]
-            [&willikins_core::PortName::parse("slug").unwrap()],
-        willikins_core::TypeRef::scalar(willikins_core::TypeName::parse("ProjectSlug").unwrap()),
+            [&willikins_core::PortName::parse("slug").unwrap()]
+            .ty(),
+        &willikins_core::TypeRef::scalar(willikins_core::TypeName::parse("ProjectSlug").unwrap()),
         "finding 2: the step named `outputs` must keep its own port types"
     );
     // ...and the workflow output resolved to the port it actually names.

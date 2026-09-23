@@ -29,7 +29,7 @@ pub use apply::{
     NodeStatus, NoopObserver, PrincipalId, RecordingObserver, Timestamp, apply,
 };
 pub use catalog::{Catalog, CatalogError};
-pub use check::{CheckError, CheckWarning, Checked, check};
+pub use check::{CheckError, CheckWarning, Checked, Edge, check};
 pub use class::Class;
 pub use describe::{
     Description, InputArg, InputError, MissingInput, PartialInputs, RawInput, describe,

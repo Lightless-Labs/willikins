@@ -944,6 +944,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a unit test of the probe itself; in production only `check` may call it
     fn probe_conversion_finds_the_one_registered_row() {
         let registry = synthetic_registry_with_one_row();
         let a = TypeName::parse("RegistryTestA").unwrap();
@@ -956,6 +957,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a unit test of the probe itself; in production only `check` may call it
     fn probe_conversion_returns_none_for_the_reverse_pair() {
         let registry = synthetic_registry_with_one_row();
         let a = TypeName::parse("RegistryTestA").unwrap();
@@ -966,6 +968,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // a unit test of the probe itself; in production only `check` may call it
     fn probe_conversion_returns_none_for_an_unrelated_pair() {
         let registry = synthetic_registry_with_one_row();
         let a = TypeName::parse("RegistryTestA").unwrap();
