@@ -18,7 +18,7 @@ use indexmap::IndexMap;
 use willikins_core::{
     Binding, Catalog, CheckError, CheckWarning, Class, Ensured, InputSpec, Inputs, Node, NodeName,
     Observation, Outputs, PortName, PortSpec, PortType, Site, Tool, ToolError, ToolName, ToolSpec,
-    TypeName, TypeRef, Value, Workflow, check,
+    TypeName, TypeRef, TypeRegistry, Value, Workflow, check,
 };
 use willikins_types::{DomainType, SinkToken};
 
@@ -376,8 +376,8 @@ fn acceptance_4_keyed_reference_into_a_for_each_node_resolves_to_the_scalar_type
 
     // `token`'s `config` port is `${{ steps.configs[prd].config }}`.
     assert_eq!(
-        checked.types[&node("token")][&port("config")],
-        ty("DopplerConfig")
+        checked.types[&node("token")][&port("config")].ty(),
+        &ty("DopplerConfig")
     );
 }
 
@@ -647,5 +647,291 @@ fn multiple_errors_are_all_reported_in_order() {
                 port: port("slug"),
             },
         ]
+    );
+}
+
+// ---------------------------------------------------------------------
+// Milestone 3d, decision (c): "one hop, no chains" -- `probe_conversion`
+// is a single probe of the `(from, to)` table, never a transitive
+// search. If `A` converts to `B` and `B` converts to `C`, an `A` bound
+// where a `C` is wanted is refused exactly as if neither row existed.
+// `docs/plans/2026-09-23-milestone-3d-conversions.md`, decision (c) and
+// acceptance test 4.
+// ---------------------------------------------------------------------
+
+#[derive(willikins_types::DomainType)]
+#[domain(
+    pattern = "[a-z]+",
+    description = "The first link in a conversion chain.",
+    example = "a"
+)]
+struct ChainA(String);
+
+#[derive(willikins_types::DomainType)]
+#[domain(
+    pattern = "[a-z]+",
+    description = "The second link in a conversion chain.",
+    example = "b"
+)]
+struct ChainB(String);
+
+#[derive(willikins_types::DomainType)]
+#[domain(
+    pattern = "[a-z]+",
+    description = "The third link in a conversion chain.",
+    example = "c"
+)]
+struct ChainC(String);
+
+impl From<ChainA> for ChainB {
+    fn from(a: ChainA) -> Self {
+        Self::parse(a.as_str()).unwrap_or_else(|err| unreachable!("ChainA's own string: {err}"))
+    }
+}
+
+impl From<ChainB> for ChainC {
+    fn from(b: ChainB) -> Self {
+        Self::parse(b.as_str()).unwrap_or_else(|err| unreachable!("ChainB's own string: {err}"))
+    }
+}
+
+/// A registry with `ChainA => ChainB` and `ChainB => ChainC` registered,
+/// and deliberately **no** `ChainA => ChainC` row. Leaked once per
+/// process, the same way every other `&'static TypeRegistry` this
+/// workspace builds is.
+fn chain_registry() -> &'static TypeRegistry {
+    Box::leak(Box::new(TypeRegistry::new(
+        vec![
+            willikins_types::registry::TypeEntry::of::<ChainA>(),
+            willikins_types::registry::TypeEntry::of::<ChainB>(),
+            willikins_types::registry::TypeEntry::of::<ChainC>(),
+        ],
+        willikins_types::conversions![ChainA => ChainB, ChainB => ChainC],
+    )))
+}
+
+/// `sink_c.c` (`Exact(ChainC)`), `sink_b.b` (`Exact(ChainB)`), and a pure
+/// `echo.in -> echo.out`, both `ChainB`.
+fn chain_catalog() -> Catalog {
+    let mut catalog = Catalog::new(chain_registry());
+    catalog
+        .insert(Arc::new(DummyTool {
+            spec: spec_of(
+                "chain.sink_c",
+                &[("c", exact("ChainC"), true)],
+                &[],
+                &[],
+                Class::Reversible,
+                false,
+            ),
+        }))
+        .unwrap();
+    catalog
+        .insert(Arc::new(DummyTool {
+            spec: spec_of(
+                "chain.sink_b",
+                &[("b", exact("ChainB"), true)],
+                &[],
+                &[],
+                Class::Reversible,
+                false,
+            ),
+        }))
+        .unwrap();
+    catalog
+        .insert(Arc::new(DummyTool {
+            spec: spec_of(
+                "chain.echo",
+                &[("in", exact("ChainB"), true)],
+                &[("out", ty("ChainB"))],
+                &[],
+                Class::Reversible,
+                true,
+            ),
+        }))
+        .unwrap();
+    catalog
+        .insert(Arc::new(DummyTool {
+            spec: spec_of(
+                "chain.sink_list_b",
+                &[("xs", PortType::Exact(list_ty("ChainB")), true)],
+                &[],
+                &[],
+                Class::Reversible,
+                false,
+            ),
+        }))
+        .unwrap();
+    catalog
+}
+
+/// An `A` bound where a `C` is wanted, with only `A => B` and `B => C`
+/// registered (no `A => C`), is refused exactly as if neither row
+/// existed: today's exact `TypeMismatch`, byte for byte.
+#[test]
+fn a_bound_where_c_is_wanted_is_refused_exactly_as_before() {
+    let workflow = Workflow::new(workflow_name("no-chains"))
+        .input(input("a"), InputSpec::new(ty("ChainA")))
+        .node(
+            node("sink"),
+            Node::new(tool_name("chain.sink_c")).port(port("c"), Binding::Input(input("a"))),
+        );
+    let errors =
+        check(&workflow, &chain_catalog()).expect_err("A must not convert to C in one hop");
+    assert_eq!(
+        errors,
+        vec![CheckError::TypeMismatch {
+            node: node("sink"),
+            port: port("c"),
+            expected: PortType::Exact(ty("ChainC")),
+            found: ty("ChainA"),
+        }]
+    );
+    assert_eq!(
+        errors[0].to_string(),
+        "node `sink`, port `c`: expected ChainC, found `ChainA`"
+    );
+}
+
+/// Positive control: `B` bound where `C` is wanted converts (`B` is one
+/// hop from `C`), and the edge records exactly that conversion.
+#[test]
+fn b_bound_where_c_is_wanted_converts_one_hop() {
+    let workflow = Workflow::new(workflow_name("no-chains-b-to-c"))
+        .input(input("b"), InputSpec::new(ty("ChainB")))
+        .node(
+            node("sink"),
+            Node::new(tool_name("chain.sink_c")).port(port("c"), Binding::Input(input("b"))),
+        );
+    let checked = check(&workflow, &chain_catalog()).expect("B must convert to C in one hop");
+    let edge = &checked.types[&node("sink")][&port("c")];
+    assert_eq!(edge.ty(), &ty("ChainB"));
+    let conversion = edge
+        .conversion()
+        .expect("B -> C is a registered conversion");
+    assert_eq!(conversion.from().as_str(), "ChainB");
+    assert_eq!(conversion.to().as_str(), "ChainC");
+}
+
+/// Positive control: `A` bound where `B` is wanted converts, the other
+/// registered hop.
+#[test]
+fn a_bound_where_b_is_wanted_converts_one_hop() {
+    let workflow = Workflow::new(workflow_name("no-chains-a-to-b"))
+        .input(input("a"), InputSpec::new(ty("ChainA")))
+        .node(
+            node("sink"),
+            Node::new(tool_name("chain.sink_b")).port(port("b"), Binding::Input(input("a"))),
+        );
+    let checked = check(&workflow, &chain_catalog()).expect("A must convert to B in one hop");
+    let edge = &checked.types[&node("sink")][&port("b")];
+    assert_eq!(edge.ty(), &ty("ChainA"));
+    let conversion = edge
+        .conversion()
+        .expect("A -> B is a registered conversion");
+    assert_eq!(conversion.from().as_str(), "ChainA");
+    assert_eq!(conversion.to().as_str(), "ChainB");
+}
+
+/// A document that spells out two edges -- `A` converted into `echo`
+/// (one hop, `A => B`), then `echo`'s own `ChainB` output bound exactly
+/// to `sink_b` (no conversion needed) -- checks cleanly. The no-chains
+/// refusal is of a chain *inside one edge*, never of a document that
+/// writes the two edges out itself.
+#[test]
+fn a_document_that_spells_out_two_edges_checks() {
+    let workflow = Workflow::new(workflow_name("no-chains-two-edges"))
+        .input(input("a"), InputSpec::new(ty("ChainA")))
+        .node(
+            node("echo"),
+            Node::new(tool_name("chain.echo")).port(port("in"), Binding::Input(input("a"))),
+        )
+        .node(
+            node("sink"),
+            Node::new(tool_name("chain.sink_b")).port(
+                port("b"),
+                Binding::Step {
+                    node: node("echo"),
+                    port: port("out"),
+                },
+            ),
+        );
+    let checked = check(&workflow, &chain_catalog()).unwrap_or_else(|errors| {
+        panic!("a document spelling out two edges must check: {errors:?}")
+    });
+
+    let echo_edge = &checked.types[&node("echo")][&port("in")];
+    assert_eq!(echo_edge.ty(), &ty("ChainA"));
+    assert_eq!(
+        echo_edge.conversion().map(|c| c.to().as_str()),
+        Some("ChainB"),
+        "the first edge is one hop, A -> B"
+    );
+
+    let sink_edge = &checked.types[&node("sink")][&port("b")];
+    assert_eq!(sink_edge.ty(), &ty("ChainB"));
+    assert!(
+        sink_edge.conversion().is_none(),
+        "the second edge is an exact match, no conversion needed"
+    );
+}
+
+/// A literal is never converted (decision (e), step 2): it has no source
+/// type of its own, and it parses directly as the port's own type. Its
+/// edge records exactly that type, with no conversion -- even when the
+/// text would also have parsed as the one registered conversion's source
+/// (`com.example.MyApp` is a valid `AppleBundleIdentifier` too). Literals
+/// parse through the global registry, so this uses the production row
+/// (`AppleBundleIdentifier => AppleProfileName`), not the chain types.
+#[test]
+fn a_literal_records_an_edge_with_no_conversion() {
+    let mut catalog = Catalog::new(willikins_types::registry());
+    catalog
+        .insert(Arc::new(DummyTool {
+            spec: spec_of(
+                "literal.sink",
+                &[("name", exact("AppleProfileName"), true)],
+                &[],
+                &[],
+                Class::Reversible,
+                false,
+            ),
+        }))
+        .unwrap();
+    let workflow = Workflow::new(workflow_name("no-chains-literal")).node(
+        node("sink"),
+        Node::new(tool_name("literal.sink")).port(
+            port("name"),
+            Binding::Literal("com.example.MyApp".to_string()),
+        ),
+    );
+    let checked = check(&workflow, &catalog).expect("a matching literal must check");
+    let edge = &checked.types[&node("sink")][&port("name")];
+    assert_eq!(edge.ty(), &ty("AppleProfileName"));
+    assert!(edge.conversion().is_none(), "a literal is never converted");
+}
+
+/// A registered scalar conversion does not lift to lists: `list<A>`
+/// bound to a `list<B>` port stays a plain `TypeMismatch`, the probe
+/// never runs (decision (e)'s exclusions: "the probe requires two
+/// scalars"). In Rust, `Vec<A>` is not `Into<Vec<B>>` either.
+#[test]
+fn list_a_into_a_list_b_port_stays_a_type_mismatch() {
+    let workflow = Workflow::new(workflow_name("no-chains-list"))
+        .input(input("xs"), InputSpec::new(list_ty("ChainA")))
+        .node(
+            node("sink"),
+            Node::new(tool_name("chain.sink_list_b")).port(port("xs"), Binding::Input(input("xs"))),
+        );
+    let errors = check(&workflow, &chain_catalog())
+        .expect_err("list<ChainA> must not convert to list<ChainB>");
+    assert_eq!(
+        errors,
+        vec![CheckError::TypeMismatch {
+            node: node("sink"),
+            port: port("xs"),
+            expected: PortType::Exact(list_ty("ChainB")),
+            found: list_ty("ChainA"),
+        }]
     );
 }

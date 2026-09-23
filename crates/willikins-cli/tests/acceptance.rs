@@ -437,7 +437,8 @@ fn acceptance_04_for_each() {
         positive_checked
             .types
             .get(&node("token"))
-            .and_then(|ports| ports.get(&port("config"))),
+            .and_then(|ports| ports.get(&port("config")))
+            .map(willikins_core::Edge::ty),
         Some(&ty("DopplerConfig")),
         "acceptance test 4: steps.configs[prd].config type-checks as DopplerConfig"
     );

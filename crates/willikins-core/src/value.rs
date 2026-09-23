@@ -17,7 +17,7 @@ use std::sync::Arc;
 use willikins_types::object::DomainObject;
 use willikins_types::{DomainType, ParseError, Rendered};
 
-pub use willikins_types::registry::{TypeName, TypeRef, TypeRegistry};
+pub use willikins_types::registry::{Conversion, TypeName, TypeRef, TypeRegistry};
 
 /// Build the [`TypeName`] for `T`.
 ///

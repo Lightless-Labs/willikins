@@ -441,7 +441,10 @@ fn the_redaction_marker_string_is_an_ordinary_text_literal() {
     );
 
     let checked = checked(&workflow);
-    assert_eq!(checked.types[&node("readme")][&port("value")], ty("Text"));
+    assert_eq!(
+        checked.types[&node("readme")][&port("value")].ty(),
+        &ty("Text")
+    );
 }
 
 /// A secret bound to a non-secret sink *and* type-mismatched on the same
@@ -555,8 +558,8 @@ fn a_duplicate_with_key_collapses_to_the_last_binding() {
         Workflow::new(workflow_name("duplicate-with-key")).node(node("repo"), node_with_duplicate);
     let checked = checked(&workflow);
     assert_eq!(
-        checked.types[&node("repo")][&port("visibility")],
-        ty("RepoVisibility")
+        checked.types[&node("repo")][&port("visibility")].ty(),
+        &ty("RepoVisibility")
     );
 }
 
@@ -811,8 +814,8 @@ fn one_for_each_node_referenced_by_both_step_and_keyed_resolves_to_list_and_scal
 
     let checked = checked(&workflow);
     assert_eq!(
-        checked.types[&node("token")][&port("config")],
-        ty("DopplerConfig")
+        checked.types[&node("token")][&port("config")].ty(),
+        &ty("DopplerConfig")
     );
     assert_eq!(
         checked.output_types[&output("all_configs")],
@@ -863,8 +866,8 @@ fn a_node_named_outputs_keeps_its_own_port_types() {
 
     let checked = checked(&workflow);
     assert_eq!(
-        checked.types[&node("outputs")][&port("project")],
-        ty("DopplerProject"),
+        checked.types[&node("outputs")][&port("project")].ty(),
+        &ty("DopplerProject"),
         "the real node's port type must survive the output of the same name"
     );
     assert_eq!(checked.output_types[&output("project")], ty("HttpsUrl"));
@@ -964,8 +967,8 @@ fn a_list_output_on_a_plain_node_still_binds_to_a_list_port() {
 
     let checked = checked(&workflow);
     assert_eq!(
-        checked.types[&node("sink")][&port("lines")],
-        list_ty("Text")
+        checked.types[&node("sink")][&port("lines")].ty(),
+        &list_ty("Text")
     );
 }
 
@@ -1141,7 +1144,7 @@ proptest! {
                 for (name, resolved) in &checked.types {
                     let spec = catalog.get(&workflow.nodes[name].tool).unwrap().spec();
                     for (bound, found) in resolved {
-                        if registry.is_secret(&found.name) == Some(true) {
+                        if registry.is_secret(&found.ty().name) == Some(true) {
                             let accepts = match &spec.inputs[bound].ty {
                                 PortType::AnySecret => true,
                                 PortType::Exact(expected) => {
@@ -1150,7 +1153,8 @@ proptest! {
                             };
                             prop_assert!(
                                 accepts,
-                                "secret {found} accepted on non-secret port {name}.{bound}",
+                                "secret {} accepted on non-secret port {name}.{bound}",
+                                found.ty()
                             );
                         }
                     }

@@ -75,7 +75,7 @@ use crate::catalog::Catalog;
 use crate::class::Class;
 use crate::site::Site;
 use crate::tool::{PortName, PortSpec, ToolName, ToolSpec};
-use crate::value::{PortType, TypeRef, TypeRegistry, Value};
+use crate::value::{Conversion, PortType, TypeRef, TypeRegistry, Value};
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
 use willikins_types::ParseError;
 
@@ -94,15 +94,85 @@ pub struct Checked {
     pub class: Class,
     /// Non-fatal warnings, alongside a successful check.
     pub warnings: Vec<CheckWarning>,
-    /// The resolved type of every node `with` binding `check` validated,
-    /// keyed by node then port. Does not cover `for_each` bindings, and
-    /// never mixes in workflow outputs (those are
-    /// [`Self::output_types`]), so a node named `outputs` keeps its own
-    /// entry.
-    pub types: IndexMap<NodeName, IndexMap<PortName, TypeRef>>,
+    /// Every node `with` binding `check` validated, keyed by node then
+    /// port: the binding's own resolved type, and the conversion `check`
+    /// chose to deliver it to the port's type, if any ([`Edge`]). Does not
+    /// cover `for_each` bindings, and never mixes in workflow outputs
+    /// (those are [`Self::output_types`]), so a node named `outputs` keeps
+    /// its own entry.
+    pub types: IndexMap<NodeName, IndexMap<PortName, Edge>>,
     /// The resolved type of every workflow output, in declaration order.
     /// A literal output has no declared type to resolve and is absent.
     pub output_types: IndexMap<OutputName, TypeRef>,
+}
+
+/// One checked data-flow edge into a node's input port: the binding's own
+/// resolved type, and the conversion `check` chose to deliver it to the
+/// port's type, if they differ.
+///
+/// `check` is the only constructor ([`Self::exact`] and [`Self::converted`]
+/// are `pub(crate)`), so outside `willikins-core` an `Edge` can only come
+/// from a real `check` -- there is no struct-literal or `Default` way to
+/// forge one, even though [`Checked::types`] is a public field. `plan` and
+/// `apply` read the conversion from here (`willikins-core::value::Conversion`)
+/// and never resolve one themselves; see [`crate::value::TypeRegistry::probe_conversion`]'s
+/// own doc for why it is `check`'s alone to call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Edge {
+    ty: TypeRef,
+    conversion: Option<Conversion>,
+}
+
+impl Edge {
+    /// A binding accepted with no conversion: the ordinary case, and the
+    /// only one that existed before milestone 3d.
+    pub(crate) fn exact(ty: TypeRef) -> Self {
+        Self {
+            ty,
+            conversion: None,
+        }
+    }
+
+    /// A binding accepted through a registered conversion: `ty` is the
+    /// binding's own resolved type (the conversion's source), and
+    /// `conversion` is the row `check` probed the registry for.
+    pub(crate) fn converted(ty: TypeRef, conversion: Conversion) -> Self {
+        Self {
+            ty,
+            conversion: Some(conversion),
+        }
+    }
+
+    /// The binding's own resolved type: exactly what [`Checked::types`]
+    /// held before milestone 3d, and the conversion's source when
+    /// [`Self::conversion`] is `Some`.
+    #[must_use]
+    pub fn ty(&self) -> &TypeRef {
+        &self.ty
+    }
+
+    /// The conversion `check` chose to deliver this binding to the port's
+    /// type, or `None` when the binding's own type already matched it
+    /// exactly.
+    #[must_use]
+    pub fn conversion(&self) -> Option<&Conversion> {
+        self.conversion.as_ref()
+    }
+
+    /// The type the port actually receives: [`Self::ty`] unchanged, or the
+    /// conversion's target when one applies, carrying [`Self::ty`]'s own
+    /// list-ness (a conversion is defined over scalars only; see
+    /// `docs/plans/2026-09-23-milestone-3d-conversions.md`, decision (e)).
+    #[must_use]
+    pub fn delivered(&self) -> TypeRef {
+        match &self.conversion {
+            None => self.ty.clone(),
+            Some(conversion) => TypeRef {
+                name: conversion.to().clone(),
+                list: self.ty.list,
+            },
+        }
+    }
 }
 
 /// A non-fatal observation returned alongside a successful [`check`].
@@ -706,17 +776,17 @@ struct Resolver<'a> {
     graph: &'a mut DiGraph<NodeName, ()>,
     index_of: &'a IndexMap<NodeName, NodeIndex>,
     used_inputs: HashSet<InputName>,
-    types: IndexMap<NodeName, IndexMap<PortName, TypeRef>>,
+    types: IndexMap<NodeName, IndexMap<PortName, Edge>>,
     output_types: IndexMap<OutputName, TypeRef>,
 }
 
 impl<'a> Resolver<'a> {
-    /// Record `ty` as the resolved type of `node`'s `port`.
-    fn record_type(&mut self, node: &NodeName, port: &PortName, ty: TypeRef) {
+    /// Record `edge` as `node`'s `port`'s checked edge.
+    fn record_edge(&mut self, node: &NodeName, port: &PortName, edge: Edge) {
         self.types
             .entry(node.clone())
             .or_default()
-            .insert(port.clone(), ty);
+            .insert(port.clone(), edge);
     }
 
     /// Whether `source` — a resolved binding's `(node, port)` origin, as
@@ -881,7 +951,11 @@ impl<'a> Resolver<'a> {
             if let Some(found) =
                 check_literal(node, port, text, &port_spec.ty, self.registry, errors)
             {
-                self.record_type(node, port, found);
+                // A literal is never converted: it has no source type of
+                // its own, and it already parsed as the port's own type
+                // directly (`check_literal`, above). See decision (e)'s
+                // step 2.
+                self.record_edge(node, port, Edge::exact(found));
             }
             return;
         }
@@ -918,15 +992,43 @@ impl<'a> Resolver<'a> {
         }
 
         if port_spec.ty.accepts(&found, self.registry) {
-            self.record_type(node, port, found);
-        } else {
-            errors.push(CheckError::TypeMismatch {
-                node: node.clone(),
-                port: port.clone(),
-                expected: port_spec.ty.clone(),
-                found,
-            });
+            self.record_edge(node, port, Edge::exact(found));
+            return;
         }
+
+        // Milestone 3d, decision (e), step 7: the binding's own type does
+        // not match the port's exactly, but a registered conversion might
+        // still deliver it. Scalars only ("one hop, no chains" -- the
+        // probe itself has no transitive search either, but a list edge
+        // is refused before ever reaching the table: `list<A>` into a
+        // `list<B>` port stays a `TypeMismatch`, the same way `Vec<A>` is
+        // not `Into<Vec<B>>` in Rust). This can only ever turn a
+        // `TypeMismatch` into an accepted edge, never the reverse, and
+        // only for a pair `AnySecret` never presents (it names no single
+        // target type to probe).
+        if let PortType::Exact(to) = &port_spec.ty
+            && !found.list
+            && !to.list
+        {
+            // `willikins-core` is `TypeRegistry::probe_conversion`'s one
+            // sanctioned caller: `clippy.toml` disallows every other call,
+            // and a tripwire test greps `plan.rs`, `apply.rs` and
+            // `describe.rs` for the method's name so they can never reach
+            // the table even through an `#[allow]` smuggled in there.
+            #[allow(clippy::disallowed_methods)]
+            let row = self.registry.probe_conversion(&found.name, &to.name);
+            if let Some(row) = row {
+                self.record_edge(node, port, Edge::converted(found, row));
+                return;
+            }
+        }
+
+        errors.push(CheckError::TypeMismatch {
+            node: node.clone(),
+            port: port.clone(),
+            expected: port_spec.ty.clone(),
+            found,
+        });
     }
 
     /// Record the side effects of a `with` key that is not one of its
@@ -2368,5 +2470,35 @@ mod tests {
             );
         }
         assert_eq!(seen_kinds.len(), CHECK_WARNING_VARIANT_COUNT);
+    }
+
+    // -------------------------------------------------------------
+    // Milestone 3d, decision (c): the tripwire. `probe_conversion` is
+    // `willikins-core`'s own `check` module's one sanctioned caller,
+    // enforced by `clippy.toml`'s `disallowed-methods`. This is the
+    // second, independent enforcement: even an `#[allow]` smuggled into
+    // `plan.rs`, `apply.rs` or `describe.rs` to silence clippy there would
+    // still fail this test, because it does not run clippy at all -- it
+    // greps the method's own name out of the source text.
+    // -------------------------------------------------------------
+
+    #[test]
+    fn plan_apply_and_describe_never_name_probe_conversion() {
+        // Assembled, not spelled out, so this test does not trip on its
+        // own source when `cargo test` includes this file's text in
+        // anything that greps the workspace (it does not today, but the
+        // needle is assembled on principle, matching the plan).
+        let needle = concat!("probe_", "conversion");
+        for (path, source) in [
+            ("plan.rs", include_str!("plan.rs")),
+            ("apply.rs", include_str!("apply.rs")),
+            ("describe.rs", include_str!("describe.rs")),
+        ] {
+            assert!(
+                !source.contains(needle),
+                "{path} names `{needle}`: only check.rs may resolve a conversion; plan and \
+                 apply must apply the one check already recorded on a Checked edge"
+            );
+        }
     }
 }
