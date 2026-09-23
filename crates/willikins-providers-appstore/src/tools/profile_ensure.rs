@@ -219,12 +219,22 @@ impl AppstoreProfileEnsure {
                 port: port("profile_type"),
             });
         }
-        let relationships = resource.relationships.as_ref().ok_or_else(|| ToolError {
-            kind: ToolErrorKind::Provider,
-            message: "App Store Connect returned a profile with no certificates relationship"
-                .to_string(),
-        })?;
-        let certs = &relationships.certificates.data;
+        // Only the `include=certificates` instance read reaches here, and
+        // it must carry the relationship's `data`: its absence means
+        // nothing was read, which is a provider fault, never a
+        // `Mismatch { certificate }` claiming the profile names the wrong
+        // certificate.
+        let certs = resource
+            .relationships
+            .as_ref()
+            .and_then(|relationships| relationships.certificates.as_ref())
+            .and_then(|certificates| certificates.data.as_ref())
+            .ok_or_else(|| ToolError {
+                kind: ToolErrorKind::Provider,
+                message: "App Store Connect returned a profile with no certificates \
+                          relationship data, although the read asked it to include them"
+                    .to_string(),
+            })?;
         if certs.len() != 1 || certs[0].id != certificate.as_str() {
             return Ok(Observation::Mismatch {
                 port: port("certificate"),

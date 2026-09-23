@@ -1,0 +1,40 @@
+{
+  "data": {
+    "type": "profiles",
+    "id": "PR0F1LE1D0001",
+    "attributes": {
+      "profileState": "ACTIVE",
+      "createdDate": "2026-09-22T00:00:00.000+00:00",
+      "profileType": "IOS_APP_STORE",
+      "name": "willikins-example-profile",
+      "profileContent": "d2lsbGlraW5zLWV4YW1wbGUtcHJvZmlsZS1jb250ZW50LWV4YW1wbGU=",
+      "uuid": "00000000-0000-0000-0000-000000000000",
+      "platform": "IOS",
+      "expirationDate": "2099-01-01T00:00:00.000+00:00"
+    },
+    "relationships": {
+      "bundleId": {
+        "links": {
+          "self": "https://api.appstoreconnect.apple.com/v1/profiles/PR0F1LE1D0001/relationships/bundleId",
+          "related": "https://api.appstoreconnect.apple.com/v1/profiles/PR0F1LE1D0001/bundleId"
+        }
+      },
+      "devices": {
+        "meta": {"paging": {"total": 0, "limit": 2147483647}},
+        "links": {
+          "self": "https://api.appstoreconnect.apple.com/v1/profiles/PR0F1LE1D0001/relationships/devices",
+          "related": "https://api.appstoreconnect.apple.com/v1/profiles/PR0F1LE1D0001/devices"
+        }
+      },
+      "certificates": {
+        "meta": {"paging": {"total": 1, "limit": 2147483647}},
+        "links": {
+          "self": "https://api.appstoreconnect.apple.com/v1/profiles/PR0F1LE1D0001/relationships/certificates",
+          "related": "https://api.appstoreconnect.apple.com/v1/profiles/PR0F1LE1D0001/certificates"
+        }
+      }
+    },
+    "links": {"self": "https://api.appstoreconnect.apple.com/v1/profiles/PR0F1LE1D0001"}
+  },
+  "links": {"self": "https://api.appstoreconnect.apple.com/v1/profiles"}
+}
