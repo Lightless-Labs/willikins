@@ -122,7 +122,13 @@ pub struct AppleCertificateRecord {
 /// stores its fields as plain strings rather than the live tool's own
 /// domain types. `appstore.profile.ensure`'s fake tool parses it back
 /// into an `AppleProfileContent` at the point it builds an `Outputs`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Plain for *loading* only: `content` serializes as its redaction marker
+/// and `Debug` never prints it (see [`redact_profile_content`] and this
+/// type's own `Debug`), so a `--fake-state-out` dump or a logged state
+/// stays the one-way, redacted view [`FakeState`]'s own doc promises for
+/// every seeded secret.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppleProfileRecord {
     /// The Apple-assigned opaque id this fake hands out.
@@ -147,8 +153,31 @@ pub struct AppleProfileRecord {
     #[serde(default)]
     pub expired: bool,
     /// The profile's base64-encoded content -- see this struct's own doc
-    /// for why it is a plain `String`.
+    /// for why it is a plain `String`, and why it never serializes as one.
+    #[serde(serialize_with = "redact_profile_content")]
     pub content: String,
+}
+
+/// Writes a profile record's `content` as the same marker
+/// `AppleProfileContent`'s own `Display` prints, never its bytes.
+fn redact_profile_content<S>(_content: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str("[REDACTED AppleProfileContent]")
+}
+
+impl std::fmt::Debug for AppleProfileRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppleProfileRecord")
+            .field("id", &self.id)
+            .field("certificate_id", &self.certificate_id)
+            .field("profile_type", &self.profile_type)
+            .field("profile_state", &self.profile_state)
+            .field("expired", &self.expired)
+            .field("content", &"[REDACTED AppleProfileContent]")
+            .finish()
+    }
 }
 
 fn default_profile_state() -> String {
@@ -1020,6 +1049,33 @@ mod tests {
         let json_again = serde_json::to_string(&back).unwrap();
         assert!(!json_again.contains("s3cr3t-value"));
         assert!(json_again.contains("REDACTED"));
+    }
+
+    /// `AppleProfileContent` is a secret type (milestone 3c decision (f)),
+    /// so a profile record's `content` joins every other seeded secret in
+    /// this state's one-way, redacted view: never in a `--fake-state-out`
+    /// dump, never in a `Debug` rendering. The task-2 record stored and
+    /// derived both as a plain `String` (the task-3 adversarial pass).
+    #[test]
+    fn a_profile_content_never_reserializes_or_debugs() {
+        let identifier = AppleBundleIdentifier::parse("com.example.MyApp").unwrap();
+        let name = AppleProfileName::parse("willikins-example-profile").unwrap();
+        let marker = "UHJvZmlsZUNvbnRlbnRNYXJrZXJOb2JvZHlTaG91bGRTZWU=";
+        let state = FakeState::new().with_apple_profile(
+            &identifier,
+            &name,
+            "PROFILE1",
+            "CERT1",
+            "IOS_APP_STORE",
+            "ACTIVE",
+            false,
+            marker,
+        );
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains(marker), "json leaked: {json}");
+        assert!(json.contains("REDACTED"), "json: {json}");
+        let debug = format!("{state:?}");
+        assert!(!debug.contains(marker), "debug leaked: {debug}");
     }
 
     #[test]
