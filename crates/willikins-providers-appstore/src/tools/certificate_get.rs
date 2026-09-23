@@ -38,8 +38,8 @@
 //! (Apple's own words -- "PATCH... this attribute... can deactivate a
 //! certificate") or an `expirationDate` at or before the wall clock each
 //! refuse with [`willikins_core::ToolErrorKind::Conflict`], naming the
-//! certificate by its *input* selection (its type and the serial the
-//! caller already supplied), never anything from the response --
+//! certificate by its type and "the requested serial" (never the serial
+//! itself), never anything from the response --
 //! `activated` absent (observed on all 5 of the operator's own
 //! certificates during the pre-flight) is treated as "not deactivated",
 //! and only an explicit `false` refuses.
@@ -48,8 +48,11 @@
 //!
 //! **Zero** matches (whether because none exist, or because every
 //! candidate the filter returned failed the exact compare) is
-//! [`willikins_core::ToolErrorKind::NotFound`], naming the type and the
-//! requested serial -- never echoing any other certificate's own fields.
+//! [`willikins_core::ToolErrorKind::NotFound`], naming the type and
+//! saying no certificate of it has the requested serial -- never repeating
+//! the serial itself (the document already holds it, and a refusal travels
+//! further than an input does: an agent's transcript, a harness panic),
+//! nor echoing any other certificate's own fields.
 //! **More than one** exact match is
 //! [`willikins_core::ToolErrorKind::Conflict`] naming the count alone,
 //! never the ids: this team held three distribution certificates at once
@@ -137,7 +140,7 @@ impl AppstoreCertificateGet {
             0 => Ok(None),
             1 => Ok(Some(matches.remove(0))),
             count => Err(conflict(format!(
-                "{count} {certificate_type} certificates have serial `{serial_number}`; this \
+                "{count} {certificate_type} certificates have the requested serial; this \
                  tool cannot disambiguate"
             ))),
         }
@@ -153,7 +156,7 @@ impl AppstoreCertificateGet {
         let client = client_for(&self.base_url, &issuer_id, &key_id, &key)?;
         let Some(resource) = Self::find_one(&client, &certificate_type, &serial_number)? else {
             return Err(not_found(format!(
-                "no {certificate_type} certificate has serial `{serial_number}`"
+                "no {certificate_type} certificate has the requested serial"
             )));
         };
         if let Some(expiration_date) = &resource.attributes.expiration_date {
@@ -166,13 +169,13 @@ impl AppstoreCertificateGet {
                 })?;
             if expires <= chrono::Utc::now() {
                 return Err(conflict(format!(
-                    "the {certificate_type} certificate with serial `{serial_number}` is expired"
+                    "the {certificate_type} certificate with the requested serial is expired"
                 )));
             }
         }
         if resource.attributes.activated == Some(false) {
             return Err(conflict(format!(
-                "the {certificate_type} certificate with serial `{serial_number}` is deactivated"
+                "the {certificate_type} certificate with the requested serial is deactivated"
             )));
         }
         let certificate = AppleCertificateId::parse(&resource.id).map_err(|err| ToolError {
