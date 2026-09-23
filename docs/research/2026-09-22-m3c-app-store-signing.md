@@ -187,3 +187,16 @@ counts and statuses only (the plan's pre-flight checklist has the full tallies):
 - All 13 profiles on the account are `IOS_APP_STORE`, each with 0 devices and exactly 1 certificate
   of type `DISTRIBUTION`; 2 are `INVALID` with unexpired dates, so `INVALID` has causes other than
   expiry. `profileContent` is 16240 to 18960 characters.
+
+## Observed from the portal, 2026-09-23 (operator screenshots)
+
+- `GET /v1/certificates` does **not** list every certificate a team holds. On the operator's team it
+  returned 5 (`meta.paging.total` agreeing) while the Certificates, Identifiers & Profiles portal
+  listed 11. The API omitted the team's Apple Push Services certificates and all of its cloud-managed
+  certificates (Development Managed, Distribution Managed). Whether a `filter[certificateType]` value
+  would surface either kind was not tried; the unfiltered, fully paged list did not.
+- Consequence: an API certificate count is a count of API-visible certificates, never of the team's.
+  Anything that reasons about "how many distribution certificates the team has" from the API alone
+  undercounts, and Apple's own published per-team limit (already shown unreliable in the 2026-09-16
+  note) cannot be checked against it either.
+
