@@ -56,16 +56,22 @@
 //!
 //! ```text
 //! source ~/.config/willikins/sandbox.env \
-//!   && J=$(curl -sf -H "Authorization: Bearer $WILLIKINS_DOPPLER_TOKEN" \
+//!   && J=$(printf 'header = "Authorization: Bearer %s"\n' "$WILLIKINS_DOPPLER_TOKEN" \
+//!        | curl -sf -K - \
 //!        "https://api.doppler.com/v3/configs/config/secrets/download?project=app-store-connect&config=prd&format=json") \
-//!   && export ASC_API_KEY_ISSUER_ID=$(jq -r .ASC_API_KEY_ISSUER_ID <<<"$J") \
-//!             ASC_API_KEY_ID=$(jq -r .ASC_API_KEY_ID <<<"$J") \
-//!             ASC_API_KEY_BASE64=$(jq -r .ASC_API_KEY_BASE64 <<<"$J") \
+//!   && export ASC_API_KEY_ISSUER_ID=$(printf '%s' "$J" | jq -r .ASC_API_KEY_ISSUER_ID) \
+//!             ASC_API_KEY_ID=$(printf '%s' "$J" | jq -r .ASC_API_KEY_ID) \
+//!             ASC_API_KEY_BASE64=$(printf '%s' "$J" | jq -r .ASC_API_KEY_BASE64) \
 //!   && unset J \
 //!   && WILLIKINS_LIVE_TESTS=1 RUST_TEST_THREADS=2 cargo test \
 //!        -p willikins-providers-appstore --features live-tests \
 //!        --test live_write_cycle -j 2 -- --ignored --nocapture
 //! ```
+//!
+//! The Doppler token reaches `curl` on its standard input (`-K -`), never
+//! its argument list, and each value reaches `jq` through a pipe from the
+//! `printf` builtin, never a here-string (which zsh spills to a temporary
+//! file, private key included).
 //!
 //! If, and only if, more than one usable `DISTRIBUTION` certificate
 //! exists on the account (the milestone 3c pre-flight found exactly
@@ -80,8 +86,6 @@
 //! id, or content -- only what this run itself created, which is by
 //! design never a real one, and only counts and statuses for everything
 //! else.
-
-use std::sync::Arc;
 
 use willikins_core::{Observation, PortName, SinkToken, Tool, Value};
 use willikins_providers_appstore::{
@@ -119,7 +123,7 @@ fn credential_parts() -> (AppleIssuerId, AppleKeyId, AppleSigningKey) {
 /// The raw JWT text this run's credential mints -- the one thing
 /// [`bearer_for`] wraps into an opaque, redacted
 /// [`willikins_providers_http::Credential`] for every typed call this
-/// file makes, and the one thing [`raw_post`]
+/// file makes, and the one thing [`raw_post_profile`]
 /// needs directly, since that helper deliberately steps outside
 /// `willikins-providers-http`'s typed client (see this file's own module
 /// doc, and that function's).
@@ -150,6 +154,41 @@ fn bearer_for(
     )
 }
 
+/// A fresh `AppstoreClient` with its own freshly minted JWT -- what the
+/// cleanup guard builds at drop time, so a cycle that ran past one
+/// token's lifetime still cleans up.
+fn fresh_client(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+) -> AppstoreClient {
+    AppstoreClient::new(willikins_providers_http::Http::new(
+        willikins_providers_appstore::APPSTORE_API_BASE_URL,
+        Vec::new(),
+        bearer_for(issuer_id, key_id, key),
+    ))
+}
+
+/// Unwrap a tool call, or STOP naming the step and the error's kind only.
+/// A `ToolError`'s message is printed only when it is one of the two
+/// fixed status messages (`401`/`403`), which carry nothing of the
+/// provider's; any other message may quote Apple's own `detail` text,
+/// which can name a certificate or profile id, so it is withheld.
+fn tool_ok<T>(result: Result<T, willikins_core::ToolError>, step: &str) -> T {
+    result.unwrap_or_else(|err| {
+        let fixed = [
+            willikins_providers_http::UNAUTHENTICATED,
+            willikins_providers_http::MISSING_PERMISSION,
+        ];
+        let message = if fixed.contains(&err.message.as_str()) {
+            err.message.as_str()
+        } else {
+            "<withheld: may quote provider text>"
+        };
+        panic!("STOP at {step}: {:?}: {message}", err.kind)
+    })
+}
+
 /// Paginate `path_and_query` (a full path plus query string, `limit=200`
 /// already included) and count every row in every page's `data` array.
 /// Shared shape for [`count_bundle_ids`], [`count_certificates`], and
@@ -171,7 +210,7 @@ fn count_rows(
     for _ in 0..50 {
         let page: serde_json::Value = http
             .get(&path)
-            .unwrap_or_else(|err| panic!("GET {path} failed: {err}"));
+            .unwrap_or_else(|err| panic!("STOP: a listing GET failed, status {:?}", err.status));
         total += page
             .get("data")
             .and_then(serde_json::Value::as_array)
@@ -263,7 +302,7 @@ fn usable_distribution_certificate_serial(
     for _ in 0..50 {
         let page: serde_json::Value = http
             .get(&path)
-            .unwrap_or_else(|err| panic!("GET {path} failed: {err}"));
+            .unwrap_or_else(|err| panic!("STOP: a listing GET failed, status {:?}", err.status));
         if let Some(rows) = page.get("data").and_then(serde_json::Value::as_array) {
             for row in rows {
                 let certificate_type = row
@@ -348,23 +387,28 @@ fn probe_bundle_name() -> AppleBundleIdName {
     AppleBundleIdName::parse("willikins-live-write-cycle-probe").unwrap()
 }
 
+/// `IOS`, not `UNIVERSAL`: this cycle's profile is `IOS_APP_STORE`, and an
+/// iOS-only identifier is the pairing that leaves Apple nothing to refuse.
 fn probe_platform() -> AppleBundleIdPlatform {
-    AppleBundleIdPlatform::parse("UNIVERSAL").unwrap()
+    AppleBundleIdPlatform::parse("IOS").unwrap()
 }
 
-/// One raw `POST`, bypassing `willikins-providers-http`'s typed client
-/// entirely -- decision (h) step 6's duplicate-name probe is the one
-/// place this file needs the response body a call carries: on success,
-/// `data.id` (so this run can record the second profile it just made,
-/// immediately, for cleanup -- never by a follow-up list-and-guess,
-/// which trust boundary 4 forbids just as much as a delete-by-name
-/// would be); on failure, the `errors[].code` leaf, which
-/// `willikins-providers-http`'s own `provider_error_from_body` discards
-/// by design (every tool in this workspace relies on that discarding;
-/// see decision (a) and this crate's own client). Nothing else in the
-/// body is ever read, and nothing this function returns is ever printed
-/// or logged -- only used in memory to decide what to clean up and what
-/// to report by status/code alone.
+/// One raw `POST /v1/profiles`, bypassing `willikins-providers-http`'s
+/// typed client entirely -- decision (h) step 6's duplicate-name probe is
+/// the one place this file needs the response body a call carries: on
+/// success, `data.id` (so this run can record the second profile it just
+/// made, immediately, for cleanup -- never by a follow-up list-and-guess,
+/// which trust boundary 4 forbids just as much as a delete-by-name would
+/// be) and whether it carried `profileContent`; on failure, the
+/// `errors[].code` leaf, which `willikins-providers-http`'s own
+/// `provider_error_from_body` discards by design. Nothing else in the body
+/// is ever read, and nothing of it is printed beyond a status, a code and
+/// a boolean.
+///
+/// The path is fixed, not a parameter: a helper that `POST`s to whatever
+/// path it is handed is a certificate write waiting for a caller, and the
+/// milestone 3c adversarial pass found this one taking one
+/// (`tests/no_certificate_writes_guard.rs` now flags such a call).
 ///
 /// # Panics
 ///
@@ -372,11 +416,10 @@ fn probe_platform() -> AppleBundleIdPlatform {
 /// `2xx` response whose body carries no `data.id` -- either would mean
 /// this harness cannot account for what it just created, which is exactly
 /// the "surprise: stop" case trust boundary 6 asks for.
-fn raw_post(
+fn raw_post_profile(
     issuer_id: &AppleIssuerId,
     key_id: &AppleKeyId,
     key: &AppleSigningKey,
-    path: &str,
     body: &serde_json::Value,
 ) -> RawPostResult {
     let jwt = raw_jwt(issuer_id, key_id, key);
@@ -385,14 +428,14 @@ fn raw_post(
         .build();
     let agent = ureq::Agent::new_with_config(config);
     let url = format!(
-        "{}{path}",
+        "{}/v1/profiles",
         willikins_providers_appstore::APPSTORE_API_BASE_URL
     );
     let mut response = agent
         .post(&url)
         .header("Authorization", format!("Bearer {jwt}"))
         .send_json(body)
-        .unwrap_or_else(|err| panic!("POST {path} failed at the transport level: {err}"));
+        .unwrap_or_else(|_| panic!("STOP: POST /v1/profiles failed at the transport level"));
     let status = response.status().as_u16();
     let body_text = response.body_mut().read_to_string().unwrap_or_default();
     let parsed = serde_json::from_str::<serde_json::Value>(&body_text).ok();
@@ -403,15 +446,20 @@ fn raw_post(
             .and_then(serde_json::Value::as_str)
             .unwrap_or_else(|| {
                 panic!(
-                    "STOP: a {status} response to POST {path} carried no data.id -- this \
+                    "STOP: a {status} response to POST /v1/profiles carried no data.id -- this \
                      harness cannot account for what it just created, so it will not guess"
                 )
             })
             .to_string();
+        let content_present = parsed
+            .as_ref()
+            .and_then(|value| value.pointer("/data/attributes/profileContent"))
+            .is_some_and(serde_json::Value::is_string);
         RawPostResult {
             status,
             created_id: Some(id),
             error_code: None,
+            content_present,
         }
     } else {
         let error_code = parsed.as_ref().and_then(|value| {
@@ -424,16 +472,19 @@ fn raw_post(
             status,
             created_id: None,
             error_code,
+            content_present: false,
         }
     }
 }
 
-/// [`raw_post`]'s result: the status always; `created_id` on a `2xx`
-/// only; `error_code` on a non-`2xx` only, when the body named one.
+/// [`raw_post_profile`]'s result: the status always; `created_id` and
+/// whether the `2xx` body carried `profileContent` on a `2xx` only;
+/// `error_code` on a non-`2xx` only, when the body named one.
 struct RawPostResult {
     status: u16,
     created_id: Option<String>,
     error_code: Option<String>,
+    content_present: bool,
 }
 
 /// Deletes every recorded profile id first, then the recorded bundle id
@@ -443,7 +494,7 @@ struct RawPostResult {
 /// after the explicit cleanup this test performs on its own success path
 /// has already run and been confirmed.
 struct Guard {
-    client: Arc<AppstoreClient>,
+    credential: (AppleIssuerId, AppleKeyId, AppleSigningKey),
     profile_ids: Vec<willikins_types::AppleProfileId>,
     bundle_id: Option<willikins_types::AppleBundleIdId>,
     armed: bool,
@@ -464,11 +515,25 @@ impl Drop for Guard {
         if !self.armed {
             return;
         }
+        let (issuer_id, key_id, key) = &self.credential;
+        let client = fresh_client(issuer_id, key_id, key);
         for profile_id in &self.profile_ids {
-            let _ = self.client.delete_profile(profile_id);
+            match client.delete_profile(profile_id) {
+                Ok(()) => println!("GUARD deleted a throwaway profile by its recorded id"),
+                Err(err) => println!(
+                    "GUARD could not delete a throwaway profile, status {:?} -- report it",
+                    err.status
+                ),
+            }
         }
         if let Some(bundle_id) = &self.bundle_id {
-            let _ = self.client.delete_bundle_id(bundle_id);
+            match client.delete_bundle_id(bundle_id) {
+                Ok(()) => println!("GUARD deleted the throwaway identifier by its recorded id"),
+                Err(err) => println!(
+                    "GUARD could not delete the throwaway identifier, status {:?} -- report it",
+                    err.status
+                ),
+            }
         }
     }
 }
@@ -479,6 +544,7 @@ impl Drop for Guard {
             same command. Never touches a certificate beyond a GET. Read carefully before \
             running: this is a production developer account with no sandbox team."]
 #[allow(clippy::disallowed_methods)] // a live-cycle test mints its own token, as every other does
+#[allow(clippy::too_many_lines)] // one linear live cycle, in decision (h)'s order, kept in one place
 fn appstore_live_write_cycle() {
     if std::env::var("WILLIKINS_LIVE_TESTS").as_deref() != Ok("1") {
         println!("skip: WILLIKINS_LIVE_TESTS is not 1");
@@ -486,11 +552,6 @@ fn appstore_live_write_cycle() {
     }
 
     let (issuer_id, key_id, key) = credential_parts();
-    let client = Arc::new(AppstoreClient::new(willikins_providers_http::Http::new(
-        willikins_providers_appstore::APPSTORE_API_BASE_URL,
-        Vec::new(),
-        bearer_for(&issuer_id, &key_id, &key),
-    )));
 
     // Step 1: read-only counts first, for all three resources this run
     // touches (or, for certificates, deliberately never touches).
@@ -526,10 +587,10 @@ fn appstore_live_write_cycle() {
         PortName::parse("serial_number").unwrap(),
         Value::known(serial_number),
     );
-    let Observation::Present(certificate_outputs) = certificate_tool
-        .read(&certificate_inputs)
-        .expect("the selected certificate reads Present")
-    else {
+    let Observation::Present(certificate_outputs) = tool_ok(
+        certificate_tool.read(&certificate_inputs),
+        "certificate selection",
+    ) else {
         panic!("STOP: the selected certificate did not read Present -- investigate by hand");
     };
     let certificate: AppleCertificateId = certificate_outputs
@@ -571,7 +632,7 @@ fn appstore_live_write_cycle() {
         Value::known(probe_platform()),
     );
 
-    match bundle_id_tool.read(&bundle_id_inputs).expect("reads") {
+    match tool_ok(bundle_id_tool.read(&bundle_id_inputs), "identifier read") {
         Observation::Absent { .. } => {}
         other => panic!(
             "the freshly generated throwaway identifier is not Absent ({other:?}) -- STOP: \
@@ -580,12 +641,9 @@ fn appstore_live_write_cycle() {
     }
 
     let sink = SinkToken::new();
-    let created_bundle_id = bundle_id_tool
-        .ensure(&bundle_id_inputs, &sink)
-        .expect("creates the identifier");
-    assert!(
-        created_bundle_id.changed,
-        "the first ensure must create the identifier"
+    let created_bundle_id = tool_ok(
+        bundle_id_tool.ensure(&bundle_id_inputs, &sink),
+        "identifier create",
     );
     let bundle_id = created_bundle_id
         .outputs
@@ -598,11 +656,15 @@ fn appstore_live_write_cycle() {
     // Guard armed immediately after the identifier's create succeeds --
     // recorded before any further step, per decision (h) step 3.
     let mut guard = Guard {
-        client: Arc::clone(&client),
+        credential: (issuer_id.clone(), key_id.clone(), key.clone()),
         profile_ids: Vec::new(),
         bundle_id: Some(bundle_id.clone()),
         armed: true,
     };
+    assert!(
+        created_bundle_id.changed,
+        "the first ensure must create the identifier"
+    );
 
     // Step 4: profile one.
     let profile_name = throwaway_profile_name(&unique);
@@ -636,13 +698,11 @@ fn appstore_live_write_cycle() {
         Value::known(certificate.clone()),
     );
 
-    let created_profile = profile_tool.ensure(&profile_inputs, &sink).expect(
-        "creates the profile -- if this is a 403, the key cannot create profiles; see \
-                 the plan's own risk list",
-    );
-    assert!(
-        created_profile.changed,
-        "the first ensure must create the profile"
+    // A 403 here means the key cannot create profiles: the plan's own risk
+    // list says stop, let the guard delete the identifier, and report.
+    let created_profile = tool_ok(
+        profile_tool.ensure(&profile_inputs, &sink),
+        "profile create",
     );
     let profile_id = created_profile
         .outputs
@@ -652,9 +712,14 @@ fn appstore_live_write_cycle() {
         .expect("the profile output is an AppleProfileId")
         .clone();
 
-    // Recorded in the guard *before any assertion*, per decision (h)
-    // step 4.
+    // Recorded in the guard *before any assertion* -- including the
+    // `changed` one, which the task-2 draft asserted first -- per decision
+    // (h) step 4.
     guard.profile_ids.push(profile_id.clone());
+    assert!(
+        created_profile.changed,
+        "the first ensure must create the profile"
+    );
 
     let content = created_profile
         .outputs
@@ -699,7 +764,12 @@ fn appstore_live_write_cycle() {
         .get(&format!(
             "/v1/profiles/{profile_id}?fields[profiles]=profileState"
         ))
-        .expect("re-reads the just-created profile");
+        .unwrap_or_else(|err| {
+            panic!(
+                "STOP: re-reading the just-created profile failed, status {:?}",
+                err.status
+            )
+        });
     let profile_state = instance
         .pointer("/data/attributes/profileState")
         .and_then(serde_json::Value::as_str)
@@ -711,13 +781,14 @@ fn appstore_live_write_cycle() {
     );
 
     // Step 5: re-read is Present; re-ensure converges with no change.
-    match profile_tool.read(&profile_inputs).expect("re-reads") {
+    match tool_ok(profile_tool.read(&profile_inputs), "profile re-read") {
         Observation::Present(_) => {}
         other => panic!("expected Present on re-read, got {other:?}"),
     }
-    let reensured = profile_tool
-        .ensure(&profile_inputs, &sink)
-        .expect("re-ensures");
+    let reensured = tool_ok(
+        profile_tool.ensure(&profile_inputs, &sink),
+        "profile re-ensure",
+    );
     assert!(
         !reensured.changed,
         "a second ensure against an unchanged profile must report changed: false"
@@ -740,9 +811,13 @@ fn appstore_live_write_cycle() {
             },
         },
     });
-    let second_create = raw_post(&issuer_id, &key_id, &key, "/v1/profiles", &create_body);
+    let second_create = raw_post_profile(&issuer_id, &key_id, &key, &create_body);
     if let Some(created_id) = &second_create.created_id {
-        println!("profile two: 201 -- names are NOT unique per identifier");
+        println!(
+            "profile two: {} -- names are NOT unique per identifier; the 2xx carried \
+             profileContent: {}",
+            second_create.status, second_create.content_present
+        );
         // Recorded immediately, from the create response's own `data.id`
         // -- never a follow-up list-and-guess, which would be exactly
         // the delete-by-filter trust boundary 4 forbids, one step removed.
@@ -761,16 +836,29 @@ fn appstore_live_write_cycle() {
         "never more than two profiles created by this run"
     );
 
-    // Step 7: cleanup, in order -- profiles first, then the identifier.
+    // Step 7: cleanup, in order -- profiles first, then the identifier,
+    // each by the id its own create returned, through a client with a
+    // freshly minted JWT.
+    let client = fresh_client(&issuer_id, &key_id, &key);
     for profile_id in guard.profile_ids.clone() {
-        client
-            .delete_profile(&profile_id)
-            .expect("deletes a throwaway profile");
+        client.delete_profile(&profile_id).unwrap_or_else(|err| {
+            panic!(
+                "STOP: deleting a throwaway profile failed, status {:?}",
+                err.status
+            )
+        });
     }
-    client
-        .delete_bundle_id(&bundle_id)
-        .expect("deletes the throwaway identifier");
-    let after_delete = bundle_id_tool.read(&bundle_id_inputs).expect("reads");
+    client.delete_bundle_id(&bundle_id).unwrap_or_else(|err| {
+        panic!(
+            "STOP: deleting the throwaway identifier failed, status {:?}",
+            err.status
+        )
+    });
+    println!(
+        "cleanup: {} profile(s) then the identifier deleted by recorded id",
+        guard.profile_ids.len()
+    );
+    let after_delete = tool_ok(bundle_id_tool.read(&bundle_id_inputs), "identifier re-read");
     assert!(
         matches!(after_delete, Observation::Absent { .. }),
         "expected Absent after delete, got {after_delete:?}"
@@ -808,22 +896,27 @@ fn appstore_live_write_cycle() {
         Vec::new(),
         bearer_for(&issuer_id, &key_id, &key),
     );
-    let bundle_id_404: Result<serde_json::Value, _> =
-        independent_http.get(&format!("/v1/bundleIds/{bundle_id}"));
+    // A body on success would be the deleted thing's own record; only the
+    // status is ever looked at, never printed beyond it.
+    let status_of = |path: &str| -> Option<u16> {
+        match independent_http.get::<serde_json::Value>(path) {
+            Ok(_) => Some(200),
+            Err(err) => err.status,
+        }
+    };
     assert_eq!(
-        bundle_id_404
-            .expect_err("the deleted identifier must 404")
-            .status,
-        Some(404)
+        status_of(&format!("/v1/bundleIds/{bundle_id}")),
+        Some(404),
+        "the deleted identifier must answer 404"
     );
     for profile_id in &guard.profile_ids {
-        let profile_404: Result<serde_json::Value, _> =
-            independent_http.get(&format!("/v1/profiles/{profile_id}"));
         assert_eq!(
-            profile_404.expect_err("a deleted profile must 404").status,
-            Some(404)
+            status_of(&format!("/v1/profiles/{profile_id}")),
+            Some(404),
+            "a deleted profile must answer 404"
         );
     }
+    println!("independent read: the identifier and every profile id answer 404");
 
     println!(
         "write cycle complete: identifier and {} profile(s) deleted",
