@@ -76,33 +76,33 @@ impl FakeAppstoreCertificateGet {
             .unwrap_or_default();
         match records.len() {
             0 => Err(not_found(format!(
-                "no {certificate_type} certificate has serial `{serial_number}`"
+                "no {certificate_type} certificate has the requested serial"
             ))),
             1 => {
                 let record = &records[0];
                 if record.expired {
                     return Err(conflict(format!(
-                        "the {certificate_type} certificate with serial `{serial_number}` is \
+                        "the {certificate_type} certificate with the requested serial is \
                          expired"
                     )));
                 }
                 if record.activated == Some(false) {
                     return Err(conflict(format!(
-                        "the {certificate_type} certificate with serial `{serial_number}` is \
+                        "the {certificate_type} certificate with the requested serial is \
                          deactivated"
                     )));
                 }
                 let certificate =
                     AppleCertificateId::parse(&record.id).map_err(|err| ToolError {
                         kind: willikins_core::ToolErrorKind::Provider,
-                        message: format!("certificate `{serial_number}` has a malformed id: {err}"),
+                        message: format!("the requested certificate has a malformed id: {err}"),
                     })?;
                 let mut outputs = Outputs::new();
                 outputs.insert(port("certificate"), Value::known(certificate));
                 Ok(outputs)
             }
             count => Err(conflict(format!(
-                "{count} {certificate_type} certificates have serial `{serial_number}`; this \
+                "{count} {certificate_type} certificates have the requested serial; this \
                  tool cannot disambiguate"
             ))),
         }
