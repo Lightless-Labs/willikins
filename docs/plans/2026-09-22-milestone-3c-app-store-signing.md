@@ -14,6 +14,41 @@ Program Roles profile rows). Every Apple fact below is quoted verbatim in one of
 **Depends on:** the bundle-identifier provider that landed 2026-09-22 without a plan of its own (see
 "Retrospective"), whose `AppstoreClient`, credential ports and paginated exact-compare read this
 milestone reuses unchanged.
+**Reviewed:** 2026-09-23 (task 3 adversarial pass, `docs/research/2026-09-22-m3c-adversarial-pass.md`)
+**Addendum:** 2026-09-23 (task 3, verifier) — **tasks 1 and 2 did not leave a green tree.** Task
+1's six commits had never passed the gates: clippy failed on a doc line and on the guard, all 14
+`certificate_get_mock.rs` tests read mockito's own `501` (the list mock set no `match_query`), the
+guard's own turbofish-delete test failed, `pure_tools_agree` had no case for the new pure tool, and
+two snapshots were stale. Every certificate and profile fixture spelled its dates `+0000`, which
+`chrono`'s RFC 3339 parser refuses (the live account spells `+00:00`: 5/5 certificate and 13/13
+profile dates parse). `AppleProfileContent`'s catalog example, the bare word `example`, rewrote every
+other type's `"example"` key in the type-catalog snapshot. All repaired and gated as one tree before
+the attack; see the research record, section 0.
+
+**Addendum:** 2026-09-23 (task 3, verifier) — **five defects, each now a test** (research record,
+section 2). (1) Decision (g)'s statement-level guard let eight honest shapes through (a `let`- or
+`const`-bound path, `Http::delete(..)`, `Method::DELETE`, `PUT`, a path-taking write helper such as
+the live harness's own `raw_post`, a `format!` whose `{BASE}` split the statement, a call named
+`revoke_certificate`); the guard's rules are rewritten and its module doc, not decision (g), is now
+the specification, including its stated limits. (2) Decision (e)'s create path assumed a `201`
+carries `relationships.certificates.data`; a JSON:API `201` without `include` carries only `links`,
+so a real create would have failed to parse after Apple made the profile. Relationship `data` is now
+optional on the read side and required only of the `include=certificates` instance read. (3)
+`appstore.certificate.get`'s refusals quoted the operator's serial; they now say "the requested
+serial". (4) Decision (h)'s harness recorded profile one's id after asserting `changed`, spent one
+JWT on the whole cycle and its cleanup, printed `ToolError` messages that can quote Apple, and
+documented a recipe with the Doppler token on argv; all fixed, and `raw_post` is now
+`raw_post_profile` with a fixed path. (5) The fake state's dump and `Debug` printed a profile's
+content; now its marker. Acceptance tests 8 and 11 also gained what task 2 left out: a fake `apply`
+of the positive document through the built binary, with a file journal and a state dump, none of
+which carries the content.
+
+**Addendum:** 2026-09-23 (task 3, verifier) — **flown.** Decision (h) ran once against the live
+account: the key can create a profile, the profile is an App Store profile by TN3125's content test,
+a duplicate name on the same identifier is refused `409 ENTITY_ERROR`, and certificate, profile and
+bundle-identifier counts were 5, 13 and 21 before, after, and on an independent recount. The
+post-flight checklist and the verify list below are filled in place.
+
 **Addendum:** 2026-09-22 (task 3 lane) — decision (h) step 6's duplicate-name probe needs the response
 body a failing `POST /v1/profiles` carries (its `errors[].code` leaf) and, on a `2xx`, its `data.id`
 (to record the second throwaway profile for cleanup immediately, never by a follow-up list-and-guess,
@@ -533,28 +568,48 @@ the profile's `content` bound to a non-secret port.
 
 ## Post-flight checklist (the verifier fills this)
 
+Filled 2026-09-23 by the task-3 verifier. Evidence is in
+`docs/research/2026-09-22-m3c-adversarial-pass.md`, section 4, unless stated.
+
 **Does it actually work?**
-- [ ] The live cycle created a profile (`201`) — i.e. the key **can** create profiles.
-- [ ] The created `IOS_APP_STORE` profile's decoded content has no `ProvisionedDevices` and no
-  `ProvisionsAllDevices` (TN3125's App Store test).
-- [ ] `read` after create → `Present`; re-`ensure` → `changed: false`.
-- [ ] Profile content length recorded, and ≤ 65536.
+- [x] The live cycle created a profile (`201`) — i.e. the key **can** create profiles.
+  `appstore.profile.ensure` reported `changed: true`; the harness read `profileState ACTIVE` back.
+- [x] The created `IOS_APP_STORE` profile's decoded content has no `ProvisionedDevices` and no
+  `ProvisionsAllDevices` (TN3125's App Store test). Asserted in memory, and it has `ExpirationDate`.
+- [x] `read` after create → `Present`; re-`ensure` → `changed: false`. Both asserted.
+- [x] Profile content length recorded, and ≤ 65536. 16380 characters.
 - [ ] (Optional) the content round-tripped through sandbox Doppler by SHA-256, and the throwaway
-  config is gone.
+  config is gone. **Not run**; carried forward with verify item 7.
 
 **Did review miss the basics?**
-- [ ] Certificate count, profile count and bundle-identifier count equal before and after.
-- [ ] Independent read: the throwaway identifier and every throwaway profile id answer `404`.
-- [ ] No certificate call other than `GET` in the crate (the guard is green and non-vacuous).
-- [ ] No name, serial, id, uuid or content of the operator's appears in any commit, doc or log kept.
-- [ ] `401` and `403` read differently in a `ToolError`, and neither carries the body.
-- [ ] Every verify item below is answered or explicitly carried forward.
+- [x] Certificate count, profile count and bundle-identifier count equal before and after. 5/13/21
+  before, after, and on a separate process's recount; 0 throwaway leftovers; unchanged again after
+  `plan --live`.
+- [x] Independent read: the throwaway identifier and every throwaway profile id answer `404`. One
+  profile was created (the duplicate was refused), so one profile id and the identifier id.
+- [x] No certificate call other than `GET` in the crate (the guard is green and non-vacuous). Green
+  (27 tests) after its rewrite; a planted `let`-bound `DELETE` in `src/client.rs` fails it
+  (mutation 5); eight bypasses of the first version are now red-then-green unit tests.
+- [x] No name, serial, id, uuid or content of the operator's appears in any commit, doc or log kept.
+  Leak-shape counts over every live log and the plan output were 0 (serial, 24+ hex runs, JWT
+  heads, PEM, 200+ base64 runs). **One exception outside the repository:** the verifier's display
+  filter over `plan --live`'s output let the issuer id through into its own session transcript; it
+  is in no file, commit or doc, and the output file was deleted. `plan --live` itself renders the
+  issuer id, key id and selected certificate id by design (non-secret types) — recorded as an
+  observation, not changed.
+- [x] `401` and `403` read differently in a `ToolError`, and neither carries the body. No provider
+  maps either status itself; mutation 4 proves the shared test pins the `401` wording.
+- [x] Every verify item below is answered or explicitly carried forward.
 
 **Operational readiness**
-- [ ] The research note's "Settled live" section and this plan's verify list updated in place.
-- [ ] The README names the two tools, the in-scope types, and the certificate-selection ports.
+- [x] The research note's "Settled live" section and this plan's verify list updated in place.
+- [x] The README names the two tools, the in-scope types, and the certificate-selection ports
+  (`03c29fa`).
 - [ ] The operator knows the one usable certificate's serial is what their documents must name, and
-  that it must be the certificate whose `.p12` Buildkite holds.
+  that it must be the certificate whose `.p12` Buildkite holds. **Theirs to confirm**: the account
+  holds exactly one usable `DISTRIBUTION` certificate, and the README says to name the serial of the
+  certificate whose `.p12` the signer holds; whether Buildkite holds *that* `.p12` is not
+  observable from here.
 
 ## Verify before relying on them
 
@@ -563,24 +618,40 @@ Only the live cycle can settle these; none may be frozen into code before it run
 1. **Is a profile `name` unique?** Per identifier, settled by profile two (decision (h) step 6). Per
    team is **not** settled by this cycle — it would need a second throwaway identifier — and stays
    open; the tool's `Conflict` arm covers either answer.
+   **Settled 2026-09-23 (per identifier):** yes — a second `POST /v1/profiles` with the same name on
+   the same identifier was refused `409`. Per team: carried forward.
 2. **Can this key create a profile?** Unknown until the first `POST` (pre-flight).
+   **Settled 2026-09-23:** yes — the live cycle's create succeeded.
 3. **Is `IOS_APP_STORE` an App Store distribution type by TN3125's content test?** The 13 existing
    profiles are consistent; the cycle's own profile is the proof.
+   **Settled 2026-09-23:** yes — the created profile's decoded content has `ExpirationDate` and
+   neither `ProvisionedDevices` nor `ProvisionsAllDevices`.
 4. **Does an expired profile read `INVALID`, or `ACTIVE` with a past date?** No expired profile exists
    on the account and the cycle cannot make one (a profile's expiry is Apple's choice). Stays open;
-   the read checks both.
+   the read checks both. **Carried forward, 2026-09-23.**
 5. **Does the `201` carry `profileContent`?** Settled by the create.
+   **Partly settled 2026-09-23:** the tool returned content from the create either way (it `GET`s
+   when the `201` omits it), and only the raw duplicate probe would have shown the `201` body
+   directly — which Apple refused with `409`. So which of the two paths ran is not observed; both are
+   tested against mocks. What *was* learned about the `201`: by JSON:API it carries relationship
+   `links` without `data`, and the client now parses that shape (research record, finding 2).
 6. **What does a duplicate-name create return, status and `errors[].code` leaf?** Settled by profile
    two if names are unique.
+   **Settled 2026-09-23:** `409`, `errors[0].code` `ENTITY_ERROR` (same name, same identifier).
 7. **Doppler's own per-value size limit** against ~19,000 characters. Settled only if task 3 runs the
-   optional sandbox Doppler round trip.
+   optional sandbox Doppler round trip. **Carried forward, 2026-09-23:** the round trip was not run.
 8. **`IOS_DISTRIBUTION` ↔ "iOS Distribution"**: not observable — no such certificate on the team.
-   Admitted by the grammar on Apple's certificate table's word, carried forward.
+   Admitted by the grammar on Apple's certificate table's word, carried forward. **Still carried
+   forward, 2026-09-23:** the team still holds none.
 9. **What makes an unexpired profile `INVALID`?** Two exist on the operator's account. Not probed
    further: reading their relationships would need their ids in a harness, and nothing in this
-   milestone depends on the cause.
+   milestone depends on the cause. **Carried forward, 2026-09-23.**
 10. **Is `filter[name]` on `/v1/profiles` substring too?** Not needed (decision (e) does not use it);
-    recorded so no later lane mistakes it for a key.
+    recorded so no later lane mistakes it for a key. **Carried forward, 2026-09-23:** still unused,
+    still unprobed.
+11. **Added 2026-09-23 — what offset does Apple spell a `date-time` with?** `+00:00`: all 5
+    certificate and 13 profile `expirationDate`s parse as RFC 3339 (the task 1 and 2 fixtures'
+    `+0000` does not).
 
 ## Gates
 

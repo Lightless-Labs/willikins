@@ -549,3 +549,31 @@ returns (probing it needs a *second* create of an identifier that already exists
 account means either colliding with a real record or creating a second throwaway — neither was
 authorised); what a refused `DELETE` returns; and every capability question, since no capability was
 touched on any identifier, existing or throwaway.
+
+## Settled live, 2026-09-23 (milestone 3c)
+
+Observed on the same production account by milestone 3c's live cycle and read-only probes
+(`tests/live_write_cycle.rs`, `tests/live_probe.rs`'s `appstore_counts_and_leftovers_probe`); the
+full record, with the leak-shape evidence, is `docs/research/2026-09-22-m3c-adversarial-pass.md`,
+section 4. Counts and statuses only.
+
+- **This key can create and delete a provisioning profile.** `POST /v1/profiles` with `name`,
+  `profileType: IOS_APP_STORE`, one `bundleId` and exactly one `certificates` relationship and no
+  `devices` key succeeded; `DELETE /v1/profiles/{id}` succeeded; a later `GET` of that id answered
+  `404`.
+- **An `IOS_APP_STORE` profile is an App Store distribution profile by TN3125's content test.** The
+  created profile's decoded content carried `ExpirationDate` and neither `ProvisionedDevices` nor
+  `ProvisionsAllDevices`. Its `profileContent` was 16380 characters; the 13 existing ones are 16240
+  to 18960, and all 13 parse as standard base64.
+- **A duplicate profile name on the same bundle identifier is refused:** `409`, `errors[0].code`
+  `ENTITY_ERROR`. Per-team uniqueness (a second identifier) was not probed.
+- **Apple spells a `date-time`'s offset `+00:00`.** All 5 certificate and all 13 profile
+  `expirationDate`s parse as RFC 3339. A fixture spelled `+0000` does not, which is how every
+  milestone 3c mock test that reached a date check had been failing.
+- **A resource's relationships carry `links`, not `data`, unless the request `include`s them.**
+  This is JSON:API's rule, and it is what a create's `201` looks like, since a `POST` takes no
+  `include`; the client now parses that shape rather than requiring `data`.
+- **Counts before and after:** certificates 5 (4 `DEVELOPER_ID_APPLICATION_G2`, 1 `DISTRIBUTION`),
+  profiles 13 (11 `ACTIVE`, 2 `INVALID`, all `IOS_APP_STORE`), bundle identifiers 21 — identical
+  before the cycle, after it, on a separate process's recount, and after a `plan --live` of the
+  milestone's positive document.
