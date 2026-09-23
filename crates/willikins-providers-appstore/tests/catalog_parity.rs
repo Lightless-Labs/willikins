@@ -1,5 +1,6 @@
-//! The live `appstore.bundle_id.ensure` and
-//! `appstore.bundle_id_capability.ensure` `ToolSpec`s equal
+//! The live `appstore.bundle_id.ensure`,
+//! `appstore.bundle_id_capability.ensure`, `appstore.certificate.get`,
+//! and `appstore.profile.ensure` `ToolSpec`s equal
 //! `willikins_providers_fake`'s tools of the same names, field for
 //! field. `ToolSpec` derives `Serialize` but not `PartialEq`, so equality
 //! here is JSON equality; an insta snapshot of both specs pins the exact
@@ -10,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use willikins_core::{Tool, ToolSpec};
 use willikins_providers_appstore::{
     AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet,
+    AppstoreProfileEnsure,
 };
 
 const NOWHERE: &str = "http://127.0.0.1:1";
@@ -45,11 +47,19 @@ fn appstore_certificate_get_spec_equals_the_fake_tool() {
 }
 
 #[test]
+fn appstore_profile_ensure_spec_equals_the_fake_tool() {
+    let live = AppstoreProfileEnsure::new(NOWHERE);
+    let fake = willikins_providers_fake::tools::FakeAppstoreProfileEnsure::new(fake_state());
+    assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
+}
+
+#[test]
 fn every_spec_validates_against_the_type_registry() {
     for spec in [
         AppstoreBundleIdEnsure::new(NOWHERE).spec(),
         AppstoreBundleIdCapabilityEnsure::new(NOWHERE).spec(),
         AppstoreCertificateGet::new(NOWHERE).spec(),
+        AppstoreProfileEnsure::new(NOWHERE).spec(),
     ] {
         spec.validate(willikins_types::registry())
             .expect("valid spec");
@@ -69,5 +79,9 @@ fn snapshot_every_live_tool_spec() {
     insta::assert_json_snapshot!(
         "appstore_certificate_get_spec",
         spec_json(AppstoreCertificateGet::new(NOWHERE).spec())
+    );
+    insta::assert_json_snapshot!(
+        "appstore_profile_ensure_spec",
+        spec_json(AppstoreProfileEnsure::new(NOWHERE).spec())
     );
 }
