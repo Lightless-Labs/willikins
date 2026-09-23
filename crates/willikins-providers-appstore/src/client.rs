@@ -714,11 +714,22 @@ pub(crate) struct RelationshipDataRef {
     pub(crate) id: String,
 }
 
-/// A to-many relationship's `data` array, on the *read* side --
-/// `certificates` on a `profiles` resource, specifically.
+/// A to-many relationship, on the *read* side -- `certificates` on a
+/// `profiles` resource, specifically.
+///
+/// `data` is optional because App Store Connect is a JSON:API server:
+/// without an `include`, a relationship carries `links` (and `meta.paging`)
+/// but no `data` at all. A `POST /v1/profiles` takes no `include`, so its
+/// `201` is exactly that shape; the task-2 client required `data`, and the
+/// real `201` failed to parse after Apple had already created the profile
+/// (the milestone 3c task-3 adversarial pass,
+/// `tests/profile_create_response_shapes.rs`). Only
+/// [`AppstoreClient::get_profile`]'s `include=certificates` read is
+/// expected to carry `data`, and its caller refuses when it does not.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CertificatesRelationship {
-    pub(crate) data: Vec<RelationshipDataRef>,
+    #[serde(default)]
+    pub(crate) data: Option<Vec<RelationshipDataRef>>,
 }
 
 /// A `profiles` resource's `relationships` object -- only `certificates`
@@ -730,7 +741,8 @@ pub(crate) struct CertificatesRelationship {
 /// single-instance read ever populates it.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ProfileRelationships {
-    pub(crate) certificates: CertificatesRelationship,
+    #[serde(default)]
+    pub(crate) certificates: Option<CertificatesRelationship>,
 }
 
 /// One `profiles` resource's attributes -- every field
