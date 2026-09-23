@@ -1,6 +1,8 @@
 # Milestone 3c: App Store signing — select a distribution certificate, produce an App Store profile
 
 **Created:** 2026-09-22
+**Completed:** 2026-09-23 — re-gated by the coordinator at `589ef10`, independently of the lanes: fmt, workspace clippy, 171 suites / 2292 tests (18 ignored) with all three guards run, and `cargo check -p willikins-types`. Live write cycle passed on the operator's account the same day; see `docs/research/2026-09-22-m3c-adversarial-pass.md`.
+**Addendum:** 2026-09-23 (coordinator) — facts from the operator's own portal screenshots that no API probe could see, and one ordering gap they expose. See "Coordinator addendum, 2026-09-23" at the end.
 **Gate:** PRE-FLIGHT CLEAR, 2026-09-22 — the read-only probe found the credential authenticating, at
 least one usable distribution certificate, and `GET /v1/profiles` answering `200`. See "Pre-flight
 checklist" below.
@@ -708,3 +710,40 @@ That record stands as written and is not duplicated here. What this plan inherit
 per-call client with no credential at construction, the paginated byte-exact read, the recorded
 `Action::Update` gap, and the lesson that live harnesses must be written against where the credential
 actually lives (Doppler), not where a prompt assumed it did.
+
+## Coordinator addendum, 2026-09-23
+
+Recorded after the lane closed, from screenshots of the portal the operator supplied during the run.
+Counts and kinds only; no name, serial, id or date of theirs is reproduced here.
+
+1. **The API sees fewer certificates than the portal holds.** The probe counted 5 through
+   `GET /v1/certificates` (4 Developer ID, 1 Distribution) with `meta.paging.total` agreeing. The
+   portal lists 11: the same 5, plus Apple Push Services certificates and cloud-managed certificates
+   (Development Managed and Distribution Managed, held by Apple for Xcode Cloud and automatic
+   signing). So the post-flight's "certificate count unchanged" covers the API-visible certificates
+   only. That is still the right guarantee for this milestone, because a certificate the API cannot
+   list is one no willikins code path can reach, and the no-certificate-writes guard makes writes
+   structurally absent regardless. It is also why "exactly one usable certificate" is correct for
+   Buildkite: a managed certificate's private key never leaves Apple, so no signer the operator runs
+   could use it.
+2. **Display names cannot select a certificate, confirmed on the real account.** Two of the portal's
+   Distribution-family certificates carry the same display name, and two Xcode Cloud ones share
+   another. Decision (c)'s choice of type plus serial is vindicated by observation, not only by
+   Apple's description of how names are built.
+3. **A profile cannot outlive its certificate.** Every ACTIVE profile on the account shares its
+   expiry date with the one Distribution certificate, so all of them lapse together the day it does.
+   Re-minting every profile after a certificate renewal is a natural later use of this milestone's
+   tools, and a reason documents should name the serial rather than let anything pick "the" certificate.
+4. **An ordering gap for a future document.** Apple invalidates a profile when a capability on its
+   identifier changes ("Enabling a capability will affect provisioning profiles for all eligible
+   platforms", quoted in the research note). A document that ensures both capabilities and a profile
+   must therefore run the capabilities first. Today the graph orders nodes only by data dependencies,
+   and a profile node consumes nothing a capability node produces, so there is no way to express
+   "after" without a data edge. The shipped signing document ensures no capability, so it is
+   unaffected; a document that combines them is not yet safely expressible. Carried forward.
+5. **The operator's naming convention is admitted, not imposed.** They name profiles (and SKUs)
+   after the bundle identifier. `AppleProfileName` accepts any 1 to 255 characters without control,
+   invisible or bidirectional characters, so a bundle-identifier-shaped string parses and the
+   operator passes the same value as `identifier` and `profile_name`. Nothing in the tool assumes it,
+   and the read still compares names exactly and refuses on more than one match.
+
