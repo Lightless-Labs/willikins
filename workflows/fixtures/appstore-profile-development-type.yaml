@@ -1,0 +1,79 @@
+# Negative fixture. Acceptance test: the positive document's own test
+# file proves the corresponding IOS_APP_STORE-only document checks
+# cleanly; this is its counterpart with a refused profile type.
+#
+# AppleProfileType's grammar admits only IOS_APP_STORE (decision (b)):
+# every other member, including a perfectly real development profile
+# type, is refused at parse time -- the refusal of every non-App-Store
+# type is the grammar, not a runtime check. `check` returns exactly one
+# error:
+#   InvalidLiteral { node: profile, port: profile_type, error }
+name: appstore-profile-development-type
+description: appstore.profile.ensure's profile_type bound to a development profile type, refused by AppleProfileType's grammar.
+inputs:
+  config: { type: DopplerConfig }
+  identifier: { type: AppleBundleIdentifier }
+  bundle_name: { type: AppleBundleIdName }
+  platform: { type: AppleBundleIdPlatform }
+  certificate_type: { type: AppleCertificateType }
+  serial_number: { type: AppleCertificateSerial }
+  profile_name: { type: AppleProfileName }
+steps:
+  issuer_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ISSUER_ID
+  issuer_id:
+    tool: apple.issuer_id.parse
+    with:
+      value: ${{ steps.issuer_id_text.value }}
+  key_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ID
+  key_id:
+    tool: apple.key_id.parse
+    with:
+      value: ${{ steps.key_id_text.value }}
+  key_base64:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_BASE64
+  key_decoded:
+    tool: base64.decode
+    with:
+      value: ${{ steps.key_base64.value }}
+  key:
+    tool: apple.signing_key.parse
+    with:
+      value: ${{ steps.key_decoded.value }}
+  bundle_id:
+    tool: appstore.bundle_id.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.identifier }}
+      name: ${{ inputs.bundle_name }}
+      platform: ${{ inputs.platform }}
+  certificate:
+    tool: appstore.certificate.get
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      certificate_type: ${{ inputs.certificate_type }}
+      serial_number: ${{ inputs.serial_number }}
+  profile:
+    tool: appstore.profile.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.bundle_id.identifier }}
+      name: ${{ inputs.profile_name }}
+      profile_type: IOS_APP_DEVELOPMENT
+      certificate: ${{ steps.certificate.certificate }}

@@ -13,16 +13,18 @@ use std::sync::{Arc, Mutex};
 use willikins_core::{Inputs, Observation, PortName, Tool, Value};
 use willikins_providers_appstore::{
     AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet,
+    AppstoreProfileEnsure,
 };
 use willikins_providers_fake::FakeState;
 use willikins_providers_fake::tools::{
     FakeAppstoreBundleIdCapabilityEnsure, FakeAppstoreBundleIdEnsure, FakeAppstoreCertificateGet,
+    FakeAppstoreProfileEnsure,
 };
 use willikins_providers_http::testing::MockProvider;
 use willikins_types::{
     AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCapabilityType,
-    AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId, AppleSigningKey,
-    DomainType,
+    AppleCertificateId, AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId,
+    AppleProfileName, AppleProfileType, AppleSigningKey, DomainType,
 };
 
 fn issuer_id() -> AppleIssuerId {
@@ -292,7 +294,7 @@ fn certificate_list_body(id: &str, activated: Option<bool>, expired: bool) -> St
     let mut attributes = serde_json::json!({
         "certificateType": "DISTRIBUTION",
         "serialNumber": "7B3F2A9C1D4E5F607182930A1B2C3D4E",
-        "expirationDate": if expired { "2020-01-01T00:00:00.000+0000" } else { "2099-01-01T00:00:00.000+0000" },
+        "expirationDate": if expired { "2020-01-01T00:00:00.000+00:00" } else { "2099-01-01T00:00:00.000+00:00" },
     });
     if let Some(activated) = activated {
         attributes["activated"] = serde_json::json!(activated);
@@ -428,4 +430,465 @@ fn certificate_conflict_on_two_matches_agrees() {
     })
     .to_string();
     assert_certificate_error_kinds_agree("conflict-two-matches", state, Some(served));
+}
+
+// ---------------------------------------------------------------------
+// `appstore.profile.ensure`
+// ---------------------------------------------------------------------
+
+fn profile_name() -> AppleProfileName {
+    AppleProfileName::parse("willikins-example-profile").unwrap()
+}
+
+fn profile_type() -> AppleProfileType {
+    AppleProfileType::parse("IOS_APP_STORE").unwrap()
+}
+
+fn profile_certificate() -> AppleCertificateId {
+    AppleCertificateId::parse("C3RT1F1CATE1").unwrap()
+}
+
+fn profile_inputs() -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(port("issuer_id"), Value::known(issuer_id()));
+    inputs.insert(port("key_id"), Value::known(key_id()));
+    inputs.insert(port("key"), Value::known(key()));
+    inputs.insert(port("identifier"), Value::known(identifier()));
+    inputs.insert(port("name"), Value::known(profile_name()));
+    inputs.insert(port("profile_type"), Value::known(profile_type()));
+    inputs.insert(port("certificate"), Value::known(profile_certificate()));
+    inputs
+}
+
+fn profile_list_body(profile_id: &str, name: &str, profile_type: &str) -> String {
+    serde_json::json!({
+        "data": [{
+            "id": profile_id,
+            "attributes": {
+                "name": name,
+                "profileType": profile_type,
+                "profileState": "ACTIVE",
+                "expirationDate": "2099-01-01T00:00:00.000+00:00",
+            }
+        }]
+    })
+    .to_string()
+}
+
+fn profile_get_body(
+    profile_id: &str,
+    name: &str,
+    profile_type: &str,
+    profile_state: &str,
+    expired: bool,
+    certificate_id: &str,
+    content: &str,
+) -> String {
+    serde_json::json!({
+        "data": {
+            "id": profile_id,
+            "attributes": {
+                "name": name,
+                "profileType": profile_type,
+                "profileState": profile_state,
+                "expirationDate": if expired { "2020-01-01T00:00:00.000+00:00" } else { "2099-01-01T00:00:00.000+00:00" },
+                "profileContent": content,
+            },
+            "relationships": {
+                "certificates": {
+                    "data": [{"type": "certificates", "id": certificate_id}]
+                }
+            }
+        }
+    })
+    .to_string()
+}
+
+/// Seeds and serves *the same real world* for both sides. Unlike
+/// [`assert_certificate_agree`], this tool's read is a two-step chain
+/// (resolve the bundle id, then the profile), so both the bundle id's
+/// derived id (mirroring [`present_agrees`]'s own reasoning) and the
+/// fake's freshly-created profile id must line up with what the live
+/// side is served -- `id` and `certificate_id` are therefore parameters,
+/// not fixed strings.
+/// Serves the three requests `appstore.profile.ensure`'s read can make
+/// (bundle id list, profile relationship list, and -- only when a name
+/// matched -- the single-instance profile `GET`) against `provider`.
+/// `profile_id` names the literal path the instance `GET` is mocked at;
+/// `None` when the case never reaches that call (identifier or name
+/// absent, or an ambiguous name match).
+fn mock_profile_reads(
+    provider: &mut MockProvider,
+    bundle_id: &str,
+    served_profile_list: Option<String>,
+    served_profile_get: Option<(&str, String)>,
+) {
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(bundle_id_list_body(bundle_id, "example", "UNIVERSAL"))
+        .create();
+    let list_mock = provider.mock(
+        "GET",
+        format!("/v1/bundleIds/{bundle_id}/profiles").as_str(),
+    );
+    let list_body =
+        served_profile_list.unwrap_or_else(|| serde_json::json!({"data": []}).to_string());
+    list_mock
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(list_body)
+        .create();
+    if let Some((profile_id, body)) = served_profile_get {
+        provider
+            .mock("GET", format!("/v1/profiles/{profile_id}").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(body)
+            .create();
+    }
+}
+
+/// Seeds and serves *the same real world* for both sides. Unlike
+/// [`assert_certificate_agree`], this tool's read is a two-step chain
+/// (resolve the bundle id, then the profile), so both the bundle id's
+/// derived id (mirroring [`present_agrees`]'s own reasoning) and the
+/// profile id the instance `GET` is mocked at must line up with what the
+/// fake side was seeded with.
+fn assert_profile_agree(
+    case: &str,
+    state: FakeState,
+    bundle_id: &str,
+    served_profile_list: Option<String>,
+    served_profile_get: Option<(&str, String)>,
+) {
+    let mut provider = MockProvider::start();
+    mock_profile_reads(
+        &mut provider,
+        bundle_id,
+        served_profile_list,
+        served_profile_get,
+    );
+
+    let live = AppstoreProfileEnsure::new(provider.url())
+        .read(&profile_inputs())
+        .unwrap_or_else(|err| panic!("{case}: the live tool failed: {err}"));
+    let fake = FakeAppstoreProfileEnsure::new(Arc::new(Mutex::new(state)))
+        .read(&profile_inputs())
+        .unwrap_or_else(|err| panic!("{case}: the fake tool failed: {err}"));
+
+    assert_eq!(
+        shape(&live),
+        shape(&fake),
+        "{case}: live says {live:?}, fake says {fake:?}"
+    );
+    assert_eq!(rendered(&live), rendered(&fake), "{case}: outputs differ");
+}
+
+fn assert_profile_error_kinds_agree(
+    case: &str,
+    state: FakeState,
+    bundle_id: &str,
+    served_profile_list: Option<String>,
+    served_profile_get: Option<(&str, String)>,
+) {
+    let mut provider = MockProvider::start();
+    mock_profile_reads(
+        &mut provider,
+        bundle_id,
+        served_profile_list,
+        served_profile_get,
+    );
+
+    let live = AppstoreProfileEnsure::new(provider.url())
+        .read(&profile_inputs())
+        .expect_err(&format!("{case}: the live tool should refuse"));
+    let fake = FakeAppstoreProfileEnsure::new(Arc::new(Mutex::new(state)))
+        .read(&profile_inputs())
+        .expect_err(&format!("{case}: the fake tool should refuse"));
+    assert_eq!(live.kind, fake.kind, "{case}");
+}
+
+#[test]
+fn profile_absent_when_identifier_not_registered_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"data": []}).to_string())
+        .create();
+    let live = AppstoreProfileEnsure::new(provider.url())
+        .read(&profile_inputs())
+        .expect("the live tool reads");
+    let fake = FakeAppstoreProfileEnsure::new(Arc::new(Mutex::new(FakeState::new())))
+        .read(&profile_inputs())
+        .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn profile_absent_when_name_not_found_agrees() {
+    let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());
+    let state = FakeState::new().with_apple_bundle_id(
+        &identifier(),
+        &AppleBundleIdName::parse("example").unwrap(),
+        &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+    );
+    assert_profile_agree("absent-name", state, &bundle_id, None, None);
+}
+
+#[test]
+fn profile_present_agrees() {
+    let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());
+    let state = FakeState::new()
+        .with_apple_bundle_id(
+            &identifier(),
+            &AppleBundleIdName::parse("example").unwrap(),
+            &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+        )
+        .with_apple_profile(
+            &identifier(),
+            &profile_name(),
+            "PROFILE1",
+            profile_certificate().as_str(),
+            "IOS_APP_STORE",
+            "ACTIVE",
+            false,
+            "ZmFrZWNvbnRlbnQ=",
+        );
+    assert_profile_agree(
+        "present",
+        state,
+        &bundle_id,
+        Some(profile_list_body(
+            "PROFILE1",
+            "willikins-example-profile",
+            "IOS_APP_STORE",
+        )),
+        Some((
+            "PROFILE1",
+            profile_get_body(
+                "PROFILE1",
+                "willikins-example-profile",
+                "IOS_APP_STORE",
+                "ACTIVE",
+                false,
+                profile_certificate().as_str(),
+                "ZmFrZWNvbnRlbnQ=",
+            ),
+        )),
+    );
+}
+
+#[test]
+fn profile_mismatch_profile_type_agrees() {
+    let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());
+    let state = FakeState::new()
+        .with_apple_bundle_id(
+            &identifier(),
+            &AppleBundleIdName::parse("example").unwrap(),
+            &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+        )
+        .with_apple_profile(
+            &identifier(),
+            &profile_name(),
+            "PROFILE1",
+            profile_certificate().as_str(),
+            "IOS_APP_ADHOC",
+            "ACTIVE",
+            false,
+            "ZmFrZWNvbnRlbnQ=",
+        );
+    assert_profile_agree(
+        "mismatch-profile-type",
+        state,
+        &bundle_id,
+        Some(profile_list_body(
+            "PROFILE1",
+            "willikins-example-profile",
+            "IOS_APP_ADHOC",
+        )),
+        Some((
+            "PROFILE1",
+            profile_get_body(
+                "PROFILE1",
+                "willikins-example-profile",
+                "IOS_APP_ADHOC",
+                "ACTIVE",
+                false,
+                profile_certificate().as_str(),
+                "ZmFrZWNvbnRlbnQ=",
+            ),
+        )),
+    );
+}
+
+#[test]
+fn profile_invalid_state_agrees() {
+    let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());
+    let state = FakeState::new()
+        .with_apple_bundle_id(
+            &identifier(),
+            &AppleBundleIdName::parse("example").unwrap(),
+            &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+        )
+        .with_apple_profile(
+            &identifier(),
+            &profile_name(),
+            "PROFILE1",
+            profile_certificate().as_str(),
+            "IOS_APP_STORE",
+            "INVALID",
+            false,
+            "ZmFrZWNvbnRlbnQ=",
+        );
+    assert_profile_error_kinds_agree(
+        "invalid",
+        state,
+        &bundle_id,
+        Some(profile_list_body(
+            "PROFILE1",
+            "willikins-example-profile",
+            "IOS_APP_STORE",
+        )),
+        Some((
+            "PROFILE1",
+            profile_get_body(
+                "PROFILE1",
+                "willikins-example-profile",
+                "IOS_APP_STORE",
+                "INVALID",
+                false,
+                profile_certificate().as_str(),
+                "ZmFrZWNvbnRlbnQ=",
+            ),
+        )),
+    );
+}
+
+#[test]
+fn profile_conflict_on_two_names_agrees() {
+    let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());
+    let state = FakeState::new()
+        .with_apple_bundle_id(
+            &identifier(),
+            &AppleBundleIdName::parse("example").unwrap(),
+            &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+        )
+        .with_apple_profile(
+            &identifier(),
+            &profile_name(),
+            "PROFILE1",
+            profile_certificate().as_str(),
+            "IOS_APP_STORE",
+            "ACTIVE",
+            false,
+            "ZmFrZWNvbnRlbnQ=",
+        )
+        .with_apple_profile(
+            &identifier(),
+            &profile_name(),
+            "PROFILE2",
+            profile_certificate().as_str(),
+            "IOS_APP_STORE",
+            "ACTIVE",
+            false,
+            "ZmFrZWNvbnRlbnQ=",
+        );
+    let served = serde_json::json!({
+        "data": [
+            {"id": "PROFILE1", "attributes": {"name": "willikins-example-profile", "profileType": "IOS_APP_STORE", "profileState": "ACTIVE", "expirationDate": "2099-01-01T00:00:00.000+00:00"}},
+            {"id": "PROFILE2", "attributes": {"name": "willikins-example-profile", "profileType": "IOS_APP_STORE", "profileState": "ACTIVE", "expirationDate": "2099-01-01T00:00:00.000+00:00"}},
+        ]
+    })
+    .to_string();
+    assert_profile_error_kinds_agree("conflict-two-names", state, &bundle_id, Some(served), None);
+}
+
+#[test]
+fn profile_mismatch_certificate_agrees() {
+    let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());
+    let state = FakeState::new()
+        .with_apple_bundle_id(
+            &identifier(),
+            &AppleBundleIdName::parse("example").unwrap(),
+            &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+        )
+        .with_apple_profile(
+            &identifier(),
+            &profile_name(),
+            "PROFILE1",
+            "OTHERCERTID999",
+            "IOS_APP_STORE",
+            "ACTIVE",
+            false,
+            "ZmFrZWNvbnRlbnQ=",
+        );
+    assert_profile_agree(
+        "mismatch-certificate",
+        state,
+        &bundle_id,
+        Some(profile_list_body(
+            "PROFILE1",
+            "willikins-example-profile",
+            "IOS_APP_STORE",
+        )),
+        Some((
+            "PROFILE1",
+            profile_get_body(
+                "PROFILE1",
+                "willikins-example-profile",
+                "IOS_APP_STORE",
+                "ACTIVE",
+                false,
+                "OTHERCERTID999",
+                "ZmFrZWNvbnRlbnQ=",
+            ),
+        )),
+    );
+}
+
+#[test]
+fn profile_expired_agrees() {
+    let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());
+    let state = FakeState::new()
+        .with_apple_bundle_id(
+            &identifier(),
+            &AppleBundleIdName::parse("example").unwrap(),
+            &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+        )
+        .with_apple_profile(
+            &identifier(),
+            &profile_name(),
+            "PROFILE1",
+            profile_certificate().as_str(),
+            "IOS_APP_STORE",
+            "ACTIVE",
+            true,
+            "ZmFrZWNvbnRlbnQ=",
+        );
+    assert_profile_error_kinds_agree(
+        "expired",
+        state,
+        &bundle_id,
+        Some(profile_list_body(
+            "PROFILE1",
+            "willikins-example-profile",
+            "IOS_APP_STORE",
+        )),
+        Some((
+            "PROFILE1",
+            profile_get_body(
+                "PROFILE1",
+                "willikins-example-profile",
+                "IOS_APP_STORE",
+                "ACTIVE",
+                true,
+                profile_certificate().as_str(),
+                "ZmFrZWNvbnRlbnQ=",
+            ),
+        )),
+    );
 }

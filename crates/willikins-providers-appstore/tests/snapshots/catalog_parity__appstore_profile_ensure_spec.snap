@@ -1,0 +1,69 @@
+---
+source: crates/willikins-providers-appstore/tests/catalog_parity.rs
+expression: "spec_json(AppstoreProfileEnsure::new(NOWHERE).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Produce (or report) an App Store Connect IOS_APP_STORE provisioning profile relating a bundle identifier to a distribution certificate.",
+  "inputs": {
+    "certificate": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleCertificateId"
+      }
+    },
+    "identifier": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleBundleIdentifier"
+      }
+    },
+    "issuer_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleIssuerId"
+      }
+    },
+    "key": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleSigningKey"
+      }
+    },
+    "key_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleKeyId"
+      }
+    },
+    "name": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleProfileName"
+      }
+    },
+    "profile_type": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleProfileType"
+      }
+    }
+  },
+  "key": [
+    "identifier",
+    "name"
+  ],
+  "name": "appstore.profile.ensure",
+  "outputs": {
+    "content": "AppleProfileContent",
+    "profile": "AppleProfileId"
+  },
+  "pure": false
+}

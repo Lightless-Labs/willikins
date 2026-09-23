@@ -91,6 +91,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
         state.clone()
     ));
     insert!(tools::FakeAppstoreCertificateGet::new(state.clone()));
+    insert!(tools::FakeAppstoreProfileEnsure::new(state.clone()));
     insert!(tools::FakeSecretList::new());
     // The last use of `state`: moved rather than cloned, so this
     // function's own `state` parameter is genuinely consumed.
@@ -141,13 +142,14 @@ mod tests {
             "appstore.bundle_id.ensure",
             "appstore.bundle_id_capability.ensure",
             "appstore.certificate.get",
+            "appstore.profile.ensure",
             "fake.secret_list",
             "fake.irreversible.ensure",
             "template.render",
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 26);
+        assert_eq!(names.len(), 27);
     }
 
     #[test]

@@ -6,8 +6,9 @@
 //! added `doppler.value.get`), (milestone 3a)
 //! `willikins-providers-buildkite`'s two live tools, and (the App Store
 //! Connect provider crate, plus milestone 3c's `appstore.certificate.get`)
-//! `willikins-providers-appstore`'s three live tools. Twenty-four tools,
-//! no fake among them.
+//! `willikins-providers-appstore`'s four live tools (milestone 3c task 2
+//! added `appstore.profile.ensure`). Twenty-five tools, no fake among
+//! them.
 //!
 //! The assembly itself lives in `willikins-server` now
 //! (`willikins_server::live_catalog_with`, task 10a's `Butler::live_catalog`)
@@ -44,18 +45,22 @@ use willikins_providers_http::{Credential, Http};
 /// The milestone's original two positive fixtures, plus the two App
 /// Store Connect credential documents proving the credential's three
 /// parts are genuinely free ports, plus the two documents that chain
-/// those parts all the way into a real `appstore.bundle_id.ensure` call.
-const POSITIVE_FIXTURES: [&str; 6] = [
+/// those parts all the way into a real `appstore.bundle_id.ensure` call,
+/// plus milestone 3c's positive document, which extends that chain through
+/// `appstore.certificate.get` and `appstore.profile.ensure` into
+/// `doppler.secret.set`.
+const POSITIVE_FIXTURES: [&str; 7] = [
     "new-rust-service.yaml",
     "rotate-service-token.yaml",
     "apple-signing-credential-from-doppler.yaml",
     "apple-signing-credential-from-inputs.yaml",
     "appstore-bundle-id-from-doppler.yaml",
     "appstore-bundle-id-from-inputs.yaml",
+    "appstore-signing-profile-from-doppler.yaml",
 ];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 24] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 25] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -89,7 +94,7 @@ fn live_catalog() -> Catalog {
     )
 }
 
-/// The assembly itself: twenty-four tools, no name collision, every spec
+/// The assembly itself: twenty-five tools, no name collision, every spec
 /// valid against the shared type registry.
 #[test]
 fn the_live_catalog_assembles_and_every_spec_validates() {
@@ -134,7 +139,7 @@ fn both_positive_fixtures_check_the_same_against_the_live_catalog() {
     }
 }
 
-/// Nothing fake survives in it: inserting any of the twenty-four fake tools
+/// Nothing fake survives in it: inserting any of the twenty-five fake tools
 /// of the same names on top is refused as a duplicate, which is what
 /// makes the two tests above statements about the live tools at all.
 #[test]

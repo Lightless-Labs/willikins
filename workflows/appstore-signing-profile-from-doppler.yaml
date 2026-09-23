@@ -1,0 +1,100 @@
+# The operator's own chain, extended one step past
+# appstore-bundle-id-from-doppler.yaml: the same App Store Connect
+# credential, resolved out of Doppler the identical way; a bundle
+# identifier; a distribution certificate selected by
+# `appstore.certificate.get` (never pasted as a literal id -- milestone
+# 3c's task-2 Addendum records why that is no longer *enforced* by
+# `check`, only conventional, and this document is the convention);
+# `appstore.profile.ensure` relating the two; and the profile's content
+# written into a Doppler secret through `doppler.secret.set`, whose
+# `config` port only accepts a derived-only binding -- hence the
+# `doppler.config.ensure` node, even though `destination_project`'s
+# config may already exist.
+#
+# `docs/plans/2026-09-22-milestone-3c-app-store-signing.md`, "The
+# positive document".
+name: appstore-signing-profile-from-doppler
+description: Resolve the App Store Connect credential from Doppler, produce an IOS_APP_STORE profile, and store its content in Doppler.
+inputs:
+  config: { type: DopplerConfig, description: "Doppler config holding the App Store Connect credential, e.g. app-store-connect/prd" }
+  identifier: { type: AppleBundleIdentifier, description: "The bundle identifier to sign, e.g. com.example.MyApp" }
+  bundle_name: { type: AppleBundleIdName, description: "The bundle id's human-written name" }
+  platform: { type: AppleBundleIdPlatform, description: "IOS, MAC_OS, or UNIVERSAL" }
+  certificate_type: { type: AppleCertificateType, description: "DISTRIBUTION or IOS_DISTRIBUTION" }
+  serial_number: { type: AppleCertificateSerial, description: "The distribution certificate's serial number" }
+  profile_name: { type: AppleProfileName, description: "The profile's human-written name" }
+  destination_project: { type: DopplerProject, description: "The Doppler project the profile's content is written into" }
+  destination_environment: { type: EnvironmentSlug, description: "The Doppler config's environment, e.g. prd" }
+  secret_name: { type: SecretName, description: "The Doppler secret name the profile's content is stored under" }
+steps:
+  issuer_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ISSUER_ID
+  issuer_id:
+    tool: apple.issuer_id.parse
+    with:
+      value: ${{ steps.issuer_id_text.value }}
+  key_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ID
+  key_id:
+    tool: apple.key_id.parse
+    with:
+      value: ${{ steps.key_id_text.value }}
+  key_base64:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_BASE64
+  key_decoded:
+    tool: base64.decode
+    with:
+      value: ${{ steps.key_base64.value }}
+  key:
+    tool: apple.signing_key.parse
+    with:
+      value: ${{ steps.key_decoded.value }}
+  bundle_id:
+    tool: appstore.bundle_id.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.identifier }}
+      name: ${{ inputs.bundle_name }}
+      platform: ${{ inputs.platform }}
+  certificate:
+    tool: appstore.certificate.get
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      certificate_type: ${{ inputs.certificate_type }}
+      serial_number: ${{ inputs.serial_number }}
+  profile:
+    tool: appstore.profile.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.bundle_id.identifier }}
+      name: ${{ inputs.profile_name }}
+      profile_type: IOS_APP_STORE
+      certificate: ${{ steps.certificate.certificate }}
+  destination:
+    tool: doppler.config.ensure
+    with:
+      project: ${{ inputs.destination_project }}
+      environment: ${{ inputs.destination_environment }}
+  store:
+    tool: doppler.secret.set
+    with:
+      config: ${{ steps.destination.config }}
+      name: ${{ inputs.secret_name }}
+      value: ${{ steps.profile.content }}
+outputs:
+  profile: ${{ steps.profile.profile }}

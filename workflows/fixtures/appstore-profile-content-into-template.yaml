@@ -1,0 +1,79 @@
+# Negative fixture: appstore.profile.ensure's secret `content` output
+# bound to template.render's non-secret `value` port. `check` returns
+# exactly one error:
+#   SecretToNonSecretSink { from: (profile, content),
+#                          to: Site::Port { node: readme, port: value } }
+name: appstore-profile-content-into-template
+description: appstore.profile.ensure's content output bound to a non-secret sink.
+inputs:
+  config: { type: DopplerConfig }
+  identifier: { type: AppleBundleIdentifier }
+  bundle_name: { type: AppleBundleIdName }
+  platform: { type: AppleBundleIdPlatform }
+  certificate_type: { type: AppleCertificateType }
+  serial_number: { type: AppleCertificateSerial }
+  profile_name: { type: AppleProfileName }
+steps:
+  issuer_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ISSUER_ID
+  issuer_id:
+    tool: apple.issuer_id.parse
+    with:
+      value: ${{ steps.issuer_id_text.value }}
+  key_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ID
+  key_id:
+    tool: apple.key_id.parse
+    with:
+      value: ${{ steps.key_id_text.value }}
+  key_base64:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_BASE64
+  key_decoded:
+    tool: base64.decode
+    with:
+      value: ${{ steps.key_base64.value }}
+  key:
+    tool: apple.signing_key.parse
+    with:
+      value: ${{ steps.key_decoded.value }}
+  bundle_id:
+    tool: appstore.bundle_id.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.identifier }}
+      name: ${{ inputs.bundle_name }}
+      platform: ${{ inputs.platform }}
+  certificate:
+    tool: appstore.certificate.get
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      certificate_type: ${{ inputs.certificate_type }}
+      serial_number: ${{ inputs.serial_number }}
+  profile:
+    tool: appstore.profile.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.bundle_id.identifier }}
+      name: ${{ inputs.profile_name }}
+      profile_type: IOS_APP_STORE
+      certificate: ${{ steps.certificate.certificate }}
+  readme:
+    tool: template.render
+    with:
+      template: "PROFILE_CONTENT={{ value }}"
+      value: ${{ steps.profile.content }}

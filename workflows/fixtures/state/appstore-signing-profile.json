@@ -1,0 +1,33 @@
+{
+  "doppler_values": {
+    "app-store-connect/prd#ASC_API_KEY_ISSUER_ID": "57246542-96fe-1a63-e053-0824d011072a",
+    "app-store-connect/prd#ASC_API_KEY_ID": "2X9R4HXF34"
+  },
+  "doppler_secrets": {
+    "app-store-connect/prd#ASC_API_KEY_BASE64": "VGhpcyBpcyBhbiBleGFtcGxlIGtleSBmb3IgdGVzdHMgb25seS4KLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3ZMNTJyZWtFcWdHcW9XbjkKK1lCa0lRdVFXRU9UaEtxcUlYYnZvbmVuY0FXaFJBTkNBQVRkdC9YZDRjL0NMT0thMmpvRDlHMXBCOTh1d0tOKwpMR0p2SzNoS1RyeFRXbkowR3lRaVAzUm1DdWJ6bCtHUVIvL2g5Y2lGYW1qeU5jSE1qVlUyY0tiQQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg=="
+  },
+  "apple_bundle_ids": {
+    "com.example.willikins-demo": {
+      "id": "FAKE00000001",
+      "name": "willikins-demo",
+      "platform": "UNIVERSAL"
+    }
+  },
+  "apple_certificates": {
+    "DISTRIBUTION#7B3F2A9C1D4E5F607182930A1B2C3D4E": [
+      {"id": "CERT1", "expired": false}
+    ]
+  },
+  "apple_profiles": {
+    "com.example.willikins-demo#willikins-demo-profile": [
+      {
+        "id": "PROFILE1",
+        "certificate_id": "CERT1",
+        "profile_type": "IOS_APP_STORE",
+        "profile_state": "ACTIVE",
+        "expired": false,
+        "content": "d2lsbGlraW5zLWV4YW1wbGUtcHJvZmlsZS1jb250ZW50LWV4YW1wbGU="
+      }
+    ]
+  }
+}

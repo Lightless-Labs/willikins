@@ -1,0 +1,69 @@
+# Negative fixture. `appstore.profile.ensure`'s `certificate` port is an
+# ordinary, non-derived-only, required `AppleCertificateId` port
+# (milestone 3c's task-2 Addendum: `exact_derived_only` is unbuildable
+# against a pure producer). Dropping `derived_only` means a document can
+# bind a literal `AppleCertificateId` here -- the residual trade the
+# Addendum accepts -- but the port still refuses a *wrong type*: binding
+# the bundle id node's own opaque `id` output (`AppleBundleIdId`) instead
+# of a real `AppleCertificateId` still fails `check`. `check` returns
+# exactly one error:
+#   TypeMismatch { node: profile, port: certificate, expected: Exact(AppleCertificateId), found: AppleBundleIdId }
+name: appstore-profile-wrong-typed-certificate
+description: appstore.profile.ensure's certificate port bound to an AppleBundleIdId instead of an AppleCertificateId.
+inputs:
+  config: { type: DopplerConfig }
+  identifier: { type: AppleBundleIdentifier }
+  bundle_name: { type: AppleBundleIdName }
+  platform: { type: AppleBundleIdPlatform }
+  profile_name: { type: AppleProfileName }
+steps:
+  issuer_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ISSUER_ID
+  issuer_id:
+    tool: apple.issuer_id.parse
+    with:
+      value: ${{ steps.issuer_id_text.value }}
+  key_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ID
+  key_id:
+    tool: apple.key_id.parse
+    with:
+      value: ${{ steps.key_id_text.value }}
+  key_base64:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_BASE64
+  key_decoded:
+    tool: base64.decode
+    with:
+      value: ${{ steps.key_base64.value }}
+  key:
+    tool: apple.signing_key.parse
+    with:
+      value: ${{ steps.key_decoded.value }}
+  bundle_id:
+    tool: appstore.bundle_id.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.identifier }}
+      name: ${{ inputs.bundle_name }}
+      platform: ${{ inputs.platform }}
+  profile:
+    tool: appstore.profile.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.bundle_id.identifier }}
+      name: ${{ inputs.profile_name }}
+      profile_type: IOS_APP_STORE
+      certificate: ${{ steps.bundle_id.id }}

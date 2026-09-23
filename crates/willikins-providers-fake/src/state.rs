@@ -14,10 +14,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use willikins_core::{ToolError, ToolErrorKind};
 use willikins_types::{
     ActionsSecretName, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
-    AppleCapabilityType, AppleCertificateSerial, AppleCertificateType, BuildkiteClusterName,
-    BuildkiteOrg, BuildkitePipelineSlug, DomainType, DopplerConfig, DopplerProject,
-    DopplerSecretValue, DopplerServiceToken, DopplerTokenName, GitHubRepo, ProjectSlug,
-    RepoVisibility, SecretName, SigNozIngestionKeyName, SigNozIngestionKeyValue, Text,
+    AppleCapabilityType, AppleCertificateSerial, AppleCertificateType, AppleProfileName,
+    BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType, DopplerConfig,
+    DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName, GitHubRepo,
+    ProjectSlug, RepoVisibility, SecretName, SigNozIngestionKeyName, SigNozIngestionKeyValue, Text,
 };
 
 /// A GitHub repository record: enough to answer `github.repo.ensure`'s
@@ -109,6 +109,50 @@ pub struct AppleCertificateRecord {
     /// certificate unusable; `Some(true)` behaves exactly like `None`.
     #[serde(default)]
     pub activated: Option<bool>,
+}
+
+/// An App Store Connect provisioning profile record: enough to answer
+/// `appstore.profile.ensure`'s `read`. No `Foreign` concept here either,
+/// same reason as [`AppleBundleIdRecord`] -- every seeded or created
+/// record is "ours". `content` is stored as a plain `String`, not
+/// [`willikins_types::AppleProfileContent`]: that type implements no
+/// `Serialize` at all (no secret domain type does), so a record holding
+/// one directly could not itself derive `Serialize`/`Deserialize` for
+/// seed-file loading -- the same reason every other record in this file
+/// stores its fields as plain strings rather than the live tool's own
+/// domain types. `appstore.profile.ensure`'s fake tool parses it back
+/// into an `AppleProfileContent` at the point it builds an `Outputs`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppleProfileRecord {
+    /// The Apple-assigned opaque id this fake hands out.
+    pub id: String,
+    /// The related certificate's `AppleCertificateId` canonical string.
+    /// Exactly one, mirroring the live provider's create body
+    /// (decision (b): no `devices` key, and the certificate relationship
+    /// is always a single element in this fake too).
+    pub certificate_id: String,
+    /// The profile's `profileType` attribute, compared exactly against
+    /// what was requested -- a mismatch here is the `Mismatch { profile_type }`
+    /// arm.
+    pub profile_type: String,
+    /// The profile's `profileState`. `"ACTIVE"` unless seeded otherwise;
+    /// `"INVALID"` is the only other value this fake's own tool checks
+    /// for, matching the live provider's two-member enum.
+    #[serde(default = "default_profile_state")]
+    pub profile_state: String,
+    /// Whether this profile is expired -- like [`AppleCertificateRecord::expired`],
+    /// this fake tracks only the boolean fact the tool's read needs, not
+    /// a real `expirationDate` timestamp.
+    #[serde(default)]
+    pub expired: bool,
+    /// The profile's base64-encoded content -- see this struct's own doc
+    /// for why it is a plain `String`.
+    pub content: String,
+}
+
+fn default_profile_state() -> String {
+    "ACTIVE".to_string()
 }
 
 /// A map from a Doppler secret's key (`project/config#SECRET`) to its
@@ -420,6 +464,17 @@ pub struct FakeState {
     /// exact compare would find it, even though Apple's real serial
     /// numbers are unique in practice.
     pub apple_certificates: HashMap<String, Vec<AppleCertificateRecord>>,
+    /// App Store Connect provisioning profiles, keyed by `(identifier,
+    /// name)` ([`apple_profile_key`]) to a list of records sharing that
+    /// pair -- mirrors [`Self::apple_certificates`]'s own shape, so a
+    /// seed file can express the ambiguous two-profiles-same-name case
+    /// (verify item 1: name uniqueness per identifier is unsettled
+    /// before the live cycle runs) the same way. Looking a profile up
+    /// also requires the identifier to have a matching entry in
+    /// [`Self::apple_bundle_ids`] -- `appstore.profile.ensure`'s fake
+    /// `read` reports `Absent` when it does not, mirroring the live
+    /// tool's own bundle-id-resolution step.
+    pub apple_profiles: HashMap<String, Vec<AppleProfileRecord>>,
     /// The [`ProjectSlug`] canonical strings `fake.irreversible.ensure`
     /// has created.
     pub irreversible: HashSet<String>,
@@ -515,6 +570,14 @@ pub fn apple_certificate_key(
     serial_number: &AppleCertificateSerial,
 ) -> String {
     format!("{certificate_type}#{serial_number}")
+}
+
+/// The key [`FakeState::apple_profiles`] looks a profile up by:
+/// `identifier`'s canonical string, a separator, `name`'s canonical
+/// string -- mirrors [`apple_certificate_key`]'s own shape.
+#[must_use]
+pub fn apple_profile_key(identifier: &AppleBundleIdentifier, name: &AppleProfileName) -> String {
+    format!("{identifier}#{name}")
 }
 
 /// Deterministically derive the opaque id a fake
@@ -738,6 +801,42 @@ impl FakeState {
                 id: id.to_string(),
                 expired,
                 activated,
+            });
+        self
+    }
+
+    /// Seed an App Store Connect provisioning profile: `(identifier,
+    /// name)` resolves to a record, appended to any other record already
+    /// seeded under the same pair (mirrors
+    /// [`Self::with_apple_certificate`]'s own ambiguous-case shape). Does
+    /// not seed the bundle id itself -- pair with
+    /// [`Self::with_apple_bundle_id`] when the test also needs the
+    /// parent to exist (a profile whose identifier has no bundle id
+    /// entry reads `Absent`, mirroring the live tool's own
+    /// bundle-id-resolution step).
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_apple_profile(
+        mut self,
+        identifier: &AppleBundleIdentifier,
+        name: &AppleProfileName,
+        id: &str,
+        certificate_id: &str,
+        profile_type: &str,
+        profile_state: &str,
+        expired: bool,
+        content: &str,
+    ) -> Self {
+        self.apple_profiles
+            .entry(apple_profile_key(identifier, name))
+            .or_default()
+            .push(AppleProfileRecord {
+                id: id.to_string(),
+                certificate_id: certificate_id.to_string(),
+                profile_type: profile_type.to_string(),
+                profile_state: profile_state.to_string(),
+                expired,
+                content: content.to_string(),
             });
         self
     }

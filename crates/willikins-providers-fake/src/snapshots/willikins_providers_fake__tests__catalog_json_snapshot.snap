@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
-assertion_line: 174
+assertion_line: 178
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -622,6 +622,118 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "name": "appstore.bundle_id_capability.ensure",
     "outputs": {
       "capability": "AppleCapabilityType"
+    },
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Select an App Store Connect distribution certificate by type and serial number.",
+    "inputs": {
+      "certificate_type": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleCertificateType"
+        }
+      },
+      "issuer_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleIssuerId"
+        }
+      },
+      "key": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleSigningKey"
+        }
+      },
+      "key_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleKeyId"
+        }
+      },
+      "serial_number": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleCertificateSerial"
+        }
+      }
+    },
+    "key": [],
+    "name": "appstore.certificate.get",
+    "outputs": {
+      "certificate": "AppleCertificateId"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Produce (or report) an App Store Connect IOS_APP_STORE provisioning profile relating a bundle identifier to a distribution certificate.",
+    "inputs": {
+      "certificate": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleCertificateId"
+        }
+      },
+      "identifier": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleBundleIdentifier"
+        }
+      },
+      "issuer_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleIssuerId"
+        }
+      },
+      "key": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleSigningKey"
+        }
+      },
+      "key_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleKeyId"
+        }
+      },
+      "name": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleProfileName"
+        }
+      },
+      "profile_type": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleProfileType"
+        }
+      }
+    },
+    "key": [
+      "identifier",
+      "name"
+    ],
+    "name": "appstore.profile.ensure",
+    "outputs": {
+      "content": "AppleProfileContent",
+      "profile": "AppleProfileId"
     },
     "pure": false
   },
