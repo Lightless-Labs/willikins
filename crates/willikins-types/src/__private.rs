@@ -55,28 +55,21 @@ where
     )
 }
 
-/// The one runtime assertion a registered conversion carries. Values
+/// The type-erased converter behind every registered conversion. Values
 /// travel as the dynamically typed `Value`
 /// (`willikins-core::value::Value`), so applying a conversion must
-/// downcast to the source type before converting it. `willikins-core`'s
-/// `check` only ever records this conversion on an edge after resolving
-/// that edge's binding to exactly type `A`, so for a `Checked` `check`
-/// itself built, this downcast cannot fail. It is still an assertion,
-/// confined to this generated-code-only module. Its message names the two
-/// types and nothing else: never the object's own bytes, which a secret
-/// type must never let a panic message carry.
-fn convert<A, B>(source: &dyn DomainObject) -> Arc<dyn DomainObject>
+/// downcast to the source type before converting it. The downcast is by
+/// `TypeId`, and a type *name* does not determine a `TypeId`: any crate can
+/// derive a type whose `TYPE_NAME` equals `A`'s, and `Value::known` accepts
+/// it. So a failed downcast is an ordinary input, not an impossible state:
+/// it is `None`, and the caller passes the value through unconverted
+/// (independent review of milestone 3d, 2026-09-24; this was an
+/// `unreachable!` that a same-named value reached through `plan`).
+fn convert<A, B>(source: &dyn DomainObject) -> Option<Arc<dyn DomainObject>>
 where
     A: DomainType + DomainObject + 'static,
     B: DomainType + DomainObject + From<A> + 'static,
 {
-    let Some(source) = crate::downcast::<A>(source) else {
-        unreachable!(
-            "conversion {} -> {}: the source is not a {}",
-            A::TYPE_NAME,
-            B::TYPE_NAME,
-            A::TYPE_NAME
-        )
-    };
-    Arc::new(B::from(source.clone()))
+    let source = crate::downcast::<A>(source)?;
+    Some(Arc::new(B::from(source.clone())))
 }

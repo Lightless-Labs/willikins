@@ -47,9 +47,21 @@ fn a_conversion_may_raise_secrecy() {
         .next()
         .expect("one row");
     let probe = Probe::parse("probe").unwrap();
-    let converted = row.apply(&probe);
+    let converted = row.apply(&probe).expect("a Probe converts");
     assert!(converted.is_secret());
     assert_eq!(converted.render().to_string(), "[REDACTED ProbeSecret]");
+}
+
+/// A row applied to an object that is not of its source type returns
+/// `None`, never panics: the test is the downcast, by `TypeId`.
+#[test]
+fn a_conversion_applied_to_another_type_is_none() {
+    let row = crate::conversions![Probe => ProbeSecret]
+        .into_iter()
+        .next()
+        .expect("one row");
+    let other = crate::GitHubOrg::parse("lightless-labs").unwrap();
+    assert!(row.apply(&other).is_none());
 }
 
 #[test]

@@ -1823,4 +1823,35 @@ mod conversions {
         let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans without a panic");
         assert_eq!(only_b(&planned.nodes[0].inputs), &foreign);
     }
+
+    /// Another Rust type whose `TYPE_NAME` is also `ConvA`.
+    mod impostor {
+        #[derive(willikins_types::DomainType)]
+        #[domain(
+            pattern = "[a-z]+",
+            description = "Not the registered ConvA.",
+            example = "a"
+        )]
+        pub(super) struct ConvA(String);
+    }
+
+    /// Independent review of milestone 3d: a workflow input whose type
+    /// *name* is the conversion's source but whose Rust type is not passes
+    /// through unconverted, and `plan` returns rather than panicking in the
+    /// converter's downcast.
+    #[test]
+    fn a_same_named_input_of_another_rust_type_plans_without_a_panic() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-impostor"))
+            .input(input("a"), InputSpec::new(scalar("ConvA")))
+            .node(node("sink"), sink_b_node(Binding::Input(input("a"))));
+        let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
+        let impostor = Value::known(impostor::ConvA::parse("imp").unwrap());
+        assert_eq!(impostor.ty(), &scalar("ConvA"));
+
+        let mut inputs = IndexMap::new();
+        inputs.insert(input("a"), impostor.clone());
+        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans without a panic");
+        assert_eq!(only_b(&planned.nodes[0].inputs), &impostor);
+    }
 }
