@@ -235,6 +235,18 @@ pub struct TypeEntry {
     /// always returns `Err` with [`SECRET_LITERAL_REFUSAL`], without ever
     /// calling the type's own parser.
     pub parse: fn(&str) -> Result<Arc<dyn DomainObject>, ParseError>,
+    /// Whether an object is actually a value of this entry's own Rust type
+    /// `T`, tested by `TypeId` (`Any::is::<T>()`, through
+    /// [`crate::object::downcast`]), monomorphized once per type at
+    /// registration. Never compares [`DomainType::TYPE_NAME`] strings: a
+    /// type name does not pin down a Rust type, since any crate can derive
+    /// a type sharing another's name (the exact hole the independent
+    /// review of milestone 3d found in a converter's own downcast; see
+    /// `docs/research/2026-09-23-m3d-adversarial-pass.md`). `plan` uses
+    /// this, through [`TypeRegistry::type_matches`], to parse every
+    /// caller-supplied workflow input against its declared type before any
+    /// node is planned.
+    pub matches: fn(&dyn DomainObject) -> bool,
 }
 
 impl TypeEntry {
@@ -244,6 +256,7 @@ impl TypeEntry {
         Self {
             info: TypeInfo::of::<T>(),
             parse: parse_entry::<T>,
+            matches: matches_entry::<T>,
         }
     }
 }
@@ -330,6 +343,15 @@ fn parse_entry<T: DomainType + DomainObject + 'static>(
         return Err(ParseError::new(T::TYPE_NAME, SECRET_LITERAL_REFUSAL));
     }
     T::parse(input).map(|value| Arc::new(value) as Arc<dyn DomainObject>)
+}
+
+/// The type-erased identity predicate behind every [`TypeEntry`]. `T` is
+/// monomorphized once, at registration, so the test itself is `T`'s own
+/// `TypeId`, through [`crate::object::downcast`] — never a comparison of
+/// `object.type_name()` against `T::TYPE_NAME`, which two different Rust
+/// types can share.
+fn matches_entry<T: DomainType + 'static>(object: &dyn DomainObject) -> bool {
+    crate::object::downcast::<T>(object).is_some()
 }
 
 /// The runtime catalog of every domain type this crate defines, keyed by
@@ -457,6 +479,18 @@ impl TypeRegistry {
     #[must_use]
     pub fn is_secret(&self, name: &TypeName) -> Option<bool> {
         self.get(name).map(|entry| entry.info.secret)
+    }
+
+    /// Whether `object` is actually a value of the Rust type registered as
+    /// `name`, tested by that entry's own [`TypeEntry::matches`] (`TypeId`,
+    /// via `Any::is`), never by comparing [`DomainType::TYPE_NAME`]
+    /// strings — a type name does not pin down a Rust type: two different
+    /// crates can each derive a type sharing one (the independent review
+    /// of milestone 3d, `docs/research/2026-09-23-m3d-adversarial-pass.md`).
+    /// `None` when `name` is not registered.
+    #[must_use]
+    pub fn type_matches(&self, name: &TypeName, object: &dyn DomainObject) -> Option<bool> {
+        self.get(name).map(|entry| (entry.matches)(object))
     }
 
     /// Iterate every registered entry.
@@ -981,6 +1015,62 @@ mod tests {
             .map(|(from, to)| (from.as_str(), to.as_str()))
             .collect();
         assert_eq!(pairs, vec![("RegistryTestA", "RegistryTestB")]);
+    }
+
+    // -------------------------------------------------------------
+    // TypeRegistry::type_matches (follow-up to milestone 3d, 2026-09-24:
+    // "I'd much rather have it fail loudly at parsing than silently go
+    // through" -- the per-type identity predicate `plan`'s own
+    // input-parsing check is built on)
+    // -------------------------------------------------------------
+
+    /// Another Rust type whose `TYPE_NAME` is also `RegistryTestA`.
+    /// `TYPE_NAME` is `stringify!` of the struct's own name, so any crate
+    /// can declare one; `type_matches` must tell it apart from the real
+    /// `RegistryTestA` by `TypeId`, never by comparing that shared name.
+    mod impostor {
+        use super::DomainType;
+
+        #[derive(DomainType)]
+        #[domain(
+            pattern = "[a-z]+",
+            description = "Not the real RegistryTestA.",
+            example = "a"
+        )]
+        pub(super) struct RegistryTestA(String);
+    }
+
+    #[test]
+    fn type_matches_is_true_for_a_real_value_of_the_registered_type() {
+        let registry = synthetic_registry_with_one_row();
+        let name = TypeName::parse("RegistryTestA").unwrap();
+        let value = RegistryTestA::parse("a").unwrap();
+        assert_eq!(registry.type_matches(&name, &value), Some(true));
+    }
+
+    #[test]
+    fn type_matches_is_false_for_a_same_named_value_of_another_rust_type() {
+        let registry = synthetic_registry_with_one_row();
+        let name = TypeName::parse("RegistryTestA").unwrap();
+        let impostor = impostor::RegistryTestA::parse("a").unwrap();
+        assert_eq!(impostor.type_name(), "RegistryTestA");
+        assert_eq!(registry.type_matches(&name, &impostor), Some(false));
+    }
+
+    #[test]
+    fn type_matches_is_false_for_a_value_of_a_different_registered_type() {
+        let registry = synthetic_registry_with_one_row();
+        let name = TypeName::parse("RegistryTestA").unwrap();
+        let other = RegistryTestB::parse("b").unwrap();
+        assert_eq!(registry.type_matches(&name, &other), Some(false));
+    }
+
+    #[test]
+    fn type_matches_is_none_for_an_unregistered_name() {
+        let registry = synthetic_registry_with_one_row();
+        let name = TypeName::parse("NeverRegistered").unwrap();
+        let value = RegistryTestA::parse("a").unwrap();
+        assert_eq!(registry.type_matches(&name, &value), None);
     }
 
     #[test]
