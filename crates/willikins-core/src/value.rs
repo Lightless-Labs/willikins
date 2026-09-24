@@ -227,37 +227,35 @@ impl Value {
     ///   any of whose objects is not of that type, is returned unchanged.
     ///   `check` only records a conversion on an edge whose binding it
     ///   resolved to the source type, so this arm is unreachable for a
-    ///   well-typed run; it exists so that the generated converter's one
-    ///   downcast (`willikins_types::__private`) can never be handed an
-    ///   object of the wrong type, even by a caller that passes `plan` a
-    ///   wrong-typed workflow input. The value then reaches the tool
-    ///   exactly as it would have before conversions existed, and the tool
-    ///   refuses it by type.
+    ///   well-typed run; it covers a caller that passes `plan` a
+    ///   wrong-typed workflow input or a hand-built `Checked`. Whether an
+    ///   object is of the source type is the converter's own `TypeId`
+    ///   downcast ([`Conversion::apply`] returns `None` otherwise), never
+    ///   its type name, which another Rust type can share. The value then
+    ///   reaches the tool exactly as it would have before conversions
+    ///   existed, and the tool refuses it by type.
     #[must_use]
     pub fn converted(&self, conversion: &Conversion) -> Value {
-        let from = conversion.from();
-        let is_source = |object: &Arc<dyn DomainObject>| object.type_name() == from.as_str();
-        if self.ty.name != *from {
+        if self.ty.name != *conversion.from() {
             return self.clone();
         }
         let state = match &self.state {
             ValueState::Unknown => ValueState::Unknown,
             ValueState::Known(Known::Scalar(object)) => {
-                if !is_source(object) {
+                let Some(converted) = conversion.apply(object.as_ref()) else {
                     return self.clone();
-                }
-                ValueState::Known(Known::Scalar(conversion.apply(object.as_ref())))
+                };
+                ValueState::Known(Known::Scalar(converted))
             }
             ValueState::Known(Known::List(items)) => {
-                if !items.iter().all(is_source) {
+                let Some(converted) = items
+                    .iter()
+                    .map(|object| conversion.apply(object.as_ref()))
+                    .collect::<Option<Vec<_>>>()
+                else {
                     return self.clone();
-                }
-                ValueState::Known(Known::List(
-                    items
-                        .iter()
-                        .map(|object| conversion.apply(object.as_ref()))
-                        .collect(),
-                ))
+                };
+                ValueState::Known(Known::List(converted))
             }
         };
         Self {
@@ -1064,5 +1062,41 @@ mod tests {
             vec![Arc::new(github_org("lightless-labs")) as Arc<dyn DomainObject>],
         );
         assert_eq!(forged.converted(&conversion), forged);
+
+        // An unknown value of another type keeps its own type: an edge
+        // never retypes a value it does not convert.
+        let unknown_other = Value::unknown(TypeRef::scalar(TypeName::parse("GitHubOrg").unwrap()));
+        assert_eq!(unknown_other.converted(&conversion), unknown_other);
+    }
+
+    /// A different Rust type that happens to share the source's type name.
+    /// `TYPE_NAME` is `stringify!` of the struct's own name, so any crate
+    /// can declare one, and `Value::known` accepts it. Its type name says
+    /// `AppleBundleIdentifier`; its `TypeId` does not.
+    mod impostor {
+        #[derive(willikins_types::DomainType)]
+        #[domain(
+            pattern = "[a-z.]+",
+            description = "Not the real bundle identifier.",
+            example = "com.example"
+        )]
+        pub(super) struct AppleBundleIdentifier(String);
+    }
+
+    /// Independent review of milestone 3d: the pass-through compares type
+    /// *names*, the converter downcasts by *`TypeId`*. A same-named value of
+    /// another Rust type must still pass through unchanged, never reach the
+    /// converter's downcast and panic.
+    #[test]
+    fn converted_passes_a_same_named_value_of_another_rust_type_through_unchanged() {
+        let conversion = identifier_to_profile_name();
+        let impostor = Value::known(impostor::AppleBundleIdentifier::parse("com.example").unwrap());
+        assert_eq!(impostor.ty().to_string(), "AppleBundleIdentifier");
+        assert_eq!(impostor.converted(&conversion), impostor);
+
+        let impostors = Value::known_list(vec![
+            impostor::AppleBundleIdentifier::parse("com.example").unwrap(),
+        ]);
+        assert_eq!(impostors.converted(&conversion), impostors);
     }
 }

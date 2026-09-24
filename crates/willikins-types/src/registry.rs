@@ -263,7 +263,7 @@ impl TypeEntry {
 pub struct Conversion {
     from: TypeName,
     to: TypeName,
-    convert: fn(&dyn DomainObject) -> Arc<dyn DomainObject>,
+    convert: fn(&dyn DomainObject) -> Option<Arc<dyn DomainObject>>,
 }
 
 impl Conversion {
@@ -272,7 +272,7 @@ impl Conversion {
     pub(crate) fn new(
         from: TypeName,
         to: TypeName,
-        convert: fn(&dyn DomainObject) -> Arc<dyn DomainObject>,
+        convert: fn(&dyn DomainObject) -> Option<Arc<dyn DomainObject>>,
     ) -> Self {
         Self { from, to, convert }
     }
@@ -289,14 +289,12 @@ impl Conversion {
         &self.to
     }
 
-    /// Apply this row's converter to `source`, which must already be known
-    /// (by whoever holds this `Conversion`, typically because they probed
-    /// the table for exactly this `(from, to)` pair) to hold a value of the
-    /// `from` type. The converter downcasts and panics if it does not; see
-    /// [`crate::__private::convert`]'s own doc for why that cannot happen
-    /// for an edge `willikins-core`'s `check` built.
+    /// Apply this row's converter to `source`: the converted object when
+    /// `source` is an object of the `from` type, else `None`. The test is
+    /// the converter's own downcast, by `TypeId`, never the object's type
+    /// name, which another Rust type can share. Never panics.
     #[must_use]
-    pub fn apply(&self, source: &dyn DomainObject) -> Arc<dyn DomainObject> {
+    pub fn apply(&self, source: &dyn DomainObject) -> Option<Arc<dyn DomainObject>> {
         (self.convert)(source)
     }
 }
