@@ -359,7 +359,7 @@ expression: snapshot
     }
   },
   {
-    "description": "The full tool and type catalog this server's `plan`/`apply` runs against -- the same JSON `willikins schema --catalog` prints.",
+    "description": "The full tool and type catalog this server's `plan`/`apply` runs against -- the same JSON `willikins schema --catalog` prints. `conversions` lists every `(from, to)` pair for which a port of type `to` also accepts a scalar binding of type `from`, converted in one hop; nothing else converts.",
     "input_schema": {
       "properties": {},
       "type": "object"

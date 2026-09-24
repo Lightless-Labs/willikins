@@ -100,7 +100,7 @@ profile.issuer_id: AppleIssuerId
 profile.key_id: AppleKeyId
 profile.key: AppleSigningKey
 profile.identifier: AppleBundleIdentifier
-profile.name: AppleProfileName
+profile.name: AppleBundleIdentifier -> AppleProfileName
 profile.profile_type: AppleProfileType
 profile.certificate: AppleCertificateId
 destination.project: DopplerProject
@@ -171,6 +171,10 @@ CHECK ERRORS:
 === workflows/fixtures/appstore-profile-development-type.yaml ===
 CHECK ERRORS:
 - kind=InvalidLiteral display=node `profile`, port `profile_type`: invalid literal: AppleProfileType: does not match the required pattern json={"kind":"InvalidLiteral","node":"profile","port":"profile_type","error":{"type_name":"AppleProfileType","reason":"does not match the required pattern"}}
+
+=== workflows/fixtures/appstore-profile-name-into-identifier.yaml ===
+CHECK ERRORS:
+- kind=TypeMismatch display=node `profile`, port `identifier`: expected AppleBundleIdentifier, found `AppleProfileName` json={"kind":"TypeMismatch","node":"profile","port":"identifier","expected":{"kind":"exact","type":"AppleBundleIdentifier"},"found":"AppleProfileName"}
 
 === workflows/fixtures/appstore-profile-wrong-typed-certificate.yaml ===
 CHECK ERRORS:

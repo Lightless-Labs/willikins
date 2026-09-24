@@ -13,6 +13,14 @@
 #
 # `docs/plans/2026-09-22-milestone-3c-app-store-signing.md`, "The
 # positive document".
+#
+# The profile is named after the bundle identifier it signs. That is
+# this operator's convention, not willikins': `appstore.profile.ensure`
+# accepts any `AppleProfileName`, and another document may bind `name`
+# to an input or a literal instead. The binding type-checks because every
+# `AppleBundleIdentifier` is a valid `AppleProfileName`, a registered
+# conversion (milestone 3d, `docs/plans/2026-09-23-milestone-3d-conversions.md`).
+# Nothing in the tool knows the convention.
 name: appstore-signing-profile-from-doppler
 description: Resolve the App Store Connect credential from Doppler, produce an IOS_APP_STORE profile, and store its content in Doppler.
 inputs:
@@ -22,7 +30,6 @@ inputs:
   platform: { type: AppleBundleIdPlatform, description: "IOS, MAC_OS, or UNIVERSAL" }
   certificate_type: { type: AppleCertificateType, description: "DISTRIBUTION or IOS_DISTRIBUTION" }
   serial_number: { type: AppleCertificateSerial, description: "The distribution certificate's serial number" }
-  profile_name: { type: AppleProfileName, description: "The profile's human-written name" }
   destination_project: { type: DopplerProject, description: "The Doppler project the profile's content is written into" }
   destination_environment: { type: EnvironmentSlug, description: "The Doppler config's environment, e.g. prd" }
   secret_name: { type: SecretName, description: "The Doppler secret name the profile's content is stored under" }
@@ -82,7 +89,7 @@ steps:
       key_id: ${{ steps.key_id.value }}
       key: ${{ steps.key.value }}
       identifier: ${{ steps.bundle_id.identifier }}
-      name: ${{ inputs.profile_name }}
+      name: ${{ steps.bundle_id.identifier }}
       profile_type: IOS_APP_STORE
       certificate: ${{ steps.certificate.certificate }}
   destination:

@@ -90,8 +90,21 @@ impl Catalog {
         let tools: Vec<&ToolSpec> = self.specs().collect();
         let types: Vec<&TypeInfo> = self.registry.iter().map(|entry| &entry.info).collect();
         let mut map = serde_json::Map::new();
+        // Milestone 3d, decision (g): every registered conversion, names
+        // only and in declaration order (never a `HashMap` iteration).
+        // A port of type `to` also accepts a scalar binding of type
+        // `from`, converted in one hop; nothing else converts.
+        let conversions: Vec<serde_json::Value> = self
+            .registry
+            .conversion_pairs()
+            .map(|(from, to)| serde_json::json!({ "from": from, "to": to }))
+            .collect();
         map.insert("tools".to_string(), to_json_value(&tools));
         map.insert("types".to_string(), to_json_value(&types));
+        map.insert(
+            "conversions".to_string(),
+            serde_json::Value::Array(conversions),
+        );
         serde_json::Value::Object(map)
     }
 }
@@ -278,6 +291,12 @@ mod tests {
             json["types"]
                 .as_array()
                 .is_some_and(|types| !types.is_empty())
+        );
+        // Milestone 3d, acceptance test 10: the one registered conversion,
+        // and nothing else.
+        assert_eq!(
+            json["conversions"],
+            serde_json::json!([{ "from": "AppleBundleIdentifier", "to": "AppleProfileName" }])
         );
     }
 }
