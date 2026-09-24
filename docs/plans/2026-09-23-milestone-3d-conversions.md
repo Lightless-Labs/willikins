@@ -19,6 +19,12 @@ conversion's source, because the converter's downcast was reachable through a wr
 after a host-wide `cargo-sweep` forced a 129-minute rebuild mid-gate. Two verifier tests added
 (`bc2b286`, `1a22498`). Verify items 1 to 8 answered and the post-flight run: see "Verify list,
 answered" and "Post-flight" below, and `docs/research/2026-09-23-m3d-adversarial-pass.md`.
+**Addendum:** 2026-09-24 (independent review) — decision (f)'s pass-through compared type
+*names*, while the converter downcast by `TypeId`, so a same-named value of another Rust type
+still reached the downcast and panicked inside `plan`. The converter now returns `None` on a
+failed downcast, `Conversion::apply` returns `Option`, and `Value::converted` passes through on
+`None` (`b470206`). See "Independent review of the verifier-written commits" in
+`docs/research/2026-09-23-m3d-adversarial-pass.md`.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system: "parse, don't validate",
 "a secret output may only flow to a secret-accepting input. No coercion."; "policy lives in the
 workflow, never in the tool"; the workflow-inputs rule "no secret input types")
