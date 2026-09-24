@@ -1424,6 +1424,46 @@ mod tests {
             }
         }
 
+        proptest! {
+            /// Milestone 3d's verifier, strategy 3: the identifier's own
+            /// alphabet with no grammar-shaped structure and lengths from
+            /// 1 to 300, so candidates straddle the 255 bound and include
+            /// every near miss (a leading, trailing or doubled separator).
+            /// Strategy 1's segments never exceed 8 characters and strategy
+            /// 2's arbitrary strings almost never parse, so neither reaches
+            /// a long segment or the bound itself; this does. Whenever the
+            /// candidate is an identifier, it is at most 255 characters and
+            /// converts to the byte-identical profile name `parse` gives.
+            #[test]
+            fn over_the_identifier_alphabet_every_identifier_converts_byte_for_byte(
+                raw in "[A-Za-z0-9.-]{1,300}"
+            ) {
+                if let Ok(identifier) = AppleBundleIdentifier::parse(&raw) {
+                    prop_assert!(raw.chars().count() <= 255);
+                    let converted = AppleProfileName::from(identifier);
+                    prop_assert_eq!(converted.as_str(), raw.as_str());
+                    prop_assert_eq!(
+                        AppleProfileName::parse(&raw).expect("an identifier is a profile name"),
+                        converted
+                    );
+                }
+            }
+        }
+
+        /// The bound with separators in it: 127 `a.` pairs and a final `a`
+        /// is exactly 255 characters, an identifier, and converts byte for
+        /// byte; one more pair is not an identifier at all.
+        #[test]
+        fn a_255_character_identifier_with_separators_converts() {
+            let raw = format!("{}a", "a.".repeat(127));
+            assert_eq!(raw.chars().count(), 255);
+            let identifier = AppleBundleIdentifier::parse(&raw).expect("255 is the limit");
+            assert_eq!(AppleProfileName::from(identifier).as_str(), raw);
+            let over = format!("{}a", "a-".repeat(128));
+            assert_eq!(over.chars().count(), 257);
+            assert!(AppleBundleIdentifier::parse(&over).is_err());
+        }
+
         #[test]
         fn a_255_character_identifier_converts() {
             let raw = "a".repeat(255);
