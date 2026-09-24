@@ -75,8 +75,11 @@ fn applying_the_signing_document_never_writes_profile_content_anywhere() {
         "--approve",
         "--input",
         "config=app-store-connect/prd",
+        // The seed's second identifier, which has no profile, so the fake
+        // really creates one -- named after the identifier, since the
+        // document binds the profile's name to it (milestone 3d).
         "--input",
-        "identifier=com.example.willikins-demo",
+        "identifier=com.example.willikins-demo-two",
         "--input",
         "bundle_name=willikins-demo",
         "--input",
@@ -85,9 +88,6 @@ fn applying_the_signing_document_never_writes_profile_content_anywhere() {
         "certificate_type=DISTRIBUTION",
         "--input",
         "serial_number=7B3F2A9C1D4E5F607182930A1B2C3D4E",
-        // Not the seeded profile's name, so the fake really creates one.
-        "--input",
-        "profile_name=willikins-demo-profile-two",
         "--input",
         "destination_project=third-thoughts",
         "--input",
@@ -110,9 +110,17 @@ fn applying_the_signing_document_never_writes_profile_content_anywhere() {
 
     let journal_text = std::fs::read_to_string(&journal).expect("the journal was written");
     let dump_text = std::fs::read_to_string(&dump).expect("the state was dumped");
+    // The created profile's own key, `(identifier, name)`, and the fake's
+    // created-profile id. Never the bare identifier: the seed already puts
+    // that string in the dump whether or not a profile was created, so it
+    // would prove nothing.
     assert!(
-        dump_text.contains("willikins-demo-profile-two") || dump_text.contains("FAKEPR0F"),
-        "the dump should hold the created profile's record: {dump_text}"
+        dump_text.contains("com.example.willikins-demo-two#com.example.willikins-demo-two"),
+        "the dump should hold the created profile, keyed by identifier and name: {dump_text}"
+    );
+    assert!(
+        dump_text.contains("FAKEPR0F"),
+        "the dump should hold the fake's created-profile id: {dump_text}"
     );
     for (label, text) in [
         ("stdout", &stdout),

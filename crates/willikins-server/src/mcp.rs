@@ -668,7 +668,9 @@ impl WillikinsHandler {
     /// The full tool and type catalog.
     #[tool(description = "The full tool and type catalog this server's \
         `plan`/`apply` runs against -- the same JSON `willikins schema \
-        --catalog` prints.")]
+        --catalog` prints. `conversions` lists every `(from, to)` pair for \
+        which a port of type `to` also accepts a scalar binding of type \
+        `from`, converted in one hop; nothing else converts.")]
     async fn list_tools(
         &self,
         extensions: rmcp::model::Extensions,

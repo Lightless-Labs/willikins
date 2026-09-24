@@ -11,6 +11,11 @@
       "id": "FAKE00000001",
       "name": "willikins-demo",
       "platform": "UNIVERSAL"
+    },
+    "com.example.willikins-demo-two": {
+      "id": "FAKE00000002",
+      "name": "willikins-demo",
+      "platform": "UNIVERSAL"
     }
   },
   "apple_certificates": {
@@ -19,7 +24,7 @@
     ]
   },
   "apple_profiles": {
-    "com.example.willikins-demo#willikins-demo-profile": [
+    "com.example.willikins-demo#com.example.willikins-demo": [
       {
         "id": "PROFILE1",
         "certificate_id": "CERT1",
