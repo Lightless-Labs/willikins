@@ -10,6 +10,15 @@ else, on Rust 1.97/trybuild 1.0.121. Decision (b)'s item-position fallback (spli
 (`__private::conversion`'s inline `const { }`) was left in place regardless, unexercised by any
 fixture, per decision (b)'s own reasoning that trybuild cannot prove a monomorphization-gated
 check either way. `missing_from_impl.rs` fails with exactly E0277 naming `From<A>`, nothing else.
+**Addendum:** 2026-09-24 (verifier) — C4 finished and landed (`6fcb456`) after three fixes its
+draft needed (the characterization formatted an `Edge`; a literal test used a synthetic type, which
+cannot parse; the probe's new clippy entry broke `willikins-types`' own probe tests); C5 landed
+(`a14ad7f`) with one design change: `Value::converted` passes through a value whose type is not the
+conversion's source, because the converter's downcast was reachable through a wrong-typed input to
+`plan` or a forged `Checked`. C6 and C7 landed as one commit (`d862203`), the merge "Budget" offers,
+after a host-wide `cargo-sweep` forced a 129-minute rebuild mid-gate. Two verifier tests added
+(`bc2b286`, `1a22498`). Verify items 1 to 8 answered and the post-flight run: see "Verify list,
+answered" and "Post-flight" below, and `docs/research/2026-09-23-m3d-adversarial-pass.md`.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system: "parse, don't validate",
 "a secret output may only flow to a secret-accepting input. No coercion."; "policy lives in the
 workflow, never in the tool"; the workflow-inputs rule "no secret input types")
@@ -859,3 +868,39 @@ merge, because each of the others is one behaviour a verifier must be able to bi
 `apply` and `describe` consume, so they cannot meet an invalid state. `Edge` is its first brick: the
 first piece of `Checked` that `plan` and `apply` *read* rather than re-derive from the document, and
 the first with private fields and a `check`-only constructor.
+
+## Verify list, answered (verifier, 2026-09-24)
+
+Each by a run, not a reading; the runs are in `docs/research/2026-09-23-m3d-adversarial-pass.md`.
+
+1. (a) **Yes.** The macro's block-position `const _` is evaluated by `cargo check` (C2's finding,
+   and now proven the other way round: removing it makes `secret_to_public.rs` compile under
+   trybuild). (b) **No.** The inline `const { }` belt in `__private::conversion` is not evaluated by
+   `cargo check`: with the macro's `const _` removed, the fixture compiled. So no direct-call fixture
+   can exist; the belt fires only when the call is compiled to code, and clippy refuses a direct call
+   before that (item 3).
+2. **Yes.** A `catalog.registry().probe_conversion(..)` call planted in `plan.rs` fails clippy
+   `-D warnings` with `disallowed_methods`, through the auto-deref.
+3. **Yes, and the `#[allow]` is load-bearing.** With the `#[allow]` stripped from the macro's
+   expansion, clippy fails on `conversion_rows()`'s own expansion in `willikins-types`. The
+   `__private::conversion` entry stays.
+4. **Yes.** `AppleBundleIdentifier::parse("com.example.MyApp\n")` is refused (C3's test).
+5. **Yes, with one note.** `willikins_providers_fake::empty()` carries every tool; the signing
+   document's characterized plan stops at its first Doppler read against the default fake state
+   (`NotFound`), before and after, which is a stable characterization.
+6. **Yes.** Live, with a throwaway identifier nothing matches (`bundle_id` `create`), the profile's
+   `name` and `identifier` ports were both known at plan time.
+7. **Read before committing** (C2): E0080 with the secrecy message only; E0277 naming `From<A>` only.
+8. **Yes.** `mcp_server__the_tool_list_and_every_schema_is_snapshotted.snap` pins the `list_tools`
+   description; its one line changed in `d862203`.
+
+## Post-flight (verifier, 2026-09-24)
+
+Read-only `plan --live` of `workflows/appstore-signing-profile-from-doppler.yaml` against the
+operator's live App Store Connect account, the credential resolved out of the sandbox Doppler
+workplace in the same process. **No `profile_name` input.** Exit 0; `bundle_id`, `profile`,
+`destination`, `store` `create`, the rest `compute`; `class: reversible`. The profile node's `name`
+port was a known `AppleProfileName` equal, byte for byte, to the `AppleBundleIdentifier` on its
+`identifier` port. Counts before and after: 5 certificates, 13 profiles, 21 bundle identifiers; the
+throwaway identifier absent both times. Every provider call was a `GET`. Not marked Completed: the
+coordinator does that after re-gating.
