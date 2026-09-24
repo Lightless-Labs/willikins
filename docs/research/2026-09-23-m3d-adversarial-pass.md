@@ -241,3 +241,143 @@ record and the plan's addenda): `cargo fmt --all --check` clean;
 failed, 18 ignored**, with `secret_literal_guard`, `no_gh_writes_guard` and
 `no_certificate_writes_guard` among them; `cargo check -p willikins-types -j 2` clean.
 
+
+
+## Independent review of the verifier-written commits, 2026-09-24
+
+**Reviewer:** an independent adversarial pass (not the verifier) over `a14ad7f` (C5), `d862203`
+(C6+C7), `bc2b286` and `1a22498`, on `main` at `5252b06`.
+**Method:** the claims above were reproduced, not read. Every mutation below edited source,
+ran the named scoped test target, and restored from a copy saved before the edit; each restore
+was checked with `cmp` against the saved copy and `git status --short` showed a clean tree
+(except the untracked todo that belongs to another session).
+
+### One defect, fixed
+
+**The converter's downcast was still reachable, and panicked inside `plan`.** Finding 4 of
+this record says `Value::converted` passes a foreign value through so "the converter is only
+ever called on a source-typed object". It was not. `Value::converted` decided whether an object
+was the source by comparing its type **name** (`object.type_name() == from`), and the generated
+converter then downcast it by **`TypeId`**, with an `unreachable!` if that failed. A type name
+does not determine a `TypeId`: `TYPE_NAME` is `stringify!` of the struct's own name, so any
+crate can `#[derive(DomainType)] struct AppleBundleIdentifier(String)`, and `Value::known`
+accepts it. A new unit test, written first, went red on `5252b06` with exactly:
+
+```
+panicked at crates/willikins-types/src/__private.rs:74:9:
+internal error: entered unreachable code: conversion AppleBundleIdentifier -> AppleProfileName: the source is not a AppleBundleIdentifier
+```
+
+User-visible failure before the fix: a library caller handing `plan` such a value as a
+workflow input on a converted edge got a panic, where before conversions it got the tool's
+`port … has an unexpected type` error. Not reachable from the CLI or MCP: both parse every
+input against its declared type through the global registry (`describe.rs:281`,
+`butler.rs:1244`), so a name there always means the registered type. The panic message named
+types only, so nothing leaked.
+
+**Fix (`b470206`):** `__private::convert` returns `None` when its downcast fails, and
+`Conversion::apply` returns that `Option`; `Value::converted` passes the value through on
+`None`. Whether an object converts is now decided once, by the downcast itself, and no
+`unreachable!` remains on the path. Pinned by
+`converted_passes_a_same_named_value_of_another_rust_type_through_unchanged` (scalar and list,
+`value.rs`), `a_same_named_input_of_another_rust_type_plans_without_a_panic` (through `plan`,
+`tests/apply.rs`), and `a_conversion_applied_to_another_type_is_none` (`probe.rs`). The same
+commit adds an unknown value of another type to the existing pass-through test: before it,
+nothing pinned that an edge never retypes an `Unknown` it does not convert. The trybuild
+`.stderr` files are unchanged (`conversion`'s signature did not move) and the suite passes.
+
+### Every reachable route to the pass-through, and what the user sees
+
+`check` only records a conversion on an edge whose binding it resolved to exactly the source
+type, and the CLI and MCP parse inputs by declared type, so for a run that goes through either,
+the pass-through is unreachable. It is reached only through the library:
+
+| Route | What happens now |
+| --- | --- |
+| `plan` given a workflow input of another declared type (e.g. a `ConvB` for a `ConvA` input) | the value reaches the tool unconverted; a real tool refuses it with `port … has an unexpected type` (a `PlanError::Tool`) |
+| `plan` given a same-named value of another Rust type | the same, since `b470206`; a panic before it |
+| a hand-built `Checked` (its fields are `pub`) moving a converted `Edge` onto another port | the value reaches that port's tool unconverted and is refused by type |
+| `Value::known_dyn_list` declaring the source type over a foreign object | the whole list passes through unconverted |
+| a caller holding a `Conversion` (via `Edge::conversion()`, `probe_conversion`, or `conversions!`) calling `apply` on a foreign object | `None`, since `b470206`; a panic before it |
+
+### Delivery: what held, with evidence
+
+- **No double conversion, but only because a second one is masked.** Mutation M2 made
+  `apply`'s `resolve_instance_inputs` deliver **every** port a second time, including the
+  `Input`/`Item` ports `plan` had already delivered. All 23 `tests/apply.rs` tests stayed
+  green. A second delivery is a no-op because the value is already target-typed and
+  `Value::converted` passes it through; nothing *detects* a double delivery. Harmless for any
+  row (the pass-through makes delivery idempotent), and said plainly so no one reads the green
+  suite as a proof that each value is delivered exactly once. That property rests on reading:
+  `plan` delivers each non-literal port once in `bind_ports`; `apply` reuses `planned.inputs`
+  for `Literal`/`Input`/`Item` and re-resolves and delivers only `Step`/`Keyed`, from raw
+  results; neither delivers `for_each` sources or workflow outputs.
+- **List conversion is pinned by one unit test only.** Mutation M1 made `Value::converted`'s
+  `Known::List` arm return its argument. Only `converted_covers_every_state` went red; no
+  integration test did, because `check` never builds a list edge. That is correct today
+  (decision (e)), and it means list delivery through `plan`/`apply` is untested because it is
+  unreachable.
+- **The real document's equivalence test is not vacuous.** Mutation M3 made
+  `ResolveCtx::deliver` return its argument, run against
+  `willikins-providers-appstore --test profile_documents`, which the record did not report.
+  Two went red: `the_document_is_equivalent_to_its_two_input_predecessor` (`must plan: Tool
+  { node: "profile", error: … "port `name` has an unexpected type" }`) and
+  `the_doppler_chain_plans_and_produces_a_redacted_profile_content`, the same error. So the
+  real `appstore.profile.ensure` does receive an `AppleProfileName` only through the edge.
+- **Literals and `AnySecret` never convert.** By construction: `bind_ports`' literal arm parses
+  against the port's own type and never calls `deliver`, and `check` records a conversion only
+  for a `PortType::Exact` scalar port. Confirmed by reading, not mutated.
+- **Unknown-at-plan `Keyed` edges** are not tested separately: the `Keyed` test's upstream is
+  pure, so its value is known at plan. The `apply` code path is the one the unknown `Step` test
+  already pins (the same `resolve_instance_inputs` branch), so this is noted, not fixed.
+
+### Secrecy: held
+
+- Plan JSON, `Debug`, `Applied`, and `RecordingObserver` events: the record's test
+  (`a_converted_secret_is_redacted_as_its_target_everywhere`) passes and does what it says.
+- The journal: `NodeStarted.inputs` is `Redacted<Inputs>`, built by `Redacted::from`, which
+  serializes through `Value`'s own redacting `Serialize` (`willikins-journal/src/redacted.rs`),
+  so there is no second rendering path to leak through.
+- Errors: `TypeMismatch` names types only; `Edge`/`Conversion` `Debug` print type names only;
+  the removed `unreachable!` named types only.
+- The catalogue and MCP `conversions` key is built from `conversion_pairs()` and carries
+  `{"from", "to"}` type names and nothing else. With one production row, "declaration order"
+  cannot be observed; it is unpinned, not wrong.
+
+### Equivalence and unchanged fixtures: held
+
+- `PREDECESSOR` in `profile_documents.rs` is byte-identical to
+  `git show c991a24:workflows/appstore-signing-profile-from-doppler.yaml` (compared by script).
+- `git diff --stat c991a24 HEAD` over `workflows/`, every `snapshots/` directory,
+  `crates/willikins-journal`, and the appstore, fake and tools crates' `src/` shows only the
+  signing document, the new fixture, the seed, the characterization snapshot and the MCP
+  tool-list snapshot. The characterization snapshot has two commits (`553b231` created it,
+  `d862203` changed it) and exactly the two reviewed hunks. It contains one ` -> `, on
+  `profile.name`. No existing negative fixture's error moved.
+- The new negative fixture's error is pinned twice: struct equality in
+  `appstore_profile_name_into_identifier_is_rejected`, and `Display` plus JSON in the snapshot.
+- No stale reference to the old seed key `willikins-demo-profile` remains outside `docs/`.
+- The limit of the characterization: the signing document's characterized plan stops at the
+  first Doppler read against the default fake state, so it does not cover the converted edge.
+  The equivalence test does, and M3 shows it would catch a lost delivery.
+
+### Mutations
+
+| # | Mutation | Result |
+| --- | --- | --- |
+| M1 | `Value::converted`'s list arm returns its argument | red: `converted_covers_every_state` only |
+| M2 | `apply` delivers every port a second time | green, all 23 `tests/apply.rs` (masked, see above) |
+| M3 | `ResolveCtx::deliver` returns its argument, appstore suite | red: the equivalence test and the positive plan |
+| M4 | the fixed converter's `?` put back as `unreachable!` | red: both new same-named tests, and `converted_passes_a_value_of_another_type_through_unchanged` (its forged `known_dyn_list` now reaches the downcast, which is the only object-level guard left) |
+
+### Not settled
+
+- `Conversion::apply` is public, and the fix changed its return type to `Option`. The only
+  callers are in-tree (`value.rs`, `probe.rs`); anything outside the workspace calling it would
+  need to handle `None`.
+- The full workspace gate was not run by this review, by instruction; the coordinator runs it.
+  Scoped runs: `willikins-core` and `willikins-types` `--lib`, `willikins-core --test apply`,
+  `willikins-types --test derive_compile_fail`, `willikins-providers-appstore --test
+  profile_documents`, `cargo clippy -p willikins-types -p willikins-core --all-targets -- -D
+  warnings`, `cargo check -p willikins-types`, and `cargo fmt --all --check`, all clean on
+  `b470206`.
