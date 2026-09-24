@@ -1019,6 +1019,44 @@ mod tests {
     /// The same three invariants `TypeRegistry::new`'s `debug_assert`s
     /// check, asserted unconditionally over the *production* registry, in
     /// every build profile -- not only debug.
+    /// Milestone 3d's verifier: "secrecy only goes up" is asserted at
+    /// compile time over [`DomainType::IS_SECRET`], and that const
+    /// defaults to `false`. A hand-written secret type that forgot to set
+    /// it would therefore let a secret-to-public `conversions!` row
+    /// compile, and `check`'s secret rule (which reads the same flag
+    /// through the registry) would miss it too. This pins, for every
+    /// registered type, that a type the registry calls public really is
+    /// public by its own [`DomainObject`] -- its example parses, and the
+    /// object says `is_secret() == false` and renders in plain -- and that
+    /// a type the registry calls secret is refused as a literal.
+    #[test]
+    fn every_registered_type_is_as_secret_as_its_is_secret_const_says() {
+        let registry = crate::registry();
+        for entry in registry.iter() {
+            let info = &entry.info;
+            if info.secret {
+                assert!(
+                    (entry.parse)(info.example).is_err(),
+                    "{}: a secret type must be refused as a literal",
+                    info.name
+                );
+                continue;
+            }
+            let object = (entry.parse)(info.example)
+                .unwrap_or_else(|err| panic!("{}: its own example must parse: {err}", info.name));
+            assert!(
+                !object.is_secret(),
+                "{}: IS_SECRET is false but its DomainObject says it is secret",
+                info.name
+            );
+            assert!(
+                matches!(object.render(), crate::object::Rendered::Plain(_)),
+                "{}: IS_SECRET is false but it renders redacted",
+                info.name
+            );
+        }
+    }
+
     #[test]
     fn the_production_registry_has_no_duplicate_or_identity_conversion_row() {
         let registry = crate::registry();
