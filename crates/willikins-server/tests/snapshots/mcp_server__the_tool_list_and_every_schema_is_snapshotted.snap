@@ -1598,7 +1598,7 @@ expression: snapshot
               "type": "object"
             },
             {
-              "description": "A workflow input's default value is not of the input's declared\ntype, in name or in cardinality.\n\nNot one of the plan's sixteen variants: the plan parses a default\nagainst its declared type when a *document* is loaded, which leaves\na [`Workflow`] built any other way — the builder API, a future\ncomposite — free to declare `Text` and default to a\n`DopplerServiceToken`. `check` resolves an input binding from the\ndeclared type, so without this the secret default would be the\nvalue a later stage actually pushed into a non-secret sink.",
+              "description": "A workflow input's default value is not of the input's declared\ntype, in name or in cardinality, or holds an object that is not a\nvalue of the Rust type the catalog's registry holds under that name\n(the registry entry's `TypeId` test,\n[`TypeRegistry::type_matches`]; a default's objects are known\nstatically, so `check` refuses one of another Rust type sharing the\ndeclared name, not only `plan`).\n\nNot one of the plan's sixteen variants: the plan parses a default\nagainst its declared type when a *document* is loaded, which leaves\na [`Workflow`] built any other way — the builder API, a future\ncomposite — free to declare `Text` and default to a\n`DopplerServiceToken`. `check` resolves an input binding from the\ndeclared type, so without this the secret default would be the\nvalue a later stage actually pushed into a non-secret sink.",
               "properties": {
                 "expected": {
                   "$ref": "#/$defs/TypeRef",
@@ -1606,7 +1606,7 @@ expression: snapshot
                 },
                 "found": {
                   "$ref": "#/$defs/TypeRef",
-                  "description": "The default value's own type."
+                  "description": "The default value's own type; for an object of another Rust\ntype under the declared name, the name that object reports (the\ndeclared name when it is not a valid type name), so `found`\ncan equal `expected`."
                 },
                 "input": {
                   "$ref": "#/$defs/InputName",
