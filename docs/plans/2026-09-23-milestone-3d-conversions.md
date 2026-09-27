@@ -32,7 +32,8 @@ the caller supplied against its declared `TypeRef` before any node is planned, a
 mismatch with the new `PlanError::InputTypeMismatch { input, expected, found }`. The value's own
 `TypeRef` must equal the declared one (list flag included), and every known object in it, each list
 element included, must pass the registry entry's `TypeId` test (`TypeRegistry::type_matches`,
-`0787a28`). Type names are never compared. `apply` inherits the check through its opening replan.
+`0787a28`). A matching name alone never admits an object: the declared `TypeRef` is compared
+first, then every known object by `TypeId`. `apply` inherits the check through its opening replan.
 Before this, a wrong-typed input on an *exact* edge reached the tool unchecked. **Backstop:**
 `Value::converted` and `Edge::deliver` return `ConversionMismatch` instead of passing a
 foreign value through, and `plan`'s `bind_ports` and `apply`'s `Step`/`Keyed` re-delivery surface
