@@ -25,6 +25,24 @@ still reached the downcast and panicked inside `plan`. The converter now returns
 failed downcast, `Conversion::apply` returns `Option`, and `Value::converted` passes through on
 `None` (`b470206`). See "Independent review of the verifier-written commits" in
 `docs/research/2026-09-23-m3d-adversarial-pass.md`.
+**Addendum:** 2026-09-27 (fail-loudly follow-up) — the operator, 2026-09-24: "I'd much rather have
+it fail loudly at parsing than silently go through." Two changes replace the pass-through that
+`b470206` left in decision (f). **Root cause, at parsing:** `plan` now checks every workflow input
+the caller supplied against its declared `TypeRef` before any node is planned, and refuses a
+mismatch with the new `PlanError::InputTypeMismatch { input, expected, found }`. The value's own
+`TypeRef` must equal the declared one (list flag included), and every known object in it, each list
+element included, must pass the registry entry's `TypeId` test (`TypeRegistry::type_matches`,
+`0787a28`). Type names are never compared. `apply` inherits the check through its opening replan.
+Before this, a wrong-typed input on an *exact* edge reached the tool unchecked. **Backstop:**
+`Value::converted` and `Edge::deliver` return `ConversionMismatch` instead of passing a
+foreign value through, and `plan`'s `bind_ports` and `apply`'s `Step`/`Keyed` re-delivery surface
+it as `PlanError::EdgeTypeMismatch { site, expected, found }` (`1e29caf`). The parse-time check
+makes this unreachable for any `Checked` that `check` built and any workflow input. It still
+catches two routes: a hand-built `Checked` that moves a converting edge onto another port, and a
+tool whose `ensure` returns a value of another type that `plan` only saw as `Unknown`. Both errors
+carry type names only. The CLI and MCP parse inputs from text by declared type, so neither error
+is reachable from them, and their messages and the characterization snapshot are unchanged. See
+"Fail-loudly follow-up, independent review" in `docs/research/2026-09-23-m3d-adversarial-pass.md`.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system: "parse, don't validate",
 "a secret output may only flow to a secret-accepting input. No coercion."; "policy lives in the
 workflow, never in the tool"; the workflow-inputs rule "no secret input types")

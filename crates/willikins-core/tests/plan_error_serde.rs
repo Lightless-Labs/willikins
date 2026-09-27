@@ -59,6 +59,11 @@ fn plan_error_samples() -> Vec<PlanError> {
             expected: ty("A"),
             found: ty("B"),
         },
+        PlanError::InputTypeMismatch {
+            input: input("i"),
+            expected: ty("A"),
+            found: ty("B"),
+        },
     ]
 }
 
@@ -96,6 +101,7 @@ variant_kinds!(
     AttributeMismatch,
     Tool,
     EdgeTypeMismatch,
+    InputTypeMismatch,
 );
 
 #[test]

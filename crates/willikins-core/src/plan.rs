@@ -66,7 +66,7 @@ use crate::check::{Checked, Edge};
 use crate::class::Class;
 use crate::site::Site;
 use crate::tool::{Inputs, Observation, Outputs, PortName, Tool, ToolError, ToolName, ToolSpec};
-use crate::value::{PortType, TypeName, TypeRef, Value};
+use crate::value::{PortType, TypeName, TypeRef, TypeRegistry, Value, type_name_of_object};
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
 
 /// What `plan` decided to do for one node instance.
@@ -312,6 +312,30 @@ pub enum PlanError {
         /// it. Never the value's own content.
         found: TypeRef,
     },
+    /// A workflow input the caller supplied is not a value of the type the
+    /// workflow declares for it. `plan` parses every supplied input against
+    /// its declared [`TypeRef`] before any node is planned: the value's own
+    /// declared type must equal it (name and list flag), and every known
+    /// object in it must be a value of the Rust type the catalog's
+    /// registry holds under that name, by that entry's `TypeId` test
+    /// ([`crate::value::TypeRegistry::type_matches`]), never by comparing
+    /// type names. The CLI and MCP parse every input from text against its
+    /// declared type, so this is reached only through the library: a
+    /// caller handing `plan` (or `apply`, whose opening replan is `plan`)
+    /// a value built some other way. Follow-up to milestone 3d, 2026-09-27;
+    /// the operator: "I'd much rather have it fail loudly at parsing than
+    /// silently go through." Type names only, never the value's content.
+    InputTypeMismatch {
+        /// The workflow input whose value is of the wrong type.
+        input: InputName,
+        /// The type the workflow declares for it.
+        expected: TypeRef,
+        /// The supplied value's own declared type when that differs; when
+        /// it matches, the type name the first offending object reports
+        /// (as `list<...>` for a list input), which equals `expected` for
+        /// a value of another Rust type sharing the declared name.
+        found: TypeRef,
+    },
 }
 
 impl std::fmt::Display for PlanError {
@@ -349,6 +373,23 @@ impl std::fmt::Display for PlanError {
                 expected,
                 found,
             } => write!(f, "{site}: expected {expected}, found `{found}`"),
+            Self::InputTypeMismatch {
+                input,
+                expected,
+                found,
+            } if expected == found => write!(
+                f,
+                "workflow input `{input}`: expected {expected}, found a value of another Rust \
+                 type also named `{found}`"
+            ),
+            Self::InputTypeMismatch {
+                input,
+                expected,
+                found,
+            } => write!(
+                f,
+                "workflow input `{input}`: expected {expected}, found `{found}`"
+            ),
         }
     }
 }
@@ -432,8 +473,10 @@ impl ResolveCtx<'_> {
 ///
 /// # Errors
 ///
-/// Returns the first [`PlanError`] found while walking the workflow; see
-/// the module docs for why this is one error, not a list.
+/// Returns [`PlanError::InputTypeMismatch`] before any node is planned when
+/// a supplied workflow input is not of its declared type; otherwise the
+/// first [`PlanError`] found while walking the workflow; see the module
+/// docs for why this is one error, not a list.
 ///
 /// # Panics
 ///
@@ -449,6 +492,7 @@ pub fn plan(
     catalog: &Catalog,
 ) -> Result<Plan, PlanError> {
     let workflow = &checked.workflow;
+    check_input_types(workflow, inputs, catalog.registry())?;
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut planned: Vec<PlannedNode> = Vec::new();
 
@@ -548,6 +592,48 @@ pub fn plan(
         class: checked.class,
         requires_approval: checked.class.requires_approval(),
     })
+}
+
+/// Parse every workflow input the caller supplied against the type
+/// `workflow` declares for it, before any node is planned
+/// ([`PlanError::InputTypeMismatch`]). The value's own declared
+/// [`TypeRef`] must equal the declared one, list flag included, and every
+/// known object in it must pass the registry entry's own `TypeId` test
+/// ([`TypeRegistry::type_matches`]); a name the registry does not hold
+/// refuses too. An `Unknown` value of the declared type holds no object and
+/// is accepted, as it always was. A declared input the caller left out is
+/// not this check's business: a binding that reads it still fails with
+/// [`PlanError::MissingInput`], exactly as before. A supplied name the
+/// workflow does not declare is ignored, as before.
+fn check_input_types(
+    workflow: &Workflow,
+    inputs: &IndexMap<InputName, Value>,
+    registry: &TypeRegistry,
+) -> Result<(), PlanError> {
+    for (name, spec) in &workflow.inputs {
+        let Some(value) = inputs.get(name) else {
+            continue;
+        };
+        let mismatch = |found: TypeRef| PlanError::InputTypeMismatch {
+            input: name.clone(),
+            expected: spec.ty.clone(),
+            found,
+        };
+        if value.ty() != &spec.ty {
+            return Err(mismatch(value.ty().clone()));
+        }
+        let scalar = value.as_scalar().into_iter();
+        let items = value.as_list().unwrap_or_default().iter().map(Arc::as_ref);
+        for object in scalar.chain(items) {
+            if registry.type_matches(&spec.ty.name, object) != Some(true) {
+                return Err(mismatch(TypeRef {
+                    name: type_name_of_object(object),
+                    list: spec.ty.list,
+                }));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Resolve every one of `spec`'s input ports for `node` into an [`Inputs`]

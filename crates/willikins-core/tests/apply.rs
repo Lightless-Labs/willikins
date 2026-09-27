@@ -1832,13 +1832,36 @@ mod conversions {
         );
     }
 
-    /// The same mismatch, reached through `plan` rather than
-    /// `Edge::deliver` directly: a caller that supplies a wrong-typed
-    /// workflow input to `plan` sees a loud `PlanError::EdgeTypeMismatch`,
-    /// naming the node and port, never a panic and never a silent pass
-    /// through. (Once the root-cause check lands, `plan` catches this
-    /// even earlier, as `PlanError::InputTypeMismatch`, before any node is
-    /// planned -- see that commit's own update to this test.)
+    /// `err` is exactly `PlanError::InputTypeMismatch` for workflow input
+    /// `name`, declared `expected`, supplied `found`.
+    fn assert_input_type_mismatch(
+        err: &PlanError,
+        name: &str,
+        expected: &TypeRef,
+        found: &TypeRef,
+    ) {
+        match err {
+            PlanError::InputTypeMismatch {
+                input: got_input,
+                expected: got_expected,
+                found: got_found,
+            } => {
+                assert_eq!(got_input, &input(name));
+                assert_eq!(got_expected, expected);
+                assert_eq!(got_found, found);
+            }
+            other => panic!("expected InputTypeMismatch, got {other:?}"),
+        }
+    }
+
+    /// Follow-up to milestone 3d, 2026-09-27 (the operator: "I'd much
+    /// rather have it fail loudly at parsing than silently go through"):
+    /// a caller that supplies a wrong-typed workflow input to `plan` is
+    /// refused while `plan` parses its inputs, as
+    /// `PlanError::InputTypeMismatch`, before any node is planned. Until
+    /// that check landed this reached the converting edge and was refused
+    /// there, as `EdgeTypeMismatch`, which stays the backstop for a
+    /// hand-built `Checked`.
     #[test]
     fn a_converted_edge_refuses_a_foreign_workflow_input_through_plan() {
         let fixture = fixture();
@@ -1851,25 +1874,13 @@ mod conversions {
         let mut inputs = IndexMap::new();
         inputs.insert(input("a"), foreign);
         let err = plan(&checked, &inputs, &fixture.catalog).expect_err("a ConvB is not a ConvA");
-        match err {
-            PlanError::EdgeTypeMismatch {
-                site,
-                expected,
-                found,
-            } => {
-                assert_eq!(
-                    site,
-                    Site::Port {
-                        node: node("sink"),
-                        port: port("b"),
-                    }
-                );
-                assert_eq!(expected, scalar("ConvA"));
-                assert_eq!(found, scalar("ConvB"));
-            }
-            other => panic!("expected EdgeTypeMismatch, got {other:?}"),
-        }
+        assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &scalar("ConvB"));
+        assert_eq!(
+            err.to_string(),
+            "workflow input `a`: expected ConvA, found `ConvB`"
+        );
         assert!(fixture.sink_b.reads.lock().unwrap().is_empty());
+        assert!(fixture.sink_b.ensures.lock().unwrap().is_empty());
     }
 
     /// Another Rust type whose `TYPE_NAME` is also `ConvA`.
@@ -1883,15 +1894,13 @@ mod conversions {
         pub(super) struct ConvA(String);
     }
 
-    /// Independent review of milestone 3d, and its own follow-up
-    /// (2026-09-24): a workflow input whose type *name* is the
-    /// conversion's source but whose Rust type is not no longer passes
-    /// through unconverted -- `plan` refuses it loudly, through
-    /// `Edge::deliver`'s own backstop, rather than panicking in the
-    /// converter's downcast or silently letting the impostor through.
-    /// (Once the root-cause check lands, this becomes
-    /// `PlanError::InputTypeMismatch`, refused before any node is
-    /// planned -- see that commit's own update to this test.)
+    /// Independent review of milestone 3d, and its follow-up: a workflow
+    /// input whose type *name* is the declared type but whose Rust type is
+    /// not is refused while `plan` parses its inputs -- by the registry
+    /// entry's own `TypeId` test, never by comparing names -- at `plan`
+    /// and at `apply`'s opening replan, before any tool reads or ensures
+    /// anything. `expected` and `found` print the same, so `Display` says
+    /// what actually differs.
     #[test]
     fn a_same_named_input_of_another_rust_type_is_refused_not_panicked() {
         let fixture = fixture();
@@ -1902,34 +1911,233 @@ mod conversions {
         let impostor = Value::known(impostor::ConvA::parse("imp").unwrap());
         assert_eq!(impostor.ty(), &scalar("ConvA"));
 
+        let mut genuine_inputs = IndexMap::new();
+        genuine_inputs.insert(input("a"), Value::known(a("real")));
+        let approved =
+            plan(&checked, &genuine_inputs, &fixture.catalog).expect("a real ConvA plans");
+        fixture.sink_b.reads.lock().unwrap().clear();
+
         let mut inputs = IndexMap::new();
         inputs.insert(input("a"), impostor);
         let err = plan(&checked, &inputs, &fixture.catalog)
             .expect_err("a same-named impostor is not a real ConvA");
-        match err {
-            PlanError::EdgeTypeMismatch {
-                site,
-                expected,
-                found,
-            } => {
-                assert_eq!(
-                    site,
-                    Site::Port {
-                        node: node("sink"),
-                        port: port("b"),
-                    }
-                );
-                // The coincidence the type system cannot see through: the
-                // impostor's own TYPE_NAME really is "ConvA". That is the
-                // whole point -- a shared name does not mean a shared
-                // Rust type, so `expected` and `found` print identically
-                // here without the refusal being wrong.
-                assert_eq!(expected, scalar("ConvA"));
-                assert_eq!(found, scalar("ConvA"));
+        assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &scalar("ConvA"));
+        assert_eq!(
+            err.to_string(),
+            "workflow input `a`: expected ConvA, found a value of another Rust type also named \
+             `ConvA`"
+        );
+
+        let mut observer = RecordingObserver::new();
+        let apply_err = apply(
+            &checked,
+            &inputs,
+            &fixture.catalog,
+            &approved,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect_err("apply's opening replan parses the same inputs");
+        match apply_err {
+            ApplyError::Plan { error } => {
+                assert_input_type_mismatch(&error, "a", &scalar("ConvA"), &scalar("ConvA"));
             }
-            other => panic!("expected EdgeTypeMismatch, got {other:?}"),
+            other => panic!("expected ApplyError::Plan{{InputTypeMismatch}}, got {other:?}"),
+        }
+        assert!(observer.events.is_empty(), "apply refused before any event");
+        assert!(fixture.sink_b.reads.lock().unwrap().is_empty());
+        assert!(fixture.sink_b.ensures.lock().unwrap().is_empty());
+    }
+
+    /// A declared `list<ConvA>` input whose supplied list holds one object
+    /// that is not a real `ConvA` -- a foreign `ConvB`, or a same-named
+    /// impostor -- is refused as a whole before any instance is planned,
+    /// naming the offending element's own type. Without the parse-time
+    /// check the first, well-typed item was already read by the sink when
+    /// the bad one reached its edge.
+    #[test]
+    fn a_list_input_with_one_foreign_or_impostor_element_is_refused_before_any_read() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-list-element"))
+            .input(input("xs"), InputSpec::new(TypeRef::list_of(name("ConvA"))))
+            .node(
+                node("each"),
+                sink_b_node(Binding::Item).for_each(Binding::Input(input("xs"))),
+            );
+        let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
+
+        for (element, found) in [
+            (
+                Arc::new(ConvB::parse("bad").unwrap()) as Arc<dyn willikins_types::DomainObject>,
+                TypeRef::list_of(name("ConvB")),
+            ),
+            (
+                Arc::new(impostor::ConvA::parse("imp").unwrap())
+                    as Arc<dyn willikins_types::DomainObject>,
+                TypeRef::list_of(name("ConvA")),
+            ),
+        ] {
+            let forged = Value::known_dyn_list(
+                name("ConvA"),
+                vec![
+                    Arc::new(a("ok")) as Arc<dyn willikins_types::DomainObject>,
+                    element,
+                ],
+            );
+            let mut inputs = IndexMap::new();
+            inputs.insert(input("xs"), forged);
+            let err = plan(&checked, &inputs, &fixture.catalog)
+                .expect_err("one element is not a real ConvA");
+            assert_input_type_mismatch(&err, "xs", &TypeRef::list_of(name("ConvA")), &found);
+            assert!(
+                fixture.sink_b.reads.lock().unwrap().is_empty(),
+                "no instance was read, not even the well-typed first one"
+            );
+        }
+    }
+
+    /// The root cause, on an edge with no conversion at all: a wrong-typed
+    /// workflow input bound to an exact port used to reach the tool
+    /// unchecked (the `Echo` double reads it without a typed accessor, so
+    /// `plan` succeeded). It is now refused while `plan` parses its inputs.
+    #[test]
+    fn an_exact_edge_input_of_another_type_is_refused_before_any_tool_reads_it() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-exact-foreign"))
+            .input(input("a"), InputSpec::new(scalar("ConvA")))
+            .node(
+                node("echo"),
+                Node::new(ToolName::parse("conv.echo").unwrap())
+                    .port(port("in"), Binding::Input(input("a"))),
+            );
+        let checked = check(&workflow, &fixture.catalog).expect("A binds to A exactly");
+        assert!(
+            checked.types[&node("echo")][&port("in")]
+                .conversion()
+                .is_none()
+        );
+
+        for (value, found) in [
+            (Value::known(ConvB::parse("bad").unwrap()), scalar("ConvB")),
+            (
+                Value::known(impostor::ConvA::parse("imp").unwrap()),
+                scalar("ConvA"),
+            ),
+        ] {
+            let mut inputs = IndexMap::new();
+            inputs.insert(input("a"), value);
+            let err = plan(&checked, &inputs, &fixture.catalog)
+                .expect_err("the echo's exact ConvA port must not receive it");
+            assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &found);
+        }
+    }
+
+    /// The declared `TypeRef` must match exactly, list flag included, for
+    /// an `Unknown` value as much as a known one; an `Unknown` of the
+    /// declared type itself is accepted, as it always was.
+    #[test]
+    fn an_input_of_the_wrong_shape_or_unknown_type_is_refused_and_a_right_unknown_plans() {
+        let fixture = fixture();
+        let scalar_workflow = Workflow::new(workflow_name("conv-shape-scalar"))
+            .input(input("a"), InputSpec::new(scalar("ConvA")))
+            .node(node("sink"), sink_b_node(Binding::Input(input("a"))));
+        let scalar_checked =
+            check(&scalar_workflow, &fixture.catalog).expect("A converts to B in one hop");
+
+        for (value, found) in [
+            (Value::unknown(scalar("ConvB")), scalar("ConvB")),
+            (
+                Value::unknown(TypeRef::list_of(name("ConvA"))),
+                TypeRef::list_of(name("ConvA")),
+            ),
+            (
+                Value::known_list(vec![a("x")]),
+                TypeRef::list_of(name("ConvA")),
+            ),
+        ] {
+            let mut inputs = IndexMap::new();
+            inputs.insert(input("a"), value);
+            let err =
+                plan(&scalar_checked, &inputs, &fixture.catalog).expect_err("not a scalar ConvA");
+            assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &found);
         }
         assert!(fixture.sink_b.reads.lock().unwrap().is_empty());
+
+        let list_workflow = Workflow::new(workflow_name("conv-shape-list"))
+            .input(input("xs"), InputSpec::new(TypeRef::list_of(name("ConvA"))))
+            .node(
+                node("each"),
+                sink_b_node(Binding::Item).for_each(Binding::Input(input("xs"))),
+            );
+        let list_checked =
+            check(&list_workflow, &fixture.catalog).expect("A converts to B in one hop");
+        let mut inputs = IndexMap::new();
+        inputs.insert(input("xs"), Value::known(a("x")));
+        let err = plan(&list_checked, &inputs, &fixture.catalog).expect_err("not a list");
+        assert_input_type_mismatch(
+            &err,
+            "xs",
+            &TypeRef::list_of(name("ConvA")),
+            &scalar("ConvA"),
+        );
+
+        let mut inputs = IndexMap::new();
+        inputs.insert(input("a"), Value::unknown(scalar("ConvA")));
+        let planned = plan(&scalar_checked, &inputs, &fixture.catalog)
+            .expect("an Unknown of the declared type is well typed");
+        assert_eq!(
+            only_b(&planned.nodes[0].inputs),
+            &Value::unknown(scalar("ConvB"))
+        );
+    }
+
+    /// A secret supplied for a non-secret workflow input is refused by type
+    /// name only: its bytes reach neither the error's `Display`, `Debug`,
+    /// or JSON, nor any tool, nor an apply event.
+    #[test]
+    fn a_secret_supplied_for_a_public_input_is_refused_without_its_bytes() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-secret-input"))
+            .input(input("a"), InputSpec::new(scalar("ConvA")))
+            .node(node("sink"), sink_b_node(Binding::Input(input("a"))));
+        let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
+
+        let mut genuine_inputs = IndexMap::new();
+        genuine_inputs.insert(input("a"), Value::known(a("real")));
+        let approved =
+            plan(&checked, &genuine_inputs, &fixture.catalog).expect("a real ConvA plans");
+        fixture.sink_b.reads.lock().unwrap().clear();
+
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            input("a"),
+            Value::known(SecA::parse(&secret_bytes()).unwrap()),
+        );
+        let err = plan(&checked, &inputs, &fixture.catalog).expect_err("a SecA is not a ConvA");
+        assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &scalar("SecA"));
+        for dump in [
+            err.to_string(),
+            format!("{err:?}"),
+            serde_json::to_string(&err).unwrap(),
+        ] {
+            assert!(!dump.contains(&secret_bytes()), "leaked: {dump}");
+        }
+
+        let mut observer = RecordingObserver::new();
+        let apply_err = apply(
+            &checked,
+            &inputs,
+            &fixture.catalog,
+            &approved,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect_err("apply's opening replan refuses it too");
+        assert!(!format!("{apply_err:?}").contains(&secret_bytes()));
+        assert!(!apply_err.to_string().contains(&secret_bytes()));
+        assert!(observer.events.is_empty());
+        assert!(fixture.sink_b.reads.lock().unwrap().is_empty());
+        assert!(fixture.sink_b.ensures.lock().unwrap().is_empty());
     }
 
     /// The backstop's own reason to exist: a `Checked` `check` never
