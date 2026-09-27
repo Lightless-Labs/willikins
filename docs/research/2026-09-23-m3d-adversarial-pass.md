@@ -520,3 +520,129 @@ The following ran, each with `-j 2`, alone on the host, with its log read in ful
 - `willikins-providers-appstore --test profile_documents`.
 
 The full workspace gate was not run, by instruction.
+
+## Independent review of 4d44fb3 and 483b165, 2026-09-27
+
+**Reviewer:** an independent adversarial pass, not the agent that wrote and then reviewed
+`4d44fb3` (`PlanError::InputTypeMismatch`, `plan`'s `check_input_types`) and `483b165`
+(`reported_type_name_or`). The section above was that agent's own record, so this pass trusted
+none of it and reproduced every claim.
+**The operator, 2026-09-24:** "I'd much rather have it fail loudly at parsing than silently go
+through."
+**Method:** as before. Each mutation edited `plan.rs` or `value.rs` through a script, ran a scoped
+`willikins-core` test target, and restored the file from a copy saved before the edit. `cmp`
+confirmed every restore byte-identical. No `git checkout`, `reset` or `stash` was used. The baseline
+on `f0ce5a2` was green: `--lib` 158, `--test apply` 31, `--test plan_error_serde` 2.
+
+### Defects found, each fixed test-first
+
+1. **A same-named default of another Rust type passed `check`** (`83a74a5`). This sits next to the
+   two commits, not inside them. `check_workflow_inputs` compared only a default's `TypeRef`. A
+   `Workflow` built through the library could do all of the following and still pass `check`:
+   - declare a public `Text` input;
+   - default it to a *secret* value of another Rust type whose derive also reports `Text`;
+   - bind it to `template.render`.
+
+   The probe went red with "expected check to reject this workflow, got Checked { … default:
+   Some([REDACTED Text]) … }". `4d44fb3` refuses that value in `plan` once `describe` has merged
+   the default in. But a default's objects are known statically, and the invariants say everything
+   knowable statically is `check`'s to reject. **Fix:** `DefaultTypeMismatch` now also fires when
+   any known object in a default fails `type_matches`, whether it is a scalar or a list element.
+   The object is named through `reported_type_name_or`. When `expected` and `found` print the
+   same, `Display` says "default value is declared `Text` but is a value of another Rust type".
+   The test pins that no impostor bytes reach `Display` or `Debug`. DSL defaults parse through
+   the registry the catalog holds, so no document's result can move. The DSL acceptance run
+   below confirms it.
+2. **A test did not check what its name promised** (`847cf0a`).
+   `an_exact_edge_input_of_another_type_is_refused_before_any_tool_reads_it` asserted only the
+   error. An exact edge has no backstop, so this is the one route where the parse-time check alone
+   decides. With the check moved after the node loop (M4), the test still passed, although both
+   tools had already read the wrong value. It now adds a recording `conv.sink_a` on a second
+   exact `ConvA` port and asserts that nothing read it. It is red under M4 ("no tool read the
+   wrong-typed input").
+3. **`Display` made a false claim after `483b165`** (`1d22ef8`). When `expected == found`, the
+   message said "found a value of another Rust type also named `X`". For a misnamed list element,
+   `found` falls back to the declared name, and the element's type is `conv_a`, not `X`. The
+   message now says "declared as `X`", which is true for both the impostor and the misnamed
+   element. The misnamed test now pins the message. Both message assertions went red first.
+
+### Attacks that held, with evidence
+
+- **Every caller-supplied shape.** Each of these is refused before any node is planned:
+  - a scalar of another type;
+  - a scalar impostor;
+  - a list with one foreign element or one impostor element (mixed list);
+  - a list supplied for a scalar input, and the reverse;
+  - an `Unknown` of the wrong `TypeRef`, list flag included.
+
+  A value's `TypeRef` always agrees with its state, because every `Value` constructor sets both.
+  So `as_scalar` chained with `as_list` covers every object the value holds.
+- **Values the check lets through, all by design.**
+  - An empty list of the declared `TypeRef` and an `Unknown` of it pass: neither holds an object
+    that could be of the wrong Rust type, including an empty list built from an impostor type.
+  - A declared input that was not supplied still reaches `MissingInput` only through a binding.
+  - An undeclared extra key is ignored. `plan` never falls back to `InputSpec::default`: only
+    `describe` merges defaults, into the map `plan` then checks.
+- **TypeId, never `TYPE_NAME`.** M1 swaps `type_matches` for a name comparison. Three tests go
+  red. The exact-edge impostor then *plans* (`inputs: {in: imp}`), and the other two fall to the
+  backstop's `EdgeTypeMismatch`.
+- **Before any read.** `plan` calls `check_input_types` on its first line, and `plan_one` is the
+  only place `Tool::read` is called in non-test code. `apply` runs only its approval gate before
+  its opening replan, so it emits no event. M4 plus defect 2 pins this.
+- **No panic from either commit's code.** `check_input_types`, `reported_type_name_or` and the new
+  `Display` arm contain no `unwrap`, `expect` or `unreachable!`. M3 puts the `unreachable!` back
+  into `reported_type_name_or`. Both misnamed tests then panic with "entered unreachable code:
+  DomainObject::type_name must be a TypeName: … `conv_a` …" (value.rs from `--lib`, the plan
+  route from `--test apply`). One public constructor still panics: `Value::known` or
+  `Value::known_dyn` of a misnamed *scalar* panics in the caller's own construction, before
+  `plan` is involved. That predates these commits and is noted here, not changed.
+- **Secrecy.** `InputTypeMismatch` and `DefaultTypeMismatch` carry only `InputName` and `TypeRef`.
+  `found` is a `&'static` `TYPE_NAME` or the declared name, never content. The existing secret
+  test pins `Display`, `Debug`, JSON, `ApplyError` and the observer. The journal and the server
+  record a plan refusal as its serde `kind` string alone (`plan_error_kind` in
+  `willikins-journal/src/observer.rs` and `willikins-server/src/butler.rs`). The new check test
+  pins `Display` and `Debug` for a secret impostor default.
+- **CLI and MCP unchanged.** Every non-test `Catalog` is built with `willikins_types::registry()`
+  (`willikins-server/src/catalog.rs:248,575`, `startup.rs:292`, `willikins-tools/src/lib.rs:55`).
+  Every input a front end hands `plan` is built in one of three ways, all through that same global
+  registry against the declared type:
+  - `Value::parse` or `parse_list`, in `describe::parse_raw`;
+  - the server's `parse_recorded_value` (`butler.rs:1205`);
+  - a DSL default (`willikins-dsl/src/lib.rs:469`).
+
+  So `type_matches` is `Some(true)` for every value they build, and neither new refusal is
+  reachable from them. The CLI's own `DefaultTypeMismatch` renderer (`render.rs:226`) keeps its
+  wording and can only see a `TypeRef` mismatch. `willikins-dsl --test acceptance` passes on
+  `1d22ef8`, and no `.snap.new` exists anywhere outside `target/`, so `553b231`'s characterization
+  did not move.
+
+### Mutations
+
+| # | Mutation (on `f0ce5a2`'s code) | Result |
+| --- | --- | --- |
+| M1 | `check_input_types` compares `object.type_name()` with the declared name instead of `type_matches` | red, 3: the scalar impostor and the list impostor fall to `EdgeTypeMismatch`; the exact-edge impostor plans `{in: imp}` |
+| M2 | the `value.ty() != &spec.ty` branch is disabled | red, 1: `Unknown(ConvB)` for a `ConvA` input slips past the input check to the backstop's `EdgeTypeMismatch`. On an exact edge, nothing would catch it |
+| M3 | `reported_type_name_or` panics (`unreachable!`) instead of falling back | red, 2: `converted_refuses_an_object_whose_type_name_is_not_a_type_name_without_a_panic` (`--lib`) and `a_list_element_whose_type_name_is_not_a_type_name_is_refused_not_panicked` (`--test apply`), both with the `unreachable!` message |
+| M4 | `check_input_types` moved from `plan`'s first line to just before `Ok(Plan {…})` | red, 6, but five only because the converting-edge backstop fires first, and one because the misnamed element panics in `for_each` keying. The exact-edge test **survived** (defect 2). After `847cf0a` it is red |
+| M5 | `!= Some(true)` becomes `== Some(false)` (an unregistered name admits an object) | **survives**, 31/31. `type_matches` returns `None` only for a name the catalog's registry lacks, and `check` has already refused such an input against the same catalog. Reaching it needs a `Checked` from an incompatible catalog, which is already a documented contract violation where `plan` may panic. Left untested on purpose |
+
+### Not settled
+
+- **An undeclared input bound by a hand-built `Checked`.** If a node's `Binding::Input(x)` names
+  an input the workflow does not declare, and the caller supplies `x`, that value reaches the tool
+  unchecked. The loop walks only declared inputs. This belongs to the same trust class as the
+  moved-edge route: a hand-built `Checked` can equally bind a declared `ConvB` input to a `ConvA`
+  port, and `plan` does not re-check bindings. It belongs with
+  `todos/2026-09-23-checked-as-a-typed-graph.md`.
+- **Unchanged from the review above:** a tool's own wrong-typed output is not checked where it is
+  produced, and a misnamed object in a tool's list output still panics in `for_each` keying.
+- **Scope of the checks run.** Each was run with `-j 2` and `RUST_TEST_THREADS=2`, one at a time,
+  and its log was read in full:
+  - `cargo fmt --all --check`;
+  - `cargo clippy -p willikins-core --all-targets -- -D warnings`;
+  - `willikins-core`: `--lib`, `--test apply`, `--test check`, `--test check_adversarial`,
+    `--test plan_error_serde`;
+  - `willikins-dsl --test acceptance`.
+
+  The full workspace gate, the CLI and server suites, and `cargo check -p willikins-types` were
+  not run, by instruction. `willikins-types` was not touched.
