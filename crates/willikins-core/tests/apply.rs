@@ -1996,6 +1996,52 @@ mod conversions {
         }
     }
 
+    /// A derived type whose Rust name is not a valid `TypeName`: the derive
+    /// takes `TYPE_NAME` from `stringify!` of the struct's name and checks
+    /// nothing, so `known_dyn_list` can carry one in a list declared as
+    /// another type.
+    #[allow(non_camel_case_types)]
+    mod misnamed {
+        #[derive(willikins_types::DomainType)]
+        #[domain(
+            pattern = "[a-z]+",
+            description = "A type whose name is not a TypeName.",
+            example = "a"
+        )]
+        pub(super) struct conv_a(String);
+    }
+
+    /// Naming the offending element must not itself panic: an object whose
+    /// reported type name is not a valid `TypeName` is refused as a
+    /// mismatch, `found` falling back to the declared name.
+    #[test]
+    fn a_list_element_whose_type_name_is_not_a_type_name_is_refused_not_panicked() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-misnamed-element"))
+            .input(input("xs"), InputSpec::new(TypeRef::list_of(name("ConvA"))))
+            .node(
+                node("each"),
+                sink_b_node(Binding::Item).for_each(Binding::Input(input("xs"))),
+            );
+        let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
+        let forged = Value::known_dyn_list(
+            name("ConvA"),
+            vec![Arc::new(misnamed::conv_a::parse("x").unwrap())
+                as Arc<dyn willikins_types::DomainObject>],
+        );
+        let mut inputs = IndexMap::new();
+        inputs.insert(input("xs"), forged);
+        let err = plan(&checked, &inputs, &fixture.catalog)
+            .expect_err("a conv_a is not a ConvA, and saying so must not panic");
+        assert_input_type_mismatch(
+            &err,
+            "xs",
+            &TypeRef::list_of(name("ConvA")),
+            &TypeRef::list_of(name("ConvA")),
+        );
+        assert!(fixture.sink_b.reads.lock().unwrap().is_empty());
+    }
+
     /// The root cause, on an edge with no conversion at all: a wrong-typed
     /// workflow input bound to an exact port used to reach the tool
     /// unchecked (the `Echo` double reads it without a typed accessor, so
