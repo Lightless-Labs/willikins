@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use willikins_core::{Observation, PortName, SinkToken, Tool, ToolErrorKind, Value};
 use willikins_providers_github::{GitHubClient, GitHubRepoGet};
 use willikins_providers_http::testing::{MockProvider, load_fixture};
-use willikins_providers_http::{Credential, Http, Sleeper};
+use willikins_providers_http::{Credential, Http, MISSING_PERMISSION, Sleeper, UNAUTHENTICATED};
 use willikins_types::{DomainType, GitHubRepo};
 
 fn fixtures_dir() -> std::path::PathBuf {
@@ -124,7 +124,7 @@ fn read_reports_unauthenticated_on_401_never_the_body() {
     let err = tool.read(&inputs()).unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::Provider);
     assert!(!err.message.contains("SECRETVALUE"));
-    assert!(!err.message.contains("permission"));
+    assert_eq!(err.message, UNAUTHENTICATED);
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn read_reports_missing_permission_on_403_never_the_body() {
     let err = tool.read(&inputs()).unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::Provider);
     assert!(!err.message.contains("SECRETVALUE"));
-    assert!(err.message.contains("permission"));
+    assert_eq!(err.message, MISSING_PERMISSION);
 }
 
 /// `ensure` is the identity of `read`: same observation, `changed: false`,

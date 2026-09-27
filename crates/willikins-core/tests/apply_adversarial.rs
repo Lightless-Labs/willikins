@@ -853,6 +853,7 @@ fn a_drift_refusal_carries_no_partial_result_and_a_tool_failure_does() {
         willikins_providers_fake::state::GitHubRepoRecord {
             visibility: RepoVisibility::Private,
             ours: true,
+            archived: false,
         },
     );
     let mut observer = RecordingObserver::new();
