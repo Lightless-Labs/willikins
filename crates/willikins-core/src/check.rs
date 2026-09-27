@@ -67,6 +67,7 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -75,7 +76,9 @@ use crate::catalog::Catalog;
 use crate::class::Class;
 use crate::site::Site;
 use crate::tool::{PortName, PortSpec, ToolName, ToolSpec};
-use crate::value::{Conversion, ConversionMismatch, PortType, TypeRef, TypeRegistry, Value};
+use crate::value::{
+    Conversion, ConversionMismatch, PortType, TypeRef, TypeRegistry, Value, reported_type_name_or,
+};
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
 use willikins_types::ParseError;
 
@@ -379,7 +382,12 @@ pub enum CheckError {
         nodes: Vec<NodeName>,
     },
     /// A workflow input's default value is not of the input's declared
-    /// type, in name or in cardinality.
+    /// type, in name or in cardinality, or holds an object that is not a
+    /// value of the Rust type the catalog's registry holds under that name
+    /// (the registry entry's `TypeId` test,
+    /// [`TypeRegistry::type_matches`]; a default's objects are known
+    /// statically, so `check` refuses one of another Rust type sharing the
+    /// declared name, not only `plan`).
     ///
     /// Not one of the plan's sixteen variants: the plan parses a default
     /// against its declared type when a *document* is loaded, which leaves
@@ -393,7 +401,10 @@ pub enum CheckError {
         input: InputName,
         /// The input's declared type.
         expected: TypeRef,
-        /// The default value's own type.
+        /// The default value's own type; for an object of another Rust
+        /// type under the declared name, the name that object reports (the
+        /// declared name when it is not a valid type name), so `found`
+        /// can equal `expected`.
         found: TypeRef,
     },
     /// A `Step` binding on a `for_each` node whose output port is already
@@ -566,6 +577,15 @@ impl CheckError {
                 input,
                 expected,
                 found,
+            } if expected == found => write!(
+                f,
+                "input `{input}`: default value is declared `{found}` but is a value of another \
+                 Rust type"
+            ),
+            Self::DefaultTypeMismatch {
+                input,
+                expected,
+                found,
             } => write!(
                 f,
                 "input `{input}`: default value has type `{found}`, expected `{expected}`"
@@ -691,7 +711,9 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
 /// Check every declared input: [`CheckError::SecretWorkflowInput`] when
 /// its type is secret, [`CheckError::UnregisteredInputType`] when its type
 /// is not in the registry at all, or else [`CheckError::DefaultTypeMismatch`]
-/// when its default value is not of the declared type. Either of the first
+/// when its default value is not of the declared type: its own `TypeRef`
+/// differs, or one of its known objects fails the registry entry's `TypeId`
+/// test ([`TypeRegistry::type_matches`]), never a name comparison. Either of the first
 /// two is a root cause that suppresses the default check for that input,
 /// which could only repeat it (a secret type cannot have a valid default at
 /// all, and an unregistered type has nothing to check the default against).
@@ -718,13 +740,31 @@ fn check_workflow_inputs(
             }
             Some(false) => {}
         }
-        if let Some(default) = &spec.default
-            && default.ty() != &spec.ty
-        {
+        let Some(default) = &spec.default else {
+            continue;
+        };
+        let found = if default.ty() == &spec.ty {
+            let scalar = default.as_scalar().into_iter();
+            let items = default
+                .as_list()
+                .unwrap_or_default()
+                .iter()
+                .map(Arc::as_ref);
+            scalar
+                .chain(items)
+                .find(|object| registry.type_matches(&spec.ty.name, *object) != Some(true))
+                .map(|object| TypeRef {
+                    name: reported_type_name_or(object, &spec.ty.name),
+                    list: spec.ty.list,
+                })
+        } else {
+            Some(default.ty().clone())
+        };
+        if let Some(found) = found {
             errors.push(CheckError::DefaultTypeMismatch {
                 input: name.clone(),
                 expected: spec.ty.clone(),
-                found: default.ty().clone(),
+                found,
             });
         }
     }

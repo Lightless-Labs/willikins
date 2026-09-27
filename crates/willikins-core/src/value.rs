@@ -41,8 +41,9 @@ fn type_name_of_object(obj: &dyn DomainObject) -> TypeName {
 
 /// The [`TypeName`] `obj` reports, or `fallback` when what it reports is
 /// not a valid type name. Used only to name an object that already failed
-/// a `TypeId` test, in [`ConversionMismatch`] and in `plan`'s
-/// `PlanError::InputTypeMismatch`: nothing checks a derived type's
+/// a `TypeId` test, in [`ConversionMismatch`], in `plan`'s
+/// `PlanError::InputTypeMismatch` and in `check`'s
+/// `CheckError::DefaultTypeMismatch`: nothing checks a derived type's
 /// `TYPE_NAME` (it is `stringify!` of the struct's name), so an object
 /// that is already being refused must not panic while it is named.
 pub(crate) fn reported_type_name_or(obj: &dyn DomainObject, fallback: &TypeName) -> TypeName {
