@@ -304,7 +304,8 @@ README.md}` copied from AppTwo's shape with triggers disabled.
 Existing mechanisms suffice, so no engine feature is proposed. `template.render` is pure, so `plan`
 evaluates it and the plan's `outputs` show every manual step **before anything runs**; `apply` shows
 them again. Each step is one node, `tool: template.render`, whose `template` is a literal
-`TemplateSource` naming the step (`MANUAL M1 app-record: …`) and whose `value` is the app identifier,
+`TemplateSource` naming the step, every one beginning `MANUAL Mn ({{ value }}): …` so each names the
+app it belongs to, and whose `value` is the app identifier,
 bound from `${{ inputs.app_identifier }}` through the new `AppleBundleIdentifier => Text` conversion, so
 the text names the identifier actually being provisioned (the dry run's throwaway, the real run's
 `com.example-org.sample`). The output names are `manual_m1_app_record` … `manual_m7_buildkite_bootstrap`
@@ -345,7 +346,13 @@ appstore.bundle_id.ensure first") is the backstop, not the mechanism.
 
 ### (d) Capability settings: one optional `setting` port, a closed pair type, refused at `read` when it does not fit
 
-`appstore.bundle_id_capability.ensure` gains `setting: AppleCapabilitySetting`, optional. The type's
+`appstore.bundle_id_capability.ensure` gains `setting: AppleCapabilitySetting`, optional. No production tool has shipped an optional port before, so
+the engine was read for it (2026-09-27): `check` raises `UnboundInput` only when `port_spec.required`
+(`crates/willikins-core/src/check.rs`, `check_with_port`), and `plan`'s `bind_ports` skips a port the
+node did not bind, so the tool's `Inputs` simply lack the key (`crates/willikins-core/src/plan.rs`,
+"`node` did not bind is simply absent from the result"). `helpers::get` fails on a missing port, so the
+tool and its fake twin read `setting` with `inputs.get(&port("setting"))` and `helpers::known` when
+present (or a small `get_optional` helper beside `get`, test first). The type's
 grammar is exactly the four `KEY=OPTION` pairs the specification can express for a capability this tool
 does not refuse (SHARED VALUES). `ICLOUD_VERSION` is excluded because `ICLOUD` is already refused.
 
