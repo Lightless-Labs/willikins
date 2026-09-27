@@ -471,9 +471,11 @@ the converter and the tool all see the same `as_any`. It is noted, not attacked.
 
 ### Held
 
-- **The entry check is by Rust type everywhere, never by name.** `type_matches` is the only
-  per-object test in `check_input_types`, and `Value::converted` decides by the converter's own
-  downcast. M1 (below) shows that a name comparison lets an impostor through on an exact edge.
+- **A matching name alone never admits an object.** `check_input_types` first compares the
+  value's declared `TypeRef` (name and list flag) with the input's, then tests every known object
+  by `TypeId`. `type_matches` is the only per-object test there, and `Value::converted` decides by
+  the converter's own downcast. M1 (below) shows that a name comparison would let an impostor
+  through on an exact edge.
 - **Secrecy.** Both new errors carry `InputName`, `Site` and `TypeRef` only. The journal records a
   plan refusal as its `kind` string alone (`willikins-journal/src/observer.rs::plan_error_kind`).
   The server boxes the `PlanError`, whose JSON carries only these fields. The secret test pins
