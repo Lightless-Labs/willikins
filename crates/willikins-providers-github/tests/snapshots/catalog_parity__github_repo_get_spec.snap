@@ -1,0 +1,24 @@
+---
+source: crates/willikins-providers-github/tests/catalog_parity.rs
+assertion_line: 78
+expression: repo_get
+---
+{
+  "class": "reversible",
+  "description": "Reference an existing GitHub repository, checked against the live API.",
+  "inputs": {
+    "repo": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "GitHubRepo"
+      }
+    }
+  },
+  "key": [],
+  "name": "github.repo.get",
+  "outputs": {
+    "repo": "GitHubRepo"
+  },
+  "pure": true
+}

@@ -134,6 +134,7 @@ impl Tool for GitHubRepoEnsure {
                     GitHubRepoRecord {
                         visibility,
                         ours: true,
+                        archived: false,
                     },
                 );
                 Ok(Ensured {

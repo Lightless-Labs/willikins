@@ -16,8 +16,9 @@
 //! plus the two parse tools `doppler.value.get`'s `Text` output needs
 //! before it can bind to either one's typed credential ports,
 //! `apple.issuer_id.parse` and `apple.key_id.parse`; milestone 3c added
-//! `appstore.certificate.get`), so the catalog this crate produces holds
-//! twenty-six tools, in the order [`catalog`] inserts them.
+//! `appstore.certificate.get`; milestone 3e task 2 added `github.repo.get`),
+//! so the catalog this crate produces holds twenty-eight tools, in the
+//! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
 //!
@@ -74,6 +75,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(willikins_tools::AppleKeyIdParse::new());
     insert!(tools::GitHubRepoEnsure::new(state.clone()));
     insert!(tools::GitHubActionsSecretEnsure::new(state.clone()));
+    insert!(tools::FakeGitHubRepoGet::new(state.clone()));
     insert!(tools::DopplerProjectEnsure::new(state.clone()));
     insert!(tools::DopplerConfigEnsure::new(state.clone()));
     insert!(tools::DopplerConfigInheritableEnsure::new(state.clone()));
@@ -127,6 +129,7 @@ mod tests {
             "apple.key_id.parse",
             "github.repo.ensure",
             "github.actions_secret.ensure",
+            "github.repo.get",
             "doppler.project.ensure",
             "doppler.config.ensure",
             "doppler.config.inheritable.ensure",
@@ -149,7 +152,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 27);
+        assert_eq!(names.len(), 28);
     }
 
     #[test]

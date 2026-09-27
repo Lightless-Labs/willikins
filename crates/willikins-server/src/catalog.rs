@@ -2,12 +2,13 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the twenty-five-tool live catalog --
+//! `live_catalog` assembles the twenty-six-tool live catalog --
 //! `willikins-tools`' seven pure tools (`naming.v1`, `template.render`,
 //! `env.get`, `base64.decode`, `apple.signing_key.parse`,
 //! `apple.issuer_id.parse`, `apple.key_id.parse`),
-//! `willikins-providers-github`'s two
-//! live tools, `willikins-providers-doppler`'s nine (milestone 3 added
+//! `willikins-providers-github`'s three
+//! live tools (milestone 3e task 2 added `github.repo.get`),
+//! `willikins-providers-doppler`'s nine (milestone 3 added
 //! `doppler.config.inheritable.ensure` and
 //! `doppler.config.inherits.ensure`; the `SigNoz` task added
 //! `doppler.secret.set`; the App Store Connect credential correction
@@ -38,14 +39,16 @@ use willikins_providers_doppler::{
     DopplerConfigInheritsEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerSecretSet,
     DopplerServiceTokenEnsure, DopplerServiceTokenRotate, DopplerValueGet,
 };
-use willikins_providers_github::{GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure};
+use willikins_providers_github::{
+    GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure, GitHubRepoGet,
+};
 use willikins_providers_http::{Credential, Http};
 use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 25] = [
+pub const LIVE_TOOL_NAMES: [&str; 26] = [
     "naming.v1",
     "template.render",
     "env.get",
@@ -55,6 +58,7 @@ pub const LIVE_TOOL_NAMES: [&str; 25] = [
     "apple.key_id.parse",
     "github.repo.ensure",
     "github.actions_secret.ensure",
+    "github.repo.get",
     "doppler.project.ensure",
     "doppler.config.ensure",
     "doppler.config.inheritable.ensure",
@@ -138,7 +142,7 @@ fn insert_appstore_tools(catalog: &mut Catalog) {
     );
 }
 
-/// Insert `willikins-providers-github`'s two live tools, built from
+/// Insert `willikins-providers-github`'s three live tools, built from
 /// `http`.
 fn insert_github_tools(catalog: &mut Catalog, http: Http) {
     let github = Arc::new(GitHubClient::new(http));
@@ -146,7 +150,11 @@ fn insert_github_tools(catalog: &mut Catalog, http: Http) {
         catalog,
         Arc::new(GitHubRepoEnsure::new(Arc::clone(&github))),
     );
-    insert(catalog, Arc::new(GitHubActionsSecretEnsure::new(github)));
+    insert(
+        catalog,
+        Arc::new(GitHubActionsSecretEnsure::new(Arc::clone(&github))),
+    );
+    insert(catalog, Arc::new(GitHubRepoGet::new(github)));
 }
 
 /// Insert `willikins-providers-doppler`'s nine live tools, built from
@@ -447,7 +455,11 @@ enum Provider {
 /// pins that this array, [`DOPPLER_TOOL_NAMES`], [`BUILDKITE_TOOL_NAMES`],
 /// and the five pure tool names together are exactly [`LIVE_TOOL_NAMES`],
 /// so the two lists cannot silently drift apart.
-const GITHUB_TOOL_NAMES: [&str; 2] = ["github.repo.ensure", "github.actions_secret.ensure"];
+const GITHUB_TOOL_NAMES: [&str; 3] = [
+    "github.repo.ensure",
+    "github.actions_secret.ensure",
+    "github.repo.get",
+];
 
 /// `willikins-providers-doppler`'s live tool names. See
 /// [`GITHUB_TOOL_NAMES`].

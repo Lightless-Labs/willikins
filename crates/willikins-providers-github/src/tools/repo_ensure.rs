@@ -85,7 +85,11 @@ impl GitHubRepoEnsure {
     /// by `read` and `ensure`.
     fn observe(&self, repo: &GitHubRepo, inputs: &Inputs) -> Result<Observation, ToolError> {
         match self.client.get_repo(repo) {
-            Ok(RepoBody { visibility, topics }) => {
+            Ok(RepoBody {
+                visibility,
+                topics,
+                archived: _,
+            }) => {
                 if !topics.iter().any(|topic| topic == crate::MANAGED_TOPIC) {
                     return Ok(Observation::Foreign);
                 }
