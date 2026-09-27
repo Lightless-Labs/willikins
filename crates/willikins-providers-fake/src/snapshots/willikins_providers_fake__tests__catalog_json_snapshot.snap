@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
+assertion_line: 181
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -185,6 +186,25 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "name": "github.actions_secret.ensure",
     "outputs": {},
     "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Reference an existing GitHub repository, checked against the live API.",
+    "inputs": {
+      "repo": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubRepo"
+        }
+      }
+    },
+    "key": [],
+    "name": "github.repo.get",
+    "outputs": {
+      "repo": "GitHubRepo"
+    },
+    "pure": true
   },
   {
     "class": "reversible",

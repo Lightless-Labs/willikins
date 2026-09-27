@@ -344,6 +344,13 @@ pub(crate) struct RepoBody {
     pub(crate) visibility: RepoVisibility,
     #[serde(default, deserialize_with = "topics_or_empty")]
     pub(crate) topics: Vec<String>,
+    /// Whether the repository is archived (`github.repo.get`'s own
+    /// `Conflict` arm; `github.repo.ensure` never reads this field).
+    /// GitHub's schema marks it required, but this crate's own mock
+    /// fixtures predate the field, so it defaults to `false` ("not
+    /// archived") rather than failing every existing fixture's parse.
+    #[serde(default)]
+    pub(crate) archived: bool,
 }
 
 /// Deserialize `topics` treating an explicit `null` as an empty list.

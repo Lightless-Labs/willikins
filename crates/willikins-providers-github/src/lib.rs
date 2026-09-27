@@ -1,5 +1,5 @@
-//! Live GitHub provider tools: `github.repo.ensure` and
-//! `github.actions_secret.ensure`.
+//! Live GitHub provider tools: `github.repo.ensure`,
+//! `github.actions_secret.ensure`, and (milestone 3e) `github.repo.get`.
 //!
 //! See `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s
 //! `willikins-providers-github` crate contract and trust boundaries 1
@@ -16,7 +16,7 @@ pub use client::{
     CREDENTIAL_PATTERN, CREDENTIAL_VAR, GITHUB_API_BASE_URL, GitHubClient, credential_from_env,
     default_headers, http_client,
 };
-pub use tools::{GitHubActionsSecretEnsure, GitHubRepoEnsure};
+pub use tools::{GitHubActionsSecretEnsure, GitHubRepoEnsure, GitHubRepoGet};
 
 /// The repository topic willikins uses to mark a repository as its own.
 /// GitHub's topic rule (lowercase letters, digits, hyphens; at most 50

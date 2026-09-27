@@ -25,6 +25,7 @@ pub mod fake_irreversible_ensure;
 pub mod fake_secret_list;
 pub mod github_actions_secret_ensure;
 pub mod github_repo_ensure;
+pub mod github_repo_get;
 pub mod signoz_ingestion_key_ensure;
 
 pub use appstore_bundle_id_capability_ensure::FakeAppstoreBundleIdCapabilityEnsure;
@@ -46,4 +47,5 @@ pub use fake_irreversible_ensure::FakeIrreversibleEnsure;
 pub use fake_secret_list::FakeSecretList;
 pub use github_actions_secret_ensure::GitHubActionsSecretEnsure;
 pub use github_repo_ensure::GitHubRepoEnsure;
+pub use github_repo_get::FakeGitHubRepoGet;
 pub use signoz_ingestion_key_ensure::SigNozIngestionKeyEnsure;

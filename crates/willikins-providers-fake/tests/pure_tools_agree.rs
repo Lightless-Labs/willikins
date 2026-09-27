@@ -8,7 +8,8 @@
 //! `apple.signing_key.parse`, `apple.issuer_id.parse`, and
 //! `apple.key_id.parse` from `willikins-tools`, `doppler.secret.get`,
 //! `doppler.value.get`, `fake.secret_list`, (milestone 3a)
-//! `buildkite.cluster.get`, and (milestone 3c) `appstore.certificate.get`
+//! `buildkite.cluster.get`, (milestone 3c) `appstore.certificate.get`, and
+//! (milestone 3e task 2) `github.repo.get`
 //! from this crate — are checked here in one
 //! place, through the catalog, so a new pure tool registered later is a
 //! one-line addition rather than a test nobody writes.
@@ -32,7 +33,7 @@ use willikins_providers_fake::{FakeState, catalog};
 use willikins_types::{
     AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId, AppleSigningKey,
     BuildkiteClusterName, BuildkiteOrg, DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg,
-    OpaqueSecret, ProjectSlug, SecretName, TemplateSource, Text,
+    GitHubRepo, OpaqueSecret, ProjectSlug, RepoVisibility, SecretName, TemplateSource, Text,
 };
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
@@ -73,6 +74,10 @@ fn cluster_name() -> BuildkiteClusterName {
     BuildkiteClusterName::parse("Default cluster").expect("a valid cluster name")
 }
 
+fn repo() -> GitHubRepo {
+    GitHubRepo::parse("bande-a-bonnot/monorepo").expect("a valid repo")
+}
+
 /// Ports compared pairwise, so a differing `Value` fails on its own port
 /// rather than inside an opaque map comparison.
 fn ports(outputs: &Outputs) -> Vec<(&PortName, &Value)> {
@@ -106,7 +111,8 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
                 "C3RT1F1CATE1",
                 false,
                 None,
-            ),
+            )
+            .with_repo(&repo(), RepoVisibility::Private, false),
     ));
     let fake_catalog = catalog(state);
 
@@ -191,6 +197,9 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
     certificate_get_inputs.insert(port("certificate_type"), Value::known(certificate_type()));
     certificate_get_inputs.insert(port("serial_number"), Value::known(serial_number()));
 
+    let mut repo_get_inputs = Inputs::new();
+    repo_get_inputs.insert(port("repo"), Value::known(repo()));
+
     let cases = [
         ("naming.v1", naming_inputs),
         ("template.render", template_inputs),
@@ -203,6 +212,7 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         ("fake.secret_list", secret_list_inputs),
         ("buildkite.cluster.get", cluster_get_inputs),
         ("appstore.certificate.get", certificate_get_inputs),
+        ("github.repo.get", repo_get_inputs),
     ];
 
     let mut checked = 0;

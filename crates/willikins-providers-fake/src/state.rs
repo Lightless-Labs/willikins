@@ -31,6 +31,13 @@ pub struct GitHubRepoRecord {
     /// Whether this repository was created by us (`false` means the
     /// natural key exists but the resource is [`Foreign`](willikins_core::Observation::Foreign)).
     pub ours: bool,
+    /// Whether the repository is archived. `github.repo.get` (milestone
+    /// 3e) is the only fake tool that consults this -- `github.repo.ensure`
+    /// never seeds or reads it, and a seed file predating this field omits
+    /// it (`#[serde(default)]`, so it means "not archived", matching every
+    /// repository this crate seeded before archiving existed).
+    #[serde(default)]
+    pub archived: bool,
 }
 
 /// A Doppler project record: enough to answer `doppler.project.ensure`'s
@@ -679,8 +686,31 @@ impl FakeState {
     /// Seed a GitHub repository.
     #[must_use]
     pub fn with_repo(mut self, repo: &GitHubRepo, visibility: RepoVisibility, ours: bool) -> Self {
-        self.github_repos
-            .insert(repo_key(repo), GitHubRepoRecord { visibility, ours });
+        self.github_repos.insert(
+            repo_key(repo),
+            GitHubRepoRecord {
+                visibility,
+                ours,
+                archived: false,
+            },
+        );
+        self
+    }
+
+    /// Seed an archived GitHub repository -- `github.repo.get`'s own
+    /// `Conflict` arm. `ours` is deliberately `false`: `github.repo.get`
+    /// ignores ownership entirely (decision (g) of the milestone 3e plan),
+    /// so an archived repository this crate never created still refuses.
+    #[must_use]
+    pub fn with_archived_repo(mut self, repo: &GitHubRepo) -> Self {
+        self.github_repos.insert(
+            repo_key(repo),
+            GitHubRepoRecord {
+                visibility: RepoVisibility::Private,
+                ours: false,
+                archived: true,
+            },
+        );
         self
     }
 

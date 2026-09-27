@@ -1,5 +1,6 @@
 //! The *whole* live catalog — `willikins-tools`' seven pure tools,
-//! `willikins-providers-github`'s two live tools, this crate's nine live
+//! `willikins-providers-github`'s three live tools (milestone 3e task 2
+//! added `github.repo.get`), this crate's nine live
 //! Doppler tools (milestone 3 added `doppler.config.inheritable.ensure`
 //! and `doppler.config.inherits.ensure`; the `SigNoz` task added
 //! `doppler.secret.set`; the App Store Connect credential correction
@@ -7,7 +8,7 @@
 //! `willikins-providers-buildkite`'s two live tools, and (the App Store
 //! Connect provider crate, plus milestone 3c's `appstore.certificate.get`)
 //! `willikins-providers-appstore`'s four live tools (milestone 3c task 2
-//! added `appstore.profile.ensure`). Twenty-five tools, no fake among
+//! added `appstore.profile.ensure`). Twenty-six tools, no fake among
 //! them.
 //!
 //! The assembly itself lives in `willikins-server` now
@@ -60,7 +61,7 @@ const POSITIVE_FIXTURES: [&str; 7] = [
 ];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 25] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 26] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -94,7 +95,7 @@ fn live_catalog() -> Catalog {
     )
 }
 
-/// The assembly itself: twenty-five tools, no name collision, every spec
+/// The assembly itself: twenty-six tools, no name collision, every spec
 /// valid against the shared type registry.
 #[test]
 fn the_live_catalog_assembles_and_every_spec_validates() {
@@ -139,7 +140,7 @@ fn both_positive_fixtures_check_the_same_against_the_live_catalog() {
     }
 }
 
-/// Nothing fake survives in it: inserting any of the twenty-five fake tools
+/// Nothing fake survives in it: inserting any of the twenty-six fake tools
 /// of the same names on top is refused as a duplicate, which is what
 /// makes the two tests above statements about the live tools at all.
 #[test]
