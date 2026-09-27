@@ -605,6 +605,68 @@ pub struct AppleBundleIdId(String);
 )]
 pub struct AppleCapabilityType(String);
 
+/// A bundle id capability's optional `setting`: `KEY=OPTION`, one of the
+/// four pairs App Store Connect's specification admits for a capability
+/// this crate can enable
+/// (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`, "Settings, from
+/// the specification 4.5", quoting `CapabilitySetting.key`'s and
+/// `CapabilityOption.key`'s enums verbatim). `ICLOUD_VERSION`'s two
+/// options (`XCODE_5`, `XCODE_6`) are excluded: `ICLOUD` itself is
+/// already refused by
+/// [`crate::appstore::AppleCapabilityType`]'s own tool
+/// (`CAPABILITIES_NEEDING_PORTAL_CONFIGURATION`), so no `ICLOUD_VERSION`
+/// pair could ever reach a request.
+///
+/// `appstore.bundle_id_capability.ensure`'s own module doc states which
+/// capability each pairs with, and why the pairing is enforced at `read`
+/// rather than by `check` (a fact about two of one tool's ports together,
+/// which `check` has no per-tool hook to hold).
+///
+/// Not secret -- a data protection class or a Sign in with Apple consent
+/// scope is exactly the kind of fact any reader of App Store Connect's UI
+/// already sees, the same reasoning [`AppleBundleIdName`]'s own doc gives.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "DATA_PROTECTION_PERMISSION_LEVEL=COMPLETE_PROTECTION|DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNLESS_OPEN|DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH|APPLE_ID_AUTH_APP_CONSENT=PRIMARY_APP_CONSENT",
+    description = "An App Store Connect bundle id capability setting, KEY=OPTION (a data protection class or a Sign in with Apple consent scope).",
+    example = "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH"
+)]
+pub struct AppleCapabilitySetting(String);
+
+impl AppleCapabilitySetting {
+    /// The setting's `key` half (`CapabilitySetting.key` in Apple's
+    /// specification) -- what `appstore.bundle_id_capability.ensure`'s
+    /// pairing check compares against the capability's required key, and
+    /// what a create body's `settings[].key` carries.
+    ///
+    /// # Panics
+    ///
+    /// Never: the grammar admits only strings containing exactly one
+    /// `=`, with a non-empty key before it.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        self.0
+            .split_once('=')
+            .unwrap_or_else(|| unreachable!("grammar guarantees exactly one `=`"))
+            .0
+    }
+
+    /// The setting's `option` half (`CapabilityOption.key`) -- the value a
+    /// create body sends as the one enabled option, and a read compares a
+    /// row's enabled option against.
+    ///
+    /// # Panics
+    ///
+    /// Never, for the same reason [`Self::key`] never does.
+    #[must_use]
+    pub fn option(&self) -> &str {
+        self.0
+            .split_once('=')
+            .unwrap_or_else(|| unreachable!("grammar guarantees exactly one `=`"))
+            .1
+    }
+}
+
 // ---------------------------------------------------------------------
 // Certificate types: `appstore.certificate.get`'s own ports. Milestone
 // 3c (`docs/plans/2026-09-22-milestone-3c-app-store-signing.md`, "the
@@ -1209,6 +1271,71 @@ mod tests {
         crate::assert_example_parses::<AppleBundleIdPlatform>();
         crate::assert_example_parses::<AppleBundleIdId>();
         crate::assert_example_parses::<AppleCapabilityType>();
+    }
+
+    // -------------------------------------------------------------
+    // `AppleCapabilitySetting`
+    // -------------------------------------------------------------
+
+    #[test]
+    fn capability_setting_accepts_its_four_members() {
+        for setting in [
+            "DATA_PROTECTION_PERMISSION_LEVEL=COMPLETE_PROTECTION",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNLESS_OPEN",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+            "APPLE_ID_AUTH_APP_CONSENT=PRIMARY_APP_CONSENT",
+        ] {
+            assert!(AppleCapabilitySetting::parse(setting).is_ok(), "{setting}");
+        }
+    }
+
+    #[test]
+    fn capability_setting_refuses_icloud_version_a_bare_key_a_bare_option_lowercase_and_a_mismatched_pair()
+     {
+        for bad in [
+            "ICLOUD_VERSION=XCODE_6",
+            "DATA_PROTECTION_PERMISSION_LEVEL",
+            "COMPLETE_PROTECTION",
+            "data_protection_permission_level=complete_protection",
+            "KEY=",
+            "=OPTION",
+            "APPLE_ID_AUTH_APP_CONSENT=COMPLETE_PROTECTION",
+            "",
+        ] {
+            assert!(
+                AppleCapabilitySetting::parse(bad).is_err(),
+                "expected `{bad}` to be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn capability_setting_key_and_option_split_on_the_one_equals_sign() {
+        let setting = AppleCapabilitySetting::parse(
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+        )
+        .unwrap();
+        assert_eq!(setting.key(), "DATA_PROTECTION_PERMISSION_LEVEL");
+        assert_eq!(setting.option(), "PROTECTED_UNTIL_FIRST_USER_AUTH");
+
+        let setting =
+            AppleCapabilitySetting::parse("APPLE_ID_AUTH_APP_CONSENT=PRIMARY_APP_CONSENT").unwrap();
+        assert_eq!(setting.key(), "APPLE_ID_AUTH_APP_CONSENT");
+        assert_eq!(setting.option(), "PRIMARY_APP_CONSENT");
+    }
+
+    #[test]
+    fn capability_setting_is_registered_and_not_secret() {
+        const { assert!(!AppleCapabilitySetting::IS_SECRET) };
+        assert_eq!(
+            crate::registry().is_secret(&crate::TypeName::parse("AppleCapabilitySetting").unwrap()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn capability_setting_example_parses_as_its_own_type() {
+        crate::assert_example_parses::<AppleCapabilitySetting>();
     }
 
     // -------------------------------------------------------------

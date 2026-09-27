@@ -1,0 +1,56 @@
+# Negative fixture. Acceptance test 2 (milestone 3e, task 1): the
+# capability/setting pairing is enforced at `read`, before any request --
+# `check` types each port independently and has no per-tool cross-port
+# hook to hold a fact about two of one tool's own ports together
+# (`appstore.bundle_id_capability.ensure`'s own module doc, decision (d)).
+# `HEALTHKIT` takes no setting at all; giving it one checks cleanly (both
+# ports are individually well-typed) but fails `plan` against the fake
+# catalog with a `PlanError::Tool` wrapping
+# `ToolErrorKind::Invalid` naming `HEALTHKIT` and the setting it forbids,
+# before any provider call is ever made.
+name: appstore-capability-setting-mismatch
+description: appstore.bundle_id_capability.ensure's HEALTHKIT node given a setting it takes none of, refused at read before any request.
+inputs:
+  config: { type: DopplerConfig }
+  identifier: { type: AppleBundleIdentifier }
+steps:
+  issuer_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ISSUER_ID
+  issuer_id:
+    tool: apple.issuer_id.parse
+    with:
+      value: ${{ steps.issuer_id_text.value }}
+  key_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ID
+  key_id:
+    tool: apple.key_id.parse
+    with:
+      value: ${{ steps.key_id_text.value }}
+  key_base64:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_BASE64
+  key_decoded:
+    tool: base64.decode
+    with:
+      value: ${{ steps.key_base64.value }}
+  key:
+    tool: apple.signing_key.parse
+    with:
+      value: ${{ steps.key_decoded.value }}
+  healthkit:
+    tool: appstore.bundle_id_capability.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.identifier }}
+      capability: HEALTHKIT
+      setting: DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH

@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-providers-appstore/tests/catalog_parity.rs
-assertion_line: 55
 expression: "spec_json(AppstoreBundleIdCapabilityEnsure::new(NOWHERE).spec())"
 ---
 {
@@ -40,6 +39,13 @@ expression: "spec_json(AppstoreBundleIdCapabilityEnsure::new(NOWHERE).spec())"
       "ty": {
         "kind": "exact",
         "type": "AppleKeyId"
+      }
+    },
+    "setting": {
+      "required": false,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleCapabilitySetting"
       }
     }
   },

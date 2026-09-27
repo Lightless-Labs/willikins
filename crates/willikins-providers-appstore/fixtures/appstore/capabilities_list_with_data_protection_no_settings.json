@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "type": "bundleIdCapabilities",
+      "id": "CAP7654321",
+      "attributes": {
+        "capabilityType": "DATA_PROTECTION",
+        "settings": []
+      },
+      "relationships": {
+        "bundleId": {"links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities/CAP7654321/relationships/bundleId"}}
+      }
+    }
+  ]
+}

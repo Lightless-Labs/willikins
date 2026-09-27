@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "type": "bundleIdCapabilities",
+      "id": "CAP7654321",
+      "attributes": {
+        "capabilityType": "DATA_PROTECTION",
+        "settings": [
+          {
+            "key": "DATA_PROTECTION_PERMISSION_LEVEL",
+            "options": [
+              {"key": "COMPLETE_PROTECTION", "enabled": true},
+              {"key": "PROTECTED_UNLESS_OPEN", "enabled": false},
+              {"key": "PROTECTED_UNTIL_FIRST_USER_AUTH", "enabled": false}
+            ]
+          }
+        ]
+      },
+      "relationships": {
+        "bundleId": {"links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities/CAP7654321/relationships/bundleId"}}
+      }
+    }
+  ]
+}

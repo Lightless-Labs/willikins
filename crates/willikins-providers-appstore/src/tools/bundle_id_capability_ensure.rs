@@ -69,16 +69,65 @@
 //! these three and finds it already `Present` (enabled by a human in the
 //! portal, association and all) converges with no error, same as any
 //! other capability.
+//!
+//! # `setting`: an optional port, paired to `capability`, checked before
+//! any request
+//!
+//! Milestone 3e (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`,
+//! decision (d)) adds one more input, `setting:
+//! `[`AppleCapabilitySetting`], **optional** -- the first port on any
+//! tool in this workspace that is. `DATA_PROTECTION` requires a
+//! `DATA_PROTECTION_PERMISSION_LEVEL` setting; `APPLE_ID_AUTH` requires
+//! an `APPLE_ID_AUTH_APP_CONSENT` one; every other capability -- push
+//! notifications among them -- takes none at all. That pairing relates
+//! two ports of *this* tool, and `check` types each port independently
+//! with no per-tool cross-port hook, so it cannot hold it: [`Self::read`]
+//! enforces it first instead, before `client_for` ever mints a
+//! credential or a request leaves the process
+//! ([`willikins_core::ToolErrorKind::Invalid`], naming the capability and
+//! the setting key it needs or forbids). Because `plan` calls `read` on
+//! every node before `ensure` runs on any of them, a mismatched pair
+//! fails the whole plan up front, never mid-apply.
+//!
+//! **Reading a setting back.** The capability row is still found by
+//! `capabilityType` exactly as before; when a `setting` was requested,
+//! the row's own `settings[]` entry for that key is inspected: exactly
+//! one option whose `key` equals the requested option and whose
+//! `enabled` is `true` → [`willikins_core::Observation::Present`]; any
+//! other shape (a different enabled option, no option enabled, or the
+//! key or `settings` missing from the row entirely) →
+//! [`willikins_core::Observation::Mismatch`] naming the `setting` port.
+//! That is terminal, exactly like [`AppstoreBundleIdEnsure`]'s own
+//! `platform` mismatch: `plan` turns every `Mismatch` into a hard
+//! `PlanError::AttributeMismatch` before any node's `ensure` runs (this
+//! workspace's design doc, "the `Action::Update` gap" -- `PATCH
+//! /v1/bundleIdCapabilities/{id}` exists, but adding convergent-update
+//! support to the core plan/apply model is out of scope here), and
+//! `Self::ensure`, called directly on an already-mismatched resource,
+//! returns [`willikins_core::ToolErrorKind::Conflict`] rather than
+//! attempting that `PATCH`. Change the setting by hand in App Store
+//! Connect, or pass its current value.
+//!
+//! **Creating with a setting.** The `POST` body's `attributes.settings`
+//! carries exactly one entry, `[{"key": KEY, "options": [{"key": OPTION,
+//! "enabled": true}]}]`, when a setting was supplied, and omits the key
+//! entirely otherwise -- see [`crate::client::AppstoreClient::create_bundle_id_capability`]'s
+//! own doc. Both the create shape and "the selected option is the one
+//! marked `enabled`" are unobserved against the real API before the live
+//! cycle runs (decision (d), verify items 1 and 2).
+//!
+//! [`AppstoreBundleIdEnsure`]: crate::tools::AppstoreBundleIdEnsure
 
 use willikins_core::tool::helpers::{
-    exact, get, invalid, not_found, port, require_present, scalar, tool_name,
+    conflict, exact, get, get_optional, invalid, not_found, port, require_present, scalar,
+    tool_name,
 };
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{
-    AppleBundleIdId, AppleBundleIdentifier, AppleCapabilityType, AppleIssuerId, AppleKeyId,
-    AppleSigningKey, DomainType,
+    AppleBundleIdId, AppleBundleIdentifier, AppleCapabilitySetting, AppleCapabilityType,
+    AppleIssuerId, AppleKeyId, AppleSigningKey, DomainType,
 };
 
 use crate::client::{AppstoreClient, CAPABILITIES_NEEDING_PORTAL_CONFIGURATION, client_for};
@@ -101,6 +150,7 @@ impl AppstoreBundleIdCapabilityEnsure {
         inputs.insert(port("key"), exact("AppleSigningKey", true));
         inputs.insert(port("identifier"), exact("AppleBundleIdentifier", true));
         inputs.insert(port("capability"), exact("AppleCapabilityType", true));
+        inputs.insert(port("setting"), exact("AppleCapabilitySetting", false));
         let mut outputs = indexmap::IndexMap::new();
         outputs.insert(port("capability"), scalar("AppleCapabilityType"));
         Self {
@@ -163,22 +213,83 @@ impl AppstoreBundleIdCapabilityEnsure {
         }
     }
 
+    /// The setting key `capability` requires, if any (decision (d)):
+    /// `DATA_PROTECTION` pairs with `DATA_PROTECTION_PERMISSION_LEVEL`,
+    /// `APPLE_ID_AUTH` with `APPLE_ID_AUTH_APP_CONSENT`, and every other
+    /// capability -- including `PUSH_NOTIFICATIONS`, which is fully
+    /// enabled with no setting -- takes none.
+    fn required_setting_key(capability: &AppleCapabilityType) -> Option<&'static str> {
+        match capability.as_str() {
+            "DATA_PROTECTION" => Some("DATA_PROTECTION_PERMISSION_LEVEL"),
+            "APPLE_ID_AUTH" => Some("APPLE_ID_AUTH_APP_CONSENT"),
+            _ => None,
+        }
+    }
+
+    /// Enforce the capability/setting pairing before any request -- see
+    /// this module's own doc for why `check` cannot hold it.
+    ///
+    /// # Errors
+    ///
+    /// [`willikins_core::ToolErrorKind::Invalid`] naming the capability
+    /// and the setting key it needs or forbids.
+    fn check_setting_pairing(
+        capability: &AppleCapabilityType,
+        setting: Option<&AppleCapabilitySetting>,
+    ) -> Result<(), ToolError> {
+        match (Self::required_setting_key(capability), setting) {
+            (None, None) => Ok(()),
+            (Some(required), Some(setting)) if setting.key() == required => Ok(()),
+            (Some(required), Some(setting)) => Err(invalid(format!(
+                "`{capability}` requires a `{required}` setting, not `{}`",
+                setting.key()
+            ))),
+            (Some(required), None) => Err(invalid(format!(
+                "`{capability}` requires a `{required}` setting"
+            ))),
+            (None, Some(setting)) => Err(invalid(format!(
+                "`{capability}` takes no setting (got `{}`)",
+                setting.key()
+            ))),
+        }
+    }
+
     fn observe(
         client: &AppstoreClient,
         parent: &AppleBundleIdId,
         capability: &AppleCapabilityType,
+        setting: Option<&AppleCapabilitySetting>,
     ) -> Result<Observation, ToolError> {
-        let present = client
+        let Some(row) = client
             .list_bundle_id_capabilities(parent)?
             .into_iter()
-            .any(|resource| resource.attributes.capability_type == capability.as_str());
-        Ok(if present {
-            Observation::Present(Self::outputs_for(capability))
-        } else {
-            Observation::Absent {
+            .find(|resource| resource.attributes.capability_type == capability.as_str())
+        else {
+            return Ok(Observation::Absent {
                 predicted: Self::outputs_for(capability),
+            });
+        };
+        if let Some(setting) = setting {
+            let selected_option_matches = row
+                .attributes
+                .settings
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .find(|entry| entry.key == setting.key())
+                .is_some_and(|entry| {
+                    entry
+                        .options
+                        .iter()
+                        .any(|option| option.key == setting.option() && option.enabled)
+                });
+            if !selected_option_matches {
+                return Ok(Observation::Mismatch {
+                    port: port("setting"),
+                });
             }
-        })
+        }
+        Ok(Observation::Present(Self::outputs_for(capability)))
     }
 
     fn needs_portal_configuration(capability: &AppleCapabilityType) -> bool {
@@ -191,6 +302,19 @@ impl AppstoreBundleIdCapabilityEnsure {
              iCloud container) that the App Store Connect API cannot express -- enabling it here \
              would leave the bundle id half-configured. Enable and configure it by hand in App \
              Store Connect's \"Certificates, Identifiers & Profiles\" > Configure flow instead."
+        ))
+    }
+
+    /// A `setting` mismatch is terminal, exactly like
+    /// [`crate::tools::AppstoreBundleIdEnsure`]'s own `platform` mismatch:
+    /// this tool cannot `PATCH` it away (this milestone does not add
+    /// convergent-update support). Mirrors that tool's own
+    /// `platform_mismatch_conflict` in shape and in reasoning.
+    fn setting_mismatch_conflict(capability: &AppleCapabilityType) -> ToolError {
+        conflict(format!(
+            "`{capability}` is already enabled on this bundle id, but with a different setting \
+             than requested, and this tool cannot change it once set; change it by hand in App \
+             Store Connect, or pass its current value instead"
         ))
     }
 }
@@ -207,9 +331,11 @@ impl Tool for AppstoreBundleIdCapabilityEnsure {
         let key: AppleSigningKey = get(inputs, "key")?;
         let identifier: AppleBundleIdentifier = get(inputs, "identifier")?;
         let capability: AppleCapabilityType = get(inputs, "capability")?;
+        let setting: Option<AppleCapabilitySetting> = get_optional(inputs, "setting")?;
+        Self::check_setting_pairing(&capability, setting.as_ref())?;
         let client = client_for(&self.base_url, &issuer_id, &key_id, &key)?;
         let parent = Self::resolve_parent(&client, &identifier)?;
-        Self::observe(&client, &parent, &capability)
+        Self::observe(&client, &parent, &capability, setting.as_ref())
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
@@ -219,18 +345,21 @@ impl Tool for AppstoreBundleIdCapabilityEnsure {
         let key: AppleSigningKey = get(inputs, "key")?;
         let identifier: AppleBundleIdentifier = get(inputs, "identifier")?;
         let capability: AppleCapabilityType = get(inputs, "capability")?;
+        let setting: Option<AppleCapabilitySetting> = get_optional(inputs, "setting")?;
+        Self::check_setting_pairing(&capability, setting.as_ref())?;
         let client = client_for(&self.base_url, &issuer_id, &key_id, &key)?;
         let parent = Self::resolve_parent(&client, &identifier)?;
-        match Self::observe(&client, &parent, &capability)? {
+        match Self::observe(&client, &parent, &capability, setting.as_ref())? {
             Observation::Present(outputs) => Ok(Ensured {
                 outputs,
                 changed: false,
             }),
+            Observation::Mismatch { .. } => Err(Self::setting_mismatch_conflict(&capability)),
             Observation::Absent { .. } => {
                 if Self::needs_portal_configuration(&capability) {
                     return Err(Self::portal_configuration_refusal(&capability));
                 }
-                match client.create_bundle_id_capability(&parent, &capability) {
+                match client.create_bundle_id_capability(&parent, &capability, setting.as_ref()) {
                     Ok(()) => Ok(Ensured {
                         outputs: Self::outputs_for(&capability),
                         changed: true,
@@ -242,21 +371,24 @@ impl Tool for AppstoreBundleIdCapabilityEnsure {
                     // error body -- the same pattern
                     // `appstore.bundle_id.ensure` and
                     // `buildkite.pipeline.ensure` both use.
-                    Err(err) => match Self::observe(&client, &parent, &capability)? {
-                        Observation::Present(outputs) => Ok(Ensured {
-                            outputs,
-                            changed: false,
-                        }),
-                        Observation::Absent { .. } => Err(err.into()),
-                        Observation::Foreign | Observation::Mismatch { .. } => {
-                            unreachable!("this tool's own observe never returns these")
+                    Err(err) => {
+                        match Self::observe(&client, &parent, &capability, setting.as_ref())? {
+                            Observation::Present(outputs) => Ok(Ensured {
+                                outputs,
+                                changed: false,
+                            }),
+                            Observation::Mismatch { .. } => {
+                                Err(Self::setting_mismatch_conflict(&capability))
+                            }
+                            Observation::Absent { .. } => Err(err.into()),
+                            Observation::Foreign => {
+                                unreachable!("this tool's own observe never returns this")
+                            }
                         }
-                    },
+                    }
                 }
             }
-            Observation::Foreign | Observation::Mismatch { .. } => {
-                unreachable!("this tool's own observe never returns these")
-            }
+            Observation::Foreign => unreachable!("this tool's own observe never returns this"),
         }
     }
 }
@@ -302,5 +434,86 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn spec_carries_setting_as_an_optional_port() {
+        let spec = tool().spec;
+        let setting = spec
+            .inputs
+            .get(&PortName::parse("setting").unwrap())
+            .unwrap();
+        assert!(!setting.required, "`setting` must be optional");
+    }
+
+    fn capability(name: &str) -> AppleCapabilityType {
+        AppleCapabilityType::parse(name).unwrap()
+    }
+
+    fn setting(text: &str) -> AppleCapabilitySetting {
+        AppleCapabilitySetting::parse(text).unwrap()
+    }
+
+    #[test]
+    fn pairing_accepts_data_protection_with_its_own_key_and_apple_id_auth_with_its_own() {
+        AppstoreBundleIdCapabilityEnsure::check_setting_pairing(
+            &capability("DATA_PROTECTION"),
+            Some(&setting(
+                "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+            )),
+        )
+        .unwrap();
+        AppstoreBundleIdCapabilityEnsure::check_setting_pairing(
+            &capability("APPLE_ID_AUTH"),
+            Some(&setting("APPLE_ID_AUTH_APP_CONSENT=PRIMARY_APP_CONSENT")),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn pairing_accepts_an_ordinary_capability_with_no_setting() {
+        AppstoreBundleIdCapabilityEnsure::check_setting_pairing(
+            &capability("PUSH_NOTIFICATIONS"),
+            None,
+        )
+        .unwrap();
+        AppstoreBundleIdCapabilityEnsure::check_setting_pairing(&capability("HEALTHKIT"), None)
+            .unwrap();
+    }
+
+    #[test]
+    fn pairing_refuses_data_protection_with_no_setting() {
+        let err = AppstoreBundleIdCapabilityEnsure::check_setting_pairing(
+            &capability("DATA_PROTECTION"),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, willikins_core::ToolErrorKind::Invalid);
+        assert!(err.message.contains("DATA_PROTECTION_PERMISSION_LEVEL"));
+    }
+
+    #[test]
+    fn pairing_refuses_apple_id_auth_with_a_data_protection_setting() {
+        let err = AppstoreBundleIdCapabilityEnsure::check_setting_pairing(
+            &capability("APPLE_ID_AUTH"),
+            Some(&setting(
+                "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+            )),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, willikins_core::ToolErrorKind::Invalid);
+    }
+
+    #[test]
+    fn pairing_refuses_an_ordinary_capability_given_any_setting() {
+        let err = AppstoreBundleIdCapabilityEnsure::check_setting_pairing(
+            &capability("HEALTHKIT"),
+            Some(&setting(
+                "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+            )),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, willikins_core::ToolErrorKind::Invalid);
+        assert!(err.message.contains("HEALTHKIT"));
     }
 }

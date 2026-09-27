@@ -2,9 +2,12 @@
 //! capability of an already-registered bundle id. Mirrors
 //! `willikins_providers_appstore::tools::AppstoreBundleIdCapabilityEnsure`'s
 //! `ToolSpec` (`tests/catalog_parity.rs`, in `willikins-providers-appstore`,
-//! pins the two equal) and its refusal of the three portal-only
-//! capabilities (`APP_GROUPS`, `APPLE_PAY`, `ICLOUD`) on the `Absent` ->
-//! create path -- see that crate's own module doc for the full reasoning.
+//! pins the two equal), its refusal of the three portal-only capabilities
+//! (`APP_GROUPS`, `APPLE_PAY`, `ICLOUD`) on the `Absent` -> create path,
+//! and, since milestone 3e, its optional `setting` port and the
+//! capability/setting pairing enforced at `read` -- see that crate's own
+//! module doc (`bundle_id_capability_ensure.rs`) for the full reasoning
+//! behind both.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,10 +16,13 @@ use indexmap::IndexMap;
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
-use willikins_types::{AppleBundleIdentifier, AppleCapabilityType};
+use willikins_types::{AppleBundleIdentifier, AppleCapabilitySetting, AppleCapabilityType};
 
-use crate::state::FakeState;
-use crate::support::{exact, get, invalid, not_found, port, require_present, scalar, tool_name};
+use crate::state::{FakeState, apple_bundle_id_capability_setting_key};
+use crate::support::{
+    conflict, exact, get, get_optional, invalid, not_found, port, require_present, scalar,
+    tool_name,
+};
 
 /// The three capability types this fake, like the live tool, refuses to
 /// create (never to read as `Present`) -- see
@@ -29,6 +35,49 @@ use crate::support::{exact, get, invalid, not_found, port, require_present, scal
 /// (also in that crate) is what pins the fake's refusal against the live
 /// one's, behaviourally.
 const CAPABILITIES_NEEDING_PORTAL_CONFIGURATION: [&str; 3] = ["APP_GROUPS", "APPLE_PAY", "ICLOUD"];
+
+/// The setting key `capability` requires, if any -- duplicated from
+/// `willikins_providers_appstore::tools::AppstoreBundleIdCapabilityEnsure::required_setting_key`
+/// for the same "a fake never depends on its live counterpart" reason as
+/// [`CAPABILITIES_NEEDING_PORTAL_CONFIGURATION`] above.
+fn required_setting_key(capability: &AppleCapabilityType) -> Option<&'static str> {
+    match capability.as_str() {
+        "DATA_PROTECTION" => Some("DATA_PROTECTION_PERMISSION_LEVEL"),
+        "APPLE_ID_AUTH" => Some("APPLE_ID_AUTH_APP_CONSENT"),
+        _ => None,
+    }
+}
+
+/// Enforce the capability/setting pairing before any state is consulted --
+/// mirrors the live tool's own `check_setting_pairing`.
+fn check_setting_pairing(
+    capability: &AppleCapabilityType,
+    setting: Option<&AppleCapabilitySetting>,
+) -> Result<(), ToolError> {
+    match (required_setting_key(capability), setting) {
+        (None, None) => Ok(()),
+        (Some(required), Some(setting)) if setting.key() == required => Ok(()),
+        (Some(required), Some(setting)) => Err(invalid(format!(
+            "`{capability}` requires a `{required}` setting, not `{}`",
+            setting.key()
+        ))),
+        (Some(required), None) => Err(invalid(format!(
+            "`{capability}` requires a `{required}` setting"
+        ))),
+        (None, Some(setting)) => Err(invalid(format!(
+            "`{capability}` takes no setting (got `{}`)",
+            setting.key()
+        ))),
+    }
+}
+
+fn setting_mismatch_conflict(capability: &AppleCapabilityType) -> ToolError {
+    conflict(format!(
+        "`{capability}` is already enabled on this bundle id, but with a different setting than \
+         requested, and this tool cannot change it once set; change it by hand in App Store \
+         Connect, or pass its current value instead"
+    ))
+}
 
 /// `appstore.bundle_id_capability.ensure`.
 pub struct FakeAppstoreBundleIdCapabilityEnsure {
@@ -48,6 +97,7 @@ impl FakeAppstoreBundleIdCapabilityEnsure {
         inputs.insert(port("key"), exact("AppleSigningKey", true));
         inputs.insert(port("identifier"), exact("AppleBundleIdentifier", true));
         inputs.insert(port("capability"), exact("AppleCapabilityType", true));
+        inputs.insert(port("setting"), exact("AppleCapabilitySetting", false));
         let mut outputs = IndexMap::new();
         outputs.insert(port("capability"), scalar("AppleCapabilityType"));
         Self {
@@ -76,6 +126,7 @@ impl FakeAppstoreBundleIdCapabilityEnsure {
         state: &FakeState,
         identifier: &AppleBundleIdentifier,
         capability: &AppleCapabilityType,
+        setting: Option<&AppleCapabilitySetting>,
     ) -> Result<Observation, ToolError> {
         if !state.apple_bundle_ids.contains_key(identifier.as_str()) {
             return Err(not_found(format!(
@@ -87,13 +138,24 @@ impl FakeAppstoreBundleIdCapabilityEnsure {
             .apple_bundle_id_capabilities
             .get(identifier.as_str())
             .is_some_and(|set| set.contains(capability.as_str()));
-        Ok(if present {
-            Observation::Present(Self::outputs_for(capability))
-        } else {
-            Observation::Absent {
+        if !present {
+            return Ok(Observation::Absent {
                 predicted: Self::outputs_for(capability),
+            });
+        }
+        if let Some(setting) = setting {
+            let key = apple_bundle_id_capability_setting_key(identifier, capability);
+            let matches = state
+                .apple_bundle_id_capability_settings
+                .get(&key)
+                .is_some_and(|option| option == setting.option());
+            if !matches {
+                return Ok(Observation::Mismatch {
+                    port: port("setting"),
+                });
             }
-        })
+        }
+        Ok(Observation::Present(Self::outputs_for(capability)))
     }
 }
 
@@ -106,27 +168,32 @@ impl Tool for FakeAppstoreBundleIdCapabilityEnsure {
         require_present(&self.spec, inputs)?;
         let identifier: AppleBundleIdentifier = get(inputs, "identifier")?;
         let capability: AppleCapabilityType = get(inputs, "capability")?;
+        let setting: Option<AppleCapabilitySetting> = get_optional(inputs, "setting")?;
+        check_setting_pairing(&capability, setting.as_ref())?;
         let mut state = self.state.lock().unwrap();
         let key = format!("{identifier}#{capability}");
         state.record_read_call(Self::TOOL_NAME, &key);
-        Self::observe(&state, &identifier, &capability)
+        Self::observe(&state, &identifier, &capability, setting.as_ref())
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         require_present(&self.spec, inputs)?;
         let identifier: AppleBundleIdentifier = get(inputs, "identifier")?;
         let capability: AppleCapabilityType = get(inputs, "capability")?;
+        let setting: Option<AppleCapabilitySetting> = get_optional(inputs, "setting")?;
+        check_setting_pairing(&capability, setting.as_ref())?;
         let mut state = self.state.lock().unwrap();
         let key = format!("{identifier}#{capability}");
         state.record_ensure_call(Self::TOOL_NAME, &key);
         if let Some(err) = state.take_fail_ensure_once(Self::TOOL_NAME, &key) {
             return Err(err);
         }
-        match Self::observe(&state, &identifier, &capability)? {
+        match Self::observe(&state, &identifier, &capability, setting.as_ref())? {
             Observation::Present(outputs) => Ok(Ensured {
                 outputs,
                 changed: false,
             }),
+            Observation::Mismatch { .. } => Err(setting_mismatch_conflict(&capability)),
             Observation::Absent { .. } => {
                 if CAPABILITIES_NEEDING_PORTAL_CONFIGURATION.contains(&capability.as_str()) {
                     return Err(invalid(format!(
@@ -143,14 +210,18 @@ impl Tool for FakeAppstoreBundleIdCapabilityEnsure {
                     .entry(identifier.as_str().to_string())
                     .or_default()
                     .insert(capability.to_string());
+                if let Some(setting) = &setting {
+                    state.apple_bundle_id_capability_settings.insert(
+                        apple_bundle_id_capability_setting_key(&identifier, &capability),
+                        setting.option().to_string(),
+                    );
+                }
                 Ok(Ensured {
                     outputs: Self::outputs_for(&capability),
                     changed: true,
                 })
             }
-            Observation::Foreign | Observation::Mismatch { .. } => {
-                unreachable!("this fake's own observe never returns these")
-            }
+            Observation::Foreign => unreachable!("this fake's own observe never returns this"),
         }
     }
 }
@@ -279,5 +350,148 @@ mod tests {
         let token = SinkToken::new();
         let ensured = tool.ensure(&inputs_for("APP_GROUPS"), &token).unwrap();
         assert!(!ensured.changed);
+    }
+
+    // -------------------------------------------------------------
+    // `setting`: the pairing refusal and `Mismatch { setting }`
+    // -------------------------------------------------------------
+
+    fn inputs_with_setting(capability: &str, setting: &str) -> Inputs {
+        let mut inputs = inputs_for(capability);
+        inputs.insert(
+            PortName::parse("setting").unwrap(),
+            Value::known(AppleCapabilitySetting::parse(setting).unwrap()),
+        );
+        inputs
+    }
+
+    #[test]
+    fn read_refuses_data_protection_with_no_setting_and_makes_no_state_change() {
+        let tool = FakeAppstoreBundleIdCapabilityEnsure::new(seeded_parent());
+        let err = tool.read(&inputs_for("DATA_PROTECTION")).unwrap_err();
+        assert_eq!(err.kind, willikins_core::ToolErrorKind::Invalid);
+        assert!(err.message.contains("DATA_PROTECTION_PERMISSION_LEVEL"));
+    }
+
+    #[test]
+    fn read_refuses_healthkit_given_any_setting() {
+        let tool = FakeAppstoreBundleIdCapabilityEnsure::new(seeded_parent());
+        let err = tool
+            .read(&inputs_with_setting(
+                "HEALTHKIT",
+                "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+            ))
+            .unwrap_err();
+        assert_eq!(err.kind, willikins_core::ToolErrorKind::Invalid);
+        assert!(err.message.contains("HEALTHKIT"));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn ensure_then_read_agree_on_a_matching_data_protection_setting() {
+        let tool = FakeAppstoreBundleIdCapabilityEnsure::new(seeded_parent());
+        let token = SinkToken::new();
+        let setting = "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH";
+        let first = tool
+            .ensure(&inputs_with_setting("DATA_PROTECTION", setting), &token)
+            .unwrap();
+        assert!(first.changed);
+        let second = tool
+            .ensure(&inputs_with_setting("DATA_PROTECTION", setting), &token)
+            .unwrap();
+        assert!(!second.changed);
+        assert!(matches!(
+            tool.read(&inputs_with_setting("DATA_PROTECTION", setting))
+                .unwrap(),
+            Observation::Present(_)
+        ));
+    }
+
+    #[test]
+    fn read_reports_mismatch_for_a_different_enabled_option() {
+        let state = Arc::new(Mutex::new(
+            FakeState::new()
+                .with_apple_bundle_id(
+                    &identifier(),
+                    &AppleBundleIdName::parse("third-thoughts").unwrap(),
+                    &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+                )
+                .with_apple_bundle_id_capability_setting(
+                    &identifier(),
+                    &AppleCapabilityType::parse("DATA_PROTECTION").unwrap(),
+                    &AppleCapabilitySetting::parse(
+                        "DATA_PROTECTION_PERMISSION_LEVEL=COMPLETE_PROTECTION",
+                    )
+                    .unwrap(),
+                ),
+        ));
+        let tool = FakeAppstoreBundleIdCapabilityEnsure::new(state);
+        let observation = tool
+            .read(&inputs_with_setting(
+                "DATA_PROTECTION",
+                "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+            ))
+            .unwrap();
+        assert!(matches!(
+            observation,
+            Observation::Mismatch { port } if port == PortName::parse("setting").unwrap()
+        ));
+    }
+
+    #[test]
+    fn read_reports_mismatch_when_enabled_with_no_setting_recorded_at_all() {
+        let state = Arc::new(Mutex::new(
+            FakeState::new()
+                .with_apple_bundle_id(
+                    &identifier(),
+                    &AppleBundleIdName::parse("third-thoughts").unwrap(),
+                    &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+                )
+                .with_apple_bundle_id_capability(
+                    &identifier(),
+                    &AppleCapabilityType::parse("DATA_PROTECTION").unwrap(),
+                ),
+        ));
+        let tool = FakeAppstoreBundleIdCapabilityEnsure::new(state);
+        let observation = tool
+            .read(&inputs_with_setting(
+                "DATA_PROTECTION",
+                "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+            ))
+            .unwrap();
+        assert!(matches!(observation, Observation::Mismatch { .. }));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn ensure_refuses_a_setting_mismatch_with_conflict_and_never_overwrites_it() {
+        let state = Arc::new(Mutex::new(
+            FakeState::new()
+                .with_apple_bundle_id(
+                    &identifier(),
+                    &AppleBundleIdName::parse("third-thoughts").unwrap(),
+                    &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+                )
+                .with_apple_bundle_id_capability_setting(
+                    &identifier(),
+                    &AppleCapabilityType::parse("DATA_PROTECTION").unwrap(),
+                    &AppleCapabilitySetting::parse(
+                        "DATA_PROTECTION_PERMISSION_LEVEL=COMPLETE_PROTECTION",
+                    )
+                    .unwrap(),
+                ),
+        ));
+        let tool = FakeAppstoreBundleIdCapabilityEnsure::new(state);
+        let token = SinkToken::new();
+        let err = tool
+            .ensure(
+                &inputs_with_setting(
+                    "DATA_PROTECTION",
+                    "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+                ),
+                &token,
+            )
+            .unwrap_err();
+        assert_eq!(err.kind, willikins_core::ToolErrorKind::Conflict);
     }
 }

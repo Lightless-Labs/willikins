@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
-assertion_line: 178
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -612,6 +611,13 @@ expression: "catalog.list_tools_json()[\"tools\"]"
         "ty": {
           "kind": "exact",
           "type": "AppleKeyId"
+        }
+      },
+      "setting": {
+        "required": false,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleCapabilitySetting"
         }
       }
     },
