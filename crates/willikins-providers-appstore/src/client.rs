@@ -35,9 +35,9 @@ use willikins_core::{ToolError, ToolErrorKind};
 use willikins_providers_http::{Credential, Http, ProviderError};
 use willikins_types::{
     AppleBundleIdId, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
-    AppleCapabilityType, AppleCertificateId, AppleCertificateSerial, AppleCertificateType,
-    AppleIssuerId, AppleKeyId, AppleProfileContent, AppleProfileId, AppleProfileName,
-    AppleProfileType, AppleSigningKey,
+    AppleCapabilitySetting, AppleCapabilityType, AppleCertificateId, AppleCertificateSerial,
+    AppleCertificateType, AppleIssuerId, AppleKeyId, AppleProfileContent, AppleProfileId,
+    AppleProfileName, AppleProfileType, AppleSigningKey,
 };
 
 /// App Store Connect's REST API base URL
@@ -71,12 +71,15 @@ const CREDENTIAL_LABEL: &str = "WILLIKINS_APPSTORE_JWT";
 /// six are identifier-association capabilities this API can flip on but
 /// never finish; the other three of Apple's six, Sign in with Apple,
 /// Data protection, and push notifications, are configurable entirely
-/// through `CapabilitySetting`, which this crate does not set either,
-/// but whose *absence* of a setting is not the same defect: enabling
-/// those three with no setting is still a complete, valid state Apple
-/// accepts, where enabling one of these three with no group/merchant/
-/// container attached is not). `appstore.bundle_id_capability.ensure`'s
-/// own module doc explains what this crate does about it.
+/// through `CapabilitySetting` -- since milestone 3e this crate does set
+/// one, for the two that require it (`DATA_PROTECTION`, `APPLE_ID_AUTH`;
+/// `appstore.bundle_id_capability.ensure`'s own module doc has the
+/// pairing) -- but whose *absence* of a setting on the remaining member,
+/// push notifications, is not the same defect: enabling it with no
+/// setting is still a complete, valid state Apple accepts, where enabling
+/// one of these three with no group/merchant/container attached is not).
+/// `appstore.bundle_id_capability.ensure`'s own module doc explains what
+/// this crate does about it.
 pub const CAPABILITIES_NEEDING_PORTAL_CONFIGURATION: [&str; 3] =
     ["APP_GROUPS", "APPLE_PAY", "ICLOUD"];
 
@@ -290,14 +293,17 @@ impl AppstoreClient {
         Ok(response.data)
     }
 
-    /// `POST /v1/bundleIdCapabilities` with exactly `capabilityType` and
-    /// the `bundleId` relationship -- no `settings` (research note,
-    /// section 2: "the only configuration surface is
-    /// `attributes.settings[]`"; this crate never sets one, and
-    /// [`CAPABILITIES_NEEDING_PORTAL_CONFIGURATION`] is exactly the set
-    /// whose configuration `settings` cannot express in the first
-    /// place -- `appstore.bundle_id_capability.ensure` refuses those
-    /// before ever reaching this call).
+    /// `POST /v1/bundleIdCapabilities` with `capabilityType`, the
+    /// `bundleId` relationship, and -- since milestone 3e -- `settings`
+    /// when `setting` is supplied: exactly
+    /// `[{"key": KEY, "options": [{"key": OPTION, "enabled": true}]}]`
+    /// (decision (d); the shape itself is unobserved live until the live
+    /// cycle settles it, verify item 1). `settings` is absent from the
+    /// body entirely when `setting` is `None`, the same as before this
+    /// milestone -- [`CAPABILITIES_NEEDING_PORTAL_CONFIGURATION`] is
+    /// exactly the set whose configuration this API cannot express at
+    /// all, settings included, and `appstore.bundle_id_capability.ensure`
+    /// refuses those before ever reaching this call.
     ///
     /// # Errors
     ///
@@ -306,12 +312,23 @@ impl AppstoreClient {
         &self,
         bundle_id: &AppleBundleIdId,
         capability: &AppleCapabilityType,
+        setting: Option<&AppleCapabilitySetting>,
     ) -> Result<(), ProviderError> {
+        let settings = setting.map(|setting| {
+            vec![CapabilitySettingWrite {
+                key: setting.key().to_string(),
+                options: vec![CapabilityOptionWrite {
+                    key: setting.option().to_string(),
+                    enabled: true,
+                }],
+            }]
+        });
         let body = CapabilityCreateBody {
             data: CapabilityCreateData {
                 type_: "bundleIdCapabilities",
                 attributes: CapabilityCreateAttributes {
                     capability_type: capability.to_string(),
+                    settings,
                 },
                 relationships: CapabilityRelationships {
                     bundle_id: RelationshipRef {
@@ -585,13 +602,40 @@ struct BundleIdUpdateBody {
     data: BundleIdUpdateData,
 }
 
-/// One `bundleIdCapabilities` resource's attributes -- only
-/// `capabilityType`, the sole field this client reads (never `settings`;
-/// see [`AppstoreClient::create_bundle_id_capability`]'s own doc).
+/// One `CapabilityOption` -- an entry of [`CapabilitySettingAttr::options`].
+/// Only `key` and `enabled` are read; `name`/`description` (decision (d),
+/// milestone 3e) are never parsed.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CapabilityOptionAttr {
+    pub(crate) key: String,
+    pub(crate) enabled: bool,
+}
+
+/// One `CapabilitySetting` -- an entry of a capability row's
+/// `attributes.settings[]`. `key` is the setting key
+/// (`DATA_PROTECTION_PERMISSION_LEVEL`, `APPLE_ID_AUTH_APP_CONSENT`,
+/// `ICLOUD_VERSION`); `options` is every option Apple reports for it, of
+/// which this client's caller looks for the one carrying `enabled: true`
+/// (decision (d): "the selected option is the one marked `enabled`" --
+/// unobserved until the live cycle settles it, verify item 2).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CapabilitySettingAttr {
+    pub(crate) key: String,
+    pub(crate) options: Vec<CapabilityOptionAttr>,
+}
+
+/// One `bundleIdCapabilities` resource's attributes -- `capabilityType`
+/// plus, since milestone 3e, `settings` (absent from a response that
+/// carries none at all, distinct from an empty array — hence `Option`
+/// rather than a defaulted `Vec`). Never `name`/`description`; see
+/// [`AppstoreClient::create_bundle_id_capability`]'s own doc for the write
+/// side of the same shape.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CapabilityAttributes {
     #[serde(rename = "capabilityType")]
     pub(crate) capability_type: String,
+    #[serde(default)]
+    pub(crate) settings: Option<Vec<CapabilitySettingAttr>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -610,10 +654,35 @@ struct CapabilityCreateResponse {
     data: serde_json::Value,
 }
 
+/// One `CapabilityOption` on the *write* side -- always `enabled: true`:
+/// this client only ever sends the one option a caller asked to select
+/// (decision (d)), never an explicit `enabled: false`.
+#[derive(Debug, Serialize)]
+struct CapabilityOptionWrite {
+    key: String,
+    enabled: bool,
+}
+
+/// One `CapabilitySetting` on the *write* side -- a distinct type from
+/// [`CapabilitySettingAttr`] for the same reason [`RelationshipListRef`]
+/// is distinct from its read-side counterpart: the write side has no
+/// `name`/`description` to omit and always carries exactly one option.
+#[derive(Debug, Serialize)]
+struct CapabilitySettingWrite {
+    key: String,
+    options: Vec<CapabilityOptionWrite>,
+}
+
 #[derive(Debug, Serialize)]
 struct CapabilityCreateAttributes {
     #[serde(rename = "capabilityType")]
     capability_type: String,
+    /// Present (one element) only when the caller supplied an
+    /// [`AppleCapabilitySetting`]; omitted from the body otherwise --
+    /// `skip_serializing_if` keeps the two request shapes acceptance test
+    /// 3 pins byte-distinguishable, not merely `null` versus absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    settings: Option<Vec<CapabilitySettingWrite>>,
 }
 
 #[derive(Debug, Serialize)]

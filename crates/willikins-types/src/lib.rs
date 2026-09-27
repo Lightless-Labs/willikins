@@ -159,9 +159,9 @@ pub mod workflow_name;
 
 pub use appstore::{
     AppleBundleIdId, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
-    AppleCapabilityType, AppleCertificateId, AppleCertificateSerial, AppleCertificateType,
-    AppleIssuerId, AppleKeyId, AppleProfileContent, AppleProfileId, AppleProfileName,
-    AppleProfileType, AppleSigningKey,
+    AppleCapabilitySetting, AppleCapabilityType, AppleCertificateId, AppleCertificateSerial,
+    AppleCertificateType, AppleIssuerId, AppleKeyId, AppleProfileContent, AppleProfileId,
+    AppleProfileName, AppleProfileType, AppleSigningKey,
 };
 pub use buildkite::{
     BuildkiteClusterId, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug,
@@ -226,6 +226,7 @@ registry::domain_types! {
     AppleBundleIdPlatform,
     AppleBundleIdId,
     AppleCapabilityType,
+    AppleCapabilitySetting,
     AppleCertificateType,
     AppleCertificateSerial,
     AppleCertificateId,

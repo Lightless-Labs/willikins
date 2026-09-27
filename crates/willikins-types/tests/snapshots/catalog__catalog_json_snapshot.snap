@@ -620,6 +620,22 @@ expression: redacted
     }
   },
   {
+    "name": "AppleCapabilitySetting",
+    "secret": false,
+    "description": "An App Store Connect bundle id capability setting, KEY=OPTION (a data protection class or a Sign in with Apple consent scope).",
+    "example": "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AppleCapabilitySetting",
+      "description": "An App Store Connect bundle id capability setting, KEY=OPTION (a data protection class or a Sign in with Apple consent scope).",
+      "type": "string",
+      "examples": [
+        "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH"
+      ],
+      "pattern": "^(?:DATA_PROTECTION_PERMISSION_LEVEL=COMPLETE_PROTECTION|DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNLESS_OPEN|DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH|APPLE_ID_AUTH_APP_CONSENT=PRIMARY_APP_CONSENT)$"
+    }
+  },
+  {
     "name": "AppleCertificateType",
     "secret": false,
     "description": "An App Store Connect certificate type: DISTRIBUTION or IOS_DISTRIBUTION (the two that can sign an App Store distribution profile).",

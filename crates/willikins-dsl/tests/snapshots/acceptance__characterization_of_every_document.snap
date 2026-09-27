@@ -164,6 +164,29 @@ PLAN:
 plan_json: {"workflow":"doppler-project","nodes":[{"name":"doppler","instance":null,"tool":"doppler.project.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}}},{"name":"configs","instance":"dev","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"dev"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"}}},{"name":"configs","instance":"stg","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"stg"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"}}},{"name":"configs","instance":"prd","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}}],"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"class":"reversible","requires_approval":false}
 fingerprint: [{"name":"doppler","instance":null,"action":"create","outputs":[["project","third-thoughts"]]},{"name":"configs","instance":"dev","action":"create","outputs":[["config","third-thoughts/dev"]]},{"name":"configs","instance":"stg","action":"create","outputs":[["config","third-thoughts/stg"]]},{"name":"configs","instance":"prd","action":"create","outputs":[["config","third-thoughts/prd"]]}]
 
+=== workflows/fixtures/appstore-capability-setting-mismatch.yaml ===
+WARNINGS:
+TYPES:
+issuer_id_text.config: DopplerConfig
+issuer_id_text.name: SecretName
+issuer_id.value: Text
+key_id_text.config: DopplerConfig
+key_id_text.name: SecretName
+key_id.value: Text
+key_base64.config: DopplerConfig
+key_base64.name: SecretName
+key_decoded.value: DopplerSecretValue
+key.value: OpaqueSecret
+healthkit.issuer_id: AppleIssuerId
+healthkit.key_id: AppleKeyId
+healthkit.key: AppleSigningKey
+healthkit.identifier: AppleBundleIdentifier
+healthkit.capability: AppleCapabilityType
+healthkit.setting: AppleCapabilitySetting
+OUTPUTS:
+PLAN:
+PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
+
 === workflows/fixtures/appstore-profile-content-into-template.yaml ===
 CHECK ERRORS:
 - kind=SecretToNonSecretSink display=secret value from node `profile`, port `content` flows into non-secret sink at `readme.value` json={"kind":"SecretToNonSecretSink","from":["profile","content"],"to":{"kind":"port","node":"readme","port":"value"}}

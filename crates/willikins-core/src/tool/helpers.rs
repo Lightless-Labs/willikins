@@ -147,6 +147,29 @@ pub fn get<T: DomainType + 'static>(inputs: &Inputs, name: &str) -> Result<T, To
     known(value, name)
 }
 
+/// Read an optional, known, typed input by its port name: `Ok(None)` when
+/// the port is not bound at all (the tool did not bind an optional port —
+/// `crate::plan`'s `bind_ports` simply leaves it out of `Inputs`, and
+/// `check` never requires it, since `require_present` only walks a spec's
+/// *required* ports). Fails the same way [`get`] does when the port is
+/// bound but [`Unknown`](crate::value::ValueState::Unknown) or of the
+/// wrong domain type — a bound, malformed optional port is still a bug,
+/// never silently `None`.
+///
+/// # Errors
+///
+/// Returns [`ToolError`] of kind [`ToolErrorKind::Invalid`] naming `name`
+/// in the "unknown" and "wrong type" cases.
+pub fn get_optional<T: DomainType + 'static>(
+    inputs: &Inputs,
+    name: &str,
+) -> Result<Option<T>, ToolError> {
+    match inputs.get(&port(name)) {
+        None => Ok(None),
+        Some(value) => known(value, name).map(Some),
+    }
+}
+
 /// Recover a known, typed value already in hand, failing the way [`get`]
 /// does for the "unknown" and "wrong type" cases.
 ///
@@ -308,6 +331,45 @@ mod tests {
             Value::known(willikins_types::ProjectSlug::parse("third-thoughts").unwrap()),
         );
         let err = get::<GitHubOrg>(&inputs, "org").unwrap_err();
+        assert!(err.message.contains("unexpected type"), "{}", err.message);
+    }
+
+    #[test]
+    fn get_optional_returns_none_for_an_unbound_port() {
+        let value = get_optional::<GitHubOrg>(&Inputs::new(), "org").unwrap();
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn get_optional_returns_the_bound_value() {
+        let mut inputs = Inputs::new();
+        inputs.insert(
+            port("org"),
+            Value::known(GitHubOrg::parse("lightless-labs").unwrap()),
+        );
+        let value = get_optional::<GitHubOrg>(&inputs, "org").unwrap();
+        assert_eq!(
+            value.map(|org| org.as_str().to_string()),
+            Some("lightless-labs".to_string())
+        );
+    }
+
+    #[test]
+    fn get_optional_rejects_an_unknown_value() {
+        let mut inputs = Inputs::new();
+        inputs.insert(port("org"), Value::unknown(scalar("GitHubOrg")));
+        let err = get_optional::<GitHubOrg>(&inputs, "org").unwrap_err();
+        assert!(err.message.contains("unknown"), "{}", err.message);
+    }
+
+    #[test]
+    fn get_optional_rejects_a_value_of_the_wrong_type() {
+        let mut inputs = Inputs::new();
+        inputs.insert(
+            port("org"),
+            Value::known(willikins_types::ProjectSlug::parse("third-thoughts").unwrap()),
+        );
+        let err = get_optional::<GitHubOrg>(&inputs, "org").unwrap_err();
         assert!(err.message.contains("unexpected type"), "{}", err.message);
     }
 }

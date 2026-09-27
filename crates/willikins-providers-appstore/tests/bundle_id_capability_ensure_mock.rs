@@ -4,8 +4,8 @@ use willikins_core::{Observation, PortName, SinkToken, Tool, ToolErrorKind, Valu
 use willikins_providers_appstore::AppstoreBundleIdCapabilityEnsure;
 use willikins_providers_http::testing::{MockProvider, load_fixture};
 use willikins_types::{
-    AppleBundleIdentifier, AppleCapabilityType, AppleIssuerId, AppleKeyId, AppleSigningKey,
-    DomainType,
+    AppleBundleIdentifier, AppleCapabilitySetting, AppleCapabilityType, AppleIssuerId, AppleKeyId,
+    AppleSigningKey, DomainType,
 };
 
 fn fixtures_dir() -> std::path::PathBuf {
@@ -47,6 +47,15 @@ fn inputs_for(capability: &str) -> willikins_core::Inputs {
     inputs.insert(
         PortName::parse("capability").unwrap(),
         Value::known(AppleCapabilityType::parse(capability).unwrap()),
+    );
+    inputs
+}
+
+fn inputs_with_setting(capability: &str, setting: &str) -> willikins_core::Inputs {
+    let mut inputs = inputs_for(capability);
+    inputs.insert(
+        PortName::parse("setting").unwrap(),
+        Value::known(AppleCapabilitySetting::parse(setting).unwrap()),
     );
     inputs
 }
@@ -220,4 +229,213 @@ fn ensure_converges_an_already_present_portal_only_capability_with_no_refusal() 
     let token = SinkToken::new();
     let ensured = tool.ensure(&inputs_for("APP_GROUPS"), &token).unwrap();
     assert!(!ensured.changed);
+}
+
+// ---------------------------------------------------------------------
+// `setting`: the pairing refusal, before any request
+// ---------------------------------------------------------------------
+
+#[test]
+fn read_refuses_data_protection_with_no_setting_and_makes_no_request() {
+    let mut provider = MockProvider::start();
+    let bundle_id_lookup = provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .expect(0)
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let err = tool.read(&inputs_for("DATA_PROTECTION")).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Invalid);
+    assert!(
+        err.message.contains("DATA_PROTECTION_PERMISSION_LEVEL"),
+        "{}",
+        err.message
+    );
+    bundle_id_lookup.assert();
+}
+
+#[test]
+fn read_refuses_apple_id_auth_with_a_data_protection_setting_and_makes_no_request() {
+    let mut provider = MockProvider::start();
+    let bundle_id_lookup = provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .expect(0)
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let err = tool
+        .read(&inputs_with_setting(
+            "APPLE_ID_AUTH",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+        ))
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Invalid);
+    bundle_id_lookup.assert();
+}
+
+#[test]
+fn read_refuses_healthkit_given_any_setting_and_makes_no_request() {
+    let mut provider = MockProvider::start();
+    let bundle_id_lookup = provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .expect(0)
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let err = tool
+        .read(&inputs_with_setting(
+            "HEALTHKIT",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+        ))
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Invalid);
+    assert!(err.message.contains("HEALTHKIT"), "{}", err.message);
+    bundle_id_lookup.assert();
+}
+
+// ---------------------------------------------------------------------
+// `read`: a settings-aware capability
+// ---------------------------------------------------------------------
+
+#[test]
+fn read_reports_present_when_the_requested_option_is_the_enabled_one() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_data_protection").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool
+        .read(&inputs_with_setting(
+            "DATA_PROTECTION",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+        ))
+        .unwrap();
+    assert!(matches!(observation, Observation::Present(_)));
+}
+
+#[test]
+fn read_reports_mismatch_when_a_different_option_is_enabled() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_data_protection_mismatched").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool
+        .read(&inputs_with_setting(
+            "DATA_PROTECTION",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+        ))
+        .unwrap();
+    match observation {
+        Observation::Mismatch { port } => {
+            assert_eq!(port, PortName::parse("setting").unwrap());
+        }
+        other => panic!("expected Mismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn read_reports_mismatch_when_no_option_is_enabled_at_all() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_data_protection_no_settings").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool
+        .read(&inputs_with_setting(
+            "DATA_PROTECTION",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+        ))
+        .unwrap();
+    assert!(matches!(observation, Observation::Mismatch { .. }));
+}
+
+// ---------------------------------------------------------------------
+// `ensure`: creating with a setting, and the terminal `Mismatch`
+// ---------------------------------------------------------------------
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_creates_data_protection_with_the_requested_setting() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_empty").to_string())
+        .create();
+    let create = provider
+        .mock("POST", "/v1/bundleIdCapabilities")
+        .match_body(willikins_providers_http::testing::json_body(
+            serde_json::json!({
+                "data": {
+                    "type": "bundleIdCapabilities",
+                    "attributes": {
+                        "capabilityType": "DATA_PROTECTION",
+                        "settings": [{
+                            "key": "DATA_PROTECTION_PERMISSION_LEVEL",
+                            "options": [{"key": "PROTECTED_UNTIL_FIRST_USER_AUTH", "enabled": true}]
+                        }]
+                    },
+                    "relationships": {
+                        "bundleId": {"data": {"type": "bundleIds", "id": "T6G4XCV345"}}
+                    }
+                }
+            }),
+        ))
+        .with_status(201)
+        .with_body(fixture("capability_post_created").to_string())
+        .expect(1)
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let token = SinkToken::new();
+    let ensured = tool
+        .ensure(
+            &inputs_with_setting(
+                "DATA_PROTECTION",
+                "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+            ),
+            &token,
+        )
+        .unwrap();
+    assert!(ensured.changed);
+    create.assert();
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_refuses_a_setting_mismatch_with_conflict_and_never_posts() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_data_protection_mismatched").to_string())
+        .create();
+    let create = provider
+        .mock("POST", "/v1/bundleIdCapabilities")
+        .expect(0)
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let token = SinkToken::new();
+    let err = tool
+        .ensure(
+            &inputs_with_setting(
+                "DATA_PROTECTION",
+                "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+            ),
+            &token,
+        )
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    create.assert();
 }

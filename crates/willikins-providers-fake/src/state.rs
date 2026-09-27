@@ -14,10 +14,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use willikins_core::{ToolError, ToolErrorKind};
 use willikins_types::{
     ActionsSecretName, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
-    AppleCapabilityType, AppleCertificateSerial, AppleCertificateType, AppleProfileName,
-    BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType, DopplerConfig,
-    DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName, GitHubRepo,
-    ProjectSlug, RepoVisibility, SecretName, SigNozIngestionKeyName, SigNozIngestionKeyValue, Text,
+    AppleCapabilitySetting, AppleCapabilityType, AppleCertificateSerial, AppleCertificateType,
+    AppleProfileName, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
+    DopplerConfig, DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName,
+    GitHubRepo, ProjectSlug, RepoVisibility, SecretName, SigNozIngestionKeyName,
+    SigNozIngestionKeyValue, Text,
 };
 
 /// A GitHub repository record: enough to answer `github.repo.ensure`'s
@@ -485,6 +486,17 @@ pub struct FakeState {
     /// in [`Self::apple_bundle_ids`] at all, rather than treating an
     /// empty set here as "absent".
     pub apple_bundle_id_capabilities: HashMap<String, HashSet<String>>,
+    /// The selected option key of a bundle id capability's `setting`,
+    /// keyed by [`apple_bundle_id_capability_setting_key`] -- absent
+    /// means the capability, if enabled at all, carries no setting.
+    /// Mirrors [`Self::apple_bundle_id_capabilities`]'s own pairing
+    /// rather than nesting inside it, the same "separate map" shape
+    /// [`Self::doppler_values`]'s own doc explains: a capability's
+    /// enabled-ness and its selected option are two different facts a
+    /// seed file may want to state independently (an enabled capability
+    /// with no setting recorded here is exactly the shape a live row
+    /// with an absent or all-`false` `settings[]` produces).
+    pub apple_bundle_id_capability_settings: HashMap<String, String>,
     /// App Store Connect certificates, keyed by `(certificate_type,
     /// serial_number)` ([`apple_certificate_key`]) to a list of records
     /// sharing that pair -- mirrors [`Self::buildkite_clusters`]'s own
@@ -588,6 +600,18 @@ pub fn signoz_ingestion_key_key(name: &SigNozIngestionKeyName) -> String {
 #[must_use]
 pub fn buildkite_pipeline_key(org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) -> String {
     format!("{org}/{slug}")
+}
+
+/// The key [`FakeState::apple_bundle_id_capability_settings`] looks a
+/// capability's selected setting option up by: `identifier`'s canonical
+/// string, a separator, `capability`'s canonical string -- mirrors
+/// [`apple_certificate_key`]'s own shape.
+#[must_use]
+pub fn apple_bundle_id_capability_setting_key(
+    identifier: &AppleBundleIdentifier,
+    capability: &AppleCapabilityType,
+) -> String {
+    format!("{identifier}#{capability}")
 }
 
 /// The key `appstore.certificate.get` looks a certificate up by: its
@@ -806,6 +830,30 @@ impl FakeState {
             .entry(identifier.as_str().to_string())
             .or_default()
             .insert(capability.to_string());
+        self
+    }
+
+    /// Seed one capability as already enabled on `identifier`'s bundle id
+    /// **with** `setting` selected -- pairs with
+    /// [`Self::with_apple_bundle_id_capability`] the same way a real
+    /// enabled row can carry a `settings[]` entry with one option
+    /// `enabled: true`. Does not seed the bundle id itself; see that
+    /// method's own doc.
+    #[must_use]
+    pub fn with_apple_bundle_id_capability_setting(
+        mut self,
+        identifier: &AppleBundleIdentifier,
+        capability: &AppleCapabilityType,
+        setting: &AppleCapabilitySetting,
+    ) -> Self {
+        self.apple_bundle_id_capabilities
+            .entry(identifier.as_str().to_string())
+            .or_default()
+            .insert(capability.to_string());
+        self.apple_bundle_id_capability_settings.insert(
+            apple_bundle_id_capability_setting_key(identifier, capability),
+            setting.option().to_string(),
+        );
         self
     }
 
