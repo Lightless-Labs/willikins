@@ -12,10 +12,11 @@
 //! shape and idioms (credential resolution, counting, the throwaway
 //! identifier, the drop guard) rather than reinventing them:
 //!
-//! - **The only permitted certificate operation is `GET`; this file makes
-//!   none at all.** No certificate is read, created, modified, or
-//!   touched in any way -- this cycle is bundle ids and capabilities
-//!   only.
+//! - **The only permitted certificate operation is `GET`.** This file
+//!   only ever counts certificates (trust boundary 5), the same
+//!   read-only listing `tests/live_write_cycle.rs`'s own `count_certificates`
+//!   performs -- never a single certificate's own fields, and no
+//!   certificate is created, modified, or touched in any other way.
 //! - **Never `APPLE_ID_AUTH`, live, on any identifier, throwaway
 //!   included** (trust boundary 4): "App IDs can't be deleted if they are
 //!   grouped with other apps for features like Sign in with Apple," which
@@ -26,7 +27,11 @@
 //! - **At most one identifier is created**, with an unmistakable
 //!   throwaway name (`com.willikins.probe.delete-me.<pid>-<unix-time>`,
 //!   unique per run), created and deleted within this same test, with the
-//!   account's bundle id count read and reported both before and after.
+//!   account's bundle id, profile, and API-visible certificate counts
+//!   (trust boundary 5) read and reported both before and after -- this
+//!   cycle creates no profile and touches no certificate, so all three
+//!   must come back unchanged, and a mover is exactly the surprise trust
+//!   boundary 6 says to stop for.
 //! - Never modifies, renames, or deletes any identifier, capability, app,
 //!   certificate, profile, or device that already exists. This test only
 //!   ever touches the one identifier it creates itself.
@@ -165,16 +170,20 @@ fn tool_ok<T>(result: Result<T, willikins_core::ToolError>, step: &str) -> T {
     })
 }
 
-/// The account's real bundle identifier **count** -- paginated the same
-/// way `tests/live_write_cycle.rs`'s own `count_bundle_ids` is, never
-/// returning or printing an identifier.
-fn count_bundle_ids(
+/// Paginate `path_and_query` (a full path plus query string, `limit=200`
+/// already included) and count every row in every page's `data` array --
+/// mirrors `tests/live_write_cycle.rs`'s own `count_rows` exactly, and is
+/// shared here the same way that file shares it across
+/// `count_bundle_ids`/`count_certificates`/`count_profiles`: never
+/// returns or prints a row's own fields, only how many there were.
+fn count_rows(
     issuer_id: &AppleIssuerId,
     key_id: &AppleKeyId,
     key: &AppleSigningKey,
+    path_and_query: &str,
 ) -> usize {
     let http = http_for(issuer_id, key_id, key);
-    let mut path = "/v1/bundleIds?limit=200".to_string();
+    let mut path = path_and_query.to_string();
     let mut total = 0usize;
     for _ in 0..50 {
         let page: serde_json::Value = http
@@ -196,6 +205,36 @@ fn count_bundle_ids(
             .to_string();
     }
     panic!("more than 50 pages for one filter -- refusing to keep paging");
+}
+
+/// The account's real bundle identifier **count**, never returning or
+/// printing an identifier.
+fn count_bundle_ids(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+) -> usize {
+    count_rows(issuer_id, key_id, key, "/v1/bundleIds?limit=200")
+}
+
+/// The account's real certificate **count**, every type, team-wide --
+/// this run makes no certificate write of any kind (trust boundary 1),
+/// so this count must be identical before and after (trust boundary 5),
+/// and a difference is exactly the kind of surprise trust boundary 6
+/// says to stop for. `GET` only, the one permitted certificate operation.
+fn count_certificates(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+) -> usize {
+    count_rows(issuer_id, key_id, key, "/v1/certificates?limit=200")
+}
+
+/// The account's real provisioning profile **count**, team-wide -- this
+/// cycle mints no profile at all, so before and after must match exactly
+/// (trust boundary 5).
+fn count_profiles(issuer_id: &AppleIssuerId, key_id: &AppleKeyId, key: &AppleSigningKey) -> usize {
+    count_rows(issuer_id, key_id, key, "/v1/profiles?limit=200")
 }
 
 /// One capability row's settings shape, recorded by **key names and
@@ -387,9 +426,16 @@ fn appstore_live_capability_cycle() {
 
     let (issuer_id, key_id, key) = credential_parts();
 
-    // Step 1: read-only count first.
+    // Step 1: read-only counts first, for all three resources trust
+    // boundary 5 names -- this cycle touches only the first, so all
+    // three must come back unchanged at step 8.
     let bundle_ids_before = count_bundle_ids(&issuer_id, &key_id, &key);
-    println!("CAPABILITY-CYCLE counts BEFORE: bundle_ids={bundle_ids_before}");
+    let certificates_before = count_certificates(&issuer_id, &key_id, &key);
+    let profiles_before = count_profiles(&issuer_id, &key_id, &key);
+    println!(
+        "CAPABILITY-CYCLE counts BEFORE: bundle_ids={bundle_ids_before} \
+         certificates={certificates_before} profiles={profiles_before}"
+    );
 
     // Step 2: one throwaway identifier.
     let unique = run_unique_suffix();
@@ -569,14 +615,29 @@ fn appstore_live_capability_cycle() {
     );
     guard.disarm();
 
-    // Step 8: counts after equal counts before; an independent read
-    // confirms the identifier answers 404.
+    // Step 8: counts after equal counts before, for all three; an
+    // independent read confirms the identifier answers 404.
     let bundle_ids_after = count_bundle_ids(&issuer_id, &key_id, &key);
-    println!("CAPABILITY-CYCLE counts AFTER: bundle_ids={bundle_ids_after}");
+    let certificates_after = count_certificates(&issuer_id, &key_id, &key);
+    let profiles_after = count_profiles(&issuer_id, &key_id, &key);
+    println!(
+        "CAPABILITY-CYCLE counts AFTER: bundle_ids={bundle_ids_after} \
+         certificates={certificates_after} profiles={profiles_after}"
+    );
     assert_eq!(
         bundle_ids_before, bundle_ids_after,
         "the account's bundle id count changed -- something this test created was not cleaned \
          up, or something else changed the account while it ran"
+    );
+    assert_eq!(
+        certificates_before, certificates_after,
+        "the account's certificate count changed -- this test never writes a certificate, so \
+         this would mean something else changed the account while it ran"
+    );
+    assert_eq!(
+        profiles_before, profiles_after,
+        "the account's profile count changed -- this test never creates a profile, so this \
+         would mean something else changed the account while it ran"
     );
 
     let independent_http = http_for(&issuer_id, &key_id, &key);
