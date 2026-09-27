@@ -2045,16 +2045,36 @@ mod conversions {
     /// The root cause, on an edge with no conversion at all: a wrong-typed
     /// workflow input bound to an exact port used to reach the tool
     /// unchecked (the `Echo` double reads it without a typed accessor, so
-    /// `plan` succeeded). It is now refused while `plan` parses its inputs.
+    /// `plan` succeeded). It is now refused while `plan` parses its inputs,
+    /// before any node is planned: a recording sink on a second exact
+    /// `ConvA` port is never read. On an exact edge no backstop exists, so
+    /// only this assertion shows the check runs first (independent review
+    /// of `4d44fb3`, 2026-09-27: with the check moved after the node loop
+    /// every other parse-time test still refused, by the backstop, and this
+    /// one refused only after both tools had read the wrong value).
     #[test]
     fn an_exact_edge_input_of_another_type_is_refused_before_any_tool_reads_it() {
-        let fixture = fixture();
+        let mut fixture = fixture();
+        let sink_a = Arc::new(Recorder {
+            spec: spec("conv.sink_a", &[("a", "ConvA")], &[], false),
+            reads: Mutex::new(Vec::new()),
+            ensures: Mutex::new(Vec::new()),
+        });
+        fixture
+            .catalog
+            .insert(Arc::clone(&sink_a) as Arc<dyn Tool>)
+            .unwrap();
         let workflow = Workflow::new(workflow_name("conv-exact-foreign"))
             .input(input("a"), InputSpec::new(scalar("ConvA")))
             .node(
                 node("echo"),
                 Node::new(ToolName::parse("conv.echo").unwrap())
                     .port(port("in"), Binding::Input(input("a"))),
+            )
+            .node(
+                node("sink"),
+                Node::new(ToolName::parse("conv.sink_a").unwrap())
+                    .port(port("a"), Binding::Input(input("a"))),
             );
         let checked = check(&workflow, &fixture.catalog).expect("A binds to A exactly");
         assert!(
@@ -2075,6 +2095,10 @@ mod conversions {
             let err = plan(&checked, &inputs, &fixture.catalog)
                 .expect_err("the echo's exact ConvA port must not receive it");
             assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &found);
+            assert!(
+                sink_a.reads.lock().unwrap().is_empty(),
+                "no tool read the wrong-typed input"
+            );
         }
     }
 
