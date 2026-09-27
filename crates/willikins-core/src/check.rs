@@ -75,7 +75,7 @@ use crate::catalog::Catalog;
 use crate::class::Class;
 use crate::site::Site;
 use crate::tool::{PortName, PortSpec, ToolName, ToolSpec};
-use crate::value::{Conversion, PortType, TypeRef, TypeRegistry, Value};
+use crate::value::{Conversion, ConversionMismatch, PortType, TypeRef, TypeRegistry, Value};
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
 use willikins_types::ParseError;
 
@@ -181,10 +181,20 @@ impl Edge {
     /// `check` recorded. `plan` and `apply` reach this only through their
     /// shared resolution context, and never look a conversion up
     /// themselves.
-    #[must_use]
-    pub fn deliver(&self, value: Value) -> Value {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversionMismatch`] when `value` is not, in fact, of this
+    /// edge's own source type -- unreachable for an edge `check` itself
+    /// built and a binding `plan`/`apply` resolved normally, but reachable
+    /// through a hand-built `Checked` moving a converted edge onto another
+    /// port (`Checked::types`' fields are public). `plan` and `apply`
+    /// surface this loudly, as [`crate::plan::PlanError::EdgeTypeMismatch`]
+    /// naming the node and port, never a panic and never the value's own
+    /// content (follow-up to milestone 3d, 2026-09-24).
+    pub fn deliver(&self, value: Value) -> Result<Value, ConversionMismatch> {
         match &self.conversion {
-            None => value,
+            None => Ok(value),
             Some(conversion) => value.converted(conversion),
         }
     }

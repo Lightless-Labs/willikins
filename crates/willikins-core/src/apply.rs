@@ -805,7 +805,10 @@ fn resolve_instance_inputs(
             };
             let value = resolve_binding(&ctx, &site, binding, None)
                 .map_err(|error| ApplyError::Plan { error })?;
-            resolved.insert(port.clone(), ctx.deliver(&planned.name, port, value));
+            let delivered = ctx
+                .deliver(&planned.name, port, value)
+                .map_err(|error| ApplyError::Plan { error })?;
+            resolved.insert(port.clone(), delivered);
         }
     }
     Ok(resolved)

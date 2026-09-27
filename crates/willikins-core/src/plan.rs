@@ -291,6 +291,27 @@ pub enum PlanError {
         /// The failure it reported.
         error: ToolError,
     },
+    /// A checked edge carries a registered conversion, but the value
+    /// reaching `site` was not, in fact, an object of the conversion's own
+    /// declared source type. `check` never records a conversion whose
+    /// source disagrees with the binding it resolved, so this is
+    /// unreachable for a `Checked` `check` itself built: it is the
+    /// backstop for a `Checked` built or edited by hand (`Checked::types`'
+    /// fields are public), covering what [`Self::InputTypeMismatch`]
+    /// cannot reach -- a converted edge moved onto another port, for
+    /// example. Follow-up to milestone 3d, 2026-09-24: the operator's own
+    /// words, "I'd much rather have it fail loudly at parsing than
+    /// silently go through," which is why this refuses rather than
+    /// silently delivering the value unconverted.
+    EdgeTypeMismatch {
+        /// Where the mismatched value was delivered.
+        site: Site,
+        /// The conversion's declared source type.
+        expected: TypeRef,
+        /// The best type reference available for the value that reached
+        /// it. Never the value's own content.
+        found: TypeRef,
+    },
 }
 
 impl std::fmt::Display for PlanError {
@@ -323,6 +344,11 @@ impl std::fmt::Display for PlanError {
                  pass its current value instead"
             ),
             Self::Tool { node, error } => write!(f, "node `{node}`: {error}"),
+            Self::EdgeTypeMismatch {
+                site,
+                expected,
+                found,
+            } => write!(f, "{site}: expected {expected}, found `{found}`"),
         }
     }
 }
@@ -364,10 +390,33 @@ impl ResolveCtx<'_> {
     /// `check` recorded no conversion for this port, so the value passes
     /// through unchanged: that is the behaviour before milestone 3d
     /// exactly, and needs no assertion.
-    pub(crate) fn deliver(&self, node: &NodeName, port: &PortName, value: Value) -> Value {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlanError::EdgeTypeMismatch`], naming `node` and `port`,
+    /// when the edge carries a conversion and `value` is not of its
+    /// declared source type. Unreachable for a `Checked` `check` itself
+    /// built; reachable through one built or edited by hand (follow-up to
+    /// milestone 3d, 2026-09-24). Never a panic, and never the value's own
+    /// content.
+    pub(crate) fn deliver(
+        &self,
+        node: &NodeName,
+        port: &PortName,
+        value: Value,
+    ) -> Result<Value, PlanError> {
         match self.edges.get(node).and_then(|ports| ports.get(port)) {
-            Some(edge) => edge.deliver(value),
-            None => value,
+            Some(edge) => edge
+                .deliver(value)
+                .map_err(|mismatch| PlanError::EdgeTypeMismatch {
+                    site: Site::Port {
+                        node: node.clone(),
+                        port: port.clone(),
+                    },
+                    expected: mismatch.expected,
+                    found: mismatch.found,
+                }),
+            None => Ok(value),
         }
     }
 }
@@ -531,7 +580,7 @@ fn bind_ports(
                 node: node_name.clone(),
                 port: port.clone(),
             };
-            ctx.deliver(node_name, port, resolve_binding(ctx, &site, binding, item)?)
+            ctx.deliver(node_name, port, resolve_binding(ctx, &site, binding, item)?)?
         };
         inputs.insert(port.clone(), value);
     }

@@ -10,7 +10,7 @@ mod common;
 
 use std::collections::HashSet;
 
-use common::{input, node, port, tool_name};
+use common::{input, node, port, tool_name, ty};
 use willikins_core::{Inputs, PlanError, Site, ToolError, ToolErrorKind};
 
 /// One instance of every [`PlanError`] variant.
@@ -51,6 +51,14 @@ fn plan_error_samples() -> Vec<PlanError> {
                 message: "boom".to_string(),
             },
         },
+        PlanError::EdgeTypeMismatch {
+            site: Site::Port {
+                node: node("n"),
+                port: port("p"),
+            },
+            expected: ty("A"),
+            found: ty("B"),
+        },
     ]
 }
 
@@ -87,6 +95,7 @@ variant_kinds!(
     NameTaken,
     AttributeMismatch,
     Tool,
+    EdgeTypeMismatch,
 );
 
 #[test]

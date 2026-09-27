@@ -33,8 +33,11 @@ fn type_name_of<T: DomainType>() -> TypeName {
 }
 
 /// Build the [`TypeName`] for an object-safe [`DomainObject`], the same way
-/// [`type_name_of`] does for a statically known `T`.
-fn type_name_of_object(obj: &dyn DomainObject) -> TypeName {
+/// [`type_name_of`] does for a statically known `T`. `pub(crate)`: `plan`'s
+/// own input-parsing check (the follow-up to milestone 3d) reuses this to
+/// name the best type available for a value that failed the registry's
+/// per-type identity test.
+pub(crate) fn type_name_of_object(obj: &dyn DomainObject) -> TypeName {
     TypeName::parse(obj.type_name())
         .unwrap_or_else(|err| unreachable!("DomainObject::type_name must be a TypeName: {err}"))
 }
@@ -101,6 +104,28 @@ pub enum ValueState {
     Unknown,
     /// The value is known: either a single domain object or a list of them.
     Known(Known),
+}
+
+/// Why [`Value::converted`] refused to deliver a value through a
+/// conversion: the value reaching a converting edge was not, in fact, an
+/// object of the conversion's declared source type -- whether its declared
+/// type name disagreed outright, or it shared the source's name but not
+/// its `TypeId` (a different Rust type can derive the same
+/// [`willikins_types::DomainType::TYPE_NAME`]; see
+/// `docs/research/2026-09-23-m3d-adversarial-pass.md`'s independent
+/// review). Carries type names only, never the value's own content:
+/// [`crate::check::Edge::deliver`] surfaces this as
+/// [`crate::plan::PlanError::EdgeTypeMismatch`], naming the node and port,
+/// so `plan` and `apply` report it loudly rather than a panic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversionMismatch {
+    /// The conversion's declared source type.
+    pub expected: TypeRef,
+    /// The best type reference available for the value that reached it:
+    /// the value's own declared type when its name already disagreed, or a
+    /// scalar reference to the offending object's own reported type name
+    /// when the declared name matched but the object did not.
+    pub found: TypeRef,
 }
 
 /// The content of a [`ValueState::Known`] value.
@@ -222,49 +247,66 @@ impl Value {
     /// - `Unknown(A)` becomes `Unknown(B)`, keeping the list flag;
     /// - a known scalar `A` converts to a known `B`;
     /// - a known list of `A` converts element-wise (`check` never builds a
-    ///   list edge today, but no state panics here);
-    /// - a value whose declared type is not the conversion's source, or
-    ///   any of whose objects is not of that type, is returned unchanged.
-    ///   `check` only records a conversion on an edge whose binding it
-    ///   resolved to the source type, so this arm is unreachable for a
-    ///   well-typed run; it covers a caller that passes `plan` a
-    ///   wrong-typed workflow input or a hand-built `Checked`. Whether an
-    ///   object is of the source type is the converter's own `TypeId`
-    ///   downcast ([`Conversion::apply`] returns `None` otherwise), never
-    ///   its type name, which another Rust type can share. The value then
-    ///   reaches the tool exactly as it would have before conversions
-    ///   existed, and the tool refuses it by type.
-    #[must_use]
-    pub fn converted(&self, conversion: &Conversion) -> Value {
+    ///   list edge today, but no state panics here).
+    ///
+    /// # Errors
+    ///
+    /// A value whose declared type is not the conversion's source, or any
+    /// of whose objects is not of that type, refuses with
+    /// [`ConversionMismatch`] rather than passing through: `check` only
+    /// records a conversion on an edge whose binding it resolved to the
+    /// source type, so this is unreachable for a well-typed run, and
+    /// reaching it at all means a caller went around `check` -- a
+    /// wrong-typed workflow input handed straight to `plan`, or a
+    /// hand-built `Checked` moving a converted edge onto another port
+    /// (`Checked::types`' fields are public; see
+    /// `docs/plans/2026-09-23-milestone-3d-conversions.md`'s follow-up
+    /// addendum, 2026-09-24). The operator's own words: "I'd much rather
+    /// have it fail loudly at parsing than silently go through." Whether
+    /// an object is of the source type is the converter's own `TypeId`
+    /// downcast ([`Conversion::apply`] returns `None` otherwise), never its
+    /// type name, which another Rust type can share.
+    pub fn converted(&self, conversion: &Conversion) -> Result<Value, ConversionMismatch> {
         if self.ty.name != *conversion.from() {
-            return self.clone();
+            return Err(ConversionMismatch {
+                expected: TypeRef {
+                    name: conversion.from().clone(),
+                    list: self.ty.list,
+                },
+                found: self.ty.clone(),
+            });
         }
+        let mismatch_of = |object: &Arc<dyn DomainObject>| ConversionMismatch {
+            expected: TypeRef::scalar(conversion.from().clone()),
+            found: TypeRef::scalar(type_name_of_object(object.as_ref())),
+        };
         let state = match &self.state {
             ValueState::Unknown => ValueState::Unknown,
             ValueState::Known(Known::Scalar(object)) => {
-                let Some(converted) = conversion.apply(object.as_ref()) else {
-                    return self.clone();
-                };
+                let converted = conversion
+                    .apply(object.as_ref())
+                    .ok_or_else(|| mismatch_of(object))?;
                 ValueState::Known(Known::Scalar(converted))
             }
             ValueState::Known(Known::List(items)) => {
-                let Some(converted) = items
+                let converted = items
                     .iter()
-                    .map(|object| conversion.apply(object.as_ref()))
-                    .collect::<Option<Vec<_>>>()
-                else {
-                    return self.clone();
-                };
+                    .map(|object| {
+                        conversion
+                            .apply(object.as_ref())
+                            .ok_or_else(|| mismatch_of(object))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 ValueState::Known(Known::List(converted))
             }
         };
-        Self {
+        Ok(Self {
             ty: TypeRef {
                 name: conversion.to().clone(),
                 list: self.ty.list,
             },
             state,
-        }
+        })
     }
 
     /// This value's declared type.
@@ -1020,7 +1062,9 @@ mod tests {
     fn converted_covers_every_state() {
         let conversion = identifier_to_profile_name();
 
-        let scalar = Value::known(identifier("com.example.one")).converted(&conversion);
+        let scalar = Value::known(identifier("com.example.one"))
+            .converted(&conversion)
+            .expect("a real AppleBundleIdentifier converts");
         assert_eq!(scalar.ty(), &profile_name_ty(false));
         assert_eq!(scalar.render().to_string(), "com.example.one");
 
@@ -1028,7 +1072,8 @@ mod tests {
             identifier("com.example.one"),
             identifier("com.example.two"),
         ])
-        .converted(&conversion);
+        .converted(&conversion)
+        .expect("a real list of AppleBundleIdentifier converts element-wise");
         assert_eq!(list.ty(), &profile_name_ty(true));
         assert_eq!(
             serde_json::to_string(&list).unwrap(),
@@ -1038,35 +1083,61 @@ mod tests {
         let unknown = Value::unknown(TypeRef::scalar(
             TypeName::parse("AppleBundleIdentifier").unwrap(),
         ))
-        .converted(&conversion);
+        .converted(&conversion)
+        .expect("an Unknown of the source type converts to an Unknown of the target");
         assert_eq!(unknown, Value::unknown(profile_name_ty(false)));
 
         let unknown_list = Value::unknown(TypeRef::list_of(
             TypeName::parse("AppleBundleIdentifier").unwrap(),
         ))
-        .converted(&conversion);
+        .converted(&conversion)
+        .expect("an Unknown list of the source type converts too");
         assert_eq!(unknown_list, Value::unknown(profile_name_ty(true)));
     }
 
+    /// Follow-up to milestone 3d, 2026-09-24 (the operator: "I'd much
+    /// rather have it fail loudly at parsing than silently go through"):
+    /// what `Value::converted` used to pass through unchanged is now a
+    /// loud [`ConversionMismatch`], never a panic and never the value's
+    /// own content.
     #[test]
-    fn converted_passes_a_value_of_another_type_through_unchanged() {
+    fn converted_refuses_a_value_of_another_type() {
         let conversion = identifier_to_profile_name();
+        let identifier_ty = TypeRef::scalar(TypeName::parse("AppleBundleIdentifier").unwrap());
         let other = Value::known(github_org("lightless-labs"));
-        assert_eq!(other.converted(&conversion), other);
+        assert_eq!(
+            other.converted(&conversion),
+            Err(ConversionMismatch {
+                expected: identifier_ty.clone(),
+                found: TypeRef::scalar(TypeName::parse("GitHubOrg").unwrap()),
+            })
+        );
 
         // A list declared as the source type but holding a foreign object
-        // (only `known_dyn_list` can build one) is left alone too, rather
-        // than reaching the converter's downcast.
+        // (only `known_dyn_list` can build one) refuses too, rather than
+        // reaching the converter's downcast.
         let forged = Value::known_dyn_list(
             TypeName::parse("AppleBundleIdentifier").unwrap(),
             vec![Arc::new(github_org("lightless-labs")) as Arc<dyn DomainObject>],
         );
-        assert_eq!(forged.converted(&conversion), forged);
+        assert_eq!(
+            forged.converted(&conversion),
+            Err(ConversionMismatch {
+                expected: TypeRef::scalar(TypeName::parse("AppleBundleIdentifier").unwrap()),
+                found: TypeRef::scalar(TypeName::parse("GitHubOrg").unwrap()),
+            })
+        );
 
-        // An unknown value of another type keeps its own type: an edge
-        // never retypes a value it does not convert.
+        // An unknown value of another type refuses too: an edge never
+        // retypes, or silently accepts, a value it does not convert.
         let unknown_other = Value::unknown(TypeRef::scalar(TypeName::parse("GitHubOrg").unwrap()));
-        assert_eq!(unknown_other.converted(&conversion), unknown_other);
+        assert_eq!(
+            unknown_other.converted(&conversion),
+            Err(ConversionMismatch {
+                expected: identifier_ty,
+                found: TypeRef::scalar(TypeName::parse("GitHubOrg").unwrap()),
+            })
+        );
     }
 
     /// A different Rust type that happens to share the source's type name.
@@ -1083,20 +1154,37 @@ mod tests {
         pub(super) struct AppleBundleIdentifier(String);
     }
 
-    /// Independent review of milestone 3d: the pass-through compares type
-    /// *names*, the converter downcasts by *`TypeId`*. A same-named value of
-    /// another Rust type must still pass through unchanged, never reach the
-    /// converter's downcast and panic.
+    /// Independent review of milestone 3d, and its own follow-up: the
+    /// converter downcasts by `TypeId`, and now (2026-09-24) a failed
+    /// downcast is a loud [`ConversionMismatch`], not a silent
+    /// pass-through and not a panic. A same-named value of another Rust
+    /// type is refused, its `found` naming the impostor's own reported
+    /// type -- which coincidentally prints the same as `expected`, because
+    /// the whole point is that a shared `TYPE_NAME` does not mean a shared
+    /// `TypeId`.
     #[test]
-    fn converted_passes_a_same_named_value_of_another_rust_type_through_unchanged() {
+    fn converted_refuses_a_same_named_value_of_another_rust_type() {
         let conversion = identifier_to_profile_name();
+        let identifier_ty = TypeRef::scalar(TypeName::parse("AppleBundleIdentifier").unwrap());
         let impostor = Value::known(impostor::AppleBundleIdentifier::parse("com.example").unwrap());
         assert_eq!(impostor.ty().to_string(), "AppleBundleIdentifier");
-        assert_eq!(impostor.converted(&conversion), impostor);
+        assert_eq!(
+            impostor.converted(&conversion),
+            Err(ConversionMismatch {
+                expected: identifier_ty.clone(),
+                found: identifier_ty.clone(),
+            })
+        );
 
         let impostors = Value::known_list(vec![
             impostor::AppleBundleIdentifier::parse("com.example").unwrap(),
         ]);
-        assert_eq!(impostors.converted(&conversion), impostors);
+        assert_eq!(
+            impostors.converted(&conversion),
+            Err(ConversionMismatch {
+                expected: identifier_ty.clone(),
+                found: identifier_ty,
+            })
+        );
     }
 }
