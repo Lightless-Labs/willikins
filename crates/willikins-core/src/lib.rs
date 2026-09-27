@@ -45,7 +45,9 @@ pub use tool::{
     Ensured, Inputs, Observation, Outputs, PortName, PortSpec, SpecError, Tool, ToolError,
     ToolErrorKind, ToolName, ToolSpec,
 };
-pub use value::{Known, PortType, TypeName, TypeRef, TypeRegistry, Value, ValueState};
+pub use value::{
+    ConversionMismatch, Known, PortType, TypeName, TypeRef, TypeRegistry, Value, ValueState,
+};
 pub use workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};
 
 /// Capability token gating access to secret values; see `willikins_types::sink::SinkToken`.

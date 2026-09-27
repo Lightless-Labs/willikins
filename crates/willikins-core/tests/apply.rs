@@ -1245,9 +1245,10 @@ mod conversions {
 
     use indexmap::IndexMap;
     use willikins_core::{
-        Approval, Binding, Catalog, Class, Ensured, InputName, InputSpec, Inputs, Node, NodeName,
-        Observation, Outputs, PortName, PortSpec, PortType, RecordingObserver, Tool, ToolError,
-        ToolName, ToolSpec, TypeName, TypeRef, TypeRegistry, Value, Workflow, apply, check, plan,
+        ApplyError, Approval, Binding, Catalog, Checked, Class, ConversionMismatch, Ensured,
+        InputName, InputSpec, Inputs, Node, NodeName, Observation, Outputs, PlanError, PortName,
+        PortSpec, PortType, RecordingObserver, Site, Tool, ToolError, ToolName, ToolSpec, TypeName,
+        TypeRef, TypeRegistry, Value, Workflow, apply, check, plan,
     };
     use willikins_types::registry::TypeEntry;
     use willikins_types::{DomainType, SinkToken};
@@ -1789,10 +1790,13 @@ mod conversions {
             Value::known(ConvB::parse("same").unwrap()),
             Value::unknown(scalar("ConvB")),
             // Even a value of another type passes through untouched: an
-            // exact edge never converts anything.
+            // exact edge never converts anything, so there is nothing for
+            // the backstop below to refuse either.
             Value::known(a("other")),
         ] {
-            let delivered = edge.deliver(value.clone());
+            let delivered = edge
+                .deliver(value.clone())
+                .expect("an exact edge never refuses");
             assert_eq!(delivered, value);
             assert_eq!(
                 serde_json::to_string(&delivered).unwrap(),
@@ -1801,13 +1805,16 @@ mod conversions {
         }
     }
 
-    /// A value whose own type is not the conversion's source is never
-    /// handed to the converter: it passes through unchanged, so the one
-    /// runtime downcast in the generated converter cannot be reached with
-    /// the wrong type, even by a caller that supplies a wrong-typed
-    /// workflow input to `plan` directly.
+    /// Follow-up to milestone 3d, 2026-09-24. The operator: "I'd much
+    /// rather have it fail loudly at parsing than silently go through."
+    /// `Edge::deliver` used to pass a value of another type through
+    /// unchanged so the generated converter's one downcast could never be
+    /// reached with the wrong type; it now refuses instead, loudly and by
+    /// type names only -- this is the backstop `Edge::deliver` itself
+    /// carries, reached even when nothing upstream (a hand-built
+    /// `Checked`, for instance) caught the mismatch first.
     #[test]
-    fn a_converted_edge_passes_a_foreign_value_through_unchanged() {
+    fn an_edge_with_a_conversion_refuses_a_foreign_value_directly() {
         let fixture = fixture();
         let workflow = Workflow::new(workflow_name("conv-foreign"))
             .input(input("a"), InputSpec::new(scalar("ConvA")))
@@ -1816,12 +1823,53 @@ mod conversions {
         let edge = &checked.types[&node("sink")][&port("b")];
         assert!(edge.conversion().is_some());
         let foreign = Value::known(ConvB::parse("already").unwrap());
-        assert_eq!(edge.deliver(foreign.clone()), foreign);
+        assert_eq!(
+            edge.deliver(foreign),
+            Err(ConversionMismatch {
+                expected: scalar("ConvA"),
+                found: scalar("ConvB"),
+            })
+        );
+    }
+
+    /// The same mismatch, reached through `plan` rather than
+    /// `Edge::deliver` directly: a caller that supplies a wrong-typed
+    /// workflow input to `plan` sees a loud `PlanError::EdgeTypeMismatch`,
+    /// naming the node and port, never a panic and never a silent pass
+    /// through. (Once the root-cause check lands, `plan` catches this
+    /// even earlier, as `PlanError::InputTypeMismatch`, before any node is
+    /// planned -- see that commit's own update to this test.)
+    #[test]
+    fn a_converted_edge_refuses_a_foreign_workflow_input_through_plan() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-foreign-plan"))
+            .input(input("a"), InputSpec::new(scalar("ConvA")))
+            .node(node("sink"), sink_b_node(Binding::Input(input("a"))));
+        let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
+        let foreign = Value::known(ConvB::parse("already").unwrap());
 
         let mut inputs = IndexMap::new();
-        inputs.insert(input("a"), foreign.clone());
-        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans without a panic");
-        assert_eq!(only_b(&planned.nodes[0].inputs), &foreign);
+        inputs.insert(input("a"), foreign);
+        let err = plan(&checked, &inputs, &fixture.catalog).expect_err("a ConvB is not a ConvA");
+        match err {
+            PlanError::EdgeTypeMismatch {
+                site,
+                expected,
+                found,
+            } => {
+                assert_eq!(
+                    site,
+                    Site::Port {
+                        node: node("sink"),
+                        port: port("b"),
+                    }
+                );
+                assert_eq!(expected, scalar("ConvA"));
+                assert_eq!(found, scalar("ConvB"));
+            }
+            other => panic!("expected EdgeTypeMismatch, got {other:?}"),
+        }
+        assert!(fixture.sink_b.reads.lock().unwrap().is_empty());
     }
 
     /// Another Rust type whose `TYPE_NAME` is also `ConvA`.
@@ -1835,12 +1883,17 @@ mod conversions {
         pub(super) struct ConvA(String);
     }
 
-    /// Independent review of milestone 3d: a workflow input whose type
-    /// *name* is the conversion's source but whose Rust type is not passes
-    /// through unconverted, and `plan` returns rather than panicking in the
-    /// converter's downcast.
+    /// Independent review of milestone 3d, and its own follow-up
+    /// (2026-09-24): a workflow input whose type *name* is the
+    /// conversion's source but whose Rust type is not no longer passes
+    /// through unconverted -- `plan` refuses it loudly, through
+    /// `Edge::deliver`'s own backstop, rather than panicking in the
+    /// converter's downcast or silently letting the impostor through.
+    /// (Once the root-cause check lands, this becomes
+    /// `PlanError::InputTypeMismatch`, refused before any node is
+    /// planned -- see that commit's own update to this test.)
     #[test]
-    fn a_same_named_input_of_another_rust_type_plans_without_a_panic() {
+    fn a_same_named_input_of_another_rust_type_is_refused_not_panicked() {
         let fixture = fixture();
         let workflow = Workflow::new(workflow_name("conv-impostor"))
             .input(input("a"), InputSpec::new(scalar("ConvA")))
@@ -1850,8 +1903,246 @@ mod conversions {
         assert_eq!(impostor.ty(), &scalar("ConvA"));
 
         let mut inputs = IndexMap::new();
-        inputs.insert(input("a"), impostor.clone());
-        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans without a panic");
-        assert_eq!(only_b(&planned.nodes[0].inputs), &impostor);
+        inputs.insert(input("a"), impostor);
+        let err = plan(&checked, &inputs, &fixture.catalog)
+            .expect_err("a same-named impostor is not a real ConvA");
+        match err {
+            PlanError::EdgeTypeMismatch {
+                site,
+                expected,
+                found,
+            } => {
+                assert_eq!(
+                    site,
+                    Site::Port {
+                        node: node("sink"),
+                        port: port("b"),
+                    }
+                );
+                // The coincidence the type system cannot see through: the
+                // impostor's own TYPE_NAME really is "ConvA". That is the
+                // whole point -- a shared name does not mean a shared
+                // Rust type, so `expected` and `found` print identically
+                // here without the refusal being wrong.
+                assert_eq!(expected, scalar("ConvA"));
+                assert_eq!(found, scalar("ConvA"));
+            }
+            other => panic!("expected EdgeTypeMismatch, got {other:?}"),
+        }
+        assert!(fixture.sink_b.reads.lock().unwrap().is_empty());
+    }
+
+    /// The backstop's own reason to exist: a `Checked` `check` never
+    /// built. `Checked::types`' fields are public precisely so a test like
+    /// this one can move a real, `check`-built converting edge onto a
+    /// different port than `check` chose it for. `plan`'s own input
+    /// parsing cannot see this -- both `a` and `c` are exactly the types
+    /// their declared inputs say -- so only `Edge::deliver`'s own backstop
+    /// catches it, at both `plan` and `apply`.
+    #[test]
+    fn a_converted_edge_moved_onto_another_port_errors_at_plan_and_apply() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-forged"))
+            .input(input("a"), InputSpec::new(scalar("ConvA")))
+            .input(input("c"), InputSpec::new(scalar("ConvB")))
+            .node(node("sink1"), sink_b_node(Binding::Input(input("a"))))
+            .node(node("sink2"), sink_b_node(Binding::Input(input("c"))));
+        let checked =
+            check(&workflow, &fixture.catalog).expect("A converts to B; B binds to B exactly");
+
+        let converting_edge = checked.types[&node("sink1")][&port("b")].clone();
+        assert!(converting_edge.conversion().is_some());
+        assert!(
+            checked.types[&node("sink2")][&port("b")]
+                .conversion()
+                .is_none()
+        );
+
+        let mut forged_types = checked.types.clone();
+        forged_types
+            .get_mut(&node("sink2"))
+            .expect("sink2 has a types entry")
+            .insert(port("b"), converting_edge);
+        let forged = Checked {
+            types: forged_types,
+            ..checked.clone()
+        };
+
+        let mut inputs = IndexMap::new();
+        inputs.insert(input("a"), Value::known(a("hello")));
+        inputs.insert(input("c"), Value::known(ConvB::parse("world").unwrap()));
+
+        let plan_err = plan(&forged, &inputs, &fixture.catalog)
+            .expect_err("sink2's real ConvB does not match the moved edge's ConvA source");
+        match plan_err {
+            PlanError::EdgeTypeMismatch {
+                site,
+                expected,
+                found,
+            } => {
+                assert_eq!(
+                    site,
+                    Site::Port {
+                        node: node("sink2"),
+                        port: port("b"),
+                    }
+                );
+                assert_eq!(expected, scalar("ConvA"));
+                assert_eq!(found, scalar("ConvB"));
+            }
+            other => panic!("expected EdgeTypeMismatch, got {other:?}"),
+        }
+
+        // A genuine plan against the real (unforged) `Checked`, so `apply`
+        // has an `approved: &Plan` to diff against -- its own opening
+        // replan against the forged `Checked` is what surfaces the same
+        // refusal for `apply`, before any drift check or `ensure` call.
+        let genuine_planned =
+            plan(&checked, &inputs, &fixture.catalog).expect("the real Checked plans");
+        let mut observer = RecordingObserver::new();
+        let apply_err = apply(
+            &forged,
+            &inputs,
+            &fixture.catalog,
+            &genuine_planned,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect_err("apply's own opening replan hits the same forged edge");
+        match apply_err {
+            ApplyError::Plan {
+                error:
+                    PlanError::EdgeTypeMismatch {
+                        site,
+                        expected,
+                        found,
+                    },
+            } => {
+                assert_eq!(
+                    site,
+                    Site::Port {
+                        node: node("sink2"),
+                        port: port("b"),
+                    }
+                );
+                assert_eq!(expected, scalar("ConvA"));
+                assert_eq!(found, scalar("ConvB"));
+            }
+            other => panic!("expected ApplyError::Plan{{EdgeTypeMismatch}}, got {other:?}"),
+        }
+        assert!(
+            fixture.sink_b.ensures.lock().unwrap().is_empty(),
+            "nothing was ever ensured"
+        );
+    }
+
+    /// A non-pure source whose `read` cannot predict its `out` (a
+    /// `ConvA`), like `UnknownAtPlan`, but whose `ensure` returns a
+    /// same-named *impostor* rather than a real `ConvA`. This is the one
+    /// route into `resolve_instance_inputs`'s own re-delivery that `plan`'s
+    /// opening replan cannot see: at plan time the value is `Unknown`, and
+    /// `Value::converted`'s `Unknown` arm never inspects an object, so
+    /// nothing is wrong yet. Only once `ensure` actually runs, at apply
+    /// time, does the impostor exist to be delivered.
+    struct ImpostorAtEnsure {
+        spec: ToolSpec,
+    }
+
+    impl Tool for ImpostorAtEnsure {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+            let mut predicted = Outputs::new();
+            predicted.insert(port("out"), Value::unknown(scalar("ConvA")));
+            Ok(Observation::Absent { predicted })
+        }
+        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            let mut outputs = Outputs::new();
+            outputs.insert(
+                port("out"),
+                Value::known(impostor::ConvA::parse("imp").unwrap()),
+            );
+            Ok(Ensured {
+                outputs,
+                changed: true,
+            })
+        }
+    }
+
+    /// Advisor-identified gap, follow-up to milestone 3d, 2026-09-24:
+    /// `resolve_instance_inputs`'s own re-delivery, at apply time, is
+    /// otherwise unreached by any other test here -- `plan`'s opening
+    /// replan already refuses everything the tests above reach. Pins that
+    /// this second delivery point refuses the impostor too, loudly,
+    /// rather than delivering it to the sink's `ensure`.
+    #[test]
+    fn apply_refuses_a_same_named_impostor_from_ensure_that_plan_could_not_see() {
+        let mut fixture = fixture();
+        fixture
+            .catalog
+            .insert(Arc::new(ImpostorAtEnsure {
+                spec: spec("conv.source_impostor", &[], &[("out", "ConvA")], false),
+            }))
+            .unwrap();
+        let workflow = Workflow::new(workflow_name("conv-ensure-impostor"))
+            .node(
+                node("source"),
+                Node::new(ToolName::parse("conv.source_impostor").unwrap()),
+            )
+            .node(
+                node("sink"),
+                sink_b_node(Binding::Step {
+                    node: node("source"),
+                    port: port("out"),
+                }),
+            );
+        let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
+        let inputs = IndexMap::new();
+
+        let planned = plan(&checked, &inputs, &fixture.catalog)
+            .expect("plans: the value is Unknown at plan time, so nothing is wrong yet");
+        let sink = planned
+            .nodes
+            .iter()
+            .find(|n| n.name == node("sink"))
+            .unwrap();
+        assert_eq!(only_b(&sink.inputs), &Value::unknown(scalar("ConvB")));
+
+        let mut observer = RecordingObserver::new();
+        let err = apply(
+            &checked,
+            &inputs,
+            &fixture.catalog,
+            &planned,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect_err("ensure's impostor is not a real ConvA");
+        match err {
+            ApplyError::Plan {
+                error:
+                    PlanError::EdgeTypeMismatch {
+                        site,
+                        expected,
+                        found,
+                    },
+            } => {
+                assert_eq!(
+                    site,
+                    Site::Port {
+                        node: node("sink"),
+                        port: port("b"),
+                    }
+                );
+                assert_eq!(expected, scalar("ConvA"));
+                assert_eq!(found, scalar("ConvA"));
+            }
+            other => panic!("expected ApplyError::Plan{{EdgeTypeMismatch}}, got {other:?}"),
+        }
+        assert!(
+            fixture.sink_b.ensures.lock().unwrap().is_empty(),
+            "the sink's ensure never runs"
+        );
     }
 }
