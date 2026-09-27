@@ -47,6 +47,17 @@ is reachable from them, and their messages and the characterization snapshot are
 That review also removed a panic from naming a refused object whose `TYPE_NAME` is not a valid
 `TypeName` (`483b165`). It left one gap open: a tool's own wrong-typed output is not checked where
 it is produced.
+**Addendum:** 2026-09-27 (independent review of `4d44fb3`/`483b165`) — both commits held under
+attack. Three gaps were found and fixed test-first:
+- `check` now applies the registry's `TypeId` test to an input's *default*. A same-named default of
+  another Rust type is therefore `CheckError::DefaultTypeMismatch` at `check`, not only
+  `InputTypeMismatch` at `plan` once `describe` has merged it (`83a74a5`).
+- The exact-edge test now asserts that no tool read the wrong value (`847cf0a`).
+- `InputTypeMismatch`'s same-name `Display` says "declared as `X`" instead of "also named `X`",
+  which was false for a misnamed element (`1d22ef8`).
+
+See "Independent review of 4d44fb3 and 483b165" in
+`docs/research/2026-09-23-m3d-adversarial-pass.md`.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system: "parse, don't validate",
 "a secret output may only flow to a secret-accepting input. No coercion."; "policy lives in the
 workflow, never in the tool"; the workflow-inputs rule "no secret input types")

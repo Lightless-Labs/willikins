@@ -641,7 +641,8 @@ on `f0ce5a2` was green: `--lib` 158, `--test apply` 31, `--test plan_error_serde
   - `cargo fmt --all --check`;
   - `cargo clippy -p willikins-core --all-targets -- -D warnings`;
   - `willikins-core`: `--lib`, `--test apply`, `--test check`, `--test check_adversarial`,
-    `--test plan_error_serde`;
+    `--test plan_error_serde` while working, then the whole crate (`cargo test -p
+    willikins-core`, every target and the doctests) on `1d22ef8`, all green;
   - `willikins-dsl --test acceptance`.
 
   The full workspace gate, the CLI and server suites, and `cargo check -p willikins-types` were
