@@ -381,3 +381,140 @@ the pass-through is unreachable. It is reached only through the library:
   profile_documents`, `cargo clippy -p willikins-types -p willikins-core --all-targets -- -D
   warnings`, `cargo check -p willikins-types`, and `cargo fmt --all --check`, all clean on
   `b470206`.
+
+## Fail-loudly follow-up, independent review, 2026-09-27
+
+**Reviewer:** an independent adversarial pass. This reviewer did not write the backstop or the
+`TypeId` predicate. It covers `0787a28` (`TypeRegistry::type_matches`), the backstop the previous
+implementer left uncommitted, and the parse-time input check, which had not been written.
+**The operator, 2026-09-24:** "I'd much rather have it fail loudly at parsing than silently go
+through."
+**Method:** as in the previous review, every claim was reproduced. Each mutation edited source,
+ran `willikins-core --test apply`, and restored the file from a copy saved before the edit. `cmp`
+confirmed every restore byte-identical. No `git checkout` or `reset` was used.
+
+### State found, and what was finished
+
+- **Backstop (A).** The previous implementer left it uncommitted with its scoped gate green (fmt,
+  clippy, `willikins-core` tests). It was committed unchanged as `1e29caf`. `Value::converted`
+  and `Edge::deliver` now return `ConversionMismatch` rather than passing a foreign value through.
+  `plan`'s `bind_ports` and `apply`'s `Step`/`Keyed` re-delivery surface it as
+  `PlanError::EdgeTypeMismatch { site, expected, found }`.
+- **Root cause (B), written here** (`4d44fb3`). `plan` now checks every workflow input the caller
+  supplied against its declared `TypeRef` before any node is planned, and refuses a mismatch with
+  `PlanError::InputTypeMismatch { input, expected, found }`. Three conditions apply:
+  - the value's own `TypeRef` must equal the declared one, list flag included;
+  - every known object must pass the catalog registry entry's `TypeId` test. That includes each
+    element of a list;
+  - a name the registry does not hold is refused.
+
+  An `Unknown` value of the declared type is accepted, as before. `apply` inherits the check
+  through its opening replan. Two things are unchanged: a declared input that was not supplied
+  still reaches `MissingInput` only through a binding, and an undeclared extra key is still
+  ignored.
+
+  The two tests whose docs promised the flip now expect `InputTypeMismatch`. The impostor test
+  also covers `apply`: no events, no read, no ensure. Four tests are new:
+  - a list with one foreign element and a list with one impostor element, with no instance read
+    (before the change, the first well-typed item was already read);
+  - an exact, unconverted edge;
+  - a wrong shape or wrong `Unknown`, plus a correctly typed `Unknown` that still plans;
+  - a secret supplied for a public input.
+
+### Defects found
+
+1. **The root cause itself, before (B).** A wrong-typed workflow input on an *exact* edge went
+   through silently. Red run on `1e29caf` plus the new tests:
+   `plan` returned `Ok` with `inputs: {in: bad}` for a `ConvB` in the `conv.echo` double's `ConvA`
+   port. The impostor case was the same (`{in: imp}`). Only a tool that reads through
+   `helpers::get` would have refused it. Six tests were red before the check and all 30 in
+   `tests/apply.rs` passed after it.
+2. **Naming a refused object could panic.** Both `ConversionMismatch` (A) and
+   `InputTypeMismatch` (B, as first written) named the offending object through
+   `type_name_of_object`, which contains an `unreachable!` if `DomainObject::type_name()` is not
+   a valid `TypeName`. Nothing checks that it is. The derive sets `TYPE_NAME` to `stringify!` of
+   the struct's name, so `#[allow(non_camel_case_types)] #[derive(DomainType)] struct conv_a`
+   compiles and reports `conv_a`. `Value::known_dyn_list` never looks at its items' names. So a
+   declared `list<ConvA>` input holding one such object panicked inside `plan`:
+   `entered unreachable code: DomainObject::type_name must be a TypeName: TypeName: \`conv_a\` is
+   not a valid type name`. The same object panicked inside the public `Value::converted`. Both
+   routes were written as tests first and went red with exactly that message. Before (B), the
+   `plan` route already panicked in `for_each`'s keying (`Value::known_dyn`). **Fix
+   (`483b165`):** the new `reported_type_name_or` names the object, falling back to the declared
+   type (for an input) or the conversion's source (for an edge) when the reported name does not
+   parse. `type_name_of_object` is private again. Pinned by
+   `a_list_element_whose_type_name_is_not_a_type_name_is_refused_not_panicked` (`tests/apply.rs`)
+   and `converted_refuses_an_object_whose_type_name_is_not_a_type_name_without_a_panic`
+   (`value.rs`).
+
+### Where a wrong-typed value can still go, with evidence
+
+| Route | Result now |
+| --- | --- |
+| Library caller: a workflow input of another declared type, shape, or `Unknown` type | `InputTypeMismatch`, before any read |
+| Library caller: a same-named impostor, scalar or list element | `InputTypeMismatch` (by `TypeId`; `found` prints like `expected`, so `Display` says "a value of another Rust type also named") |
+| Library caller: a secret for a public input | `InputTypeMismatch` naming `SecA`; no bytes in `Display`, `Debug`, JSON or `ApplyError`; no apply event |
+| Hand-built `Checked` moving a converting edge | `EdgeTypeMismatch` at `plan` and at `apply`'s replan |
+| `ensure` returning an impostor that `plan` saw as `Unknown`, on a converting edge | `EdgeTypeMismatch` at apply re-delivery, sink never ensured |
+| **A tool's own output of the wrong type, on an exact edge** | **reaches the next tool.** Probe (temporary test, removed, `cmp`-restored): a pure `conv.liar` declaring `out: ConvA` and returning a `ConvB`. Into the untyped echo: `Ok`, `inputs = {in: lie}`. Into a tool reading through `helpers::get`: `node \`down\`: Invalid: port \`in\` has an unexpected type`. Into a converting sink: `down.b: expected ConvA, found \`ConvB\`` |
+| A tool's list output holding a misnamed object, as a `for_each` source | still panics in `plan`'s keying (`Value::known_dyn`); not reachable from any in-tree tool |
+
+**Not fixed, by scope:** tool outputs are never checked against the tool's declared output types
+(`fill_outputs` clones what the tool gave, and `apply` does the same with `ensure`'s outputs).
+Tools are catalog code, not caller input. Every provider tool reads an exact-typed port through `helpers::get` or a
+`downcast`, so the result is loud, but it arrives as a `ToolError` from the *receiving*
+tool, and at apply time only after earlier ensures have run. Checking outputs where they are
+produced is the natural next step. It would change which error a buggy tool produces, so it
+belongs to its own change, alongside `todos/2026-09-23-checked-as-a-typed-graph.md`. A hand-written
+`DomainObject` whose `as_any` returns another object is consistent with itself: the `TypeId` test,
+the converter and the tool all see the same `as_any`. It is noted, not attacked.
+
+### Held
+
+- **The entry check is by Rust type everywhere, never by name.** `type_matches` is the only
+  per-object test in `check_input_types`, and `Value::converted` decides by the converter's own
+  downcast. M1 (below) shows that a name comparison lets an impostor through on an exact edge.
+- **Secrecy.** Both new errors carry `InputName`, `Site` and `TypeRef` only. The journal records a
+  plan refusal as its `kind` string alone (`willikins-journal/src/observer.rs::plan_error_kind`).
+  The server boxes the `PlanError`, whose JSON carries only these fields. The secret test pins
+  `Display`, `Debug`, JSON, `ApplyError` and the observer.
+- **Unchanged.** `willikins-dsl --test acceptance` passes on `4d44fb3`, including
+  `characterization_of_every_document`, with no `.snap.new` written. The characterization committed
+  in `553b231` (as C7 amended it) therefore did not move: every negative fixture's error and every
+  document's plan and fingerprint are the same. `willikins-providers-appstore --test
+  profile_documents` (the converted-edge equivalence) passes. The CLI and MCP parse every input from
+  text against its declared type through the global registry, which is the catalog's, so
+  `type_matches` is always `Some(true)` for their values and neither new error is reachable from
+  them. Their messages cannot have changed. That last point comes from reading `describe.rs`, the
+  server's input parsing and the characterization run, not from running the CLI and server suites,
+  which this review was told not to run. No downstream crate matches `PlanError` exhaustively, and
+  no snapshot enumerates its kinds (searched).
+- **Panics.** Apart from defect 2 and the tool-output keying route above, the new code has no
+  `unwrap` or `unreachable!`.
+
+### Mutations
+
+| # | Mutation | Result |
+| --- | --- | --- |
+| M1 | `matches_entry` compares `object.type_name() == T::TYPE_NAME` instead of `TypeId` | red, 3: the scalar impostor and list impostor fall to the backstop's `EdgeTypeMismatch`; the exact-edge impostor **plans**, reaching the echo (`{in: imp}`) |
+| M2 | `plan` never calls `check_input_types` | red, 6: every new parse-time test |
+| M3 | `Edge::deliver` passes a mismatched value through (`unwrap_or(value)`) | red, 3: the moved-edge test (plans `sink2` with `world` unconverted), the direct-edge test, and the ensure-impostor test (applies both nodes) |
+| M4 | `apply`'s `Step`/`Keyed` re-delivery skips `deliver` | red, 4: the ensure impostor, the unknown `Step`, the keyed/item delivery and the converted-secret test |
+| M5 | `check_input_types` skips list elements | red, 1: the list-element test |
+| M6 | `InputTypeMismatch`'s `expected == found` `Display` case removed | red, 1: the impostor test's message |
+
+Every restore compared byte-identical with `cmp`. `git status` showed only the operator's
+`CLAUDE.md` edit and the two untracked files from other sessions afterwards.
+
+### Scope of the checks run
+
+The following ran, each with `-j 2`, alone on the host, with its log read in full:
+- `cargo fmt --all --check`;
+- `cargo clippy -p willikins-core --all-targets -- -D warnings`;
+- `cargo test -p willikins-core`: the whole crate on `4d44fb3`'s tree, and `--lib --test apply
+  --test plan_error_serde` for `483b165`;
+- `cargo check -p willikins-types`;
+- `willikins-dsl --test acceptance`;
+- `willikins-providers-appstore --test profile_documents`.
+
+The full workspace gate was not run, by instruction.

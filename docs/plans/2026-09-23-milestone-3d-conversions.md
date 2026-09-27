@@ -43,6 +43,9 @@ tool whose `ensure` returns a value of another type that `plan` only saw as `Unk
 carry type names only. The CLI and MCP parse inputs from text by declared type, so neither error
 is reachable from them, and their messages and the characterization snapshot are unchanged. See
 "Fail-loudly follow-up, independent review" in `docs/research/2026-09-23-m3d-adversarial-pass.md`.
+That review also removed a panic from naming a refused object whose `TYPE_NAME` is not a valid
+`TypeName` (`483b165`). It left one gap open: a tool's own wrong-typed output is not checked where
+it is produced.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system: "parse, don't validate",
 "a secret output may only flow to a secret-accepting input. No coercion."; "policy lives in the
 workflow, never in the tool"; the workflow-inputs rule "no secret input types")
