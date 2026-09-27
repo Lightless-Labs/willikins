@@ -33,13 +33,20 @@ fn type_name_of<T: DomainType>() -> TypeName {
 }
 
 /// Build the [`TypeName`] for an object-safe [`DomainObject`], the same way
-/// [`type_name_of`] does for a statically known `T`. `pub(crate)`: `plan`'s
-/// own input-parsing check (the follow-up to milestone 3d) reuses this to
-/// name the best type available for a value that failed the registry's
-/// per-type identity test.
-pub(crate) fn type_name_of_object(obj: &dyn DomainObject) -> TypeName {
+/// [`type_name_of`] does for a statically known `T`.
+fn type_name_of_object(obj: &dyn DomainObject) -> TypeName {
     TypeName::parse(obj.type_name())
         .unwrap_or_else(|err| unreachable!("DomainObject::type_name must be a TypeName: {err}"))
+}
+
+/// The [`TypeName`] `obj` reports, or `fallback` when what it reports is
+/// not a valid type name. Used only to name an object that already failed
+/// a `TypeId` test, in [`ConversionMismatch`] and in `plan`'s
+/// `PlanError::InputTypeMismatch`: nothing checks a derived type's
+/// `TYPE_NAME` (it is `stringify!` of the struct's name), so an object
+/// that is already being refused must not panic while it is named.
+pub(crate) fn reported_type_name_or(obj: &dyn DomainObject, fallback: &TypeName) -> TypeName {
+    TypeName::parse(obj.type_name()).unwrap_or_else(|_| fallback.clone())
 }
 
 /// The type a tool port accepts.
@@ -278,7 +285,7 @@ impl Value {
         }
         let mismatch_of = |object: &Arc<dyn DomainObject>| ConversionMismatch {
             expected: TypeRef::scalar(conversion.from().clone()),
-            found: TypeRef::scalar(type_name_of_object(object.as_ref())),
+            found: TypeRef::scalar(reported_type_name_or(object.as_ref(), conversion.from())),
         };
         let state = match &self.state {
             ValueState::Unknown => ValueState::Unknown,
@@ -1152,6 +1159,42 @@ mod tests {
             example = "com.example"
         )]
         pub(super) struct AppleBundleIdentifier(String);
+    }
+
+    /// A derived type whose Rust name is not a valid `TypeName` (the
+    /// derive checks nothing about it).
+    #[allow(non_camel_case_types)]
+    mod misnamed {
+        #[derive(willikins_types::DomainType)]
+        #[domain(
+            pattern = "[a-z.]+",
+            description = "A type whose name is not a TypeName.",
+            example = "com.example"
+        )]
+        pub(super) struct apple_bundle_identifier(String);
+    }
+
+    /// Naming the object that failed the converter's downcast must not
+    /// itself panic when that object's reported type name is not a valid
+    /// `TypeName`: `found` falls back to the conversion's source name.
+    #[test]
+    fn converted_refuses_an_object_whose_type_name_is_not_a_type_name_without_a_panic() {
+        let conversion = identifier_to_profile_name();
+        let identifier = TypeName::parse("AppleBundleIdentifier").unwrap();
+        let forged = Value::known_dyn_list(
+            identifier.clone(),
+            vec![
+                Arc::new(misnamed::apple_bundle_identifier::parse("com.example").unwrap())
+                    as Arc<dyn DomainObject>,
+            ],
+        );
+        assert_eq!(
+            forged.converted(&conversion),
+            Err(ConversionMismatch {
+                expected: TypeRef::scalar(identifier.clone()),
+                found: TypeRef::scalar(identifier),
+            })
+        );
     }
 
     /// Independent review of milestone 3d, and its own follow-up: the

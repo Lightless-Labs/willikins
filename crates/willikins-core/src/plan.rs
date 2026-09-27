@@ -66,7 +66,7 @@ use crate::check::{Checked, Edge};
 use crate::class::Class;
 use crate::site::Site;
 use crate::tool::{Inputs, Observation, Outputs, PortName, Tool, ToolError, ToolName, ToolSpec};
-use crate::value::{PortType, TypeName, TypeRef, TypeRegistry, Value, type_name_of_object};
+use crate::value::{PortType, TypeName, TypeRef, TypeRegistry, Value, reported_type_name_or};
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
 
 /// What `plan` decided to do for one node instance.
@@ -333,7 +333,9 @@ pub enum PlanError {
         /// The supplied value's own declared type when that differs; when
         /// it matches, the type name the first offending object reports
         /// (as `list<...>` for a list input), which equals `expected` for
-        /// a value of another Rust type sharing the declared name.
+        /// a value of another Rust type sharing the declared name, and
+        /// is `expected` too when the object's reported name is not a
+        /// valid type name at all.
         found: TypeRef,
     },
 }
@@ -627,7 +629,7 @@ fn check_input_types(
         for object in scalar.chain(items) {
             if registry.type_matches(&spec.ty.name, object) != Some(true) {
                 return Err(mismatch(TypeRef {
-                    name: type_name_of_object(object),
+                    name: reported_type_name_or(object, &spec.ty.name),
                     list: spec.ty.list,
                 }));
             }
