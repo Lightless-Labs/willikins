@@ -1,6 +1,7 @@
 # Milestone 3d: total conversions between domain types, parsed into the checked graph
 
 **Created:** 2026-09-23
+**Completed:** 2026-09-27 — full gate by the coordinator on `357b552`: fmt, workspace clippy, 171 suites / 2347 tests / 0 failed / 18 ignored, `cargo check -p willikins-types`; `secret_literal_guard`, `no_gh_writes_guard` and `no_certificate_writes_guard` all passed. Includes the operator's fail-loudly follow-up (`1e29caf`, `4d44fb3`, `483b165`, `83a74a5`, `847cf0a`, `1d22ef8`), independently attacked twice.
 **Addendum:** 2026-09-23 (C2) — verify item 1 settled empirically. A `const _: () = assert!(…)`
 nested in block position inside `conversion_rows()`'s `vec![…]` (where `conversions!` emits it)
 **is** evaluated by `cargo check`, the same as `object.rs:105`'s item-position precedent: the
