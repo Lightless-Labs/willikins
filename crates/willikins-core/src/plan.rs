@@ -382,7 +382,7 @@ impl std::fmt::Display for PlanError {
             } if expected == found => write!(
                 f,
                 "workflow input `{input}`: expected {expected}, found a value of another Rust \
-                 type also named `{found}`"
+                 type declared as `{found}`"
             ),
             Self::InputTypeMismatch {
                 input,

@@ -1924,7 +1924,7 @@ mod conversions {
         assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &scalar("ConvA"));
         assert_eq!(
             err.to_string(),
-            "workflow input `a`: expected ConvA, found a value of another Rust type also named \
+            "workflow input `a`: expected ConvA, found a value of another Rust type declared as \
              `ConvA`"
         );
 
@@ -2038,6 +2038,13 @@ mod conversions {
             "xs",
             &TypeRef::list_of(name("ConvA")),
             &TypeRef::list_of(name("ConvA")),
+        );
+        // `found` fell back to the declared name: the message must not
+        // claim the element's own type is named `ConvA` (it is `conv_a`).
+        assert_eq!(
+            err.to_string(),
+            "workflow input `xs`: expected list<ConvA>, found a value of another Rust type \
+             declared as `list<ConvA>`"
         );
         assert!(fixture.sink_b.reads.lock().unwrap().is_empty());
     }
