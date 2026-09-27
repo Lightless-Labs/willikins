@@ -741,6 +741,89 @@ fn a_default_of_the_right_type_but_the_wrong_cardinality_is_rejected() {
     );
 }
 
+/// Another Rust type whose `TYPE_NAME` is also `Text`, and secret: the
+/// derive checks nothing about the name, so any crate can declare one.
+mod impostor {
+    #[derive(willikins_types::DomainType)]
+    #[domain(
+        min_len = 8,
+        secret,
+        description = "Not the registered Text.",
+        example = "sekret-impostor"
+    )]
+    pub(super) struct Text(secrecy::SecretString);
+}
+
+/// The impostor's bytes, assembled at run time so no dump can match a
+/// source literal by accident.
+fn impostor_bytes() -> String {
+    "IMPOSTOR".repeat(3)
+}
+
+/// Independent review of `4d44fb3`/`483b165`, 2026-09-27: a default whose
+/// declared `TypeRef` matches but whose object is another Rust type under
+/// the same name -- here a *secret* one, on a non-secret `Text` input bound
+/// to `template.render` -- is knowable statically, so `check` rejects it by
+/// the registry entry's `TypeId` test, not only `plan` once `describe` has
+/// merged it. A scalar default and one element of a list default alike;
+/// the error names types only, never the impostor's bytes.
+#[test]
+fn a_same_named_default_of_another_rust_type_is_rejected_by_type_id() {
+    let scalar = Workflow::new(workflow_name("impostor-default"))
+        .input(
+            input("motd"),
+            InputSpec::new(ty("Text")).with_default(Value::known(
+                impostor::Text::parse(&impostor_bytes()).unwrap(),
+            )),
+        )
+        .node(
+            node("readme"),
+            Node::new(tool_name("template.render"))
+                .port(
+                    port("template"),
+                    Binding::Literal("{{ value }}".to_string()),
+                )
+                .port(port("value"), Binding::Input(input("motd"))),
+        );
+    let scalar_errors = errors(&scalar);
+    assert_eq!(
+        scalar_errors,
+        vec![CheckError::DefaultTypeMismatch {
+            input: input("motd"),
+            expected: ty("Text"),
+            found: ty("Text"),
+        }]
+    );
+    let message = scalar_errors[0].to_string();
+    assert_eq!(
+        message,
+        "input `motd`: default value is declared `Text` but is a value of another Rust type"
+    );
+    for dump in [message, format!("{scalar_errors:?}")] {
+        assert!(!dump.contains(&impostor_bytes()), "leaked: {dump}");
+    }
+
+    let list = Workflow::new(workflow_name("impostor-list-default")).input(
+        input("lines"),
+        InputSpec::new(list_ty("Text")).with_default(Value::known_dyn_list(
+            TypeName::parse("Text").unwrap(),
+            vec![
+                Arc::new(willikins_types::Text::parse("fine").unwrap())
+                    as Arc<dyn willikins_types::DomainObject>,
+                Arc::new(impostor::Text::parse(&impostor_bytes()).unwrap()),
+            ],
+        )),
+    );
+    assert_eq!(
+        errors(&list),
+        vec![CheckError::DefaultTypeMismatch {
+            input: input("lines"),
+            expected: list_ty("Text"),
+            found: list_ty("Text"),
+        }]
+    );
+}
+
 /// The positive fixture's own defaults must keep passing: a scalar enum
 /// and a list of slugs, each matching its declared type. An `Unknown`
 /// default of the declared type is accepted too — it declares a type
