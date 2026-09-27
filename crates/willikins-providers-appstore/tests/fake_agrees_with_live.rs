@@ -22,9 +22,9 @@ use willikins_providers_fake::tools::{
 };
 use willikins_providers_http::testing::MockProvider;
 use willikins_types::{
-    AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCapabilityType,
-    AppleCertificateId, AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId,
-    AppleProfileName, AppleProfileType, AppleSigningKey, DomainType,
+    AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCapabilitySetting,
+    AppleCapabilityType, AppleCertificateId, AppleCertificateSerial, AppleCertificateType,
+    AppleIssuerId, AppleKeyId, AppleProfileName, AppleProfileType, AppleSigningKey, DomainType,
 };
 
 fn issuer_id() -> AppleIssuerId {
@@ -75,6 +75,15 @@ fn capability_inputs(capability: &str) -> Inputs {
     inputs.insert(
         port("capability"),
         Value::known(AppleCapabilityType::parse(capability).unwrap()),
+    );
+    inputs
+}
+
+fn capability_inputs_with_setting(capability: &str, setting: &str) -> Inputs {
+    let mut inputs = capability_inputs(capability);
+    inputs.insert(
+        port("setting"),
+        Value::known(AppleCapabilitySetting::parse(setting).unwrap()),
     );
     inputs
 }
@@ -262,6 +271,133 @@ fn capability_absent_and_present_agree() {
             .unwrap_or_else(|err| panic!("{case}: live failed: {err}"));
         let fake = FakeAppstoreBundleIdCapabilityEnsure::new(Arc::new(Mutex::new(state)))
             .read(&capability_inputs("PUSH_NOTIFICATIONS"))
+            .unwrap_or_else(|err| panic!("{case}: fake failed: {err}"));
+
+        assert_eq!(shape(&live), shape(&fake), "{case}");
+    }
+}
+
+// ---------------------------------------------------------------------
+// `setting`: the pairing refusal and `Mismatch { setting }`, each new
+// arm milestone 3e's task 1 added (acceptance test 5)
+// ---------------------------------------------------------------------
+
+#[test]
+fn capability_setting_pairing_refusal_agrees_by_error_kind() {
+    // Neither side ever makes a request for this case (the pairing check
+    // runs before any bundle id lookup), so no mock is armed at all --
+    // an unexpected call would panic mockito's own unmatched-request
+    // handling on the live side.
+    let provider = MockProvider::start();
+    let live = AppstoreBundleIdCapabilityEnsure::new(provider.url())
+        .read(&capability_inputs("DATA_PROTECTION"))
+        .expect_err("the live tool refuses DATA_PROTECTION with no setting");
+    let fake = FakeAppstoreBundleIdCapabilityEnsure::new(Arc::new(Mutex::new(FakeState::new())))
+        .read(&capability_inputs("DATA_PROTECTION"))
+        .expect_err("the fake tool refuses DATA_PROTECTION with no setting");
+    assert_eq!(live.kind, fake.kind);
+}
+
+#[test]
+fn capability_setting_present_and_mismatch_agree() {
+    let requested = "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH";
+    for (case, capabilities_body, seed) in [
+        (
+            "present: the requested option is the enabled one",
+            serde_json::json!({"data": [{
+                "attributes": {
+                    "capabilityType": "DATA_PROTECTION",
+                    "settings": [{
+                        "key": "DATA_PROTECTION_PERMISSION_LEVEL",
+                        "options": [
+                            {"key": "COMPLETE_PROTECTION", "enabled": false},
+                            {"key": "PROTECTED_UNTIL_FIRST_USER_AUTH", "enabled": true}
+                        ]
+                    }]
+                }
+            }]}),
+            Some("PROTECTED_UNTIL_FIRST_USER_AUTH"),
+        ),
+        (
+            "mismatch: a different option is enabled",
+            serde_json::json!({"data": [{
+                "attributes": {
+                    "capabilityType": "DATA_PROTECTION",
+                    "settings": [{
+                        "key": "DATA_PROTECTION_PERMISSION_LEVEL",
+                        "options": [
+                            {"key": "COMPLETE_PROTECTION", "enabled": true},
+                            {"key": "PROTECTED_UNTIL_FIRST_USER_AUTH", "enabled": false}
+                        ]
+                    }]
+                }
+            }]}),
+            Some("COMPLETE_PROTECTION"),
+        ),
+        (
+            "mismatch: settings is empty (enabled with no setting recorded)",
+            serde_json::json!({"data": [{
+                "attributes": {
+                    "capabilityType": "DATA_PROTECTION",
+                    "settings": []
+                }
+            }]}),
+            None,
+        ),
+        (
+            "mismatch: settings is absent entirely",
+            serde_json::json!({"data": [{
+                "attributes": {
+                    "capabilityType": "DATA_PROTECTION"
+                }
+            }]}),
+            None,
+        ),
+    ] {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v1/bundleIds")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(bundle_id_list_body(
+                "T6G4XCV345",
+                "third-thoughts",
+                "UNIVERSAL",
+            ))
+            .create();
+        provider
+            .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+            .with_status(200)
+            .with_body(capabilities_body.to_string())
+            .create();
+
+        let mut state = FakeState::new().with_apple_bundle_id(&identifier(), &name(), &platform());
+        state = match seed {
+            Some(option) => state.with_apple_bundle_id_capability_setting(
+                &identifier(),
+                &AppleCapabilityType::parse("DATA_PROTECTION").unwrap(),
+                &AppleCapabilitySetting::parse(&format!(
+                    "DATA_PROTECTION_PERMISSION_LEVEL={option}"
+                ))
+                .unwrap(),
+            ),
+            None => state.with_apple_bundle_id_capability(
+                &identifier(),
+                &AppleCapabilityType::parse("DATA_PROTECTION").unwrap(),
+            ),
+        };
+
+        let live = AppstoreBundleIdCapabilityEnsure::new(provider.url())
+            .read(&capability_inputs_with_setting(
+                "DATA_PROTECTION",
+                requested,
+            ))
+            .unwrap_or_else(|err| panic!("{case}: live failed: {err}"));
+        let fake = FakeAppstoreBundleIdCapabilityEnsure::new(Arc::new(Mutex::new(state)))
+            .read(&capability_inputs_with_setting(
+                "DATA_PROTECTION",
+                requested,
+            ))
             .unwrap_or_else(|err| panic!("{case}: fake failed: {err}"));
 
         assert_eq!(shape(&live), shape(&fake), "{case}");

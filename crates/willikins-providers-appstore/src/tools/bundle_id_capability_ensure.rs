@@ -58,10 +58,12 @@
 //! is exactly the kind of surprise this task's operator asked this crate
 //! to stop and report rather than improvise around. The other three of
 //! Apple's six (Sign in with Apple, data protection, push notifications)
-//! are fully expressible through `CapabilitySetting` even though this
-//! tool never sets one -- enabling them with no setting is a complete,
-//! valid state Apple accepts, not a half-configured one, so they are not
-//! refused.
+//! are fully expressible through `CapabilitySetting`, not merely
+//! flip-on-able, so none of the three is refused here -- but they are
+//! not all alike below that: `PUSH_NOTIFICATIONS` is a complete, valid
+//! state with no setting at all, while `DATA_PROTECTION` and
+//! `APPLE_ID_AUTH` each require one and are refused at `read` without it
+//! -- see the next section.
 //!
 //! `read` still reports `Present`/`Absent` honestly for all 28 capability
 //! types, including these three -- refusing only happens in `ensure`,
