@@ -3,11 +3,48 @@
 Current state of the project and active work. Read this at session start. Update before
 compaction, before handing off, after a milestone, and after a plan change or discovery.
 
-**Last updated:** 2026-09-23
+**Last updated:** 2026-09-27
 
 ## Current Status
 
-### RESUME HERE (2026-09-23) — milestone 3c is complete and live-proven: willikins selects a distribution certificate and produces an App Store provisioning profile, and can hand its content to Doppler for Buildkite
+### RESUME HERE (2026-09-27) — milestone 3d is complete: total, secrecy-monotone, one-hop conversions parsed into the checked graph, and wrong-typed values fail loudly at parsing
+
+- **Live state:** `main` at the handoff commit on top of `143500c`. Full gate by the coordinator on
+  `357b552`: fmt, workspace clippy, **171 suites / 2347 tests / 0 failed / 18 ignored**, `cargo check
+  -p willikins-types`; all three guards passed. Plan `docs/plans/2026-09-23-milestone-3d-conversions.md`
+  is Completed; attack records in `docs/research/2026-09-23-m3d-adversarial-pass.md`.
+- **What landed.** `conversions!` beside `domain_types!`: each row compile-fails without a hand-written
+  `From` impl and compile-fails if secret-to-public (a `const` assert on `IS_SECRET`); the table is a
+  `(from, to)` map probed once, never searched. `check` records the conversion on each typed edge
+  (`Checked::types` holds `Edge`s); `plan` and `apply` deliver through the edge and never probe the table
+  (a clippy `disallowed-methods` rule plus a tripwire test — a lint, not a type boundary). One row:
+  `AppleBundleIdentifier => AppleProfileName`, total by grammar containment, pinned by proptests.
+  `workflows/appstore-signing-profile-from-doppler.yaml` no longer takes `profile_name`: it binds the
+  profile's name to the bundle identifier (the operator's convention, stated in the document, not in any
+  tool). Read-only `plan --live` against the live account confirmed name == identifier, counts 5/13/21.
+- **Fail loudly at parsing (operator decision 2026-09-24).** `plan` checks every caller-supplied input
+  against its declared type before any node is planned (`PlanError::InputTypeMismatch`), by `TypeRef`
+  then by `TypeId` through the registry's per-type `matches` predicate — never by `TYPE_NAME`, which two
+  Rust types can share. A wrong-typed value reaching a converter is `PlanError::EdgeTypeMismatch` at plan
+  and apply, never a pass-through or panic. `check` now refuses an input default of another Rust type
+  under the declared name. New CLAUDE.md invariant for conversions; `AGENTS.md` is a byte-identical copy
+  of `CLAUDE.md` and will drift unless both are edited together.
+- **Process lesson.** Three lanes running: implementers were cut off before finishing, and reviewers
+  wrote code they then reviewed. Every such piece got a second, independent attack before closing.
+  Delegating long waits to agents fails on this host; the coordinator should run full gates itself as a
+  single background command.
+- **Host.** A full gate took about an hour this time. `serve_http_deploy_pins` failed 5 tests once
+  under full-suite load on its 10-second startup deadline (empty stderr) and passed alone in 2.47s:
+  flaky under load, worth widening. The `com.thomas.agents-disk-maintenance` cargo-sweep (04:00 local,
+  2h+) deletes artifacts mid-build; never gate across it.
+- **Open, carried forward.** A tool's own outputs are not type-checked where produced; a misnamed object
+  in a tool's list output still panics in `for_each` keying; `Value::known` of a misnamed value panics at
+  construction. A hand-built `Checked` can bypass both checks — all belong to
+  `todos/2026-09-23-checked-as-a-typed-graph.md` (next). The CLI's serial number still rides on argv.
+- **Next candidates:** Checked as a typed graph (the natural follow-up, makes "no second lookup" a type
+  boundary); secrecy inference; capability `settings`; the bundle-id name-drift gap; file-writing.
+
+### Earlier (2026-09-23) — milestone 3c is complete and live-proven: willikins selects a distribution certificate and produces an App Store provisioning profile, and can hand its content to Doppler for Buildkite
 
 - **Live state:** `main` at the handoff commit on top of `589ef10`. Re-gated by the coordinator at
   `589ef10`, independently of the lanes: fmt, workspace clippy, **171 suites / 2292 tests**, 18
