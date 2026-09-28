@@ -204,7 +204,7 @@ fn read_finds_the_requested_capability_on_a_later_page() {
     });
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
-        .match_query(mockito::Matcher::UrlEncoded("limit".into(), "200".into()))
+        .match_query(mockito::Matcher::Exact("limit=200".into()))
         .with_status(200)
         .with_body(page_one.to_string())
         .create();
@@ -239,7 +239,7 @@ fn ensure_never_posts_when_the_requested_capability_is_on_a_later_page() {
     });
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
-        .match_query(mockito::Matcher::UrlEncoded("limit".into(), "200".into()))
+        .match_query(mockito::Matcher::Exact("limit=200".into()))
         .with_status(200)
         .with_body(page_one.to_string())
         .create();
@@ -279,16 +279,21 @@ fn read_refuses_past_the_page_cap_rather_than_spinning() {
             provider.url()
         ),
     });
-    provider
+    // `MAX_PAGES` is private to `client.rs`; pin its value here (50) rather
+    // than merely "eventually refuses" -- `.expect(50)` fails the test if
+    // the client stops short or keeps going past it.
+    let looping = provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
         .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(looping_page.to_string())
+        .expect(50)
         .create();
     let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
     let err = tool.read(&inputs_for("PUSH_NOTIFICATIONS")).unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::Provider);
     assert!(err.message.contains("pages"), "{}", err.message);
+    looping.assert();
 }
 
 /// `links.next` is an absolute URL Apple sends; a response naming a
@@ -312,7 +317,7 @@ fn read_reattaches_only_the_query_string_never_the_host_or_path_links_next_names
     });
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
-        .match_query(mockito::Matcher::UrlEncoded("limit".into(), "200".into()))
+        .match_query(mockito::Matcher::Exact("limit=200".into()))
         .with_status(200)
         .with_body(page_one.to_string())
         .create();
