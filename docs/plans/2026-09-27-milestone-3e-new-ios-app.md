@@ -318,15 +318,19 @@ gained exactly the one new fixture's entry, byte-identical elsewhere. Scoped gat
 `willikins-types` (408 tests, including the 11 new ones), `willikins-providers-appstore` (4 tests),
 `willikins-dsl`'s acceptance suite (5 tests, snapshot re-verified green after accepting the one
 additive hunk), clippy `-D warnings` on both touched crates, `cargo check -p willikins-types`, `cargo
-fmt --all --check`. **What T3 (the Sample document) can now do that it could not before:** both new
-edges are public-to-public, so a document may bind an `AppleBundleIdentifier` output straight to a
-bundle id's `name` port or to `template.render`'s `Text` sink — the manual-step texts can name the
-supplied app identifier with no parse node in between, closing the gap decision (a)'s "manual steps"
-design implicitly assumed a second `name`-shaped input for every identifier-shaped one. Test-first
-process note: the impl and its proptests were written in the same edit pass rather than red-then-green
-in separate steps, since the `From` impl is what the proptest module needs to compile at all (the
-missing impl is a compile error, not a runtime red); the tests were run once, immediately after,
-never against a stub.
+fmt --all --check`. **These are exactly the two rows decisions (a) and (h) already named as needed,
+not new design.** Decision (a) (superseded by (j), kept for history) names
+`AppleBundleIdentifier => Text` by name for a manual step's `value`, bound straight from
+`inputs.app_identifier` so the dry run's text names its own throwaway identifier rather than a
+literal; `template.render`'s `value` port is `exact("Text", true)`
+(`crates/willikins-tools/src/template_render.rs`), so this is a real `Exact` edge, not a polymorphic
+sink incidentally accepting it. Decision (h) names `AppleBundleIdentifier => AppleBundleIdName` for
+every bundle-identifier `name` port, "the operator's 'bundle id everywhere' habit ... exactly as 3d
+did for profile names." T3b supplies both rows T3 will bind through; no further conversion work is
+owed to T3. Test-first process note: the impl and its proptests were written in the same edit pass
+rather than red-then-green in separate steps, since the `From` impl is what the proptest module needs
+to compile at all (the missing impl is a compile error, not a runtime red); the tests were run once,
+immediately after, never against a stub.
 
 ## Goal
 
