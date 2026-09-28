@@ -251,8 +251,10 @@ G3/T3's job, once Sample's own gates (or a fake gate tool) exist. Plan not marke
 (`crate::value::is_operator_acknowledgement`, via `TypeRegistry::type_matches`), never by comparing
 `DomainType::TYPE_NAME` strings (the milestone 3d rule) — `check` refuses a default on a workflow
 input of this type (`CheckError::AcknowledgementDefault`) and a literal bound to a port of it
-(`CheckError::AcknowledgementLiteral`), each with its own test plus a DSL-level negative fixture
-(`workflows/fixtures/acknowledgement-default.yaml`, acceptance 16); `describe` lists an unsupplied
+(`CheckError::AcknowledgementLiteral`), each with its own unit test plus a DSL-level negative
+fixture (`workflows/fixtures/acknowledgement-default.yaml`; `acknowledgement-literal.yaml` followed
+in a third, small commit once `operator.acknowledge` existed for it to name; acceptance 16);
+`describe` lists an unsupplied
 input of this type under a new `awaiting` field (skip-if-empty, same convention as `Plan.blocked`)
 instead of `missing`, so it never blocks `plan` the way a genuinely missing input does; `plan`'s
 `Binding::Input` arm resolves such an unsupplied input to `Value::unknown` instead of

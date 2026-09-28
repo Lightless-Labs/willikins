@@ -1,0 +1,14 @@
+# G3 (willikins-tools), decision (j) point 6
+# (docs/plans/2026-09-27-milestone-3e-new-ios-app.md): a literal cannot
+# supply an operator's acknowledgement -- it must come from a workflow
+# input the operator fills in themselves. `check` must return exactly one
+# error:
+#   AcknowledgementLiteral { node: m7_bootstrap, port: acknowledged }
+name: acknowledgement-literal
+description: A literal bound to an operator-acknowledgement port.
+steps:
+  m7_bootstrap:
+    tool: operator.acknowledge
+    with:
+      step: Replace the sample pipeline's stored bootstrap
+      acknowledged: done
