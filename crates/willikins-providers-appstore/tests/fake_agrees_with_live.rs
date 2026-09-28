@@ -281,6 +281,7 @@ fn capability_absent_and_present_agree() {
             .create();
         provider
             .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+            .match_query(mockito::Matcher::Any)
             .with_status(200)
             .with_body(capabilities_body.to_string())
             .create();
@@ -400,6 +401,7 @@ fn capability_setting_present_and_mismatch_agree() {
             .create();
         provider
             .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+            .match_query(mockito::Matcher::Any)
             .with_status(200)
             .with_body(capabilities_body.to_string())
             .create();

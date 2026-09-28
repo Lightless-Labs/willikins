@@ -274,23 +274,65 @@ impl AppstoreClient {
         self.http.delete(&format!("/v1/bundleIds/{id}"))
     }
 
-    /// `GET /v1/bundleIds/{id}/bundleIdCapabilities`.
+    /// `GET /v1/bundleIds/{id}/bundleIdCapabilities`, every page of it.
     ///
     /// The only way to read a bundle id's capabilities at all: the
     /// capability resource has no `GET` of its own (research note,
     /// section 2, "Capabilities live on a separate resource whose
     /// operation list is conspicuously asymmetric").
     ///
+    /// **Must paginate.** Apple's row order for this endpoint was observed
+    /// live to change between reads (the milestone 3e capability read
+    /// fixes' independent review, 2026-09-28,
+    /// `docs/research/2026-09-28-m3e-adversarial-pass.md`, "The capability
+    /// list is read as one page with no `limit`"). A single unpaginated
+    /// page could put a capability that is already enabled past the page
+    /// boundary, and the caller (`AppstoreBundleIdCapabilityEnsure::observe`)
+    /// would read `Absent` for something that exists -- then `ensure`
+    /// would `POST` a duplicate whose result is undocumented. So this asks
+    /// for [`PAGE_LIMIT`] rows and follows `links.next` until Apple stops
+    /// sending one, exactly like [`Self::list_bundle_ids`].
+    ///
+    /// `links.next` is an absolute URL. Only its query string is used,
+    /// re-attached to this client's own
+    /// `/v1/bundleIds/{id}/bundleIdCapabilities` path -- this call's own
+    /// `id`, never whatever id or host the response names -- so a response
+    /// can never redirect this client at a host or a path of the
+    /// provider's choosing.
+    ///
     /// # Errors
     ///
-    /// See [`Self::list_bundle_ids`].
+    /// Returns [`ProviderError`] for any non-2xx response, a transport
+    /// failure, or more than [`MAX_PAGES`] pages (which would mean a
+    /// paging bug, not a real bundle id).
     pub(crate) fn list_bundle_id_capabilities(
         &self,
         id: &AppleBundleIdId,
     ) -> Result<Vec<CapabilityResource>, ProviderError> {
-        let path = format!("/v1/bundleIds/{id}/bundleIdCapabilities");
-        let response: CapabilityListResponse = self.http.get(&path)?;
-        Ok(response.data)
+        let own_path = format!("/v1/bundleIds/{id}/bundleIdCapabilities");
+        let mut path = format!("{own_path}?limit={PAGE_LIMIT}");
+        let mut rows: Vec<CapabilityResource> = Vec::new();
+        for _ in 0..MAX_PAGES {
+            let response: CapabilityListResponse = self.http.get(&path)?;
+            rows.extend(response.data);
+            let Some(next) = response.links.and_then(|links| links.next) else {
+                return Ok(rows);
+            };
+            let Some((_, query)) = next.split_once('?') else {
+                // A `next` with no query is not a page this client can
+                // follow; treat the listing as finished rather than
+                // re-requesting page one forever.
+                return Ok(rows);
+            };
+            path = format!("{own_path}?{query}");
+        }
+        Err(ProviderError::new(
+            None,
+            format!(
+                "App Store Connect returned more than {MAX_PAGES} pages of capabilities for \
+                 one bundle id; refusing to keep paging"
+            ),
+        ))
     }
 
     /// `POST /v1/bundleIdCapabilities` with `capabilityType`, the
@@ -671,6 +713,10 @@ pub(crate) struct CapabilityResource {
 #[derive(Debug, Deserialize)]
 struct CapabilityListResponse {
     data: Vec<CapabilityResource>,
+    /// See [`BundleIdListResponse::links`] -- same reasoning, same
+    /// `Option` (absent on a response with no further pages, and absent
+    /// from every fixture that predates this client's pagination).
+    links: Option<Links>,
 }
 
 #[derive(Debug, Deserialize)]
