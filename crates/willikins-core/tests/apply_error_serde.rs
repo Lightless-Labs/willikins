@@ -19,6 +19,7 @@ fn empty_applied() -> Applied {
     Applied {
         nodes: Vec::new(),
         outputs: indexmap::IndexMap::new(),
+        blocked: Vec::new(),
     }
 }
 

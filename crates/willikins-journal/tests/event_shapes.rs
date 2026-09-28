@@ -165,6 +165,35 @@ fn every_event_variant_serializes_with_its_kind() {
     assert_eq!(seen.len(), EVENT_VARIANT_COUNT);
 }
 
+/// `Outcome::Blocked` (task G2, decision (j)) is additive: a new variant
+/// alongside `Succeeded`/`Failed`, not exercised by [`event_samples`]'s own
+/// one-per-`Event`-variant list (which only needs one `RunFinished`
+/// sample), but its own wire shape and round trip still need pinning.
+#[test]
+fn a_run_finished_event_with_a_blocked_outcome_serializes_with_its_kind_and_round_trips() {
+    let event = Event::RunFinished {
+        run_id: RunId::new(),
+        outcome: Outcome::Blocked {
+            outputs: Redacted::from(&indexmap::IndexMap::new()),
+            blocked: vec![willikins_core::BlockedGate {
+                node: node("app_group"),
+                instance: None,
+                tool: tool_name("test.gate"),
+                need: "APP_GROUPS enabled on this bundle identifier".to_string(),
+                how: "register the group in the portal".to_string(),
+                subject: vec![(port("identifier"), "com.example.app".to_string())],
+                holds_back: vec![node("profile")],
+            }],
+        },
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["outcome"]["kind"], "blocked");
+    let round_tripped: Event = serde_json::from_str(&serde_json::to_string(&event).unwrap())
+        .expect("Outcome::Blocked must round-trip");
+    let back_json = serde_json::to_value(&round_tripped).unwrap();
+    assert_eq!(json, back_json, "round trip changed the wire shape");
+}
+
 #[test]
 fn every_event_variant_round_trips_through_json() {
     for sample in event_samples() {

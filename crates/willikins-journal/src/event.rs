@@ -21,8 +21,8 @@ use std::collections::BTreeMap;
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Class, InputName, Inputs, InstanceFingerprint, NodeName, NodeStatus, OutputName, PortName,
-    ToolError, ToolName, Value,
+    BlockedGate, Class, InputName, Inputs, InstanceFingerprint, NodeName, NodeStatus, OutputName,
+    PortName, ToolError, ToolName, Value,
 };
 use willikins_types::WorkflowName;
 
@@ -183,15 +183,35 @@ pub enum DriftReasonKind {
 /// `Applied`, whose own `outputs` field this mirrors. Recorded as a
 /// deliberate, reasoned deviation rather than a silent addition; see the
 /// crate's top-level docs.
+///
+/// `Blocked` (task G2, decision (j)) is a **third**, additive outcome, not a
+/// kind of `Failed`: `apply` returned `Ok(Applied)` with a non-empty
+/// `blocked`, so every independent node ran and only what a gate holds back
+/// was skipped. Old journals hold only `Succeeded`/`Failed` and replay byte
+/// for byte; an older binary cannot read a newer `Blocked` line, the usual
+/// forward-compatibility cost of a new variant.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Outcome {
-    /// The run finished; every attempted instance succeeded.
+    /// The run finished; every attempted instance succeeded, and no gate
+    /// was blocked.
     Succeeded {
         /// Every workflow output's resolved value.
         outputs: Redacted<IndexMap<OutputName, Value>>,
     },
-    /// The run stopped on a failure or a blocked instance.
+    /// The run finished with no tool failure, but at least one gate read
+    /// [`willikins_core::Observation::Absent`]: every node not downstream
+    /// of a blocked gate ran, and the operator must act before a re-run
+    /// converges the rest.
+    Blocked {
+        /// Every workflow output's resolved value (a skipped node's own
+        /// output ports resolve `Unknown`, same as `Succeeded`'s).
+        outputs: Redacted<IndexMap<OutputName, Value>>,
+        /// Every gate this run found `Action::Blocked`, taken from
+        /// `willikins_core::Applied::blocked`.
+        blocked: Vec<BlockedGate>,
+    },
+    /// The run stopped on a failure.
     Failed {
         /// The failure `apply` returned, partial result included.
         error: Redacted<willikins_core::ApplyError>,

@@ -151,7 +151,13 @@ pub struct Plan {
 /// `need` and `how` come straight from the gate's own `&'static str`s, and
 /// `subject` is rendered text, never a live value. See
 /// [`crate::tool::Gate`]'s own doc.
-#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+///
+/// Derives [`serde::Deserialize`] as well as `Serialize` (added by task G2):
+/// `willikins-journal`'s `Event::RunFinished` stores a run's own
+/// `Vec<BlockedGate>` directly rather than through `Redacted`, since none
+/// of its fields is ever a [`Value`] — the same reasoning that lets
+/// [`crate::apply::NodeStatus`] round-trip untouched.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct BlockedGate {
     /// The blocked node.
     pub node: NodeName,

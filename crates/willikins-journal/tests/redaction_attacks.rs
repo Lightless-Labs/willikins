@@ -280,6 +280,7 @@ fn a_failed_run_journals_its_error_redacted() {
                         outputs: outputs.clone(),
                     }],
                     outputs: resolved.clone(),
+                    blocked: Vec::new(),
                 }),
             })
         },

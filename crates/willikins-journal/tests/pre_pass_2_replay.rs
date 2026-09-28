@@ -269,6 +269,9 @@ fn the_frozen_fixture_still_carries_both_run_outcomes() {
             match outcome {
                 Outcome::Succeeded { .. } => succeeded += 1,
                 Outcome::Failed { .. } => failed += 1,
+                Outcome::Blocked { .. } => {
+                    panic!("the frozen pre-G2 fixture cannot carry an Outcome::Blocked line")
+                }
             }
         }
     }
@@ -488,6 +491,7 @@ fn regenerate_the_frozen_fixture() {
                     applied: Box::new(willikins_core::Applied {
                         nodes: Vec::new(),
                         outputs: IndexMap::new(),
+                        blocked: Vec::new(),
                     }),
                 }),
             },
