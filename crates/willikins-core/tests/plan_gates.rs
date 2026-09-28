@@ -285,6 +285,25 @@ fn workflow() -> Workflow {
             Node::new(tool_name("test.passthrough_independent"))
                 .port(port("value"), Binding::Literal("prd".to_string())),
         )
+        // Proves the skip rule holds transitively: `downstream` never binds
+        // `gate` at all, only `consumer` (itself skipped only because of
+        // `gate`) -- `Keyed` rather than `Step`, so its own `value` port
+        // stays a scalar `EnvironmentSlug` in both scenarios (the key
+        // "dev" is one of `consumer`'s own instance keys once expanded,
+        // since a `for_each` node's instances key by the *source* item it
+        // aggregated -- here, `gate`'s own `dev`/`stg` values passed
+        // straight through).
+        .node(
+            node("downstream"),
+            Node::new(tool_name("test.counted")).port(
+                port("value"),
+                Binding::Keyed {
+                    node: node("consumer"),
+                    key: "dev".to_string(),
+                    port: port("value"),
+                },
+            ),
+        )
         .output(
             output("gate_keys"),
             Binding::Step {
@@ -393,9 +412,17 @@ fn a_blocked_gate_skips_its_dependents_and_leaves_every_other_branch_alone() {
     assert_eq!(consumer_instances[0].action, Action::Skip);
     assert_eq!(consumer_instances[0].instance, None);
 
-    // `solo` and `consumer` are the only nodes bound to `test.counted`, so
-    // a zero count here is a hard proof neither was ever read, not merely
-    // an inference from their `Action`.
+    // `downstream` binds nothing of `gate`'s directly -- only `consumer`,
+    // itself skipped only because of `gate` -- proving the skip rule holds
+    // transitively, one hop beyond a direct reference.
+    assert_eq!(
+        by_name(&result.nodes, "downstream", None).action,
+        Action::Skip
+    );
+
+    // `solo`, `consumer`, and `downstream` are the only nodes bound to
+    // `test.counted`, so a zero count here is a hard proof none of them was
+    // ever read, not merely an inference from their `Action`.
     assert_eq!(
         *reads.lock().unwrap(),
         0,
@@ -437,7 +464,10 @@ fn a_blocked_gate_skips_its_dependents_and_leaves_every_other_branch_alone() {
         .iter()
         .map(willikins_core::NodeName::as_str)
         .collect();
-    assert_eq!(holds_back, HashSet::from(["solo", "consumer"]));
+    assert_eq!(
+        holds_back,
+        HashSet::from(["solo", "consumer", "downstream"])
+    );
 
     // No secret can appear here (the catalog would have refused the gate
     // otherwise), and the rendered subject is plain text, not a marker.
@@ -482,6 +512,11 @@ fn a_satisfied_gate_blocks_nothing_and_the_plan_json_has_no_blocked_key() {
     assert_eq!(
         by_name(&result.nodes, "independent", None).action,
         Action::Create
+    );
+    assert_eq!(
+        by_name(&result.nodes, "downstream", None).action,
+        Action::Create,
+        "a Keyed reference to a satisfied for_each node's own instance resolves normally"
     );
     assert!(result.blocked.is_empty());
 

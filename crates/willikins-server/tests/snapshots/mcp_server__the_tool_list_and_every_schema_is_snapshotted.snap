@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-server/tests/mcp_server.rs
+assertion_line: 241
 expression: snapshot
 ---
 [
@@ -535,6 +536,16 @@ expression: snapshot
               "const": "noop",
               "description": "The resource already exists and is ours: `ensure` would be a no-op.",
               "type": "string"
+            },
+            {
+              "const": "blocked",
+              "description": "A [`crate::tool::Gate`]'s `read` reported [`Observation::Absent`]:\nthe thing the operator must make does not exist yet. See\n[`Plan::blocked`].",
+              "type": "string"
+            },
+            {
+              "const": "skip",
+              "description": "This node instance binds a node or `for_each` source that is\n[`Action::Blocked`] or itself `Skip`, directly or transitively: it is\nnever read, and every one of its output ports is\n[`crate::value::ValueState::Unknown`]. See [`Plan::blocked`].",
+              "type": "string"
             }
           ]
         },
@@ -552,6 +563,67 @@ expression: snapshot
               "type": "string"
             }
           ]
+        },
+        "BlockedGate": {
+          "description": "One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it\ntrue, what it was checking, and every node it holds back.\n\nPlain data — never a [`Value`] — so it holds no secret by construction:\n`need` and `how` come straight from the gate's own `&'static str`s, and\n`subject` is rendered text, never a live value. See\n[`crate::tool::Gate`]'s own doc.",
+          "properties": {
+            "holds_back": {
+              "description": "Every node this gate holds back — [`Action::Skip`] because it binds\nthis gate directly or transitively — in plan order, deduplicated by\nname.",
+              "items": {
+                "$ref": "#/$defs/NodeName"
+              },
+              "type": "array"
+            },
+            "how": {
+              "description": "The gate's own [`crate::tool::Gate::how`].",
+              "type": "string"
+            },
+            "instance": {
+              "description": "The `for_each` instance key, if any; `None` for a node with no\n`for_each`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "need": {
+              "description": "The gate's own [`crate::tool::Gate::need`].",
+              "type": "string"
+            },
+            "node": {
+              "$ref": "#/$defs/NodeName",
+              "description": "The blocked node."
+            },
+            "subject": {
+              "description": "Each of the gate's [`crate::tool::Gate::subject`] ports, rendered\nfrom the bound input that reached it, in declared order.",
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/PortName"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "tool": {
+              "$ref": "#/$defs/ToolName",
+              "description": "The gate tool this node calls."
+            }
+          },
+          "required": [
+            "node",
+            "tool",
+            "need",
+            "how",
+            "subject",
+            "holds_back"
+          ],
+          "type": "object"
         },
         "Class": {
           "description": "How much a tool's `ensure` should be trusted to run unattended.\n\nOrdered `Reversible < Irreversible < Destructive`, so\n[`Class::max_of`] over every node in a plan gives the plan's own class.",
@@ -600,6 +672,13 @@ expression: snapshot
         "Plan": {
           "description": "A concrete, approval-classified plan.",
           "properties": {
+            "blocked": {
+              "description": "Every gate this plan found [`Action::Blocked`], each naming what it\nholds back. Empty for a plan with no gate, or whose every gate read\n[`Observation::Present`] — the common case, and the reason this is\n`#[serde(skip_serializing_if = \"Vec::is_empty\")]`: a plan with no\nblocked gate serializes byte-identically to before this field\nexisted. See decision (j),\n`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.",
+              "items": {
+                "$ref": "#/$defs/BlockedGate"
+              },
+              "type": "array"
+            },
             "class": {
               "$ref": "#/$defs/Class",
               "description": "The plan's approval class: [`Checked::class`], a static property of\nthe checked workflow's tools, unaffected by anything `plan`\nobserves at runtime."
@@ -635,7 +714,8 @@ expression: snapshot
             "nodes",
             "outputs",
             "class",
-            "requires_approval"
+            "requires_approval",
+            "blocked"
           ],
           "type": "object"
         },
@@ -682,6 +762,10 @@ expression: snapshot
             "outputs"
           ],
           "type": "object"
+        },
+        "PortName": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
         },
         "Timestamp": {
           "format": "date-time",
