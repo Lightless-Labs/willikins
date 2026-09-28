@@ -39,6 +39,7 @@ fn plan_recorded(plan_id: PlanId, requires_approval: bool, instances: &[&str]) -
             Class::Reversible
         },
         requires_approval,
+        blocked: Vec::new(),
     };
     Event::PlanRecorded {
         plan_id,

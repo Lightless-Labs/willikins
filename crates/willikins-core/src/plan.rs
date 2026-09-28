@@ -82,6 +82,15 @@ pub enum Action {
     Create,
     /// The resource already exists and is ours: `ensure` would be a no-op.
     NoOp,
+    /// A [`crate::tool::Gate`]'s `read` reported [`Observation::Absent`]:
+    /// the thing the operator must make does not exist yet. See
+    /// [`Plan::blocked`].
+    Blocked,
+    /// This node instance binds a node or `for_each` source that is
+    /// [`Action::Blocked`] or itself `Skip`, directly or transitively: it is
+    /// never read, and every one of its output ports is
+    /// [`crate::value::ValueState::Unknown`]. See [`Plan::blocked`].
+    Skip,
 }
 
 /// One planned call to a tool: a whole node with no `for_each`, or one
@@ -124,6 +133,44 @@ pub struct Plan {
     /// Whether this plan should require human approval before running:
     /// `class.requires_approval()`.
     pub requires_approval: bool,
+    /// Every gate this plan found [`Action::Blocked`], each naming what it
+    /// holds back. Empty for a plan with no gate, or whose every gate read
+    /// [`Observation::Present`] — the common case, and the reason this is
+    /// `#[serde(skip_serializing_if = "Vec::is_empty")]`: a plan with no
+    /// blocked gate serializes byte-identically to before this field
+    /// existed. See decision (j),
+    /// `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<BlockedGate>,
+}
+
+/// One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it
+/// true, what it was checking, and every node it holds back.
+///
+/// Plain data — never a [`Value`] — so it holds no secret by construction:
+/// `need` and `how` come straight from the gate's own `&'static str`s, and
+/// `subject` is rendered text, never a live value. See
+/// [`crate::tool::Gate`]'s own doc.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+pub struct BlockedGate {
+    /// The blocked node.
+    pub node: NodeName,
+    /// The `for_each` instance key, if any; `None` for a node with no
+    /// `for_each`.
+    pub instance: Option<String>,
+    /// The gate tool this node calls.
+    pub tool: ToolName,
+    /// The gate's own [`crate::tool::Gate::need`].
+    pub need: String,
+    /// The gate's own [`crate::tool::Gate::how`].
+    pub how: String,
+    /// Each of the gate's [`crate::tool::Gate::subject`] ports, rendered
+    /// from the bound input that reached it, in declared order.
+    pub subject: Vec<(PortName, String)>,
+    /// Every node this gate holds back — [`Action::Skip`] because it binds
+    /// this gate directly or transitively — in plan order, deduplicated by
+    /// name.
+    pub holds_back: Vec<NodeName>,
 }
 
 /// The fixed string every secret output port contributes to
@@ -399,20 +446,38 @@ impl std::fmt::Display for PlanError {
 impl std::error::Error for PlanError {}
 
 /// One instance of a `for_each` node: its item's canonical string (the key
-/// a [`Binding::Keyed`] matches against) and its planned outputs.
+/// a [`Binding::Keyed`] matches against), its planned outputs, and whether
+/// this instance's own [`Action`] was [`Action::Blocked`] — a gate applied
+/// per item, some of whose instances may be satisfied while others are not.
 pub(crate) struct ForEachInstance {
     pub(crate) key: String,
     pub(crate) outputs: Outputs,
+    pub(crate) blocked: bool,
 }
 
 /// What a node resolved to, once planned: a single set of outputs for a
-/// node with no `for_each`, or one set per instance for one that has it.
+/// node with no `for_each`, one set per instance for one that has it, or
+/// nothing at all for a node [`plan`] decided never to read.
 pub(crate) enum NodeResult {
     /// A node with no `for_each`.
     Scalar(Outputs),
     /// A `for_each` node's instances, in source-list order.
     ForEach(Vec<ForEachInstance>),
+    /// This whole node plans [`Action::Skip`]: either it directly binds a
+    /// blocked or skipped node, or (for a `for_each` node) its own source
+    /// does. Never read; every output port resolves
+    /// [`crate::value::ValueState::Unknown`]. Kept distinct from
+    /// `ForEach(vec![])` on purpose: an empty instance list would let
+    /// [`aggregate_for_each_port`] hand back a **known** empty list, which
+    /// is wrong — decision (j), point 3.
+    Skipped,
 }
+
+/// Identifies one [`BlockedGate`] (or, transiently, any blocked/skipped
+/// node instance while [`plan`] is walking the graph): a node name, and,
+/// for a `for_each` node, the specific instance key — `None` for a node
+/// with no `for_each`, or for one skipped as a whole.
+type GateKey = (NodeName, Option<String>);
 
 /// The read-only context every binding resolution needs: the workflow (for
 /// its node and input declarations), the caller's resolved workflow
@@ -488,6 +553,8 @@ impl ResolveCtx<'_> {
 /// produced by [`crate::check::check`] against a catalog compatible with
 /// `catalog`, which is a caller contract violation, not a value `plan`
 /// deals with normally.
+#[allow(clippy::too_many_lines)] // one function, one topological walk; decision (j)'s skip-set
+// check inlines here rather than scattering the walk across more functions.
 pub fn plan(
     checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
@@ -497,6 +564,7 @@ pub fn plan(
     check_input_types(workflow, inputs, catalog.registry())?;
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut planned: Vec<PlannedNode> = Vec::new();
+    let mut gates = GateTracking::default();
 
     for name in &checked.order {
         let node = workflow
@@ -515,10 +583,45 @@ pub fn plan(
             edges: &checked.types,
         };
 
+        // Decision (j), point 3: a skip set is decided from the bindings
+        // *before* `bind_ports`. A node whose `for_each` source, or any
+        // `with` binding besides `Binding::Item`, names a blocked or
+        // skipped node plans `Action::Skip` as a single instance
+        // (`instance: None`) and is never read — regardless of whether it
+        // has a `for_each` of its own, since a `with` binding applies to
+        // every instance alike.
+        let mut causes: HashSet<GateKey> = HashSet::new();
+        if let Some(source) = &node.for_each {
+            gates.collect_causes(source, &mut causes);
+        }
+        for binding in node.with.values() {
+            if matches!(binding, Binding::Item) {
+                continue;
+            }
+            gates.collect_causes(binding, &mut causes);
+        }
+
+        if !causes.is_empty() {
+            planned.push(PlannedNode {
+                name: name.clone(),
+                instance: None,
+                tool: spec.name.clone(),
+                action: Action::Skip,
+                inputs: Inputs::new(),
+                outputs: fill_outputs(spec, &Outputs::new()),
+            });
+            results.insert(name.clone(), NodeResult::Skipped);
+            gates.mark_whole_skipped(name.clone(), causes);
+            continue;
+        }
+
         let result = match &node.for_each {
             None => {
                 let bound = bind_ports(&ctx, name, node, spec, None)?;
                 let node_plan = plan_one(name, None, spec, tool.as_ref(), bound)?;
+                if node_plan.action == Action::Blocked {
+                    gates.mark_blocked(name.clone(), None, spec, tool.as_ref(), &node_plan.inputs);
+                }
                 let outputs = node_plan.outputs.clone();
                 planned.push(node_plan);
                 NodeResult::Scalar(outputs)
@@ -554,9 +657,20 @@ pub fn plan(
                 for (item_value, key) in keyed {
                     let bound = bind_ports(&ctx, name, node, spec, Some(&item_value))?;
                     let node_plan = plan_one(name, Some(key.clone()), spec, tool.as_ref(), bound)?;
+                    let blocked = node_plan.action == Action::Blocked;
+                    if blocked {
+                        gates.mark_blocked(
+                            name.clone(),
+                            Some(key.clone()),
+                            spec,
+                            tool.as_ref(),
+                            &node_plan.inputs,
+                        );
+                    }
                     instances.push(ForEachInstance {
                         key,
                         outputs: node_plan.outputs.clone(),
+                        blocked,
                     });
                     planned.push(node_plan);
                 }
@@ -593,7 +707,166 @@ pub fn plan(
         outputs,
         class: checked.class,
         requires_approval: checked.class.requires_approval(),
+        blocked: gates.into_blocked(),
     })
+}
+
+/// Tracks every blocked or skipped node/instance while [`plan`] walks
+/// `checked.order`, so a later node's bindings can be checked against it
+/// (decision (j), point 3) and so each [`BlockedGate`]'s `holds_back` can be
+/// filled in as its dependents are discovered, in plan order.
+#[derive(Default)]
+struct GateTracking {
+    /// Node names whose entire result must propagate `Skip` to anything
+    /// that binds them by `Step`, `Keyed`, or as a `for_each` source:
+    /// covers a non-`for_each` node that is itself `Blocked`, and any node
+    /// (`for_each` or not) forced to `Skip` as a whole.
+    whole: HashSet<NodeName>,
+    /// For a `for_each` node that is *not* wholly skipped, the instance
+    /// keys whose own `Action` was `Blocked` — a gate applied per item.
+    instances: HashMap<NodeName, HashSet<String>>,
+    /// For every blocked or skipped `GateKey`, the root gate key(s)
+    /// ultimately responsible: itself, for something directly `Blocked`;
+    /// the union of its own causes, for something forced to `Skip`.
+    causes_of: HashMap<GateKey, HashSet<GateKey>>,
+    /// The finished `BlockedGate` entries, in discovery order, plus an
+    /// index into it by `GateKey` so a later node can append itself to an
+    /// earlier gate's `holds_back`.
+    entries: Vec<BlockedGate>,
+    index: HashMap<GateKey, usize>,
+    /// Per gate key, the node *names* already appended to its
+    /// `holds_back` — `holds_back` is deduplicated by name even though a
+    /// `for_each` node with several blocked instances could otherwise
+    /// contribute the same downstream name more than once.
+    holds_back_seen: HashMap<GateKey, HashSet<NodeName>>,
+}
+
+impl GateTracking {
+    /// Whether `binding` names a node (or, for `Keyed`, a specific
+    /// instance) already blocked or skipped, and if so the root gate
+    /// key(s) behind it, unioned into `causes`. `Input`, `Item`, and
+    /// `Literal` never reference another node and never contribute.
+    fn collect_causes(&self, binding: &Binding, causes: &mut HashSet<GateKey>) {
+        let root_of = |key: &GateKey| -> HashSet<GateKey> {
+            self.causes_of.get(key).cloned().unwrap_or_else(|| {
+                let mut singleton = HashSet::with_capacity(1);
+                singleton.insert(key.clone());
+                singleton
+            })
+        };
+        match binding {
+            Binding::Step { node, .. } => {
+                if self.whole.contains(node) {
+                    causes.extend(root_of(&(node.clone(), None)));
+                } else if let Some(blocked) = self.instances.get(node) {
+                    for key in blocked {
+                        causes.extend(root_of(&(node.clone(), Some(key.clone()))));
+                    }
+                }
+            }
+            Binding::Keyed { node, key, .. } => {
+                if self.whole.contains(node) {
+                    causes.extend(root_of(&(node.clone(), None)));
+                } else if self
+                    .instances
+                    .get(node)
+                    .is_some_and(|blocked| blocked.contains(key))
+                {
+                    causes.extend(root_of(&(node.clone(), Some(key.clone()))));
+                }
+            }
+            Binding::Input(_) | Binding::Item | Binding::Literal(_) => {}
+        }
+    }
+
+    /// Record that `node` (as a whole) plans `Action::Skip` because of
+    /// `causes`, and append it to each cause's `holds_back`.
+    fn mark_whole_skipped(&mut self, node: NodeName, causes: HashSet<GateKey>) {
+        self.whole.insert(node.clone());
+        self.append_to_holds_back(&causes, &node);
+        self.causes_of.insert((node, None), causes);
+    }
+
+    /// Record that `node` (or, for a `for_each` node, its `instance`) plans
+    /// `Action::Blocked`, and build its [`BlockedGate`] entry.
+    fn mark_blocked(
+        &mut self,
+        node: NodeName,
+        instance: Option<String>,
+        spec: &ToolSpec,
+        tool: &dyn Tool,
+        bound: &Inputs,
+    ) {
+        let gate = tool.gate().unwrap_or_else(|| {
+            unreachable!("Action::Blocked is only produced for a declared gate")
+        });
+        let key: GateKey = (node.clone(), instance.clone());
+        match &instance {
+            None => {
+                self.whole.insert(node.clone());
+            }
+            Some(item_key) => {
+                self.instances
+                    .entry(node.clone())
+                    .or_default()
+                    .insert(item_key.clone());
+            }
+        }
+        let mut root = HashSet::with_capacity(1);
+        root.insert(key.clone());
+        self.causes_of.insert(key.clone(), root);
+        let subject = gate
+            .subject
+            .iter()
+            .map(|name| {
+                let port = PortName::parse(name).unwrap_or_else(|err| {
+                    unreachable!("Catalog::insert validated this gate's subject ports: {err}")
+                });
+                let rendered = bound.get(&port).cloned().unwrap_or_else(|| {
+                    let PortType::Exact(ty) = &spec
+                        .inputs
+                        .get(&port)
+                        .unwrap_or_else(|| {
+                            unreachable!("Catalog::insert validated this gate's subject ports")
+                        })
+                        .ty
+                    else {
+                        unreachable!("Catalog::insert refuses an AnySecret gate subject")
+                    };
+                    Value::unknown(ty.clone())
+                });
+                (port, rendered.render().to_string())
+            })
+            .collect();
+        self.index.insert(key, self.entries.len());
+        self.entries.push(BlockedGate {
+            node,
+            instance,
+            tool: spec.name.clone(),
+            need: gate.need.to_string(),
+            how: gate.how.to_string(),
+            subject,
+            holds_back: Vec::new(),
+        });
+    }
+
+    /// Append `node` to every gate key in `causes`'s own `holds_back`,
+    /// deduplicated by name.
+    fn append_to_holds_back(&mut self, causes: &HashSet<GateKey>, node: &NodeName) {
+        for cause in causes {
+            let seen = self.holds_back_seen.entry(cause.clone()).or_default();
+            if seen.insert(node.clone())
+                && let Some(&idx) = self.index.get(cause)
+            {
+                self.entries[idx].holds_back.push(node.clone());
+            }
+        }
+    }
+
+    /// The finished [`BlockedGate`] entries, in discovery order.
+    fn into_blocked(self) -> Vec<BlockedGate> {
+        self.entries
+    }
 }
 
 /// Parse every workflow input the caller supplied against the type
@@ -706,8 +979,10 @@ pub(crate) fn resolve_binding(
 }
 
 /// Resolve a `Step` reference to `node`'s `port`: that node's own output
-/// value when it has no `for_each`, or the aggregation across every
-/// instance described in the module docs when it does.
+/// value when it has no `for_each`, the aggregation across every instance
+/// described in the module docs when it does, or
+/// [`crate::value::ValueState::Unknown`] when `node` was never read at all
+/// ([`NodeResult::Skipped`] — decision (j), point 3).
 pub(crate) fn resolve_step(ctx: &ResolveCtx, node: &NodeName, port: &PortName) -> Value {
     match ctx
         .results
@@ -719,12 +994,56 @@ pub(crate) fn resolve_step(ctx: &ResolveCtx, node: &NodeName, port: &PortName) -
             .cloned()
             .unwrap_or_else(|| unreachable!("`check` validated that this output port exists")),
         NodeResult::ForEach(instances) => aggregate_for_each_port(ctx, node, port, instances),
+        NodeResult::Skipped => {
+            let list = ctx
+                .workflow
+                .nodes
+                .get(node)
+                .unwrap_or_else(|| unreachable!("referenced node exists per `check`"))
+                .for_each
+                .is_some();
+            Value::unknown(output_port_type(ctx, node, port, list))
+        }
+    }
+}
+
+/// The [`TypeRef`] `node`'s `port` declares: as a scalar (`as_list: false`
+/// — what a [`Binding::Keyed`] reference always resolves, since it always
+/// selects one `for_each` instance) or as a list (`as_list: true` — what a
+/// [`Binding::Step`] reference resolves when `node` has a `for_each`, the
+/// same rule [`aggregate_for_each_port`] applies when it actually has
+/// instances to aggregate). Used to type an `Unknown` value for a node
+/// [`NodeResult::Skipped`] ever reached, whose instances (if any) were never
+/// computed at all.
+fn output_port_type(ctx: &ResolveCtx, node: &NodeName, port: &PortName, as_list: bool) -> TypeRef {
+    let target = ctx
+        .workflow
+        .nodes
+        .get(node)
+        .unwrap_or_else(|| unreachable!("referenced node exists per `check`"));
+    let declared = ctx
+        .catalog
+        .get(&target.tool)
+        .unwrap_or_else(|| unreachable!("`checked` was checked against a compatible catalog"))
+        .spec()
+        .outputs
+        .get(port)
+        .unwrap_or_else(|| unreachable!("`check` validated that this output port exists"))
+        .clone();
+    if as_list {
+        TypeRef::list_of(declared.name)
+    } else {
+        declared
     }
 }
 
 /// Aggregate every instance of a `for_each` node's `port` into one list
 /// value: known when every instance's value there is known, unknown (at
-/// `list<element>`) the moment one is not.
+/// `list<element>`) the moment one is not — including the moment any
+/// instance's own [`Action`] was [`Action::Blocked`], regardless of whether
+/// that instance's own value at `port` happens to be known (decision (j),
+/// point 3: "a `Step` binding aggregating a `for_each` gate is skipped if
+/// any instance is").
 pub(crate) fn aggregate_for_each_port(
     ctx: &ResolveCtx,
     node: &NodeName,
@@ -748,6 +1067,10 @@ pub(crate) fn aggregate_for_each_port(
         .name
         .clone();
 
+    if instances.iter().any(|instance| instance.blocked) {
+        return Value::unknown(TypeRef::list_of(element));
+    }
+
     let mut items = Vec::with_capacity(instances.len());
     for instance in instances {
         let value = instance
@@ -763,8 +1086,10 @@ pub(crate) fn aggregate_for_each_port(
 }
 
 /// Resolve a `Keyed` reference: the instance of `target`'s `for_each` node
-/// whose item renders to `key`, or [`PlanError::KeyNotInForEach`] attributed
-/// to `site` when none matches.
+/// whose item renders to `key`, [`PlanError::KeyNotInForEach`] attributed to
+/// `site` when none matches, or [`crate::value::ValueState::Unknown`] when
+/// `target` was never read at all ([`NodeResult::Skipped`] — decision (j),
+/// point 3).
 pub(crate) fn resolve_keyed(
     ctx: &ResolveCtx,
     site: &Site,
@@ -772,13 +1097,18 @@ pub(crate) fn resolve_keyed(
     key: &str,
     port: &PortName,
 ) -> Result<Value, PlanError> {
-    let NodeResult::ForEach(instances) = ctx
-        .results
-        .get(target)
-        .unwrap_or_else(|| unreachable!("`checked.order` plans every node before its dependents"))
-    else {
-        unreachable!("`check` rejects a Keyed reference to a node with no for_each");
-    };
+    let instances =
+        match ctx.results.get(target).unwrap_or_else(|| {
+            unreachable!("`checked.order` plans every node before its dependents")
+        }) {
+            NodeResult::ForEach(instances) => instances,
+            NodeResult::Skipped => {
+                return Ok(Value::unknown(output_port_type(ctx, target, port, false)));
+            }
+            NodeResult::Scalar(_) => {
+                unreachable!("`check` rejects a Keyed reference to a node with no for_each")
+            }
+        };
     instances
         .iter()
         .find(|instance| instance.key == key)
@@ -835,7 +1165,18 @@ fn plan_one(
         });
     }
 
-    let action = if spec.pure {
+    let action = if tool.gate().is_some() {
+        // Decision (j), point 1: a gate's `Absent` means the operator has
+        // not made the condition true yet, not that `ensure` would create
+        // anything — `Catalog::insert` guarantees a gate is pure, so
+        // `Present` is always `Compute` here, exactly like any other pure
+        // tool.
+        if matches!(observation, Observation::Absent { .. }) {
+            Action::Blocked
+        } else {
+            Action::Compute
+        }
+    } else if spec.pure {
         Action::Compute
     } else if matches!(observation, Observation::Absent { .. }) {
         Action::Create
@@ -932,6 +1273,7 @@ mod tests {
             outputs: IndexMap::new(),
             class: Class::Reversible,
             requires_approval: false,
+            blocked: Vec::new(),
         }
     }
 
@@ -956,6 +1298,7 @@ mod tests {
             outputs: IndexMap::new(),
             class: Class::Reversible,
             requires_approval: false,
+            blocked: Vec::new(),
         }
     }
 

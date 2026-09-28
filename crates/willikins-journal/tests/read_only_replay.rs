@@ -202,6 +202,7 @@ fn replay_exposes_the_same_read_views_as_a_file_journal() {
         outputs: IndexMap::new(),
         class: Class::Reversible,
         requires_approval: true,
+        blocked: Vec::new(),
     };
     let fingerprint = vec![InstanceFingerprint {
         name: common::node("n"),

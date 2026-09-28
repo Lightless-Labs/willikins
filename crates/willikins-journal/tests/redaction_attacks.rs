@@ -80,6 +80,7 @@ fn a_plan_fingerprint_of_secret_outputs_never_carries_the_bytes() {
         outputs: IndexMap::new(),
         class: Class::Irreversible,
         requires_approval: true,
+        blocked: Vec::new(),
     };
 
     let fingerprint = plan.fingerprint();

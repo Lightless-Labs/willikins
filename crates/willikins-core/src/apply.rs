@@ -723,6 +723,11 @@ pub fn apply(
                             unreachable!("every for_each instance carries its own key")
                         }),
                         outputs,
+                        // `apply` does not yet classify `Action::Blocked`
+                        // specially (task G2); every instance it resolves
+                        // here already ran, or the run would have stopped,
+                        // so `false` is correct for every document today.
+                        blocked: false,
                     })
                     .collect(),
             )

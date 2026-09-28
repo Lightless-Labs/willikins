@@ -173,6 +173,66 @@ pub struct ToolSpec {
     pub pure: bool,
 }
 
+/// Declares that a tool is a **gate**: a pure, read-only tool whose
+/// [`Observation::Absent`] means something an operator, not a provider API,
+/// must make true, rather than something `ensure` could create.
+///
+/// A gate is an ordinary tool otherwise — [`Tool::gate`] is a default
+/// method returning `None`, so no existing tool, catalog entry, or
+/// document changes. Decision (j),
+/// `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.
+///
+/// `need`, `how` and `subject` are `&'static`: a gate never authors a
+/// string from its inputs, so [`crate::plan::BlockedGate`] can render a
+/// report from them with no risk of a tool smuggling a secret or
+/// document-controlled text through a field meant to be a fixed label.
+/// Only `subject`'s *named ports* are rendered from live input, and
+/// [`crate::catalog::Catalog::insert`] guarantees every one of them is a
+/// non-secret, [`PortType::Exact`] input port of the same tool.
+#[derive(Debug, Clone, Copy)]
+pub struct Gate {
+    /// What must be true before this gate is satisfied, e.g. "`APP_GROUPS`
+    /// enabled on this bundle identifier". Shown verbatim in a blocked
+    /// report.
+    pub need: &'static str,
+    /// How the operator makes `need` true, e.g. "register the group in the
+    /// portal, or from Xcode".
+    pub how: &'static str,
+    /// The names of this tool's own input ports whose bound value the
+    /// engine renders alongside the report, in this order — what the gate
+    /// is checking, not how. Every entry must name one of this tool's own
+    /// input ports, of a non-secret [`PortType::Exact`] type;
+    /// [`crate::catalog::Catalog::insert`] refuses the tool otherwise.
+    pub subject: &'static [&'static str],
+}
+
+/// Why [`crate::catalog::Catalog::insert`] refused a [`Gate`] declaration.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum GateError {
+    /// A gate's tool is not [`ToolSpec::pure`].
+    #[error("a gate must be a pure tool")]
+    NotPure,
+    /// A `subject` entry does not name one of the tool's own input ports.
+    #[error("gate subject `{port}` is not one of this tool's own input ports")]
+    SubjectNotAnInput {
+        /// The offending subject entry.
+        port: String,
+    },
+    /// A `subject` entry names a port whose type is [`PortType::AnySecret`]
+    /// rather than [`PortType::Exact`].
+    #[error("gate subject `{port}` must be an Exact port, not AnySecret")]
+    SubjectNotExact {
+        /// The offending subject entry.
+        port: String,
+    },
+    /// A `subject` entry names a port of a secret type.
+    #[error("gate subject `{port}` must not be a secret type")]
+    SubjectSecret {
+        /// The offending subject entry.
+        port: String,
+    },
+}
+
 /// Why a [`ToolSpec`] failed [`ToolSpec::validate`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SpecError {
@@ -444,6 +504,12 @@ pub trait Tool: Send + Sync {
     /// Returns [`ToolError`] when the underlying provider cannot satisfy
     /// the request.
     fn ensure(&self, inputs: &Inputs, token: &SinkToken) -> Result<Ensured, ToolError>;
+
+    /// This tool's [`Gate`] declaration, if it is a gate. `None` for every
+    /// ordinary tool — the default, so no existing implementation changes.
+    fn gate(&self) -> Option<&Gate> {
+        None
+    }
 }
 
 #[cfg(test)]
