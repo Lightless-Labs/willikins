@@ -86,6 +86,75 @@ now that every request carries `?limit=200`. The default page size of the endpoi
 open verify item (unaffected by this fix, since the client no longer depends on it), but the
 duplicate-`POST` risk the review named is closed either way.
 
+**Addendum:** 2026-09-28 (operator decision 1, task T3a) — **`appstore.profile.ensure` gains
+replace-when-INVALID; the tool is now `Class::Destructive`.** The operator asked "Can't willikins
+create a new profile?" and the answer is yes, scoped exactly: a profile row found at this tool's own
+key (`identifier`, `name`) whose `profileState` is `INVALID` is no longer a terminal
+`ToolErrorKind::Conflict`. `read` reports it `Observation::Absent` (checked before `profile_type` or
+`certificate`, so a stale profile of any shape at this key replans as a create); `ensure` deletes it by
+the id `read`'s own resolution carried, then creates fresh. It never touches a profile that is `ACTIVE`,
+or `INVALID` under a different identifier or a different name -- both are excluded structurally by the
+existing exact-key lookups (`find_bundle_id`, `find_profile_row`), never by an extra check. Expiry is
+untouched: still an independent, terminal `Conflict`, per the tool's own module doc. Per the design
+doc's class rules, a tool whose `ensure` can now delete a resource it did not itself just create in the
+same call is `Class::Destructive`, not `Class::Reversible` -- the same reasoning that makes
+`doppler.service_token.rotate` destructive -- so a plan reaching this tool now requires approval. This
+does **not** change any existing document's characterization: `workflows/appstore-signing-profile-from-doppler.yaml`'s
+`plan` already fails earlier, at `issuer_id_text`'s `NotFound` (a missing sandbox secret), before the
+`profile` node is ever reached, confirmed unchanged by `characterization_of_every_document` (still green,
+byte-identical for every existing entry).
+
+Landed (`crates/willikins-providers-appstore`, `crates/willikins-providers-fake`): the live tool's
+`observe_instance`/`observe` replaced by `resolve_instance`/`resolve`, returning a private
+`ProfileResolution` (`NotFound` / `Invalid { id }` / `Decided(Observation)`) instead of `Observation`
+directly, so `ensure` can see the doomed row's id without a second read; a `create_new` helper factors
+the create-or-ambiguous-reread logic shared by the `NotFound` and `Invalid` arms. The fake tool mirrors
+the same shape in memory (drops the `INVALID` record from its `Vec` before appending a fresh one).
+Mock tests (`profile_ensure_mock.rs`) cover every arm the task asked for: `INVALID` replaced
+(delete-then-create, a genuinely fresh id); `ACTIVE` left untouched (no `DELETE` mock registered at
+all, so an unexpected call would fail the test); `INVALID` of a different name never deleted (a
+substring-neighbor row, excluded before `profileState` is ever inspected -- new fixtures
+`profile_list_substring_neighbor_invalid.json`, `profile_post_created_after_replace.json`); a delete
+failure (mocked `500`) stops before any create (`.expect(0)` on the `POST` mock, asserted). The fake
+twin gained the same `Invalid` arm and `fake_agrees_with_live.rs`'s `profile_invalid_state_agrees` now
+asserts agreement on `Observation::Absent` (previously on matching error kinds, since the old behaviour
+was a shared terminal `Conflict`). Both catalog snapshots (`catalog_parity__appstore_profile_ensure_spec.snap`,
+`willikins-providers-fake`'s own catalog snapshot) updated for `"class": "destructive"`.
+
+**The gated live write cycle, extended, written but not run** (per the task: opus runs it):
+`crates/willikins-providers-appstore/tests/live_write_cycle.rs` gains a second `#[ignore]`d test,
+`appstore_live_profile_replace_cycle`, reusing that file's own credential, counting, and cleanup-guard
+helpers. Apple offers no API to set `profileState` directly, and the account already carries two
+unexplained `INVALID` profiles from an unknown cause (2026-09-23 handoff) -- so this harness does not
+guess at another one. It uses the one *documented* way to produce a real `INVALID` profile: Apple's own
+words, quoted in this plan's pre-flight, "Provisioning profiles that contain a modified App ID become
+invalid." The cycle creates one throwaway identifier and one profile on it (as the existing cycle does),
+enables `HEALTHKIT` (no setting, already live-proven able to enable by task 1's own cycle) on that same
+throwaway identifier only, asserts the profile now reads `Absent`, calls `ensure` again and asserts a
+genuinely different profile id with `changed: true`, converges on a third call, then deletes the live
+profile and the identifier and confirms counts and independent `404`s exactly as the existing cycle
+does. This is the one narrow, explicitly documented exception to that file's long-standing "no
+capability is ever enabled here" invariant -- recorded in both the file's own module doc and here, never
+silently widened. If a future run finds `HEALTHKIT` cannot be enabled, or Apple does not invalidate the
+profile the way its own documentation says, the instructions are to stop and report rather than invent
+another way to force `INVALID` -- in that case the replace-when-INVALID path stays proven only by the
+mock arms and the fake's own tests above, which is an acceptable, explicitly stated fallback per the
+task, not a gap to paper over.
+
+Gates run (scoped, this task's own crates): `cargo fmt --all --check`; `cargo clippy -p
+willikins-providers-appstore -p willikins-providers-fake --all-targets -j 2 -- -D warnings`;
+`RUST_TEST_THREADS=2 cargo test -p willikins-providers-appstore -p willikins-providers-fake -j 2
+--no-fail-fast` (green throughout: `willikins-providers-appstore`'s suites total 179 passed, 3 ignored
+(the opt-in live probe), `profile_ensure_mock` alone 23 (five new); `willikins-providers-fake` green
+throughout, `fake_agrees_with_live`'s `profile_invalid_state_agrees` now proves agreement on `Absent`
+rather than on matching error kinds); `cargo check -p willikins-types -j 2`; plus, defensively (not this
+task's own crate, but the one other place a class change could plausibly break something), `cargo test
+-p willikins-cli --test appstore_profile_apply_redaction` (green -- that test already passes
+`--approve`, so the class change is invisible to it) and `cargo test -p willikins-dsl --test acceptance`
+(green, `characterization_of_every_document` byte-identical). `cargo clippy -p
+willikins-providers-appstore --features live-tests --tests -j 2 -- -D warnings` and `cargo test
+--features live-tests --test live_write_cycle --no-run` both green (compiles; never executed).
+
 ## Goal
 
 One workflow document, `workflows/walter-ios-app.yaml`, provisions everything a provider API can

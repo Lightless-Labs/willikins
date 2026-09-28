@@ -2,7 +2,10 @@
 //! crate that creates something real and then removes it again. Extended
 //! by milestone 3c (decision (h)) to also select a real distribution
 //! certificate and produce a real `IOS_APP_STORE` profile, on top of the
-//! bundle identifier this file already created and deleted.
+//! bundle identifier this file already created and deleted. Extended
+//! again by milestone 3e's decision 1 ("replace-when-INVALID") with a
+//! second test, [`appstore_live_profile_replace_cycle`], proving `ensure`
+//! really deletes-then-creates on the live account.
 //!
 //! **This is the operator's live developer account. There is no sandbox
 //! team, and Apple offers no sandbox for this API.** Every rule below is
@@ -26,9 +29,18 @@
 //!   leftover from an aborted run is unambiguous, created and deleted
 //!   within this same test, with the account's certificate, profile, and
 //!   bundle id counts read and reported both before and after.
-//! - **No capability is ever enabled here.** See
-//!   `tests/bundle_id_capability_ensure_mock.rs`'s own note (unchanged
-//!   from before this milestone).
+//! - **No capability is ever enabled here, in [`appstore_live_write_cycle`]
+//!   itself.** See `tests/bundle_id_capability_ensure_mock.rs`'s own note
+//!   (unchanged from before this milestone). The *second* test in this
+//!   file, [`appstore_live_profile_replace_cycle`], is the one narrow
+//!   exception this module now carries: it enables exactly one
+//!   capability (`HEALTHKIT`, no setting), and only ever on the one
+//!   throwaway identifier that same test creates for itself -- never an
+//!   existing one -- solely to exercise Apple's own documented behaviour
+//!   ("Provisioning profiles that contain a modified App ID become
+//!   invalid") as the one documented way to produce a real `INVALID`
+//!   profile without guessing at undocumented causes. See that test's
+//!   own doc for the rest of its boundary.
 //! - If anything surprises (a duplicate, an unexpected status, a filter
 //!   that matches more than the one identifier or profile this run
 //!   made): the guard below still deletes what this run created, but the
@@ -89,12 +101,13 @@
 
 use willikins_core::{Observation, PortName, SinkToken, Tool, Value};
 use willikins_providers_appstore::{
-    AppstoreBundleIdEnsure, AppstoreCertificateGet, AppstoreClient, AppstoreProfileEnsure,
+    AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet,
+    AppstoreClient, AppstoreProfileEnsure,
 };
 use willikins_types::{
-    AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCertificateId,
-    AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId, AppleProfileContent,
-    AppleProfileName, AppleProfileType, AppleSigningKey, DomainType,
+    AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCapabilityType,
+    AppleCertificateId, AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId,
+    AppleProfileContent, AppleProfileName, AppleProfileType, AppleSigningKey, DomainType,
 };
 
 fn credential_parts() -> (AppleIssuerId, AppleKeyId, AppleSigningKey) {
@@ -922,4 +935,370 @@ fn appstore_live_write_cycle() {
         "write cycle complete: identifier and {} profile(s) deleted",
         guard.profile_ids.len()
     );
+}
+
+/// Milestone 3e's decision 1 ("replace-when-INVALID"), proven live:
+/// `appstore.profile.ensure`'s `ensure` really deletes an `INVALID`
+/// profile by the id `read` returned, then creates a fresh one, on the
+/// operator's real account -- never touching any resource but the one
+/// throwaway identifier and (at most two) throwaway profiles this test
+/// creates for itself.
+///
+/// **Boundary, additional to this file's own module doc:** the only
+/// capability this whole crate is ever allowed to enable live is the one
+/// this test enables on its own throwaway identifier, `HEALTHKIT` with no
+/// setting -- chosen because it needs no `DATA_PROTECTION_PERMISSION_LEVEL`
+/// pairing and milestone 3e's own live capability cycle already proved
+/// this key can enable it. Its only purpose is to trigger Apple's
+/// documented behaviour ("Provisioning profiles that contain a modified
+/// App ID become invalid") on a profile this test made -- Apple offers no
+/// API to set `profileState` directly, so this is the one *documented*
+/// way to produce a real `INVALID` profile without guessing at an
+/// undocumented cause (the plan's own pre-flight found two unexplained
+/// `INVALID` profiles on the account, and this test must not add a third
+/// kind of confusion by inventing another cause). If a future reader
+/// finds this capability enable itself refused or unavailable, the
+/// replace-when-INVALID path stays proven only by
+/// `tests/profile_ensure_mock.rs`'s mock arms and
+/// `willikins-providers-fake`'s own tests -- record that in the plan
+/// rather than widening this test's scope to find another way to
+/// invalidate a profile.
+#[test]
+#[ignore = "creates and deletes throwaway resources on the operator's LIVE App Store Connect \
+            account, and enables one capability (HEALTHKIT) on the one throwaway identifier it \
+            creates; run with WILLIKINS_LIVE_TESTS=1 and the sandbox credential sourced in the \
+            same command. Never touches a certificate beyond a GET, and never an existing \
+            identifier, app, or profile. Read carefully before running: this is a production \
+            developer account with no sandbox team."]
+#[allow(clippy::disallowed_methods)] // a live-cycle test mints its own token, as every other does
+#[allow(clippy::too_many_lines)] // one linear live cycle, kept in one place like its sibling
+fn appstore_live_profile_replace_cycle() {
+    if std::env::var("WILLIKINS_LIVE_TESTS").as_deref() != Ok("1") {
+        println!("skip: WILLIKINS_LIVE_TESTS is not 1");
+        return;
+    }
+
+    let (issuer_id, key_id, key) = credential_parts();
+
+    // Step 1: read-only counts first.
+    let certificates_before = count_certificates(&issuer_id, &key_id, &key);
+    let profiles_before = count_profiles(&issuer_id, &key_id, &key);
+    let bundle_ids_before = count_bundle_ids(&issuer_id, &key_id, &key);
+    println!(
+        "PROFILE-REPLACE-CYCLE counts BEFORE: certificates={certificates_before} \
+         profiles={profiles_before} bundle_ids={bundle_ids_before}"
+    );
+
+    // Step 2: certificate selection through appstore.certificate.get, as
+    // in appstore_live_write_cycle.
+    let certificate_type = AppleCertificateType::parse("DISTRIBUTION").unwrap();
+    let serial_number = usable_distribution_certificate_serial(&issuer_id, &key_id, &key);
+    let certificate_tool =
+        AppstoreCertificateGet::new(willikins_providers_appstore::APPSTORE_API_BASE_URL);
+    let mut certificate_inputs = willikins_core::Inputs::new();
+    certificate_inputs.insert(
+        PortName::parse("issuer_id").unwrap(),
+        Value::known(issuer_id.clone()),
+    );
+    certificate_inputs.insert(
+        PortName::parse("key_id").unwrap(),
+        Value::known(key_id.clone()),
+    );
+    certificate_inputs.insert(PortName::parse("key").unwrap(), Value::known(key.clone()));
+    certificate_inputs.insert(
+        PortName::parse("certificate_type").unwrap(),
+        Value::known(certificate_type),
+    );
+    certificate_inputs.insert(
+        PortName::parse("serial_number").unwrap(),
+        Value::known(serial_number),
+    );
+    let Observation::Present(certificate_outputs) = tool_ok(
+        certificate_tool.read(&certificate_inputs),
+        "certificate selection",
+    ) else {
+        panic!("STOP: the selected certificate did not read Present -- investigate by hand");
+    };
+    let certificate: AppleCertificateId = certificate_outputs
+        .get(&PortName::parse("certificate").unwrap())
+        .expect("certificate output present")
+        .downcast::<AppleCertificateId>()
+        .expect("certificate output is an AppleCertificateId")
+        .clone();
+
+    // Step 3: one throwaway identifier, UNIVERSAL (this test never
+    // submits the profile to App Review, so the platform choice is
+    // immaterial beyond "not something the operator uses").
+    let unique = run_unique_suffix();
+    let identifier = throwaway_identifier(&unique);
+    let bundle_id_tool =
+        AppstoreBundleIdEnsure::new(willikins_providers_appstore::APPSTORE_API_BASE_URL);
+    let mut bundle_id_inputs = willikins_core::Inputs::new();
+    bundle_id_inputs.insert(
+        PortName::parse("issuer_id").unwrap(),
+        Value::known(issuer_id.clone()),
+    );
+    bundle_id_inputs.insert(
+        PortName::parse("key_id").unwrap(),
+        Value::known(key_id.clone()),
+    );
+    bundle_id_inputs.insert(PortName::parse("key").unwrap(), Value::known(key.clone()));
+    bundle_id_inputs.insert(
+        PortName::parse("identifier").unwrap(),
+        Value::known(identifier.clone()),
+    );
+    bundle_id_inputs.insert(
+        PortName::parse("name").unwrap(),
+        Value::known(probe_bundle_name()),
+    );
+    bundle_id_inputs.insert(
+        PortName::parse("platform").unwrap(),
+        Value::known(probe_platform()),
+    );
+
+    match tool_ok(bundle_id_tool.read(&bundle_id_inputs), "identifier read") {
+        Observation::Absent { .. } => {}
+        other => panic!(
+            "the freshly generated throwaway identifier is not Absent ({other:?}) -- STOP: \
+             this is unexpected and must be investigated by hand, not improvised around"
+        ),
+    }
+
+    let sink = SinkToken::new();
+    let created_bundle_id = tool_ok(
+        bundle_id_tool.ensure(&bundle_id_inputs, &sink),
+        "identifier create",
+    );
+    let bundle_id = created_bundle_id
+        .outputs
+        .get(&PortName::parse("id").unwrap())
+        .expect("the id output is present")
+        .downcast::<willikins_types::AppleBundleIdId>()
+        .expect("the id output is an AppleBundleIdId")
+        .clone();
+
+    // Guard armed immediately after the identifier's create succeeds.
+    let mut guard = Guard {
+        credential: (issuer_id.clone(), key_id.clone(), key.clone()),
+        profile_ids: Vec::new(),
+        bundle_id: Some(bundle_id.clone()),
+        armed: true,
+    };
+    assert!(
+        created_bundle_id.changed,
+        "the first ensure must create the identifier"
+    );
+
+    // Step 4: one profile, ACTIVE, on the throwaway identifier.
+    let profile_name = throwaway_profile_name(&unique);
+    let profile_type = AppleProfileType::parse("IOS_APP_STORE").unwrap();
+    let profile_tool =
+        AppstoreProfileEnsure::new(willikins_providers_appstore::APPSTORE_API_BASE_URL);
+    let mut profile_inputs = willikins_core::Inputs::new();
+    profile_inputs.insert(
+        PortName::parse("issuer_id").unwrap(),
+        Value::known(issuer_id.clone()),
+    );
+    profile_inputs.insert(
+        PortName::parse("key_id").unwrap(),
+        Value::known(key_id.clone()),
+    );
+    profile_inputs.insert(PortName::parse("key").unwrap(), Value::known(key.clone()));
+    profile_inputs.insert(
+        PortName::parse("identifier").unwrap(),
+        Value::known(identifier.clone()),
+    );
+    profile_inputs.insert(
+        PortName::parse("name").unwrap(),
+        Value::known(profile_name.clone()),
+    );
+    profile_inputs.insert(
+        PortName::parse("profile_type").unwrap(),
+        Value::known(profile_type),
+    );
+    profile_inputs.insert(
+        PortName::parse("certificate").unwrap(),
+        Value::known(certificate),
+    );
+
+    let created_profile = tool_ok(
+        profile_tool.ensure(&profile_inputs, &sink),
+        "profile create",
+    );
+    let first_profile_id = created_profile
+        .outputs
+        .get(&PortName::parse("profile").unwrap())
+        .expect("the profile output is present")
+        .downcast::<willikins_types::AppleProfileId>()
+        .expect("the profile output is an AppleProfileId")
+        .clone();
+    guard.profile_ids.push(first_profile_id.clone());
+    assert!(
+        created_profile.changed,
+        "the first ensure must create the profile"
+    );
+
+    // Step 5: enable HEALTHKIT on the throwaway identifier -- this
+    // test's one narrow, documented exception to "no capability enabled
+    // live" (see this test's own doc). Apple's documented consequence:
+    // the profile just created, which names this identifier, becomes
+    // INVALID.
+    let capability_tool =
+        AppstoreBundleIdCapabilityEnsure::new(willikins_providers_appstore::APPSTORE_API_BASE_URL);
+    let mut capability_inputs = willikins_core::Inputs::new();
+    capability_inputs.insert(
+        PortName::parse("issuer_id").unwrap(),
+        Value::known(issuer_id.clone()),
+    );
+    capability_inputs.insert(
+        PortName::parse("key_id").unwrap(),
+        Value::known(key_id.clone()),
+    );
+    capability_inputs.insert(PortName::parse("key").unwrap(), Value::known(key.clone()));
+    capability_inputs.insert(
+        PortName::parse("identifier").unwrap(),
+        Value::known(identifier.clone()),
+    );
+    capability_inputs.insert(
+        PortName::parse("capability").unwrap(),
+        Value::known(AppleCapabilityType::parse("HEALTHKIT").unwrap()),
+    );
+    let enabled_capability = tool_ok(
+        capability_tool.ensure(&capability_inputs, &sink),
+        "capability enable",
+    );
+    assert!(
+        enabled_capability.changed,
+        "enabling HEALTHKIT on a fresh identifier must report changed: true"
+    );
+
+    // Step 6: re-read the profile -- must now be Absent (replaced), per
+    // milestone 3e's decision 1, not the old terminal Conflict.
+    let after_invalidation = tool_ok(profile_tool.read(&profile_inputs), "profile re-read");
+    let was_replaced = matches!(after_invalidation, Observation::Absent { .. });
+    println!(
+        "profile after capability enable: {}",
+        if was_replaced {
+            "Absent (INVALID, as decision 1 predicts)"
+        } else {
+            "NOT Absent -- Apple did not invalidate it the way the plan's sources say; STOP, \
+             this is exactly the surprise trust boundary 6 asks for"
+        }
+    );
+    assert!(
+        was_replaced,
+        "STOP: the profile was not invalidated by the capability enable; investigate by hand \
+         rather than assume the replace path is exercised"
+    );
+
+    // Step 7: `ensure` replaces it -- delete-then-create, a genuinely
+    // fresh id, `changed: true`.
+    let replaced = tool_ok(
+        profile_tool.ensure(&profile_inputs, &sink),
+        "profile replace",
+    );
+    assert!(
+        replaced.changed,
+        "replacing an INVALID profile must report changed: true"
+    );
+    let second_profile_id = replaced
+        .outputs
+        .get(&PortName::parse("profile").unwrap())
+        .expect("the profile output is present")
+        .downcast::<willikins_types::AppleProfileId>()
+        .expect("the profile output is an AppleProfileId")
+        .clone();
+    assert_ne!(
+        first_profile_id.as_str(),
+        second_profile_id.as_str(),
+        "the replacement must be a genuinely fresh profile, not the deleted one's id replayed"
+    );
+    // The old id is already gone (this run's own `ensure` deleted it);
+    // track only the live one so the guard's cleanup, and this test's
+    // own, never re-attempt a delete of an id already gone.
+    guard
+        .profile_ids
+        .retain(|id| id.as_str() != first_profile_id.as_str());
+    guard.profile_ids.push(second_profile_id.clone());
+
+    // Step 8: re-read is Present; re-ensure converges with no change --
+    // exactly appstore_live_write_cycle's own step 5, proving the
+    // replaced profile behaves like any other from here on.
+    match tool_ok(
+        profile_tool.read(&profile_inputs),
+        "profile re-read after replace",
+    ) {
+        Observation::Present(_) => {}
+        other => panic!("expected Present after replace, got {other:?}"),
+    }
+    let reensured = tool_ok(
+        profile_tool.ensure(&profile_inputs, &sink),
+        "profile re-ensure after replace",
+    );
+    assert!(
+        !reensured.changed,
+        "a second ensure against the replaced profile must report changed: false"
+    );
+
+    // Step 9: cleanup -- the one live profile, then the identifier
+    // (which also removes the capability this test enabled; deleting a
+    // bundle id removes its capabilities).
+    let client = fresh_client(&issuer_id, &key_id, &key);
+    for profile_id in guard.profile_ids.clone() {
+        client.delete_profile(&profile_id).unwrap_or_else(|err| {
+            panic!(
+                "STOP: deleting the live throwaway profile failed, status {:?}",
+                err.status
+            )
+        });
+    }
+    client.delete_bundle_id(&bundle_id).unwrap_or_else(|err| {
+        panic!(
+            "STOP: deleting the throwaway identifier failed, status {:?}",
+            err.status
+        )
+    });
+    guard.disarm();
+
+    // Step 10: counts after equal counts before; an independent read
+    // confirms the identifier and the one live profile id answer 404.
+    let certificates_after = count_certificates(&issuer_id, &key_id, &key);
+    let profiles_after = count_profiles(&issuer_id, &key_id, &key);
+    let bundle_ids_after = count_bundle_ids(&issuer_id, &key_id, &key);
+    println!(
+        "PROFILE-REPLACE-CYCLE counts AFTER: certificates={certificates_after} \
+         profiles={profiles_after} bundle_ids={bundle_ids_after}"
+    );
+    assert_eq!(certificates_before, certificates_after);
+    assert_eq!(profiles_before, profiles_after);
+    assert_eq!(bundle_ids_before, bundle_ids_after);
+
+    let independent_http = willikins_providers_http::Http::new(
+        willikins_providers_appstore::APPSTORE_API_BASE_URL,
+        Vec::new(),
+        bearer_for(&issuer_id, &key_id, &key),
+    );
+    let status_of = |path: &str| -> Option<u16> {
+        match independent_http.get::<serde_json::Value>(path) {
+            Ok(_) => Some(200),
+            Err(err) => err.status,
+        }
+    };
+    assert_eq!(
+        status_of(&format!("/v1/bundleIds/{bundle_id}")),
+        Some(404),
+        "the deleted identifier must answer 404"
+    );
+    assert_eq!(
+        status_of(&format!("/v1/profiles/{second_profile_id}")),
+        Some(404),
+        "the deleted replacement profile must answer 404"
+    );
+    assert_eq!(
+        status_of(&format!("/v1/profiles/{first_profile_id}")),
+        Some(404),
+        "the deleted (replaced) original profile must still answer 404"
+    );
+
+    println!("profile replace cycle complete: identifier and 1 live profile deleted");
 }
