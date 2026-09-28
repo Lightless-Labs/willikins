@@ -442,6 +442,31 @@ fn read_reports_mismatch_when_two_options_are_listed_with_no_enabled_field() {
     assert!(matches!(observation, Observation::Mismatch { .. }));
 }
 
+/// The same two-listed row, with the option listed *first* requested: the
+/// test above requests the second one, so a rule that looked only at the
+/// first listed option (`[only, ..]` in place of `[only]`) passed it --
+/// the independent review of 2026-09-28 made exactly that mutation and it
+/// survived. Apple's row order is not stable across reads, so option
+/// order must not decide the answer either way.
+#[test]
+fn read_reports_mismatch_when_two_options_are_listed_and_the_first_is_requested() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_data_protection_two_listed").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool
+        .read(&inputs_with_setting(
+            "DATA_PROTECTION",
+            "DATA_PROTECTION_PERMISSION_LEVEL=COMPLETE_PROTECTION",
+        ))
+        .unwrap();
+    assert!(matches!(observation, Observation::Mismatch { .. }));
+}
+
 /// The one remaining fixture carrying `enabled` fields at all (superseded
 /// by the observed key-only shape above, kept so the enabled-field branch
 /// of the rule stays exercised): decision (d)'s "exactly one" makes a row
