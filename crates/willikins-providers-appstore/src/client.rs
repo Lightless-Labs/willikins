@@ -636,9 +636,9 @@ pub(crate) struct CapabilityOptionAttr {
 /// `key` alone, with no `enabled` field on any option at all. This
 /// client's caller (`AppstoreBundleIdCapabilityEnsure::observe`) reads
 /// both shapes: when no option under a key carries `enabled`, the listed
-/// option is the selection; when at least one does, the older
+/// option is the selection; when every one does, the older
 /// exactly-one-`enabled: true` rule still applies, as a defensive
-/// fallback never observed live.
+/// fallback never observed live; a mix of the two is `Mismatch`.
 /// `key` and `options` default to `None` when missing or `null`, for the
 /// same reason as [`CapabilityOptionAttr`]'s fields.
 #[derive(Debug, Clone, Deserialize)]

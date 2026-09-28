@@ -471,6 +471,60 @@ fn read_reports_mismatch_when_another_option_is_enabled_beside_the_requested_one
     }
 }
 
+/// The `enabled`-field branch's one `Present` case: every option carries
+/// `enabled`, and exactly the requested one is `true`.
+#[test]
+fn read_reports_present_when_every_option_carries_enabled_and_only_the_requested_one_is_true() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_data_protection_one_enabled").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool
+        .read(&inputs_with_setting(
+            "DATA_PROTECTION",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+        ))
+        .unwrap();
+    assert!(matches!(observation, Observation::Present(_)));
+}
+
+/// A row mixing the two read-back shapes: the requested option marked
+/// `enabled: true` beside a second option listed by `key` alone. Under
+/// the `enabled` rule the bare option is unselected (one selection);
+/// under the observed key-only rule a listed option *is* selected (two
+/// selections). The two rules disagree, so the row is ambiguous and must
+/// read `Mismatch { setting }`, never `Present` -- a wrong `Present`
+/// plans `NoOp` silently, a wrong `Mismatch` stops and asks. Mock-only:
+/// the fake stores one option per (identifier, capability) and cannot
+/// express this row (`fake_agrees_with_live.rs` states the same limit).
+#[test]
+fn read_reports_mismatch_when_an_enabled_option_sits_beside_a_bare_listed_one() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_data_protection_mixed_enabled").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool
+        .read(&inputs_with_setting(
+            "DATA_PROTECTION",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+        ))
+        .unwrap();
+    match observation {
+        Observation::Mismatch { port } => {
+            assert_eq!(port, PortName::parse("setting").unwrap());
+        }
+        other => panic!("expected Mismatch, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------
 // `ensure`: creating with a setting, and the terminal `Mismatch`
 // ---------------------------------------------------------------------
