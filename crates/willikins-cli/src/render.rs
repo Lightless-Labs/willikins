@@ -300,8 +300,9 @@ pub fn describe_text(description: &Description) -> String {
 // ---------------------------------------------------------------------
 
 /// Render a [`Plan`] for text output: one line per planned node instance
-/// (its instance key, tool, and action) followed by its outputs, then
-/// workflow outputs, then the plan's class and approval requirement.
+/// (its instance key, tool, and action) followed by its outputs; then, when
+/// [`Plan::blocked`] is non-empty, the `blocked:` section (decision (j));
+/// then workflow outputs, then the plan's class and approval requirement.
 #[must_use]
 pub fn plan_text(plan: &Plan) -> String {
     let mut lines = Vec::new();
@@ -311,6 +312,9 @@ pub fn plan_text(plan: &Plan) -> String {
             lines.push(format!("    {port}: {}", value_text(value)));
         }
     }
+    if !plan.blocked.is_empty() {
+        lines.extend(blocked_lines(&plan.blocked));
+    }
     lines.push("outputs:".to_string());
     for (name, value) in &plan.outputs {
         lines.push(format!("  {name}: {}", value_text(value)));
@@ -318,6 +322,56 @@ pub fn plan_text(plan: &Plan) -> String {
     lines.push(format!("class: {:?}", plan.class));
     lines.push(format!("requires_approval: {}", plan.requires_approval));
     lines.join("\n")
+}
+
+/// The `blocked:` section: a summary line, then one block per
+/// [`willikins_core::BlockedGate`] (its node/instance, tool and `need`;
+/// each `subject` port; `how`; and, when non-empty, the nodes it holds
+/// back), then the closing instruction every surface repeats verbatim
+/// (decision (j), point 7). Every string a gate or a document could have
+/// written — `need`, `how`, a rendered `subject` value, an instance key —
+/// goes through [`single_line`], exactly like [`planned_node_line`].
+fn blocked_lines(blocked: &[willikins_core::BlockedGate]) -> Vec<String> {
+    let mut lines = Vec::with_capacity(blocked.len() * 3 + 2);
+    lines.push(format!(
+        "blocked: {} gate{} need{} the operator; everything that does not depend on them is planned",
+        blocked.len(),
+        if blocked.len() == 1 { "" } else { "s" },
+        if blocked.len() == 1 { "s" } else { "" },
+    ));
+    for gate in blocked {
+        let header = match &gate.instance {
+            Some(instance) => format!(
+                "  {}[{}] ({}): {}",
+                gate.node,
+                single_line(instance),
+                gate.tool,
+                single_line(&gate.need)
+            ),
+            None => format!(
+                "  {} ({}): {}",
+                gate.node,
+                gate.tool,
+                single_line(&gate.need)
+            ),
+        };
+        lines.push(header);
+        for (port, value) in &gate.subject {
+            lines.push(format!("    {port}: {}", single_line(value)));
+        }
+        lines.push(format!("    how: {}", single_line(&gate.how)));
+        if !gate.holds_back.is_empty() {
+            let names = gate
+                .holds_back
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("    holds back: {names}"));
+        }
+    }
+    lines.push("re-run this document once done".to_string());
+    lines
 }
 
 /// Render a [`PlanError`] as one line of text.
@@ -361,6 +415,8 @@ fn action_text(action: Action) -> &'static str {
         Action::Compute => "Compute",
         Action::Create => "Create",
         Action::NoOp => "NoOp",
+        Action::Blocked => "Blocked",
+        Action::Skip => "Skip",
     }
 }
 
@@ -643,6 +699,7 @@ mod tests {
             outputs: IndexMap::new(),
             class: Class::Reversible,
             requires_approval: false,
+            blocked: Vec::new(),
         };
 
         let text = plan_text(&plan);
@@ -651,6 +708,96 @@ mod tests {
             "text: {text}"
         );
         assert!(!text.contains("fake-secret-bytes"), "text leaked: {text}");
+    }
+
+    /// Acceptance test 13 (G1, decision (j)): a blocked gate's node line
+    /// reads `Blocked`, a node it holds back reads `Skip`, and the
+    /// `blocked:` section names the gate's need, its rendered subject, its
+    /// `how`, and what it holds back, ending with the instruction every
+    /// surface repeats verbatim.
+    #[test]
+    fn plan_text_shows_a_blocked_gate_and_the_re_run_instruction() {
+        let gate = PlannedNode {
+            name: NodeName::parse("app_group").unwrap(),
+            instance: None,
+            tool: ToolName::parse("test.gate").unwrap(),
+            action: Action::Blocked,
+            inputs: willikins_core::Inputs::new(),
+            outputs: Outputs::new(),
+        };
+        let profile = PlannedNode {
+            name: NodeName::parse("profile").unwrap(),
+            instance: None,
+            tool: ToolName::parse("appstore.profile.ensure").unwrap(),
+            action: Action::Skip,
+            inputs: willikins_core::Inputs::new(),
+            outputs: Outputs::new(),
+        };
+        let blocked = willikins_core::BlockedGate {
+            node: NodeName::parse("app_group").unwrap(),
+            instance: None,
+            tool: ToolName::parse("test.gate").unwrap(),
+            need: "APP_GROUPS enabled on this bundle identifier".to_string(),
+            how: "register the group and enable App Groups (portal, or Xcode)".to_string(),
+            subject: vec![(
+                PortName::parse("identifier").unwrap(),
+                "com.example.nse".to_string(),
+            )],
+            holds_back: vec![NodeName::parse("profile").unwrap()],
+        };
+        let plan = Plan {
+            workflow: willikins_types::WorkflowName::parse("test").unwrap(),
+            nodes: vec![gate, profile],
+            outputs: IndexMap::new(),
+            class: Class::Reversible,
+            requires_approval: false,
+            blocked: vec![blocked],
+        };
+
+        let text = plan_text(&plan);
+        assert!(
+            text.contains("app_group (test.gate): Blocked"),
+            "text: {text}"
+        );
+        assert!(
+            text.contains("profile (appstore.profile.ensure): Skip"),
+            "text: {text}"
+        );
+        assert!(
+            text.contains("blocked: 1 gate needs the operator"),
+            "text: {text}"
+        );
+        assert!(text.contains("identifier: com.example.nse"), "text: {text}");
+        assert!(
+            text.contains("how: register the group and enable App Groups (portal, or Xcode)"),
+            "text: {text}"
+        );
+        assert!(text.contains("holds back: profile"), "text: {text}");
+        assert!(
+            text.contains("re-run this document once done"),
+            "text: {text}"
+        );
+    }
+
+    /// The mirror case: no blocked gate means no `blocked:` section and no
+    /// closing instruction — a document that never uses a gate sees no
+    /// change in `plan`'s text output at all.
+    #[test]
+    fn plan_text_has_no_blocked_section_when_nothing_is_blocked() {
+        let plan = Plan {
+            workflow: willikins_types::WorkflowName::parse("test").unwrap(),
+            nodes: Vec::new(),
+            outputs: IndexMap::new(),
+            class: Class::Reversible,
+            requires_approval: false,
+            blocked: Vec::new(),
+        };
+        let text = plan_text(&plan);
+        assert!(!text.contains("blocked:"), "text: {text}");
+        assert!(
+            !text.contains("re-run this document once done"),
+            "text: {text}"
+        );
     }
 
     /// Acceptance test 14: a document's description text, however
@@ -762,6 +909,7 @@ mod tests {
             outputs: workflow_outputs,
             class: Class::Destructive,
             requires_approval: true,
+            blocked: Vec::new(),
         };
 
         let text = plan_text(&plan);
@@ -1105,6 +1253,7 @@ mod tests {
                 outputs: IndexMap::new(),
                 class: Class::Reversible,
                 requires_approval: false,
+                blocked: Vec::new(),
             },
             requires_approval: false,
             approval: ApprovalRequirement::Automatic,

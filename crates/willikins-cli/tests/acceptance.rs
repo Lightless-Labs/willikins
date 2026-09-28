@@ -862,6 +862,7 @@ fn acceptance_08a_redaction_by_construction() {
         outputs: IndexMap::new(),
         class: Class::Reversible,
         requires_approval: false,
+        blocked: Vec::new(),
     };
     let tool_error = ToolError {
         kind: ToolErrorKind::Provider,
