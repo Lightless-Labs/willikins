@@ -584,7 +584,10 @@ impl WillikinsHandler {
         trusted directory (never an inline document -- `plan` names \
         workflows, it does not accept document text) against the live \
         catalog's current state. Returns the plan, its id, and whether it \
-        auto-approved or needs a human decision.",
+        auto-approved or needs a human decision. If `plan.blocked` is \
+        non-empty, a manual step is needed: forward each entry's `need`, \
+        `how` and `subject` to the operator, then call `plan` again with \
+        the same inputs (plus any `awaiting_inputs`) once it is done.",
         output_schema = "rmcp::handler::server::tool::schema_for_output::<PlanResponse>()"
     )]
     async fn plan(
@@ -635,8 +638,13 @@ impl WillikinsHandler {
     }
 
     /// Look up a run's current state and per-node outcomes.
-    #[tool(description = "The current state (running, succeeded, or \
-        failed) and per-node outcomes of a run started by `apply`.")]
+    #[tool(description = "The current state (running, succeeded, blocked, \
+        or failed) and per-node outcomes of a run started by `apply`. When \
+        `state` is `blocked`, `blocked` names every gate the operator must \
+        act on (its `need`, `how`, and `subject`) and `next_step` says to \
+        re-run the document once every one is met -- forward both \
+        verbatim to the operator, then call `plan` again with the same \
+        inputs once done.")]
     async fn run_status(
         &self,
         Parameters(params): Parameters<RunStatusParams>,

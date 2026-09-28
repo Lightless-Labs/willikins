@@ -528,10 +528,16 @@ fn print_run_record(run: &RunRecord, json: bool) {
     }
 }
 
+/// Exit codes: 0 succeeded, 1 failed (or still `Running`, which
+/// [`wait_for_run`]'s own doc explains), 2 usage/configuration (elsewhere
+/// in this module), **3 a blocked run** (task G2, decision (j)) -- distinct
+/// from a failure: every independent node ran, and the operator should
+/// re-run the document once the reported gates are met.
 fn exit_for_run_state(run: &RunRecord) -> ExitCode {
     match run.state {
         RunState::Succeeded => ExitCode::from(0),
         RunState::Running | RunState::Failed => ExitCode::from(1),
+        RunState::Blocked => ExitCode::from(3),
     }
 }
 

@@ -954,6 +954,7 @@ impl Butler {
                     applied: Box::new(Applied {
                         nodes: Vec::new(),
                         outputs: IndexMap::new(),
+                        blocked: Vec::new(),
                     }),
                 };
                 let mut journal = journal;
