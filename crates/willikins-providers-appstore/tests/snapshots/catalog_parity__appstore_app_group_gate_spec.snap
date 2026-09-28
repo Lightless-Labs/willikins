@@ -1,0 +1,44 @@
+---
+source: crates/willikins-providers-appstore/tests/catalog_parity.rs
+expression: "spec_json(AppstoreAppGroupGate::new(NOWHERE).spec())"
+---
+{
+  "class": "reversible",
+  "description": "A gate: whether APP_GROUPS is enabled on a bundle identifier.",
+  "inputs": {
+    "identifier": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleBundleIdentifier"
+      }
+    },
+    "issuer_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleIssuerId"
+      }
+    },
+    "key": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleSigningKey"
+      }
+    },
+    "key_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleKeyId"
+      }
+    }
+  },
+  "key": [],
+  "name": "appstore.app_group.gate",
+  "outputs": {
+    "identifier": "AppleBundleIdentifier"
+  },
+  "pure": true
+}

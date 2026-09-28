@@ -1,0 +1,44 @@
+---
+source: crates/willikins-providers-appstore/tests/catalog_parity.rs
+expression: "spec_json(AppstoreAppGet::new(NOWHERE).spec())"
+---
+{
+  "class": "reversible",
+  "description": "A gate: whether an App Store Connect app record exists for a bundle identifier.",
+  "inputs": {
+    "identifier": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleBundleIdentifier"
+      }
+    },
+    "issuer_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleIssuerId"
+      }
+    },
+    "key": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleSigningKey"
+      }
+    },
+    "key_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleKeyId"
+      }
+    }
+  },
+  "key": [],
+  "name": "appstore.app.get",
+  "outputs": {
+    "identifier": "AppleBundleIdentifier"
+  },
+  "pure": true
+}

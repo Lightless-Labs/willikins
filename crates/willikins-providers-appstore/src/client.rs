@@ -203,6 +203,45 @@ impl AppstoreClient {
         ))
     }
 
+    /// `GET /v1/apps?filter[bundleId]={identifier}`, every page of it --
+    /// `appstore.app.get`'s own read (milestone 3e task 3, the app-record
+    /// gate). Whether `filter[bundleId]` is an exact match or a substring
+    /// one, like `filter[identifier]` on bundle ids and
+    /// `filter[serialNumber]` on certificates, is unobserved (research
+    /// note, section 4, "Reading back by key" -- unsettled). This client
+    /// gives it the same defensive treatment either way: paginate, and
+    /// let the caller compare every row's `bundleId` attribute exactly,
+    /// never trust the filter alone.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::list_bundle_ids`].
+    pub(crate) fn list_apps(
+        &self,
+        identifier: &AppleBundleIdentifier,
+    ) -> Result<Vec<AppResource>, ProviderError> {
+        let mut path = format!("/v1/apps?filter[bundleId]={identifier}&limit={PAGE_LIMIT}");
+        let mut rows: Vec<AppResource> = Vec::new();
+        for _ in 0..MAX_PAGES {
+            let response: AppListResponse = self.http.get(&path)?;
+            rows.extend(response.data);
+            let Some(next) = response.links.and_then(|links| links.next) else {
+                return Ok(rows);
+            };
+            let Some((_, query)) = next.split_once('?') else {
+                return Ok(rows);
+            };
+            path = format!("/v1/apps?{query}");
+        }
+        Err(ProviderError::new(
+            None,
+            format!(
+                "App Store Connect returned more than {MAX_PAGES} pages of apps for one \
+                 filter; refusing to keep paging"
+            ),
+        ))
+    }
+
     /// `POST /v1/bundleIds` with exactly `identifier`, `name`, and
     /// `platform` -- no `seedId` (the one other create attribute,
     /// optional and undocumented in shape; this crate never sets it).
@@ -609,6 +648,29 @@ struct BundleIdListResponse {
     /// Absent on a response with no further pages -- and absent from
     /// every mock fixture in this crate that predates pagination, which
     /// is why it is `Option` rather than defaulted.
+    links: Option<Links>,
+}
+
+/// One `apps` resource's attributes -- only `bundleId`, the one thing
+/// `appstore.app.get` compares (never `name`, `sku`, or any other
+/// attribute this crate has no reason to read).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct AppAttributes {
+    #[serde(rename = "bundleId")]
+    pub(crate) bundle_id: String,
+}
+
+/// One `apps` resource.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct AppResource {
+    pub(crate) attributes: AppAttributes,
+}
+
+#[derive(Debug, Deserialize)]
+struct AppListResponse {
+    data: Vec<AppResource>,
+    /// See [`BundleIdListResponse::links`] -- same reasoning, same
+    /// `Option`.
     links: Option<Links>,
 }
 

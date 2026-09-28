@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
-assertion_line: 184
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -762,6 +761,86 @@ expression: "catalog.list_tools_json()[\"tools\"]"
       "profile": "AppleProfileId"
     },
     "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "A gate: whether an App Store Connect app record exists for a bundle identifier.",
+    "inputs": {
+      "identifier": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleBundleIdentifier"
+        }
+      },
+      "issuer_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleIssuerId"
+        }
+      },
+      "key": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleSigningKey"
+        }
+      },
+      "key_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleKeyId"
+        }
+      }
+    },
+    "key": [],
+    "name": "appstore.app.get",
+    "outputs": {
+      "identifier": "AppleBundleIdentifier"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "A gate: whether APP_GROUPS is enabled on a bundle identifier.",
+    "inputs": {
+      "identifier": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleBundleIdentifier"
+        }
+      },
+      "issuer_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleIssuerId"
+        }
+      },
+      "key": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleSigningKey"
+        }
+      },
+      "key_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleKeyId"
+        }
+      }
+    },
+    "key": [],
+    "name": "appstore.app_group.gate",
+    "outputs": {
+      "identifier": "AppleBundleIdentifier"
+    },
+    "pure": true
   },
   {
     "class": "reversible",

@@ -2,7 +2,9 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the twenty-six-tool live catalog --
+//! `live_catalog` assembles the live catalog (twenty-nine tools since
+//! milestone 3e task 3 added the two Walter gates,
+//! `appstore.app.get` and `appstore.app_group.gate`) --
 //! `willikins-tools`' seven pure tools (`naming.v1`, `template.render`,
 //! `env.get`, `base64.decode`, `apple.signing_key.parse`,
 //! `apple.issuer_id.parse`, `apple.key_id.parse`),
@@ -17,7 +19,8 @@
 //! task), and `willikins-providers-appstore`'s three (two from the App
 //! Store Connect provider crate; milestone 3c added
 //! `appstore.certificate.get`; milestone 3c task 2 added
-//! `appstore.profile.ensure`) -- exactly as
+//! `appstore.profile.ensure`; milestone 3e task 3 added the two Walter
+//! gates, `appstore.app.get` and `appstore.app_group.gate`) -- exactly as
 //! `crates/willikins-providers-doppler/tests/live_catalog.rs` built it
 //! before this task; that test now calls [`live_catalog_with`] (this
 //! module's own assembly, taking `Http`s rather than `Credential`s so a
@@ -28,8 +31,8 @@ use std::sync::Arc;
 
 use willikins_core::{Catalog, Tool, ToolName, Workflow};
 use willikins_providers_appstore::{
-    AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet,
-    AppstoreProfileEnsure,
+    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure,
+    AppstoreCertificateGet, AppstoreProfileEnsure,
 };
 use willikins_providers_buildkite::{
     BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineEnsure,
@@ -48,7 +51,7 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 27] = [
+pub const LIVE_TOOL_NAMES: [&str; 29] = [
     "naming.v1",
     "template.render",
     "operator.acknowledge",
@@ -76,6 +79,8 @@ pub const LIVE_TOOL_NAMES: [&str; 27] = [
     "appstore.bundle_id_capability.ensure",
     "appstore.certificate.get",
     "appstore.profile.ensure",
+    "appstore.app.get",
+    "appstore.app_group.gate",
 ];
 
 /// Insert `willikins-tools`' eight pure tools -- no provider, no
@@ -144,6 +149,18 @@ fn insert_appstore_tools(catalog: &mut Catalog) {
     insert(
         catalog,
         Arc::new(AppstoreProfileEnsure::new(
+            willikins_providers_appstore::APPSTORE_API_BASE_URL,
+        )),
+    );
+    insert(
+        catalog,
+        Arc::new(AppstoreAppGet::new(
+            willikins_providers_appstore::APPSTORE_API_BASE_URL,
+        )),
+    );
+    insert(
+        catalog,
+        Arc::new(AppstoreAppGroupGate::new(
             willikins_providers_appstore::APPSTORE_API_BASE_URL,
         )),
     );
@@ -788,6 +805,8 @@ mod tests {
             "appstore.bundle_id_capability.ensure",
             "appstore.certificate.get",
             "appstore.profile.ensure",
+            "appstore.app.get",
+            "appstore.app_group.gate",
         ];
         from_provider_arrays.extend(GITHUB_TOOL_NAMES);
         from_provider_arrays.extend(DOPPLER_TOOL_NAMES);
@@ -838,6 +857,8 @@ mod tests {
             "appstore.bundle_id_capability.ensure",
             "appstore.certificate.get",
             "appstore.profile.ensure",
+            "appstore.app.get",
+            "appstore.app_group.gate",
         ] {
             let tool = willikins_core::ToolName::parse(name).unwrap();
             assert_eq!(provider_of(&tool), None, "{name}");

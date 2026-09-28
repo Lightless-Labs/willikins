@@ -17,8 +17,10 @@
 //! before it can bind to either one's typed credential ports,
 //! `apple.issuer_id.parse` and `apple.key_id.parse`; milestone 3c added
 //! `appstore.certificate.get`; milestone 3e task 2 added `github.repo.get`;
-//! G3 added `operator.acknowledge`, also pure and provider-independent),
-//! so the catalog this crate produces holds twenty-nine tools, in the
+//! G3 added `operator.acknowledge`, also pure and provider-independent;
+//! milestone 3e task 3 added the two Walter gates, `appstore.app.get`
+//! and `appstore.app_group.gate`),
+//! so the catalog this crate produces holds thirty-one tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -95,6 +97,8 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     ));
     insert!(tools::FakeAppstoreCertificateGet::new(state.clone()));
     insert!(tools::FakeAppstoreProfileEnsure::new(state.clone()));
+    insert!(tools::FakeAppstoreAppGet::new(state.clone()));
+    insert!(tools::FakeAppstoreAppGroupGate::new(state.clone()));
     insert!(tools::FakeSecretList::new());
     // The last use of `state`: moved rather than cloned, so this
     // function's own `state` parameter is genuinely consumed.
@@ -148,6 +152,8 @@ mod tests {
             "appstore.bundle_id_capability.ensure",
             "appstore.certificate.get",
             "appstore.profile.ensure",
+            "appstore.app.get",
+            "appstore.app_group.gate",
             "fake.secret_list",
             "fake.irreversible.ensure",
             "template.render",
@@ -155,7 +161,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 29);
+        assert_eq!(names.len(), 31);
     }
 
     #[test]

@@ -1,7 +1,10 @@
 //! Live App Store Connect provider tools: `appstore.bundle_id.ensure`,
-//! `appstore.bundle_id_capability.ensure`, and (milestone 3c)
-//! `appstore.certificate.get`. `appstore.certificate.get` is the only
-//! read-only, pure tool of the three -- see its own module doc -- and the
+//! `appstore.bundle_id_capability.ensure`, (milestone 3c)
+//! `appstore.certificate.get` and `appstore.profile.ensure`, and
+//! (milestone 3e task 3) two gates over state only the operator can
+//! change, `appstore.app.get` and `appstore.app_group.gate`.
+//! `appstore.certificate.get` is the only
+//! read-only, pure tool of the original three -- see its own module doc -- and the
 //! only certificate operation this crate performs at all, anywhere:
 //! `tests/no_certificate_writes_guard.rs` enforces that a certificate
 //! write is structurally absent, not merely unused.
@@ -50,6 +53,6 @@ pub use client::{
     APPSTORE_API_BASE_URL, AppstoreClient, CAPABILITIES_NEEDING_PORTAL_CONFIGURATION,
 };
 pub use tools::{
-    AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet,
-    AppstoreProfileEnsure,
+    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure,
+    AppstoreCertificateGet, AppstoreProfileEnsure,
 };
