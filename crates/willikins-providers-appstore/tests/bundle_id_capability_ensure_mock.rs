@@ -291,6 +291,48 @@ fn read_refuses_past_the_page_cap_rather_than_spinning() {
     assert!(err.message.contains("pages"), "{}", err.message);
 }
 
+/// `links.next` is an absolute URL Apple sends; a response naming a
+/// different bundle id's path (and, separately, a different host)
+/// must never be followed as-is -- only its query string is reattached
+/// to this client's own fixed capabilities path. Proven the same way
+/// `bundle_id_ensure_mock.rs`'s own pagination test is proven: the second
+/// page is only reachable through this client's own path, never the one
+/// the fixture names.
+#[test]
+fn read_reattaches_only_the_query_string_never_the_host_or_path_links_next_names() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    let mut page_one = fixture("capabilities_list_with_an_unparsed_setting_shape");
+    // A different host AND a different bundle id's path -- if this client
+    // ever followed `next` verbatim it would either fail to connect (the
+    // host does not exist) or hit another bundle id's capabilities list
+    // (a path this test never mocks, so mockito would 501 it).
+    page_one["links"] = serde_json::json!({
+        "next": "https://evil.example.com/v1/bundleIds/OTHERID99/bundleIdCapabilities?cursor=PAGE2&limit=200",
+    });
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::UrlEncoded("limit".into(), "200".into()))
+        .with_status(200)
+        .with_body(page_one.to_string())
+        .create();
+    // Only reachable if the client re-attached the query string to ITS OWN
+    // path (this bundle id, `T6G4XCV345`) rather than the evil host or the
+    // `OTHERID99` path `next` names.
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "cursor".into(),
+            "PAGE2".into(),
+        ))
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_push").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool.read(&inputs_for("PUSH_NOTIFICATIONS")).unwrap();
+    assert!(matches!(observation, Observation::Present(_)));
+}
+
 // ---------------------------------------------------------------------
 // `ensure`: an ordinary capability
 // ---------------------------------------------------------------------
