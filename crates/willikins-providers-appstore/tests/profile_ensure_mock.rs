@@ -287,15 +287,126 @@ fn read_reports_mismatch_certificate_when_two_certificates_are_related() {
     ));
 }
 
+// ---------------------------------------------------------------------
+// `INVALID` is replaced, not terminal (2026-09-28 addendum: milestone
+// 3e's decision 1, "replace-when-INVALID")
+// ---------------------------------------------------------------------
+
 #[test]
-fn read_reports_conflict_when_the_profile_state_is_invalid() {
+fn read_reports_absent_when_the_profile_state_is_invalid() {
     let mut provider = MockProvider::start();
     mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
     mock_profile_list(&mut provider, &fixture("profile_list_one"));
     mock_profile_get(&mut provider, 200, &fixture("profile_get_invalid"));
     let tool = AppstoreProfileEnsure::new(provider.url());
-    let err = tool.read(&inputs()).unwrap_err();
-    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    let observation = tool.read(&inputs()).unwrap();
+    assert!(
+        matches!(observation, Observation::Absent { .. }),
+        "an INVALID profile at this exact key should plan as a replacement, not a hard error: \
+         {observation:?}"
+    );
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_replaces_an_invalid_profile_by_deleting_it_then_creating_fresh() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    mock_profile_list(&mut provider, &fixture("profile_list_one"));
+    mock_profile_get(&mut provider, 200, &fixture("profile_get_invalid"));
+    let delete_mock = provider
+        .mock("DELETE", "/v1/profiles/PR0F1LE1D0001")
+        .with_status(204)
+        .expect(1)
+        .create();
+    let create_mock = provider
+        .mock("POST", "/v1/profiles")
+        .with_status(201)
+        .with_body(fixture("profile_post_created_after_replace").to_string())
+        .expect(1)
+        .create();
+
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&inputs(), &token).unwrap();
+    assert!(ensured.changed);
+    // A genuinely fresh profile, not the deleted one's id replayed.
+    assert_eq!(profile_id_of(&ensured.outputs), "PR0F1LE1D0002");
+    delete_mock.assert();
+    create_mock.assert();
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_leaves_an_active_profile_untouched_and_never_deletes_it() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    mock_profile_list(&mut provider, &fixture("profile_list_one"));
+    mock_profile_get(&mut provider, 200, &fixture("profile_get_present_healthy"));
+    // No DELETE mock is registered at all: an unexpected DELETE call would
+    // hit mockito's catch-all and fail this test's own assertion, not
+    // silently succeed.
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&inputs(), &token).unwrap();
+    assert!(!ensured.changed);
+    assert_eq!(profile_id_of(&ensured.outputs), "PR0F1LE1D0001");
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_never_deletes_an_invalid_profile_of_a_different_name() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    // The only row present is INVALID, but its name is a substring
+    // neighbor of the requested one -- `find_profile_row`'s exact compare
+    // must exclude it before `profileState` is ever inspected, so this
+    // reads and ensures exactly like "no profile at this key" (no `GET`
+    // instance call, no `DELETE`).
+    mock_profile_list(
+        &mut provider,
+        &fixture("profile_list_substring_neighbor_invalid"),
+    );
+    let create_mock = provider
+        .mock("POST", "/v1/profiles")
+        .with_status(201)
+        .with_body(fixture("profile_post_created").to_string())
+        .expect(1)
+        .create();
+
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&inputs(), &token).unwrap();
+    assert!(ensured.changed);
+    create_mock.assert();
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_stops_before_any_create_when_the_delete_fails() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    mock_profile_list(&mut provider, &fixture("profile_list_one"));
+    mock_profile_get(&mut provider, 200, &fixture("profile_get_invalid"));
+    provider
+        .mock("DELETE", "/v1/profiles/PR0F1LE1D0001")
+        .with_status(500)
+        .with_body(fixture("error_5xx").to_string())
+        .create();
+    // No create mock is registered: `.expect(0)` plus `.assert()` proves
+    // the `POST` this arm would otherwise make never happens.
+    let create_mock = provider
+        .mock("POST", "/v1/profiles")
+        .with_status(201)
+        .with_body(fixture("profile_post_created").to_string())
+        .expect(0)
+        .create();
+
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    let token = SinkToken::new();
+    let err = tool.ensure(&inputs(), &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    create_mock.assert();
 }
 
 #[test]

@@ -898,6 +898,10 @@ fn profile_mismatch_profile_type_agrees() {
 
 #[test]
 fn profile_invalid_state_agrees() {
+    // 2026-09-28 addendum (milestone 3e's decision 1,
+    // "replace-when-INVALID"): an `INVALID` profile at this exact key now
+    // reads `Absent` on both sides, not an error -- `read` shows the
+    // replacement `plan` will make.
     let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());
     let state = FakeState::new()
         .with_apple_bundle_id(
@@ -915,7 +919,7 @@ fn profile_invalid_state_agrees() {
             false,
             "ZmFrZWNvbnRlbnQ=",
         );
-    assert_profile_error_kinds_agree(
+    assert_profile_agree(
         "invalid",
         state,
         &bundle_id,

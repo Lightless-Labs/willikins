@@ -3,10 +3,13 @@
 //! `willikins_providers_appstore::tools::AppstoreProfileEnsure`'s
 //! `ToolSpec` exactly (`tests/catalog_parity.rs`, in
 //! `willikins-providers-appstore`, pins the two equal) and the same
-//! observations and check order: `Absent`, `Mismatch { profile_type }`,
-//! `Mismatch { certificate }`, `Conflict` (`INVALID` or expired),
-//! `Present` -- no `Foreign`, for the identical reason the live tool's
-//! own module doc gives.
+//! resolution order: `INVALID` (replaced, not terminal -- see the live
+//! tool's own module doc, "`INVALID` is replaced, not terminal"), then
+//! `Mismatch { profile_type }`, `Mismatch { certificate }`, `Conflict`
+//! (expired), `Present` -- no `Foreign`, for the identical reason the
+//! live tool's own module doc gives. `Class::Destructive`, mirroring the
+//! live tool: `ensure` can delete the `INVALID` record at this key
+//! before creating fresh.
 
 use std::sync::{Arc, Mutex};
 
@@ -56,7 +59,7 @@ impl FakeAppstoreProfileEnsure {
                 inputs,
                 outputs,
                 key: vec![port("identifier"), port("name")],
-                class: Class::Reversible,
+                class: Class::Destructive,
                 pure: false,
             },
             state,
@@ -95,20 +98,20 @@ impl FakeAppstoreProfileEnsure {
         Ok(outputs)
     }
 
-    /// The full read, mirroring the live tool's `observe`: identifier
-    /// resolution, then the record lookup, then the checks in decision
-    /// (d)/(e)'s order.
-    fn observe(
+    /// The full resolution, mirroring the live tool's `resolve`:
+    /// identifier resolution, then the record lookup, then the checks in
+    /// the live tool's own module doc order -- `INVALID` first (replaced,
+    /// not terminal), then `profile_type`, then `certificate`, then
+    /// expiry, then `Present`.
+    fn resolve(
         state: &FakeState,
         identifier: &AppleBundleIdentifier,
         name: &AppleProfileName,
         profile_type: &AppleProfileType,
         certificate: &AppleCertificateId,
-    ) -> Result<Observation, ToolError> {
+    ) -> Result<ProfileResolution, ToolError> {
         if !state.apple_bundle_ids.contains_key(identifier.as_str()) {
-            return Ok(Observation::Absent {
-                predicted: Self::predicted_outputs(),
-            });
+            return Ok(ProfileResolution::NotFound);
         }
         let records = state
             .apple_profiles
@@ -116,27 +119,21 @@ impl FakeAppstoreProfileEnsure {
             .cloned()
             .unwrap_or_default();
         match records.len() {
-            0 => Ok(Observation::Absent {
-                predicted: Self::predicted_outputs(),
-            }),
+            0 => Ok(ProfileResolution::NotFound),
             1 => {
                 let record = &records[0];
+                if record.profile_state == "INVALID" {
+                    return Ok(ProfileResolution::Invalid);
+                }
                 if record.profile_type != profile_type.as_str() {
-                    return Ok(Observation::Mismatch {
+                    return Ok(ProfileResolution::Decided(Observation::Mismatch {
                         port: port("profile_type"),
-                    });
+                    }));
                 }
                 if record.certificate_id != certificate.as_str() {
-                    return Ok(Observation::Mismatch {
+                    return Ok(ProfileResolution::Decided(Observation::Mismatch {
                         port: port("certificate"),
-                    });
-                }
-                if record.profile_state == "INVALID" {
-                    return Err(conflict(
-                        "the profile exists but Apple reports it INVALID; willikins cannot \
-                         repair a profile, replace it instead"
-                            .to_string(),
-                    ));
+                    }));
                 }
                 if record.expired {
                     return Err(conflict(
@@ -145,7 +142,9 @@ impl FakeAppstoreProfileEnsure {
                             .to_string(),
                     ));
                 }
-                Ok(Observation::Present(Self::outputs_for(record)?))
+                Ok(ProfileResolution::Decided(Observation::Present(
+                    Self::outputs_for(record)?,
+                )))
             }
             count => Err(conflict(format!(
                 "{count} profiles named `{name}` already exist on this bundle id; this tool \
@@ -153,6 +152,57 @@ impl FakeAppstoreProfileEnsure {
             ))),
         }
     }
+
+    /// Create a fresh record at `key` and append it, mirroring the live
+    /// tool's `create_new`.
+    fn create_new(
+        state: &mut FakeState,
+        identifier: &AppleBundleIdentifier,
+        profile_type: &AppleProfileType,
+        certificate: &AppleCertificateId,
+        key: &str,
+    ) -> Result<Ensured, ToolError> {
+        if !state.apple_bundle_ids.contains_key(identifier.as_str()) {
+            return Err(not_found(format!(
+                "bundle identifier `{identifier}` is not registered; register it \
+                 (for example via appstore.bundle_id.ensure) before creating a \
+                 profile for it"
+            )));
+        }
+        let id = format!("FAKEPR0F{key:0>8}", key = records_seen(state) + 1);
+        let content = format!("fakeprofilecontent{id}==");
+        let record = AppleProfileRecord {
+            id: id.clone(),
+            certificate_id: certificate.as_str().to_string(),
+            profile_type: profile_type.as_str().to_string(),
+            profile_state: "ACTIVE".to_string(),
+            expired: false,
+            content,
+        };
+        let outputs = Self::outputs_for(&record)?;
+        state
+            .apple_profiles
+            .entry(key.to_string())
+            .or_default()
+            .push(record);
+        Ok(Ensured {
+            outputs,
+            changed: true,
+        })
+    }
+}
+
+/// What [`FakeAppstoreProfileEnsure::resolve`] decided, mirroring the
+/// live tool's own `ProfileResolution`.
+enum ProfileResolution {
+    /// No bundle id, or no profile record, at this exact `(identifier,
+    /// name)` key.
+    NotFound,
+    /// The one record at this exact key has `profile_state == "INVALID"`:
+    /// `read` reports it `Absent`; `ensure` drops it, then creates fresh.
+    Invalid,
+    /// The full check ran and decided.
+    Decided(Observation),
 }
 
 fn inputs_of(
@@ -184,7 +234,12 @@ impl Tool for FakeAppstoreProfileEnsure {
         let (identifier, name, profile_type, certificate) = inputs_of(inputs)?;
         let mut state = self.state.lock().unwrap();
         state.record_read_call(Self::TOOL_NAME, &apple_profile_key(&identifier, &name));
-        Self::observe(&state, &identifier, &name, &profile_type, &certificate)
+        match Self::resolve(&state, &identifier, &name, &profile_type, &certificate)? {
+            ProfileResolution::NotFound | ProfileResolution::Invalid => Ok(Observation::Absent {
+                predicted: Self::predicted_outputs(),
+            }),
+            ProfileResolution::Decided(observation) => Ok(observation),
+        }
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
@@ -196,41 +251,35 @@ impl Tool for FakeAppstoreProfileEnsure {
         if let Some(err) = state.take_fail_ensure_once(Self::TOOL_NAME, &key) {
             return Err(err);
         }
-        match Self::observe(&state, &identifier, &name, &profile_type, &certificate)? {
-            Observation::Present(outputs) => Ok(Ensured {
+        match Self::resolve(&state, &identifier, &name, &profile_type, &certificate)? {
+            ProfileResolution::Decided(Observation::Present(outputs)) => Ok(Ensured {
                 outputs,
                 changed: false,
             }),
-            Observation::Mismatch { .. } => Err(conflict(
+            ProfileResolution::Decided(Observation::Mismatch { .. }) => Err(conflict(
                 "the existing profile does not match what was requested, and cannot be \
                  converged (there is no update operation for a profile); replace it instead"
                     .to_string(),
             )),
-            Observation::Foreign => unreachable!("this fake's own observe never returns Foreign"),
-            Observation::Absent { .. } => {
-                if !state.apple_bundle_ids.contains_key(identifier.as_str()) {
-                    return Err(not_found(format!(
-                        "bundle identifier `{identifier}` is not registered; register it \
-                         (for example via appstore.bundle_id.ensure) before creating a \
-                         profile for it"
-                    )));
-                }
-                let id = format!("FAKEPR0F{key:0>8}", key = records_seen(&state) + 1);
-                let content = format!("fakeprofilecontent{id}==");
-                let record = AppleProfileRecord {
-                    id: id.clone(),
-                    certificate_id: certificate.as_str().to_string(),
-                    profile_type: profile_type.as_str().to_string(),
-                    profile_state: "ACTIVE".to_string(),
-                    expired: false,
-                    content,
-                };
-                let outputs = Self::outputs_for(&record)?;
-                state.apple_profiles.entry(key).or_default().push(record);
-                Ok(Ensured {
-                    outputs,
-                    changed: true,
-                })
+            ProfileResolution::Decided(Observation::Foreign) => {
+                unreachable!("this fake's own resolve never returns Foreign")
+            }
+            ProfileResolution::Decided(Observation::Absent { .. }) => {
+                unreachable!("this fake's own resolve never decides Absent")
+            }
+            ProfileResolution::NotFound => {
+                Self::create_new(&mut state, &identifier, &profile_type, &certificate, &key)
+            }
+            // Replace-when-INVALID: drop the INVALID record at this exact
+            // key, then create fresh -- never a record of another
+            // identifier or another name, since `key` is this exact pair.
+            ProfileResolution::Invalid => {
+                state
+                    .apple_profiles
+                    .entry(key.clone())
+                    .or_default()
+                    .retain(|record| record.profile_state != "INVALID");
+                Self::create_new(&mut state, &identifier, &profile_type, &certificate, &key)
             }
         }
     }
