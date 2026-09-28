@@ -93,14 +93,36 @@
 //!
 //! **Reading a setting back.** The capability row is still found by
 //! `capabilityType` exactly as before; when a `setting` was requested,
-//! the row's own `settings[]` entries for that key are inspected: exactly
-//! one option marked `enabled: true`, and that option the requested one
-//! → [`willikins_core::Observation::Present`]; any other shape (a
-//! different enabled option, a second enabled option beside the
-//! requested one, no option enabled, or the key or `settings` missing
-//! from the row entirely) →
-//! [`willikins_core::Observation::Mismatch`] naming the `setting` port.
-//! That is terminal, exactly like [`AppstoreBundleIdEnsure`]'s own
+//! every option under the row's `settings[]` entries for that key is
+//! collected first. **This rule changed on 2026-09-28**, from a live
+//! observation (the milestone 3e plan's second live capability cycle):
+//! after creating `DATA_PROTECTION` with
+//! `DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH`,
+//! Apple's list endpoint echoed back exactly one option under that key,
+//! carrying `key` alone -- **no `enabled` field at all** -- so decision
+//! (d)'s original assumption ("the selected option is the one marked
+//! `enabled: true`") could never match a real row, and a correct create
+//! always read back as `Mismatch`. The rule now branches on whether any
+//! collected option carries an `enabled` field:
+//!
+//! - **No option carries `enabled` at all** (Apple's own shape, observed
+//!   live): the listed option *is* the selection. Exactly one option
+//!   listed, and it is the requested one →
+//!   [`willikins_core::Observation::Present`]; more than one option
+//!   listed, or none at all, → `Mismatch` -- ambiguous or absent, never a
+//!   guess at which one is real.
+//! - **At least one option carries an `enabled` field** (never observed
+//!   live; kept as a defensive fallback and exercised only by a mock
+//!   fixture): the pre-2026-09-28 rule applies unchanged -- exactly one
+//!   option marked `enabled: true`, and that option the requested one, is
+//!   `Present`; anything else (a different enabled option, two enabled
+//!   options, none enabled) is `Mismatch`.
+//!
+//! Either way, the key or `settings` missing from the row entirely
+//! collects zero options, which is `Mismatch` under both branches.
+//! Every `Mismatch` →
+//! [`willikins_core::Observation::Mismatch`] naming the `setting` port,
+//! terminal exactly like [`AppstoreBundleIdEnsure`]'s own
 //! `platform` mismatch: `plan` turns every `Mismatch` into a hard
 //! `PlanError::AttributeMismatch` before any node's `ensure` runs (this
 //! workspace's design doc, "the `Action::Update` gap" -- `PATCH
@@ -115,9 +137,11 @@
 //! carries exactly one entry, `[{"key": KEY, "options": [{"key": OPTION,
 //! "enabled": true}]}]`, when a setting was supplied, and omits the key
 //! entirely otherwise -- see [`crate::client::AppstoreClient::create_bundle_id_capability`]'s
-//! own doc. Both the create shape and "the selected option is the one
-//! marked `enabled`" are unobserved against the real API before the live
-//! cycle runs (decision (d), verify items 1 and 2).
+//! own doc. **Settled live, 2026-09-28:** the create shape is accepted
+//! (verify item 1), but Apple's own read-back never echoes the write
+//! side's `enabled: true` -- it lists the selected option by `key` alone
+//! (verify item 2, superseding decision (d)'s original assumption; see
+//! "Reading a setting back" above and the plan's 2026-09-28 addendum).
 //!
 //! [`AppstoreBundleIdEnsure`]: crate::tools::AppstoreBundleIdEnsure
 
@@ -273,11 +297,9 @@ impl AppstoreBundleIdCapabilityEnsure {
             });
         };
         if let Some(setting) = setting {
-            // Every option marked enabled under this setting's key, across
-            // every entry carrying that key: `Present` only when that is
-            // exactly the one requested option (decision (d)). A keyless
-            // enabled option counts as "some other option".
-            let enabled: Vec<Option<&str>> = row
+            // Every option under this setting's key, across every entry
+            // carrying that key.
+            let options: Vec<_> = row
                 .attributes
                 .settings
                 .as_deref()
@@ -285,10 +307,24 @@ impl AppstoreBundleIdCapabilityEnsure {
                 .iter()
                 .filter(|entry| entry.key.as_deref() == Some(setting.key()))
                 .flat_map(|entry| entry.options.as_deref().unwrap_or(&[]))
-                .filter(|option| option.enabled == Some(true))
-                .map(|option| option.key.as_deref())
                 .collect();
-            if enabled != [Some(setting.option())] {
+            // Two read-back shapes (this module's own doc, "Reading a
+            // setting back"): when no option carries `enabled` at all
+            // (Apple's own shape, observed live 2026-09-28), the listed
+            // option *is* the selection. When at least one does (never
+            // observed live; a defensive fallback), the pre-2026-09-28
+            // rule applies: exactly one option marked `enabled: true`.
+            let matches = if options.iter().any(|option| option.enabled.is_some()) {
+                let enabled: Vec<Option<&str>> = options
+                    .iter()
+                    .filter(|option| option.enabled == Some(true))
+                    .map(|option| option.key.as_deref())
+                    .collect();
+                enabled == [Some(setting.option())]
+            } else {
+                matches!(options.as_slice(), [only] if only.key.as_deref() == Some(setting.option()))
+            };
+            if !matches {
                 return Ok(Observation::Mismatch {
                     port: port("setting"),
                 });
