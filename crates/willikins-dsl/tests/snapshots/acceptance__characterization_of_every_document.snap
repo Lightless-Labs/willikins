@@ -173,6 +173,10 @@ CHECK ERRORS:
 CHECK ERRORS:
 - kind=AcknowledgementLiteral display=node `m7_bootstrap`, port `acknowledged`: a literal cannot supply an operator acknowledgement json={"kind":"AcknowledgementLiteral","node":"m7_bootstrap","port":"acknowledged"}
 
+=== workflows/fixtures/appstore-bundle-id-text-into-identifier.yaml ===
+CHECK ERRORS:
+- kind=TypeMismatch display=node `bundle_id`, port `identifier`: expected AppleBundleIdentifier, found `Text` json={"kind":"TypeMismatch","node":"bundle_id","port":"identifier","expected":{"kind":"exact","type":"AppleBundleIdentifier"},"found":"Text"}
+
 === workflows/fixtures/appstore-capability-setting-mismatch.yaml ===
 WARNINGS:
 TYPES:
