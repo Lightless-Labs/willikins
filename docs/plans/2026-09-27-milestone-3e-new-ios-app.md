@@ -13,6 +13,31 @@ workflow, never in the tool", the 2026-09-22 `Action::Update` addendum)
 `docs/research/2026-09-20-project-survey-and-workflow-library.md` (Sample's "one step in twelve"),
 and this plan's own pre-flight, fetched 2026-09-27 and quoted below with its URLs.
 **Depends on:** milestones 3a (Buildkite), 3c (signing), 3d (conversions), all Completed.
+**Reviewed:** 2026-09-28 (independent adversarial pass over T1 and T2,
+`docs/research/2026-09-28-m3e-adversarial-pass.md`)
+**Addendum:** 2026-09-28 (attacker) — **four defects fixed test-first.** `c054a09`: every capability
+read parsed every row's `settings` strictly, so another row's missing `enabled` or `null` `options`
+failed a `HEALTHKIT` read; the four fields are now optional. `92dec9e`: decision (d)'s "exactly one
+enabled option, the requested one" was implemented as "the requested one among the enabled". `d4abcf4`
+and `1328d59`: the live cycle now records an absent `enabled`/`settings` distinctly, Apple's field
+names, and the read-back shape **before** asserting convergence. Seven mutations killed.
+**Addendum:** 2026-09-28 (attacker) — **the live capability cycle ran once and stopped at trust
+boundary 6.** Counts 21 identifiers / 5 certificates / 13 profiles before and after, equal again on an
+independent recount, throwaway leftovers 0. `HEALTHKIT` and `PUSH_NOTIFICATIONS` created and converged;
+the `DATA_PROTECTION` create carrying `settings` was **accepted**, but the re-ensure read the fresh row
+back as `Mismatch { setting }` (`Conflict`). The guard deleted the throwaway by its create id. The row's
+shape was not recorded (the cycle recorded it after the assertion; fixed in `1328d59`, unrun). Risk 1
+has happened: the create shape works, the read-back does not match decision (d)'s assumption, and the
+real shape is still unseen. A second run is the coordinator's call. Verify items 1 and 3 settled yes;
+item 2 unsettled (see "Verify before relying on them").
+**Addendum:** 2026-09-28 (attacker) — **T3-blocking: a capability node downstream of a fresh
+identifier fails `plan` with `NotFound`.** `plan` reads every node whose key is known;
+`appstore.bundle_id.ensure`'s `Absent` predicts `identifier`, so `healthkit`/`push`/`data_protection`
+bound from `steps.app_id.identifier` are read, and `appstore.bundle_id_capability.ensure`'s `read`
+refuses a missing parent. Reproduced against the fake catalog. Decision (c)'s "backstop, not the
+mechanism" fires at plan time, and acceptance 8 cannot pass as written. `appstore.profile.ensure`
+already reads `Absent` for an unregistered identifier (the precedent). Decision needed before T3; the
+tool is unchanged.
 
 ## Goal
 
@@ -564,22 +589,33 @@ Buildkite token exists.
 
 ## Post-flight checklist (the attacker fills this)
 
-- [ ] Live capability cycle ran once; counts equal; the throwaway id answers `404`.
+- [ ] Live capability cycle ran once; counts equal; the throwaway id answers `404`. — 2026-09-28: ran
+  once, stopped at the `DATA_PROTECTION` re-ensure; counts 21/5/13 equal before and after by an
+  independent recount, leftovers 0; the guard deleted the throwaway by its create id; the `404` read
+  never ran (the cycle stopped first).
 - [ ] `DATA_PROTECTION` with a setting was accepted by Apple and read back as decision (d) assumes, or an
-  addendum records the real shape and the adapted parse.
-- [ ] The key can enable `HEALTHKIT` and `PUSH_NOTIFICATIONS`.
+  addendum records the real shape and the adapted parse. — 2026-09-28: accepted, **not** read back as
+  assumed (`Mismatch { setting }`); the real shape is unrecorded (header addendum).
+- [x] The key can enable `HEALTHKIT` and `PUSH_NOTIFICATIONS`. — 2026-09-28, on a `UNIVERSAL` throwaway.
 - [ ] Dry run applied, re-applied `Unchanged`, tore down; every count equal; no leftover in any sandbox.
 - [ ] The eight manual steps appear in the live plan's outputs naming the throwaway identifier.
-- [ ] No operator identifier, certificate, profile, team id or credential in any file, log or commit.
-- [ ] `no_certificate_writes_guard`, `secret_literal_guard`, `no_gh_writes_guard` green.
+- [x] No operator identifier, certificate, profile, team id or credential in any file, log or commit.
+  — 2026-09-28, for the capability cycle's three logs: UUID, `eyJ`, `PRIVATE KEY`, 24+ hex, 200+
+  base64 and throwaway-identifier greps all 0.
+- [x] `no_certificate_writes_guard`, `secret_literal_guard`, `no_gh_writes_guard` green. — 2026-09-28:
+  27, 15, 7 passed.
 
 ## Verify before relying on them
 
 1. **Does a create carrying `settings` succeed with `options: [{key, enabled: true}]`?** Unobserved; the
-   live cycle settles it.
+   live cycle settles it. **Settled 2026-09-28: yes** (accepted, `changed: true`).
 2. **How does a capability row report its selected option** — by `enabled: true` on one option, or
-   another way? Unobserved.
+   another way? Unobserved. **Still unsettled 2026-09-28:** the tool read its own fresh
+   `PROTECTED_UNTIL_FIRST_USER_AUTH` row as `Mismatch`; the shape was not recorded. Candidates (settings
+   absent on the list endpoint, Apple's default applied instead, no option enabled, two enabled,
+   `enabled` absent) are in the research record, section 4.
 3. **Can the ASC team key enable capabilities at all?** No capability has ever been enabled through it.
+   **Settled 2026-09-28: yes** (`HEALTHKIT`, `PUSH_NOTIFICATIONS` created and converged).
 4. **Is `DATA_PROTECTION` without a setting accepted?** The tool's module doc claims it; never proven.
    Task 1 refuses it anyway, so the answer only matters for the doc correction.
 5. **Does App Store validation need anything on the NSE's App ID beyond registration?** Apple's pages
