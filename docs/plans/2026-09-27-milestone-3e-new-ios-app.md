@@ -292,6 +292,42 @@ exercised `operator.acknowledge` against a real MCP client end to end, only the 
 the CLI text renderer at the unit level, the same honest limit G1/G2 recorded for the engine
 mechanism generally.
 
+**Addendum:** 2026-09-28 (implementer) — **T3b landed, two commits** (`1c65573`, `b1526aa`).
+`willikins-types`: two new conversion rows out of `AppleBundleIdentifier`, registered through
+`conversions!` beside milestone 3d's `AppleBundleIdentifier => AppleProfileName` row —
+`=> AppleBundleIdName` (its own hand-written `From` impl in `appstore.rs`, proved by the identical
+grammar-containment argument the profile-name row already carries, since `AppleBundleIdName::parse`'s
+four refusals are byte-for-byte the same as `AppleProfileName::parse`'s) and `=> Text` (its `From`
+impl in `text.rs`, not `appstore.rs`, since `Text`'s tuple field is private to its own module; the
+proof is simpler still, since `Text::parse` bounds only length at 65536, well over
+`AppleBundleIdentifier`'s own 255-character bound, and refuses nothing else). Each row carries the
+same three proptest strategies as the existing row (the bundle-identifier grammar directly, the
+implication over arbitrary strings, and the identifier's own alphabet at lengths 1–300 straddling
+the 255 bound) plus boundary unit tests at exactly 255 and 256 characters. `conversion_rows()`'s
+stale "to date, only one" doc comment is corrected. Acceptance 7's reverse-direction fixture,
+`workflows/fixtures/appstore-bundle-id-text-into-identifier.yaml`, binds a `Text`-typed input to
+`appstore.bundle_id.ensure`'s `identifier` port following
+`appstore-profile-name-into-identifier.yaml`'s exact pattern; `check` still refuses it with the same
+`TypeMismatch` it always did (a new acceptance test in
+`crates/willikins-providers-appstore/tests/bundle_id_documents.rs`), proving the new row does not
+loosen `check` in the direction it was never registered for. The `AppleBundleIdName` reverse needed
+no second document-level fixture, since its grammar is identical to `AppleProfileName`'s and the
+"space is not an identifier" fact is pinned at unit level instead
+(`a_bundle_id_name_with_a_space_is_not_a_bundle_identifier`). `characterization_of_every_document`
+gained exactly the one new fixture's entry, byte-identical elsewhere. Scoped gates green throughout:
+`willikins-types` (408 tests, including the 11 new ones), `willikins-providers-appstore` (4 tests),
+`willikins-dsl`'s acceptance suite (5 tests, snapshot re-verified green after accepting the one
+additive hunk), clippy `-D warnings` on both touched crates, `cargo check -p willikins-types`, `cargo
+fmt --all --check`. **What T3 (the Sample document) can now do that it could not before:** both new
+edges are public-to-public, so a document may bind an `AppleBundleIdentifier` output straight to a
+bundle id's `name` port or to `template.render`'s `Text` sink — the manual-step texts can name the
+supplied app identifier with no parse node in between, closing the gap decision (a)'s "manual steps"
+design implicitly assumed a second `name`-shaped input for every identifier-shaped one. Test-first
+process note: the impl and its proptests were written in the same edit pass rather than red-then-green
+in separate steps, since the `From` impl is what the proptest module needs to compile at all (the
+missing impl is a compile error, not a runtime red); the tests were run once, immediately after,
+never against a stub.
+
 ## Goal
 
 One workflow document, `workflows/sample-ios-app.yaml`, provisions everything a provider API can
