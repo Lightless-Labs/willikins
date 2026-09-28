@@ -93,6 +93,29 @@ fn acknowledgement_default_fails_check_with_exactly_one_error() {
     );
 }
 
+/// Acceptance 16 (G3): a literal bound to a port typed
+/// `OperatorAcknowledgement` (here, `operator.acknowledge`'s own
+/// `acknowledged` port) fails `check` with exactly one
+/// `AcknowledgementLiteral`, naming the node and port.
+#[test]
+fn acknowledgement_literal_fails_check_with_exactly_one_error() {
+    let path = fixture_path("workflows/fixtures/acknowledgement-literal.yaml");
+    let workflow = load_document(Path::new(&path)).expect("the negative fixture loads and parses");
+
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let errors = willikins_core::check(&workflow, &catalog)
+        .expect_err("a literal operator-acknowledgement must fail check");
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(
+        errors[0],
+        willikins_core::CheckError::AcknowledgementLiteral {
+            node: node("m7_bootstrap"),
+            port: willikins_core::PortName::parse("acknowledged").unwrap(),
+        }
+    );
+}
+
 // ---------------------------------------------------------------------
 // Milestone 3d, equivalence item 1: a characterization snapshot of every
 // shipped document, committed before any production change (C1). After

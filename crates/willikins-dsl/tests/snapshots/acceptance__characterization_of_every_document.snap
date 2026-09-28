@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-dsl/tests/acceptance.rs
-assertion_line: 261
+assertion_line: 284
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
@@ -168,6 +168,10 @@ fingerprint: [{"name":"doppler","instance":null,"action":"create","outputs":[["p
 === workflows/fixtures/acknowledgement-default.yaml ===
 CHECK ERRORS:
 - kind=AcknowledgementDefault display=input `m7_bootstrap_done`: an operator acknowledgement input may not have a default json={"kind":"AcknowledgementDefault","input":"m7_bootstrap_done"}
+
+=== workflows/fixtures/acknowledgement-literal.yaml ===
+CHECK ERRORS:
+- kind=AcknowledgementLiteral display=node `m7_bootstrap`, port `acknowledged`: a literal cannot supply an operator acknowledgement json={"kind":"AcknowledgementLiteral","node":"m7_bootstrap","port":"acknowledged"}
 
 === workflows/fixtures/appstore-capability-setting-mismatch.yaml ===
 WARNINGS:
