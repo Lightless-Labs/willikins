@@ -7,9 +7,10 @@
 //! added `doppler.value.get`), (milestone 3a)
 //! `willikins-providers-buildkite`'s two live tools, and (the App Store
 //! Connect provider crate, plus milestone 3c's `appstore.certificate.get`)
-//! `willikins-providers-appstore`'s four live tools (milestone 3c task 2
-//! added `appstore.profile.ensure`). Twenty-six tools, no fake among
-//! them.
+//! `willikins-providers-appstore`'s six live tools (milestone 3c task 2
+//! added `appstore.profile.ensure`; milestone 3e task 3 added the two
+//! Sample gates, `appstore.app.get` and `appstore.app_group.gate`).
+//! Twenty-nine tools, no fake among them.
 //!
 //! The assembly itself lives in `willikins-server` now
 //! (`willikins_server::live_catalog_with`, task 10a's `Butler::live_catalog`)
@@ -61,7 +62,7 @@ const POSITIVE_FIXTURES: [&str; 7] = [
 ];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 26] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 29] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -95,8 +96,8 @@ fn live_catalog() -> Catalog {
     )
 }
 
-/// The assembly itself: twenty-six tools, no name collision, every spec
-/// valid against the shared type registry.
+/// The assembly itself: every tool in [`LIVE_TOOL_NAMES`], no name
+/// collision, every spec valid against the shared type registry.
 #[test]
 fn the_live_catalog_assembles_and_every_spec_validates() {
     let catalog = live_catalog();
@@ -140,8 +141,8 @@ fn both_positive_fixtures_check_the_same_against_the_live_catalog() {
     }
 }
 
-/// Nothing fake survives in it: inserting any of the twenty-six fake tools
-/// of the same names on top is refused as a duplicate, which is what
+/// Nothing fake survives in it: inserting any of the fake tools of the
+/// same names on top is refused as a duplicate, which is what
 /// makes the two tests above statements about the live tools at all.
 #[test]
 fn no_fake_tool_fits_into_the_live_catalog() {

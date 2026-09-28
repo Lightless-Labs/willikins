@@ -6,6 +6,8 @@
 //! to the `willikins-tools` crate; [`crate::catalog`](crate::catalog())
 //! registers them from there alongside this crate's own eight tools.
 
+pub mod appstore_app_get;
+pub mod appstore_app_group_gate;
 pub mod appstore_bundle_id_capability_ensure;
 pub mod appstore_bundle_id_ensure;
 pub mod appstore_certificate_get;
@@ -28,6 +30,8 @@ pub mod github_repo_ensure;
 pub mod github_repo_get;
 pub mod signoz_ingestion_key_ensure;
 
+pub use appstore_app_get::FakeAppstoreAppGet;
+pub use appstore_app_group_gate::FakeAppstoreAppGroupGate;
 pub use appstore_bundle_id_capability_ensure::FakeAppstoreBundleIdCapabilityEnsure;
 pub use appstore_bundle_id_ensure::FakeAppstoreBundleIdEnsure;
 pub use appstore_certificate_get::FakeAppstoreCertificateGet;

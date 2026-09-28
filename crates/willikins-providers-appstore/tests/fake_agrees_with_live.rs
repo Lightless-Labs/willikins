@@ -12,13 +12,13 @@ use std::sync::{Arc, Mutex};
 
 use willikins_core::{Inputs, Observation, PortName, Tool, Value};
 use willikins_providers_appstore::{
-    AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet,
-    AppstoreProfileEnsure,
+    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure,
+    AppstoreCertificateGet, AppstoreProfileEnsure,
 };
 use willikins_providers_fake::FakeState;
 use willikins_providers_fake::tools::{
-    FakeAppstoreBundleIdCapabilityEnsure, FakeAppstoreBundleIdEnsure, FakeAppstoreCertificateGet,
-    FakeAppstoreProfileEnsure,
+    FakeAppstoreAppGet, FakeAppstoreAppGroupGate, FakeAppstoreBundleIdCapabilityEnsure,
+    FakeAppstoreBundleIdEnsure, FakeAppstoreCertificateGet, FakeAppstoreProfileEnsure,
 };
 use willikins_providers_http::testing::MockProvider;
 use willikins_types::{
@@ -1066,4 +1066,169 @@ fn profile_expired_agrees() {
             ),
         )),
     );
+}
+
+// ---------------------------------------------------------------------
+// `appstore.app.get` and `appstore.app_group.gate` (milestone 3e task 3,
+// the two Sample gates)
+// ---------------------------------------------------------------------
+
+fn app_get_inputs() -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(port("issuer_id"), Value::known(issuer_id()));
+    inputs.insert(port("key_id"), Value::known(key_id()));
+    inputs.insert(port("key"), Value::known(key()));
+    inputs.insert(port("identifier"), Value::known(identifier()));
+    inputs
+}
+
+#[test]
+fn app_get_absent_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/apps")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"data": []}).to_string())
+        .create();
+    let live = AppstoreAppGet::new(provider.url())
+        .read(&app_get_inputs())
+        .expect("the live tool reads");
+    let fake = FakeAppstoreAppGet::new(Arc::new(Mutex::new(FakeState::new())))
+        .read(&app_get_inputs())
+        .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn app_get_present_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/apps")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": [{"id": "APP1", "attributes": {"bundleId": identifier().as_str()}}]})
+                .to_string(),
+        )
+        .create();
+    let live = AppstoreAppGet::new(provider.url())
+        .read(&app_get_inputs())
+        .expect("the live tool reads");
+    let fake = FakeAppstoreAppGet::new(Arc::new(Mutex::new(
+        FakeState::new().with_apple_app(&identifier()),
+    )))
+    .read(&app_get_inputs())
+    .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+    assert_eq!(rendered(&live), rendered(&fake));
+}
+
+/// A row whose `bundleId` merely contains `identifier` as a substring
+/// must not count as a match, on either side -- the same exact-compare
+/// discipline every other filtered read in this crate follows.
+#[test]
+fn app_get_absent_on_a_substring_neighbor_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/apps")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": [{"id": "APP1", "attributes": {"bundleId": format!("{}.other", identifier())}}]})
+                .to_string(),
+        )
+        .create();
+    let live = AppstoreAppGet::new(provider.url())
+        .read(&app_get_inputs())
+        .expect("the live tool reads");
+    let fake = FakeAppstoreAppGet::new(Arc::new(Mutex::new(FakeState::new())))
+        .read(&app_get_inputs())
+        .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn app_group_gate_absent_when_identifier_not_registered_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"data": []}).to_string())
+        .create();
+    let live = AppstoreAppGroupGate::new(provider.url())
+        .read(&app_get_inputs())
+        .expect("the live tool reads");
+    let fake = FakeAppstoreAppGroupGate::new(Arc::new(Mutex::new(FakeState::new())))
+        .read(&app_get_inputs())
+        .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn app_group_gate_absent_when_registered_but_not_enabled_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(bundle_id_list_body(
+            "BID1",
+            name().as_str(),
+            platform().as_str(),
+        ))
+        .create();
+    provider
+        .mock("GET", "/v1/bundleIds/BID1/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"data": []}).to_string())
+        .create();
+    let live = AppstoreAppGroupGate::new(provider.url())
+        .read(&app_get_inputs())
+        .expect("the live tool reads");
+    let fake_state = FakeState::new().with_apple_bundle_id(&identifier(), &name(), &platform());
+    let fake = FakeAppstoreAppGroupGate::new(Arc::new(Mutex::new(fake_state)))
+        .read(&app_get_inputs())
+        .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn app_group_gate_present_once_app_groups_is_enabled_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(bundle_id_list_body(
+            "BID1",
+            name().as_str(),
+            platform().as_str(),
+        ))
+        .create();
+    provider
+        .mock("GET", "/v1/bundleIds/BID1/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": [{"attributes": {"capabilityType": "APP_GROUPS"}}]})
+                .to_string(),
+        )
+        .create();
+    let live = AppstoreAppGroupGate::new(provider.url())
+        .read(&app_get_inputs())
+        .expect("the live tool reads");
+    let fake_state = FakeState::new()
+        .with_apple_bundle_id(&identifier(), &name(), &platform())
+        .with_apple_bundle_id_capability(
+            &identifier(),
+            &AppleCapabilityType::parse("APP_GROUPS").unwrap(),
+        );
+    let fake = FakeAppstoreAppGroupGate::new(Arc::new(Mutex::new(fake_state)))
+        .read(&app_get_inputs())
+        .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+    assert_eq!(rendered(&live), rendered(&fake));
 }

@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use willikins_core::{Tool, ToolSpec};
 use willikins_providers_appstore::{
-    AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure, AppstoreCertificateGet,
-    AppstoreProfileEnsure,
+    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure,
+    AppstoreCertificateGet, AppstoreProfileEnsure,
 };
 
 const NOWHERE: &str = "http://127.0.0.1:1";
@@ -54,12 +54,28 @@ fn appstore_profile_ensure_spec_equals_the_fake_tool() {
 }
 
 #[test]
+fn appstore_app_get_spec_equals_the_fake_tool() {
+    let live = AppstoreAppGet::new(NOWHERE);
+    let fake = willikins_providers_fake::tools::FakeAppstoreAppGet::new(fake_state());
+    assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
+}
+
+#[test]
+fn appstore_app_group_gate_spec_equals_the_fake_tool() {
+    let live = AppstoreAppGroupGate::new(NOWHERE);
+    let fake = willikins_providers_fake::tools::FakeAppstoreAppGroupGate::new(fake_state());
+    assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
+}
+
+#[test]
 fn every_spec_validates_against_the_type_registry() {
     for spec in [
         AppstoreBundleIdEnsure::new(NOWHERE).spec(),
         AppstoreBundleIdCapabilityEnsure::new(NOWHERE).spec(),
         AppstoreCertificateGet::new(NOWHERE).spec(),
         AppstoreProfileEnsure::new(NOWHERE).spec(),
+        AppstoreAppGet::new(NOWHERE).spec(),
+        AppstoreAppGroupGate::new(NOWHERE).spec(),
     ] {
         spec.validate(willikins_types::registry())
             .expect("valid spec");
@@ -83,5 +99,13 @@ fn snapshot_every_live_tool_spec() {
     insta::assert_json_snapshot!(
         "appstore_profile_ensure_spec",
         spec_json(AppstoreProfileEnsure::new(NOWHERE).spec())
+    );
+    insta::assert_json_snapshot!(
+        "appstore_app_get_spec",
+        spec_json(AppstoreAppGet::new(NOWHERE).spec())
+    );
+    insta::assert_json_snapshot!(
+        "appstore_app_group_gate_spec",
+        spec_json(AppstoreAppGroupGate::new(NOWHERE).spec())
     );
 }

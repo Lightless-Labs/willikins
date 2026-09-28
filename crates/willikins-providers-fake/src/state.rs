@@ -523,6 +523,12 @@ pub struct FakeState {
     /// `read` reports `Absent` when it does not, mirroring the live
     /// tool's own bundle-id-resolution step.
     pub apple_profiles: HashMap<String, Vec<AppleProfileRecord>>,
+    /// App Store Connect app records that exist, keyed by
+    /// [`AppleBundleIdentifier::as_str`] -- `appstore.app.get`'s own gate
+    /// (milestone 3e task 3). Membership is the only fact recorded: no
+    /// other attribute of an app record (`name`, `sku`, ...) is ever
+    /// read.
+    pub apple_apps: HashSet<String>,
     /// The [`ProjectSlug`] canonical strings `fake.irreversible.ensure`
     /// has created.
     pub irreversible: HashSet<String>,
@@ -884,6 +890,14 @@ impl FakeState {
             apple_bundle_id_capability_setting_key(identifier, capability),
             setting.option().to_string(),
         );
+        self
+    }
+
+    /// Seed an App Store Connect app record as existing for `identifier`
+    /// -- `appstore.app.get`'s own gate (milestone 3e task 3).
+    #[must_use]
+    pub fn with_apple_app(mut self, identifier: &AppleBundleIdentifier) -> Self {
+        self.apple_apps.insert(identifier.as_str().to_string());
         self
     }
 

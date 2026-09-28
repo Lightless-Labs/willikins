@@ -31,6 +31,7 @@ use std::sync::{Arc, Mutex};
 use willikins_core::{Inputs, Observation, Outputs, PortName, SinkToken, ToolName, Value};
 use willikins_providers_fake::{FakeState, catalog};
 use willikins_types::{
+    AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCapabilityType,
     AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId, AppleSigningKey,
     BuildkiteClusterName, BuildkiteOrg, DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg,
     GitHubRepo, OpaqueSecret, OperatorAcknowledgement, ProjectSlug, RepoVisibility, SecretName,
@@ -79,6 +80,10 @@ fn repo() -> GitHubRepo {
     GitHubRepo::parse("example-org/monorepo").expect("a valid repo")
 }
 
+fn app_identifier() -> AppleBundleIdentifier {
+    AppleBundleIdentifier::parse("com.example.MyApp").expect("a valid bundle identifier")
+}
+
 /// Ports compared pairwise, so a differing `Value` fails on its own port
 /// rather than inside an opaque map comparison.
 fn ports(outputs: &Outputs) -> Vec<(&PortName, &Value)> {
@@ -113,7 +118,17 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
                 false,
                 None,
             )
-            .with_repo(&repo(), RepoVisibility::Private, false),
+            .with_repo(&repo(), RepoVisibility::Private, false)
+            .with_apple_app(&app_identifier())
+            .with_apple_bundle_id(
+                &app_identifier(),
+                &AppleBundleIdName::parse("my-app").expect("a valid bundle id name"),
+                &AppleBundleIdPlatform::parse("UNIVERSAL").expect("a valid platform"),
+            )
+            .with_apple_bundle_id_capability(
+                &app_identifier(),
+                &AppleCapabilityType::parse("APP_GROUPS").expect("a valid capability"),
+            ),
     ));
     let fake_catalog = catalog(state);
 
@@ -213,6 +228,26 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         ),
     );
 
+    let mut app_get_inputs = Inputs::new();
+    app_get_inputs.insert(
+        port("issuer_id"),
+        Value::known(
+            AppleIssuerId::parse("57246542-96fe-1a63-e053-0824d011072a")
+                .expect("a valid issuer id"),
+        ),
+    );
+    app_get_inputs.insert(
+        port("key_id"),
+        Value::known(AppleKeyId::parse("2X9R4HXF34").expect("a valid key id")),
+    );
+    app_get_inputs.insert(
+        port("key"),
+        Value::known(AppleSigningKey::parse(AppleSigningKey::example()).expect("a valid key")),
+    );
+    app_get_inputs.insert(port("identifier"), Value::known(app_identifier()));
+
+    let app_group_gate_inputs = app_get_inputs.clone();
+
     let cases = [
         ("naming.v1", naming_inputs),
         ("template.render", template_inputs),
@@ -227,6 +262,8 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         ("appstore.certificate.get", certificate_get_inputs),
         ("github.repo.get", repo_get_inputs),
         ("operator.acknowledge", acknowledge_inputs),
+        ("appstore.app.get", app_get_inputs),
+        ("appstore.app_group.gate", app_group_gate_inputs),
     ];
 
     let mut checked = 0;
