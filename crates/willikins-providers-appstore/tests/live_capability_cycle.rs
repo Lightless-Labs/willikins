@@ -322,19 +322,26 @@ fn capability_rows(
 }
 
 /// The JSON **field names** (Apple's schema, never a value) carried by
-/// `capability_type`'s `settings[]` entries and by their `options[]`,
-/// on `bundle_id` -- so the record can say which fields Apple sends
-/// beside `key`, `options` and `enabled` without printing any of them.
+/// `capability_type`'s rows on `bundle_id`: the row's `attributes`
+/// object, its `settings[]` entries, and their `options[]` -- plus what
+/// JSON kind `attributes.settings` is on each row (`absent`, `null`,
+/// `array(n)`, or another kind by name). So the record can say what
+/// Apple sends without printing any value.
+#[derive(Debug, Default)]
+struct FieldNames {
+    attributes: std::collections::BTreeSet<String>,
+    settings_kinds: Vec<String>,
+    setting_entry: std::collections::BTreeSet<String>,
+    option_entry: std::collections::BTreeSet<String>,
+}
+
 fn settings_field_names(
     issuer_id: &AppleIssuerId,
     key_id: &AppleKeyId,
     key: &AppleSigningKey,
     bundle_id: &willikins_types::AppleBundleIdId,
     capability_type: &str,
-) -> (
-    std::collections::BTreeSet<String>,
-    std::collections::BTreeSet<String>,
-) {
+) -> FieldNames {
     let http = http_for(issuer_id, key_id, key);
     let path = format!("/v1/bundleIds/{bundle_id}/bundleIdCapabilities");
     let page: serde_json::Value = http.get(&path).unwrap_or_else(|err| {
@@ -343,8 +350,7 @@ fn settings_field_names(
             err.status
         )
     });
-    let mut setting_fields = std::collections::BTreeSet::new();
-    let mut option_fields = std::collections::BTreeSet::new();
+    let mut names = FieldNames::default();
     let rows = page
         .get("data")
         .and_then(serde_json::Value::as_array)
@@ -356,6 +362,20 @@ fn settings_field_names(
                 == Some(capability_type)
         });
     for row in rows {
+        if let Some(object) = row.get("attributes").and_then(serde_json::Value::as_object) {
+            names.attributes.extend(object.keys().cloned());
+        }
+        names
+            .settings_kinds
+            .push(match row.pointer("/attributes/settings") {
+                None => "absent".to_string(),
+                Some(serde_json::Value::Null) => "null".to_string(),
+                Some(serde_json::Value::Array(items)) => format!("array({})", items.len()),
+                Some(serde_json::Value::Bool(_)) => "bool".to_string(),
+                Some(serde_json::Value::Number(_)) => "number".to_string(),
+                Some(serde_json::Value::String(_)) => "string".to_string(),
+                Some(serde_json::Value::Object(_)) => "object".to_string(),
+            });
         let settings = row
             .pointer("/attributes/settings")
             .and_then(serde_json::Value::as_array)
@@ -363,7 +383,7 @@ fn settings_field_names(
             .flatten();
         for setting in settings {
             if let Some(object) = setting.as_object() {
-                setting_fields.extend(object.keys().cloned());
+                names.setting_entry.extend(object.keys().cloned());
             }
             let options = setting
                 .get("options")
@@ -372,12 +392,12 @@ fn settings_field_names(
                 .flatten();
             for option in options {
                 if let Some(object) = option.as_object() {
-                    option_fields.extend(object.keys().cloned());
+                    names.option_entry.extend(object.keys().cloned());
                 }
             }
         }
     }
-    (setting_fields, option_fields)
+    names
 }
 
 fn run_unique_suffix() -> String {
@@ -584,6 +604,12 @@ fn appstore_live_capability_cycle() {
         );
         println!("{capability_name}: created, then converged");
     }
+    // Recorded before any further assertion: how a row with no setting
+    // carries `settings` (absent, `null`, or an empty array).
+    for capability_name in ["HEALTHKIT", "PUSH_NOTIFICATIONS"] {
+        let names = settings_field_names(&issuer_id, &key_id, &key, &bundle_id, capability_name);
+        println!("{capability_name} field names: {names:?}");
+    }
 
     // Step 4: DATA_PROTECTION with its required setting -- verify items 1
     // and 2 (does a create carrying `settings` succeed, and is the
@@ -606,6 +632,31 @@ fn appstore_live_capability_cycle() {
         "data protection create",
     );
     assert!(first.changed, "expected changed: true on first ensure");
+    println!("DATA_PROTECTION create accepted (changed: true)");
+    // Record the read-back shape BEFORE asserting convergence: the first
+    // run (2026-09-28) stopped at the re-ensure with Conflict, i.e. a
+    // Mismatch { setting } read-back, and the shape it tripped on was
+    // never recorded because this step came after the assertion.
+    for (capability_type, shape) in capability_rows(&issuer_id, &key_id, &key, &bundle_id) {
+        if capability_type == "DATA_PROTECTION" {
+            println!("after create: row capabilityType={capability_type} settings={shape:?}");
+        }
+    }
+    let names = settings_field_names(&issuer_id, &key_id, &key, &bundle_id, "DATA_PROTECTION");
+    println!("DATA_PROTECTION field names: {names:?}");
+    let read_back = tool_ok(
+        capability_tool.read(&with_setting_inputs),
+        "data protection read-back",
+    );
+    println!(
+        "DATA_PROTECTION read-back with the requested setting: {}",
+        match read_back {
+            Observation::Present(_) => "Present",
+            Observation::Absent { .. } => "Absent",
+            Observation::Mismatch { .. } => "Mismatch",
+            Observation::Foreign => "Foreign",
+        }
+    );
     let second = tool_ok(
         capability_tool.ensure(&with_setting_inputs, &sink),
         "data protection re-ensure",
@@ -661,12 +712,6 @@ fn appstore_live_capability_cycle() {
             .iter()
             .any(|(capability_type, _)| capability_type == "DATA_PROTECTION"),
         "STOP: DATA_PROTECTION does not appear in the row list at all"
-    );
-    let (setting_fields, option_fields) =
-        settings_field_names(&issuer_id, &key_id, &key, &bundle_id, "DATA_PROTECTION");
-    println!(
-        "DATA_PROTECTION field names: settings[] entry {setting_fields:?}; options[] entry \
-         {option_fields:?}"
     );
 
     // Step 7: cleanup, by the id this run's own create returned.
