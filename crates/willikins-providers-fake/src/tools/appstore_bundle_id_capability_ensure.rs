@@ -122,26 +122,33 @@ impl FakeAppstoreBundleIdCapabilityEnsure {
         outputs
     }
 
+    /// Mirrors the live tool's own `observe`: an unregistered parent
+    /// identifier is `Absent`, not a refusal (see that tool's own module
+    /// doc for why -- the T3-blocking fix, milestone 3e, 2026-09-28).
+    /// `ensure`'s own `Absent` arm is where a genuinely missing parent is
+    /// still a hard `NotFound`, since this fake -- like the live tool --
+    /// cannot create a bundle id itself. Infallible (unlike the live
+    /// tool's own `observe`, which can fail on a transport error): a
+    /// state lookup never fails, so this returns a bare `Observation`.
     fn observe(
         state: &FakeState,
         identifier: &AppleBundleIdentifier,
         capability: &AppleCapabilityType,
         setting: Option<&AppleCapabilitySetting>,
-    ) -> Result<Observation, ToolError> {
+    ) -> Observation {
         if !state.apple_bundle_ids.contains_key(identifier.as_str()) {
-            return Err(not_found(format!(
-                "no App Store Connect bundle id has identifier `{identifier}`; run \
-                 appstore.bundle_id.ensure first"
-            )));
+            return Observation::Absent {
+                predicted: Self::outputs_for(capability),
+            };
         }
         let present = state
             .apple_bundle_id_capabilities
             .get(identifier.as_str())
             .is_some_and(|set| set.contains(capability.as_str()));
         if !present {
-            return Ok(Observation::Absent {
+            return Observation::Absent {
                 predicted: Self::outputs_for(capability),
-            });
+            };
         }
         if let Some(setting) = setting {
             let key = apple_bundle_id_capability_setting_key(identifier, capability);
@@ -150,12 +157,12 @@ impl FakeAppstoreBundleIdCapabilityEnsure {
                 .get(&key)
                 .is_some_and(|option| option == setting.option());
             if !matches {
-                return Ok(Observation::Mismatch {
+                return Observation::Mismatch {
                     port: port("setting"),
-                });
+                };
             }
         }
-        Ok(Observation::Present(Self::outputs_for(capability)))
+        Observation::Present(Self::outputs_for(capability))
     }
 }
 
@@ -173,7 +180,12 @@ impl Tool for FakeAppstoreBundleIdCapabilityEnsure {
         let mut state = self.state.lock().unwrap();
         let key = format!("{identifier}#{capability}");
         state.record_read_call(Self::TOOL_NAME, &key);
-        Self::observe(&state, &identifier, &capability, setting.as_ref())
+        Ok(Self::observe(
+            &state,
+            &identifier,
+            &capability,
+            setting.as_ref(),
+        ))
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
@@ -188,13 +200,19 @@ impl Tool for FakeAppstoreBundleIdCapabilityEnsure {
         if let Some(err) = state.take_fail_ensure_once(Self::TOOL_NAME, &key) {
             return Err(err);
         }
-        match Self::observe(&state, &identifier, &capability, setting.as_ref())? {
+        match Self::observe(&state, &identifier, &capability, setting.as_ref()) {
             Observation::Present(outputs) => Ok(Ensured {
                 outputs,
                 changed: false,
             }),
             Observation::Mismatch { .. } => Err(setting_mismatch_conflict(&capability)),
             Observation::Absent { .. } => {
+                if !state.apple_bundle_ids.contains_key(identifier.as_str()) {
+                    return Err(not_found(format!(
+                        "no App Store Connect bundle id has identifier `{identifier}`; run \
+                         appstore.bundle_id.ensure first"
+                    )));
+                }
                 if CAPABILITIES_NEEDING_PORTAL_CONFIGURATION.contains(&capability.as_str()) {
                     return Err(invalid(format!(
                         "`{capability}` needs an identifier association (an app group, a \
@@ -279,10 +297,22 @@ mod tests {
     }
 
     #[test]
-    fn read_refuses_when_the_parent_does_not_exist() {
+    fn read_reports_absent_when_the_parent_does_not_exist() {
         let tool =
             FakeAppstoreBundleIdCapabilityEnsure::new(Arc::new(Mutex::new(FakeState::new())));
-        let err = tool.read(&inputs_for("PUSH_NOTIFICATIONS")).unwrap_err();
+        let observation = tool.read(&inputs_for("PUSH_NOTIFICATIONS")).unwrap();
+        assert!(matches!(observation, Observation::Absent { .. }));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn ensure_refuses_when_the_parent_does_not_exist() {
+        let tool =
+            FakeAppstoreBundleIdCapabilityEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+        let token = SinkToken::new();
+        let err = tool
+            .ensure(&inputs_for("PUSH_NOTIFICATIONS"), &token)
+            .unwrap_err();
         assert_eq!(err.kind, willikins_core::ToolErrorKind::NotFound);
     }
 

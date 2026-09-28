@@ -18,12 +18,30 @@
 //! `appstore.bundle_id.ensure`'s own `id` output first, and it re-derives
 //! `id` from `identifier` the same way either way.
 //!
-//! If no bundle id has `identifier` at all, this tool's `read` refuses
-//! outright ([`willikins_core::ToolErrorKind::NotFound`]) rather than
-//! reporting `Absent`: `Absent` would imply `ensure` can create what is
-//! missing, and this tool cannot create a bundle id -- only
-//! `appstore.bundle_id.ensure` does that. A document names that tool
-//! first.
+//! If no bundle id has `identifier` at all, this tool's `read` reports
+//! [`willikins_core::Observation::Absent`] (predicting this tool's own
+//! `capability` output, unchanged from what was requested) rather than
+//! refusing outright. Milestone 3e's task 1 originally refused here with
+//! [`willikins_core::ToolErrorKind::NotFound`], reasoning that `Absent`
+//! would wrongly imply *this* tool can create what is missing -- but
+//! `plan` reads every node whose key ports are known
+//! (`crates/willikins-core/src/plan.rs`), and `appstore.bundle_id.ensure`'s
+//! own `Absent` predicts its `identifier` output from its input, so a
+//! capability node bound from `steps.app_id.identifier` (decision (c),
+//! `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`) has a known key at
+//! plan time and is read *before* the bundle id is ever created -- failing
+//! every such document at `plan`, before any write, reproduced against the
+//! fake catalog (that plan's 2026-09-28 T3-blocking addendum). The
+//! in-crate precedent is [`crate::tools::AppstoreProfileEnsure`], which
+//! already reports `Absent` for an unregistered parent identifier and
+//! only refuses with `NotFound` at `ensure`'s create path, once the
+//! parent is confirmed still missing at apply time. This tool now follows
+//! the same shape: `read` (and `plan`, which only ever calls `read`) is
+//! honest that the capability is absent because nothing is there yet;
+//! `ensure` -- the only place that would actually need to create a bundle
+//! id -- still refuses with `NotFound` naming `appstore.bundle_id.ensure`,
+//! because this tool still cannot create one itself. A document names
+//! that tool first; it may now simply run first in the same plan.
 //!
 //! # `APP_GROUPS`, `APPLE_PAY`, `ICLOUD`: flip-on-able, never
 //! configurable -- and what this tool does about it
@@ -202,42 +220,54 @@ impl AppstoreBundleIdCapabilityEnsure {
         outputs
     }
 
-    /// Resolve `identifier` to its parent bundle id's Apple-assigned
-    /// `id`, comparing every filtered row exactly (see this module's own
-    /// doc).
+    /// Find `identifier`'s parent bundle id's Apple-assigned `id`,
+    /// comparing every filtered row exactly (see this module's own doc).
+    /// `Ok(None)` when no bundle id has it -- the identifier is simply not
+    /// registered yet -- mirrors
+    /// [`crate::tools::AppstoreProfileEnsure::find_bundle_id`], the
+    /// precedent this tool now follows for the same absent-parent case.
     ///
     /// # Errors
     ///
-    /// [`willikins_core::ToolErrorKind::NotFound`] naming `identifier`
-    /// when no bundle id has it; [`willikins_core::ToolErrorKind::Conflict`]
-    /// when more than one does; [`willikins_core::ToolErrorKind::Provider`]
-    /// on a transport or non-2xx failure or a malformed id.
-    fn resolve_parent(
+    /// [`willikins_core::ToolErrorKind::Conflict`] when more than one row
+    /// matches exactly; [`willikins_core::ToolErrorKind::Provider`] on a
+    /// transport or non-2xx failure or a malformed id.
+    fn find_parent(
         client: &AppstoreClient,
         identifier: &AppleBundleIdentifier,
-    ) -> Result<AppleBundleIdId, ToolError> {
+    ) -> Result<Option<AppleBundleIdId>, ToolError> {
         let mut matches: Vec<_> = client
             .list_bundle_ids(identifier)?
             .into_iter()
             .filter(|resource| resource.attributes.identifier == identifier.as_str())
             .collect();
         match matches.len() {
-            0 => Err(not_found(format!(
-                "no App Store Connect bundle id has identifier `{identifier}`; run \
-                 appstore.bundle_id.ensure first"
-            ))),
+            0 => Ok(None),
             1 => {
                 let resource = matches.remove(0);
-                AppleBundleIdId::parse(&resource.id).map_err(|err| ToolError {
-                    kind: willikins_core::ToolErrorKind::Provider,
-                    message: format!("App Store Connect returned a malformed bundle id id: {err}"),
-                })
+                AppleBundleIdId::parse(&resource.id)
+                    .map(Some)
+                    .map_err(|err| ToolError {
+                        kind: willikins_core::ToolErrorKind::Provider,
+                        message: format!(
+                            "App Store Connect returned a malformed bundle id id: {err}"
+                        ),
+                    })
             }
             count => Err(willikins_core::tool::helpers::conflict(format!(
                 "{count} App Store Connect bundle ids already have identifier `{identifier}`; \
                  this tool cannot disambiguate"
             ))),
         }
+    }
+
+    /// The error `ensure` raises when the parent bundle id is still
+    /// missing at apply time -- this tool cannot create one itself.
+    fn parent_not_found(identifier: &AppleBundleIdentifier) -> ToolError {
+        not_found(format!(
+            "no App Store Connect bundle id has identifier `{identifier}`; run \
+             appstore.bundle_id.ensure first"
+        ))
     }
 
     /// The setting key `capability` requires, if any (decision (d)):
@@ -281,12 +311,21 @@ impl AppstoreBundleIdCapabilityEnsure {
         }
     }
 
+    /// `parent` is `None` when `identifier` is not registered yet --
+    /// `Absent`, exactly as when the identifier is registered but the
+    /// capability itself is not on it, since either way there is nothing
+    /// this tool can report but "not there".
     fn observe(
         client: &AppstoreClient,
-        parent: &AppleBundleIdId,
+        parent: Option<&AppleBundleIdId>,
         capability: &AppleCapabilityType,
         setting: Option<&AppleCapabilitySetting>,
     ) -> Result<Observation, ToolError> {
+        let Some(parent) = parent else {
+            return Ok(Observation::Absent {
+                predicted: Self::outputs_for(capability),
+            });
+        };
         let Some(row) = client
             .list_bundle_id_capabilities(parent)?
             .into_iter()
@@ -375,8 +414,8 @@ impl Tool for AppstoreBundleIdCapabilityEnsure {
         let setting: Option<AppleCapabilitySetting> = get_optional(inputs, "setting")?;
         Self::check_setting_pairing(&capability, setting.as_ref())?;
         let client = client_for(&self.base_url, &issuer_id, &key_id, &key)?;
-        let parent = Self::resolve_parent(&client, &identifier)?;
-        Self::observe(&client, &parent, &capability, setting.as_ref())
+        let parent = Self::find_parent(&client, &identifier)?;
+        Self::observe(&client, parent.as_ref(), &capability, setting.as_ref())
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
@@ -389,14 +428,24 @@ impl Tool for AppstoreBundleIdCapabilityEnsure {
         let setting: Option<AppleCapabilitySetting> = get_optional(inputs, "setting")?;
         Self::check_setting_pairing(&capability, setting.as_ref())?;
         let client = client_for(&self.base_url, &issuer_id, &key_id, &key)?;
-        let parent = Self::resolve_parent(&client, &identifier)?;
-        match Self::observe(&client, &parent, &capability, setting.as_ref())? {
+        let parent = Self::find_parent(&client, &identifier)?;
+        match Self::observe(&client, parent.as_ref(), &capability, setting.as_ref())? {
             Observation::Present(outputs) => Ok(Ensured {
                 outputs,
                 changed: false,
             }),
             Observation::Mismatch { .. } => Err(Self::setting_mismatch_conflict(&capability)),
             Observation::Absent { .. } => {
+                // `observe` reported `Absent` either because the parent
+                // does not exist yet (this tool's own module doc, "Read:
+                // list the parent") or because it exists but the
+                // capability itself is not on it. Only the first is a
+                // hard refusal here: this tool still cannot create a
+                // bundle id, only report on and switch capabilities on
+                // one that already exists.
+                let Some(parent) = parent else {
+                    return Err(Self::parent_not_found(&identifier));
+                };
                 if Self::needs_portal_configuration(&capability) {
                     return Err(Self::portal_configuration_refusal(&capability));
                 }
@@ -413,7 +462,8 @@ impl Tool for AppstoreBundleIdCapabilityEnsure {
                     // `appstore.bundle_id.ensure` and
                     // `buildkite.pipeline.ensure` both use.
                     Err(err) => {
-                        match Self::observe(&client, &parent, &capability, setting.as_ref())? {
+                        match Self::observe(&client, Some(&parent), &capability, setting.as_ref())?
+                        {
                             Observation::Present(outputs) => Ok(Ensured {
                                 outputs,
                                 changed: false,

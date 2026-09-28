@@ -213,8 +213,12 @@ fn mismatch_platform_agrees_and_is_checked_before_name() {
 // `appstore.bundle_id_capability.ensure`
 // ---------------------------------------------------------------------
 
+/// Milestone 3e's T3-blocking fix, 2026-09-28: `read` reports `Absent`
+/// for a capability whose parent bundle id is not registered yet, the
+/// same precedent `profile_absent_when_identifier_not_registered_agrees`
+/// already pins for `appstore.profile.ensure`.
 #[test]
-fn capability_not_found_agrees_by_error_kind() {
+fn capability_absent_when_identifier_not_registered_agrees() {
     let mut provider = MockProvider::start();
     provider
         .mock("GET", "/v1/bundleIds")
@@ -224,9 +228,32 @@ fn capability_not_found_agrees_by_error_kind() {
         .create();
     let live = AppstoreBundleIdCapabilityEnsure::new(provider.url())
         .read(&capability_inputs("PUSH_NOTIFICATIONS"))
-        .expect_err("the live tool refuses");
+        .expect("the live tool reads");
     let fake = FakeAppstoreBundleIdCapabilityEnsure::new(Arc::new(Mutex::new(FakeState::new())))
         .read(&capability_inputs("PUSH_NOTIFICATIONS"))
+        .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+/// `ensure`, not `read`, is where a genuinely unregistered parent is
+/// still a hard `NotFound` on both sides: neither tool can create a
+/// bundle id itself.
+#[test]
+#[allow(clippy::disallowed_methods)] // a parity test mints its own token
+fn capability_ensure_not_found_when_parent_missing_agrees_by_error_kind() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"data": []}).to_string())
+        .create();
+    let token = willikins_core::SinkToken::new();
+    let live = AppstoreBundleIdCapabilityEnsure::new(provider.url())
+        .ensure(&capability_inputs("PUSH_NOTIFICATIONS"), &token)
+        .expect_err("the live tool refuses");
+    let fake = FakeAppstoreBundleIdCapabilityEnsure::new(Arc::new(Mutex::new(FakeState::new())))
+        .ensure(&capability_inputs("PUSH_NOTIFICATIONS"), &token)
         .expect_err("the fake tool refuses");
     assert_eq!(live.kind, fake.kind);
 }
