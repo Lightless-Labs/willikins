@@ -174,6 +174,34 @@ gates (the app record exists; `APP_GROUPS` on all three identifiers) belong to T
 today when a node fails, established from the code: it **stops**, and every later instance in plan
 order, dependent or not, is `NotRun` (see (j), "Today").
 
+**Addendum:** 2026-09-28 (implementer) — **G1 landed, three commits** (`e06d85c`, `650cae7`,
+`c9fa63e`). `willikins-core`: `Gate`/`GateError`, `Tool::gate()` (default `None`), `Catalog::insert`'s
+gate validation (not pure / subject not an input / subject `AnySecret` / subject secret, each with its
+own test), `Action::Blocked`/`Action::Skip`, `plan`'s skip-set walk (`GateTracking`), `NodeResult::Skipped`,
+`aggregate_for_each_port`'s any-instance-blocked rule, and `Plan.blocked: Vec<BlockedGate>`
+(skip-if-empty). `crates/willikins-core/tests/plan_gates.rs`: small in-test tools only (a mixed
+`for_each` gate, a shared `test.counted` read counter, four `Catalog::insert` refusals), 7 tests,
+including a `downstream` node bound only to `consumer` (itself skipped only because of the blocked
+`gate` instance) to pin the "holds transitively" claim one hop out, not just the direct case.
+`willikins-cli`: `action_text`'s `Blocked`/`Skip` labels and `plan_text`'s `blocked:` section (decision
+(j), point 7), two new render tests (acceptance 13). Gates run: `cargo fmt --all --check`; `cargo
+clippy -p willikins-core --all-targets` and `-p willikins-cli --all-targets` (both `-D warnings`,
+both clean); `cargo test -p willikins-core` (19 suites) and `-p willikins-cli` (15 suites), both green;
+`cargo check -p willikins-types`; `cargo test -p willikins-dsl --test acceptance`
+(`characterization_of_every_document` byte-identical, acceptance 9). Every `willikins_core::Plan`
+literal outside this crate (ten `willikins-journal` test fixtures, verified compiling under the `-p
+willikins-cli` clippy pass since it pulls that crate in) gained `blocked: Vec::new()`, purely
+mechanical. `mcp_server__the_tool_list_and_every_schema_is_snapshotted`'s insta snapshot moved
+additively one commit early (`PlanResponse` embeds `Plan` directly), fixed and reverified green
+(6/6) rather than left for G2. **Honest limits, for G2/G3:** no gate tool exists yet in the fake
+catalog, so the CLI/MCP `blocked` surface is proven only at the render layer, never through a real
+`plan`/`apply` binary run — that needs a fake gate tool or T3's own Walter gates. `Plan.blocked`
+appears in the published JSON Schema's `required` array despite `skip_serializing_if` (same
+pre-existing pattern as `PortSpec.derived_only`); an MCP client validating strictly against the
+schema would reject a gate-free plan. `BlockedGate` derives `Serialize`/`JsonSchema` only, not
+`Deserialize`, though `NodeName`/`ToolName`/`PortName` all already do — trivial to add when G2 needs
+it for the journal.
+
 ## Goal
 
 One workflow document, `workflows/walter-ios-app.yaml`, provisions everything a provider API can
