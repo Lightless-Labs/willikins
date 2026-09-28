@@ -132,6 +132,7 @@ fn read_reports_absent_when_the_capability_is_not_in_the_list() {
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_empty").to_string())
         .create();
@@ -146,6 +147,7 @@ fn read_reports_present_when_the_capability_is_already_in_the_list() {
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_push").to_string())
         .create();
@@ -165,6 +167,7 @@ fn read_of_a_capability_is_unaffected_by_another_rows_unexpected_settings_shape(
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_an_unparsed_setting_shape").to_string())
         .create();
@@ -173,6 +176,93 @@ fn read_of_a_capability_is_unaffected_by_another_rows_unexpected_settings_shape(
         .read(&inputs_for("HEALTHKIT"))
         .unwrap_or_else(|err| panic!("{:?}: {}", err.kind, err.message));
     assert!(matches!(observation, Observation::Present(_)));
+}
+
+// ---------------------------------------------------------------------
+// `read`/`ensure`: the capability list paginates
+// ---------------------------------------------------------------------
+
+/// Apple's row order for `GET .../bundleIdCapabilities` was observed live
+/// to change between reads (the milestone 3e capability read fixes'
+/// independent review, 2026-09-28). Before this fix the client read a
+/// single unpaginated page, so a capability sitting past page one would
+/// read `Absent`. Page one here carries the `HEALTHKIT`/`ICLOUD` rows
+/// (reusing `capabilities_list_with_an_unparsed_setting_shape`, which
+/// already has no `PUSH_NOTIFICATIONS` row) plus a `links.next` cursor;
+/// page two (`capabilities_list_with_push`) is where the requested
+/// capability actually sits.
+#[test]
+fn read_finds_the_requested_capability_on_a_later_page() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    let mut page_one = fixture("capabilities_list_with_an_unparsed_setting_shape");
+    page_one["links"] = serde_json::json!({
+        "next": format!(
+            "{}/v1/bundleIds/T6G4XCV345/bundleIdCapabilities?cursor=PAGE2&limit=200",
+            provider.url()
+        ),
+    });
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::UrlEncoded("limit".into(), "200".into()))
+        .with_status(200)
+        .with_body(page_one.to_string())
+        .create();
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "cursor".into(),
+            "PAGE2".into(),
+        ))
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_push").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool.read(&inputs_for("PUSH_NOTIFICATIONS")).unwrap();
+    assert!(matches!(observation, Observation::Present(_)));
+}
+
+/// The same two-page list, exercised through `ensure`: a capability the
+/// unstable row order put on page two must converge with no `POST` at
+/// all, never a duplicate create.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_never_posts_when_the_requested_capability_is_on_a_later_page() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    let mut page_one = fixture("capabilities_list_with_an_unparsed_setting_shape");
+    page_one["links"] = serde_json::json!({
+        "next": format!(
+            "{}/v1/bundleIds/T6G4XCV345/bundleIdCapabilities?cursor=PAGE2&limit=200",
+            provider.url()
+        ),
+    });
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::UrlEncoded("limit".into(), "200".into()))
+        .with_status(200)
+        .with_body(page_one.to_string())
+        .create();
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "cursor".into(),
+            "PAGE2".into(),
+        ))
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_push").to_string())
+        .create();
+    let create = provider
+        .mock("POST", "/v1/bundleIdCapabilities")
+        .expect(0)
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let token = SinkToken::new();
+    let ensured = tool
+        .ensure(&inputs_for("PUSH_NOTIFICATIONS"), &token)
+        .unwrap();
+    assert!(!ensured.changed);
+    create.assert();
 }
 
 // ---------------------------------------------------------------------
@@ -186,6 +276,7 @@ fn ensure_creates_an_ordinary_capability_when_absent() {
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_empty").to_string())
         .create();
@@ -222,6 +313,7 @@ fn ensure_is_a_no_op_when_the_ordinary_capability_is_already_present() {
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_push").to_string())
         .create();
@@ -250,6 +342,7 @@ fn ensure_refuses_app_groups_apple_pay_and_icloud_when_absent_and_never_posts() 
         mock_bundle_id_lookup(&mut provider);
         provider
             .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+            .match_query(mockito::Matcher::Any)
             .with_status(200)
             .with_body(fixture("capabilities_list_empty").to_string())
             .create();
@@ -275,6 +368,7 @@ fn ensure_converges_an_already_present_portal_only_capability_with_no_refusal() 
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(
             serde_json::json!({"data": [{"attributes": {"capabilityType": "APP_GROUPS"}}]})
@@ -362,6 +456,7 @@ fn read_reports_present_when_the_requested_option_is_the_only_one_listed() {
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_data_protection").to_string())
         .create();
@@ -383,6 +478,7 @@ fn read_reports_mismatch_when_a_different_option_is_listed() {
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_data_protection_mismatched").to_string())
         .create();
@@ -407,6 +503,7 @@ fn read_reports_mismatch_when_no_option_is_listed_at_all() {
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_data_protection_no_settings").to_string())
         .create();
@@ -429,6 +526,7 @@ fn read_reports_mismatch_when_two_options_are_listed_with_no_enabled_field() {
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_data_protection_two_listed").to_string())
         .create();
@@ -454,6 +552,7 @@ fn read_reports_mismatch_when_two_options_are_listed_and_the_first_is_requested(
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_data_protection_two_listed").to_string())
         .create();
@@ -478,6 +577,7 @@ fn read_reports_mismatch_when_another_option_is_enabled_beside_the_requested_one
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_data_protection_two_enabled").to_string())
         .create();
@@ -504,6 +604,7 @@ fn read_reports_present_when_every_option_carries_enabled_and_only_the_requested
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_data_protection_one_enabled").to_string())
         .create();
@@ -532,6 +633,7 @@ fn read_reports_mismatch_when_an_enabled_option_sits_beside_a_bare_listed_one() 
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_data_protection_mixed_enabled").to_string())
         .create();
@@ -561,6 +663,7 @@ fn ensure_creates_data_protection_with_the_requested_setting() {
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_empty").to_string())
         .create();
@@ -609,6 +712,7 @@ fn ensure_refuses_a_setting_mismatch_with_conflict_and_never_posts() {
     mock_bundle_id_lookup(&mut provider);
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
         .with_status(200)
         .with_body(fixture("capabilities_list_with_data_protection_mismatched").to_string())
         .create();
