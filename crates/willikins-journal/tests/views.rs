@@ -82,6 +82,16 @@ fn run_finished_ok(run_id: RunId) -> Event {
     }
 }
 
+fn run_finished_blocked(run_id: RunId, blocked: Vec<willikins_core::BlockedGate>) -> Event {
+    Event::RunFinished {
+        run_id,
+        outcome: willikins_journal::Outcome::Blocked {
+            outputs: Redacted::from(&IndexMap::<OutputName, Value>::new()),
+            blocked,
+        },
+    }
+}
+
 /// A plan whose run has already started is not waiting on a human,
 /// whatever its approval events say. Journaling a `RunStarted` for a plan
 /// that requires approval but carries no `ApprovalGranted` is not
@@ -255,6 +265,65 @@ fn two_runs_of_one_plan_replay_without_panicking() {
         Some(second),
         "the last RunStarted wins: {record:?}"
     );
+}
+
+/// `RunFinished { outcome: Outcome::Blocked }` (task G2, decision (j))
+/// folds to `RunState::Blocked`, `RunRecord.blocked` naming the same
+/// gates, and `RunRecord.next_step` set to the fixed re-run instruction --
+/// never `Failed`, and never `next_step` for a plain `Succeeded` run.
+#[test]
+fn a_blocked_run_folds_to_run_state_blocked_with_its_gates_and_next_step() {
+    let mut journal = MemoryJournal::new();
+    let plan_id = PlanId::new();
+    let run_id = RunId::new();
+    journal
+        .append(plan_recorded(plan_id, false, &["gate", "downstream"]))
+        .unwrap();
+    journal.append(run_started(run_id, plan_id)).unwrap();
+    journal
+        .append(node_finished(run_id, "gate", NodeStatus::Blocked))
+        .unwrap();
+    journal
+        .append(node_finished(run_id, "downstream", NodeStatus::Skipped))
+        .unwrap();
+    let gate = willikins_core::BlockedGate {
+        node: node("gate"),
+        instance: None,
+        tool: willikins_core::ToolName::parse("test.gate").unwrap(),
+        need: "the operator makes the test condition true".to_string(),
+        how: "do the manual thing".to_string(),
+        subject: Vec::new(),
+        holds_back: vec![node("downstream")],
+    };
+    journal
+        .append(run_finished_blocked(run_id, vec![gate]))
+        .unwrap();
+
+    let record = journal.run(&run_id).expect("run must replay");
+    assert_eq!(record.state, RunState::Blocked);
+    assert_eq!(record.blocked.len(), 1);
+    assert_eq!(record.blocked[0].node.as_str(), "gate");
+    assert_eq!(
+        record.next_step.as_deref(),
+        Some(willikins_journal::BLOCKED_NEXT_STEP)
+    );
+    assert!(record.error.is_none());
+
+    // A plain succeeded run carries neither.
+    let plan_id_2 = PlanId::new();
+    let run_id_2 = RunId::new();
+    journal
+        .append(plan_recorded(plan_id_2, false, &["gate"]))
+        .unwrap();
+    journal.append(run_started(run_id_2, plan_id_2)).unwrap();
+    journal
+        .append(node_finished(run_id_2, "gate", NodeStatus::Computed))
+        .unwrap();
+    journal.append(run_finished_ok(run_id_2)).unwrap();
+    let ok_record = journal.run(&run_id_2).expect("run must replay");
+    assert_eq!(ok_record.state, RunState::Succeeded);
+    assert!(ok_record.blocked.is_empty());
+    assert!(ok_record.next_step.is_none());
 }
 
 /// An unknown id is `None`, not a panic or an empty record.

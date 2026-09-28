@@ -362,14 +362,7 @@ where
         journal_error = Some(err);
     }
 
-    let outcome = match &result {
-        Ok(applied) => Outcome::Succeeded {
-            outputs: Redacted::from(&applied.outputs),
-        },
-        Err(error) => Outcome::Failed {
-            error: Redacted::from(error),
-        },
-    };
+    let outcome = outcome_of(&result);
     if let Err(err) = journal.append(Event::RunFinished { run_id, outcome })
         && journal_error.is_none()
     {
@@ -377,6 +370,26 @@ where
     }
 
     (result, run_id, journal_error)
+}
+
+/// [`Event::RunFinished`]'s `outcome` for `apply`'s own result: `Blocked`
+/// when it succeeded with a non-empty [`Applied::blocked`], `Succeeded`
+/// otherwise, `Failed` on any `Err`. Shared by [`run_and_journal`] and
+/// [`continue_run_and_journal`] so the two never disagree about which of
+/// the three a given `apply` result means.
+fn outcome_of(result: &Result<Applied, ApplyError>) -> Outcome {
+    match result {
+        Ok(applied) if applied.blocked.is_empty() => Outcome::Succeeded {
+            outputs: Redacted::from(&applied.outputs),
+        },
+        Ok(applied) => Outcome::Blocked {
+            outputs: Redacted::from(&applied.outputs),
+            blocked: applied.blocked.clone(),
+        },
+        Err(error) => Outcome::Failed {
+            error: Redacted::from(error),
+        },
+    }
 }
 
 /// Like [`run_and_journal`], but for a run whose `RunStarted` the caller
@@ -419,14 +432,7 @@ where
     let result = run(&mut observer);
     let mut journal_error = observer.into_error();
 
-    let outcome = match &result {
-        Ok(applied) => Outcome::Succeeded {
-            outputs: Redacted::from(&applied.outputs),
-        },
-        Err(error) => Outcome::Failed {
-            error: Redacted::from(error),
-        },
-    };
+    let outcome = outcome_of(&result);
     if let Err(err) = journal.append(Event::RunFinished { run_id, outcome })
         && journal_error.is_none()
     {

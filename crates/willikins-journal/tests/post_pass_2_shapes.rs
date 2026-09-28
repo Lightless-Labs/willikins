@@ -191,6 +191,8 @@ fn every_node_status_kind_the_pre_change_fixture_misses_replays() {
                 NodeStatus::Unchanged => "unchanged",
                 NodeStatus::Converged => "converged",
                 NodeStatus::Failed { .. } => "failed",
+                NodeStatus::Blocked => "blocked",
+                NodeStatus::Skipped => "skipped",
                 NodeStatus::NotRun => "not_run",
             });
         }

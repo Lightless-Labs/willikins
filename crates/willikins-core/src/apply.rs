@@ -29,7 +29,7 @@ use indexmap::IndexMap;
 
 use crate::check::Checked;
 use crate::class::Class;
-use crate::plan::{Action, Plan, PlannedNode};
+use crate::plan::{Action, BlockedGate, Plan, PlannedNode};
 use crate::plan::{
     ForEachInstance, InstanceFingerprint, NodeResult, PlanError, ResolveCtx, fill_outputs, plan,
     resolve_binding,
@@ -106,8 +106,21 @@ pub enum NodeStatus {
         /// The failure `ensure` reported.
         error: ToolError,
     },
+    /// This instance's own planned [`Action`] was [`Action::Blocked`]: a
+    /// [`crate::tool::Gate`] read [`crate::tool::Observation::Absent`]. No
+    /// tool was called; the operator must act and the run must be
+    /// re-planned. See decision (j),
+    /// `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.
+    Blocked,
+    /// This instance's own planned [`Action`] was [`Action::Skip`]: it
+    /// binds a [`Self::Blocked`] or [`Self::Skipped`] node, directly or
+    /// transitively, so it was never read or called. Distinct from
+    /// [`Self::NotRun`], which means the *run itself* stopped before
+    /// reaching this instance — a `Skipped` instance was reached, and the
+    /// rest of the run continued past it.
+    Skipped,
     /// This instance was never attempted: an earlier instance in the same
-    /// run failed or was blocked first.
+    /// run failed, and the run stopped there.
     NotRun,
 }
 
@@ -131,13 +144,26 @@ pub struct AppliedNode {
 /// The result of a successful [`apply`] run.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct Applied {
-    /// Every attempted node instance, in plan order. An instance blocked by
-    /// [`ApplyError::UnknownInput`] before it was ever started is absent
-    /// here rather than carrying a synthetic status; see that variant's
-    /// own doc.
+    /// Every attempted node instance, in plan order — including one whose
+    /// own planned [`Action`] was [`Action::Blocked`] or [`Action::Skip`]
+    /// (see [`NodeStatus::Blocked`]/[`NodeStatus::Skipped`]): the walk
+    /// continues past those, unlike a tool failure. An instance the run
+    /// stopped at (rejected by [`ApplyError::UnknownInput`] or
+    /// [`ApplyError::UnknownRequiredInput`]) before it was ever started is
+    /// absent here rather than carrying a synthetic status; see those
+    /// variants' own docs.
     pub nodes: Vec<AppliedNode>,
     /// Every workflow output's resolved value.
     pub outputs: IndexMap<OutputName, Value>,
+    /// Every gate this run found [`Action::Blocked`], taken from the fresh
+    /// re-plan rule 2 produced — the same shape [`Plan::blocked`] carries,
+    /// and empty under the same condition. `#[serde(skip_serializing_if =
+    /// "Vec::is_empty")]` so an `Applied` with no blocked gate serializes
+    /// byte-identically to before this field existed. `Ok(Applied)` with a
+    /// non-empty `blocked` is a **blocked run**, not an error — see
+    /// decision (j), `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<BlockedGate>,
 }
 
 /// One node instance's identity — the `(node, instance)` pair a
@@ -492,8 +518,17 @@ impl ApplyObserver for RecordingObserver {
 ///    the workspace.
 /// 4. Walks the fresh plan in order, one node instance at a time,
 ///    classifying each into a [`NodeStatus`] per the table on
-///    [`NodeStatus`]'s own variants; a tool failure or a blocked instance
-///    stops the walk and returns the partial result.
+///    [`NodeStatus`]'s own variants, **by its planned [`Action`] first**:
+///    [`Action::Blocked`] and [`Action::Skip`] are recorded as
+///    [`NodeStatus::Blocked`]/[`NodeStatus::Skipped`] with no tool call and
+///    no input resolution, and the walk **continues** past them; only a
+///    tool failure stops the walk and returns the partial result, with a
+///    [`NodeStatus::NotRun`] tail. `Applied::blocked` carries the fresh
+///    plan's own `blocked` list, so a run that ends with every instance
+///    classified and no tool failure but a non-empty `blocked` is a
+///    **blocked run** (see decision (j),
+///    `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`), `Ok`, not an
+///    error.
 /// 5. Resolves workflow outputs from the run's own instance outputs, the
 ///    same way [`plan`] resolves them from planned ones (see the module
 ///    docs).
@@ -563,11 +598,61 @@ pub fn apply(
             .unwrap_or_else(|| unreachable!("`approved` was planned against a compatible catalog"));
         let spec = tool.spec();
 
+        // A whole-node `Action::Skip` (decision (j), point 3) plans as a
+        // single `PlannedNode` with `instance: None`, whatever `node.for_each`
+        // says — `plan` never expands a skipped `for_each` source. Detected
+        // once, from the group's first entry, before the inner loop: an
+        // individual `for_each` instance's own action can be `Blocked` (a
+        // gate applied per item) but never `Skip` — only the node as a whole
+        // collapses to one `Skip` entry (see `plan`'s own `GateTracking`).
+        let whole_skip = fresh.nodes[index].action == Action::Skip;
+
         let mut group_end = index;
-        let mut group_outputs: Vec<(Option<String>, Outputs)> = Vec::new();
+        let mut group_outputs: Vec<(Option<String>, Outputs, bool)> = Vec::new();
 
         while group_end < fresh.nodes.len() && fresh.nodes[group_end].name == name {
             let planned = &fresh.nodes[group_end];
+
+            // Classify by `planned.action` first, before any input
+            // resolution and before the `pure` branch: a `Blocked` gate
+            // (always pure) must not be reported `Computed`, and a `Skip`
+            // instance's `inputs` are empty by construction (`plan`, point
+            // 3), so resolving its bindings — or even checking a
+            // non-pure tool's required ports against them — would panic or
+            // deliver an `Unknown` through a conversion edge that expects a
+            // known value. Neither tool is called; the walk simply
+            // continues (decision (j), point 4).
+            if matches!(planned.action, Action::Blocked | Action::Skip) {
+                let outputs = planned.outputs.clone();
+                let blocked = planned.action == Action::Blocked;
+                let status = if blocked {
+                    NodeStatus::Blocked
+                } else {
+                    NodeStatus::Skipped
+                };
+                observer.on(ApplyEvent::NodeStarted {
+                    node: name.clone(),
+                    instance: planned.instance.clone(),
+                    inputs: planned.inputs.clone(),
+                });
+                observer.on(ApplyEvent::NodeFinished {
+                    node: name.clone(),
+                    instance: planned.instance.clone(),
+                    status: status.clone(),
+                    outputs: outputs.clone(),
+                });
+                applied_nodes.push(AppliedNode {
+                    name: name.clone(),
+                    instance: planned.instance.clone(),
+                    tool: spec.name.clone(),
+                    status,
+                    outputs: outputs.clone(),
+                });
+                group_outputs.push((planned.instance.clone(), outputs, blocked));
+                group_end += 1;
+                continue;
+            }
+
             let resolved_inputs =
                 resolve_instance_inputs(checked, inputs, catalog, &results, node, planned)?;
 
@@ -591,7 +676,7 @@ pub fn apply(
                     status: NodeStatus::Computed,
                     outputs: outputs.clone(),
                 });
-                group_outputs.push((planned.instance.clone(), outputs));
+                group_outputs.push((planned.instance.clone(), outputs, false));
                 group_end += 1;
                 continue;
             }
@@ -624,7 +709,7 @@ pub fn apply(
                                 status,
                                 outputs: outputs.clone(),
                             });
-                            group_outputs.push((planned.instance.clone(), outputs));
+                            group_outputs.push((planned.instance.clone(), outputs, false));
                         }
                         Err(error) => {
                             observer.on(ApplyEvent::NodeFinished {
@@ -652,6 +737,7 @@ pub fn apply(
                                 applied: Box::new(Applied {
                                     nodes: applied_nodes,
                                     outputs: IndexMap::new(),
+                                    blocked: Vec::new(),
                                 }),
                             });
                         }
@@ -677,7 +763,7 @@ pub fn apply(
                         status: NodeStatus::Converged,
                         outputs: outputs.clone(),
                     });
-                    group_outputs.push((planned.instance.clone(), outputs));
+                    group_outputs.push((planned.instance.clone(), outputs, false));
                 }
                 Some(UnknownRequired::Upstream { port, from }) => {
                     applied_nodes.extend(not_run_tail(&fresh.nodes[group_end + 1..]));
@@ -688,6 +774,7 @@ pub fn apply(
                         applied: Box::new(Applied {
                             nodes: applied_nodes,
                             outputs: IndexMap::new(),
+                            blocked: Vec::new(),
                         }),
                     });
                 }
@@ -701,6 +788,7 @@ pub fn apply(
                         applied: Box::new(Applied {
                             nodes: applied_nodes,
                             outputs: IndexMap::new(),
+                            blocked: Vec::new(),
                         }),
                     });
                 }
@@ -708,8 +796,10 @@ pub fn apply(
             group_end += 1;
         }
 
-        let node_result = if node.for_each.is_none() {
-            let (_, outputs) = group_outputs
+        let node_result = if whole_skip {
+            NodeResult::Skipped
+        } else if node.for_each.is_none() {
+            let (_, outputs, _) = group_outputs
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| unreachable!("a non-for_each node has exactly one instance"));
@@ -718,16 +808,12 @@ pub fn apply(
             NodeResult::ForEach(
                 group_outputs
                     .into_iter()
-                    .map(|(key, outputs)| ForEachInstance {
+                    .map(|(key, outputs, blocked)| ForEachInstance {
                         key: key.unwrap_or_else(|| {
                             unreachable!("every for_each instance carries its own key")
                         }),
                         outputs,
-                        // `apply` does not yet classify `Action::Blocked`
-                        // specially (task G2); every instance it resolves
-                        // here already ran, or the run would have stopped,
-                        // so `false` is correct for every document today.
-                        blocked: false,
+                        blocked,
                     })
                     .collect(),
             )
@@ -760,6 +846,7 @@ pub fn apply(
     Ok(Applied {
         nodes: applied_nodes,
         outputs,
+        blocked: fresh.blocked,
     })
 }
 

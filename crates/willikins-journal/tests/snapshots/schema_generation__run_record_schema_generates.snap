@@ -9,6 +9,13 @@ expression: schema
   "description": "A run of a plan, replayed from its `RunStarted`, `NodeStarted`,\n`NodeFinished`, and `RunFinished` events.",
   "type": "object",
   "properties": {
+    "blocked": {
+      "description": "Every gate this run found blocked, from [`Outcome::Blocked`]. Empty\nfor a run that never reports that outcome --\n`#[serde(skip_serializing_if = \"Vec::is_empty\")]` so a `RunRecord`\nwith none serializes byte-identically to before this field existed\n(task G2, decision (j)).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/BlockedGate"
+      }
+    },
     "error": {
       "description": "The failure the run ended with, if any.",
       "anyOf": [
@@ -31,6 +38,13 @@ expression: schema
         }
       ]
     },
+    "next_step": {
+      "description": "What the operator should do next, present exactly when `state` is\n[`RunState::Blocked`]: `\"re-run this document once every blocked\ngate's need is met\"`. `#[serde(skip_serializing_if = \"Option::is_none\")]`\nfor the same byte-identical-when-absent reason as `blocked`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "nodes": {
       "description": "Every node instance the run reached, in the applied plan's own\norder when that plan's `PlanRecorded` event is in this journal\n(with [`NodeStatus::NotRun`] filling in any instance the run never\nstarted); in the order `NodeFinished` events arrived otherwise.",
       "type": "array",
@@ -39,7 +53,7 @@ expression: schema
       }
     },
     "outputs": {
-      "description": "Every workflow output's resolved value. Empty until (and unless)\nthe run's `RunFinished` reports [`Outcome::Succeeded`].",
+      "description": "Every workflow output's resolved value. Empty until (and unless)\nthe run's `RunFinished` reports [`Outcome::Succeeded`] or\n[`Outcome::Blocked`].",
       "$ref": "#/$defs/RedactedResolvedOutputs"
     },
     "plan_id": {
@@ -70,9 +84,71 @@ expression: schema
     "started_at",
     "state",
     "nodes",
-    "outputs"
+    "outputs",
+    "blocked"
   ],
   "$defs": {
+    "BlockedGate": {
+      "description": "One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it\ntrue, what it was checking, and every node it holds back.\n\nPlain data — never a [`Value`] — so it holds no secret by construction:\n`need` and `how` come straight from the gate's own `&'static str`s, and\n`subject` is rendered text, never a live value. See\n[`crate::tool::Gate`]'s own doc.\n\nDerives [`serde::Deserialize`] as well as `Serialize` (added by task G2):\n`willikins-journal`'s `Event::RunFinished` stores a run's own\n`Vec<BlockedGate>` directly rather than through `Redacted`, since none\nof its fields is ever a [`Value`] — the same reasoning that lets\n[`crate::apply::NodeStatus`] round-trip untouched.",
+      "type": "object",
+      "properties": {
+        "holds_back": {
+          "description": "Every node this gate holds back — [`Action::Skip`] because it binds\nthis gate directly or transitively — in plan order, deduplicated by\nname.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NodeName"
+          }
+        },
+        "how": {
+          "description": "The gate's own [`crate::tool::Gate::how`].",
+          "type": "string"
+        },
+        "instance": {
+          "description": "The `for_each` instance key, if any; `None` for a node with no\n`for_each`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "need": {
+          "description": "The gate's own [`crate::tool::Gate::need`].",
+          "type": "string"
+        },
+        "node": {
+          "description": "The blocked node.",
+          "$ref": "#/$defs/NodeName"
+        },
+        "subject": {
+          "description": "Each of the gate's [`crate::tool::Gate::subject`] ports, rendered\nfrom the bound input that reached it, in declared order.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/PortName"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "tool": {
+          "description": "The gate tool this node calls.",
+          "$ref": "#/$defs/ToolName"
+        }
+      },
+      "required": [
+        "node",
+        "tool",
+        "need",
+        "how",
+        "subject",
+        "holds_back"
+      ]
+    },
     "NodeName": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]*$"
@@ -151,7 +227,33 @@ expression: schema
           ]
         },
         {
-          "description": "This instance was never attempted: an earlier instance in the same\nrun failed or was blocked first.",
+          "description": "This instance's own planned [`Action`] was [`Action::Blocked`]: a\n[`crate::tool::Gate`] read [`crate::tool::Observation::Absent`]. No\ntool was called; the operator must act and the run must be\nre-planned. See decision (j),\n`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "blocked"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "This instance's own planned [`Action`] was [`Action::Skip`]: it\nbinds a [`Self::Blocked`] or [`Self::Skipped`] node, directly or\ntransitively, so it was never read or called. Distinct from\n[`Self::NotRun`], which means the *run itself* stopped before\nreaching this instance — a `Skipped` instance was reached, and the\nrest of the run continued past it.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "skipped"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "This instance was never attempted: an earlier instance in the same\nrun failed, and the run stopped there.",
           "type": "object",
           "properties": {
             "kind": {
@@ -168,6 +270,10 @@ expression: schema
     "PlanId": {
       "type": "string",
       "format": "uuid"
+    },
+    "PortName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
     },
     "PrincipalId": {
       "type": "string",
@@ -219,9 +325,14 @@ expression: schema
           "const": "running"
         },
         {
-          "description": "Finished successfully.",
+          "description": "Finished successfully, with no gate blocked.",
           "type": "string",
           "const": "succeeded"
+        },
+        {
+          "description": "Finished with no tool failure, but at least one gate blocked (task\nG2, decision (j)): every node not downstream of it ran. See\n[`RunRecord::blocked`]/[`RunRecord::next_step`].",
+          "type": "string",
+          "const": "blocked"
         },
         {
           "description": "Finished with a failure.",
@@ -276,6 +387,10 @@ expression: schema
           "const": "Invalid"
         }
       ]
+    },
+    "ToolName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
     }
   }
 }

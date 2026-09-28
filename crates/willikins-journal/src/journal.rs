@@ -6,7 +6,7 @@
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Class, InstanceFingerprint, NodeName, NodeStatus, OutputName, Outputs, Value,
+    BlockedGate, Class, InstanceFingerprint, NodeName, NodeStatus, OutputName, Outputs, Value,
 };
 use willikins_types::WorkflowName;
 
@@ -81,6 +81,11 @@ pub struct PlanRecord {
     pub applied: Option<RunId>,
 }
 
+/// [`RunRecord::next_step`]'s fixed text for a [`RunState::Blocked`] run
+/// (decision (j), point 7): what the CLI prints and what an MCP
+/// `run_status` hands an agent to forward to its operator, verbatim.
+pub const BLOCKED_NEXT_STEP: &str = "re-run this document once every blocked gate's need is met";
+
 /// Whether a run is still going, or how it ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -90,8 +95,12 @@ pub enum RunState {
     /// view -- it has no way to distinguish "still running" from "will
     /// never finish").
     Running,
-    /// Finished successfully.
+    /// Finished successfully, with no gate blocked.
     Succeeded,
+    /// Finished with no tool failure, but at least one gate blocked (task
+    /// G2, decision (j)): every node not downstream of it ran. See
+    /// [`RunRecord::blocked`]/[`RunRecord::next_step`].
+    Blocked,
     /// Finished with a failure.
     Failed,
 }
@@ -132,10 +141,24 @@ pub struct RunRecord {
     /// started); in the order `NodeFinished` events arrived otherwise.
     pub nodes: Vec<RunNode>,
     /// Every workflow output's resolved value. Empty until (and unless)
-    /// the run's `RunFinished` reports [`Outcome::Succeeded`].
+    /// the run's `RunFinished` reports [`Outcome::Succeeded`] or
+    /// [`Outcome::Blocked`].
     pub outputs: Redacted<IndexMap<OutputName, Value>>,
     /// The failure the run ended with, if any.
     pub error: Option<Redacted<willikins_core::ApplyError>>,
+    /// Every gate this run found blocked, from [`Outcome::Blocked`]. Empty
+    /// for a run that never reports that outcome --
+    /// `#[serde(skip_serializing_if = "Vec::is_empty")]` so a `RunRecord`
+    /// with none serializes byte-identically to before this field existed
+    /// (task G2, decision (j)).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<BlockedGate>,
+    /// What the operator should do next, present exactly when `state` is
+    /// [`RunState::Blocked`]: `"re-run this document once every blocked
+    /// gate's need is met"`. `#[serde(skip_serializing_if = "Option::is_none")]`
+    /// for the same byte-identical-when-absent reason as `blocked`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<String>,
     /// When it finished, if it has.
     pub finished_at: Option<Timestamp>,
 }
@@ -395,6 +418,8 @@ fn fold_run_started(
             nodes: Vec::new(),
             outputs: Redacted::from(&IndexMap::<OutputName, Value>::new()),
             error: None,
+            blocked: Vec::new(),
+            next_step: None,
             finished_at: None,
         },
     );
@@ -452,6 +477,12 @@ fn fold_run_finished(runs: &mut IndexMap<RunId, RunRecord>, entry: &Entry) {
             Outcome::Succeeded { outputs } => {
                 run.state = RunState::Succeeded;
                 run.outputs = outputs.clone();
+            }
+            Outcome::Blocked { outputs, blocked } => {
+                run.state = RunState::Blocked;
+                run.outputs = outputs.clone();
+                run.blocked.clone_from(blocked);
+                run.next_step = Some(BLOCKED_NEXT_STEP.to_string());
             }
             Outcome::Failed { error } => {
                 run.state = RunState::Failed;

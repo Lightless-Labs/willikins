@@ -48,7 +48,9 @@ pub use event::{
 };
 pub use file::{FileJournal, JournalError};
 pub use ids::{PlanId, RunId};
-pub use journal::{ApprovalState, Journal, PlanRecord, RunNode, RunRecord, RunState};
+pub use journal::{
+    ApprovalState, BLOCKED_NEXT_STEP, Journal, PlanRecord, RunNode, RunRecord, RunState,
+};
 pub use memory::MemoryJournal;
 pub use observer::{Append, JournalObserver, continue_run_and_journal, run_and_journal};
 pub use read_only::{ReplayedJournal, replay};

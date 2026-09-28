@@ -14,9 +14,14 @@ expression: schema
       "const": "running"
     },
     {
-      "description": "Finished successfully.",
+      "description": "Finished successfully, with no gate blocked.",
       "type": "string",
       "const": "succeeded"
+    },
+    {
+      "description": "Finished with no tool failure, but at least one gate blocked (task\nG2, decision (j)): every node not downstream of it ran. See\n[`RunRecord::blocked`]/[`RunRecord::next_step`].",
+      "type": "string",
+      "const": "blocked"
     },
     {
       "description": "Finished with a failure.",

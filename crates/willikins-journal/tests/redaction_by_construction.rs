@@ -30,6 +30,7 @@ fn secret_value() -> Value {
 
 /// Every event shape whose payload could hold [`secret_value`]'s bytes,
 /// with it planted in every place that type's own fields allow.
+#[allow(clippy::too_many_lines)] // one flat list of samples; splitting it would scatter the shared setup above
 fn events_carrying_the_secret() -> Vec<Event> {
     let plan_id = PlanId::new();
     let run_id = RunId::new();
@@ -82,6 +83,7 @@ fn events_carrying_the_secret() -> Vec<Event> {
                 outputs: outputs_with_secret.clone(),
             }],
             outputs: resolved_outputs.clone(),
+            blocked: Vec::new(),
         }),
     };
 
@@ -121,6 +123,21 @@ fn events_carrying_the_secret() -> Vec<Event> {
             run_id,
             outcome: willikins_journal::Outcome::Failed {
                 error: Redacted::from(&applied_error),
+            },
+        },
+        Event::RunFinished {
+            run_id,
+            outcome: willikins_journal::Outcome::Blocked {
+                outputs: Redacted::from(&resolved_outputs),
+                blocked: vec![willikins_core::BlockedGate {
+                    node: node("token"),
+                    instance: None,
+                    tool: willikins_core::ToolName::parse("doppler.service_token.ensure").unwrap(),
+                    need: "the operator makes the test condition true".to_string(),
+                    how: "do the manual thing".to_string(),
+                    subject: Vec::new(),
+                    holds_back: Vec::new(),
+                }],
             },
         },
     ]
