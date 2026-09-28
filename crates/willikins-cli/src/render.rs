@@ -366,6 +366,13 @@ fn blocked_lines(blocked: &[willikins_core::BlockedGate]) -> Vec<String> {
             lines.push(format!("    {port}: {}", single_line(value)));
         }
         lines.push(format!("    how: {}", single_line(&gate.how)));
+        // G3: every awaited `OperatorAcknowledgement` input this gate binds
+        // directly, rendered by the engine from `awaiting_inputs` -- never
+        // by the tool. `done` is hardcoded rather than looked up because it
+        // is the type's only valid value (its grammar admits nothing else).
+        for input in &gate.awaiting_inputs {
+            lines.push(format!("    supply: --input {input}=done"));
+        }
         if !gate.holds_back.is_empty() {
             let names = gate
                 .holds_back
@@ -685,7 +692,7 @@ pub fn approval_required_guidance(plan_id: PlanId, journal_path: Option<&str>) -
 mod tests {
     use super::*;
     use indexmap::IndexMap;
-    use willikins_core::{Class, NodeName, Outputs, PortName, ToolName};
+    use willikins_core::{Class, InputName, NodeName, Outputs, PortName, ToolName};
     use willikins_types::DomainType;
 
     /// A [`Plan`] holding a `Known` secret must never print its bytes
@@ -794,6 +801,48 @@ mod tests {
         assert!(text.contains("holds back: profile"), "text: {text}");
         assert!(
             text.contains("re-run this document once done"),
+            "text: {text}"
+        );
+    }
+
+    /// G3, acceptance 16: a blocked `operator.acknowledge` gate's
+    /// `awaiting_inputs` render as `supply: --input <name>=done` lines, one
+    /// per awaited input, engine-rendered rather than tool-authored.
+    #[test]
+    fn plan_text_shows_a_supply_line_for_each_awaited_acknowledgement_input() {
+        let gate = PlannedNode {
+            name: NodeName::parse("m7_bootstrap").unwrap(),
+            instance: None,
+            tool: ToolName::parse("operator.acknowledge").unwrap(),
+            action: Action::Blocked,
+            inputs: willikins_core::Inputs::new(),
+            outputs: Outputs::new(),
+        };
+        let blocked = willikins_core::BlockedGate {
+            node: NodeName::parse("m7_bootstrap").unwrap(),
+            instance: None,
+            tool: ToolName::parse("operator.acknowledge").unwrap(),
+            need: "the operator has done the manual step this document names".to_string(),
+            how: "do the step named below, then supply the awaited input".to_string(),
+            subject: vec![(
+                PortName::parse("step").unwrap(),
+                "Replace the sample pipeline's stored bootstrap".to_string(),
+            )],
+            holds_back: Vec::new(),
+            awaiting_inputs: vec![InputName::parse("m7_bootstrap_done").unwrap()],
+        };
+        let plan = Plan {
+            workflow: willikins_types::WorkflowName::parse("test").unwrap(),
+            nodes: vec![gate],
+            outputs: IndexMap::new(),
+            class: Class::Reversible,
+            requires_approval: false,
+            blocked: vec![blocked],
+        };
+
+        let text = plan_text(&plan);
+        assert!(
+            text.contains("supply: --input m7_bootstrap_done=done"),
             "text: {text}"
         );
     }

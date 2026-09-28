@@ -48,9 +48,10 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 26] = [
+pub const LIVE_TOOL_NAMES: [&str; 27] = [
     "naming.v1",
     "template.render",
+    "operator.acknowledge",
     "env.get",
     "base64.decode",
     "apple.signing_key.parse",
@@ -77,7 +78,7 @@ pub const LIVE_TOOL_NAMES: [&str; 26] = [
     "appstore.profile.ensure",
 ];
 
-/// Insert `willikins-tools`' seven pure tools -- no provider, no
+/// Insert `willikins-tools`' eight pure tools -- no provider, no
 /// credential, always present regardless of which providers a document
 /// uses. `env.get`, `base64.decode`, and `apple.signing_key.parse` joined
 /// `naming.v1` and `template.render` here once the App Store Connect
@@ -86,10 +87,16 @@ pub const LIVE_TOOL_NAMES: [&str; 26] = [
 /// `apple.signing_key.parse`) real documents to run in; `apple.issuer_id.parse`
 /// and `apple.key_id.parse` joined once `willikins-providers-appstore`
 /// gave a `Text`-emitting resolver (`doppler.value.get`) a typed port to
-/// reach.
+/// reach; `operator.acknowledge` joined in G3, the gate over an operator's
+/// own acknowledgement (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`,
+/// decision (j), point 6).
 fn insert_pure_tools(catalog: &mut Catalog) {
     insert(catalog, Arc::new(willikins_tools::NamingV1::new()));
     insert(catalog, Arc::new(willikins_tools::TemplateRender::new()));
+    insert(
+        catalog,
+        Arc::new(willikins_tools::OperatorAcknowledge::new()),
+    );
     insert(catalog, Arc::new(willikins_tools::EnvGet::new()));
     insert(catalog, Arc::new(willikins_tools::Base64Decode::new()));
     insert(
@@ -113,7 +120,7 @@ fn insert_pure_tools(catalog: &mut Catalog) {
 /// [`insert_pure_tools`], in both [`live_catalog_with`] and
 /// [`live_catalog_for_document`] -- there is no environment credential
 /// to gate them behind, and `tests::the_provider_tool_name_arrays_partition_live_tool_names`
-/// tracks them alongside the five pure tool names for exactly that
+/// tracks them alongside the eight pure tool names for exactly that
 /// reason.
 fn insert_appstore_tools(catalog: &mut Catalog) {
     insert(
@@ -453,7 +460,7 @@ enum Provider {
 /// (rather than slicing [`LIVE_TOOL_NAMES`]) so it names exactly the tools
 /// [`insert_github_tools`] inserts; `tests::the_provider_tool_name_arrays_partition_live_tool_names`
 /// pins that this array, [`DOPPLER_TOOL_NAMES`], [`BUILDKITE_TOOL_NAMES`],
-/// and the five pure tool names together are exactly [`LIVE_TOOL_NAMES`],
+/// and the eight pure tool names together are exactly [`LIVE_TOOL_NAMES`],
 /// so the two lists cannot silently drift apart.
 const GITHUB_TOOL_NAMES: [&str; 3] = [
     "github.repo.ensure",
@@ -759,7 +766,7 @@ mod tests {
     }
 
     /// Every array feeding [`live_catalog_for_document`]'s per-provider
-    /// gate, together with the five pure tool names, is exactly
+    /// gate, together with the eight pure tool names, is exactly
     /// [`LIVE_TOOL_NAMES`] -- so a tool added to one list and not the
     /// other (e.g. a new Doppler tool added to [`insert_doppler_tools`]
     /// but not [`DOPPLER_TOOL_NAMES`]) fails here instead of silently
@@ -771,6 +778,7 @@ mod tests {
         let mut from_provider_arrays: Vec<&str> = vec![
             "naming.v1",
             "template.render",
+            "operator.acknowledge",
             "env.get",
             "base64.decode",
             "apple.signing_key.parse",

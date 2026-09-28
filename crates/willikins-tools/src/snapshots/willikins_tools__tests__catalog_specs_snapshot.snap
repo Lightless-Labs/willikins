@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-tools/src/lib.rs
-assertion_line: 91
+assertion_line: 95
 expression: specs
 ---
 [
@@ -146,6 +146,32 @@ expression: specs
     },
     "outputs": {
       "value": "AppleKeyId"
+    },
+    "key": [],
+    "class": "reversible",
+    "pure": true
+  },
+  {
+    "name": "operator.acknowledge",
+    "description": "A gate: reports whether the operator has acknowledged doing the manual step `step` names, by supplying `acknowledged: done`.",
+    "inputs": {
+      "step": {
+        "ty": {
+          "kind": "exact",
+          "type": "Text"
+        },
+        "required": true
+      },
+      "acknowledged": {
+        "ty": {
+          "kind": "exact",
+          "type": "OperatorAcknowledgement"
+        },
+        "required": true
+      }
+    },
+    "outputs": {
+      "step": "Text"
     },
     "key": [],
     "class": "reversible",

@@ -16,8 +16,9 @@
 //! plus the two parse tools `doppler.value.get`'s `Text` output needs
 //! before it can bind to either one's typed credential ports,
 //! `apple.issuer_id.parse` and `apple.key_id.parse`; milestone 3c added
-//! `appstore.certificate.get`; milestone 3e task 2 added `github.repo.get`),
-//! so the catalog this crate produces holds twenty-eight tools, in the
+//! `appstore.certificate.get`; milestone 3e task 2 added `github.repo.get`;
+//! G3 added `operator.acknowledge`, also pure and provider-independent),
+//! so the catalog this crate produces holds twenty-nine tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -99,6 +100,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     // function's own `state` parameter is genuinely consumed.
     insert!(tools::FakeIrreversibleEnsure::new(state));
     insert!(willikins_tools::TemplateRender::new());
+    insert!(willikins_tools::OperatorAcknowledge::new());
     catalog
 }
 
@@ -149,10 +151,11 @@ mod tests {
             "fake.secret_list",
             "fake.irreversible.ensure",
             "template.render",
+            "operator.acknowledge",
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 28);
+        assert_eq!(names.len(), 29);
     }
 
     #[test]
