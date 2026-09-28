@@ -202,6 +202,49 @@ schema would reject a gate-free plan. `BlockedGate` derives `Serialize`/`JsonSch
 `Deserialize`, though `NodeName`/`ToolName`/`PortName` all already do — trivial to add when G2 needs
 it for the journal.
 
+**Addendum:** 2026-09-28 (implementer) — **G2 landed, two commits** (`393b4bf`, `fe01d97`).
+`willikins-core`: `apply` now classifies each planned instance's `Action` *first*, before
+`resolve_instance_inputs` and before the `pure` branch — a `Blocked` gate (always pure) is reported
+`NodeStatus::Blocked` rather than `Computed`, and a `Skip` instance is reported `NodeStatus::Skipped`
+without ever resolving its (empty, by construction) bindings, which would otherwise panic on a
+literal-bound required port or misdeliver `Unknown` through a conversion edge. Neither tool is
+called; the walk continues past both, and only a genuine tool failure still stops it with a
+`NotRun` tail. `Applied` gains `blocked: Vec<BlockedGate>` (skip-if-empty), carried straight from
+rule 2's fresh re-plan; the `for_each` grouping threads each instance's own `blocked` flag into
+`ForEachInstance` instead of the placeholder `false` G1 left; a whole-node `Skip` (a `for_each`
+source itself blocked, planned as one entry with `instance: None`) now builds `NodeResult::Skipped`
+rather than reaching the `unreachable!` a for_each grouping with no keyed instance used to hit.
+`willikins-journal`: `Outcome` gains a third variant, `Blocked { outputs, blocked }`, chosen by one
+`outcome_of` helper shared by `run_and_journal` and `continue_run_and_journal` so `Butler` and the
+CLI path never disagree; `RunState` gains `Blocked`; `RunRecord` gains `blocked` (skip-if-empty) and
+`next_step` (skip-if-none, the new `BLOCKED_NEXT_STEP` constant), both filled by the fold.
+`BlockedGate` gained `Deserialize` (the trivial addition G1 flagged), since nothing in it is ever a
+`Value`. `crates/willikins-core/tests/apply_gates.rs` (acceptance 14, small in-test tools only, the
+same choice `plan_gates.rs` made): a blocked run still creates every independent resource; a second
+apply once the gate opens runs the previously-skipped node and converges; a third reads everything
+`Unchanged`/`Computed`; a gate flipped between plan and apply refuses as `Action` drift before
+anything runs; a tool failure elsewhere in the same run still stops with a `NotRun` tail while the
+earlier `Blocked`/`Skipped` statuses survive in the partial `Applied`. `willikins-journal` gained a
+`views.rs` fold test and an `event_shapes.rs` round-trip test for `Outcome::Blocked`; the two
+frozen-fixture suites (`pre_pass_2_replay`, `post_pass_2_shapes`) needed the new match arms their
+own exhaustive matches now require — both still replay their frozen fixtures byte for byte.
+`willikins-cli`: `node_status_text`/`run_state_text` gain the new labels; `run_record_text` reuses
+`plan_text`'s own `blocked:` section and adds a trailing `next_step:` line; `exit_for_run_state`
+maps `RunState::Blocked` to exit code **3** (distinct from a failure's 1). `willikins-server`:
+`plan` and `run_status`'s MCP descriptions say what to do on a non-empty `blocked` (forward
+`need`/`how`/`subject`, then re-`plan`); the tool-list snapshot moved additively (both descriptions,
+`BlockedGate`'s schema now under `run_status`'s output too, `NodeStatus`'s two new variants,
+`RunState::Blocked`). Gates run, both commits: `cargo fmt --all --check`; `cargo clippy` per touched
+crate pair `--all-targets -D warnings`; `cargo test` per touched crate pair (core+journal 36 suites,
+cli+server full suite including `mcp_server`, `adversarial_10a`/`10b`/`11`/`13`, `blocking_pool_13`,
+`http_server`, all green); `cargo check -p willikins-types`; `cargo test -p willikins-dsl --test
+acceptance` (`characterization_of_every_document` byte-identical); the defensive
+`appstore_profile_apply_redaction` run (green — that test already passes `--approve`, so the
+Destructive class change stays invisible to it). **Honest limit, same as G1's:** exit 3 and the
+CLI/MCP blocked surface are proven at the render/unit level only — no gate tool exists in the fake
+catalog yet, so driving `Action::Blocked`/`Skip` through a real `plan`/`apply` *binary* run is still
+G3/T3's job, once Sample's own gates (or a fake gate tool) exist. Plan not marked Completed.
+
 ## Goal
 
 One workflow document, `workflows/sample-ios-app.yaml`, provisions everything a provider API can
