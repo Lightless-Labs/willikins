@@ -318,8 +318,11 @@ fn read_refuses_healthkit_given_any_setting_and_makes_no_request() {
 // `read`: a settings-aware capability
 // ---------------------------------------------------------------------
 
+/// The observed shape (2026-09-28's second live capability cycle): a row
+/// with no `enabled` field at all, listing exactly the selected option.
+/// The listed option *is* the selection.
 #[test]
-fn read_reports_present_when_the_requested_option_is_the_enabled_one() {
+fn read_reports_present_when_the_requested_option_is_the_only_one_listed() {
     let mut provider = MockProvider::start();
     mock_bundle_id_lookup(&mut provider);
     provider
@@ -337,8 +340,10 @@ fn read_reports_present_when_the_requested_option_is_the_enabled_one() {
     assert!(matches!(observation, Observation::Present(_)));
 }
 
+/// Observed shape: exactly one option listed, but it is not the one
+/// requested.
 #[test]
-fn read_reports_mismatch_when_a_different_option_is_enabled() {
+fn read_reports_mismatch_when_a_different_option_is_listed() {
     let mut provider = MockProvider::start();
     mock_bundle_id_lookup(&mut provider);
     provider
@@ -362,7 +367,7 @@ fn read_reports_mismatch_when_a_different_option_is_enabled() {
 }
 
 #[test]
-fn read_reports_mismatch_when_no_option_is_enabled_at_all() {
+fn read_reports_mismatch_when_no_option_is_listed_at_all() {
     let mut provider = MockProvider::start();
     mock_bundle_id_lookup(&mut provider);
     provider
@@ -380,9 +385,33 @@ fn read_reports_mismatch_when_no_option_is_enabled_at_all() {
     assert!(matches!(observation, Observation::Mismatch { .. }));
 }
 
-/// Decision (d): `Present` only when *exactly one* option is enabled and
-/// it is the requested one. A row that also marks another option enabled
-/// is not a state this tool can call converged.
+/// Observed shape: two options listed under the same key, neither
+/// carrying `enabled` -- ambiguous, so `Mismatch`, never a guess at which
+/// one is the real selection.
+#[test]
+fn read_reports_mismatch_when_two_options_are_listed_with_no_enabled_field() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_data_protection_two_listed").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool
+        .read(&inputs_with_setting(
+            "DATA_PROTECTION",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+        ))
+        .unwrap();
+    assert!(matches!(observation, Observation::Mismatch { .. }));
+}
+
+/// The one remaining fixture carrying `enabled` fields at all (superseded
+/// by the observed key-only shape above, kept so the enabled-field branch
+/// of the rule stays exercised): decision (d)'s "exactly one" makes a row
+/// with two enabled options `Mismatch { setting }`, not `Present`, even
+/// though the requested option is among the enabled ones.
 #[test]
 fn read_reports_mismatch_when_another_option_is_enabled_beside_the_requested_one() {
     let mut provider = MockProvider::start();

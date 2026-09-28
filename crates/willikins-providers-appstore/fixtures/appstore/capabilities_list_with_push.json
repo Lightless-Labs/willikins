@@ -5,7 +5,7 @@
       "id": "CAP1234567",
       "attributes": {
         "capabilityType": "PUSH_NOTIFICATIONS",
-        "settings": []
+        "settings": null
       },
       "relationships": {
         "bundleId": {"links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities/CAP1234567/relationships/bundleId"}}

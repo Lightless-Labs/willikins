@@ -298,20 +298,27 @@ fn capability_setting_pairing_refusal_agrees_by_error_kind() {
     assert_eq!(live.kind, fake.kind);
 }
 
+/// The first two cases serve the observed shape (2026-09-28: a real row
+/// carries no `enabled` field at all, only the selected option's `key`);
+/// the third and fourth (zero options) agree under either read rule. The
+/// "two listed options, no `enabled`" and "enabled-field-present" arms
+/// are mock-only (`bundle_id_capability_ensure_mock.rs`): the fake's
+/// state stores one option string per (identifier, capability), so it
+/// cannot express either shape, the same limit already recorded for the
+/// two-enabled arm.
 #[test]
 fn capability_setting_present_and_mismatch_agree() {
     let requested = "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH";
     for (case, capabilities_body, seed) in [
         (
-            "present: the requested option is the enabled one",
+            "present: the requested option is the only one listed",
             serde_json::json!({"data": [{
                 "attributes": {
                     "capabilityType": "DATA_PROTECTION",
                     "settings": [{
                         "key": "DATA_PROTECTION_PERMISSION_LEVEL",
                         "options": [
-                            {"key": "COMPLETE_PROTECTION", "enabled": false},
-                            {"key": "PROTECTED_UNTIL_FIRST_USER_AUTH", "enabled": true}
+                            {"key": "PROTECTED_UNTIL_FIRST_USER_AUTH"}
                         ]
                     }]
                 }
@@ -319,15 +326,14 @@ fn capability_setting_present_and_mismatch_agree() {
             Some("PROTECTED_UNTIL_FIRST_USER_AUTH"),
         ),
         (
-            "mismatch: a different option is enabled",
+            "mismatch: a different option is listed",
             serde_json::json!({"data": [{
                 "attributes": {
                     "capabilityType": "DATA_PROTECTION",
                     "settings": [{
                         "key": "DATA_PROTECTION_PERMISSION_LEVEL",
                         "options": [
-                            {"key": "COMPLETE_PROTECTION", "enabled": true},
-                            {"key": "PROTECTED_UNTIL_FIRST_USER_AUTH", "enabled": false}
+                            {"key": "COMPLETE_PROTECTION"}
                         ]
                     }]
                 }
@@ -335,7 +341,7 @@ fn capability_setting_present_and_mismatch_agree() {
             Some("COMPLETE_PROTECTION"),
         ),
         (
-            "mismatch: settings is empty (enabled with no setting recorded)",
+            "mismatch: settings is empty (nothing listed at all)",
             serde_json::json!({"data": [{
                 "attributes": {
                     "capabilityType": "DATA_PROTECTION",

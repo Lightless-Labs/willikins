@@ -9,9 +9,7 @@
           {
             "key": "DATA_PROTECTION_PERMISSION_LEVEL",
             "options": [
-              {"key": "COMPLETE_PROTECTION", "enabled": true},
-              {"key": "PROTECTED_UNLESS_OPEN", "enabled": false},
-              {"key": "PROTECTED_UNTIL_FIRST_USER_AUTH", "enabled": false}
+              {"key": "COMPLETE_PROTECTION"}
             ]
           }
         ]

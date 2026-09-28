@@ -297,13 +297,15 @@ impl AppstoreClient {
     /// `bundleId` relationship, and -- since milestone 3e -- `settings`
     /// when `setting` is supplied: exactly
     /// `[{"key": KEY, "options": [{"key": OPTION, "enabled": true}]}]`
-    /// (decision (d); the shape itself is unobserved live until the live
-    /// cycle settles it, verify item 1). `settings` is absent from the
-    /// body entirely when `setting` is `None`, the same as before this
+    /// (decision (d); **settled live 2026-09-28: this write shape is
+    /// accepted**, verify item 1). `settings` is absent from the body
+    /// entirely when `setting` is `None`, the same as before this
     /// milestone -- [`CAPABILITIES_NEEDING_PORTAL_CONFIGURATION`] is
     /// exactly the set whose configuration this API cannot express at
     /// all, settings included, and `appstore.bundle_id_capability.ensure`
-    /// refuses those before ever reaching this call.
+    /// refuses those before ever reaching this call. Note that the
+    /// *read* side never echoes this write shape's `enabled: true` back
+    /// -- see [`CapabilitySettingAttr`]'s own doc.
     ///
     /// # Errors
     ///
@@ -608,7 +610,14 @@ struct BundleIdUpdateBody {
 /// `None` when missing or `null`: every capability read parses every
 /// row's settings, so a shape this crate did not expect on a row nobody
 /// asked about must not fail a read of a different capability (the
-/// milestone 3e adversarial pass). A missing `enabled` is "not selected".
+/// milestone 3e adversarial pass). **Live-observed 2026-09-28** (the
+/// milestone 3e plan's second live capability cycle): a real row never
+/// carries `enabled` at all -- it lists only the selected option's `key`.
+/// `enabled`'s absence is read by
+/// `AppstoreBundleIdCapabilityEnsure::observe` as "this option is simply
+/// listed", not "not selected" -- the two mean the same thing only when
+/// exactly one option is listed; see that function's own doc for the
+/// full two-branch rule.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CapabilityOptionAttr {
     #[serde(default)]
@@ -620,10 +629,16 @@ pub(crate) struct CapabilityOptionAttr {
 /// One `CapabilitySetting` -- an entry of a capability row's
 /// `attributes.settings[]`. `key` is the setting key
 /// (`DATA_PROTECTION_PERMISSION_LEVEL`, `APPLE_ID_AUTH_APP_CONSENT`,
-/// `ICLOUD_VERSION`); `options` is every option Apple reports for it, of
-/// which this client's caller looks for the one carrying `enabled: true`
-/// (decision (d): "the selected option is the one marked `enabled`" --
-/// unobserved until the live cycle settles it, verify item 2).
+/// `ICLOUD_VERSION`); `options` is every option Apple reports for it.
+/// Decision (d) originally assumed the selected option is always the one
+/// carrying `enabled: true` (verify item 2) -- **settled live 2026-09-28,
+/// and not what it assumed**: a real row lists the selected option by
+/// `key` alone, with no `enabled` field on any option at all. This
+/// client's caller (`AppstoreBundleIdCapabilityEnsure::observe`) reads
+/// both shapes: when no option under a key carries `enabled`, the listed
+/// option is the selection; when at least one does, the older
+/// exactly-one-`enabled: true` rule still applies, as a defensive
+/// fallback never observed live.
 /// `key` and `options` default to `None` when missing or `null`, for the
 /// same reason as [`CapabilityOptionAttr`]'s fields.
 #[derive(Debug, Clone, Deserialize)]
