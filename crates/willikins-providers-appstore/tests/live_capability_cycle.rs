@@ -697,8 +697,18 @@ fn appstore_live_capability_cycle() {
         ),
     }
     let rows_after_mismatch_read = capability_rows(&issuer_id, &key_id, &key, &bundle_id);
+    // Compared as a set: Apple's capability list order is not stable across
+    // two reads (observed live 2026-09-28: the same four rows, reordered,
+    // with no write in between), so an ordered comparison reports a
+    // write that never happened.
+    let as_set = |rows: &[(String, SettingsShape)]| {
+        let mut keyed: Vec<String> = rows.iter().map(|row| format!("{row:?}")).collect();
+        keyed.sort();
+        keyed
+    };
     assert_eq!(
-        rows_before_mismatch_read, rows_after_mismatch_read,
+        as_set(&rows_before_mismatch_read),
+        as_set(&rows_after_mismatch_read),
         "STOP: the capability row list changed across a read-only Mismatch observation -- a \
          read must never write"
     );
