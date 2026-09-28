@@ -627,7 +627,7 @@ its fingerprint, its journal lines, its CLI text and its exit codes.
 - The CLI's `apply` exits 0 on `Succeeded`, 1 on `Failed` or `Running`, 2 on usage or configuration
   (`crates/willikins-cli/src/commands.rs` 531–535). An input with no default and no value is
   `describe`'s `missing` (`crates/willikins-core/src/describe.rs` 249), and `plan` then exits 1 before
-  planning anything (`crates/willikins-cli/src/main.rs` 340–344).
+  planning anything (`crates/willikins-cli/src/main.rs` 341–345).
 - MCP's `plan` returns `PlanResponse` (`crates/willikins-server/src/types.rs` 21) with the `Plan`
   inside; `run_status` returns the journal's `RunRecord` (`crates/willikins-server/src/mcp.rs` 638–651).
 - Nodes are ordered **only by data edges**: `Node` has `tool`, `for_each` and `with`, nothing else
@@ -678,8 +678,10 @@ consumes is a **leaf**: it blocks the run and is reported, but holds nothing bac
 topological order makes one pass the transitive closure):
 
 - A node any of whose bindings — a `with` port or its `for_each` source, `Step` or `Keyed` — names a
-  node in the set plans **`Action::Skip`** and is **never read**, so `KeyUnknown` cannot fire. Its
-  outputs are all `Unknown`, filled by `fill_outputs` from nothing. A `Keyed` binding to one instance
+  node in the set plans **`Action::Skip`** and is **never read**, so `KeyUnknown` cannot fire. The
+  decision is made from the bindings *before* `bind_ports`, and a skipped node is not bound at all
+  (its `inputs` are empty), so no edge delivers an `Unknown` through a conversion. Its outputs are all
+  `Unknown`, filled by `fill_outputs` from nothing. A `Keyed` binding to one instance
   of a `for_each` gate is skipped only if *that* instance is blocked; a `Step` binding aggregating a
   `for_each` gate is skipped if any instance is.
 - A `for_each` node whose *source* is skipped cannot be expanded: it plans as one `PlannedNode` with
@@ -708,7 +710,13 @@ pub struct BlockedGate {
 }
 ```
 
-**4. Apply.** Rule 2's re-plan produces the same `Blocked`/`Skip` actions. The walk then treats a
+**4. Apply.** Rule 2's re-plan produces the same `Blocked`/`Skip` actions. The walk **classifies by
+`planned.action` first**, before `resolve_instance_inputs` (apply.rs 571), before the pure branch
+(574) and before the unknown-required-input match (599). The order is load-bearing: a skipped
+*non-pure* node (Sample's `appstore.profile.ensure`, `identifier` bound from a blocked gate) would
+otherwise reach 599 with an `Unknown` upstream port and stop the whole run as
+`ApplyError::UnknownInput`, and a blocked gate, being pure, would otherwise be reported `Computed`.
+The walk then treats a
 `Blocked` instance as `NodeStatus::Blocked` and a `Skip` instance as `NodeStatus::Skipped`, emits
 `NodeStarted` and `NodeFinished` for both (so the journal does not fold them into `NotRun`), calls no
 tool, records `NodeResult::Skipped`, and **continues**. Every node not downstream of a blocked gate
@@ -1047,7 +1055,7 @@ One lane at a time on `main`, in order; each commits by path with `git commit --
 | T1 | **Capability settings.** Commit 1: `AppleCapabilitySetting` in `willikins-types` (registry entry); the optional `setting` port, the pairing refusal at `read`, the create body, the settings-aware read and `Mismatch { setting }` in `appstore.bundle_id_capability.ensure` and its client; the module doc corrected; the fake twin; mock tests; the negative fixture (acceptance 1–5, 9). Commit 2: `tests/live_capability_cycle.rs` with its own `[[test]]` entry, **written, not run** — the attacker runs it (acceptance 10) | sonnet implements, opus attacks and runs the live cycle |
 | T2 | **`github.repo.get`.** One or two commits: the pure read-only tool over `GitHubClient::get_repo`, its fake twin, mock tests, `LIVE_TOOL_NAMES` 25 → 26 with every pinned site, catalog and MCP snapshots (acceptance 6, 9) | sonnet implements, opus attacks |
 | G1 | **Gates in `plan`** (decision (j), points 1–3). Commit 1, `willikins-core` only: `Gate` and `Tool::gate()` (default `None`); `Catalog::insert` refuses a gate that is not pure or whose `subject` port is missing, not `Exact`, or secret; `Action::Blocked` and `Action::Skip`; the skip set in `plan` (a node binding a blocked or skipped node, through `with` or `for_each`, `Step` or `Keyed`, is `Skip` and never read); `NodeResult::Skipped` in `resolve_step`/`resolve_keyed`/aggregation; a skipped `for_each` source planning one `instance: None` entry; `BlockedGate` and `Plan.blocked` (skip if empty). Test-first against small in-test tools, one of whose `read` panics if called: a blocked gate's dependents are `Skip` and unread, transitively; an independent branch plans as before; a met gate is `Compute`; a `Keyed` dependent of another instance is not skipped; outputs bound to skipped nodes are `Unknown`; `BlockedGate` renders a secret-free subject (acceptance 12). Commit 2, `willikins-cli`: `plan` text shows `Blocked`/`Skip` and the `blocked:` section with `re-run this document once done`; exit 0; no section when empty (acceptance 13). Characterization byte-identical (acceptance 9) | sonnet implements, opus attacks |
-| G2 | **Gates in `apply`, the journal, the CLI and MCP** (points 4, 5, 7, 8). Commit 1, `willikins-core` and `willikins-journal`: `NodeStatus::Blocked`/`Skipped` with both events emitted; the walk continues past them; `Applied.blocked`; the `apply.rs` grouping builds `NodeResult::Skipped`; failure still stops with a `NotRun` tail; `Outcome::Blocked`, `RunState::Blocked`, `RunRecord.blocked`/`next_step`; a gate satisfied between plan and apply is `Action` drift (acceptance 14). Commit 2, `willikins-cli` and `willikins-server`: run text, exit 3 on a blocked run, MCP descriptions, the additive schema snapshots listed in (j) (acceptance 15) | sonnet implements, opus attacks |
+| G2 | **Gates in `apply`, the journal, the CLI and MCP** (points 4, 5, 7, 8). Commit 1, `willikins-core` and `willikins-journal`: `NodeStatus::Blocked`/`Skipped` with both events emitted, classified by `planned.action` before input resolution, the pure branch and the unknown-input match (a skipped non-pure node must not stop the run as `UnknownInput`; test it with a non-pure dependent); the walk continues past them; `Applied.blocked`; the `apply.rs` grouping builds `NodeResult::Skipped`; failure still stops with a `NotRun` tail; `Outcome::Blocked`, `RunState::Blocked`, `RunRecord.blocked`/`next_step`; a gate satisfied between plan and apply is `Action` drift (acceptance 14). Commit 2, `willikins-cli` and `willikins-server`: run text, exit 3 on a blocked run, MCP descriptions, the additive schema snapshots listed in (j) (acceptance 15) | sonnet implements, opus attacks |
 | G3 | **Operator acknowledgement** (point 6). Commit 1, `willikins-types` and `willikins-core`: `OperatorAcknowledgement` (grammar `done`, public, registry entry); `check` refuses a default of it and a literal on a port of it (two negative fixtures); `describe`'s `awaiting` instead of `missing`; `plan` resolves an unsupplied one `Unknown` without putting it in the resolved map; `BlockedGate.awaiting_inputs`. Commit 2, `willikins-tools` and `willikins-server`: `operator.acknowledge`, `LIVE_TOOL_NAMES` 26 → 27, catalog snapshots, a positive fixture that plans blocked without the input and `Compute` with it, and CLI `supply:` lines (acceptance 16) | sonnet implements, opus attacks |
 | T3 | **The Sample document** (after G1–G3; **2026-09-28**: its acceptance 8, dry-run step 4 and the post-flight "eight manual steps" item were written for decision (a) and are rewritten by T3 for gates: the observed app-record and app-group gates, profiles behind the app-group gate, the remaining steps as acknowledgement leaves; the Doppler layout of operator decision 2). Commit 1: the two conversion rows with their `From` impls, proptests and the reverse negative fixture (acceptance 7). Commit 2: `workflows/sample-ios-app.yaml` and its graph tests over the fake catalogue in `crates/willikins-cli/tests/sample_document.rs`, any fake-state fixture it needs under `workflows/fixtures/state/` (acceptance 8, 9) | sonnet implements, opus attacks, writes and runs the dry run once a Buildkite token exists |
 
