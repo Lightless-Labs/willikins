@@ -76,8 +76,16 @@ fn mock_bundle_id_lookup(provider: &mut MockProvider) -> mockito::Mock {
 // `read`
 // ---------------------------------------------------------------------
 
+/// Milestone 3e, T3-blocking fix: `plan` reads every node whose key ports
+/// are known, and `appstore.bundle_id.ensure`'s own `Absent` predicts its
+/// `identifier` output, so a capability node bound from
+/// `steps.app_id.identifier` is read before the bundle id is ever
+/// created. `read` must report `Absent` for a not-yet-registered parent
+/// -- exactly the precedent `appstore.profile.ensure` already set for an
+/// unregistered identifier -- so a document that registers an identifier
+/// and enables a capability on it in the same run plans cleanly.
 #[test]
-fn read_refuses_when_the_parent_bundle_id_does_not_exist() {
+fn read_reports_absent_when_the_parent_bundle_id_does_not_exist() {
     let mut provider = MockProvider::start();
     provider
         .mock("GET", "/v1/bundleIds")
@@ -86,9 +94,36 @@ fn read_refuses_when_the_parent_bundle_id_does_not_exist() {
         .with_body(fixture("bundle_id_list_empty").to_string())
         .create();
     let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
-    let err = tool.read(&inputs_for("PUSH_NOTIFICATIONS")).unwrap_err();
+    let observation = tool.read(&inputs_for("PUSH_NOTIFICATIONS")).unwrap();
+    assert!(matches!(observation, Observation::Absent { .. }));
+}
+
+/// `ensure` is where the missing parent is still a hard `NotFound`: this
+/// tool cannot create a bundle id, only `appstore.bundle_id.ensure` does,
+/// so an apply-time attempt against a genuinely unregistered identifier
+/// must refuse -- and must never `POST`, exactly as before this fix.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_refuses_when_the_parent_bundle_id_does_not_exist_and_never_posts() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(fixture("bundle_id_list_empty").to_string())
+        .create();
+    let create = provider
+        .mock("POST", "/v1/bundleIdCapabilities")
+        .expect(0)
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let token = SinkToken::new();
+    let err = tool
+        .ensure(&inputs_for("PUSH_NOTIFICATIONS"), &token)
+        .unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::NotFound);
     assert!(err.message.contains("com.example.MyApp"), "{}", err.message);
+    create.assert();
 }
 
 #[test]
