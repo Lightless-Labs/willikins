@@ -155,6 +155,25 @@ task's own crate, but the one other place a class change could plausibly break s
 willikins-providers-appstore --features live-tests --tests -j 2 -- -D warnings` and `cargo test
 --features live-tests --test live_write_cycle --no-run` both green (compiles; never executed).
 
+**Addendum:** 2026-09-28 (operator decision 6, designer) — **a manual step is a GATE node; an unmet
+gate is BLOCKED, not failed.** The operator, verbatim: "if it's idempotent, it's even better than making
+it pausable / resumable. It'd basically be: run all that can be ran, hit a blockage requiring user /
+operator action / feedback, tell to re-run the document once action is done / feedback / info are
+provided. If it's cheaply idempotent, then it's basically capable of pausing and resuming, without
+requiring any feature-specific development." And: "because if it just fails or whatever, well...".
+Decision (a) (manual steps as `template.render` outputs) is **superseded** by decision (j) below;
+decision (b) (no profiles in the Walter document) was already overturned by operator decision 1 (the
+T3a addendum above) and is marked superseded too. (j) is the smallest engine change that fits the
+existing model: a gate is an ordinary **pure, read-only tool** that declares itself a gate through a
+new default-`None` trait method, so no existing tool, catalog entry or document changes; its `Absent`
+plans as `Action::Blocked`, every node downstream of it by data edge plans as `Action::Skip` without
+being read, every other node plans and applies exactly as today, and the run ends `blocked` with a
+structured list of what the operator must do and "re-run this document once done". No saved run
+state. The engine work is three new tasks, **G1–G3**, which run **before T3**; the Walter-specific
+gates (the app record exists; `APP_GROUPS` on all three identifiers) belong to T3. What `apply` does
+today when a node fails, established from the code: it **stops**, and every later instance in plan
+order, dependent or not, is `NotRun` (see (j), "Today").
+
 ## Goal
 
 One workflow document, `workflows/walter-ios-app.yaml`, provisions everything a provider API can
@@ -181,9 +200,9 @@ operator's, with the credentials listed under "Credentials — for a later real 
 
 ## Out of scope
 
-- **Provisioning profiles in the Walter document.** Decision (b): they are minted afterwards, one run
-  of `workflows/appstore-signing-profile-from-doppler.yaml` per identifier, once the manual app-group
-  step is done.
+- ~~**Provisioning profiles in the Walter document.**~~ **Superseded 2026-09-28** (operator decision 1
+  and decision (j)): the profiles are in the document, behind the app-group gate, and a re-run replaces
+  any profile Apple invalidated.
 - **Writing files** (entitlements, `Info.plist`, `BUILD.bazel`, `.buildkite/`): a manual step until
   file-writing lands.
 - **App groups, the app record, an APNs key, a Doppler grant to the CI service account**: manual steps.
@@ -442,6 +461,9 @@ README.md}` copied from Danksworth's shape with triggers disabled.
 
 ### (a) A named manual step is a workflow output bound to a `template.render` node
 
+**Superseded 2026-09-28 by decision (j).** Kept for its history: its own "honest trade" below is
+exactly what (j) fixes — a gate orders what it guards, and a re-run is the acknowledgement.
+
 Existing mechanisms suffice, so no engine feature is proposed. `template.render` is pure, so `plan`
 evaluates it and the plan's `outputs` show every manual step **before anything runs**; `apply` shows
 them again. Each step is one node, `tool: template.render`, whose `template` is a literal
@@ -463,6 +485,10 @@ candidate for a later milestone, not designed here. What a manual step leaves be
 where it matters: an `APP_GROUPS` or profile document run before M2 either converges or refuses loudly.
 
 ### (b) The Walter document mints no provisioning profile
+
+**Superseded 2026-09-28** by operator decision 1 (replace-when-INVALID, the T3a addendum) and decision
+(j): the second fact below is answered by a gate that passes the identifier through, which is a data
+edge. Kept for its history.
 
 Two facts force it. Apple: "Provisioning profiles that contain a modified App ID become invalid." App
 groups can only be assigned by hand (M2), after the document has run, so any profile the document
@@ -579,7 +605,228 @@ The ASC credential chain reads `config` (`app-store-connect/prd`) through the sa
 apply that config must be in the same workplace as `walter` (one `WILLIKINS_DOPPLER_TOKEN` is one
 workplace).
 
+### (j) A manual step is a gate: blocked, not failed; re-running the document is the resume
+
+**Decided 2026-09-28** (operator decision 6; replaces (a)). Designed as the smallest change to the
+existing model. Every behaviour of a document that uses no gate stays byte-identical: its plan JSON,
+its fingerprint, its journal lines, its CLI text and its exit codes.
+
+**Today, from the code** (`main` at `63144a8`):
+
+- `plan` stops at the first problem: `crates/willikins-core/src/plan.rs` module doc lines 36–41, and
+  the walk at 501–567 returns the first `PlanError`. A node whose key port is `Unknown` is
+  `PlanError::KeyUnknown` before its `read` (`plan_one`, 807–813).
+- `apply` **stops at the first failure, and independent branches do not run.** A failed `ensure`
+  pushes `NodeStatus::Failed`, appends `not_run_tail` over *every* later instance in plan order,
+  dependent or not, and returns `ApplyError::Tool` (`crates/willikins-core/src/apply.rs` 629–657); the
+  two unknown-input refusals do the same (682–706). The walk is by plan position, not by dependency.
+- The journal records `Outcome::Failed` for any `Err` (`crates/willikins-journal/src/observer.rs`
+  366–369), and `finish_runs` synthesizes `NotRun` for every planned instance that has no
+  `NodeFinished` (`crates/willikins-journal/src/journal.rs` 469–495). `RunState` is
+  `running|succeeded|failed`.
+- The CLI's `apply` exits 0 on `Succeeded`, 1 on `Failed` or `Running`, 2 on usage or configuration
+  (`crates/willikins-cli/src/commands.rs` 531–535). An input with no default and no value is
+  `describe`'s `missing` (`crates/willikins-core/src/describe.rs` 249), and `plan` then exits 1 before
+  planning anything (`crates/willikins-cli/src/main.rs` 340–344).
+- MCP's `plan` returns `PlanResponse` (`crates/willikins-server/src/types.rs` 21) with the `Plan`
+  inside; `run_status` returns the journal's `RunRecord` (`crates/willikins-server/src/mcp.rs` 638–651).
+- Nodes are ordered **only by data edges**: `Node` has `tool`, `for_each` and `with`, nothing else
+  (`crates/willikins-core/src/workflow.rs` 195–203); there is no `when` and no `after`.
+
+Failure semantics do **not** change: a tool failure still stops the walk with a `NotRun` tail, and a
+failure dominates a block. Only a gate's `Absent` gets the new treatment.
+
+**1. What a gate is.** An ordinary tool that is `pure: true` (read-only, no key, `Reversible`, never
+`ensure`d — the codebase already calls provider-reading tools such as `github.repo.get` and
+`appstore.certificate.get` pure), and that answers one new trait method with a default:
+
+```rust
+// crates/willikins-core/src/tool.rs
+pub struct Gate {
+    pub need: &'static str,              // what must be true, e.g. "APP_GROUPS enabled on this bundle identifier"
+    pub how: &'static str,               // how the operator makes it true
+    pub subject: &'static [&'static str] // input ports the report names, rendered by the engine
+}
+pub trait Tool { /* unchanged */ fn gate(&self) -> Option<&Gate> { None } }
+```
+
+A default method, not a `ToolSpec` field or an `Observation` variant: a `ToolSpec` field would edit
+about fifty struct literals and every catalog entry's JSON, and a new `Observation` variant would add
+an arm to about fifteen exhaustive provider matches. Neither is needed. `Catalog::insert`
+(`crates/willikins-core/src/catalog.rs` 53) refuses a gate whose spec is not pure, and a `subject`
+entry that is not one of the tool's input ports with an `Exact`, non-secret type.
+
+A gate's `read` has the usual three answers. **`Present(outputs)`**: the condition holds; the node
+plans `Compute`, exactly as any pure tool. **`Absent { .. }`**: the thing the operator must make does
+not exist yet (the app record, the capability row, the acknowledgement); the node plans the new
+**`Action::Blocked`**. **`Foreign`, `Mismatch`, or an error**: unchanged, a hard `PlanError` — a gate
+that sees something *wrong*, rather than something *missing*, stops the plan as today. A gate
+observes reality wherever an API exposes it, reusing the provider's existing client read (Walter's:
+`GET /v1/apps` filtered by bundle id, research note section 4; the capability list
+`list_bundle_id_capabilities` already paginates), and otherwise takes an operator acknowledgement
+(point 6).
+
+**2. Ordering: a gate guards only what consumes its output.** Because edges are data edges, a gate
+orders a node only by emitting a typed output that node binds. The rule for gate authors: **a gate
+passes through the key it checked.** Walter's app-group gate takes `identifier` and outputs it again,
+and each profile node binds `identifier: ${{ steps.<gate>.identifier }}`, never
+`${{ steps.app_id.identifier }}` — that edge is what puts the profiles after the gate. A gate nothing
+consumes is a **leaf**: it blocks the run and is reported, but holds nothing back. An explicit
+`needs:` edge would be a document-format change and is **not** in this milestone.
+
+**3. Plan.** `plan` walks `Checked::order` as today, carrying one set of blocked-or-skipped nodes (the
+topological order makes one pass the transitive closure):
+
+- A node any of whose bindings — a `with` port or its `for_each` source, `Step` or `Keyed` — names a
+  node in the set plans **`Action::Skip`** and is **never read**, so `KeyUnknown` cannot fire. Its
+  outputs are all `Unknown`, filled by `fill_outputs` from nothing. A `Keyed` binding to one instance
+  of a `for_each` gate is skipped only if *that* instance is blocked; a `Step` binding aggregating a
+  `for_each` gate is skipped if any instance is.
+- A `for_each` node whose *source* is skipped cannot be expanded: it plans as one `PlannedNode` with
+  `instance: None` and `Action::Skip`.
+- `NodeResult` gains a `Skipped` arm, so `resolve_step` (plan.rs 711) and `resolve_keyed` (768) yield
+  `Value::unknown` of the port's type (a list type for a `for_each` node). Without it,
+  `aggregate_for_each_port` (728) over zero instances would return a **known empty list** — wrong.
+- Every other node, including every node that does not depend on a gate, is planned exactly as today.
+- Workflow outputs bound to a skipped node resolve `Unknown`.
+- `Plan` gains `blocked: Vec<BlockedGate>` with `#[serde(skip_serializing_if = "Vec::is_empty")]`, so
+  a plan without a blocked gate serializes byte-identically (the characterization snapshot prints
+  `plan_json` and `fingerprint_json` verbatim, `crates/willikins-dsl/tests/acceptance.rs` 220–222).
+
+```rust
+// Plain data, no `Value`: Serialize + Deserialize + JsonSchema, stored in the journal untouched,
+// like NodeStatus and InstanceFingerprint.
+pub struct BlockedGate {
+    pub node: NodeName,
+    pub instance: Option<String>,
+    pub tool: ToolName,
+    pub need: String,                    // the gate's static `need`
+    pub how: String,                     // the gate's static `how`
+    pub subject: Vec<(PortName, String)>,// each `subject` port rendered by Value::render, in declared order
+    pub awaiting_inputs: Vec<InputName>, // G3: unsupplied acknowledgement inputs bound to this gate
+    pub holds_back: Vec<NodeName>,       // every node skipped because of this gate, plan order, deduplicated
+}
+```
+
+**4. Apply.** Rule 2's re-plan produces the same `Blocked`/`Skip` actions. The walk then treats a
+`Blocked` instance as `NodeStatus::Blocked` and a `Skip` instance as `NodeStatus::Skipped`, emits
+`NodeStarted` and `NodeFinished` for both (so the journal does not fold them into `NotRun`), calls no
+tool, records `NodeResult::Skipped`, and **continues**. Every node not downstream of a blocked gate
+runs. apply.rs's grouping (711–729) must build `NodeResult::Skipped` for a skipped group rather than
+reach its `unreachable!` on a `for_each` node with no keyed instance. A tool failure still stops the
+walk with the `NotRun` tail and returns `ApplyError::Tool`; its partial `Applied` shows any `Blocked`
+and `Skipped` statuses reached so far. `Applied` gains `blocked: Vec<BlockedGate>` (skip if empty),
+taken from the fresh plan; `Ok(Applied)` with a non-empty `blocked` is a **blocked run**, not an error.
+
+**5. Drift and approval.** The new actions ride in `InstanceFingerprint::action` as `"blocked"` and
+`"skip"`; the fingerprint's shape is unchanged. A gate satisfied between plan and apply is
+`Action` drift, so `apply` refuses and the operator re-plans — correct, since the approved plan never
+said the guarded nodes would run; the CLI's one-shot `plan`+`apply` makes that window small, and the
+server's own pre-check (`crates/willikins-server/src/drift.rs`) compares actions by equality and needs
+no change. The class stays **static** (`Checked::class`, apply rule 1): a document containing
+`appstore.profile.ensure` (Destructive since `f980d78`) requires approval on **every** run, including
+a first run whose profiles are all skipped. For Walter that means `--approve` (or an approver) each
+run; the operator accepted "whatever approval that implies" in decision 1.
+
+**6. Operator acknowledgement (G3).** Where no API shows the state, a gate reads an acknowledgement:
+`operator.acknowledge` in `willikins-tools`, pure, a gate, inputs `step: Text` (required, the
+gate's `subject`: the document states the manual step in its own words — policy in the workflow)
+and `acknowledged: OperatorAcknowledgement` (required); output `step: Text`; `read` answers
+`Present` when `acknowledged` is known and `Absent` when it is `Unknown`. `OperatorAcknowledgement` is
+a new public type in `willikins-types`, grammar exactly `done`, example `done`, which no tool outputs.
+It is **never defaulted and never a literal**, and an unsupplied one is **awaited, not missing**:
+
+- `check` refuses a `default:` on an input of this type and a literal bound to a port of it (two new
+  `CheckError`s, each with a negative fixture). The type is recognised through the registry entry's
+  `TypeId`, never by its name (the milestone 3d rule).
+- `describe` does not list an unsupplied input of this type in `missing`; it lists it in a new
+  `awaiting: Vec<…>` (skip if empty), each with a prompt naming the input and the value `done`.
+- `plan`'s `Binding::Input` arm (plan.rs 695) yields `Value::unknown` for such an input instead of
+  `PlanError::MissingInput`. The input stays **absent** from the resolved map, so `PlanRecorded.inputs`
+  and the butler's rebuild from the journal are untouched.
+- A blocked acknowledgement gate reports, in `awaiting_inputs`, the workflow inputs bound to its ports
+  whose value is `Unknown`, so the report can say which `--input name=done` satisfies it.
+
+Honest limit: an acknowledgement gate has no typed pass-through, so it is a **leaf** (point 2). It
+reports and blocks the run's outcome; it orders nothing. For Walter's acknowledgement steps that is
+enough (decision (f) already argues the pipeline is harmless before its files land).
+
+**7. The report.** One shape, `BlockedGate`, everywhere; every string that reaches text output goes
+through `render::single_line`.
+
+- **CLI `plan`**, text: node lines read `app_groups (tool): Blocked` and `nse_profile (tool): Skip`;
+  after the node lines and before `outputs:`, when `blocked` is non-empty:
+
+  ```
+  blocked: 2 gates need the operator; everything that does not depend on them is planned
+    nse_app_groups (<T3's gate tool>): APP_GROUPS enabled on this bundle identifier
+      identifier: com.example.nse
+      how: register group.<app identifier>, enable App Groups on the identifier and assign the group (portal Configure, or Xcode)
+      holds back: nse_profile, nse_profile_to_doppler
+    m7_bootstrap (operator.acknowledge): an operator acknowledgement that this manual step is done
+      step: Replace the walter pipeline's stored bootstrap with apps/walter/.buildkite/bootstrap.yml
+      how: do the step, then supply the awaited input
+      supply: --input m7_bootstrap_done=done
+  re-run this document once done
+  ```
+
+  (Illustrative: the gate tool, node and input names are T3's. `supply:` is rendered by the engine
+  from `awaiting_inputs`, never by the tool.)
+
+  `plan` still exits **0**: a plan with blocked gates is a valid plan. JSON: the `Plan` with `blocked`.
+- **CLI `apply`**: the same node and `blocked:` lines in the run record's text, then
+  `state: blocked` and `re-run this document once done`. Exit status **3** when the run ended blocked
+  and nothing failed (0, 1 and 2 are taken); a failure still exits 1.
+- **MCP**: `plan`'s `PlanResponse.plan.blocked`; `run_status`'s `RunRecord` gains `state: "blocked"`,
+  `blocked: [BlockedGate]` (skip if empty) and `next_step: "re-run this document once every blocked
+  gate's need is met"` (skip if absent), so an agent can forward it verbatim. The two tools'
+  descriptions say: on `blocked`, forward each entry's `need`, `how` and `subject` to the operator,
+  then call `plan` again with the same inputs (plus any `awaiting_inputs`) once done.
+
+**8. The journal.** Additive, no existing line changes. `PlanRecorded.plan` (redacted JSON) carries
+`blocked` only when non-empty; `fingerprint` carries the two new actions. `NodeFinished` gets statuses
+`blocked` and `skipped`. `RunFinished`'s `Outcome` gains `Blocked { outputs:
+Redacted<IndexMap<OutputName, Value>>, blocked: Vec<BlockedGate> }`, written when `apply` returns `Ok`
+with a non-empty `blocked`; `Succeeded` otherwise, as today. The fold maps it to `RunState::Blocked`
+and fills `RunRecord.blocked`. Old journals replay byte for byte (`pre_pass_2_replay`); an older binary
+cannot read a newer `blocked` line, which is the usual forward-compatibility cost of a new variant.
+
+**9. Invariants.**
+
+- *Secrecy.* A gate never authors a string from its inputs: `need` and `how` are `&'static str`, and
+  the engine renders only the declared `subject` ports, which `Catalog::insert` guarantees are
+  non-secret `Exact` ports, through `Value::render` (an `Unknown` renders `<unknown>`). `BlockedGate`
+  therefore holds no `Value` and no secret by construction, which is why the journal may store it
+  unwrapped. `OperatorAcknowledgement` is public and is never a secret input.
+- *`Plan::fingerprint`.* Unchanged in shape; two new `Action` values. The secret-is-not-drift marker is
+  untouched.
+- *Journal wire format.* Additive variants and skip-if-empty fields only (point 8).
+- *Class.* Static, from the graph (point 5). Gates are pure, so they never raise a class.
+- *No new input kind for secrets.* The awaited input is public and typed; the "no secret input types"
+  refusal stands.
+- *Idempotence is the resume.* No run state is saved. A re-run re-plans from provider state; every
+  node is idempotent, so what ran reads `NoOp`/`Unchanged`, what was skipped runs once its gate passes.
+
+**Snapshots that move, additively, and are not characterization drift:** the `schema_generation__*`
+snapshots for `NodeStatus`, `Applied`, `AppliedNode`, `RunRecord` and `RunNode` (new variants and
+fields), `mcp_server__the_tool_list_and_every_schema_is_snapshotted` (schemas and two descriptions),
+and, in G3, the type-registry and tool-catalog snapshots (one new type, one new tool) and
+`LIVE_TOOL_NAMES` **26 → 27** (`crates/willikins-server/src/catalog.rs` 51 lists `willikins-tools`'
+pure tools too), with every site that pins the count. `acceptance__characterization_of_every_document.snap` changes only by the new
+fixtures' entries.
+
+**Walter, for T3 (not designed here).** Two observed gates: the app record exists (a new read-only
+gate over `GET /v1/apps`, a leaf) and `APP_GROUPS` enabled on each of the three identifiers (a gate
+per identifier that passes `identifier` through to that identifier's profile). The API shows
+`APP_GROUPS` *enabled*, not the group *assigned* (pre-flight row 14): the gate can pass before the
+group is assigned, and the next run's replace-when-INVALID heals the profiles Apple then invalidates.
+The remaining manual steps become `operator.acknowledge` leaves or are dropped, T3's call.
+
 ## The named manual steps
+
+**2026-09-28:** under decision (j) these are **gate candidates** for T3, not outputs; M4 is gone (the
+profiles are in the document behind the app-group gate), and M1 and M2 are observed gates. The table
+is kept as the list of what the operator must do.
 
 Each appears in the plan as an output. Order matters where stated.
 
@@ -680,6 +927,27 @@ Buildkite token exists.
     before and after it; the raw row's settings shape recorded by key names and booleans only; the
     identifier deleted by its create id; counts equal; the id answers `404`.
 11. **The dry run**, as above.
+12. **Gates in `plan`** (G1). With a gate reading `Absent`: the gate is `Blocked`; every node reachable
+    from it by `Step`, `Keyed` or a `for_each` source is `Skip` and its `read` is never called; a node
+    reachable only from other branches plans exactly as without the gate; `Plan.blocked` names the
+    gate, its static `need`/`how`, its rendered `subject` and its `holds_back`. With the gate
+    `Present`: `Compute`, its dependents plan as they would with no gate, and the plan's JSON has no
+    `blocked` key at all. A gate whose `subject` names a secret or `AnySecret` port, or that is not pure, is refused
+    by `Catalog::insert`. No `BlockedGate` JSON ever contains a seeded secret.
+13. **Plan text** (G1). The `blocked:` section and `re-run this document once done` appear only when
+    `blocked` is non-empty; `plan` exits 0 either way; every existing CLI text snapshot is unchanged.
+14. **Gates in `apply`** (G2). A blocked run creates every independent resource, reports `Blocked` and
+    `Skipped` statuses (not `NotRun`) in `Applied`, the journal and `RunRecord`, and records
+    `Outcome::Blocked`; a second apply after the gate passes runs the skipped nodes and converges; a
+    third reads every node `Unchanged`/`Computed`. A tool failure in the same run still stops the walk
+    with a `NotRun` tail and `Outcome::Failed`. A gate flipped between plan and apply refuses as
+    `Action` drift. Journals written before G2 replay byte for byte.
+15. **Surfaces** (G2). CLI `apply` exits 3 on a blocked run, 1 on a failure, 0 otherwise; `run_status`
+    returns `state: "blocked"`, `blocked` and `next_step`; the schema snapshots move only additively.
+16. **Acknowledgement** (G3). `OperatorAcknowledgement` accepts `done` only; a default of it and a
+    literal on a port of it each fail `check` (negative fixtures); an unsupplied one is `awaiting`, not
+    `missing`, and the plan blocks on `operator.acknowledge` naming it in `awaiting_inputs`; supplying
+    `done` makes the gate `Compute`; the recorded plan inputs never contain an unsupplied one.
 
 ## Credentials
 
@@ -778,7 +1046,10 @@ One lane at a time on `main`, in order; each commits by path with `git commit --
 | --- | --- | --- |
 | T1 | **Capability settings.** Commit 1: `AppleCapabilitySetting` in `willikins-types` (registry entry); the optional `setting` port, the pairing refusal at `read`, the create body, the settings-aware read and `Mismatch { setting }` in `appstore.bundle_id_capability.ensure` and its client; the module doc corrected; the fake twin; mock tests; the negative fixture (acceptance 1–5, 9). Commit 2: `tests/live_capability_cycle.rs` with its own `[[test]]` entry, **written, not run** — the attacker runs it (acceptance 10) | sonnet implements, opus attacks and runs the live cycle |
 | T2 | **`github.repo.get`.** One or two commits: the pure read-only tool over `GitHubClient::get_repo`, its fake twin, mock tests, `LIVE_TOOL_NAMES` 25 → 26 with every pinned site, catalog and MCP snapshots (acceptance 6, 9) | sonnet implements, opus attacks |
-| T3 | **The Walter document.** Commit 1: the two conversion rows with their `From` impls, proptests and the reverse negative fixture (acceptance 7). Commit 2: `workflows/walter-ios-app.yaml` and its graph tests over the fake catalogue in `crates/willikins-cli/tests/walter_document.rs`, any fake-state fixture it needs under `workflows/fixtures/state/` (acceptance 8, 9) | sonnet implements, opus attacks, writes and runs the dry run once a Buildkite token exists |
+| G1 | **Gates in `plan`** (decision (j), points 1–3). Commit 1, `willikins-core` only: `Gate` and `Tool::gate()` (default `None`); `Catalog::insert` refuses a gate that is not pure or whose `subject` port is missing, not `Exact`, or secret; `Action::Blocked` and `Action::Skip`; the skip set in `plan` (a node binding a blocked or skipped node, through `with` or `for_each`, `Step` or `Keyed`, is `Skip` and never read); `NodeResult::Skipped` in `resolve_step`/`resolve_keyed`/aggregation; a skipped `for_each` source planning one `instance: None` entry; `BlockedGate` and `Plan.blocked` (skip if empty). Test-first against small in-test tools, one of whose `read` panics if called: a blocked gate's dependents are `Skip` and unread, transitively; an independent branch plans as before; a met gate is `Compute`; a `Keyed` dependent of another instance is not skipped; outputs bound to skipped nodes are `Unknown`; `BlockedGate` renders a secret-free subject (acceptance 12). Commit 2, `willikins-cli`: `plan` text shows `Blocked`/`Skip` and the `blocked:` section with `re-run this document once done`; exit 0; no section when empty (acceptance 13). Characterization byte-identical (acceptance 9) | sonnet implements, opus attacks |
+| G2 | **Gates in `apply`, the journal, the CLI and MCP** (points 4, 5, 7, 8). Commit 1, `willikins-core` and `willikins-journal`: `NodeStatus::Blocked`/`Skipped` with both events emitted; the walk continues past them; `Applied.blocked`; the `apply.rs` grouping builds `NodeResult::Skipped`; failure still stops with a `NotRun` tail; `Outcome::Blocked`, `RunState::Blocked`, `RunRecord.blocked`/`next_step`; a gate satisfied between plan and apply is `Action` drift (acceptance 14). Commit 2, `willikins-cli` and `willikins-server`: run text, exit 3 on a blocked run, MCP descriptions, the additive schema snapshots listed in (j) (acceptance 15) | sonnet implements, opus attacks |
+| G3 | **Operator acknowledgement** (point 6). Commit 1, `willikins-types` and `willikins-core`: `OperatorAcknowledgement` (grammar `done`, public, registry entry); `check` refuses a default of it and a literal on a port of it (two negative fixtures); `describe`'s `awaiting` instead of `missing`; `plan` resolves an unsupplied one `Unknown` without putting it in the resolved map; `BlockedGate.awaiting_inputs`. Commit 2, `willikins-tools` and `willikins-server`: `operator.acknowledge`, `LIVE_TOOL_NAMES` 26 → 27, catalog snapshots, a positive fixture that plans blocked without the input and `Compute` with it, and CLI `supply:` lines (acceptance 16) | sonnet implements, opus attacks |
+| T3 | **The Walter document** (after G1–G3; **2026-09-28**: its acceptance 8, dry-run step 4 and the post-flight "eight manual steps" item were written for decision (a) and are rewritten by T3 for gates: the observed app-record and app-group gates, profiles behind the app-group gate, the remaining steps as acknowledgement leaves; the Doppler layout of operator decision 2). Commit 1: the two conversion rows with their `From` impls, proptests and the reverse negative fixture (acceptance 7). Commit 2: `workflows/walter-ios-app.yaml` and its graph tests over the fake catalogue in `crates/willikins-cli/tests/walter_document.rs`, any fake-state fixture it needs under `workflows/fixtures/state/` (acceptance 8, 9) | sonnet implements, opus attacks, writes and runs the dry run once a Buildkite token exists |
 
 ## Risks
 
@@ -790,7 +1061,9 @@ One lane at a time on `main`, in order; each commits by path with `git commit --
 3. **The data protection level is the operator's call.** Decision (e) argues for the default class; a
    stricter one is one input change, but `COMPLETE_PROTECTION` needs Walter's code to write NSE-readable
    files with an explicit weaker class.
-4. **A manual step is only a report.** Skipping M2 before M4 yields profiles without the app group,
+4. **A manual step is only a report.** *(Addressed 2026-09-28 by decision (j): the app-group gate
+   keeps the first run from minting profiles, and a re-run replaces any Apple invalidates later. What
+   remains: the API shows `APP_GROUPS` enabled, not the group assigned, so the gate can pass early.)* Skipping M2 before M4 yields profiles without the app group,
    which Apple will invalidate on M2 — recoverable by re-running M4, not silent corruption.
 5. **The dry run is blocked on a Buildkite token.** Tasks 1–3 do not need it.
 6. **Build time and disk.** Two small crates touched per task; the host's 60 GB target directory and
