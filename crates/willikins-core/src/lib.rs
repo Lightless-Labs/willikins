@@ -32,7 +32,8 @@ pub use catalog::{Catalog, CatalogError};
 pub use check::{CheckError, CheckWarning, Checked, Edge, check};
 pub use class::Class;
 pub use describe::{
-    Description, InputArg, InputError, MissingInput, PartialInputs, RawInput, describe,
+    AwaitingInput, Description, InputArg, InputError, MissingInput, PartialInputs, RawInput,
+    describe,
 };
 pub use plan::{Action, BlockedGate, InstanceFingerprint, Plan, PlanError, PlannedNode, plan};
 pub use reported::Reported;
