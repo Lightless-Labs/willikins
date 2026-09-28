@@ -34,7 +34,7 @@ pub use class::Class;
 pub use describe::{
     Description, InputArg, InputError, MissingInput, PartialInputs, RawInput, describe,
 };
-pub use plan::{Action, InstanceFingerprint, Plan, PlanError, PlannedNode, plan};
+pub use plan::{Action, BlockedGate, InstanceFingerprint, Plan, PlanError, PlannedNode, plan};
 pub use reported::Reported;
 pub use site::Site;
 /// Generic tool-authoring helpers (port/type construction, input checks,
@@ -42,8 +42,8 @@ pub use site::Site;
 /// `willikins-core`; see [`tool::helpers`] for the full set.
 pub use tool::helpers;
 pub use tool::{
-    Ensured, Inputs, Observation, Outputs, PortName, PortSpec, SpecError, Tool, ToolError,
-    ToolErrorKind, ToolName, ToolSpec,
+    Ensured, Gate, GateError, Inputs, Observation, Outputs, PortName, PortSpec, SpecError, Tool,
+    ToolError, ToolErrorKind, ToolName, ToolSpec,
 };
 pub use value::{
     ConversionMismatch, Known, PortType, TypeName, TypeRef, TypeRegistry, Value, ValueState,

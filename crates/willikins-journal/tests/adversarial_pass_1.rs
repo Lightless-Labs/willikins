@@ -588,6 +588,7 @@ fn empty_plan() -> willikins_core::Plan {
         outputs: IndexMap::new(),
         class: Class::Reversible,
         requires_approval: false,
+        blocked: Vec::new(),
     }
 }
 

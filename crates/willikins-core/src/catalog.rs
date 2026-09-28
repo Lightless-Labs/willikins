@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use crate::tool::{SpecError, Tool, ToolName, ToolSpec};
-use crate::value::TypeRegistry;
+use crate::tool::{GateError, PortName, SpecError, Tool, ToolName, ToolSpec};
+use crate::value::{PortType, TypeRegistry};
 use willikins_types::TypeInfo;
 
 /// Why [`Catalog::insert`] refused a tool.
@@ -24,6 +24,15 @@ pub enum CatalogError {
     /// A tool with this name is already in the catalog.
     #[error("a tool named `{0}` is already in the catalog")]
     Duplicate(ToolName),
+    /// The tool's [`crate::tool::Gate`] declaration is invalid.
+    #[error("tool `{name}` has an invalid gate: {error}")]
+    Gate {
+        /// The tool whose gate declaration is invalid.
+        name: ToolName,
+        /// Why it is invalid.
+        #[source]
+        error: GateError,
+    },
 }
 
 /// Every tool a workflow can call, keyed by name, plus the type registry
@@ -48,8 +57,11 @@ impl Catalog {
     /// # Errors
     ///
     /// Returns [`CatalogError::Spec`] when the tool's spec does not
-    /// validate, or [`CatalogError::Duplicate`] when a tool with the same
-    /// name is already present.
+    /// validate, [`CatalogError::Gate`] when it declares a [`crate::tool::Gate`]
+    /// that is not pure or whose `subject` names anything but one of its
+    /// own non-secret, [`PortType::Exact`] input ports, or
+    /// [`CatalogError::Duplicate`] when a tool with the same name is
+    /// already present.
     pub fn insert(&mut self, tool: Arc<dyn Tool>) -> Result<(), CatalogError> {
         let name = tool.spec().name.clone();
         tool.spec()
@@ -58,10 +70,53 @@ impl Catalog {
                 name: name.clone(),
                 error,
             })?;
+        if let Some(gate) = tool.gate() {
+            self.validate_gate(tool.spec(), gate)
+                .map_err(|error| CatalogError::Gate {
+                    name: name.clone(),
+                    error,
+                })?;
+        }
         if self.tools.contains_key(&name) {
             return Err(CatalogError::Duplicate(name));
         }
         self.tools.insert(name, tool);
+        Ok(())
+    }
+
+    /// A gate's tool must be pure, and every `subject` entry must name one
+    /// of the tool's own input ports, of a non-secret [`PortType::Exact`]
+    /// type: never [`PortType::AnySecret`], never a secret scalar or list.
+    fn validate_gate(&self, spec: &ToolSpec, gate: &crate::tool::Gate) -> Result<(), GateError> {
+        if !spec.pure {
+            return Err(GateError::NotPure);
+        }
+        for name in gate.subject {
+            let Ok(port) = PortName::parse(name) else {
+                return Err(GateError::SubjectNotAnInput {
+                    port: (*name).to_string(),
+                });
+            };
+            let Some(port_spec) = spec.inputs.get(&port) else {
+                return Err(GateError::SubjectNotAnInput {
+                    port: (*name).to_string(),
+                });
+            };
+            match &port_spec.ty {
+                PortType::AnySecret => {
+                    return Err(GateError::SubjectNotExact {
+                        port: (*name).to_string(),
+                    });
+                }
+                PortType::Exact(ty) => {
+                    if self.registry.is_secret(&ty.name) == Some(true) {
+                        return Err(GateError::SubjectSecret {
+                            port: (*name).to_string(),
+                        });
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

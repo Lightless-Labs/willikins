@@ -63,6 +63,7 @@ pub fn empty_plan(workflow: WorkflowName) -> willikins_core::Plan {
         outputs: IndexMap::new(),
         class: willikins_core::Class::Reversible,
         requires_approval: false,
+        blocked: Vec::new(),
     }
 }
 

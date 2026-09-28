@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-core/tests/schema_generation.rs
+assertion_line: 25
 expression: schema
 ---
 {
@@ -61,6 +62,16 @@ expression: schema
           "description": "The resource already exists and is ours: `ensure` would be a no-op.",
           "type": "string",
           "const": "noop"
+        },
+        {
+          "description": "A [`crate::tool::Gate`]'s `read` reported [`Observation::Absent`]:\nthe thing the operator must make does not exist yet. See\n[`Plan::blocked`].",
+          "type": "string",
+          "const": "blocked"
+        },
+        {
+          "description": "This node instance binds a node or `for_each` source that is\n[`Action::Blocked`] or itself `Skip`, directly or transitively: it is\nnever read, and every one of its output ports is\n[`crate::value::ValueState::Unknown`]. See [`Plan::blocked`].",
+          "type": "string",
+          "const": "skip"
         }
       ]
     },

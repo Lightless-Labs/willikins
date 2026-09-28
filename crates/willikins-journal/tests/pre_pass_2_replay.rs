@@ -314,6 +314,7 @@ fn regenerate_the_frozen_fixture() {
         outputs: IndexMap::new(),
         class: Class::Reversible,
         requires_approval: false,
+        blocked: Vec::new(),
     };
 
     let plan_a = PlanId::new();

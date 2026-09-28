@@ -1,0 +1,699 @@
+//! Acceptance test 12 (G1, decision (j)): gates in `plan`.
+//!
+//! Small, in-test tools only — no provider, no fake catalog — because the
+//! mechanism under test (`Catalog::insert`'s gate validation, the skip set
+//! `plan` decides from bindings, `NodeResult::Skipped`,
+//! `aggregate_for_each_port`'s "any instance blocked" rule, and
+//! `Plan::blocked`) belongs to `willikins-core` itself, independent of any
+//! real provider. `solo` and `consumer` share one [`CountingTool`] instance
+//! (`test.counted`), so a test asserting a node is `Skip` can also assert
+//! its shared read counter stayed at zero — the same graph is reused by a
+//! scenario where those very nodes legitimately must run, so the tool
+//! itself has to behave, not merely refuse to be called.
+
+mod common;
+
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+
+use indexmap::IndexMap;
+
+use common::{input, node, output, port, tool_name, ty, workflow_name};
+use willikins_core::{
+    Action, Binding, Catalog, CatalogError, Class, Ensured, Gate, GateError, InputSpec, Inputs,
+    Node, Observation, Outputs, PortSpec, PortType, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Workflow, check, plan,
+};
+use willikins_types::{DomainType, EnvironmentSlug};
+
+// ---------------------------------------------------------------------
+// Test tools
+// ---------------------------------------------------------------------
+
+static GATE: Gate = Gate {
+    need: "the operator makes the test condition true",
+    how: "do the manual thing, then re-run this document",
+    subject: &["key"],
+};
+
+/// A pure gate over one `EnvironmentSlug` port, passed through as its own
+/// output (decision (j), point 2: "a gate passes through the key it
+/// checked"). `Present` for every key in `present`, `Absent` otherwise —
+/// shared so one workflow can mix blocked and satisfied instances of the
+/// same tool under one `for_each`.
+struct GateTool {
+    spec: ToolSpec,
+    present: Arc<Mutex<HashSet<String>>>,
+}
+
+impl GateTool {
+    fn new(present: Arc<Mutex<HashSet<String>>>) -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("key"),
+            PortSpec {
+                ty: PortType::Exact(ty("EnvironmentSlug")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("key"), ty("EnvironmentSlug"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name("test.gate"),
+                description: "Test gate over one EnvironmentSlug.".to_string(),
+                inputs,
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: true,
+            },
+            present,
+        }
+    }
+}
+
+impl Tool for GateTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
+        let key = inputs
+            .get(&port("key"))
+            .expect("test always binds `key`")
+            .clone();
+        let mut outputs = Outputs::new();
+        outputs.insert(port("key"), key.clone());
+        if self
+            .present
+            .lock()
+            .unwrap()
+            .contains(&key.render().to_string())
+        {
+            Ok(Observation::Present(outputs))
+        } else {
+            Ok(Observation::Absent { predicted: outputs })
+        }
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        unreachable!("this test never applies a plan")
+    }
+
+    fn gate(&self) -> Option<&Gate> {
+        Some(&GATE)
+    }
+}
+
+/// A non-pure, keyless tool that counts every call to `read` and otherwise
+/// behaves normally (always `Absent`, passing its input straight through).
+/// Shared by both `solo` and `consumer` in [`workflow`]: in the "blocked"
+/// scenario, both are forced `Skip` and this tool's shared counter must
+/// stay zero; in the "satisfied" scenario, both run for real, so the same
+/// tool must behave correctly rather than merely never being called.
+/// (`plan` never applies anything, so `ensure` is never exercised here.)
+struct CountingTool {
+    spec: ToolSpec,
+    reads: Arc<Mutex<u32>>,
+}
+
+impl CountingTool {
+    fn new(name: &str, reads: Arc<Mutex<u32>>) -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("value"),
+            PortSpec {
+                ty: PortType::Exact(ty("EnvironmentSlug")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("value"), ty("EnvironmentSlug"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name(name),
+                description: "Test tool: counts its own `read` calls.".to_string(),
+                inputs,
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+            reads,
+        }
+    }
+}
+
+impl Tool for CountingTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
+        *self.reads.lock().unwrap() += 1;
+        let mut outputs = Outputs::new();
+        outputs.insert(
+            port("value"),
+            inputs.get(&port("value")).expect("always bound").clone(),
+        );
+        Ok(Observation::Absent { predicted: outputs })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        unreachable!("this test never applies a plan")
+    }
+}
+
+/// A normal, well-behaved non-pure tool: always `Absent`, passing its input
+/// straight through as its output. Used for a node a test expects to plan
+/// normally (not skipped) alongside a blocked gate elsewhere in the graph.
+struct PassthroughTool {
+    spec: ToolSpec,
+}
+
+impl PassthroughTool {
+    fn new(name: &str) -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("value"),
+            PortSpec {
+                ty: PortType::Exact(ty("EnvironmentSlug")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("value"), ty("EnvironmentSlug"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name(name),
+                description: "Test tool: always Absent, passes its input through.".to_string(),
+                inputs,
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+        }
+    }
+}
+
+impl Tool for PassthroughTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
+        let mut outputs = Outputs::new();
+        outputs.insert(
+            port("value"),
+            inputs.get(&port("value")).expect("always bound").clone(),
+        );
+        Ok(Observation::Absent { predicted: outputs })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        unreachable!("this test never applies a plan")
+    }
+}
+
+// ---------------------------------------------------------------------
+// The shared graph
+// ---------------------------------------------------------------------
+
+/// `envs = [dev, stg]`; `gate` is `for_each` over it (`test.gate`, `present`
+/// controls which instances read `Present`); `solo` and `solo_ok` are
+/// `Keyed` onto `gate`'s `dev` and `stg` instances respectively; `consumer`
+/// is a `for_each` node whose *source* aggregates every instance of `gate`
+/// (`Step`); `independent` binds nothing of `gate`'s. `solo` and `consumer`
+/// are both `test.counted` (one shared read counter); `solo_ok` and
+/// `independent` are the well-behaved `PassthroughTool`.
+fn workflow() -> Workflow {
+    Workflow::new(workflow_name("gate-test"))
+        .input(
+            input("envs"),
+            InputSpec::new(willikins_core::TypeRef::list_of(
+                willikins_core::TypeName::parse("EnvironmentSlug").unwrap(),
+            ))
+            .with_default(Value::known_list(vec![
+                EnvironmentSlug::parse("dev").unwrap(),
+                EnvironmentSlug::parse("stg").unwrap(),
+            ])),
+        )
+        .node(
+            node("gate"),
+            Node::new(tool_name("test.gate"))
+                .for_each(Binding::Input(input("envs")))
+                .port(port("key"), Binding::Item),
+        )
+        .node(
+            node("solo"),
+            Node::new(tool_name("test.counted")).port(
+                port("value"),
+                Binding::Keyed {
+                    node: node("gate"),
+                    key: "dev".to_string(),
+                    port: port("key"),
+                },
+            ),
+        )
+        .node(
+            node("solo_ok"),
+            Node::new(tool_name("test.passthrough_ok")).port(
+                port("value"),
+                Binding::Keyed {
+                    node: node("gate"),
+                    key: "stg".to_string(),
+                    port: port("key"),
+                },
+            ),
+        )
+        .node(
+            node("consumer"),
+            Node::new(tool_name("test.counted"))
+                .for_each(Binding::Step {
+                    node: node("gate"),
+                    port: port("key"),
+                })
+                .port(port("value"), Binding::Item),
+        )
+        .node(
+            node("independent"),
+            Node::new(tool_name("test.passthrough_independent"))
+                .port(port("value"), Binding::Literal("prd".to_string())),
+        )
+        .output(
+            output("gate_keys"),
+            Binding::Step {
+                node: node("gate"),
+                port: port("key"),
+            },
+        )
+}
+
+/// Builds a fresh catalog for [`workflow`] and the shared `test.counted`
+/// read counter (starts at zero), so a caller can assert it stayed zero
+/// after a `plan` that expects `solo` and `consumer` to be skipped.
+fn catalog_with(present: HashSet<&str>) -> (Catalog, Arc<Mutex<u32>>) {
+    let mut catalog = Catalog::new(willikins_types::registry());
+    let present: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(
+        present.into_iter().map(str::to_string).collect(),
+    ));
+    catalog.insert(Arc::new(GateTool::new(present))).unwrap();
+    let reads = Arc::new(Mutex::new(0));
+    catalog
+        .insert(Arc::new(CountingTool::new("test.counted", reads.clone())))
+        .unwrap();
+    catalog
+        .insert(Arc::new(PassthroughTool::new("test.passthrough_ok")))
+        .unwrap();
+    catalog
+        .insert(Arc::new(PassthroughTool::new(
+            "test.passthrough_independent",
+        )))
+        .unwrap();
+    (catalog, reads)
+}
+
+/// `plan` resolves a `Binding::Input` only from the caller's own supplied
+/// map — applying a workflow input's declared default is `describe`'s job,
+/// not `plan`'s (see `tests/plan.rs`'s own `new_rust_service_inputs`) — so
+/// every test here supplies `envs` explicitly rather than relying on
+/// `workflow()`'s declared default ever being read.
+fn envs_inputs() -> IndexMap<willikins_core::InputName, Value> {
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("envs"),
+        Value::known_list(vec![
+            EnvironmentSlug::parse("dev").unwrap(),
+            EnvironmentSlug::parse("stg").unwrap(),
+        ]),
+    );
+    inputs
+}
+
+fn by_name<'a>(
+    nodes: &'a [willikins_core::PlannedNode],
+    name: &str,
+    instance: Option<&str>,
+) -> &'a willikins_core::PlannedNode {
+    nodes
+        .iter()
+        .find(|n| n.name.as_str() == name && n.instance.as_deref() == instance)
+        .unwrap_or_else(|| panic!("no planned node `{name}` (instance {instance:?})"))
+}
+
+// ---------------------------------------------------------------------
+// Acceptance test 12
+// ---------------------------------------------------------------------
+
+/// With `dev` blocked and `stg` satisfied: `gate[dev]` is `Blocked`,
+/// `gate[stg]` is `Compute`; `solo` (`Keyed` onto `dev`) and `consumer`
+/// (`Step`-aggregating `gate`, which includes the blocked `dev`) are both
+/// `Skip`, and `test.counted`'s shared read counter — which `solo` and
+/// `consumer` are the only nodes bound to — stays at zero, proving neither
+/// was ever read; `solo_ok` (`Keyed` onto the satisfied `stg`) and
+/// `independent` (binds nothing of `gate`'s) plan exactly as they would
+/// with no gate at all.
+#[test]
+fn a_blocked_gate_skips_its_dependents_and_leaves_every_other_branch_alone() {
+    let (catalog, reads) = catalog_with(HashSet::from(["stg"]));
+    let workflow = workflow();
+    let checked = check(&workflow, &catalog).expect("the test graph checks cleanly");
+    let inputs = envs_inputs();
+    let result = plan(&checked, &inputs, &catalog).expect("a blocked gate never fails `plan`");
+
+    assert_eq!(
+        by_name(&result.nodes, "gate", Some("dev")).action,
+        Action::Blocked
+    );
+    assert_eq!(
+        by_name(&result.nodes, "gate", Some("stg")).action,
+        Action::Compute
+    );
+
+    assert_eq!(by_name(&result.nodes, "solo", None).action, Action::Skip);
+    assert!(
+        by_name(&result.nodes, "solo", None).inputs.is_empty(),
+        "a skipped node is left unbound"
+    );
+    let consumer_instances: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| n.name.as_str() == "consumer")
+        .collect();
+    assert_eq!(
+        consumer_instances.len(),
+        1,
+        "a for_each node whose source is blocked plans as exactly one instance"
+    );
+    assert_eq!(consumer_instances[0].action, Action::Skip);
+    assert_eq!(consumer_instances[0].instance, None);
+
+    // `solo` and `consumer` are the only nodes bound to `test.counted`, so
+    // a zero count here is a hard proof neither was ever read, not merely
+    // an inference from their `Action`.
+    assert_eq!(
+        *reads.lock().unwrap(),
+        0,
+        "a skipped node's tool must never be read"
+    );
+
+    // Not skipped: these ran through the real tool.
+    assert_eq!(
+        by_name(&result.nodes, "solo_ok", None).action,
+        Action::Create
+    );
+    assert_eq!(
+        by_name(&result.nodes, "independent", None).action,
+        Action::Create
+    );
+
+    // The workflow output aggregating the mixed gate is Unknown, not a
+    // known two-element list.
+    let gate_keys = result.outputs.get(&output("gate_keys")).unwrap();
+    assert!(
+        !gate_keys.is_known(),
+        "an aggregate over a blocked instance must be Unknown"
+    );
+
+    // `Plan.blocked` names exactly the one blocked instance, with its
+    // static need/how, its rendered subject, and every node it holds back.
+    assert_eq!(result.blocked.len(), 1);
+    let entry = &result.blocked[0];
+    assert_eq!(entry.node.as_str(), "gate");
+    assert_eq!(entry.instance.as_deref(), Some("dev"));
+    assert_eq!(entry.tool.as_str(), "test.gate");
+    assert_eq!(entry.need, GATE.need);
+    assert_eq!(entry.how, GATE.how);
+    assert_eq!(entry.subject.len(), 1);
+    assert_eq!(entry.subject[0].0.as_str(), "key");
+    assert_eq!(entry.subject[0].1, "dev");
+    let holds_back: HashSet<&str> = entry
+        .holds_back
+        .iter()
+        .map(willikins_core::NodeName::as_str)
+        .collect();
+    assert_eq!(holds_back, HashSet::from(["solo", "consumer"]));
+
+    // No secret can appear here (the catalog would have refused the gate
+    // otherwise), and the rendered subject is plain text, not a marker.
+    let json = serde_json::to_string(&result).unwrap();
+    assert!(json.contains("\"dev\""));
+    assert!(!json.contains("REDACTED"));
+}
+
+/// With every instance satisfied: every node plans `Compute`/`Create`
+/// exactly as it would with no gate at all, `Plan.blocked` is empty, and
+/// the plan's JSON carries no `blocked` key whatsoever.
+#[test]
+fn a_satisfied_gate_blocks_nothing_and_the_plan_json_has_no_blocked_key() {
+    let (catalog, _reads) = catalog_with(HashSet::from(["dev", "stg"]));
+    let workflow = workflow();
+    let checked = check(&workflow, &catalog).unwrap();
+    let inputs = envs_inputs();
+    let result = plan(&checked, &inputs, &catalog).unwrap();
+
+    assert_eq!(
+        by_name(&result.nodes, "gate", Some("dev")).action,
+        Action::Compute
+    );
+    assert_eq!(
+        by_name(&result.nodes, "gate", Some("stg")).action,
+        Action::Compute
+    );
+    assert_eq!(by_name(&result.nodes, "solo", None).action, Action::Create);
+    assert_eq!(
+        by_name(&result.nodes, "solo_ok", None).action,
+        Action::Create
+    );
+    assert_eq!(
+        result
+            .nodes
+            .iter()
+            .filter(|n| n.name.as_str() == "consumer")
+            .count(),
+        2,
+        "an unblocked for_each source expands normally"
+    );
+    assert_eq!(
+        by_name(&result.nodes, "independent", None).action,
+        Action::Create
+    );
+    assert!(result.blocked.is_empty());
+
+    let json = serde_json::to_value(&result).unwrap();
+    assert!(
+        json.as_object().unwrap().get("blocked").is_none(),
+        "an empty `blocked` must not serialize at all: {json}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Catalog::insert's gate validation
+// ---------------------------------------------------------------------
+
+static BAD_SUBJECT_GATE: Gate = Gate {
+    need: "n",
+    how: "h",
+    subject: &["nonexistent"],
+};
+
+static ANY_SECRET_SUBJECT_GATE: Gate = Gate {
+    need: "n",
+    how: "h",
+    subject: &["secret_port"],
+};
+
+static SECRET_TYPED_SUBJECT_GATE: Gate = Gate {
+    need: "n",
+    how: "h",
+    subject: &["secret_value"],
+};
+
+static OK_GATE: Gate = Gate {
+    need: "n",
+    how: "h",
+    subject: &["key"],
+};
+
+/// A pure tool declaring `gate`, whose one input port's shape is
+/// configurable, so each refusal test can build exactly the offending
+/// shape without a new struct per case.
+struct ConfigurableGateTool {
+    spec: ToolSpec,
+    gate: &'static Gate,
+}
+
+impl Tool for ConfigurableGateTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Present(Outputs::new()))
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        unreachable!("insert-time validation never calls a tool's own methods")
+    }
+
+    fn gate(&self) -> Option<&Gate> {
+        Some(self.gate)
+    }
+}
+
+fn spec_with(inputs: IndexMap<willikins_core::PortName, PortSpec>, pure: bool) -> ToolSpec {
+    ToolSpec {
+        name: tool_name("test.configurable_gate"),
+        description: "Test tool for gate validation.".to_string(),
+        inputs,
+        outputs: IndexMap::new(),
+        key: Vec::new(),
+        // Always Reversible: the `NotPure` test needs a spec that would
+        // otherwise validate cleanly (`ToolSpec::validate` only constrains
+        // `class` when `pure` is true), so the gate refusal under test is
+        // never confused with a `PureToolNotReversible` spec error.
+        class: Class::Reversible,
+        pure,
+    }
+}
+
+#[test]
+fn insert_refuses_a_gate_whose_tool_is_not_pure() {
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        port("key"),
+        PortSpec {
+            ty: PortType::Exact(ty("EnvironmentSlug")),
+            required: true,
+            derived_only: false,
+        },
+    );
+    let mut catalog = Catalog::new(willikins_types::registry());
+    let err = catalog
+        .insert(Arc::new(ConfigurableGateTool {
+            spec: spec_with(inputs, false),
+            gate: &OK_GATE,
+        }))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CatalogError::Gate {
+            error: GateError::NotPure,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn insert_refuses_a_gate_subject_that_is_not_one_of_the_tools_own_inputs() {
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        port("key"),
+        PortSpec {
+            ty: PortType::Exact(ty("EnvironmentSlug")),
+            required: true,
+            derived_only: false,
+        },
+    );
+    let mut catalog = Catalog::new(willikins_types::registry());
+    let err = catalog
+        .insert(Arc::new(ConfigurableGateTool {
+            spec: spec_with(inputs, true),
+            gate: &BAD_SUBJECT_GATE,
+        }))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CatalogError::Gate {
+            error: GateError::SubjectNotAnInput { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn insert_refuses_a_gate_subject_of_an_any_secret_port() {
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        port("secret_port"),
+        PortSpec {
+            ty: PortType::AnySecret,
+            required: true,
+            derived_only: false,
+        },
+    );
+    let mut catalog = Catalog::new(willikins_types::registry());
+    let err = catalog
+        .insert(Arc::new(ConfigurableGateTool {
+            spec: spec_with(inputs, true),
+            gate: &ANY_SECRET_SUBJECT_GATE,
+        }))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CatalogError::Gate {
+            error: GateError::SubjectNotExact { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn insert_refuses_a_gate_subject_of_a_secret_type() {
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        port("secret_value"),
+        PortSpec {
+            ty: PortType::Exact(ty("DopplerSecretValue")),
+            required: true,
+            derived_only: false,
+        },
+    );
+    let mut catalog = Catalog::new(willikins_types::registry());
+    let err = catalog
+        .insert(Arc::new(ConfigurableGateTool {
+            spec: spec_with(inputs, true),
+            gate: &SECRET_TYPED_SUBJECT_GATE,
+        }))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CatalogError::Gate {
+            error: GateError::SubjectSecret { .. },
+            ..
+        }
+    ));
+    // Sanity: `DopplerSecretValue` really is registered secret, so this
+    // test is pinning the refusal this crate cares about, not an
+    // unregistered-type accident.
+    assert_eq!(
+        willikins_types::registry()
+            .is_secret(&willikins_core::TypeName::parse("DopplerSecretValue").unwrap()),
+        Some(true)
+    );
+}
+
+#[test]
+fn insert_accepts_a_well_formed_gate() {
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        port("key"),
+        PortSpec {
+            ty: PortType::Exact(ty("EnvironmentSlug")),
+            required: true,
+            derived_only: false,
+        },
+    );
+    let mut catalog = Catalog::new(willikins_types::registry());
+    catalog
+        .insert(Arc::new(ConfigurableGateTool {
+            spec: spec_with(inputs, true),
+            gate: &OK_GATE,
+        }))
+        .unwrap();
+}
