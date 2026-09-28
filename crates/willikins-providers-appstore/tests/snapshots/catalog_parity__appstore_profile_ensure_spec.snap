@@ -3,7 +3,7 @@ source: crates/willikins-providers-appstore/tests/catalog_parity.rs
 expression: "spec_json(AppstoreProfileEnsure::new(NOWHERE).spec())"
 ---
 {
-  "class": "reversible",
+  "class": "destructive",
   "description": "Produce (or report) an App Store Connect IOS_APP_STORE provisioning profile relating a bundle identifier to a distribution certificate.",
   "inputs": {
     "certificate": {

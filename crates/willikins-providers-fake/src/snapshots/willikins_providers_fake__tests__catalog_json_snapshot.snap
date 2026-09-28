@@ -699,7 +699,7 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "pure": true
   },
   {
-    "class": "reversible",
+    "class": "destructive",
     "description": "Produce (or report) an App Store Connect IOS_APP_STORE provisioning profile relating a bundle identifier to a distribution certificate.",
     "inputs": {
       "certificate": {

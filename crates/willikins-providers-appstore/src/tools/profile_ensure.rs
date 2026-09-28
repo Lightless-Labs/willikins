@@ -26,17 +26,43 @@
 //! job -- delete it by hand, or give the document a new `name` -- never
 //! this tool's.
 //!
-//! # `INVALID` and expiry are both terminal, and checked independently
+//! # `INVALID` is replaced, not terminal; expiry stays terminal
 //!
 //! `profileState`'s enum is `ACTIVE | INVALID` -- there is no `EXPIRED`
-//! member, so expiry is never a *state* Apple reports on its own. This
-//! tool's read therefore checks both, independently: `profileState ==
-//! INVALID` is a [`willikins_core::ToolErrorKind::Conflict`] regardless
-//! of the date, and `expirationDate` at or before the wall clock is a
-//! separate `Conflict` regardless of `profileState` -- the pre-flight
-//! observed `INVALID` profiles with a future expiry on the operator's
-//! own account, so the two are independent facts, not one implying the
-//! other.
+//! member, so expiry is never a *state* Apple reports on its own; it is
+//! checked independently of `profileState` below, and stays a terminal
+//! [`willikins_core::ToolErrorKind::Conflict`] (the pre-flight observed
+//! `INVALID` profiles with a future expiry on the operator's own
+//! account, so the two are independent facts, not one implying the
+//! other).
+//!
+//! `profileState == INVALID`, at this exact `(identifier, name)` key, is
+//! **not** terminal (2026-09-28 addendum, milestone 3e's decision 1,
+//! "replace-when-INVALID"): Apple invalidates a profile whenever the App
+//! ID it names is modified (a capability enabled, say), so a document
+//! that runs `appstore.bundle_id_capability.ensure` and then a signing
+//! document across two runs leaves the first run's profile INVALID
+//! through no fault of the operator's. `read` reports it exactly like a
+//! missing profile ([`Observation::Absent`]), so `plan` shows the
+//! replacement as an ordinary create rather than failing the whole plan;
+//! `ensure` deletes it **by the id the read returned**, then creates
+//! fresh. This is checked before `profile_type` or `certificate`, so a
+//! stale profile of any shape at this key is replaced rather than
+//! reported `Mismatch`. It is never reached for a profile of another
+//! identifier or another name: [`AppstoreProfileEnsure::find_bundle_id`]
+//! and [`AppstoreProfileEnsure::find_profile_row`] only ever resolve the
+//! row at the exact key requested, so an `ACTIVE` profile, or an
+//! `INVALID` one under a different identifier or name, is never touched.
+//!
+//! **This makes the tool [`Class::Destructive`]**, not
+//! [`Class::Reversible`]: `ensure` can now delete a resource it did not
+//! itself just create in the same call, which is exactly what
+//! `willikins_core::class`'s own doc calls destructive ("destroys or
+//! overwrites something"), the same reasoning that makes
+//! `doppler.service_token.rotate` destructive. A plan that reaches this
+//! tool's `Action::Create` now requires approval even though nothing
+//! about the *plan* shows a delete -- the class is a static property of
+//! the tool, not a fact about one particular run.
 //!
 //! # The key: `(identifier, name)`, and the read that uses the
 //! relationship rather than a filter
@@ -115,7 +141,11 @@ impl AppstoreProfileEnsure {
                 inputs,
                 outputs,
                 key: vec![port("identifier"), port("name")],
-                class: Class::Reversible,
+                // Destructive, not Reversible: see this module's own doc,
+                // "`INVALID` is replaced, not terminal" -- `ensure` can now
+                // delete an `INVALID` profile at this key before creating
+                // fresh.
+                class: Class::Destructive,
                 pure: false,
             },
             base_url: base_url.into(),
@@ -205,19 +235,27 @@ impl AppstoreProfileEnsure {
     }
 
     /// Read the single-instance resource (`profileContent` and the
-    /// `certificates` relationship both present) and build the
-    /// [`Observation`] decisions (d)/(e) specify, in the order they list
-    /// them: `profile_type` mismatch, then `certificate` mismatch, then
-    /// `INVALID`, then expiry, then `Present`.
-    fn observe_instance(
+    /// `certificates` relationship both present) and decide what to do
+    /// with it, in the order this module's own doc specifies: `INVALID`
+    /// first (replaced, never a `Mismatch`), then `profile_type`
+    /// mismatch, then `certificate` mismatch, then expiry, then
+    /// `Present`.
+    fn resolve_instance(
         resource: &ProfileResource,
         profile_type: &AppleProfileType,
         certificate: &AppleCertificateId,
-    ) -> Result<Observation, ToolError> {
+    ) -> Result<ProfileResolution, ToolError> {
+        let profile_id = AppleProfileId::parse(&resource.id).map_err(|err| ToolError {
+            kind: ToolErrorKind::Provider,
+            message: format!("App Store Connect returned a malformed profile id: {err}"),
+        })?;
+        if resource.attributes.profile_state == "INVALID" {
+            return Ok(ProfileResolution::Invalid { id: profile_id });
+        }
         if resource.attributes.profile_type != profile_type.as_str() {
-            return Ok(Observation::Mismatch {
+            return Ok(ProfileResolution::Decided(Observation::Mismatch {
                 port: port("profile_type"),
-            });
+            }));
         }
         // Only the `include=certificates` instance read reaches here, and
         // it must carry the relationship's `data`: its absence means
@@ -236,17 +274,9 @@ impl AppstoreProfileEnsure {
                     .to_string(),
             })?;
         if certs.len() != 1 || certs[0].id != certificate.as_str() {
-            return Ok(Observation::Mismatch {
+            return Ok(ProfileResolution::Decided(Observation::Mismatch {
                 port: port("certificate"),
-            });
-        }
-        if resource.attributes.profile_state == "INVALID" {
-            return Err(conflict(
-                "the profile exists but Apple reports it INVALID; willikins cannot repair a \
-                 profile, replace it instead (delete it by hand, or give the document a new \
-                 `name`)"
-                    .to_string(),
-            ));
+            }));
         }
         if let Some(expiration_date) = &resource.attributes.expiration_date {
             let expires =
@@ -273,27 +303,25 @@ impl AppstoreProfileEnsure {
                 message: "App Store Connect returned no profileContent for an existing profile"
                     .to_string(),
             })?;
-        let profile = AppleProfileId::parse(&resource.id).map_err(|err| ToolError {
-            kind: ToolErrorKind::Provider,
-            message: format!("App Store Connect returned a malformed profile id: {err}"),
-        })?;
-        Ok(Observation::Present(Self::outputs_for(&profile, &content)))
+        Ok(ProfileResolution::Decided(Observation::Present(
+            Self::outputs_for(&profile_id, &content),
+        )))
     }
 
-    /// The full read: resolve the bundle id, find the profile row by
-    /// name, then (only on a match) the single-instance read and its
-    /// checks.
-    fn observe(
+    /// The full resolution: resolve the bundle id, find the profile row
+    /// by name, then (only on a match) the single-instance read and its
+    /// checks. Never touches a profile of another identifier or another
+    /// name -- both lookups below are exact, byte-for-byte compares
+    /// against the requested key, never a provider filter.
+    fn resolve(
         client: &AppstoreClient,
         identifier: &AppleBundleIdentifier,
         name: &AppleProfileName,
         profile_type: &AppleProfileType,
         certificate: &AppleCertificateId,
-    ) -> Result<Observation, ToolError> {
+    ) -> Result<ProfileResolution, ToolError> {
         let Some(bundle_id_resource) = Self::find_bundle_id(client, identifier)? else {
-            return Ok(Observation::Absent {
-                predicted: Self::predicted_outputs(),
-            });
+            return Ok(ProfileResolution::NotFound);
         };
         let bundle_id =
             AppleBundleIdId::parse(&bundle_id_resource.id).map_err(|err| ToolError {
@@ -301,17 +329,110 @@ impl AppstoreProfileEnsure {
                 message: format!("App Store Connect returned a malformed bundle id id: {err}"),
             })?;
         let Some(row) = Self::find_profile_row(client, &bundle_id, name)? else {
-            return Ok(Observation::Absent {
-                predicted: Self::predicted_outputs(),
-            });
+            return Ok(ProfileResolution::NotFound);
         };
         let profile_id = AppleProfileId::parse(&row.id).map_err(|err| ToolError {
             kind: ToolErrorKind::Provider,
             message: format!("App Store Connect returned a malformed profile id: {err}"),
         })?;
         let instance = client.get_profile(&profile_id)?;
-        Self::observe_instance(&instance, profile_type, certificate)
+        Self::resolve_instance(&instance, profile_type, certificate)
     }
+
+    /// Create a fresh profile at `(identifier, name)`: resolve the
+    /// bundle id (again -- the caller may have reached here from
+    /// [`ProfileResolution::Invalid`], which already deleted a stale row
+    /// at this key but never learned the bundle id's own opaque id), then
+    /// `POST`. On an ambiguous create failure, re-resolve rather than
+    /// parse the error body, exactly as `appstore.bundle_id.ensure`'s own
+    /// module doc explains for its own ambiguous create.
+    fn create_new(
+        client: &AppstoreClient,
+        identifier: &AppleBundleIdentifier,
+        name: &AppleProfileName,
+        profile_type: &AppleProfileType,
+        certificate: &AppleCertificateId,
+    ) -> Result<Ensured, ToolError> {
+        let Some(bundle_id_resource) = Self::find_bundle_id(client, identifier)? else {
+            return Err(not_found(format!(
+                "bundle identifier `{identifier}` is not registered; register it (for \
+                 example via appstore.bundle_id.ensure) before creating a profile for it"
+            )));
+        };
+        let bundle_id =
+            AppleBundleIdId::parse(&bundle_id_resource.id).map_err(|err| ToolError {
+                kind: ToolErrorKind::Provider,
+                message: format!("App Store Connect returned a malformed bundle id id: {err}"),
+            })?;
+        match client.create_profile(name, profile_type, &bundle_id, certificate) {
+            Ok(created) => {
+                let profile_id = AppleProfileId::parse(&created.id).map_err(|err| ToolError {
+                    kind: ToolErrorKind::Provider,
+                    message: format!("App Store Connect returned a malformed profile id: {err}"),
+                })?;
+                // Verify item 5 ("does the 201 carry profileContent?")
+                // is unsettled until the live cycle runs; if the
+                // create response omits it, one GET follows rather
+                // than assuming either answer.
+                let content = if let Some(content) = created.attributes.profile_content {
+                    content
+                } else {
+                    let instance = client.get_profile(&profile_id)?;
+                    instance
+                        .attributes
+                        .profile_content
+                        .ok_or_else(|| ToolError {
+                            kind: ToolErrorKind::Provider,
+                            message: "App Store Connect returned no profileContent for a \
+                                  just-created profile, even after a follow-up GET"
+                                .to_string(),
+                        })?
+                };
+                Ok(Ensured {
+                    outputs: Self::outputs_for(&profile_id, &content),
+                    changed: true,
+                })
+            }
+            Err(err) => match Self::resolve(client, identifier, name, profile_type, certificate)? {
+                ProfileResolution::Decided(Observation::Present(outputs)) => Ok(Ensured {
+                    outputs,
+                    changed: false,
+                }),
+                ProfileResolution::Decided(Observation::Mismatch { .. }) => Err(ToolError {
+                    kind: ToolErrorKind::Conflict,
+                    message: "the existing profile does not match what was requested, and \
+                              cannot be converged (there is no update operation for a \
+                              profile); replace it instead"
+                        .to_string(),
+                }),
+                ProfileResolution::Decided(Observation::Foreign) => {
+                    unreachable!("appstore.profile.ensure never observes Foreign")
+                }
+                ProfileResolution::Decided(Observation::Absent { .. }) => {
+                    unreachable!("resolve_instance never decides Absent")
+                }
+                // Still (or again) nothing at this key, or the re-read
+                // finds it INVALID once more: neither retries the create
+                // within this one `ensure` call, so the original failure
+                // is what the caller sees.
+                ProfileResolution::NotFound | ProfileResolution::Invalid { .. } => Err(err.into()),
+            },
+        }
+    }
+}
+
+/// What [`AppstoreProfileEnsure::resolve`] decided, before it becomes
+/// either an [`Observation`] (`read`) or an `ensure` action.
+enum ProfileResolution {
+    /// No bundle id, or no profile row, at this exact `(identifier,
+    /// name)` key.
+    NotFound,
+    /// A profile row at this exact key exists and Apple reports its
+    /// `profileState` as `INVALID` -- carries the id `ensure` deletes
+    /// before creating fresh. See this module's own doc.
+    Invalid { id: AppleProfileId },
+    /// The full instance check ran and decided.
+    Decided(Observation),
 }
 
 /// The seven parsed input ports, in the order the spec declares them.
@@ -354,7 +475,17 @@ impl Tool for AppstoreProfileEnsure {
             certificate,
         } = inputs_of(inputs)?;
         let client = client_for(&self.base_url, &issuer_id, &key_id, &key)?;
-        Self::observe(&client, &identifier, &name, &profile_type, &certificate)
+        match Self::resolve(&client, &identifier, &name, &profile_type, &certificate)? {
+            // A replaced profile plans exactly like a missing one -- see
+            // this module's own doc, "`INVALID` is replaced, not
+            // terminal".
+            ProfileResolution::NotFound | ProfileResolution::Invalid { .. } => {
+                Ok(Observation::Absent {
+                    predicted: Self::predicted_outputs(),
+                })
+            }
+            ProfileResolution::Decided(observation) => Ok(observation),
+        }
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
@@ -369,96 +500,33 @@ impl Tool for AppstoreProfileEnsure {
             certificate,
         } = inputs_of(inputs)?;
         let client = client_for(&self.base_url, &issuer_id, &key_id, &key)?;
-        let observation = Self::observe(&client, &identifier, &name, &profile_type, &certificate)?;
-        match observation {
-            Observation::Present(outputs) => Ok(Ensured {
+        match Self::resolve(&client, &identifier, &name, &profile_type, &certificate)? {
+            ProfileResolution::Decided(Observation::Present(outputs)) => Ok(Ensured {
                 outputs,
                 changed: false,
             }),
-            Observation::Mismatch { .. } => Err(ToolError {
+            ProfileResolution::Decided(Observation::Mismatch { .. }) => Err(ToolError {
                 kind: ToolErrorKind::Conflict,
                 message: "the existing profile does not match what was requested, and cannot \
                           be converged (there is no update operation for a profile); replace \
                           it instead"
                     .to_string(),
             }),
-            Observation::Foreign => unreachable!("appstore.profile.ensure never observes Foreign"),
-            Observation::Absent { .. } => {
-                let Some(bundle_id_resource) = Self::find_bundle_id(&client, &identifier)? else {
-                    return Err(not_found(format!(
-                        "bundle identifier `{identifier}` is not registered; register it (for \
-                         example via appstore.bundle_id.ensure) before creating a profile for it"
-                    )));
-                };
-                let bundle_id =
-                    AppleBundleIdId::parse(&bundle_id_resource.id).map_err(|err| ToolError {
-                        kind: ToolErrorKind::Provider,
-                        message: format!(
-                            "App Store Connect returned a malformed bundle id id: {err}"
-                        ),
-                    })?;
-                match client.create_profile(&name, &profile_type, &bundle_id, &certificate) {
-                    Ok(created) => {
-                        let profile_id =
-                            AppleProfileId::parse(&created.id).map_err(|err| ToolError {
-                                kind: ToolErrorKind::Provider,
-                                message: format!(
-                                    "App Store Connect returned a malformed profile id: {err}"
-                                ),
-                            })?;
-                        // Verify item 5 ("does the 201 carry profileContent?")
-                        // is unsettled until the live cycle runs; if the
-                        // create response omits it, one GET follows rather
-                        // than assuming either answer.
-                        let content = if let Some(content) = created.attributes.profile_content {
-                            content
-                        } else {
-                            let instance = client.get_profile(&profile_id)?;
-                            instance
-                                .attributes
-                                .profile_content
-                                .ok_or_else(|| ToolError {
-                                    kind: ToolErrorKind::Provider,
-                                    message: "App Store Connect returned no profileContent for \
-                                              a just-created profile, even after a follow-up GET"
-                                        .to_string(),
-                                })?
-                        };
-                        Ok(Ensured {
-                            outputs: Self::outputs_for(&profile_id, &content),
-                            changed: true,
-                        })
-                    }
-                    // Ambiguous create failure: re-read rather than parse
-                    // the error body, exactly as
-                    // `appstore.bundle_id.ensure::ensure` does.
-                    Err(err) => {
-                        let observation = Self::observe(
-                            &client,
-                            &identifier,
-                            &name,
-                            &profile_type,
-                            &certificate,
-                        )?;
-                        match observation {
-                            Observation::Present(outputs) => Ok(Ensured {
-                                outputs,
-                                changed: false,
-                            }),
-                            Observation::Absent { .. } => Err(err.into()),
-                            Observation::Mismatch { .. } => Err(ToolError {
-                                kind: ToolErrorKind::Conflict,
-                                message: "the existing profile does not match what was \
-                                          requested, and cannot be converged (there is no \
-                                          update operation for a profile); replace it instead"
-                                    .to_string(),
-                            }),
-                            Observation::Foreign => {
-                                unreachable!("appstore.profile.ensure never observes Foreign")
-                            }
-                        }
-                    }
-                }
+            ProfileResolution::Decided(Observation::Foreign) => {
+                unreachable!("appstore.profile.ensure never observes Foreign")
+            }
+            ProfileResolution::Decided(Observation::Absent { .. }) => {
+                unreachable!("resolve_instance never decides Absent")
+            }
+            ProfileResolution::NotFound => {
+                Self::create_new(&client, &identifier, &name, &profile_type, &certificate)
+            }
+            // Replace-when-INVALID: delete by the id `resolve` returned,
+            // then create fresh. A delete failure propagates before any
+            // create is attempted -- `?` never reaches `create_new`.
+            ProfileResolution::Invalid { id } => {
+                client.delete_profile(&id)?;
+                Self::create_new(&client, &identifier, &name, &profile_type, &certificate)
             }
         }
     }
@@ -502,8 +570,11 @@ mod tests {
     }
 
     #[test]
-    fn spec_is_reversible_and_not_pure() {
-        assert_eq!(tool().spec().class, Class::Reversible);
+    fn spec_is_destructive_and_not_pure() {
+        // Class::Destructive, not Reversible: `ensure` can now delete an
+        // `INVALID` profile before creating fresh. See this module's own
+        // doc, "`INVALID` is replaced, not terminal".
+        assert_eq!(tool().spec().class, Class::Destructive);
         assert!(!tool().spec().pure);
     }
 
