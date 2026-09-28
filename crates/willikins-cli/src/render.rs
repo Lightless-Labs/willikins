@@ -486,6 +486,8 @@ fn node_status_text(status: &NodeStatus) -> String {
         NodeStatus::Unchanged => "Unchanged".to_string(),
         NodeStatus::Converged => "Converged".to_string(),
         NodeStatus::Failed { error } => format!("Failed: {}", single_line(&error.to_string())),
+        NodeStatus::Blocked => "Blocked".to_string(),
+        NodeStatus::Skipped => "Skipped".to_string(),
         NodeStatus::NotRun => "NotRun".to_string(),
     }
 }
@@ -573,14 +575,18 @@ fn run_state_text(state: RunState) -> &'static str {
     match state {
         RunState::Running => "running",
         RunState::Succeeded => "succeeded",
+        RunState::Blocked => "blocked",
         RunState::Failed => "failed",
     }
 }
 
 /// Render a [`RunRecord`] (from `willikins_server::Butler::run`, or from
 /// [`willikins_journal::replay`]'s own `run`/`runs`) for text output: one
-/// line per node instance and its outputs, then the workflow's own
-/// outputs, then the run's final state and, on a failure, its error.
+/// line per node instance and its outputs; then, when
+/// [`RunRecord::blocked`] is non-empty, the same `blocked:` section
+/// [`plan_text`] uses; then the workflow's own outputs, then the run's
+/// final state and, on a failure, its error, then, on a blocked run,
+/// [`RunRecord::next_step`] (task G2, decision (j)).
 ///
 /// Unlike [`plan_text`]/[`applied_text`], this never touches a live
 /// [`Value`]: a `RunRecord`'s `outputs`, and each [`RunNode`]'s own
@@ -604,6 +610,9 @@ pub fn run_record_text(run: &RunRecord) -> String {
         lines.push(run_record_node_line(node));
         lines.extend(redacted_map_lines(node.outputs.as_json(), "    "));
     }
+    if !run.blocked.is_empty() {
+        lines.extend(blocked_lines(&run.blocked));
+    }
     lines.push("outputs:".to_string());
     lines.extend(redacted_map_lines(run.outputs.as_json(), "  "));
     lines.push(format!("state: {}", run_state_text(run.state)));
@@ -612,6 +621,9 @@ pub fn run_record_text(run: &RunRecord) -> String {
             "error: {}",
             single_line(&error.as_json().to_string())
         ));
+    }
+    if let Some(next_step) = &run.next_step {
+        lines.push(format!("next_step: {}", single_line(next_step)));
     }
     lines.join("\n")
 }
@@ -1200,6 +1212,8 @@ mod tests {
             nodes: vec![node],
             outputs: willikins_journal::Redacted::from(&IndexMap::new()),
             error: None,
+            blocked: Vec::new(),
+            next_step: None,
             finished_at: Some(willikins_core::Timestamp::now()),
         };
 
@@ -1233,6 +1247,8 @@ mod tests {
             nodes: vec![node],
             outputs: willikins_journal::Redacted::from(&IndexMap::new()),
             error: Some(willikins_journal::Redacted::from(&error)),
+            blocked: Vec::new(),
+            next_step: None,
             finished_at: Some(willikins_core::Timestamp::now()),
         };
 
@@ -1241,6 +1257,70 @@ mod tests {
         assert!(text.contains("state: failed"), "text: {text}");
         assert!(text.contains("error:"), "text: {text}");
         assert!(text.contains("ApprovalRequired"), "text: {text}");
+    }
+
+    /// Acceptance test 15 (G2, decision (j)): a blocked run's text shows the
+    /// same `blocked:` section [`plan_text`] does, `Blocked`/`Skipped` node
+    /// lines (not `NotRun`), `state: blocked`, and the run's own
+    /// `next_step` line.
+    #[test]
+    fn run_record_text_shows_the_blocked_section_state_and_next_step() {
+        let gate_node = RunNode {
+            node: NodeName::parse("app_group").unwrap(),
+            instance: None,
+            status: NodeStatus::Blocked,
+            outputs: willikins_journal::Redacted::from(&Outputs::new()),
+        };
+        let skipped_node = RunNode {
+            node: NodeName::parse("profile").unwrap(),
+            instance: None,
+            status: NodeStatus::Skipped,
+            outputs: willikins_journal::Redacted::from(&Outputs::new()),
+        };
+        let blocked = willikins_core::BlockedGate {
+            node: NodeName::parse("app_group").unwrap(),
+            instance: None,
+            tool: ToolName::parse("test.gate").unwrap(),
+            need: "APP_GROUPS enabled on this bundle identifier".to_string(),
+            how: "register the group and enable App Groups (portal, or Xcode)".to_string(),
+            subject: vec![(
+                PortName::parse("identifier").unwrap(),
+                "com.example.nse".to_string(),
+            )],
+            holds_back: vec![NodeName::parse("profile").unwrap()],
+        };
+        let run = RunRecord {
+            run_id: run_id(),
+            plan_id: plan_id(),
+            principal: principal("agent"),
+            started_at: willikins_core::Timestamp::now(),
+            state: RunState::Blocked,
+            nodes: vec![gate_node, skipped_node],
+            outputs: willikins_journal::Redacted::from(&IndexMap::new()),
+            error: None,
+            blocked: vec![blocked],
+            next_step: Some(willikins_journal::BLOCKED_NEXT_STEP.to_string()),
+            finished_at: Some(willikins_core::Timestamp::now()),
+        };
+
+        let text = run_record_text(&run);
+        assert!(text.contains("app_group: Blocked"), "text: {text}");
+        assert!(text.contains("profile: Skipped"), "text: {text}");
+        assert!(
+            text.contains("blocked: 1 gate needs the operator"),
+            "text: {text}"
+        );
+        assert!(text.contains("identifier: com.example.nse"), "text: {text}");
+        assert!(text.contains("holds back: profile"), "text: {text}");
+        assert!(text.contains("state: blocked"), "text: {text}");
+        assert!(
+            text.contains(&format!(
+                "next_step: {}",
+                willikins_journal::BLOCKED_NEXT_STEP
+            )),
+            "text: {text}"
+        );
+        assert!(text.contains("outputs:"), "text: {text}");
     }
 
     #[test]

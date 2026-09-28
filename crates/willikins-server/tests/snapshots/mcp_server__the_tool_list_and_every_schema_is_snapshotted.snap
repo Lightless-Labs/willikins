@@ -468,7 +468,7 @@ expression: snapshot
     }
   },
   {
-    "description": "Compute a plan for a workflow already in the trusted directory (never an inline document -- `plan` names workflows, it does not accept document text) against the live catalog's current state. Returns the plan, its id, and whether it auto-approved or needs a human decision.",
+    "description": "Compute a plan for a workflow already in the trusted directory (never an inline document -- `plan` names workflows, it does not accept document text) against the live catalog's current state. Returns the plan, its id, and whether it auto-approved or needs a human decision. If `plan.blocked` is non-empty, a manual step is needed: forward each entry's `need`, `how` and `subject` to the operator, then call `plan` again with the same inputs (plus any `awaiting_inputs`) once it is done.",
     "input_schema": {
       "$defs": {
         "InputValueDto": {
@@ -565,7 +565,7 @@ expression: snapshot
           ]
         },
         "BlockedGate": {
-          "description": "One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it\ntrue, what it was checking, and every node it holds back.\n\nPlain data — never a [`Value`] — so it holds no secret by construction:\n`need` and `how` come straight from the gate's own `&'static str`s, and\n`subject` is rendered text, never a live value. See\n[`crate::tool::Gate`]'s own doc.",
+          "description": "One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it\ntrue, what it was checking, and every node it holds back.\n\nPlain data — never a [`Value`] — so it holds no secret by construction:\n`need` and `how` come straight from the gate's own `&'static str`s, and\n`subject` is rendered text, never a live value. See\n[`crate::tool::Gate`]'s own doc.\n\nDerives [`serde::Deserialize`] as well as `Serialize` (added by task G2):\n`willikins-journal`'s `Event::RunFinished` stores a run's own\n`Vec<BlockedGate>` directly rather than through `Redacted`, since none\nof its fields is ever a [`Value`] — the same reasoning that lets\n[`crate::apply::NodeStatus`] round-trip untouched.",
           "properties": {
             "holds_back": {
               "description": "Every node this gate holds back — [`Action::Skip`] because it binds\nthis gate directly or transitively — in plan order, deduplicated by\nname.",
@@ -964,7 +964,7 @@ expression: snapshot
     }
   },
   {
-    "description": "The current state (running, succeeded, or failed) and per-node outcomes of a run started by `apply`.",
+    "description": "The current state (running, succeeded, blocked, or failed) and per-node outcomes of a run started by `apply`. When `state` is `blocked`, `blocked` names every gate the operator must act on (its `need`, `how`, and `subject`) and `next_step` says to re-run the document once every one is met -- forward both verbatim to the operator, then call `plan` again with the same inputs once done.",
     "input_schema": {
       "$defs": {
         "RunId": {
@@ -987,6 +987,67 @@ expression: snapshot
     "name": "run_status",
     "output_schema": {
       "$defs": {
+        "BlockedGate": {
+          "description": "One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it\ntrue, what it was checking, and every node it holds back.\n\nPlain data — never a [`Value`] — so it holds no secret by construction:\n`need` and `how` come straight from the gate's own `&'static str`s, and\n`subject` is rendered text, never a live value. See\n[`crate::tool::Gate`]'s own doc.\n\nDerives [`serde::Deserialize`] as well as `Serialize` (added by task G2):\n`willikins-journal`'s `Event::RunFinished` stores a run's own\n`Vec<BlockedGate>` directly rather than through `Redacted`, since none\nof its fields is ever a [`Value`] — the same reasoning that lets\n[`crate::apply::NodeStatus`] round-trip untouched.",
+          "properties": {
+            "holds_back": {
+              "description": "Every node this gate holds back — [`Action::Skip`] because it binds\nthis gate directly or transitively — in plan order, deduplicated by\nname.",
+              "items": {
+                "$ref": "#/$defs/NodeName"
+              },
+              "type": "array"
+            },
+            "how": {
+              "description": "The gate's own [`crate::tool::Gate::how`].",
+              "type": "string"
+            },
+            "instance": {
+              "description": "The `for_each` instance key, if any; `None` for a node with no\n`for_each`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "need": {
+              "description": "The gate's own [`crate::tool::Gate::need`].",
+              "type": "string"
+            },
+            "node": {
+              "$ref": "#/$defs/NodeName",
+              "description": "The blocked node."
+            },
+            "subject": {
+              "description": "Each of the gate's [`crate::tool::Gate::subject`] ports, rendered\nfrom the bound input that reached it, in declared order.",
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/PortName"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "tool": {
+              "$ref": "#/$defs/ToolName",
+              "description": "The gate tool this node calls."
+            }
+          },
+          "required": [
+            "node",
+            "tool",
+            "need",
+            "how",
+            "subject",
+            "holds_back"
+          ],
+          "type": "object"
+        },
         "NodeName": {
           "pattern": "^[a-z][a-z0-9_]*$",
           "type": "string"
@@ -1065,7 +1126,33 @@ expression: snapshot
               "type": "object"
             },
             {
-              "description": "This instance was never attempted: an earlier instance in the same\nrun failed or was blocked first.",
+              "description": "This instance's own planned [`Action`] was [`Action::Blocked`]: a\n[`crate::tool::Gate`] read [`crate::tool::Observation::Absent`]. No\ntool was called; the operator must act and the run must be\nre-planned. See decision (j),\n`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.",
+              "properties": {
+                "kind": {
+                  "const": "blocked",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "This instance's own planned [`Action`] was [`Action::Skip`]: it\nbinds a [`Self::Blocked`] or [`Self::Skipped`] node, directly or\ntransitively, so it was never read or called. Distinct from\n[`Self::NotRun`], which means the *run itself* stopped before\nreaching this instance — a `Skipped` instance was reached, and the\nrest of the run continued past it.",
+              "properties": {
+                "kind": {
+                  "const": "skipped",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "This instance was never attempted: an earlier instance in the same\nrun failed, and the run stopped there.",
               "properties": {
                 "kind": {
                   "const": "not_run",
@@ -1081,6 +1168,10 @@ expression: snapshot
         },
         "PlanId": {
           "format": "uuid",
+          "type": "string"
+        },
+        "PortName": {
+          "pattern": "^[a-z][a-z0-9_]*$",
           "type": "string"
         },
         "PrincipalId": {
@@ -1134,7 +1225,12 @@ expression: snapshot
             },
             {
               "const": "succeeded",
-              "description": "Finished successfully.",
+              "description": "Finished successfully, with no gate blocked.",
+              "type": "string"
+            },
+            {
+              "const": "blocked",
+              "description": "Finished with no tool failure, but at least one gate blocked (task\nG2, decision (j)): every node not downstream of it ran. See\n[`RunRecord::blocked`]/[`RunRecord::next_step`].",
               "type": "string"
             },
             {
@@ -1190,10 +1286,21 @@ expression: snapshot
               "type": "string"
             }
           ]
+        },
+        "ToolName": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "type": "string"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "blocked": {
+          "description": "Every gate this run found blocked, from [`Outcome::Blocked`]. Empty\nfor a run that never reports that outcome --\n`#[serde(skip_serializing_if = \"Vec::is_empty\")]` so a `RunRecord`\nwith none serializes byte-identically to before this field existed\n(task G2, decision (j)).",
+          "items": {
+            "$ref": "#/$defs/BlockedGate"
+          },
+          "type": "array"
+        },
         "error": {
           "anyOf": [
             {
@@ -1216,6 +1323,13 @@ expression: snapshot
           ],
           "description": "When it finished, if it has."
         },
+        "next_step": {
+          "description": "What the operator should do next, present exactly when `state` is\n[`RunState::Blocked`]: `\"re-run this document once every blocked\ngate's need is met\"`. `#[serde(skip_serializing_if = \"Option::is_none\")]`\nfor the same byte-identical-when-absent reason as `blocked`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "nodes": {
           "description": "Every node instance the run reached, in the applied plan's own\norder when that plan's `PlanRecorded` event is in this journal\n(with [`NodeStatus::NotRun`] filling in any instance the run never\nstarted); in the order `NodeFinished` events arrived otherwise.",
           "items": {
@@ -1225,7 +1339,7 @@ expression: snapshot
         },
         "outputs": {
           "$ref": "#/$defs/RedactedResolvedOutputs",
-          "description": "Every workflow output's resolved value. Empty until (and unless)\nthe run's `RunFinished` reports [`Outcome::Succeeded`]."
+          "description": "Every workflow output's resolved value. Empty until (and unless)\nthe run's `RunFinished` reports [`Outcome::Succeeded`] or\n[`Outcome::Blocked`]."
         },
         "plan_id": {
           "$ref": "#/$defs/PlanId",
@@ -1255,7 +1369,8 @@ expression: snapshot
         "started_at",
         "state",
         "nodes",
-        "outputs"
+        "outputs",
+        "blocked"
       ],
       "type": "object"
     }
