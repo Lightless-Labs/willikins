@@ -250,14 +250,24 @@ registry::domain_types! {
 /// a public-typed input port; see
 /// `docs/plans/2026-09-23-milestone-3d-conversions.md`, decision (b).
 ///
-/// Milestone 3d adds the mechanism with no production row; milestone 3d's
-/// own task 3 adds the first and, to date, only one.
+/// Milestone 3d adds the mechanism with no production row and its own task
+/// 3 adds the first; milestone 3e's task T3b adds two more, all three
+/// sharing `AppleBundleIdentifier` as their source.
 fn conversion_rows() -> Vec<registry::Conversion> {
     conversions![
         // Every bundle identifier is a valid profile name, byte for byte:
         // the containment proof is on the `From` impl in `appstore.rs`,
         // pinned by `every_bundle_identifier_is_a_valid_profile_name`.
         AppleBundleIdentifier => AppleProfileName,
+        // Every bundle identifier is a valid bundle-id name, byte for
+        // byte, by the identical grammar-containment fact: the proof is
+        // on the `From` impl in `appstore.rs`, pinned by
+        // `every_bundle_identifier_is_a_valid_bundle_id_name`.
+        AppleBundleIdentifier => AppleBundleIdName,
+        // Every bundle identifier is valid free-form text, byte for
+        // byte: the containment proof is on the `From` impl in
+        // `text.rs`, pinned by `every_bundle_identifier_is_valid_text`.
+        AppleBundleIdentifier => Text,
     ]
 }
 
