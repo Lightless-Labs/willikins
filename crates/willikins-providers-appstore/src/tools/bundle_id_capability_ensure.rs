@@ -93,11 +93,12 @@
 //!
 //! **Reading a setting back.** The capability row is still found by
 //! `capabilityType` exactly as before; when a `setting` was requested,
-//! the row's own `settings[]` entry for that key is inspected: exactly
-//! one option whose `key` equals the requested option and whose
-//! `enabled` is `true` → [`willikins_core::Observation::Present`]; any
-//! other shape (a different enabled option, no option enabled, or the
-//! key or `settings` missing from the row entirely) →
+//! the row's own `settings[]` entries for that key are inspected: exactly
+//! one option marked `enabled: true`, and that option the requested one
+//! → [`willikins_core::Observation::Present`]; any other shape (a
+//! different enabled option, a second enabled option beside the
+//! requested one, no option enabled, or the key or `settings` missing
+//! from the row entirely) →
 //! [`willikins_core::Observation::Mismatch`] naming the `setting` port.
 //! That is terminal, exactly like [`AppstoreBundleIdEnsure`]'s own
 //! `platform` mismatch: `plan` turns every `Mismatch` into a hard
@@ -272,25 +273,22 @@ impl AppstoreBundleIdCapabilityEnsure {
             });
         };
         if let Some(setting) = setting {
-            let selected_option_matches = row
+            // Every option marked enabled under this setting's key, across
+            // every entry carrying that key: `Present` only when that is
+            // exactly the one requested option (decision (d)). A keyless
+            // enabled option counts as "some other option".
+            let enabled: Vec<Option<&str>> = row
                 .attributes
                 .settings
                 .as_deref()
                 .unwrap_or(&[])
                 .iter()
-                .find(|entry| entry.key.as_deref() == Some(setting.key()))
-                .is_some_and(|entry| {
-                    entry
-                        .options
-                        .as_deref()
-                        .unwrap_or(&[])
-                        .iter()
-                        .any(|option| {
-                            option.key.as_deref() == Some(setting.option())
-                                && option.enabled == Some(true)
-                        })
-                });
-            if !selected_option_matches {
+                .filter(|entry| entry.key.as_deref() == Some(setting.key()))
+                .flat_map(|entry| entry.options.as_deref().unwrap_or(&[]))
+                .filter(|option| option.enabled == Some(true))
+                .map(|option| option.key.as_deref())
+                .collect();
+            if enabled != [Some(setting.option())] {
                 return Ok(Observation::Mismatch {
                     port: port("setting"),
                 });

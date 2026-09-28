@@ -380,6 +380,33 @@ fn read_reports_mismatch_when_no_option_is_enabled_at_all() {
     assert!(matches!(observation, Observation::Mismatch { .. }));
 }
 
+/// Decision (d): `Present` only when *exactly one* option is enabled and
+/// it is the requested one. A row that also marks another option enabled
+/// is not a state this tool can call converged.
+#[test]
+fn read_reports_mismatch_when_another_option_is_enabled_beside_the_requested_one() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_data_protection_two_enabled").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool
+        .read(&inputs_with_setting(
+            "DATA_PROTECTION",
+            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
+        ))
+        .unwrap();
+    match observation {
+        Observation::Mismatch { port } => {
+            assert_eq!(port, PortName::parse("setting").unwrap());
+        }
+        other => panic!("expected Mismatch, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------
 // `ensure`: creating with a setting, and the terminal `Mismatch`
 // ---------------------------------------------------------------------
