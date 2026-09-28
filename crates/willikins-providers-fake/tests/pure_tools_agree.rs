@@ -8,8 +8,8 @@
 //! `apple.signing_key.parse`, `apple.issuer_id.parse`, and
 //! `apple.key_id.parse` from `willikins-tools`, `doppler.secret.get`,
 //! `doppler.value.get`, `fake.secret_list`, (milestone 3a)
-//! `buildkite.cluster.get`, (milestone 3c) `appstore.certificate.get`, and
-//! (milestone 3e task 2) `github.repo.get`
+//! `buildkite.cluster.get`, (milestone 3c) `appstore.certificate.get`,
+//! (milestone 3e task 2) `github.repo.get`, and (G3) `operator.acknowledge`
 //! from this crate — are checked here in one
 //! place, through the catalog, so a new pure tool registered later is a
 //! one-line addition rather than a test nobody writes.
@@ -33,7 +33,8 @@ use willikins_providers_fake::{FakeState, catalog};
 use willikins_types::{
     AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId, AppleSigningKey,
     BuildkiteClusterName, BuildkiteOrg, DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg,
-    GitHubRepo, OpaqueSecret, ProjectSlug, RepoVisibility, SecretName, TemplateSource, Text,
+    GitHubRepo, OpaqueSecret, OperatorAcknowledgement, ProjectSlug, RepoVisibility, SecretName,
+    TemplateSource, Text,
 };
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
@@ -200,6 +201,18 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
     let mut repo_get_inputs = Inputs::new();
     repo_get_inputs.insert(port("repo"), Value::known(repo()));
 
+    let mut acknowledge_inputs = Inputs::new();
+    acknowledge_inputs.insert(
+        port("step"),
+        Value::known(Text::parse("do the thing").expect("valid text value")),
+    );
+    acknowledge_inputs.insert(
+        port("acknowledged"),
+        Value::known(
+            OperatorAcknowledgement::parse("done").expect("valid operator acknowledgement"),
+        ),
+    );
+
     let cases = [
         ("naming.v1", naming_inputs),
         ("template.render", template_inputs),
@@ -213,6 +226,7 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         ("buildkite.cluster.get", cluster_get_inputs),
         ("appstore.certificate.get", certificate_get_inputs),
         ("github.repo.get", repo_get_inputs),
+        ("operator.acknowledge", acknowledge_inputs),
     ];
 
     let mut checked = 0;

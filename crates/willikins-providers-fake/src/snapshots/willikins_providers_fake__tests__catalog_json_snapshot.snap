@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
-assertion_line: 181
+assertion_line: 184
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -824,6 +824,32 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "name": "template.render",
     "outputs": {
       "rendered": "Text"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "A gate: reports whether the operator has acknowledged doing the manual step `step` names, by supplying `acknowledged: done`.",
+    "inputs": {
+      "acknowledged": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "OperatorAcknowledgement"
+        }
+      },
+      "step": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "Text"
+        }
+      }
+    },
+    "key": [],
+    "name": "operator.acknowledge",
+    "outputs": {
+      "step": "Text"
     },
     "pure": true
   }
