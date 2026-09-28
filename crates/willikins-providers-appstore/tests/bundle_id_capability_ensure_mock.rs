@@ -265,6 +265,32 @@ fn ensure_never_posts_when_the_requested_capability_is_on_a_later_page() {
     create.assert();
 }
 
+/// A capability list whose `links.next` never stops (each page pointing
+/// at another page with the same shape) must not page forever: past a
+/// fixed cap this refuses, exactly like `list_bundle_ids`'s own cap.
+#[test]
+fn read_refuses_past_the_page_cap_rather_than_spinning() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    let mut looping_page = fixture("capabilities_list_empty");
+    looping_page["links"] = serde_json::json!({
+        "next": format!(
+            "{}/v1/bundleIds/T6G4XCV345/bundleIdCapabilities?cursor=AGAIN&limit=200",
+            provider.url()
+        ),
+    });
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(looping_page.to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let err = tool.read(&inputs_for("PUSH_NOTIFICATIONS")).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    assert!(err.message.contains("pages"), "{}", err.message);
+}
+
 // ---------------------------------------------------------------------
 // `ensure`: an ordinary capability
 // ---------------------------------------------------------------------
