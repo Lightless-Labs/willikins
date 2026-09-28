@@ -604,11 +604,17 @@ struct BundleIdUpdateBody {
 
 /// One `CapabilityOption` -- an entry of [`CapabilitySettingAttr::options`].
 /// Only `key` and `enabled` are read; `name`/`description` (decision (d),
-/// milestone 3e) are never parsed.
+/// milestone 3e) are never parsed. Both are optional and default to
+/// `None` when missing or `null`: every capability read parses every
+/// row's settings, so a shape this crate did not expect on a row nobody
+/// asked about must not fail a read of a different capability (the
+/// milestone 3e adversarial pass). A missing `enabled` is "not selected".
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CapabilityOptionAttr {
-    pub(crate) key: String,
-    pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) key: Option<String>,
+    #[serde(default)]
+    pub(crate) enabled: Option<bool>,
 }
 
 /// One `CapabilitySetting` -- an entry of a capability row's
@@ -618,10 +624,14 @@ pub(crate) struct CapabilityOptionAttr {
 /// which this client's caller looks for the one carrying `enabled: true`
 /// (decision (d): "the selected option is the one marked `enabled`" --
 /// unobserved until the live cycle settles it, verify item 2).
+/// `key` and `options` default to `None` when missing or `null`, for the
+/// same reason as [`CapabilityOptionAttr`]'s fields.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CapabilitySettingAttr {
-    pub(crate) key: String,
-    pub(crate) options: Vec<CapabilityOptionAttr>,
+    #[serde(default)]
+    pub(crate) key: Option<String>,
+    #[serde(default)]
+    pub(crate) options: Option<Vec<CapabilityOptionAttr>>,
 }
 
 /// One `bundleIdCapabilities` resource's attributes -- `capabilityType`

@@ -278,12 +278,17 @@ impl AppstoreBundleIdCapabilityEnsure {
                 .as_deref()
                 .unwrap_or(&[])
                 .iter()
-                .find(|entry| entry.key == setting.key())
+                .find(|entry| entry.key.as_deref() == Some(setting.key()))
                 .is_some_and(|entry| {
                     entry
                         .options
+                        .as_deref()
+                        .unwrap_or(&[])
                         .iter()
-                        .any(|option| option.key == setting.option() && option.enabled)
+                        .any(|option| {
+                            option.key.as_deref() == Some(setting.option())
+                                && option.enabled == Some(true)
+                        })
                 });
             if !selected_option_matches {
                 return Ok(Observation::Mismatch {

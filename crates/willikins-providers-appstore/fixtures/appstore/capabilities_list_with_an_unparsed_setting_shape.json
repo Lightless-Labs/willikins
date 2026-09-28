@@ -1,0 +1,29 @@
+{
+  "data": [
+    {
+      "type": "bundleIdCapabilities",
+      "id": "CAP1234567",
+      "attributes": {
+        "capabilityType": "HEALTHKIT"
+      },
+      "relationships": {
+        "bundleId": {"links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities/CAP1234567/relationships/bundleId"}}
+      }
+    },
+    {
+      "type": "bundleIdCapabilities",
+      "id": "CAP2345678",
+      "attributes": {
+        "capabilityType": "ICLOUD",
+        "settings": [
+          {"key": "ICLOUD_VERSION", "options": [{"key": "XCODE_6"}]},
+          {"key": "ICLOUD_VERSION", "options": null},
+          {"options": [{"key": "XCODE_5", "enabled": null}]}
+        ]
+      },
+      "relationships": {
+        "bundleId": {"links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities/CAP2345678/relationships/bundleId"}}
+      }
+    }
+  ]
+}
