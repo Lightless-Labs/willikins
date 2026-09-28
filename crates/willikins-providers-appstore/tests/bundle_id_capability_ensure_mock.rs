@@ -119,6 +119,27 @@ fn read_reports_present_when_the_capability_is_already_in_the_list() {
     assert!(matches!(observation, Observation::Present(_)));
 }
 
+/// Milestone 3e made every capability read parse every row's
+/// `settings`, where before it read `capabilityType` alone. A row this
+/// read never asks about -- here an `ICLOUD` row whose settings omit
+/// `enabled`, carry a `null` `options` and a keyless entry -- must not
+/// turn a `HEALTHKIT` read into a parse failure.
+#[test]
+fn read_of_a_capability_is_unaffected_by_another_rows_unexpected_settings_shape() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_an_unparsed_setting_shape").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool
+        .read(&inputs_for("HEALTHKIT"))
+        .unwrap_or_else(|err| panic!("{:?}: {}", err.kind, err.message));
+    assert!(matches!(observation, Observation::Present(_)));
+}
+
 // ---------------------------------------------------------------------
 // `ensure`: an ordinary capability
 // ---------------------------------------------------------------------

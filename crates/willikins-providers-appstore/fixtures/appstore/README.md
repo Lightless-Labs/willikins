@@ -22,6 +22,10 @@ examples in shape only.
 | `capabilities_list_empty.json` | Documented shape | `GET /v1/bundleIds/{id}/bundleIdCapabilities` with no capability enabled yet. |
 | `capabilities_list_with_push.json` | Documented shape | The same endpoint with one capability (`PUSH_NOTIFICATIONS`) already enabled. |
 | `capability_post_created.json` | Documented shape | `POST /v1/bundleIdCapabilities`'s success response. |
+| `capabilities_list_with_data_protection.json` | Authored (milestone 3e) | One `DATA_PROTECTION` row whose `DATA_PROTECTION_PERMISSION_LEVEL` lists all three options, `PROTECTED_UNTIL_FIRST_USER_AUTH` the one `enabled` -- decision (d)'s assumed read-back shape. |
+| `capabilities_list_with_data_protection_mismatched.json` | Authored (milestone 3e) | The same row with `COMPLETE_PROTECTION` enabled instead -- `Mismatch { setting }`. |
+| `capabilities_list_with_data_protection_no_settings.json` | Authored (milestone 3e) | The same row with `settings: []` -- `Mismatch { setting }`. |
+| `capabilities_list_with_an_unparsed_setting_shape.json` | Authored (milestone 3e adversarial pass) | A `HEALTHKIT` row beside an `ICLOUD` row whose settings omit `enabled`, carry `options: null`, and include a keyless entry -- a read of `HEALTHKIT` must not fail on a row it never asked about. |
 | `error_403.json` | Documented shape | The generic `ErrorResponse` shape (research note, section 2); `willikins-providers-http`'s own `provider_error_from_body` maps any `403` to a fixed `MISSING_PERMISSION` message regardless of body content, so this fixture's exact fields are not load-bearing. |
 | `error_5xx.json` | Documented shape | Same `ErrorResponse` shape, generic `5xx` case. |
 | `certificate_list_one.json` | Documented shape + pre-flight | `GET /v1/certificates?filter[certificateType]=...&filter[serialNumber]=...`'s list shape, one exact match, `DISTRIBUTION`, unexpired, `activated` absent (the pre-flight's own observation: absent on all 5 real certificates) -- `appstore.certificate.get`'s `Present` arm. |
