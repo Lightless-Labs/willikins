@@ -68,6 +68,24 @@ showed the two-listed test only requested the second-listed option (`79994c8`), 
 graph test now also applies and re-plans as converged (`a468df2`). Record:
 `docs/research/2026-09-28-m3e-adversarial-pass.md`, "Capability read fixes, independent review".
 
+**Addendum:** 2026-09-28 — **`list_bundle_id_capabilities` now paginates, closing the "Not settled"
+finding of the independent review** ("The capability list is read as one page with no `limit`",
+`docs/research/2026-09-28-m3e-adversarial-pass.md`). Apple's row order for
+`GET /v1/bundleIds/{id}/bundleIdCapabilities` was observed live to change between reads, so a
+capability sitting past whatever page Apple's default returns could read `Absent` even though it is
+already enabled, and `ensure` would then `POST` a duplicate whose result is undocumented. Fixed exactly
+the way `list_bundle_ids` already handles its own substring-filter paging risk: request `limit=200`,
+follow `links.next`, and re-attach only that URL's query string to this client's own fixed capabilities
+path, so a response can never steer the client at another host or path (`e4ba9af`). Test-first, mock
+only: a capability the unstable order put on page two is found and never triggers a duplicate `POST`
+(`e4ba9af`); a `links.next` that never stops is refused past the same page cap `list_bundle_ids` already
+carries (`8077680`); a `links.next` naming a different bundle id's path, or a different host entirely,
+is never followed as-is (`850af30`). The in-memory fake has no wire layer to paginate and is unaffected;
+`fake_agrees_with_live` (22 green) and the pre-existing capability mocks needed `match_query(Any)` added
+now that every request carries `?limit=200`. The default page size of the endpoint itself remains an
+open verify item (unaffected by this fix, since the client no longer depends on it), but the
+duplicate-`POST` risk the review named is closed either way.
+
 ## Goal
 
 One workflow document, `workflows/sample-ios-app.yaml`, provisions everything a provider API can
