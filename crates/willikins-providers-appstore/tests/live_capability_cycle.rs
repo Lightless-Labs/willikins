@@ -240,10 +240,18 @@ fn count_profiles(issuer_id: &AppleIssuerId, key_id: &AppleKeyId, key: &AppleSig
 /// One capability row's settings shape, recorded by **key names and
 /// booleans only** (decision (d)'s own instruction): every `settings[]`
 /// entry's `key`, and for each of its `options[]`, the option `key` and
-/// whether it is `enabled` -- never `name`, `description`, or anything
-/// else the row might carry.
+/// its `enabled` -- never `name`, `description`, or anything else the
+/// row might carry. `None` for the whole shape means the row carried no
+/// `settings` array at all (absent or `null`), and `None` for an option's
+/// `enabled` means the field was absent or not a boolean -- both kept
+/// distinct from `[]` and `false`, since verify item 2 asks exactly how
+/// Apple marks the selected option.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SettingsShape(Vec<(String, Vec<(String, bool)>)>);
+struct SettingsShape(Option<Vec<SettingShape>>);
+
+/// One `settings[]` entry: its `key`, and each option's `key` and
+/// `enabled` (see [`SettingsShape`]).
+type SettingShape = (String, Vec<(String, Option<bool>)>);
 
 /// Every capability row on `bundle_id`, as `(capabilityType, settings
 /// shape)` pairs -- one raw `GET`, parsed only for the fields this test
@@ -279,38 +287,97 @@ fn capability_rows(
             let settings = row
                 .pointer("/attributes/settings")
                 .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .map(|setting| {
-                    let key = setting
-                        .get("key")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("<missing>")
-                        .to_string();
-                    let options = setting
-                        .get("options")
-                        .and_then(serde_json::Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .map(|option| {
-                            let option_key = option
+                .map(|settings| {
+                    settings
+                        .iter()
+                        .map(|setting| {
+                            let key = setting
                                 .get("key")
                                 .and_then(serde_json::Value::as_str)
                                 .unwrap_or("<missing>")
                                 .to_string();
-                            let enabled = option
-                                .get("enabled")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false);
-                            (option_key, enabled)
+                            let options = setting
+                                .get("options")
+                                .and_then(serde_json::Value::as_array)
+                                .into_iter()
+                                .flatten()
+                                .map(|option| {
+                                    let option_key = option
+                                        .get("key")
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or("<missing>")
+                                        .to_string();
+                                    let enabled =
+                                        option.get("enabled").and_then(serde_json::Value::as_bool);
+                                    (option_key, enabled)
+                                })
+                                .collect();
+                            (key, options)
                         })
-                        .collect();
-                    (key, options)
-                })
-                .collect();
+                        .collect()
+                });
             (capability_type, SettingsShape(settings))
         })
         .collect()
+}
+
+/// The JSON **field names** (Apple's schema, never a value) carried by
+/// `capability_type`'s `settings[]` entries and by their `options[]`,
+/// on `bundle_id` -- so the record can say which fields Apple sends
+/// beside `key`, `options` and `enabled` without printing any of them.
+fn settings_field_names(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+    bundle_id: &willikins_types::AppleBundleIdId,
+    capability_type: &str,
+) -> (
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeSet<String>,
+) {
+    let http = http_for(issuer_id, key_id, key);
+    let path = format!("/v1/bundleIds/{bundle_id}/bundleIdCapabilities");
+    let page: serde_json::Value = http.get(&path).unwrap_or_else(|err| {
+        panic!(
+            "STOP: capability listing GET failed, status {:?}",
+            err.status
+        )
+    });
+    let mut setting_fields = std::collections::BTreeSet::new();
+    let mut option_fields = std::collections::BTreeSet::new();
+    let rows = page
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|row| {
+            row.pointer("/attributes/capabilityType")
+                .and_then(serde_json::Value::as_str)
+                == Some(capability_type)
+        });
+    for row in rows {
+        let settings = row
+            .pointer("/attributes/settings")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten();
+        for setting in settings {
+            if let Some(object) = setting.as_object() {
+                setting_fields.extend(object.keys().cloned());
+            }
+            let options = setting
+                .get("options")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten();
+            for option in options {
+                if let Some(object) = option.as_object() {
+                    option_fields.extend(object.keys().cloned());
+                }
+            }
+        }
+    }
+    (setting_fields, option_fields)
 }
 
 fn run_unique_suffix() -> String {
@@ -594,6 +661,12 @@ fn appstore_live_capability_cycle() {
             .iter()
             .any(|(capability_type, _)| capability_type == "DATA_PROTECTION"),
         "STOP: DATA_PROTECTION does not appear in the row list at all"
+    );
+    let (setting_fields, option_fields) =
+        settings_field_names(&issuer_id, &key_id, &key, &bundle_id, "DATA_PROTECTION");
+    println!(
+        "DATA_PROTECTION field names: settings[] entry {setting_fields:?}; options[] entry \
+         {option_fields:?}"
     );
 
     // Step 7: cleanup, by the id this run's own create returned.
