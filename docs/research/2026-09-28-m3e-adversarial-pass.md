@@ -299,7 +299,10 @@ restored tree.
   none is ignored: the request carries no setting, the pairing check allows none, and the read is
   `Present` — correct, since this tool could not change it anyway. Every option carrying `enabled` with
   exactly the requested one `true` is `Present`; two `true`, none `true`, or a different one `true` is
-  `Mismatch`. `enabled: null` deserializes as absent.
+  `Mismatch`. `enabled: null` deserializes as absent. Three of these arms were concluded by reading
+`observe` and have no fixture of their own: `settings: null` on the requested capability (mocks cover
+`settings: []` and, in the parity test, `settings` absent), an option without `key`, and
+`enabled: null`.
 - **`Absent` for a missing parent never lets `ensure` write against it.** `ensure` re-resolves the
   parent itself; with none, its `Absent` arm returns `NotFound` naming `appstore.bundle_id.ensure`
   before the portal-configuration check and before any `POST` (`.expect(0)` on the create mock). The
