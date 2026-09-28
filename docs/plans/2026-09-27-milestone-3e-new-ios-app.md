@@ -38,6 +38,28 @@ refuses a missing parent. Reproduced against the fake catalog. Decision (c)'s "b
 mechanism" fires at plan time, and acceptance 8 cannot pass as written. `appstore.profile.ensure`
 already reads `Absent` for an unregistered identifier (the precedent). Decision needed before T3; the
 tool is unchanged.
+**Addendum:** 2026-09-28 (implementer) — **two fixes landed test-first, from the coordinator's second
+live capability cycle.** After creating `DATA_PROTECTION` with
+`DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH`, Apple's list endpoint returned this
+row shape: `attributes: {capabilityType, settings}`; `settings`: an array of one entry; setting entry:
+`{key, options}`; option entry: `{key}` **only** — no `enabled` field at all — and the setting listed
+exactly one option, `PROTECTED_UNTIL_FIRST_USER_AUTH`. `HEALTHKIT` and `PUSH_NOTIFICATIONS` rows
+returned `settings: null`. This settles verify item 2, and not as decision (d) assumed.
+**Fix 1** (`fcdb9da`): the read rule is now, in one sentence, *when no option under the requested key
+carries an `enabled` field, the listed option is the selection — Present iff exactly one option is
+listed and it is the requested one; when at least one option does carry `enabled`, the older
+exactly-one-`enabled: true` rule still applies as a defensive fallback never observed live.* Mock
+fixtures rebuilt on the observed key-only shape; one fixture (`..._two_enabled.json`) kept as the sole
+test of the enabled-field branch; doc comments corrected.
+**Fix 2** (`a19247e`, `2bb3773`): `appstore.bundle_id_capability.ensure`'s `read` now reports `Absent`
+for a capability whose parent identifier is not registered yet — exactly the precedent
+`appstore.profile.ensure` already set — so the T3-blocking `NotFound` above no longer fires at plan
+time; `ensure`'s own `Absent` arm still refuses with `NotFound` if the parent is genuinely missing at
+apply time, since this tool still cannot create one. A new graph test over the fake catalog
+(`capability_documents.rs`) plans a document that both registers a fresh bundle id and enables a
+capability on it, bound from the registration node's own `identifier` output, and asserts both nodes
+plan as `Action::Create`. Verify item 2 and the T3-blocking finding are both settled; see "Verify before
+relying on them" and the post-flight checklist below.
 
 ## Goal
 
@@ -593,9 +615,14 @@ Buildkite token exists.
   once, stopped at the `DATA_PROTECTION` re-ensure; counts 21/5/13 equal before and after by an
   independent recount, leftovers 0; the guard deleted the throwaway by its create id; the `404` read
   never ran (the cycle stopped first).
-- [ ] `DATA_PROTECTION` with a setting was accepted by Apple and read back as decision (d) assumes, or an
+- [x] `DATA_PROTECTION` with a setting was accepted by Apple and read back as decision (d) assumes, or an
   addendum records the real shape and the adapted parse. — 2026-09-28: accepted, **not** read back as
-  assumed (`Mismatch { setting }`); the real shape is unrecorded (header addendum).
+  decision (d) assumed; the coordinator's second live capability cycle recorded the real shape (row
+  `attributes: {capabilityType, settings}`; one setting entry `{key, options}`; option entry `{key}`
+  only, no `enabled`; exactly the requested option listed; `HEALTHKIT`/`PUSH_NOTIFICATIONS` rows
+  `settings: null`), and the parse is now adapted to it, test-first (`fcdb9da`; see the header
+  addendum). This implementer did not re-run the live cycle to confirm the fix's own assertions pass
+  live — only mock fixtures rebuilt on the observed shape were exercised.
 - [x] The key can enable `HEALTHKIT` and `PUSH_NOTIFICATIONS`. — 2026-09-28, on a `UNIVERSAL` throwaway.
 - [ ] Dry run applied, re-applied `Unchanged`, tore down; every count equal; no leftover in any sandbox.
 - [ ] The eight manual steps appear in the live plan's outputs naming the throwaway identifier.
@@ -610,10 +637,10 @@ Buildkite token exists.
 1. **Does a create carrying `settings` succeed with `options: [{key, enabled: true}]`?** Unobserved; the
    live cycle settles it. **Settled 2026-09-28: yes** (accepted, `changed: true`).
 2. **How does a capability row report its selected option** — by `enabled: true` on one option, or
-   another way? Unobserved. **Still unsettled 2026-09-28:** the tool read its own fresh
-   `PROTECTED_UNTIL_FIRST_USER_AUTH` row as `Mismatch`; the shape was not recorded. Candidates (settings
-   absent on the list endpoint, Apple's default applied instead, no option enabled, two enabled,
-   `enabled` absent) are in the research record, section 4.
+   another way? Unobserved. **Settled 2026-09-28 (the coordinator's second live capability cycle):** by
+   listing the selected option's `key` alone — no option ever carries `enabled` at all. The candidate
+   that held (research record, section 4): `enabled` absent on every option, not `settings` absent, not
+   Apple's default applied, not two enabled. The read rule is adapted accordingly (`fcdb9da`).
 3. **Can the ASC team key enable capabilities at all?** No capability has ever been enabled through it.
    **Settled 2026-09-28: yes** (`HEALTHKIT`, `PUSH_NOTIFICATIONS` created and converged).
 4. **Is `DATA_PROTECTION` without a setting accepted?** The tool's module doc claims it; never proven.
