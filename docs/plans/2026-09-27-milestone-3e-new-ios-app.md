@@ -245,7 +245,9 @@ CLI/MCP blocked surface are proven at the render/unit level only — no gate too
 catalog yet, so driving `Action::Blocked`/`Skip` through a real `plan`/`apply` *binary* run is still
 G3/T3's job, once Walter's own gates (or a fake gate tool) exist. Plan not marked Completed.
 
-**Addendum:** 2026-09-28 (implementer) — **G3 landed, two commits** (`70e5e0a`, `3f41d6d`).
+**Addendum:** 2026-09-28 (implementer) — **G3 landed, four commits** (`70e5e0a`, `3f41d6d`,
+`0b13a51`, `daffc94`; `e9b6235` is this addendum's own first version, corrected here rather than
+amended).
 `willikins-types`: new public `OperatorAcknowledgement` (grammar exactly `done`, registry entry).
 `willikins-core`: recognised everywhere by its registry entry's `TypeId`
 (`crate::value::is_operator_acknowledgement`, via `TypeRegistry::type_matches`), never by comparing
@@ -277,8 +279,14 @@ in-test double) blocks without the input and computes with it, through the real 
 (`fmt`, clippy `-D warnings`, tests) are green; snapshots (three in `willikins-core`, one each in
 `willikins-journal`, `willikins-dsl`, `willikins-server`, `willikins-tools`,
 `willikins-providers-fake`, plus `willikins-types`' own catalog snapshot) moved additively only;
-`characterization_of_every_document` gained exactly the one new fixture entry, byte-identical
-elsewhere. **Honest limits, for T3:** the Walter document itself (its own app-record and
+`characterization_of_every_document` gained exactly two new fixture entries (`acknowledgement-default.yaml`,
+`acknowledgement-literal.yaml`), byte-identical elsewhere. Two gaps a self-review caught after the
+first two commits, each its own commit: `describe_text` (`willikins-cli`) rendered nothing for an
+`awaiting` input, so `willikins describe` in text mode silently dropped it even though JSON mode
+carried it; it now renders an `awaiting` block beside `missing`, same convention (`document says:`
+included). And `AwaitingInput` was never exported from `willikins-core`'s crate root — an oversight
+in the first commit, invisible until something outside the crate needed to name the type. **Honest
+limits, for T3:** the Walter document itself (its own app-record and
 app-group gates, profiles behind the app-group gate) is unwritten — T3's job; no live run has
 exercised `operator.acknowledge` against a real MCP client end to end, only the fake catalog and
 the CLI text renderer at the unit level, the same honest limit G1/G2 recorded for the engine
