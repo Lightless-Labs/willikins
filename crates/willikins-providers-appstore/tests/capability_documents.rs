@@ -208,20 +208,9 @@ fn seeded_state_without_a_bundle_id() -> std::sync::Arc<std::sync::Mutex<FakeSta
     std::sync::Arc::new(std::sync::Mutex::new(state))
 }
 
-/// Acceptance test (T3-blocking fix, milestone 3e plan, 2026-09-28
-/// addendum): `plan` must not fail at the `healthkit` node with
-/// `NotFound` before `bundle_id` is ever ensured. Both nodes plan as
-/// `Action::Create`.
-#[test]
-fn a_document_that_ensures_a_new_bundle_id_and_a_capability_on_it_plans_with_both_as_create() {
-    let workflow = willikins_dsl::parse_document(NEW_BUNDLE_ID_WITH_CAPABILITY)
-        .unwrap_or_else(|err| panic!("the inlined document parses: {err}"));
-    let state = seeded_state_without_a_bundle_id();
-    let catalog = willikins_providers_fake::catalog(state);
-
-    let checked = willikins_core::check(&workflow, &catalog)
-        .unwrap_or_else(|errors| panic!("the document must check cleanly: {errors:?}"));
-
+/// The inputs [`NEW_BUNDLE_ID_WITH_CAPABILITY`] runs with: a fresh
+/// identifier, `com.example.Fresh`.
+fn fresh_bundle_id_inputs() -> IndexMap<InputName, Value> {
     let mut inputs = IndexMap::new();
     inputs.insert(
         InputName::parse("config").unwrap(),
@@ -239,6 +228,24 @@ fn a_document_that_ensures_a_new_bundle_id_and_a_capability_on_it_plans_with_bot
         InputName::parse("platform").unwrap(),
         scalar_input("AppleBundleIdPlatform", "UNIVERSAL"),
     );
+    inputs
+}
+
+/// Acceptance test (T3-blocking fix, milestone 3e plan, 2026-09-28
+/// addendum): `plan` must not fail at the `healthkit` node with
+/// `NotFound` before `bundle_id` is ever ensured. Both nodes plan as
+/// `Action::Create`.
+#[test]
+fn a_document_that_ensures_a_new_bundle_id_and_a_capability_on_it_plans_with_both_as_create() {
+    let workflow = willikins_dsl::parse_document(NEW_BUNDLE_ID_WITH_CAPABILITY)
+        .unwrap_or_else(|err| panic!("the inlined document parses: {err}"));
+    let state = seeded_state_without_a_bundle_id();
+    let catalog = willikins_providers_fake::catalog(state);
+
+    let checked = willikins_core::check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document must check cleanly: {errors:?}"));
+
+    let inputs = fresh_bundle_id_inputs();
 
     let plan = willikins_core::plan(&checked, &inputs, &catalog).unwrap_or_else(|err| {
         panic!("plan must resolve both nodes as create, never fail on the fresh parent: {err:?}")
@@ -253,4 +260,66 @@ fn a_document_that_ensures_a_new_bundle_id_and_a_capability_on_it_plans_with_bot
     };
     assert_eq!(action_of("bundle_id"), Action::Create);
     assert_eq!(action_of("healthkit"), Action::Create);
+}
+
+/// The same document carried through `apply`, then planned again: the
+/// capability node's `Absent`-for-a-missing-parent read must not let its
+/// `ensure` run before the parent exists (the fake's `ensure`, like the
+/// live one, refuses a missing parent with `NotFound`, so a wrong order
+/// fails this test), the capability must land on the freshly registered
+/// identifier, and a second plan must read every node `NoOp` --
+/// acceptance 8's shape (milestone 3e plan), on the smallest document
+/// that exercises the parent-then-capability edge.
+#[test]
+fn a_document_that_ensures_a_new_bundle_id_and_a_capability_on_it_applies_then_converges() {
+    let workflow = willikins_dsl::parse_document(NEW_BUNDLE_ID_WITH_CAPABILITY)
+        .unwrap_or_else(|err| panic!("the inlined document parses: {err}"));
+    let state = seeded_state_without_a_bundle_id();
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = willikins_core::check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document must check cleanly: {errors:?}"));
+    let inputs = fresh_bundle_id_inputs();
+
+    let plan = willikins_core::plan(&checked, &inputs, &catalog)
+        .unwrap_or_else(|err| panic!("must plan: {err:?}"));
+    let mut observer = willikins_core::RecordingObserver::new();
+    let approval = willikins_core::Approval::Human {
+        approver: willikins_core::PrincipalId::parse("operator").unwrap(),
+        at: willikins_core::Timestamp::now(),
+    };
+    willikins_core::apply(&checked, &inputs, &catalog, &plan, &approval, &mut observer)
+        .unwrap_or_else(|err| {
+            panic!("must apply: the capability node runs after its parent exists: {err:?}")
+        });
+
+    {
+        let state = state.lock().unwrap();
+        assert!(
+            state.apple_bundle_ids.contains_key("com.example.Fresh"),
+            "apply must have registered the fresh identifier"
+        );
+        assert!(
+            state
+                .apple_bundle_id_capabilities
+                .get("com.example.Fresh")
+                .is_some_and(|set| set.contains("HEALTHKIT")),
+            "apply must have enabled HEALTHKIT on the freshly registered identifier"
+        );
+    }
+
+    let second = willikins_core::plan(&checked, &inputs, &catalog)
+        .unwrap_or_else(|err| panic!("must plan again: {err:?}"));
+    for node in ["bundle_id", "healthkit"] {
+        let action = second
+            .nodes
+            .iter()
+            .find(|planned| planned.name.as_str() == node)
+            .unwrap_or_else(|| panic!("the `{node}` node planned"))
+            .action;
+        assert_eq!(
+            action,
+            Action::NoOp,
+            "`{node}` must converge on a second plan"
+        );
+    }
 }
