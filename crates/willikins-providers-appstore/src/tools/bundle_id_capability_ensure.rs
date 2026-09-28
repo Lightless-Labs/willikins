@@ -129,12 +129,18 @@
 //!   [`willikins_core::Observation::Present`]; more than one option
 //!   listed, or none at all, → `Mismatch` -- ambiguous or absent, never a
 //!   guess at which one is real.
-//! - **At least one option carries an `enabled` field** (never observed
-//!   live; kept as a defensive fallback and exercised only by a mock
-//!   fixture): the pre-2026-09-28 rule applies unchanged -- exactly one
-//!   option marked `enabled: true`, and that option the requested one, is
+//! - **Every option carries an `enabled` field** (never observed live;
+//!   kept as a defensive fallback and exercised only by mock fixtures):
+//!   the pre-2026-09-28 rule applies unchanged -- exactly one option
+//!   marked `enabled: true`, and that option the requested one, is
 //!   `Present`; anything else (a different enabled option, two enabled
 //!   options, none enabled) is `Mismatch`.
+//! - **Some options carry `enabled` and some do not** (never observed
+//!   live): `Mismatch`. The two rules above disagree on what a bare
+//!   option means -- listed, so selected; or unmarked, so not -- and a
+//!   row they disagree on is ambiguous, never a guess (the independent
+//!   review of 2026-09-28 found this case reading `Present` when the
+//!   branch was chosen by "at least one option carries `enabled`").
 //!
 //! Either way, the key or `settings` missing from the row entirely
 //! collects zero options, which is `Mismatch` under both branches.
@@ -350,10 +356,18 @@ impl AppstoreBundleIdCapabilityEnsure {
             // Two read-back shapes (this module's own doc, "Reading a
             // setting back"): when no option carries `enabled` at all
             // (Apple's own shape, observed live 2026-09-28), the listed
-            // option *is* the selection. When at least one does (never
+            // option *is* the selection. When every one does (never
             // observed live; a defensive fallback), the pre-2026-09-28
-            // rule applies: exactly one option marked `enabled: true`.
-            let matches = if options.iter().any(|option| option.enabled.is_some()) {
+            // rule applies: exactly one option marked `enabled: true`. A
+            // row mixing the two is ambiguous -- the rules disagree on
+            // what a bare option means -- so it never reads `Present`.
+            let carrying_enabled = options
+                .iter()
+                .filter(|option| option.enabled.is_some())
+                .count();
+            let matches = if carrying_enabled == 0 {
+                matches!(options.as_slice(), [only] if only.key.as_deref() == Some(setting.option()))
+            } else if carrying_enabled == options.len() {
                 let enabled: Vec<Option<&str>> = options
                     .iter()
                     .filter(|option| option.enabled == Some(true))
@@ -361,7 +375,7 @@ impl AppstoreBundleIdCapabilityEnsure {
                     .collect();
                 enabled == [Some(setting.option())]
             } else {
-                matches!(options.as_slice(), [only] if only.key.as_deref() == Some(setting.option()))
+                false
             };
             if !matches {
                 return Ok(Observation::Mismatch {
