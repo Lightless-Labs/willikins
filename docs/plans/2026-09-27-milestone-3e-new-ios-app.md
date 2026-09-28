@@ -245,6 +245,43 @@ CLI/MCP blocked surface are proven at the render/unit level only — no gate too
 catalog yet, so driving `Action::Blocked`/`Skip` through a real `plan`/`apply` *binary* run is still
 G3/T3's job, once Walter's own gates (or a fake gate tool) exist. Plan not marked Completed.
 
+**Addendum:** 2026-09-28 (implementer) — **G3 landed, two commits** (`70e5e0a`, `3f41d6d`).
+`willikins-types`: new public `OperatorAcknowledgement` (grammar exactly `done`, registry entry).
+`willikins-core`: recognised everywhere by its registry entry's `TypeId`
+(`crate::value::is_operator_acknowledgement`, via `TypeRegistry::type_matches`), never by comparing
+`DomainType::TYPE_NAME` strings (the milestone 3d rule) — `check` refuses a default on a workflow
+input of this type (`CheckError::AcknowledgementDefault`) and a literal bound to a port of it
+(`CheckError::AcknowledgementLiteral`), each with its own test plus a DSL-level negative fixture
+(`workflows/fixtures/acknowledgement-default.yaml`, acceptance 16); `describe` lists an unsupplied
+input of this type under a new `awaiting` field (skip-if-empty, same convention as `Plan.blocked`)
+instead of `missing`, so it never blocks `plan` the way a genuinely missing input does; `plan`'s
+`Binding::Input` arm resolves such an unsupplied input to `Value::unknown` instead of
+`PlanError::MissingInput`, never adding it to the resolved map, so `PlanRecorded.inputs` and the
+butler's rebuild from the journal stay untouched; `BlockedGate` gained `awaiting_inputs` (the
+workflow inputs bound to a blocked gate's own ports whose value is still `Unknown`, declared order,
+deduplicated), proven end to end against a small in-test gate tool in
+`crates/willikins-core/tests/plan_gates.rs` (an unsupplied input blocks the gate and is named in
+`awaiting_inputs`; supplying `done` makes it `Compute`). `willikins-tools`: the production
+`operator.acknowledge` gate (pure; `step: Text` the one subject; `acknowledged:
+OperatorAcknowledgement`; reads `inputs.get` directly rather than through `helpers::get`, which
+would fail on an `Unknown` value instead of reporting the gate unmet). `LIVE_TOOL_NAMES` moved
+26 → 27 at every pinned site (`willikins-server`'s const, `insert_pure_tools`, the
+`from_provider_arrays` partition test; `willikins-providers-fake`'s catalog, now twenty-nine tools;
+`willikins-tools`' own `register()`); `crates/willikins-core/tests/operator_acknowledge_document.rs`
+is the positive fixture acceptance 16 asks for, proving the *production* tool (not only G3's
+in-test double) blocks without the input and computes with it, through the real fake catalog;
+`willikins-cli`'s `plan_text` renders one `supply: --input <name>=done` line per
+`awaiting_inputs`, engine-rendered, never tool-authored. Every touched crate's own scoped gates
+(`fmt`, clippy `-D warnings`, tests) are green; snapshots (three in `willikins-core`, one each in
+`willikins-journal`, `willikins-dsl`, `willikins-server`, `willikins-tools`,
+`willikins-providers-fake`, plus `willikins-types`' own catalog snapshot) moved additively only;
+`characterization_of_every_document` gained exactly the one new fixture entry, byte-identical
+elsewhere. **Honest limits, for T3:** the Walter document itself (its own app-record and
+app-group gates, profiles behind the app-group gate) is unwritten — T3's job; no live run has
+exercised `operator.acknowledge` against a real MCP client end to end, only the fake catalog and
+the CLI text renderer at the unit level, the same honest limit G1/G2 recorded for the engine
+mechanism generally.
+
 ## Goal
 
 One workflow document, `workflows/walter-ios-app.yaml`, provisions everything a provider API can
