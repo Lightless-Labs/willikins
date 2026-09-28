@@ -60,6 +60,13 @@ apply time, since this tool still cannot create one. A new graph test over the f
 capability on it, bound from the registration node's own `identifier` output, and asserts both nodes
 plan as `Action::Create`. Verify item 2 and the T3-blocking finding are both settled; see "Verify before
 relying on them" and the post-flight checklist below.
+**Addendum:** 2026-09-28 (independent review) — **Fix 1's branch rule tightened.** A row mixing an
+`enabled: true` option with a bare listed one read `Present`: the rule was chosen by "at least one
+option carries `enabled`". Now the `enabled` rule applies only when *every* option carries it, the
+key-only rule only when none does, and a mix is `Mismatch { setting }` (`9acecc4`). A surviving mutation
+showed the two-listed test only requested the second-listed option (`79994c8`), and the fresh-bundle-id
+graph test now also applies and re-plans as converged (`a468df2`). Record:
+`docs/research/2026-09-28-m3e-adversarial-pass.md`, "Capability read fixes, independent review".
 
 ## Goal
 
