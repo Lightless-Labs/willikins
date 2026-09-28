@@ -1,0 +1,11 @@
+# G3 (willikins-core), decision (j) point 6
+# (docs/plans/2026-09-27-milestone-3e-new-ios-app.md): an
+# `OperatorAcknowledgement` input may never carry a default -- it exists so
+# a gate can ask the operator, and a default would let it pass without
+# anyone acting. `check` must return exactly one error:
+#   AcknowledgementDefault { input: m7_bootstrap_done }
+name: acknowledgement-default
+description: An operator-acknowledgement input declared with a default.
+inputs:
+  m7_bootstrap_done: { type: OperatorAcknowledgement, default: done }
+steps: {}

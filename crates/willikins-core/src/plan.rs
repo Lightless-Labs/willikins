@@ -177,6 +177,13 @@ pub struct BlockedGate {
     /// this gate directly or transitively — in plan order, deduplicated by
     /// name.
     pub holds_back: Vec<NodeName>,
+    /// Every workflow input, bound directly to one of this node's ports,
+    /// whose value is still [`crate::value::ValueState::Unknown`] — G3: an
+    /// unsupplied [`willikins_types::OperatorAcknowledgement`] input, so the
+    /// report can say which `--input name=done` would satisfy this gate. In
+    /// port declaration order, deduplicated by name. Empty for a gate that
+    /// observes provider state rather than an operator acknowledgement.
+    pub awaiting_inputs: Vec<InputName>,
 }
 
 /// The fixed string every secret output port contributes to
@@ -626,7 +633,14 @@ pub fn plan(
                 let bound = bind_ports(&ctx, name, node, spec, None)?;
                 let node_plan = plan_one(name, None, spec, tool.as_ref(), bound)?;
                 if node_plan.action == Action::Blocked {
-                    gates.mark_blocked(name.clone(), None, spec, tool.as_ref(), &node_plan.inputs);
+                    gates.mark_blocked(
+                        name.clone(),
+                        None,
+                        spec,
+                        tool.as_ref(),
+                        &node_plan.inputs,
+                        &node.with,
+                    );
                 }
                 let outputs = node_plan.outputs.clone();
                 planned.push(node_plan);
@@ -671,6 +685,7 @@ pub fn plan(
                             spec,
                             tool.as_ref(),
                             &node_plan.inputs,
+                            &node.with,
                         );
                     }
                     instances.push(ForEachInstance {
@@ -795,6 +810,13 @@ impl GateTracking {
 
     /// Record that `node` (or, for a `for_each` node, its `instance`) plans
     /// `Action::Blocked`, and build its [`BlockedGate`] entry.
+    ///
+    /// `bindings` is the node's own `with` map (declaration order):
+    /// [`BlockedGate::awaiting_inputs`] is every [`Binding::Input`] among
+    /// them whose resolved value in `bound` is still
+    /// [`crate::value::ValueState::Unknown`] (G3: an unsupplied
+    /// [`willikins_types::OperatorAcknowledgement`]), deduplicated by name,
+    /// in `bindings`' own order.
     fn mark_blocked(
         &mut self,
         node: NodeName,
@@ -802,6 +824,7 @@ impl GateTracking {
         spec: &ToolSpec,
         tool: &dyn Tool,
         bound: &Inputs,
+        bindings: &IndexMap<PortName, Binding>,
     ) {
         let gate = tool.gate().unwrap_or_else(|| {
             unreachable!("Action::Blocked is only produced for a declared gate")
@@ -844,6 +867,17 @@ impl GateTracking {
                 (port, rendered.render().to_string())
             })
             .collect();
+        let mut seen_inputs = HashSet::new();
+        let awaiting_inputs = bindings
+            .iter()
+            .filter_map(|(port, binding)| match binding {
+                Binding::Input(input) if !bound.get(port).is_some_and(Value::is_known) => {
+                    Some(input.clone())
+                }
+                _ => None,
+            })
+            .filter(|input| seen_inputs.insert(input.clone()))
+            .collect();
         self.index.insert(key, self.entries.len());
         self.entries.push(BlockedGate {
             node,
@@ -853,6 +887,7 @@ impl GateTracking {
             how: gate.how.to_string(),
             subject,
             holds_back: Vec::new(),
+            awaiting_inputs,
         });
     }
 
@@ -972,12 +1007,25 @@ pub(crate) fn resolve_binding(
             unreachable!("`check` rejects `item` used outside a for_each node")
         })),
         Binding::Input(name) => {
-            ctx.inputs
-                .get(name)
-                .cloned()
-                .ok_or_else(|| PlanError::MissingInput {
-                    input: name.clone(),
-                })
+            if let Some(value) = ctx.inputs.get(name) {
+                return Ok(value.clone());
+            }
+            // G3, decision (j) point 6: an `OperatorAcknowledgement` input
+            // with no value supplied is *awaited*, not missing. `check`
+            // already rejects both a default and a literal for this type,
+            // so the only way `name` is declared this type and absent from
+            // `ctx.inputs` is exactly this case. Every other declared type
+            // still fails the plan below, unchanged.
+            let declared = ctx.workflow.inputs.get(name).unwrap_or_else(|| {
+                unreachable!("`check` rejects a reference to an undeclared input")
+            });
+            if crate::value::is_operator_acknowledgement(ctx.catalog.registry(), &declared.ty.name)
+            {
+                return Ok(Value::unknown(declared.ty.clone()));
+            }
+            Err(PlanError::MissingInput {
+                input: name.clone(),
+            })
         }
         Binding::Step { node, port } => Ok(resolve_step(ctx, node, port)),
         Binding::Keyed { node, key, port } => resolve_keyed(ctx, site, node, key, port),

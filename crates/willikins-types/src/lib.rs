@@ -147,6 +147,7 @@ pub mod env;
 pub mod github;
 pub mod name;
 pub mod naming;
+pub mod operator;
 pub mod propose;
 pub mod registry;
 pub mod reserved;
@@ -175,6 +176,7 @@ pub use env::EnvVarName;
 pub use github::{ActionsSecretName, GitHubOrg, GitHubRepo, HttpsUrl, RepoVisibility};
 pub use name::ProjectName;
 pub use naming::NamingScheme;
+pub use operator::OperatorAcknowledgement;
 pub use propose::{ProposeError, propose_slug};
 pub use registry::{Conversion, TypeName, TypeRef, TypeRegistry};
 pub use reserved::is_reserved;
@@ -234,6 +236,7 @@ registry::domain_types! {
     AppleProfileName,
     AppleProfileId,
     AppleProfileContent,
+    OperatorAcknowledgement,
 }
 
 /// Every total conversion between two registered domain types, one row per

@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-types/tests/catalog.rs
+assertion_line: 101
 expression: redacted
 ---
 [
@@ -747,6 +748,22 @@ expression: redacted
       ],
       "maxLength": 65536,
       "pattern": "^(?:[A-Za-z0-9+/]+={0,2})$"
+    }
+  },
+  {
+    "name": "OperatorAcknowledgement",
+    "secret": false,
+    "description": "An operator's acknowledgement that a manual step is done (the only valid value is `done`); never defaulted, never a literal.",
+    "example": "done",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "OperatorAcknowledgement",
+      "description": "An operator's acknowledgement that a manual step is done (the only valid value is `done`); never defaulted, never a literal.",
+      "type": "string",
+      "examples": [
+        "done"
+      ],
+      "pattern": "^(?:done)$"
     }
   }
 ]
