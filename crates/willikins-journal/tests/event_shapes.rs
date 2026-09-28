@@ -183,6 +183,7 @@ fn a_run_finished_event_with_a_blocked_outcome_serializes_with_its_kind_and_roun
                 how: "register the group in the portal".to_string(),
                 subject: vec![(port("identifier"), "com.example.app".to_string())],
                 holds_back: vec![node("profile")],
+                awaiting_inputs: Vec::new(),
             }],
         },
     };

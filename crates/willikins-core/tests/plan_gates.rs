@@ -732,3 +732,170 @@ fn insert_accepts_a_well_formed_gate() {
         }))
         .unwrap();
 }
+
+// ---------------------------------------------------------------------
+// G3: operator acknowledgement. `plan`'s `Binding::Input` arm and
+// `GateTracking::mark_blocked`'s `awaiting_inputs`, exercised end to end
+// through a small in-test gate tool -- the mechanism `operator.acknowledge`
+// (willikins-tools, commit 2) will be the one production user of.
+// ---------------------------------------------------------------------
+
+static ACK_GATE: Gate = Gate {
+    need: "the operator has done the test's manual step",
+    how: "do the step, then supply the awaited input",
+    subject: &["step"],
+};
+
+/// A pure gate over `step: Text` (the subject, passed through as its own
+/// output) and `acknowledged: OperatorAcknowledgement`. `Present` iff
+/// `acknowledged` is known; `Absent` when it is
+/// [`willikins_core::Value::unknown`] -- never reads it through
+/// `helpers::get`, which would fail on an `Unknown` value instead of
+/// reporting the gate unmet. Models `operator.acknowledge`'s own `read`.
+struct AckGateTool {
+    spec: ToolSpec,
+}
+
+impl AckGateTool {
+    fn new() -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("step"),
+            PortSpec {
+                ty: PortType::Exact(ty("Text")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        inputs.insert(
+            port("acknowledged"),
+            PortSpec {
+                ty: PortType::Exact(ty("OperatorAcknowledgement")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("step"), ty("Text"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name("test.acknowledge"),
+                description: "Test gate over one OperatorAcknowledgement.".to_string(),
+                inputs,
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: true,
+            },
+        }
+    }
+}
+
+impl Tool for AckGateTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
+        let step = inputs
+            .get(&port("step"))
+            .expect("test always binds `step`")
+            .clone();
+        let mut outputs = Outputs::new();
+        outputs.insert(port("step"), step);
+        let acknowledged_known = inputs
+            .get(&port("acknowledged"))
+            .is_some_and(Value::is_known);
+        if acknowledged_known {
+            Ok(Observation::Present(outputs))
+        } else {
+            Ok(Observation::Absent { predicted: outputs })
+        }
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        unreachable!("this test never applies a plan")
+    }
+
+    fn gate(&self) -> Option<&Gate> {
+        Some(&ACK_GATE)
+    }
+}
+
+/// A workflow with one declared input (`ack_done: OperatorAcknowledgement`,
+/// no default) and one node, `gate`, binding `step` to a literal and
+/// `acknowledged` to that input.
+fn ack_workflow() -> Workflow {
+    Workflow::new(workflow_name("w"))
+        .input(
+            input("ack_done"),
+            InputSpec::new(ty("OperatorAcknowledgement")),
+        )
+        .node(
+            node("gate"),
+            Node::new(tool_name("test.acknowledge"))
+                .port(port("step"), Binding::Literal("do the thing".to_string()))
+                .port(port("acknowledged"), Binding::Input(input("ack_done"))),
+        )
+}
+
+fn ack_catalog() -> Catalog {
+    let mut catalog = Catalog::new(willikins_types::registry());
+    catalog.insert(Arc::new(AckGateTool::new())).unwrap();
+    catalog
+}
+
+/// Acceptance 16's core plan-time claim: an `OperatorAcknowledgement`
+/// input the caller never supplied is absent from the resolved inputs map
+/// (`describe` put it under `awaiting`, never `resolved`) yet `plan` still
+/// succeeds -- `Binding::Input` resolves it to `Value::unknown` rather than
+/// `PlanError::MissingInput` -- and the gate reads `Absent`, so the node is
+/// `Action::Blocked` and names the awaited input in `awaiting_inputs`.
+#[test]
+fn an_unsupplied_acknowledgement_input_blocks_the_gate_and_is_named_in_awaiting_inputs() {
+    let workflow = ack_workflow();
+    let catalog = ack_catalog();
+    let checked = check(&workflow, &catalog).expect("the test graph checks cleanly");
+
+    // No entry for `ack_done` at all -- exactly what `describe` leaves
+    // behind for an awaited input (never added to the resolved map).
+    let inputs: IndexMap<willikins_core::InputName, Value> = IndexMap::new();
+    let result = plan(&checked, &inputs, &catalog)
+        .expect("an unsupplied OperatorAcknowledgement input must never fail `plan`");
+
+    assert_eq!(by_name(&result.nodes, "gate", None).action, Action::Blocked);
+    assert_eq!(result.blocked.len(), 1);
+    let entry = &result.blocked[0];
+    assert_eq!(entry.tool.as_str(), "test.acknowledge");
+    assert_eq!(entry.subject[0].0.as_str(), "step");
+    assert_eq!(entry.subject[0].1, "do the thing");
+    assert_eq!(
+        entry.awaiting_inputs,
+        vec![input("ack_done")],
+        "the report must name exactly the input a --input flag would supply"
+    );
+
+    // The caller's own map is untouched: `plan` never adds the unsupplied
+    // input to it.
+    assert!(!inputs.contains_key(&input("ack_done")));
+}
+
+/// Supplying `done` makes the gate `Compute`, `Plan.blocked` empty, and
+/// `awaiting_inputs` moot -- the acknowledgement flows exactly like any
+/// other known input.
+#[test]
+fn supplying_done_makes_the_acknowledgement_gate_compute() {
+    let workflow = ack_workflow();
+    let catalog = ack_catalog();
+    let checked = check(&workflow, &catalog).expect("the test graph checks cleanly");
+
+    let mut inputs: IndexMap<willikins_core::InputName, Value> = IndexMap::new();
+    inputs.insert(
+        input("ack_done"),
+        Value::known(willikins_types::OperatorAcknowledgement::parse("done").unwrap()),
+    );
+    let result = plan(&checked, &inputs, &catalog).expect("a supplied acknowledgement plans fine");
+
+    assert_eq!(by_name(&result.nodes, "gate", None).action, Action::Compute);
+    assert!(result.blocked.is_empty());
+}

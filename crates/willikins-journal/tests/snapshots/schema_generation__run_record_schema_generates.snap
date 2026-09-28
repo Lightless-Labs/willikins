@@ -92,6 +92,13 @@ expression: schema
       "description": "One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it\ntrue, what it was checking, and every node it holds back.\n\nPlain data — never a [`Value`] — so it holds no secret by construction:\n`need` and `how` come straight from the gate's own `&'static str`s, and\n`subject` is rendered text, never a live value. See\n[`crate::tool::Gate`]'s own doc.\n\nDerives [`serde::Deserialize`] as well as `Serialize` (added by task G2):\n`willikins-journal`'s `Event::RunFinished` stores a run's own\n`Vec<BlockedGate>` directly rather than through `Redacted`, since none\nof its fields is ever a [`Value`] — the same reasoning that lets\n[`crate::apply::NodeStatus`] round-trip untouched.",
       "type": "object",
       "properties": {
+        "awaiting_inputs": {
+          "description": "Every workflow input, bound directly to one of this node's ports,\nwhose value is still [`crate::value::ValueState::Unknown`] — G3: an\nunsupplied [`willikins_types::OperatorAcknowledgement`] input, so the\nreport can say which `--input name=done` would satisfy this gate. In\nport declaration order, deduplicated by name. Empty for a gate that\nobserves provider state rather than an operator acknowledgement.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputName"
+          }
+        },
         "holds_back": {
           "description": "Every node this gate holds back — [`Action::Skip`] because it binds\nthis gate directly or transitively — in plan order, deduplicated by\nname.",
           "type": "array",
@@ -146,8 +153,13 @@ expression: schema
         "need",
         "how",
         "subject",
-        "holds_back"
+        "holds_back",
+        "awaiting_inputs"
       ]
+    },
+    "InputName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
     },
     "NodeName": {
       "type": "string",

@@ -246,6 +246,12 @@ fn check_error_detail(error: &CheckError) -> String {
         CheckError::LiteralOutput { output } => {
             format!("output `{output}`: a workflow output must be a reference, not a literal")
         }
+        CheckError::AcknowledgementDefault { input } => {
+            format!("input `{input}`: an operator acknowledgement input may not have a default")
+        }
+        CheckError::AcknowledgementLiteral { node, port } => {
+            format!("{node}.{port}: a literal cannot supply an operator acknowledgement")
+        }
     }
 }
 
@@ -756,6 +762,7 @@ mod tests {
                 "com.example.nse".to_string(),
             )],
             holds_back: vec![NodeName::parse("profile").unwrap()],
+            awaiting_inputs: Vec::new(),
         };
         let plan = Plan {
             workflow: willikins_types::WorkflowName::parse("test").unwrap(),
@@ -834,6 +841,7 @@ mod tests {
         let description = Description {
             errors: Vec::new(),
             missing: vec![missing],
+            awaiting: Vec::new(),
             resolved: IndexMap::new(),
         };
 
@@ -1288,6 +1296,7 @@ mod tests {
                 "com.example.nse".to_string(),
             )],
             holds_back: vec![NodeName::parse("profile").unwrap()],
+            awaiting_inputs: Vec::new(),
         };
         let run = RunRecord {
             run_id: run_id(),

@@ -472,6 +472,36 @@ pub enum CheckError {
         /// The output whose binding is a literal.
         output: OutputName,
     },
+    /// A workflow input declared type
+    /// [`willikins_types::OperatorAcknowledgement`] has a default value.
+    /// This type is never defaulted: it exists so a gate can ask the
+    /// operator, and a default would let it pass without anyone acting.
+    /// See `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`, decision
+    /// (j), point 6.
+    ///
+    /// Not one of the plan's variants; a G3 addition, recognising the type
+    /// by its registry entry's `TypeId`
+    /// ([`crate::value::is_operator_acknowledgement`]), never by comparing
+    /// [`willikins_types::DomainType::TYPE_NAME`] strings (the milestone 3d
+    /// rule).
+    AcknowledgementDefault {
+        /// The offending input.
+        input: InputName,
+    },
+    /// A `Binding::Literal` bound to a port whose type is
+    /// [`willikins_types::OperatorAcknowledgement`]. A document cannot
+    /// supply this on its own: it must come from a workflow input the
+    /// operator fills in. Reported before the literal is ever handed to a
+    /// parser, exactly like [`Self::SecretLiteral`].
+    ///
+    /// Not one of the plan's variants; a G3 addition, see
+    /// [`Self::AcknowledgementDefault`].
+    AcknowledgementLiteral {
+        /// The node whose binding is the literal.
+        node: NodeName,
+        /// The port it was bound to.
+        port: PortName,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -551,6 +581,10 @@ impl fmt::Display for CheckError {
                 f,
                 "{site}: node `{referenced}` runs once per item and its port is already a list; there is no list-of-list type"
             ),
+            Self::AcknowledgementLiteral { node, port } => write!(
+                f,
+                "node `{node}`, port `{port}`: a literal cannot supply an operator acknowledgement"
+            ),
             // Errors about a *declaration* rather than a node's port: see
             // `fmt_declaration_error`. Listed explicitly so this match
             // stays exhaustive and a new variant is still a compile error.
@@ -558,7 +592,8 @@ impl fmt::Display for CheckError {
             | Self::DefaultTypeMismatch { .. }
             | Self::UnregisteredInputType { .. }
             | Self::DuplicateNode { .. }
-            | Self::LiteralOutput { .. } => self.fmt_declaration_error(f),
+            | Self::LiteralOutput { .. }
+            | Self::AcknowledgementDefault { .. } => self.fmt_declaration_error(f),
         }
     }
 }
@@ -598,6 +633,10 @@ impl CheckError {
             Self::LiteralOutput { output } => write!(
                 f,
                 "output `{output}`: a workflow output must be a reference, not a literal; there is no port to give a literal a type"
+            ),
+            Self::AcknowledgementDefault { input } => write!(
+                f,
+                "input `{input}`: an operator acknowledgement input may not have a default"
             ),
             other => unreachable!("not a declaration error: {other:?}"),
         }
@@ -641,6 +680,8 @@ impl CheckError {
             Self::UnregisteredInputType { .. } => "UnregisteredInputType",
             Self::DuplicateForEachDefault { .. } => "DuplicateForEachDefault",
             Self::LiteralOutput { .. } => "LiteralOutput",
+            Self::AcknowledgementDefault { .. } => "AcknowledgementDefault",
+            Self::AcknowledgementLiteral { .. } => "AcknowledgementLiteral",
         }
     }
 }
@@ -739,6 +780,14 @@ fn check_workflow_inputs(
                 continue;
             }
             Some(false) => {}
+        }
+        if crate::value::is_operator_acknowledgement(registry, &spec.ty.name) {
+            if spec.default.is_some() {
+                errors.push(CheckError::AcknowledgementDefault {
+                    input: name.clone(),
+                });
+            }
+            continue;
         }
         let Some(default) = &spec.default else {
             continue;
@@ -1313,6 +1362,14 @@ fn check_literal(
     let PortType::Exact(ty) = expected else {
         unreachable!("AnySecret always accepts a secret and is handled above");
     };
+
+    if crate::value::is_operator_acknowledgement(registry, &ty.name) {
+        errors.push(CheckError::AcknowledgementLiteral {
+            node: node.clone(),
+            port: port.clone(),
+        });
+        return None;
+    }
 
     if ty.list {
         let error = ParseError::new("Binding", "lists cannot be literals");
@@ -2257,6 +2314,73 @@ mod tests {
     }
 
     #[test]
+    fn acknowledgement_default_refuses_a_default_on_an_operator_acknowledgement_input() {
+        // Negative fixture (acceptance 16): a workflow input declared
+        // `OperatorAcknowledgement` may never carry a default -- see
+        // `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`, decision (j),
+        // point 6.
+        let workflow = Workflow::new(workflow_name("w")).input(
+            input_name("done_ack"),
+            InputSpec::new(ty("OperatorAcknowledgement")).with_default(Value::known(
+                willikins_types::OperatorAcknowledgement::parse("done").unwrap(),
+            )),
+        );
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::AcknowledgementDefault {
+                input: input_name("done_ack"),
+            }]
+        );
+        assert_eq!(
+            errors[0].to_string(),
+            "input `done_ack`: an operator acknowledgement input may not have a default"
+        );
+    }
+
+    #[test]
+    fn acknowledgement_literal_refuses_a_literal_bound_to_an_operator_acknowledgement_port() {
+        // Negative fixture (acceptance 16): a literal cannot supply an
+        // operator's acknowledgement -- it must come from a workflow input
+        // the operator fills in themselves.
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(Arc::new(DummyTool {
+                spec: spec_of(
+                    "test.acknowledge",
+                    &[
+                        ("step", exact("Text"), true),
+                        ("acknowledged", exact("OperatorAcknowledgement"), true),
+                    ],
+                    &[],
+                    &[],
+                    Class::Reversible,
+                    true,
+                ),
+            }))
+            .unwrap();
+        let workflow = Workflow::new(workflow_name("w")).node(
+            node_name("gate"),
+            Node::new(tool_name("test.acknowledge"))
+                .port(port("step"), Binding::Literal("do the thing".to_string()))
+                .port(port("acknowledged"), Binding::Literal("done".to_string())),
+        );
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::AcknowledgementLiteral {
+                node: node_name("gate"),
+                port: port("acknowledged"),
+            }]
+        );
+        assert_eq!(
+            errors[0].to_string(),
+            "node `gate`, port `acknowledged`: a literal cannot supply an operator acknowledgement"
+        );
+    }
+
+    #[test]
     fn unregistered_input_type_is_reported_alongside_secret_workflow_input_in_declaration_order() {
         let workflow = Workflow::new(workflow_name("w"))
             .input(input_name("mystery"), InputSpec::new(ty("NoSuchType")))
@@ -2414,6 +2538,13 @@ mod tests {
             CheckError::LiteralOutput {
                 output: OutputName::parse("o").unwrap(),
             },
+            CheckError::AcknowledgementDefault {
+                input: input_name("i"),
+            },
+            CheckError::AcknowledgementLiteral {
+                node: node_name("n"),
+                port: port("p"),
+            },
         ]
     }
 
@@ -2443,6 +2574,8 @@ mod tests {
         UnregisteredInputType,
         DuplicateForEachDefault,
         LiteralOutput,
+        AcknowledgementDefault,
+        AcknowledgementLiteral,
     );
 
     #[test]

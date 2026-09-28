@@ -294,6 +294,7 @@ fn a_blocked_run_folds_to_run_state_blocked_with_its_gates_and_next_step() {
         how: "do the manual thing".to_string(),
         subject: Vec::new(),
         holds_back: vec![node("downstream")],
+        awaiting_inputs: Vec::new(),
     };
     journal
         .append(run_finished_blocked(run_id, vec![gate]))

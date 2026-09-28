@@ -137,6 +137,7 @@ fn events_carrying_the_secret() -> Vec<Event> {
                     how: "do the manual thing".to_string(),
                     subject: Vec::new(),
                     holds_back: Vec::new(),
+                    awaiting_inputs: Vec::new(),
                 }],
             },
         },

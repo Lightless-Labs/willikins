@@ -50,6 +50,33 @@ pub(crate) fn reported_type_name_or(obj: &dyn DomainObject, fallback: &TypeName)
     TypeName::parse(obj.type_name()).unwrap_or_else(|_| fallback.clone())
 }
 
+/// A known value of [`willikins_types::OperatorAcknowledgement`], built
+/// once from the type's own example (`"done"`) and reused by
+/// [`is_operator_acknowledgement`] so that function never re-parses.
+static OPERATOR_ACKNOWLEDGEMENT_EXAMPLE: std::sync::LazyLock<
+    willikins_types::OperatorAcknowledgement,
+> = std::sync::LazyLock::new(|| {
+    willikins_types::OperatorAcknowledgement::parse(
+        <willikins_types::OperatorAcknowledgement as DomainType>::example(),
+    )
+    .unwrap_or_else(|err| unreachable!("OperatorAcknowledgement's own example parses: {err}"))
+});
+
+/// Whether `name` is registered, in `registry`, as the Rust type
+/// [`willikins_types::OperatorAcknowledgement`] -- decided by the registry
+/// entry's own `TypeId` test ([`TypeRegistry::type_matches`]), never by
+/// comparing [`TypeName`] strings: two different Rust types can share a
+/// [`DomainType::TYPE_NAME`] (the milestone 3d rule; see
+/// `docs/research/2026-09-23-m3d-adversarial-pass.md`). `check` uses this to
+/// refuse a default or a literal for this type; `describe` uses it for the
+/// `awaiting` field; `plan` uses it to resolve an unsupplied one to
+/// [`Value::unknown`] instead of failing the plan. `None` (an unregistered
+/// name) and every other registered type both read `false`.
+#[must_use]
+pub(crate) fn is_operator_acknowledgement(registry: &TypeRegistry, name: &TypeName) -> bool {
+    registry.type_matches(name, &*OPERATOR_ACKNOWLEDGEMENT_EXAMPLE) == Some(true)
+}
+
 /// The type a tool port accepts.
 ///
 /// `AnySecret` exists only for sinks such as
@@ -640,6 +667,23 @@ mod tests {
     fn downcast_returns_none_for_the_wrong_type() {
         let value = Value::known(github_org("lightless-labs"));
         assert!(value.downcast::<willikins_types::HttpsUrl>().is_none());
+    }
+
+    #[test]
+    fn is_operator_acknowledgement_recognises_only_its_own_type() {
+        let registry = willikins_types::registry();
+        assert!(is_operator_acknowledgement(
+            registry,
+            &TypeName::parse("OperatorAcknowledgement").unwrap()
+        ));
+        assert!(!is_operator_acknowledgement(
+            registry,
+            &TypeName::parse("GitHubOrg").unwrap()
+        ));
+        assert!(!is_operator_acknowledgement(
+            registry,
+            &TypeName::parse("NoSuchType").unwrap()
+        ));
     }
 
     #[test]

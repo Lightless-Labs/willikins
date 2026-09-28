@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-dsl/tests/acceptance.rs
+assertion_line: 261
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
@@ -163,6 +164,10 @@ project: DopplerProject
 PLAN:
 plan_json: {"workflow":"doppler-project","nodes":[{"name":"doppler","instance":null,"tool":"doppler.project.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}}},{"name":"configs","instance":"dev","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"dev"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/dev"}}},{"name":"configs","instance":"stg","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"stg"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/stg"}}},{"name":"configs","instance":"prd","tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}}],"outputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"}},"class":"reversible","requires_approval":false}
 fingerprint: [{"name":"doppler","instance":null,"action":"create","outputs":[["project","third-thoughts"]]},{"name":"configs","instance":"dev","action":"create","outputs":[["config","third-thoughts/dev"]]},{"name":"configs","instance":"stg","action":"create","outputs":[["config","third-thoughts/stg"]]},{"name":"configs","instance":"prd","action":"create","outputs":[["config","third-thoughts/prd"]]}]
+
+=== workflows/fixtures/acknowledgement-default.yaml ===
+CHECK ERRORS:
+- kind=AcknowledgementDefault display=input `m7_bootstrap_done`: an operator acknowledgement input may not have a default json={"kind":"AcknowledgementDefault","input":"m7_bootstrap_done"}
 
 === workflows/fixtures/appstore-capability-setting-mismatch.yaml ===
 WARNINGS:

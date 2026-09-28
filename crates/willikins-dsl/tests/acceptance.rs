@@ -72,6 +72,27 @@ fn secret_into_template_fails_check_with_exactly_one_taint_error() {
     }
 }
 
+/// Acceptance 16 (G3): a workflow input declared `OperatorAcknowledgement`
+/// with a `default:` fails `check` with exactly one
+/// `AcknowledgementDefault`, naming the offending input.
+#[test]
+fn acknowledgement_default_fails_check_with_exactly_one_error() {
+    let path = fixture_path("workflows/fixtures/acknowledgement-default.yaml");
+    let workflow = load_document(Path::new(&path)).expect("the negative fixture loads and parses");
+
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let errors = willikins_core::check(&workflow, &catalog)
+        .expect_err("an operator-acknowledgement default must fail check");
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(
+        errors[0],
+        willikins_core::CheckError::AcknowledgementDefault {
+            input: willikins_core::InputName::parse("m7_bootstrap_done").unwrap(),
+        }
+    );
+}
+
 // ---------------------------------------------------------------------
 // Milestone 3d, equivalence item 1: a characterization snapshot of every
 // shipped document, committed before any production change (C1). After

@@ -190,6 +190,33 @@ fn type_schema_json_schema(_generator: &mut schemars::SchemaGenerator) -> schema
     schemars::json_schema!({ "type": "object" })
 }
 
+/// A declared input of type [`willikins_types::OperatorAcknowledgement`]
+/// `describe` found no raw value for.
+///
+/// Never `missing`, and never carries a default (`check` refuses one, see
+/// [`crate::check::CheckError::AcknowledgementDefault`]): this type exists
+/// so a gate can ask the operator, and an unsupplied one is *awaited*, not
+/// an error blocking `plan` -- see
+/// `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`, decision (j), point
+/// 6.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
+pub struct AwaitingInput {
+    /// The awaited input's name.
+    pub name: InputName,
+    /// Its declared type -- always `OperatorAcknowledgement`, carried for
+    /// the same reason [`MissingInput::ty`] is.
+    pub ty: TypeRef,
+    /// The input's own one-line description, verbatim from the document,
+    /// if it declared one. Document text, not willikins' own words -- see
+    /// the module docs' "Document text is data".
+    pub document_description: Option<willikins_types::Description>,
+    /// A valid example value for the type: always `done`.
+    pub example: &'static str,
+    /// A one-sentence question naming the input and the value that
+    /// satisfies it (`done`), willikins' own words only.
+    pub prompt: String,
+}
+
 /// The result of resolving [`PartialInputs`] against a [`Checked`]
 /// workflow's declared inputs.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
@@ -198,8 +225,17 @@ pub struct Description {
     /// documented on [`describe`].
     pub errors: Vec<InputError>,
     /// Every declared input with neither a raw value nor a default, in
-    /// declaration order.
+    /// declaration order. Never includes an
+    /// [`willikins_types::OperatorAcknowledgement`]-typed input -- see
+    /// [`Self::awaiting`].
     pub missing: Vec<MissingInput>,
+    /// Every declared [`willikins_types::OperatorAcknowledgement`]-typed
+    /// input describe found no raw value for, in declaration order. Skipped
+    /// when serializing if empty (decision (j), point 6), the same
+    /// convention as [`crate::plan::Plan::blocked`], so a document with no
+    /// awaited input serializes exactly as it did before G3.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub awaiting: Vec<AwaitingInput>,
     /// Every input that resolved to a concrete [`Value`]: a parsed raw
     /// value, or a declared default. In declaration order.
     pub resolved: IndexMap<InputName, Value>,
@@ -218,6 +254,10 @@ pub struct Description {
 ///   separate check is needed here; a parse failure becomes an
 ///   [`InputError`] carrying that parser's own message (see
 ///   [`InputError::error`] for what it may quote);
+/// - otherwise, when the input's declared type is
+///   [`willikins_types::OperatorAcknowledgement`], it is [`AwaitingInput`]
+///   rather than [`MissingInput`] (this type is never defaulted, so this
+///   check runs before the default lookup below);
 /// - otherwise, a declared default fills [`Description::resolved`];
 /// - otherwise the input is [`MissingInput`].
 ///
@@ -229,6 +269,7 @@ pub struct Description {
 pub fn describe(checked: &Checked, partial: &PartialInputs) -> Description {
     let mut errors = Vec::new();
     let mut missing = Vec::new();
+    let mut awaiting = Vec::new();
     let mut resolved = IndexMap::new();
 
     for (name, spec) in &checked.workflow.inputs {
@@ -242,6 +283,13 @@ pub fn describe(checked: &Checked, partial: &PartialInputs) -> Description {
                     error,
                 }),
             },
+            None if crate::value::is_operator_acknowledgement(
+                willikins_types::registry(),
+                &spec.ty.name,
+            ) =>
+            {
+                awaiting.push(awaiting_input(name, spec));
+            }
             None => match &spec.default {
                 Some(default) => {
                     resolved.insert(name.clone(), default.clone());
@@ -266,6 +314,7 @@ pub fn describe(checked: &Checked, partial: &PartialInputs) -> Description {
     Description {
         errors,
         missing,
+        awaiting,
         resolved,
     }
 }
@@ -310,6 +359,29 @@ fn missing_input(name: &InputName, spec: &InputSpec) -> MissingInput {
             .default
             .as_ref()
             .map(|value| value.render().to_string()),
+        example,
+        prompt,
+    }
+}
+
+/// Build the [`AwaitingInput`] entry for a declared
+/// [`willikins_types::OperatorAcknowledgement`]-typed input with no raw
+/// value supplied.
+///
+/// # Panics
+///
+/// Same as [`missing_input`]: cannot happen for an input inside a
+/// [`Checked`] workflow.
+fn awaiting_input(name: &InputName, spec: &InputSpec) -> AwaitingInput {
+    let entry = willikins_types::registry()
+        .get(&spec.ty.name)
+        .unwrap_or_else(|| unreachable!("`check` already rejected an unregistered input type"));
+    let example = entry.info.example;
+    let prompt = build_prompt(name, entry.info.description, example);
+    AwaitingInput {
+        name: name.clone(),
+        ty: spec.ty.clone(),
+        document_description: spec.description.clone(),
         example,
         prompt,
     }
@@ -506,6 +578,69 @@ mod tests {
             .get(&input_name("environments"))
             .unwrap();
         assert_eq!(environments.as_list().unwrap().len(), 3);
+    }
+
+    /// Acceptance 16 (G3): an unsupplied `OperatorAcknowledgement` input is
+    /// `awaiting`, never `missing`, and never blocks `describe` the way a
+    /// truly missing input does.
+    #[test]
+    fn acceptance_16_an_unsupplied_acknowledgement_input_is_awaiting_not_missing() {
+        let workflow = Workflow::new(workflow_name("w")).input(
+            input_name("m7_bootstrap_done"),
+            InputSpec::new(ty("OperatorAcknowledgement")).with_description(document_description(
+                "Replace the walter pipeline's stored bootstrap, then supply this input.",
+            )),
+        );
+        let catalog = Catalog::new(willikins_types::registry());
+        let checked = check(&workflow, &catalog).expect("no nodes: nothing to fail check");
+        let partial = PartialInputs::new();
+        let description = describe(&checked, &partial);
+
+        assert!(description.errors.is_empty());
+        assert!(
+            description.missing.is_empty(),
+            "an awaited input must never also be missing: {:?}",
+            description.missing
+        );
+        assert!(
+            !description
+                .resolved
+                .contains_key(&input_name("m7_bootstrap_done"))
+        );
+        assert_eq!(description.awaiting.len(), 1);
+        let awaiting = &description.awaiting[0];
+        assert_eq!(awaiting.name, input_name("m7_bootstrap_done"));
+        assert_eq!(awaiting.example, "done");
+        assert!(awaiting.prompt.contains("m7_bootstrap_done"));
+        assert!(awaiting.prompt.contains("done"));
+        assert!(awaiting.document_description.is_some());
+    }
+
+    /// Supplying `done` resolves the input normally, exactly like any other
+    /// type -- `describe` needs no special-case for the supplied path.
+    #[test]
+    fn acceptance_16_supplying_done_resolves_the_acknowledgement_input() {
+        let workflow = Workflow::new(workflow_name("w")).input(
+            input_name("m7_bootstrap_done"),
+            InputSpec::new(ty("OperatorAcknowledgement")),
+        );
+        let catalog = Catalog::new(willikins_types::registry());
+        let checked = check(&workflow, &catalog).expect("no nodes: nothing to fail check");
+        let mut partial = PartialInputs::new();
+        partial.insert(
+            input_name("m7_bootstrap_done"),
+            RawInput::Scalar("done".to_string()),
+        );
+        let description = describe(&checked, &partial);
+
+        assert!(description.errors.is_empty());
+        assert!(description.awaiting.is_empty());
+        assert!(description.missing.is_empty());
+        assert!(
+            description
+                .resolved
+                .contains_key(&input_name("m7_bootstrap_done"))
+        );
     }
 
     #[test]
