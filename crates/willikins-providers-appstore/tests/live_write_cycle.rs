@@ -110,6 +110,12 @@ use willikins_types::{
     AppleProfileContent, AppleProfileName, AppleProfileType, AppleSigningKey, DomainType,
 };
 
+// What a STOP may say about a failed Apple call: status, `errors[].code`
+// and `errors[].title`, never `errors[].detail`. Its tests also run in
+// `tests/redaction.rs`, which every ordinary gate compiles.
+#[path = "support/apple_error_report.rs"]
+mod apple_error_report;
+
 fn credential_parts() -> (AppleIssuerId, AppleKeyId, AppleSigningKey) {
     let issuer_id = std::env::var("ASC_API_KEY_ISSUER_ID").expect("ASC_API_KEY_ISSUER_ID is set");
     let key_id = std::env::var("ASC_API_KEY_ID").expect("ASC_API_KEY_ID is set");
@@ -182,22 +188,16 @@ fn fresh_client(
     ))
 }
 
-/// Unwrap a tool call, or STOP naming the step and the error's kind only.
-/// A `ToolError`'s message is printed only when it is one of the two
-/// fixed status messages (`401`/`403`), which carry nothing of the
-/// provider's; any other message may quote Apple's own `detail` text,
-/// which can name a certificate or profile id, so it is withheld.
+/// Unwrap a tool call, or STOP naming the step, the error's kind, and its
+/// message only when willikins wrote every word of it: the two fixed
+/// `401`/`403` texts, `provider returned status N` (Apple's error body has
+/// no top-level `message`, so a failed Apple call reads exactly that), or
+/// the fixed parse-position text. Any other message may quote Apple's own
+/// `detail`, which can name a certificate or profile id, so it is withheld
+/// ([`apple_error_report::stop_message`]).
 fn tool_ok<T>(result: Result<T, willikins_core::ToolError>, step: &str) -> T {
     result.unwrap_or_else(|err| {
-        let fixed = [
-            willikins_providers_http::UNAUTHENTICATED,
-            willikins_providers_http::MISSING_PERMISSION,
-        ];
-        let message = if fixed.contains(&err.message.as_str()) {
-            err.message.as_str()
-        } else {
-            "<withheld: may quote provider text>"
-        };
+        let message = apple_error_report::stop_message(&err.message);
         panic!("STOP at {step}: {:?}: {message}", err.kind)
     })
 }
@@ -412,11 +412,12 @@ fn probe_platform() -> AppleBundleIdPlatform {
 /// success, `data.id` (so this run can record the second profile it just
 /// made, immediately, for cleanup -- never by a follow-up list-and-guess,
 /// which trust boundary 4 forbids just as much as a delete-by-name would
-/// be) and whether it carried `profileContent`; on failure, the
-/// `errors[].code` leaf, which `willikins-providers-http`'s own
-/// `provider_error_from_body` discards by design. Nothing else in the body
-/// is ever read, and nothing of it is printed beyond a status, a code and
-/// a boolean.
+/// be) and whether it carried `profileContent`; on failure, the status and
+/// every `errors[].code` and `errors[].title`
+/// ([`apple_error_report::apple_error_summary`]), which
+/// `willikins-providers-http`'s own `provider_error_from_body` discards by
+/// design. `errors[].detail` is never read, and nothing else of the body is
+/// printed beyond a status, codes, titles and a boolean.
 ///
 /// The path is fixed, not a parameter: a helper that `POST`s to whatever
 /// path it is handed is a certificate write waiting for a caller, and the
@@ -471,20 +472,14 @@ fn raw_post_profile(
         RawPostResult {
             status,
             created_id: Some(id),
-            error_code: None,
+            error_summary: None,
             content_present,
         }
     } else {
-        let error_code = parsed.as_ref().and_then(|value| {
-            value
-                .pointer("/errors/0/code")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        });
         RawPostResult {
             status,
             created_id: None,
-            error_code,
+            error_summary: Some(apple_error_report::apple_error_summary(status, &body_text)),
             content_present: false,
         }
     }
@@ -492,11 +487,12 @@ fn raw_post_profile(
 
 /// [`raw_post_profile`]'s result: the status always; `created_id` and
 /// whether the `2xx` body carried `profileContent` on a `2xx` only;
-/// `error_code` on a non-`2xx` only, when the body named one.
+/// `error_summary` (status, codes and titles, never detail) on a non-`2xx`
+/// only.
 struct RawPostResult {
     status: u16,
     created_id: Option<String>,
-    error_code: Option<String>,
+    error_summary: Option<String>,
     content_present: bool,
 }
 
@@ -839,9 +835,8 @@ fn appstore_live_write_cycle() {
         guard.profile_ids.push(second_profile_id);
     } else {
         println!(
-            "profile two: status {}, errors[].code {}",
-            second_create.status,
-            second_create.error_code.as_deref().unwrap_or("<none>")
+            "profile two: {}",
+            second_create.error_summary.as_deref().unwrap_or("<none>")
         );
     }
     assert!(
