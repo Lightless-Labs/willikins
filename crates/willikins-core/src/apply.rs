@@ -35,7 +35,7 @@ use crate::plan::{
     resolve_binding,
 };
 use crate::site::Site;
-use crate::tool::{Ensured, Inputs, Outputs, PortName, ToolError};
+use crate::tool::{Ensured, Inputs, Outputs, PortName, Tool, ToolError, ToolErrorKind};
 use crate::value::Value;
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName};
 use crate::{Catalog, ToolName};
@@ -536,6 +536,12 @@ impl ApplyObserver for RecordingObserver {
 ///    **blocked run** (see decision (j),
 ///    `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`), `Ok`, not an
 ///    error.
+///
+///    4a. Just before [`Tool::ensure`], an instance whose planned action
+///    is not [`Action::Replace`] asks [`Tool::replaces`]; `true` fails that
+///    instance with [`ToolErrorKind::Conflict`] before `ensure` runs, so a
+///    delete the approved plan did not show never happens -- see
+///    [`refuse_unplanned_replacement`].
 /// 5. Resolves workflow outputs from the run's own instance outputs, the
 ///    same way [`plan`] resolves them from planned ones (see the module
 ///    docs).
@@ -695,7 +701,11 @@ pub fn apply(
                         instance: planned.instance.clone(),
                         inputs: resolved_inputs.clone(),
                     });
-                    match tool.ensure(&resolved_inputs, &token) {
+                    // Rule 4a: never run a replacement the approved plan
+                    // did not show.
+                    match refuse_unplanned_replacement(tool.as_ref(), planned, &resolved_inputs)
+                        .and_then(|()| tool.ensure(&resolved_inputs, &token))
+                    {
                         Ok(Ensured { outputs, changed }) => {
                             let outputs = fill_outputs(spec, &outputs);
                             let status = if changed {
@@ -854,6 +864,49 @@ pub fn apply(
         nodes: applied_nodes,
         outputs,
         blocked: fresh.blocked,
+    })
+}
+
+/// Rule 4a (milestone 3e, adversarial pass 3, 2026-09-29): `Ok(())` unless
+/// `ensure` would now delete an existing resource that the approved plan
+/// did not show as [`Action::Replace`].
+///
+/// Rule 2's drift check runs once, before any node executes, so it cannot
+/// see a resource invalidated *during* the run by an earlier node -- Apple
+/// invalidates a profile when a capability is enabled on its App ID, and
+/// Sample's capability nodes run before its profile nodes. Such a profile
+/// planned `NoOp` (it was `ACTIVE`), and `apply` calls `ensure` on a `NoOp`
+/// instance too, so `appstore.profile.ensure` would delete and recreate it
+/// with `Plan::replacing` empty. Asking [`Tool::replaces`] here closes that:
+/// the instance fails with [`ToolErrorKind::Conflict`], nothing is deleted,
+/// and a re-run plans the `Replace` for an approver to see. A tool that
+/// never replaces anything keeps [`Tool::replaces`]' default `false`, so
+/// this costs it nothing; `appstore.profile.ensure` pays one more
+/// read-only resolve per instance. What remains is the window between this
+/// call and `ensure`'s own re-resolve, the same one every read-then-write
+/// has.
+///
+/// # Errors
+///
+/// [`ToolErrorKind::Conflict`] for an unplanned replacement, or whatever
+/// [`Tool::replaces`] itself returns.
+fn refuse_unplanned_replacement(
+    tool: &dyn Tool,
+    planned: &PlannedNode,
+    inputs: &Inputs,
+) -> Result<(), ToolError> {
+    if planned.action == Action::Replace || !tool.replaces(inputs)? {
+        return Ok(());
+    }
+    Err(ToolError {
+        kind: ToolErrorKind::Conflict,
+        message: format!(
+            "ensure would now delete the existing resource at this node's key and create a \
+             fresh one, but the approved plan planned {:?} here, not Replace: it changed \
+             during this run, most likely through an earlier node. Nothing was deleted; \
+             re-run this document to plan the replacement and approve it",
+            planned.action
+        ),
     })
 }
 
