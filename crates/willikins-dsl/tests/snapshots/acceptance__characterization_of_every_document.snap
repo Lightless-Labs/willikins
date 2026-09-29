@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-dsl/tests/acceptance.rs
+assertion_line: 284
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
@@ -167,6 +168,20 @@ fingerprint: [{"name":"doppler","instance":null,"action":"create","outputs":[["p
 === workflows/fixtures/acknowledgement-default.yaml ===
 CHECK ERRORS:
 - kind=AcknowledgementDefault display=input `m7_bootstrap_done`: an operator acknowledgement input may not have a default json={"kind":"AcknowledgementDefault","input":"m7_bootstrap_done"}
+
+=== workflows/fixtures/acknowledgement-gate-resume.yaml ===
+WARNINGS:
+TYPES:
+independent.template: TemplateSource
+independent.value: Text
+gate.step: Text
+gate.acknowledged: OperatorAcknowledgement
+downstream.template: TemplateSource
+downstream.value: Text
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"acknowledgement-gate-resume","nodes":[{"name":"independent","instance":null,"tool":"template.render","action":"compute","inputs":{"template":{"type":"TemplateSource","list":false,"state":"known","value":"{{ value }}"},"value":{"type":"Text","list":false,"state":"known","value":"applies regardless of the gate"}},"outputs":{"rendered":{"type":"Text","list":false,"state":"known","value":"applies regardless of the gate"}}},{"name":"gate","instance":null,"tool":"operator.acknowledge","action":"compute","inputs":{"step":{"type":"Text","list":false,"state":"known","value":"Do the manual step this fixture names"},"acknowledged":{"type":"OperatorAcknowledgement","list":false,"state":"known","value":"done"}},"outputs":{"step":{"type":"Text","list":false,"state":"known","value":"Do the manual step this fixture names"}}},{"name":"downstream","instance":null,"tool":"template.render","action":"compute","inputs":{"template":{"type":"TemplateSource","list":false,"state":"known","value":"{{ value }}"},"value":{"type":"Text","list":false,"state":"known","value":"Do the manual step this fixture names"}},"outputs":{"rendered":{"type":"Text","list":false,"state":"known","value":"Do the manual step this fixture names"}}}],"outputs":{},"class":"reversible","requires_approval":false}
+fingerprint: [{"name":"independent","instance":null,"action":"compute","outputs":[["rendered","applies regardless of the gate"]]},{"name":"gate","instance":null,"action":"compute","outputs":[["step","Do the manual step this fixture names"]]},{"name":"downstream","instance":null,"action":"compute","outputs":[["rendered","Do the manual step this fixture names"]]}]
 
 === workflows/fixtures/acknowledgement-literal.yaml ===
 CHECK ERRORS:

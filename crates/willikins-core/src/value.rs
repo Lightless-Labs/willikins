@@ -72,8 +72,15 @@ static OPERATOR_ACKNOWLEDGEMENT_EXAMPLE: std::sync::LazyLock<
 /// `awaiting` field; `plan` uses it to resolve an unsupplied one to
 /// [`Value::unknown`] instead of failing the plan. `None` (an unregistered
 /// name) and every other registered type both read `false`.
+///
+/// `pub`, not `pub(crate)`: `willikins-server`'s `Butler::apply` (a
+/// different crate) needs this same test to rebuild a plan's resolved
+/// inputs from the journal (`resolve_recorded_inputs`) the same way
+/// `plan`'s own `Binding::Input` arm does -- see that function's own doc,
+/// and the task B2 addendum in
+/// `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.
 #[must_use]
-pub(crate) fn is_operator_acknowledgement(registry: &TypeRegistry, name: &TypeName) -> bool {
+pub fn is_operator_acknowledgement(registry: &TypeRegistry, name: &TypeName) -> bool {
     registry.type_matches(name, &*OPERATOR_ACKNOWLEDGEMENT_EXAMPLE) == Some(true)
 }
 

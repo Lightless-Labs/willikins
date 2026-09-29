@@ -35,6 +35,15 @@
 //! test). A value that no longer parses (which cannot happen for a
 //! document whose hash still matches, but is checked rather than assumed)
 //! refuses with [`ButlerError::RecordedInputUnreadable`], never a panic.
+//!
+//! One declared input is deliberately absent from that record even for a
+//! document whose hash matches: an unsupplied
+//! `willikins_types::OperatorAcknowledgement` input (G3, decision (j)
+//! point 6) is never in `PlanRecord.inputs` at all, by `describe`'s own
+//! design. [`resolve_recorded_inputs`] recognises this one case (by the
+//! registry's own `TypeId` test, [`willikins_core::value::is_operator_acknowledgement`],
+//! never by name) and leaves it out of the resolved map too, instead of
+//! refusing -- task B2's fix, `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -45,7 +54,7 @@ use indexmap::IndexMap;
 use willikins_core::describe::PartialInputs;
 use willikins_core::{
     Applied, ApplyError, Approval, Catalog, Checked, InputName, PlanError, ToolError,
-    ToolErrorKind, ToolName, TypeRef, Value,
+    ToolErrorKind, ToolName, TypeRef, TypeRegistry, Value,
 };
 use willikins_journal::{
     Append, ApplyRefusedReason, ApprovalState, Clock, Entry, Event, Journal, PlanId, PlanRecord,
@@ -844,29 +853,30 @@ impl Butler {
             }
         };
 
-        let resolved_inputs = match resolve_recorded_inputs(&checked_now, &record.inputs) {
-            Ok(inputs) => inputs,
-            Err(error) => {
-                // Its own reason since adversarial pass 2. It used to be
-                // journaled as `PlanFailed { error_kind: "Unavailable" }`,
-                // naming a `PlanError` kind that does not exist -- nothing
-                // planned at all, and the fault is in the record, not the
-                // provider.
-                let input = match &error {
-                    ButlerError::RecordedInputUnreadable { input, .. } => Some(input.clone()),
-                    // `resolve_recorded_inputs`'s other failure is the
-                    // whole recorded `inputs` payload being unreadable
-                    // JSON, which names no single input.
-                    _ => None,
-                };
-                self.refuse_apply(
-                    plan_id,
-                    principal,
-                    ApplyRefusedReason::RecordedInputUnreadable { input },
-                );
-                return Err(error);
-            }
-        };
+        let resolved_inputs =
+            match resolve_recorded_inputs(&checked_now, &record.inputs, self.catalog.registry()) {
+                Ok(inputs) => inputs,
+                Err(error) => {
+                    // Its own reason since adversarial pass 2. It used to be
+                    // journaled as `PlanFailed { error_kind: "Unavailable" }`,
+                    // naming a `PlanError` kind that does not exist -- nothing
+                    // planned at all, and the fault is in the record, not the
+                    // provider.
+                    let input = match &error {
+                        ButlerError::RecordedInputUnreadable { input, .. } => Some(input.clone()),
+                        // `resolve_recorded_inputs`'s other failure is the
+                        // whole recorded `inputs` payload being unreadable
+                        // JSON, which names no single input.
+                        _ => None,
+                    };
+                    self.refuse_apply(
+                        plan_id,
+                        principal,
+                        ApplyRefusedReason::RecordedInputUnreadable { input },
+                    );
+                    return Err(error);
+                }
+            };
 
         let fresh = match willikins_core::plan(&checked_now, &resolved_inputs, &self.catalog) {
             Ok(fresh) => fresh,
@@ -1182,10 +1192,23 @@ fn elapsed_between(
 /// recorded value is missing or no longer parses against its declared
 /// type -- refused rather than panicking, though this cannot happen for a
 /// document whose hash still matches the one `plan` recorded (the caller
-/// checks that first, via `Butler::reload_and_check`).
+/// checks that first, via `Butler::reload_and_check`) -- with one
+/// deliberate exception: G3, decision (j) point 6
+/// (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`)'s own design
+/// never records an unsupplied `willikins_types::OperatorAcknowledgement`
+/// input at all (`describe`'s own `resolved` map omits it, so
+/// `PlanRecorded.inputs` never carries it either). A missing entry for an
+/// input of that type is not an unreadable record; it is left out of the
+/// resolved map here too, mirroring `plan.rs`'s own `Binding::Input` arm,
+/// so `willikins_core::plan`'s identical fallback to `Value::unknown`
+/// fires again exactly as it did on the plan's original `plan` call --
+/// letting `apply` start the blocked run decision (j) asks for, instead
+/// of refusing outright (task B2's own defect,
+/// `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`).
 fn resolve_recorded_inputs(
     checked: &Checked,
     inputs: &Redacted<IndexMap<InputName, Value>>,
+    registry: &TypeRegistry,
 ) -> Result<IndexMap<InputName, Value>, ButlerError> {
     let raw: IndexMap<InputName, serde_json::Value> =
         serde_json::from_value(inputs.as_json().clone()).map_err(|error| ButlerError::Journal {
@@ -1194,15 +1217,21 @@ fn resolve_recorded_inputs(
 
     let mut resolved = IndexMap::new();
     for (name, spec) in &checked.workflow.inputs {
-        let entry = raw
-            .get(name)
-            .ok_or_else(|| ButlerError::RecordedInputUnreadable {
-                input: name.clone(),
-                error: ParseError::new(
-                    "Value",
-                    format!("the plan recorded no value for input `{name}`"),
-                ),
-            })?;
+        let entry = match raw.get(name) {
+            Some(entry) => entry,
+            None if willikins_core::value::is_operator_acknowledgement(registry, &spec.ty.name) => {
+                continue;
+            }
+            None => {
+                return Err(ButlerError::RecordedInputUnreadable {
+                    input: name.clone(),
+                    error: ParseError::new(
+                        "Value",
+                        format!("the plan recorded no value for input `{name}`"),
+                    ),
+                });
+            }
+        };
         let value = parse_recorded_value(&spec.ty, entry).map_err(|error| {
             ButlerError::RecordedInputUnreadable {
                 input: name.clone(),

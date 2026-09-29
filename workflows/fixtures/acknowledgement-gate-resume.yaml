@@ -1,0 +1,37 @@
+# Task B2 (docs/plans/2026-09-27-milestone-3e-new-ios-app.md, T3c's
+# follow-up addendum): the positive fixture proving decision (j)'s "run,
+# get blocked, re-run" through a real `Butler::apply`, its journal, and
+# MCP `run_status` -- not only at the render/unit level (G1-G3's own
+# honest limits) or through the fake catalog's `plan` alone
+# (`crates/willikins-core/tests/operator_acknowledge_document.rs`).
+#
+# `independent` has no data edge to `gate` and must apply on the very
+# first (blocked) run; `downstream` binds `steps.gate.step` and must be
+# `Skip`ped on that run, then `Compute`d once `gate_done` is supplied and
+# the document is re-run.
+name: acknowledgement-gate-resume
+description: >-
+  An acknowledgement gate blocking one downstream node while an
+  independent node still applies -- proves the run blocks rather than
+  fails, and resumes and converges once the operator supplies the
+  acknowledgement.
+inputs:
+  gate_done:
+    type: OperatorAcknowledgement
+    description: "The manual step this fixture names has been done."
+steps:
+  independent:
+    tool: template.render
+    with:
+      template: "{{ value }}"
+      value: "applies regardless of the gate"
+  gate:
+    tool: operator.acknowledge
+    with:
+      step: "Do the manual step this fixture names"
+      acknowledged: ${{ inputs.gate_done }}
+  downstream:
+    tool: template.render
+    with:
+      template: "{{ value }}"
+      value: ${{ steps.gate.step }}
