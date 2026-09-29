@@ -328,9 +328,22 @@ impl AppstoreClient {
     /// page could put a capability that is already enabled past the page
     /// boundary, and the caller (`AppstoreBundleIdCapabilityEnsure::observe`)
     /// would read `Absent` for something that exists -- then `ensure`
-    /// would `POST` a duplicate whose result is undocumented. So this asks
-    /// for [`PAGE_LIMIT`] rows and follows `links.next` until Apple stops
-    /// sending one, exactly like [`Self::list_bundle_ids`].
+    /// would `POST` a duplicate whose result is undocumented. So this
+    /// follows `links.next` until Apple stops sending one, exactly like
+    /// [`Self::list_bundle_ids`] -- **with one difference, live-confirmed
+    /// 2026-09-29:** the App Store Connect `OpenAPI` description 4.5 lists
+    /// `limit` (maximum 200) on this path, but a live `GET
+    /// .../bundleIdCapabilities?limit=200` answers `400`,
+    /// `errors[].code` `PARAMETER_ERROR.ILLEGAL` ("A given parameter is
+    /// not allowed for this request"); the same `GET` with no query
+    /// answers `200`
+    /// (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`, "the
+    /// diagnosis addendum"). So, unlike every other paginated call this
+    /// client makes, the **first** request here carries no query string
+    /// at all -- [`PAGE_LIMIT`] is never sent on it. Only a later page,
+    /// reached through `links.next`, carries a query, and only because
+    /// Apple's own `next` URL does; Apple's default page size for this
+    /// path is otherwise unverified (a genuine gap, not assumed away).
     ///
     /// `links.next` is an absolute URL. Only its query string is used,
     /// re-attached to this client's own
@@ -349,7 +362,12 @@ impl AppstoreClient {
         id: &AppleBundleIdId,
     ) -> Result<Vec<CapabilityResource>, ProviderError> {
         let own_path = format!("/v1/bundleIds/{id}/bundleIdCapabilities");
-        let mut path = format!("{own_path}?limit={PAGE_LIMIT}");
+        // Live-confirmed 2026-09-29: this path answers `400
+        // PARAMETER_ERROR.ILLEGAL` for `?limit=200`, unlike every other
+        // paginated call this client makes -- so, deliberately, the first
+        // request carries no query string at all. Only a later page,
+        // reached through `links.next` below, ever carries one.
+        let mut path = own_path.clone();
         let mut rows: Vec<CapabilityResource> = Vec::new();
         for _ in 0..MAX_PAGES {
             let response: CapabilityListResponse = self.http.get(&path)?;
