@@ -165,7 +165,7 @@ pub use appstore::{
     AppleProfileName, AppleProfileType, AppleSigningKey,
 };
 pub use buildkite::{
-    BuildkiteClusterId, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug,
+    BuildkiteClusterId, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, BuildkiteToken,
 };
 pub use description::Description;
 pub use doppler::{
@@ -216,6 +216,7 @@ registry::domain_types! {
     BuildkitePipelineSlug,
     BuildkiteClusterId,
     BuildkiteClusterName,
+    BuildkiteToken,
     WorkflowName,
     Description,
     SigNozIngestionKeyName,

@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-tools/src/lib.rs
-assertion_line: 103
+assertion_line: 110
 expression: specs
 ---
 [
@@ -164,6 +164,24 @@ expression: specs
     },
     "outputs": {
       "value": "GitHubToken"
+    },
+    "key": [],
+    "class": "reversible",
+    "pure": true
+  },
+  {
+    "name": "buildkite.token.parse",
+    "description": "Parse a resolved secret as a Buildkite API access token.",
+    "inputs": {
+      "value": {
+        "ty": {
+          "kind": "any_secret"
+        },
+        "required": true
+      }
+    },
+    "outputs": {
+      "value": "BuildkiteToken"
     },
     "key": [],
     "class": "reversible",

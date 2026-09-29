@@ -382,15 +382,17 @@ fn resolve_mod_file(parent_file: &Path, mod_name: &str) -> PathBuf {
 /// One crate's set of exempt files: each a relative path from the
 /// crate's `src/` directory (e.g. `credential.rs`), paired with either
 /// the function names exempt inside it or `None` to exempt the whole
-/// file. Almost always zero or one entry; `willikins-types` has four
+/// file. Almost always zero or one entry; `willikins-types` has five
 /// (`secret.rs`'s `reveal_for_transform`, `appstore.rs`'s hand-written
 /// `expose`/`eq`/`reveal_for_signing`, `doppler.rs`'s own
 /// `reveal_for_transform` -- `DopplerSecretValue`'s second token-less
 /// exception, mirroring `OpaqueSecret`'s until `doppler.secret.get`
-/// migrates to emit `OpaqueSecret` instead -- and `github.rs`'s own
-/// `reveal_for_authorization`, `GitHubToken`'s fourth and narrowest)
-/// because it holds two independently hand-written secret types and two
-/// derive-generated ones that each need the same narrow escape hatch.
+/// migrates to emit `OpaqueSecret` instead -- `github.rs`'s own
+/// `reveal_for_authorization`, `GitHubToken`'s fourth token-less
+/// exception -- and `buildkite.rs`'s own `reveal_for_authorization`,
+/// `BuildkiteToken`'s fifth, scoped exactly as narrowly) because it holds
+/// several secret types, hand-written and derive-generated alike, that
+/// each need the same narrow escape hatch.
 type Exemptions<'a> = &'a [(PathBuf, Option<&'static [&'static str]>)];
 
 /// Resolve `path`'s [`Exemption`] against `exemptions`: the first entry
@@ -537,6 +539,10 @@ fn every_expose_secret_call_site_is_the_codegen_emitter_authorize_a_test_item_or
                 ),
                 (
                     PathBuf::from("github.rs"),
+                    Some(&["reveal_for_authorization"][..]),
+                ),
+                (
+                    PathBuf::from("buildkite.rs"),
                     Some(&["reveal_for_authorization"][..]),
                 ),
             ],

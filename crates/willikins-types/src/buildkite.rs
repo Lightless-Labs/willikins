@@ -1,5 +1,6 @@
 //! Buildkite domain types: organisation, pipeline slug, cluster identity,
-//! and a human-written cluster lookup name.
+//! a human-written cluster lookup name, and (milestone 3e task K1) a
+//! secret-typed API access token.
 //!
 //! See `docs/plans/2026-09-16-milestone-3a-buildkite-and-the-real-workflow.md`
 //! ("The type table") and `docs/research/2026-09-16-m3a-buildkite.md` for
@@ -195,9 +196,91 @@ impl schemars::JsonSchema for BuildkiteClusterName {
 
 crate::impl_domain_object_non_secret!(BuildkiteClusterName);
 
+/// A Buildkite API access token (`bkua_`), the one token family
+/// `willikins-providers-buildkite` authenticates as. Secret.
+///
+/// This is the graph-port counterpart of
+/// `willikins_providers_buildkite::CREDENTIAL_VAR`'s own value -- the
+/// design addendum "Credentials are ports, resolvers are nodes"
+/// (`docs/plans/2026-09-11-willikins-design.md`, 2026-09-21) applied to
+/// Buildkite the same way it already applies to GitHub
+/// ([`crate::GitHubToken`]) and to App Store Connect
+/// (`AppleIssuerId`/`AppleKeyId`/`AppleSigningKey`): a document may bind
+/// `buildkite.cluster.get`'s and `buildkite.pipeline.ensure`'s optional
+/// `token` port to a resolver chain ending here (`doppler.secret.get`
+/// into `buildkite.token.parse`, say), rather than relying solely on
+/// `WILLIKINS_BUILDKITE_TOKEN` in the process environment.
+///
+/// The pattern mirrors `willikins_providers_buildkite::CREDENTIAL_PATTERN`
+/// exactly (`^bkua_[A-Za-z0-9_-]{20,}$`), duplicated rather than
+/// imported: a provider crate depends on `willikins-types`, never the
+/// reverse, so a domain type in this crate cannot name a provider
+/// crate's constant. Unlike [`crate::GitHubToken`]'s own pattern (which
+/// has no minimum length, because GitHub's own `CREDENTIAL_PATTERN`
+/// doesn't either), this one keeps `CREDENTIAL_PATTERN`'s `{20,}` floor:
+/// that crate's own doc explains the floor is a deliberate choice against
+/// Buildkite's masked token bodies, not an arbitrary gap, so the port and
+/// the environment variable should accept the same shape. That floor
+/// makes a real value of this type exactly what
+/// `secret_literal_guard.rs`'s `BUILDKITE_TOKEN` pattern looks for (it
+/// uses the same `{20,}`), so -- like
+/// [`crate::doppler::DopplerServiceToken`]'s own token -- this type's
+/// `example` is `concat!`-assembled rather than a plain string literal
+/// (the derive's `example` key accepts any constant expression for
+/// exactly this reason: see `willikins-derive`'s own
+/// `attrs::DomainAttrs::example` doc comment). No single literal in this
+/// file spells a real-shaped Buildkite token contiguously.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "bkua_[A-Za-z0-9_-]{20,}",
+    secret,
+    description = "A Buildkite API access token (`bkua_`).",
+    example = concat!("bkua_", "exampleexampleexample")
+)]
+pub struct BuildkiteToken(secrecy::SecretString);
+
+impl BuildkiteToken {
+    /// Apply `f` to this token's raw bytes, producing whatever `f`
+    /// produces -- typically a `willikins_providers_http::Credential`
+    /// built from it via `Credential::from_bearer_token`.
+    ///
+    /// # Why this exists, and why it is a fifth, equally narrow,
+    /// token-less exception
+    ///
+    /// Every other secret domain type's bytes are reachable only through
+    /// the derive-generated `expose(&SinkToken)`, and a
+    /// [`crate::SinkToken`] can only be constructed inside the apply
+    /// executor. That is exactly right for a tool that *does something*
+    /// with a secret from inside `Tool::ensure`. But
+    /// `buildkite.cluster.get` and `buildkite.pipeline.ensure` both
+    /// authorize their `Tool::read` too -- a document's bound `token`
+    /// port must be usable to authenticate the very `GET` that `plan`
+    /// depends on, and `read` never receives a `SinkToken` (see
+    /// [`crate::GitHubToken::reveal_for_authorization`], which this
+    /// mirrors exactly). Scoped exactly as narrowly as that exception:
+    /// using the token's bytes to build one outbound `Authorization`
+    /// header, never to move them anywhere a document or an agent could
+    /// read them back.
+    // The fifth production call site of `expose_secret` outside the
+    // derive's own codegen -- named in `clippy.toml`'s
+    // `disallowed-methods` reason and walked by
+    // `crates/willikins-core/tests/expose_secret_guard.rs`, which exempts
+    // exactly this function in this file.
+    #[allow(clippy::disallowed_methods)]
+    pub fn reveal_for_authorization<T>(&self, f: impl FnOnce(&str) -> T) -> T {
+        f(secrecy::ExposeSecret::expose_secret(&self.0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A valid [`BuildkiteToken`], assembled the same way as the type's
+    /// own `#[domain(example = ...)]` value: any single literal spelling
+    /// this contiguously is exactly what `secret_literal_guard.rs`'s
+    /// `BUILDKITE_TOKEN` pattern looks for.
+    const EXAMPLE_TOKEN: &str = concat!("bkua_", "exampleexampleexample");
 
     // -------------------------------------------------------------
     // BuildkiteOrg
@@ -465,6 +548,54 @@ mod tests {
     }
 
     // -------------------------------------------------------------
+    // BuildkiteToken
+    // -------------------------------------------------------------
+
+    #[test]
+    fn buildkite_token_accepts_the_api_access_prefix() {
+        assert!(BuildkiteToken::parse(EXAMPLE_TOKEN).is_ok());
+    }
+
+    #[test]
+    fn buildkite_token_rejects_an_agent_token_prefix() {
+        assert!(BuildkiteToken::parse(&format!("bkct_{}", "a".repeat(20))).is_err());
+    }
+
+    #[test]
+    fn buildkite_token_rejects_a_body_one_short_of_the_floor() {
+        assert!(BuildkiteToken::parse(&format!("bkua_{}", "a".repeat(19))).is_err());
+    }
+
+    #[test]
+    fn buildkite_token_accepts_exactly_the_floor() {
+        assert!(BuildkiteToken::parse(&format!("bkua_{}", "a".repeat(20))).is_ok());
+    }
+
+    #[test]
+    fn buildkite_token_rejects_an_empty_body() {
+        assert!(BuildkiteToken::parse("bkua_").is_err());
+    }
+
+    #[test]
+    fn buildkite_token_is_secret() {
+        const { assert!(BuildkiteToken::IS_SECRET) };
+    }
+
+    #[test]
+    fn buildkite_token_display_and_debug_are_redacted() {
+        let token = BuildkiteToken::parse(EXAMPLE_TOKEN).unwrap();
+        assert_eq!(format!("{token}"), "[REDACTED BuildkiteToken]");
+        assert_eq!(format!("{token:?}"), "[REDACTED BuildkiteToken]");
+    }
+
+    #[test]
+    fn buildkite_token_reveal_for_authorization_reaches_the_raw_bytes() {
+        let token = BuildkiteToken::parse(EXAMPLE_TOKEN).unwrap();
+        let revealed = token.reveal_for_authorization(str::to_string);
+        assert_eq!(revealed, EXAMPLE_TOKEN);
+    }
+
+    // -------------------------------------------------------------
     // Catalog examples
     // -------------------------------------------------------------
 
@@ -474,5 +605,6 @@ mod tests {
         crate::assert_example_parses::<BuildkitePipelineSlug>();
         crate::assert_example_parses::<BuildkiteClusterId>();
         crate::assert_example_parses::<BuildkiteClusterName>();
+        crate::assert_example_parses::<BuildkiteToken>();
     }
 }

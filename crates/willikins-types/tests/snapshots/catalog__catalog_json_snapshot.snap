@@ -426,6 +426,22 @@ expression: redacted
     }
   },
   {
+    "name": "BuildkiteToken",
+    "secret": true,
+    "description": "A Buildkite API access token (`bkua_`).",
+    "example": "[ELIDED SECRET EXAMPLE]",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "BuildkiteToken",
+      "description": "A Buildkite API access token (`bkua_`).",
+      "type": "string",
+      "examples": [
+        "[ELIDED SECRET EXAMPLE]"
+      ],
+      "pattern": "^(?:bkua_[A-Za-z0-9_-]{20,})$"
+    }
+  },
+  {
     "name": "WorkflowName",
     "secret": false,
     "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
