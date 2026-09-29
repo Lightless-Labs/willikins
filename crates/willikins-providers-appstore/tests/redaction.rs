@@ -6,6 +6,13 @@
 //! proves the *derived* secret -- the JWT this crate mints from it --
 //! is held to the same standard end to end.
 
+// What a live harness STOP may say about a failed Apple call: status,
+// `errors[].code` and `errors[].title`, never `detail`. Included here so
+// its tests run in every gate, not only under the `live-tests` feature.
+#[path = "support/apple_error_report.rs"]
+#[allow(dead_code)] // the live harness uses every item; this binary runs only the tests
+mod apple_error_report;
+
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{Observation, PortName, SinkToken, Tool, Value};
