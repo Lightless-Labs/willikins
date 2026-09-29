@@ -332,8 +332,9 @@ rather than red-then-green in separate steps, since the `From` impl is what the 
 to compile at all (the missing impl is a compile error, not a runtime red); the tests were run once,
 immediately after, never against a stub.
 
-**Addendum:** 2026-09-29 (implementer) — **T3c landed, two commits** (`98bad49`,
-next commit). Task T3 as amended by decisions 1, 2 and 6.
+**Addendum:** 2026-09-29 (implementer) — **T3c landed, four commits** (`98bad49`,
+`5af1503`, `7337276` this addendum's own first version, `16bef8c` a review-driven
+follow-up). Task T3 as amended by decisions 1, 2 and 6.
 
 Commit 1 (`98bad49`): the two Sample gates T3 needed and the plan left undesigned
 ("Sample, for T3 (not designed here)") — `appstore.app.get` (M1, a leaf: `GET
@@ -437,6 +438,53 @@ after task 3") is not part of this commit — it needs a working sandbox
 Buildkite token (still `401` as of the plan's pre-flight) and is explicitly the
 next lane's job. The live capability cycle's own gaps (verify items) are
 unaffected by this task. Plan not marked Completed.
+
+**Follow-up commit (`16bef8c`), after a review pass:**
+
+- **A real engine defect found, T3-blocking for the acknowledgement path
+  specifically.** `crates/willikins-server/src/butler.rs::resolve_recorded_inputs`
+  (the `for (name, spec) in &checked.workflow.inputs` loop) requires **every**
+  declared workflow input to have an entry in the journal's recorded
+  `PlanRecorded.inputs` JSON, or refuses with `ButlerError::RecordedInputUnreadable`.
+  But G3's own design (decision (j) point 6, "the input stays absent from the
+  resolved map") deliberately never records an unsupplied `OperatorAcknowledgement`
+  input there at all. So **any** document with an acknowledgement gate left unmet
+  on the very run that should exercise decision 6's "run, get blocked, re-run"
+  fails instead: exit 1, "recorded input `<name>` could not be read back: the
+  plan recorded no value for input `<name>`" — never a blocked run. Reproduced
+  live through the built binary (`crates/willikins-cli/tests/sample_apply_blocked_redaction.rs`'s
+  own module doc has the exact repro: remove any of the four `--input
+  *_done=done` lines from that test and it fails this way instead of blocking).
+  This is not specific to Sample or to this task — it is `willikins-server`'s
+  own surface, and it blocks **every** caller that rebuilds inputs from the
+  journal: one-shot `apply --approve`, `apply --plan-id`, and (unverified, same
+  code path) MCP's `apply`. The bounded fix: in `resolve_recorded_inputs`, a
+  missing entry for an input whose declared type is `OperatorAcknowledgement`
+  (`crate::value::is_operator_acknowledgement`, never by name) should leave
+  that input out of the resolved map entirely, mirroring `plan.rs`'s own
+  `Binding::Input` arm — but not made here: it is G3's engine surface, and per
+  this repo's own process it needs its own attack pass, not a same-session
+  patch. Filed for the coordinator to dispatch, not worked around.
+- Test assertions tightened per review: run 2's `Created` set is asserted
+  exactly equal to the six newly-unblocked nodes; `app_app_groups`'s own
+  `holds_back` is asserted exactly `[app_profile, app_profile_to_doppler]`
+  (the ordering claim the whole design rests on); each acknowledgement gate's
+  `awaiting_inputs` is asserted exactly its own `*_done` input; run 3 is
+  asserted to create nothing **except** the three `doppler.secret.set` nodes,
+  which — by that tool's own documented design, a write-only sink that can
+  never compare against what is already stored — report `changed: true` on
+  every apply, not only the first. Any future dry-run harness should expect
+  the same: step 5's "every node `Unchanged`" does not hold for those three.
+- Gap 2 (above) re-diagnosed from "the type is too narrow" to "verify the real
+  slug" — see the corrected text above and a new verify item 12.
+- A new journal-level test, `crates/willikins-cli/tests/sample_apply_blocked_redaction.rs`:
+  a real `willikins apply --approve` binary run, the two observed gates
+  deliberately unmet, the four acknowledgements supplied (to avoid the defect
+  above, which is not what this test means to prove) — exit **3**, the
+  `blocked:` section naming `app_record`/`app_app_groups`/`nse_app_groups`/
+  `widgets_app_groups`, "re-run this document once done", and neither stdout,
+  stderr nor the journal file ever carrying the signing key's PEM marker or a
+  fake profile's plaintext content.
 
 ## Goal
 
