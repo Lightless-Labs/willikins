@@ -4,6 +4,11 @@
 //! `willikins-providers-buildkite`, pins the two equal) and the same four
 //! observations: `Absent`, `Present`, `Foreign`, and both `Mismatch`
 //! arms (`repo`, then `cluster`).
+//!
+//! Milestone 3e task K1 gave the live tool an optional, secret-typed
+//! `token` port; this fake carries the same port for spec parity but
+//! never inspects its value -- see `github.repo.ensure`'s fake twin for
+//! the identical precedent.
 
 use std::sync::{Arc, Mutex};
 
@@ -48,6 +53,7 @@ impl FakeBuildkitePipelineEnsure {
         inputs.insert(port("slug"), exact("BuildkitePipelineSlug", true));
         inputs.insert(port("repo"), exact("GitHubRepo", true));
         inputs.insert(port("cluster"), exact("BuildkiteClusterId", true));
+        inputs.insert(port("token"), exact("BuildkiteToken", false));
         let mut outputs = IndexMap::new();
         outputs.insert(port("slug"), scalar("BuildkitePipelineSlug"));
         outputs.insert(port("url"), scalar("HttpsUrl"));

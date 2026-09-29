@@ -374,3 +374,96 @@ fn cluster_get_agrees_on_not_found_and_on_an_ambiguous_name() {
         assert_eq!(live.message, fake.message, "{case}: error messages differ");
     }
 }
+
+// ---------------------------------------------------------------------
+// Milestone 3e task K1: a document that binds the optional `token` port
+// still agrees between the fake and the live tool.
+// ---------------------------------------------------------------------
+
+/// A present pipeline, with the `token` port bound, agrees between the
+/// fake and the live tool. The fake tool ignores the port's value
+/// entirely (it has no real credential to check), so this proves the
+/// *shape* of the two sides' answers still matches with the port bound --
+/// the live-side authorization proof itself lives in
+/// `pipeline_ensure_mock.rs`'s
+/// `read_authorizes_with_the_bound_token_port_not_the_default_credential`.
+#[test]
+fn pipeline_ensure_agrees_on_present_with_the_token_port_bound() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(200)
+        .with_body(pipeline_body(
+            Some(MANAGED_DESCRIPTION),
+            &ssh_repository_url(&repo()),
+            CLUSTER_ID,
+        ))
+        .create();
+
+    let mut bound_inputs = pipeline_inputs();
+    bound_inputs.insert(
+        port("token"),
+        Value::known(
+            willikins_types::BuildkiteToken::parse(concat!("bkua_", "theboundtokenexampleexample"))
+                .unwrap(),
+        ),
+    );
+
+    let live = live_pipeline_tool(provider.url())
+        .read(&bound_inputs)
+        .unwrap_or_else(|err| panic!("live tool errored: {err:?}"));
+
+    let state = FakeState::new().with_buildkite_pipeline(
+        &org(),
+        &slug(),
+        BuildkitePipelineRecord {
+            repository: ssh_repository_url(&repo()),
+            cluster_id: CLUSTER_ID.to_string(),
+            ours: true,
+        },
+    );
+    let fake = FakeBuildkitePipelineEnsure::new(Arc::new(Mutex::new(state)))
+        .read(&bound_inputs)
+        .unwrap_or_else(|err| panic!("fake tool errored: {err:?}"));
+
+    assert_eq!(shape(&live), shape(&fake));
+    assert!(matches!(live, Observation::Present(_)));
+}
+
+/// Same proof for `buildkite.cluster.get`'s own `token` port.
+#[test]
+fn cluster_get_agrees_on_a_single_match_with_the_token_port_bound() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v2/organizations/willikins-test/clusters")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!([{"id": CLUSTER_ID, "name": "Default cluster"}]).to_string())
+        .create();
+    let credential = Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+    let http = Http::new(provider.url(), Vec::new(), credential);
+
+    let mut bound_inputs = cluster_inputs();
+    bound_inputs.insert(
+        port("token"),
+        Value::known(
+            willikins_types::BuildkiteToken::parse(concat!("bkua_", "theboundtokenexampleexample"))
+                .unwrap(),
+        ),
+    );
+
+    let live = BuildkiteClusterGet::new(Arc::new(BuildkiteClient::new(http)))
+        .read(&bound_inputs)
+        .expect("the live tool resolves the cluster");
+
+    let state = FakeState::new().with_buildkite_cluster(&cluster_name(), CLUSTER_ID);
+    let fake = FakeBuildkiteClusterGet::new(Arc::new(Mutex::new(state)))
+        .read(&bound_inputs)
+        .expect("the fake tool resolves the cluster");
+
+    assert_eq!(shape(&live), shape(&fake));
+    assert_eq!(rendered(&live), rendered(&fake));
+}

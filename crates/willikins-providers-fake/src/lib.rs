@@ -24,8 +24,11 @@
 //! `github.token.parse`, the parse tool `github.repo.ensure`'s,
 //! `github.actions_secret.ensure`'s, and `github.repo.get`'s new optional
 //! `token` credential port binds to; milestone 3e task R3 added the gate
-//! `doppler.config.inheritable.gate`),
-//! so the catalog this crate produces holds thirty-four tools, in the
+//! `doppler.config.inheritable.gate`; milestone 3e task K1 added
+//! `buildkite.token.parse`, the parse tool `buildkite.cluster.get`'s and
+//! `buildkite.pipeline.ensure`'s new optional `token` credential port
+//! binds to, mirroring R2 exactly),
+//! so the catalog this crate produces holds thirty-five tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -82,6 +85,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(willikins_tools::AppleIssuerIdParse::new());
     insert!(willikins_tools::AppleKeyIdParse::new());
     insert!(willikins_tools::GitHubTokenParse::new());
+    insert!(willikins_tools::BuildkiteTokenParse::new());
     insert!(tools::GitHubRepoEnsure::new(state.clone()));
     insert!(tools::GitHubActionsSecretEnsure::new(state.clone()));
     insert!(tools::FakeGitHubRepoGet::new(state.clone()));
@@ -142,6 +146,7 @@ mod tests {
             "apple.issuer_id.parse",
             "apple.key_id.parse",
             "github.token.parse",
+            "buildkite.token.parse",
             "github.repo.ensure",
             "github.actions_secret.ensure",
             "github.repo.get",
@@ -172,7 +177,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 34);
+        assert_eq!(names.len(), 35);
     }
 
     #[test]

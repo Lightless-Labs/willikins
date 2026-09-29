@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
-assertion_line: 201
+assertion_line: 206
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -140,6 +140,24 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "name": "github.token.parse",
     "outputs": {
       "value": "GitHubToken"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Parse a resolved secret as a Buildkite API access token.",
+    "inputs": {
+      "value": {
+        "required": true,
+        "ty": {
+          "kind": "any_secret"
+        }
+      }
+    },
+    "key": [],
+    "name": "buildkite.token.parse",
+    "outputs": {
+      "value": "BuildkiteToken"
     },
     "pure": true
   },
@@ -578,6 +596,13 @@ expression: "catalog.list_tools_json()[\"tools\"]"
           "kind": "exact",
           "type": "BuildkiteOrg"
         }
+      },
+      "token": {
+        "required": false,
+        "ty": {
+          "kind": "exact",
+          "type": "BuildkiteToken"
+        }
       }
     },
     "key": [],
@@ -617,6 +642,13 @@ expression: "catalog.list_tools_json()[\"tools\"]"
         "ty": {
           "kind": "exact",
           "type": "BuildkitePipelineSlug"
+        }
+      },
+      "token": {
+        "required": false,
+        "ty": {
+          "kind": "exact",
+          "type": "BuildkiteToken"
         }
       }
     },

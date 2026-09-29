@@ -12,11 +12,41 @@
 //! module rests on, and
 //! `docs/plans/2026-09-16-milestone-3a-buildkite-and-the-real-workflow.md`'s
 //! trust boundaries 6, 7, and 8.
+//!
+//! # Buildkite credentials as ports (milestone 3e, task K1)
+//!
+//! Every tool in this crate is still built once, at catalog-construction
+//! time, from a [`BuildkiteClient`] that itself owns a [`Credential`]
+//! read from `WILLIKINS_BUILDKITE_TOKEN` ([`credential_from_env`]) --
+//! nothing about that changes, so every document and server invocation
+//! that predates this section keeps working exactly as it did.
+//!
+//! What is new: each of the two tools' `ToolSpec` now also declares an
+//! **optional** `token` port, [`willikins_types::BuildkiteToken`], the
+//! same "credentials are ports, resolvers are nodes" shape
+//! (`docs/plans/2026-09-11-willikins-design.md`, 2026-09-21 addendum)
+//! task R2 already gave `willikins-providers-github`'s three tools. A
+//! document that binds it (typically `doppler.secret.get` into
+//! `buildkite.token.parse`) gets a *fresh* [`BuildkiteClient`] built from
+//! that resolved token instead -- [`client_for_token`] mints it, exactly
+//! mirroring `willikins_providers_github::client::client_for_token`: it
+//! takes the default client and calls [`BuildkiteClient::with_credential`]
+//! (in turn [`Http::with_credential`]) to swap only the credential, never
+//! [`BUILDKITE_API_BASE_URL`] unconditionally, so a bound token still
+//! reaches whatever `base_url` the tool's own default client already
+//! carries (a mock server in a test, the real API in production). A
+//! document that does not bind `token` is unaffected:
+//! [`ScopedClient::default_for`] simply borrows the tool's own held
+//! client, exactly as before this addition. Optional, not required, on
+//! purpose: making it required would demand every existing document bind
+//! it, which is precisely what this task's own boundary rules out.
 
 use serde::{Deserialize, Serialize};
 
 use willikins_providers_http::{Credential, CredentialError, Http, ProviderError};
-use willikins_types::{BuildkiteClusterId, BuildkiteOrg, BuildkitePipelineSlug, GitHubRepo};
+use willikins_types::{
+    BuildkiteClusterId, BuildkiteOrg, BuildkitePipelineSlug, BuildkiteToken, GitHubRepo,
+};
 
 /// Buildkite's REST API base URL.
 pub const BUILDKITE_API_BASE_URL: &str = "https://api.buildkite.com";
@@ -168,6 +198,19 @@ impl BuildkiteClient {
         Self { http }
     }
 
+    /// Build a client identical to this one -- same route and headers --
+    /// except for its credential, which [`client_for_token`] uses so a
+    /// document-bound `token` port still reaches whatever `base_url` this
+    /// client was built against (a mock server in a test, the real API in
+    /// production), never [`BUILDKITE_API_BASE_URL`] unconditionally. See
+    /// [`Http::with_credential`].
+    #[must_use]
+    fn with_credential(&self, credential: Credential) -> Self {
+        Self {
+            http: self.http.with_credential(credential),
+        }
+    }
+
     /// `GET /v2/organizations/{org}/pipelines/{slug}`.
     ///
     /// # Errors
@@ -263,6 +306,73 @@ impl BuildkiteClient {
     }
 }
 
+/// The label a bound `token` port's minted [`Credential`] carries in its
+/// own redacted `Debug` -- distinct from [`CREDENTIAL_VAR`] on purpose: a
+/// 401 against a Doppler-sourced token must never point an operator at
+/// `WILLIKINS_BUILDKITE_TOKEN`, which this credential was never read
+/// from. Mirrors `willikins_providers_github::client`'s own
+/// `BOUND_TOKEN_LABEL`.
+const BOUND_TOKEN_LABEL: &str = "BuildkiteToken port";
+
+/// Build a fresh [`BuildkiteClient`] from a document-bound `token` port,
+/// minting a [`Credential`] straight from its resolved bytes via
+/// [`BuildkiteToken::reveal_for_authorization`] -- the only place this
+/// crate reads them -- while keeping `default`'s own route (base URL and
+/// headers): [`Http::with_credential`] swaps only the credential, so this
+/// reaches whatever `default` was built against (a mock server in a
+/// test, the real API in production), never [`BUILDKITE_API_BASE_URL`]
+/// unconditionally. See this module's own "Buildkite credentials as
+/// ports" doc section.
+pub(crate) fn client_for_token(
+    default: &BuildkiteClient,
+    token: &BuildkiteToken,
+) -> BuildkiteClient {
+    let credential = token.reveal_for_authorization(|bytes| {
+        Credential::from_bearer_token(BOUND_TOKEN_LABEL, bytes.to_owned())
+    });
+    default.with_credential(credential)
+}
+
+/// Either the tool's own held [`BuildkiteClient`] (built once, from
+/// `WILLIKINS_BUILDKITE_TOKEN`, at catalog-construction time -- the
+/// unbound-port, execution-context case) or a freshly minted one built
+/// from a document-bound `token` port. `Deref`s to [`BuildkiteClient`] so
+/// every existing `self.client.method(...)` call site becomes
+/// `client.method(...)` regardless of which case applies.
+pub(crate) enum ScopedClient<'a> {
+    /// No `token` port was bound: use the client this tool already holds.
+    Default(&'a BuildkiteClient),
+    /// A `token` port was bound: use the client [`client_for_token`] just
+    /// built from it.
+    Bound(BuildkiteClient),
+}
+
+impl<'a> ScopedClient<'a> {
+    /// Choose between `default` and a client built from `token`, exactly
+    /// as this module's own "Buildkite credentials as ports" doc section
+    /// describes.
+    pub(crate) fn default_for(
+        default: &'a BuildkiteClient,
+        token: Option<&BuildkiteToken>,
+    ) -> Self {
+        match token {
+            Some(token) => Self::Bound(client_for_token(default, token)),
+            None => Self::Default(default),
+        }
+    }
+}
+
+impl std::ops::Deref for ScopedClient<'_> {
+    type Target = BuildkiteClient;
+
+    fn deref(&self) -> &BuildkiteClient {
+        match self {
+            Self::Default(client) => client,
+            Self::Bound(client) => client,
+        }
+    }
+}
+
 /// A Buildkite pipeline's REST representation, deserializing **exactly**
 /// the six fields trust boundary 7 names: `id`, `slug`, `web_url`,
 /// `repository`, `cluster_id`, `description`. No `provider` (which would
@@ -327,6 +437,7 @@ pub(crate) struct ClusterBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use willikins_types::DomainType;
 
     // A distinctive marker: if it ever showed up in a rendered error, a
     // redaction rule broke. Only used below to prove `WrongKind`'s
@@ -401,5 +512,73 @@ mod tests {
             UPLOAD_CONFIGURATION,
             "steps:\n - command: \"buildkite-agent pipeline upload\""
         );
+    }
+
+    // -------------------------------------------------------------
+    // Buildkite credentials as ports (task K1)
+    // -------------------------------------------------------------
+
+    /// A valid [`BuildkiteToken`], assembled the same way as the type's
+    /// own `#[domain(example = ...)]` value.
+    const EXAMPLE_TOKEN: &str = concat!("bkua_", "exampleexampleexample");
+
+    #[test]
+    fn client_for_token_builds_a_client() {
+        let credential =
+            Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+        let default = BuildkiteClient::new(Http::new("http://127.0.0.1:1", Vec::new(), credential));
+        let token = BuildkiteToken::parse(EXAMPLE_TOKEN).unwrap();
+        let _client = client_for_token(&default, &token);
+    }
+
+    /// The whole point of the fix: a bound token still reaches the
+    /// *same route* the default client was built against (a mock server
+    /// here, the real API in production) -- never
+    /// `BUILDKITE_API_BASE_URL` unconditionally, which would make this
+    /// request go nowhere the mock could ever see it.
+    #[test]
+    fn client_for_token_preserves_the_default_clients_base_url() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        // Pins the credential too, not only the route: only the *bound*
+        // token's bearer value is accepted here.
+        let mock = provider
+            .mock(
+                "GET",
+                "/v2/organizations/willikins-test/pipelines/third-thoughts",
+            )
+            .match_header("authorization", format!("Bearer {EXAMPLE_TOKEN}").as_str())
+            .with_status(404)
+            .create();
+        let credential =
+            Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+        let default = BuildkiteClient::new(Http::new(provider.url(), Vec::new(), credential));
+        let token = BuildkiteToken::parse(EXAMPLE_TOKEN).unwrap();
+        let bound = client_for_token(&default, &token);
+        let org = BuildkiteOrg::parse("willikins-test").unwrap();
+        let slug = BuildkitePipelineSlug::parse("third-thoughts").unwrap();
+        // A 404 is still a `ProviderError`, so this only proves the
+        // *request landed at the mock's own route, with the bound
+        // credential* -- `mock.assert()` below is the real assertion.
+        let _ = bound.get_pipeline(&org, &slug);
+        mock.assert();
+    }
+
+    #[test]
+    fn scoped_client_default_for_borrows_the_default_without_a_bound_token() {
+        let credential =
+            Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+        let default = BuildkiteClient::new(Http::new("http://127.0.0.1:1", Vec::new(), credential));
+        let scoped = ScopedClient::default_for(&default, None);
+        assert!(matches!(scoped, ScopedClient::Default(_)));
+    }
+
+    #[test]
+    fn scoped_client_default_for_builds_a_fresh_client_with_a_bound_token() {
+        let credential =
+            Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+        let default = BuildkiteClient::new(Http::new("http://127.0.0.1:1", Vec::new(), credential));
+        let token = BuildkiteToken::parse(EXAMPLE_TOKEN).unwrap();
+        let scoped = ScopedClient::default_for(&default, Some(&token));
+        assert!(matches!(scoped, ScopedClient::Bound(_)));
     }
 }

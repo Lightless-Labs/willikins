@@ -2263,3 +2263,94 @@ byte-identical, no provider called.
   Store Connect document and the sandbox still use `ASC_API_KEY_*`. Verify items: `GH_CLONE_TOKEN` must begin
   `ghp_` or `github_pat_` (the only prefixes `GitHubToken` accepts); whether Doppler refuses a config name
   that is `-` or starts, ends or doubles a hyphen, which the grammar now admits.
+
+**Addendum:** 2026-09-29 (K1, Buildkite credentials as ports) — **`willikins-providers-buildkite`'s
+two tools gain an optional, secret-typed `token` port ([`BuildkiteToken`](crates/willikins-types/src/buildkite.rs)),
+a `buildkite.token.parse` tool mirroring `github.token.parse` (R2), closing the gap R2's own addendum
+recorded ("Buildkite: not free, left as is... Left for a follow-up task"). Every existing document and
+the server keep working unchanged: the port is optional, so an unbound `token` does exactly what it
+always did (falls back to the client built once from `WILLIKINS_BUILDKITE_TOKEN` at
+catalog-construction time).**
+
+- **`BuildkiteToken`** (`crates/willikins-types/src/buildkite.rs`): secret, derived
+  (`#[domain(secret, ...)]`), pattern mirrors `willikins_providers_buildkite::CREDENTIAL_PATTERN`
+  exactly, including its `{20,}` floor (unlike `GitHubToken`, whose own provider-crate pattern has no
+  floor to mirror). That floor makes a real value of this type exactly what
+  `secret_literal_guard.rs`'s `BUILDKITE_TOKEN` pattern looks for, so -- like
+  `DopplerServiceToken` -- this type's own `example` is `concat!`-assembled rather than a plain string
+  literal (the derive's `example` key accepts any constant expression for exactly this reason).
+  Registered in `domain_types!`; the catalog snapshot moved by exactly one new entry, reviewed
+  diff-by-diff.
+- **`BuildkiteToken::reveal_for_authorization`**, the fifth token-less exception (after `OpaqueSecret`'s
+  and `DopplerSecretValue`'s `reveal_for_transform`, `AppleSigningKey`'s `reveal_for_signing`, and
+  `GitHubToken`'s own `reveal_for_authorization`): scoped exactly as narrowly as `GitHubToken`'s --
+  building one outbound `Authorization` header inside `buildkite.cluster.get`/`buildkite.pipeline.ensure`'s
+  own `Tool::read`, which never receives a `SinkToken`, when a document binds their optional `token`
+  port. Named in `clippy.toml`'s `disallowed-methods` reason and in
+  `crates/willikins-core/tests/expose_secret_guard.rs`'s `willikins-types` exemption list
+  (`buildkite.rs`, `reveal_for_authorization`).
+- **`buildkite.token.parse`** (`crates/willikins-tools`): pure, `AnySecret` input, mirrors
+  `github.token.parse` line for line. Registered in `willikins_tools::register`, the fake catalog, and
+  the live catalog's `insert_pure_tools` (credential-independent, always present); `LIVE_TOOL_NAMES`
+  32 → 33.
+- **`ScopedClient`** (`crates/willikins-providers-buildkite/src/client.rs`): `Default(&BuildkiteClient)`
+  or `Bound(BuildkiteClient)`, `Deref`s to `BuildkiteClient`, built the same way
+  `willikins-providers-github`'s own `ScopedClient` is, over `BuildkiteClient::with_credential` (in
+  turn `willikins_providers_http::Http::with_credential`, the general seam R2 introduced): a bound
+  token still reaches whatever `base_url` the tool's own default client was built against (a mock
+  server in a test, the real API in production), never `BUILDKITE_API_BASE_URL` unconditionally --
+  proven directly by `client_for_token_preserves_the_default_clients_base_url`, so this task did not
+  need to rediscover R2's own "real defect caught before commit" the hard way. `buildkite.pipeline.ensure`'s
+  `observe` moved from a `&self` method to a static function taking `&BuildkiteClient`, so both `read`
+  and `ensure` can pass whichever `ScopedClient` the request's own `token` binding implies.
+- **Fake twins, catalogue parity, fake/live agreement:** both fake Buildkite tools
+  (`willikins-providers-fake`) gained the identical `token` port for spec parity (`catalog_parity.rs`
+  continues to pin fake and live specs byte-for-byte equal; both ToolSpec snapshots moved additively).
+  `fake_agrees_with_live.rs` gained `pipeline_ensure_agrees_on_present_with_the_token_port_bound` and
+  `cluster_get_agrees_on_a_single_match_with_the_token_port_bound`. The fake tools never inspect the
+  port's value, the correct behaviour for a fake.
+- **Redaction, proven both ways:** `redaction.rs` gained a second marker, `PORT_TOKEN_MARKER`
+  (`concat!`-assembled), and two tests -- `a_bound_token_port_marker_reaches_no_header_but_authorization`
+  and `a_bound_token_port_marker_reaches_no_observation_or_error` -- proving a bound token's marker
+  reaches no recorded request field but `Authorization`, and no `Observation` or `ToolError` either,
+  across both a `404` and a genuinely failing `500`.
+- **The gap R2's own adversarial pass left open, closed here proactively.** Pass 4 (finding 3) found
+  that no tool-level *mock* test pinned which credential the *unbound* path actually used -- a mutation
+  that made the unbound path authorize with a fixed, bogus credential instead of the tool's own default
+  survived all three of GitHub's tool-level mock suites, killed only by a unit test and one `redaction.rs`
+  test. Both Buildkite mock suites (`cluster_get_mock.rs`, `pipeline_ensure_mock.rs`) gain
+  `unbound_read_authorizes_with_the_tools_own_default_credential`: builds the tool's default client
+  from a distinctive credential, calls `read` with no `token` port bound, and asserts the captured
+  `Authorization` header equals *exactly* that credential -- not a generic, interchangeable test token.
+  Both mock suites also gain `read_authorizes_with_the_bound_token_port_not_the_default_credential` and
+  `a_bound_token_port_is_used_even_when_the_default_credential_would_be_refused` (the latter's default
+  credential is refused outright by the mock, so the test can only pass if the bound token authorized
+  the request), mirroring `github.repo.get`'s own `repo_get_mock.rs` pair.
+- **No new document.** Unlike R2 (which added `workflows/github-repo-token-from-doppler.yaml`), this
+  task's own boundary asks only that the port exist and that every existing document and the
+  server keep working unchanged -- proven by `workflows/new-rust-service-buildkite.yaml`'s own
+  acceptance tests (`acceptance_m3a_buildkite.rs`, unmodified, all green) and by
+  `cargo test -p willikins-dsl --test acceptance`'s characterization snapshot staying **byte-identical**
+  (confirmed: `git status` shows no change to
+  `crates/willikins-dsl/tests/snapshots/acceptance__characterization_of_every_document.snap`). No
+  exhaustive document-list test (`acceptance_13_trusted_directory.rs`, `image_contents.rs`) needed
+  updating for the same reason.
+- **No provider call of any kind was made for this task** -- every check ran against the fake catalog,
+  the empty catalog, or a mock server that never leaves the process.
+- **Scoped gates green:** `cargo fmt --all --check`; `cargo clippy` on every touched crate
+  (`willikins-types`, `willikins-tools`, `willikins-core`, `willikins-providers-buildkite`,
+  `willikins-providers-fake`, `willikins-server`) `--all-targets -D warnings`; `cargo test` over
+  `willikins-types`, `willikins-core`, `willikins-tools`, `willikins-providers-buildkite`,
+  `willikins-providers-fake`, `willikins-server`, `willikins-cli --test acceptance_m3a_buildkite`, and
+  `willikins-dsl --test acceptance` -- every suite green (`RUST_TEST_THREADS=2`). Insta snapshots
+  accepted additively and reviewed diff-by-diff: buildkite `catalog_parity`'s two tool specs (`+token`
+  port each), `willikins-tools`' `catalog_specs_snapshot` (+1 tool), `willikins-providers-fake`'s
+  `catalog_json_snapshot` (two `+token` ports, +1 tool), `willikins-types`' own `catalog_json_snapshot`
+  (+1 registered type). `cargo check -p willikins-types -j 2`. The full workspace gate was not run
+  (host rule; the coordinator's).
+- **Remaining, carried forward, unchanged by this task:** the same server-side gap R2 recorded still
+  applies to Buildkite too -- `live_catalog_for_document`/`live_catalog_from_env` still read
+  `WILLIKINS_BUILDKITE_TOKEN` from the process environment whenever a document names any
+  `buildkite.*` tool, even when every such node already binds `token` from Doppler (the same
+  `insert_*_tools`-credential-lazy follow-up R2 named would need to cover both providers at once).
+

@@ -4,20 +4,27 @@
 //! "The tool table" and decision (d) ("Idempotence: key, ownership, and
 //! the four observations"); shaped exactly like
 //! `willikins_providers_doppler::tools::project_ensure`.
+//!
+//! Milestone 3e task K1 gave this tool an optional, secret-typed `token`
+//! port ([`BuildkiteToken`]), mirroring `github.repo.ensure`'s own -- see
+//! `crate::client`'s "Buildkite credentials as ports" doc section.
 
 use std::sync::Arc;
 
 use willikins_core::tool::helpers::{
-    conflict, exact, get, port, require_present, scalar, tool_name,
+    conflict, exact, get, get_optional, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{
-    BuildkiteClusterId, BuildkiteOrg, BuildkitePipelineSlug, DomainType, GitHubRepo, HttpsUrl,
+    BuildkiteClusterId, BuildkiteOrg, BuildkitePipelineSlug, BuildkiteToken, DomainType,
+    GitHubRepo, HttpsUrl,
 };
 
-use crate::client::{BuildkiteClient, MANAGED_DESCRIPTION, pipeline_web_url, ssh_repository_url};
+use crate::client::{
+    BuildkiteClient, MANAGED_DESCRIPTION, ScopedClient, pipeline_web_url, ssh_repository_url,
+};
 
 /// `buildkite.pipeline.ensure`.
 pub struct BuildkitePipelineEnsure {
@@ -34,6 +41,7 @@ impl BuildkitePipelineEnsure {
         inputs.insert(port("slug"), exact("BuildkitePipelineSlug", true));
         inputs.insert(port("repo"), exact("GitHubRepo", true));
         inputs.insert(port("cluster"), exact("BuildkiteClusterId", true));
+        inputs.insert(port("token"), exact("BuildkiteToken", false));
         let mut outputs = indexmap::IndexMap::new();
         outputs.insert(port("slug"), scalar("BuildkitePipelineSlug"));
         outputs.insert(port("url"), scalar("HttpsUrl"));
@@ -74,7 +82,9 @@ impl BuildkitePipelineEnsure {
     }
 
     /// `GET` the pipeline, mapped to an [`Observation`]. Shared by `read`
-    /// and `ensure`.
+    /// and `ensure`, both of which pass the [`ScopedClient`] this tool's
+    /// own optional `token` port implies -- see `crate::client`'s
+    /// "Buildkite credentials as ports" doc section.
     ///
     /// Ownership is exact equality against [`MANAGED_DESCRIPTION`], the
     /// same rule `doppler.project.ensure` uses for the same reason: a
@@ -85,13 +95,13 @@ impl BuildkitePipelineEnsure {
     /// is a port, and this crate has no call that could change them
     /// (decision (a)).
     fn observe(
-        &self,
+        client: &BuildkiteClient,
         org: &BuildkiteOrg,
         slug: &BuildkitePipelineSlug,
         repo: &GitHubRepo,
         cluster: &BuildkiteClusterId,
     ) -> Result<Observation, ToolError> {
-        match self.client.get_pipeline(org, slug) {
+        match client.get_pipeline(org, slug) {
             Ok(body) if body.description.as_deref() != Some(MANAGED_DESCRIPTION) => {
                 Ok(Observation::Foreign)
             }
@@ -138,7 +148,9 @@ impl Tool for BuildkitePipelineEnsure {
         let slug: BuildkitePipelineSlug = get(inputs, "slug")?;
         let repo: GitHubRepo = get(inputs, "repo")?;
         let cluster: BuildkiteClusterId = get(inputs, "cluster")?;
-        self.observe(&org, &slug, &repo, &cluster)
+        let token: Option<BuildkiteToken> = get_optional(inputs, "token")?;
+        let client = ScopedClient::default_for(&self.client, token.as_ref());
+        Self::observe(&client, &org, &slug, &repo, &cluster)
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
@@ -147,7 +159,9 @@ impl Tool for BuildkitePipelineEnsure {
         let slug: BuildkitePipelineSlug = get(inputs, "slug")?;
         let repo: GitHubRepo = get(inputs, "repo")?;
         let cluster: BuildkiteClusterId = get(inputs, "cluster")?;
-        match self.observe(&org, &slug, &repo, &cluster)? {
+        let bound_token: Option<BuildkiteToken> = get_optional(inputs, "token")?;
+        let client = ScopedClient::default_for(&self.client, bound_token.as_ref());
+        match Self::observe(&client, &org, &slug, &repo, &cluster)? {
             Observation::Foreign => Err(Self::foreign_conflict(&org, &slug)),
             Observation::Mismatch { port } => {
                 Err(Self::mismatch_conflict(&org, &slug, port.as_str()))
@@ -158,10 +172,7 @@ impl Tool for BuildkitePipelineEnsure {
             }),
             Observation::Absent { .. } => {
                 let repository = ssh_repository_url(&repo);
-                match self
-                    .client
-                    .create_pipeline(&org, &slug, &cluster, &repository)
-                {
+                match client.create_pipeline(&org, &slug, &cluster, &repository) {
                     Ok(()) => Ok(Ensured {
                         outputs: Self::outputs_for(&org, &slug),
                         changed: true,
@@ -170,7 +181,7 @@ impl Tool for BuildkitePipelineEnsure {
                     // duplicate create at all (decision (d)): resolve any
                     // create failure by re-reading rather than parsing
                     // the error body.
-                    Err(err) => match self.observe(&org, &slug, &repo, &cluster)? {
+                    Err(err) => match Self::observe(&client, &org, &slug, &repo, &cluster)? {
                         Observation::Present(outputs) => Ok(Ensured {
                             outputs,
                             changed: false,
