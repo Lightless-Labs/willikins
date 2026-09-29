@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
+assertion_line: 198
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -126,6 +127,24 @@ expression: "catalog.list_tools_json()[\"tools\"]"
   },
   {
     "class": "reversible",
+    "description": "Parse a resolved secret as a GitHub personal access token (fine-grained or classic).",
+    "inputs": {
+      "value": {
+        "required": true,
+        "ty": {
+          "kind": "any_secret"
+        }
+      }
+    },
+    "key": [],
+    "name": "github.token.parse",
+    "outputs": {
+      "value": "GitHubToken"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
     "description": "Ensure a GitHub repository exists.",
     "inputs": {
       "repo": {
@@ -133,6 +152,13 @@ expression: "catalog.list_tools_json()[\"tools\"]"
         "ty": {
           "kind": "exact",
           "type": "GitHubRepo"
+        }
+      },
+      "token": {
+        "required": false,
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubToken"
         }
       },
       "visibility": {
@@ -171,6 +197,13 @@ expression: "catalog.list_tools_json()[\"tools\"]"
           "type": "GitHubRepo"
         }
       },
+      "token": {
+        "required": false,
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubToken"
+        }
+      },
       "value": {
         "required": true,
         "ty": {
@@ -195,6 +228,13 @@ expression: "catalog.list_tools_json()[\"tools\"]"
         "ty": {
           "kind": "exact",
           "type": "GitHubRepo"
+        }
+      },
+      "token": {
+        "required": false,
+        "ty": {
+          "kind": "exact",
+          "type": "GitHubToken"
         }
       }
     },

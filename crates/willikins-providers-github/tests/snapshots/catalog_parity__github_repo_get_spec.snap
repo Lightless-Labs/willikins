@@ -13,6 +13,13 @@ expression: repo_get
         "kind": "exact",
         "type": "GitHubRepo"
       }
+    },
+    "token": {
+      "required": false,
+      "ty": {
+        "kind": "exact",
+        "type": "GitHubToken"
+      }
     }
   },
   "key": [],

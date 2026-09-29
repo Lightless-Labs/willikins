@@ -7,7 +7,7 @@ use willikins_core::{Observation, PortName, SinkToken, Tool, ToolErrorKind, Valu
 use willikins_providers_github::{GitHubClient, GitHubRepoEnsure};
 use willikins_providers_http::testing::{MockProvider, json_body, load_fixture};
 use willikins_providers_http::{Credential, Http, Sleeper};
-use willikins_types::{DomainType, GitHubRepo, RepoVisibility};
+use willikins_types::{DomainType, GitHubRepo, GitHubToken, RepoVisibility};
 
 fn fixtures_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures")
@@ -732,4 +732,70 @@ fn a_retry_after_of_an_hour_is_capped_the_same_way() {
     limited.assert();
     let durations = sleeper.durations.lock().expect("not poisoned").clone();
     assert_eq!(durations, vec![std::time::Duration::from_secs(60); 3]);
+}
+
+/// Milestone 3e, task R2: the spec grows one optional, secret-typed
+/// `token` port -- required is `false`, so `require_present` never
+/// demands a binding, and every document written before this port
+/// existed keeps checking and planning exactly as it did.
+#[test]
+fn spec_carries_token_as_an_optional_secret_port() {
+    let (client, _sleeper) = client_against("http://127.0.0.1:1".to_string());
+    let tool = GitHubRepoEnsure::new(client);
+    let token_port = tool
+        .spec()
+        .inputs
+        .get(&PortName::parse("token").unwrap())
+        .expect("a `token` port is declared");
+    assert!(!token_port.required, "`token` must be optional");
+    assert_eq!(
+        token_port.ty,
+        willikins_core::PortType::Exact(willikins_core::TypeRef::scalar(
+            willikins_core::TypeName::parse("GitHubToken").unwrap()
+        ))
+    );
+}
+
+/// The heart of R2: when a document binds `token`, `read` authorizes with
+/// *that* credential, not the one the tool was constructed with -- proven
+/// by giving the two different bearer values and having the mock 404
+/// unless it sees the bound one.
+#[test]
+fn read_authorizes_with_the_bound_token_port_not_the_default_credential() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(200)
+        .with_body_from_request(|request| {
+            let authorization = request
+                .header("Authorization")
+                .first()
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            if authorization == "Bearer ghp_theboundtoken" {
+                br#"{"visibility":"private","topics":["managed-by-willikins"]}"#.to_vec()
+            } else {
+                br#"{"message":"Bad credentials"}"#.to_vec()
+            }
+        })
+        .create();
+    // The default client the tool was built with carries a *different*
+    // bearer value -- if `read` ever fell back to it despite the bound
+    // port, the mock above (fixed at `with_status(200)` regardless of
+    // which branch its body closure takes) would answer with the
+    // `Bad credentials` body instead, which fails to deserialize as
+    // `RepoBody` and makes `read` return `Err`, not `Present`.
+    let (client, _sleeper) = client_against(provider.url());
+    let tool = GitHubRepoEnsure::new(client);
+
+    let mut request_inputs = inputs(RepoVisibility::Private);
+    request_inputs.insert(
+        PortName::parse("token").unwrap(),
+        Value::known(GitHubToken::parse("ghp_theboundtoken").unwrap()),
+    );
+    let observation = tool.read(&request_inputs).unwrap();
+    assert!(
+        matches!(observation, Observation::Present(_)),
+        "{observation:?}"
+    );
 }

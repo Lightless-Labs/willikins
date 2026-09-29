@@ -5,14 +5,14 @@
 use std::sync::Arc;
 
 use willikins_core::tool::helpers::{
-    conflict, exact, get, port, require_present, scalar, tool_name,
+    conflict, exact, get, get_optional, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
-use willikins_types::{GitHubRepo, RepoVisibility};
+use willikins_types::{GitHubRepo, GitHubToken, RepoVisibility};
 
-use crate::client::{GitHubClient, RepoBody, to_tool_error};
+use crate::client::{GitHubClient, RepoBody, ScopedClient, to_tool_error};
 
 /// `github.repo.ensure`.
 pub struct GitHubRepoEnsure {
@@ -27,6 +27,7 @@ impl GitHubRepoEnsure {
         let mut inputs = indexmap::IndexMap::new();
         inputs.insert(port("repo"), exact("GitHubRepo", true));
         inputs.insert(port("visibility"), exact("RepoVisibility", true));
+        inputs.insert(port("token"), exact("GitHubToken", false));
         let mut outputs = indexmap::IndexMap::new();
         outputs.insert(port("repo"), scalar("GitHubRepo"));
         outputs.insert(port("url"), scalar("HttpsUrl"));
@@ -82,9 +83,15 @@ impl GitHubRepoEnsure {
     }
 
     /// `GET /repos/{owner}/{name}`, mapped to an [`Observation`]. Shared
-    /// by `read` and `ensure`.
-    fn observe(&self, repo: &GitHubRepo, inputs: &Inputs) -> Result<Observation, ToolError> {
-        match self.client.get_repo(repo) {
+    /// by `read` and `ensure`, both of which pass the [`ScopedClient`]
+    /// this tool's own optional `token` port implies -- see
+    /// `crate::client`'s "GitHub credentials as ports" doc section.
+    fn observe(
+        client: &GitHubClient,
+        repo: &GitHubRepo,
+        inputs: &Inputs,
+    ) -> Result<Observation, ToolError> {
+        match client.get_repo(repo) {
             Ok(RepoBody {
                 visibility,
                 topics,
@@ -123,25 +130,27 @@ impl Tool for GitHubRepoEnsure {
     fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
         require_present(&self.spec, inputs)?;
         let repo: GitHubRepo = get(inputs, "repo")?;
-        self.observe(&repo, inputs)
+        let token: Option<GitHubToken> = get_optional(inputs, "token")?;
+        let client = ScopedClient::default_for(&self.client, token.as_ref());
+        Self::observe(&client, &repo, inputs)
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         require_present(&self.spec, inputs)?;
         let repo: GitHubRepo = get(inputs, "repo")?;
         let visibility: RepoVisibility = get(inputs, "visibility")?;
-        match self.observe(&repo, inputs)? {
+        let bound_token: Option<GitHubToken> = get_optional(inputs, "token")?;
+        let client = ScopedClient::default_for(&self.client, bound_token.as_ref());
+        match Self::observe(&client, &repo, inputs)? {
             Observation::Foreign => Err(Self::foreign_conflict(&repo)),
             Observation::Mismatch { .. } => Err(Self::mismatch_conflict(&repo)),
             Observation::Present(outputs) => Ok(Ensured {
                 outputs,
                 changed: false,
             }),
-            Observation::Absent { .. } => match self.client.create_repo(&repo, visibility) {
+            Observation::Absent { .. } => match client.create_repo(&repo, visibility) {
                 Ok(()) => {
-                    self.client
-                        .put_managed_topic(&repo)
-                        .map_err(to_tool_error)?;
+                    client.put_managed_topic(&repo).map_err(to_tool_error)?;
                     Ok(Ensured {
                         outputs: Self::outputs_for(&repo),
                         changed: true,
@@ -150,7 +159,7 @@ impl Tool for GitHubRepoEnsure {
                 // The create may have landed despite the error (a retried
                 // ambiguous failure, or simply a name already taken):
                 // re-read rather than assume either way.
-                Err(err) if err.already_exists => match self.observe(&repo, inputs)? {
+                Err(err) if err.already_exists => match Self::observe(&client, &repo, inputs)? {
                     Observation::Present(outputs) => Ok(Ensured {
                         outputs,
                         changed: false,

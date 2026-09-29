@@ -145,3 +145,37 @@ fn agrees_on_archived() {
     assert_eq!(live.kind, fake.kind);
     assert_eq!(live.message, fake.message);
 }
+
+/// Milestone 3e, task R2: a document that binds `token` still agrees
+/// between the fake and the live tool. The fake tool ignores the port's
+/// value entirely (it has no real credential to check), so this proves
+/// the *shape* of the two sides' answers still matches with the port
+/// bound -- the live-side authorization proof itself lives in
+/// `repo_get_mock.rs`'s `read_authorizes_with_the_bound_token_port_not_the_default_credential`.
+#[test]
+fn agrees_on_present_with_the_token_port_bound() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/repos/bande-a-bonnot/monorepo")
+        .with_status(200)
+        .with_body(fixture("repo_get_present").to_string())
+        .create();
+
+    let mut bound_inputs = inputs();
+    bound_inputs.insert(
+        PortName::parse("token").unwrap(),
+        Value::known(willikins_types::GitHubToken::parse("ghp_theboundtoken").unwrap()),
+    );
+
+    let live = live_against(provider.url())
+        .read(&bound_inputs)
+        .unwrap_or_else(|err| panic!("live tool errored: {err:?}"));
+
+    let state = FakeState::new().with_repo(&repo(), RepoVisibility::Private, true);
+    let fake = FakeGitHubRepoGet::new(Arc::new(Mutex::new(state)))
+        .read(&bound_inputs)
+        .unwrap_or_else(|err| panic!("fake tool errored: {err:?}"));
+
+    assert_eq!(shape(&live), shape(&fake));
+    assert!(matches!(live, Observation::Present(_)));
+}

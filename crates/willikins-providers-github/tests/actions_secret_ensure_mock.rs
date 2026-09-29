@@ -380,3 +380,52 @@ fn no_recorded_request_observation_or_ensured_carries_the_secret_marker() {
         }
     }
 }
+
+/// Milestone 3e, task R2: the spec grows one optional, secret-typed
+/// `token` port, same as `github.repo.ensure`'s and `github.repo.get`'s.
+#[test]
+fn spec_carries_token_as_an_optional_secret_port() {
+    let tool = GitHubActionsSecretEnsure::new(client_against("http://127.0.0.1:1".to_string()));
+    let token_port = tool
+        .spec()
+        .inputs
+        .get(&PortName::parse("token").unwrap())
+        .expect("a `token` port is declared");
+    assert!(!token_port.required, "`token` must be optional");
+}
+
+/// A document that binds `token` authorizes `read` with it, not the
+/// credential the tool was constructed with: the mock captures whatever
+/// `Authorization` header the request actually carried and asserts it is
+/// the bound value, never the default `client_against` set up.
+#[test]
+fn read_authorizes_with_the_bound_token_port_not_the_default_credential() {
+    let captured = Arc::new(Mutex::new(String::new()));
+    let capture = captured.clone();
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/repos/acme/widget/actions/secrets/DOPPLER_TOKEN")
+        .with_status(200)
+        .with_body_from_request(move |request| {
+            let authorization = request
+                .header("Authorization")
+                .first()
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            *capture.lock().expect("not poisoned") = authorization;
+            b"{}".to_vec()
+        })
+        .create();
+    let tool = GitHubActionsSecretEnsure::new(client_against(provider.url()));
+    let mut inputs = full_inputs();
+    inputs.insert(
+        PortName::parse("token").unwrap(),
+        Value::known(willikins_types::GitHubToken::parse("ghp_theboundtoken").unwrap()),
+    );
+    tool.read(&inputs).expect("the mock answers 200");
+    assert_eq!(
+        captured.lock().expect("not poisoned").as_str(),
+        "Bearer ghp_theboundtoken"
+    );
+}

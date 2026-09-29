@@ -1952,3 +1952,136 @@ accepts hyphens; `naming::v1` is frozen, so this is a documentation-only stalene
 a behaviour change, and it does not affect the "never panics" claim it supports (both the old and the new
 grammar are supersets of a snake join's characters).
 
+**Addendum:** 2026-09-29 (R2, GitHub credentials as ports) — **`willikins-providers-github`'s three
+tools gain an optional, secret-typed `token` port ([`GitHubToken`](crates/willikins-types/src/github.rs)),
+a `github.token.parse` tool mirroring `apple.signing_key.parse`, and the "credentials are ports,
+resolvers are nodes" addendum now covers GitHub the same way it already covers App Store Connect.
+Every existing document and the server keep working unchanged: the port is optional, so an unbound
+`token` does exactly what it always did (falls back to the client built once from
+`WILLIKINS_GITHUB_TOKEN` at catalog-construction time).**
+
+- **`GitHubToken`** (`crates/willikins-types/src/github.rs`): secret, derived (`#[domain(secret, ...)]`),
+  pattern mirrors `willikins_providers_github::CREDENTIAL_PATTERN`'s shape (`github_pat_`/`ghp_` prefix,
+  no length bound GitHub does not itself document) but duplicated rather than imported, since a type
+  in `willikins-types` may not depend on a provider crate. Unlike `DopplerServiceToken`'s fixed-length
+  real shape, this type's pattern has no minimum length, so no test value here needs `concat!`-assembly
+  to dodge `secret_literal_guard.rs`'s twenty-character floor — a short example such as `ghp_example` is
+  a fully valid value and never reaches it. Registered in `domain_types!`; the catalog snapshot moved
+  by exactly one new entry, reviewed diff-by-diff.
+- **`GitHubToken::reveal_for_authorization`**, the fourth and narrowest token-less exception (after
+  `OpaqueSecret`'s and `DopplerSecretValue`'s `reveal_for_transform` and `AppleSigningKey`'s
+  `reveal_for_signing`): scoped to building one outbound `Authorization` header inside
+  `github.repo.ensure`/`github.actions_secret.ensure`/`github.repo.get`'s own `Tool::read`, which never
+  receives a `SinkToken`, when a document binds their optional `token` port. Named in `clippy.toml`'s
+  `disallowed-methods` reason and in `crates/willikins-core/tests/expose_secret_guard.rs`'s
+  `willikins-types` exemption list (`github.rs`, `reveal_for_authorization`).
+- **`github.token.parse`** (`crates/willikins-tools`): pure, `AnySecret` input, mirrors
+  `apple.signing_key.parse` line for line — a document chains `doppler.secret.get` (or `env.get`,
+  optionally through `base64.decode`) straight into it. Registered in `willikins_tools::register`, the
+  fake catalog, and the live catalog's `insert_pure_tools` (credential-independent, always present,
+  exactly like the three `apple.*.parse` tools); `LIVE_TOOL_NAMES` 30 → 31.
+- **A real defect caught before commit, not after:** the first `client_for_token` unconditionally built
+  its `Http` against `GITHUB_API_BASE_URL`, so a document binding `token` would have talked to the real
+  GitHub API even in every mock test and in the fake-catalog document test — exactly the "no provider
+  call of any kind" boundary this task was given. Fixed with a new, general seam,
+  `willikins_providers_http::Http::with_credential` (clones the route, headers, and sleeper; swaps only
+  the credential) and `GitHubClient::with_credential` on top of it, so `client_for_token` now takes the
+  tool's own default client and swaps its credential rather than building a fresh one against a fixed
+  base URL. `client_for_token_preserves_the_default_clients_base_url` (in `client.rs`'s own tests) pins
+  this by routing a bound-token call through a mock server and asserting on both the route and the
+  `Authorization` header; `repo_get_mock.rs`'s
+  `a_bound_token_port_is_used_even_when_the_default_credential_would_be_refused` is the sibling proof at
+  the tool level (the default credential is refused outright by the mock, so the test can only pass if
+  the bound token's credential authorized the request). The minted credential's own label is
+  `GitHubToken port`, distinct from `CREDENTIAL_VAR`'s `WILLIKINS_GITHUB_TOKEN`, so a 401 against a
+  Doppler-sourced token never points an operator at the wrong variable.
+- **`ScopedClient`** (`crates/willikins-providers-github/src/client.rs`): `Default(&GitHubClient)` or
+  `Bound(GitHubClient)`, `Deref`s to `GitHubClient` so every existing `self.client.method(...)` call
+  site becomes `client.method(...)` unchanged regardless of which case applies. `ScopedClient::default_for`
+  is the one place a tool decides between them, from `get_optional(inputs, "token")`.
+- **Fake twins, catalogue parity, fake/live agreement:** all three fake GitHub tools
+  (`willikins-providers-fake`) gained the identical `token` port for spec parity
+  (`tests/catalog_parity.rs` continues to pin fake and live specs byte-for-byte equal; the three
+  ToolSpec snapshots moved additively). `fake_agrees_with_live.rs` gained
+  `agrees_on_present_with_the_token_port_bound`. The fake tools never inspect the port's value (they
+  have no real credential to check), which is the correct behaviour for a fake.
+- **Redaction, proven both ways:** `redaction.rs` gained a second marker, `PORT_TOKEN_MARKER`
+  (`concat!`-assembled, matching `CREDENTIAL_MARKER`'s own convention even though this type's grammar
+  does not strictly require it), and two tests —
+  `a_bound_token_port_marker_reaches_no_header_but_authorization` and
+  `a_bound_token_port_marker_reaches_no_observation_or_error` — proving a bound token's marker reaches
+  no recorded request field but `Authorization`, and no `Observation` or `ToolError` (`Debug` or
+  `message`) either, across both a `404` and a genuinely failing `500`.
+- **A new document, an addition, not a change:** `workflows/github-repo-token-from-doppler.yaml`
+  resolves `GH_CLONE_TOKEN` from Doppler through `github.token.parse` and binds it to
+  `github.repo.get`'s `token` port — the operator's own words, quoted in this task's brief: the GitHub
+  token "is in... doppler! The whole point of the damn thing!" Its own document test
+  (`crates/willikins-providers-github/tests/github_token_documents.rs`) plans it end to end against
+  seeded fake state (`workflows/fixtures/state/github-token.json`) and asserts the whole serialized
+  `Plan` never carries the seeded token's raw value. `crates/willikins-dsl/tests/acceptance.rs`'s
+  characterization sweep picks the new document up automatically; its snapshot gained exactly one
+  `=== workflows/github-repo-token-from-doppler.yaml ===` block and nothing else — confirmed by diffing
+  the pre-change snapshot against the accepted one and filtering out the insta-metadata line:
+  `diff old.snap new.snap | grep '^[<>]' | grep -v assertion_line` produced twelve `>` lines, all inside
+  the new block (types, outputs, and `PLAN ERROR: node \`token_secret\`: NotFound: ...` — the empty fake
+  state has no seeded secret, the same shape every other Doppler-chain document's characterization entry
+  already shows), zero `<` lines, and `grep -c ghp_` on the new snapshot is `0`.
+- **Buildkite: not free, left as is.** Unlike GitHub, Buildkite has no domain type for its own token at
+  all in this workspace (`willikins-providers-buildkite`'s own `CREDENTIAL_PATTERN` lives only as a
+  provider-crate constant), so giving it the same shape needs a new secret type, a parse tool, and a
+  `BuildkiteClient::with_credential` seam — none of which falls out of this change for free. Left for a
+  follow-up task.
+- **The gap this task leaves, stated plainly:** `willikins_server::catalog::live_catalog_for_document`
+  (and `live_catalog_from_env`) still read `WILLIKINS_GITHUB_TOKEN` from the process environment
+  whenever a document names *any* `github.*` tool, even when every such node already binds `token` from
+  Doppler. This is required by this task's own "server unchanged" boundary — making the port required,
+  or making the default client optional, would have changed `describe`/`plan` output for every existing
+  document or the server's own startup behaviour, both out of scope here. So the milestone's stated end
+  state ("the only credential outside Doppler is the Doppler token itself") is **not yet reachable**
+  through `plan --live`/`apply --live` for a document like Walter's monorepo reference: it would still
+  need `WILLIKINS_GITHUB_TOKEN` set, alongside whatever it resolves from Doppler. The one-function
+  follow-up: make `insert_github_tools`'s credential lazy (`Option<Http>`/a closure resolved only if a
+  node's `read`/`ensure` actually reaches the unbound-port path), erroring at call time rather than at
+  catalog-construction time when the environment variable is absent. Recorded as `remaining`, not
+  buried here.
+- **Host observation, not this task's to fix:** a `cargo test --target-dir target/pi-check` process
+  (unrelated to this task; a separate tool's own watcher, judging by its target dir) restarted repeatedly
+  over the course of this session, one process per file save in this same working tree, compiling the
+  same live source concurrently with every gate run here. One run transiently hit `E0027: pattern does
+  not mention field 'archived'` at a line in `repo_ensure.rs` whose destructuring predated this task's
+  own `observe` refactor -- a shape that no longer existed in the file on disk at the time. An immediate
+  retry with byte-identical source was clean. Recorded rather than chased further: this workspace's own
+  host rules already single out concurrent cargo activity against a shared `target/` as a source of
+  exactly this kind of ghost failure (a linker "missing .rcgu.o" is the documented sibling case); this
+  one used a different `--target-dir` and still produced a transient, non-reproducing compiler error, so
+  the hazard is broader than the documented one. Not this task's watcher to stop.
+- **Other exhaustive-list tests this change touched, found by running them rather than guessed:**
+  `willikins-providers-fake/tests/pure_tools_agree.rs` enumerates every pure tool's own inputs by hand
+  (a new case for `github.token.parse`, and its own "N pure tools" self-check moved from 15 to 16);
+  `willikins-server/tests/acceptance_13_trusted_directory.rs` and
+  `willikins-server/tests/image_contents.rs` each assert the exact sorted list of top-level
+  `workflows/*.yaml` filenames the trusted directory (respectively the shipped container image) holds,
+  both needing `github-repo-token-from-doppler` inserted in its sorted position (between
+  `doppler-project` and `new-rust-service-buildkite`) and the fixed count in each test's own name and
+  message corrected (fourteen to fifteen). `willikins-cli`'s own multi-document sweeps
+  (`acceptance_11_mcp_parity.rs`) compute their document count and read-rate dynamically from the
+  directory rather than hard-coding either, so they needed no change — confirmed by running them, not
+  assumed from reading the code.
+- **Scoped gates green, both commits:** `cargo fmt --all --check`; `cargo clippy` on every touched
+  crate (`willikins-types`, `willikins-tools`, `willikins-providers-http`, `willikins-providers-github`,
+  `willikins-providers-fake`, `willikins-server`, `willikins-core`, `willikins-cli`) `--all-targets -D
+  warnings`; `cargo test` over `willikins-types`, `willikins-tools`, `willikins-providers-http`,
+  `willikins-providers-github` (run four times before it stayed green — see the host-observation bullet
+  above for the first, transient failure; the rest were real, fixed test-first: an empty mock body that
+  should have been `{}`, and a stale doc comment claiming a mock returns 404 when it is fixed at 200),
+  `willikins-providers-fake`, `willikins-core`, `willikins-server`, `willikins-providers-doppler`'s
+  `live_catalog` binary, and `willikins-cli` — every suite green. Insta snapshots accepted additively and
+  reviewed diff-by-diff: github `catalog_parity`'s three tool specs (`+token` port each), `willikins-tools`'
+  `catalog_specs_snapshot` (+1 tool), `willikins-providers-fake`'s `catalog_json_snapshot` (three `+token`
+  ports, +1 tool), `willikins-types`' own `catalog_json_snapshot` (+1 registered type). The server's MCP
+  tool-list/schema snapshot (`mcp_server.rs`) did **not** move — it snapshots the eight MCP meta-tools
+  (`plan`, `apply`, `describe`, ...), not the provider catalog, so it was never going to be touched by
+  this change; checked, not assumed. `cargo test -p willikins-dsl --test acceptance` — the
+  characterization snapshot gained exactly the one new document's own block, verified by diff (see
+  above). The full workspace gate was not run (host rule; the coordinator's).
+

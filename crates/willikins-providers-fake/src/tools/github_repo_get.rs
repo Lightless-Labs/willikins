@@ -33,6 +33,7 @@ impl FakeGitHubRepoGet {
     pub fn new(state: Arc<Mutex<FakeState>>) -> Self {
         let mut inputs = IndexMap::new();
         inputs.insert(port("repo"), exact("GitHubRepo", true));
+        inputs.insert(port("token"), exact("GitHubToken", false));
         let mut outputs = IndexMap::new();
         outputs.insert(port("repo"), scalar("GitHubRepo"));
         Self {

@@ -14,14 +14,14 @@
 use std::sync::Arc;
 
 use willikins_core::tool::helpers::{
-    any_secret, exact, get, invalid, port, require_present, tool_name,
+    any_secret, exact, get, get_optional, invalid, port, require_present, tool_name,
 };
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec,
 };
-use willikins_types::{ActionsSecretName, GitHubRepo};
+use willikins_types::{ActionsSecretName, GitHubRepo, GitHubToken};
 
-use crate::client::{GitHubClient, to_tool_error};
+use crate::client::{GitHubClient, ScopedClient, to_tool_error};
 
 /// `github.actions_secret.ensure`.
 pub struct GitHubActionsSecretEnsure {
@@ -37,6 +37,7 @@ impl GitHubActionsSecretEnsure {
         inputs.insert(port("repo"), exact("GitHubRepo", true));
         inputs.insert(port("name"), exact("ActionsSecretName", true));
         inputs.insert(port("value"), any_secret(true));
+        inputs.insert(port("token"), exact("GitHubToken", false));
         Self {
             spec: ToolSpec {
                 name: tool_name("github.actions_secret.ensure"),
@@ -58,6 +59,14 @@ impl GitHubActionsSecretEnsure {
         let name = get(inputs, "name")?;
         Ok((repo, name))
     }
+
+    /// The [`ScopedClient`] this call should use -- the tool's own held
+    /// client, or a fresh one built from a bound `token` port. See
+    /// `crate::client`'s "GitHub credentials as ports" doc section.
+    fn scoped_client(&self, inputs: &Inputs) -> Result<ScopedClient<'_>, ToolError> {
+        let token: Option<GitHubToken> = get_optional(inputs, "token")?;
+        Ok(ScopedClient::default_for(&self.client, token.as_ref()))
+    }
 }
 
 impl Tool for GitHubActionsSecretEnsure {
@@ -67,7 +76,8 @@ impl Tool for GitHubActionsSecretEnsure {
 
     fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
         let (repo, name) = self.key_ports(inputs)?;
-        match self.client.get_actions_secret(&repo, &name) {
+        let client = self.scoped_client(inputs)?;
+        match client.get_actions_secret(&repo, &name) {
             Ok(()) => Ok(Observation::Present(Outputs::new())),
             Err(err) if err.status == Some(404) => Ok(Observation::Absent {
                 predicted: Outputs::new(),
@@ -78,6 +88,7 @@ impl Tool for GitHubActionsSecretEnsure {
 
     fn ensure(&self, inputs: &Inputs, token: &SinkToken) -> Result<Ensured, ToolError> {
         let (repo, name) = self.key_ports(inputs)?;
+        let client = self.scoped_client(inputs)?;
         let value = inputs
             .get(&port("value"))
             .ok_or_else(|| invalid("port `value` is required"))?;
@@ -90,14 +101,14 @@ impl Tool for GitHubActionsSecretEnsure {
         // Fetch the key first, so the plaintext's lifetime in this
         // process is exactly "between expose and seal" — not stretched
         // across a network round trip it does not need to survive.
-        let public_key = self.client.get_public_key(&repo).map_err(to_tool_error)?;
+        let public_key = client.get_public_key(&repo).map_err(to_tool_error)?;
         // The one place in this crate the plaintext exists: read here,
         // handed straight to `seal`, and dropped immediately after.
         // Never `Debug`-formatted, never placed in a `ToolError`.
         let plaintext = object.expose(token);
         let encrypted_value = crate::seal::seal(&public_key.key, plaintext.as_bytes())?;
         drop(plaintext);
-        self.client
+        client
             .put_actions_secret(&repo, &name, &encrypted_value, &public_key.key_id)
             .map_err(to_tool_error)?;
         // A sink whose value can never be read back always writes when

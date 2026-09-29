@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-providers-github/tests/catalog_parity.rs
-assertion_line: 59
+assertion_line: 76
 expression: repo
 ---
 {
@@ -12,6 +12,13 @@ expression: repo
       "ty": {
         "kind": "exact",
         "type": "GitHubRepo"
+      }
+    },
+    "token": {
+      "required": false,
+      "ty": {
+        "kind": "exact",
+        "type": "GitHubToken"
       }
     },
     "visibility": {

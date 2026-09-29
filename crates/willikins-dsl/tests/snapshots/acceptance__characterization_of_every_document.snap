@@ -485,6 +485,19 @@ CHECK ERRORS:
 CHECK ERRORS:
 - kind=UnknownPort display=names.for_each (tool `naming.v1`): no such port json={"kind":"UnknownPort","site":{"kind":"port","node":"names","port":"for_each"},"tool":"naming.v1"}
 
+=== workflows/github-repo-token-from-doppler.yaml ===
+WARNINGS:
+TYPES:
+token_secret.config: DopplerConfig
+token_secret.name: SecretName
+token.value: DopplerSecretValue
+repo_ref.repo: GitHubRepo
+repo_ref.token: GitHubToken
+OUTPUTS:
+repo: GitHubRepo
+PLAN:
+PLAN ERROR: node `token_secret`: NotFound: no secret at `third-thoughts/prd#GH_CLONE_TOKEN`
+
 === workflows/new-rust-service-buildkite.yaml ===
 WARNINGS:
 TYPES:

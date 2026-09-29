@@ -32,6 +32,7 @@ impl GitHubActionsSecretEnsure {
         inputs.insert(port("repo"), exact("GitHubRepo", true));
         inputs.insert(port("name"), exact("ActionsSecretName", true));
         inputs.insert(port("value"), any_secret(true));
+        inputs.insert(port("token"), exact("GitHubToken", false));
         Self {
             spec: ToolSpec {
                 name: tool_name(Self::TOOL_NAME),

@@ -14,14 +14,14 @@
 use std::sync::Arc;
 
 use willikins_core::tool::helpers::{
-    conflict, exact, get, port, require_present, scalar, tool_name,
+    conflict, exact, get, get_optional, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
-use willikins_types::GitHubRepo;
+use willikins_types::{GitHubRepo, GitHubToken};
 
-use crate::client::{GitHubClient, to_tool_error};
+use crate::client::{GitHubClient, ScopedClient, to_tool_error};
 
 /// `github.repo.get`.
 pub struct GitHubRepoGet {
@@ -35,6 +35,7 @@ impl GitHubRepoGet {
     pub fn new(client: Arc<GitHubClient>) -> Self {
         let mut inputs = indexmap::IndexMap::new();
         inputs.insert(port("repo"), exact("GitHubRepo", true));
+        inputs.insert(port("token"), exact("GitHubToken", false));
         let mut outputs = indexmap::IndexMap::new();
         outputs.insert(port("repo"), scalar("GitHubRepo"));
         Self {
@@ -68,7 +69,9 @@ impl GitHubRepoGet {
     fn lookup(&self, inputs: &Inputs) -> Result<Outputs, ToolError> {
         require_present(&self.spec, inputs)?;
         let repo: GitHubRepo = get(inputs, "repo")?;
-        match self.client.get_repo(&repo) {
+        let token: Option<GitHubToken> = get_optional(inputs, "token")?;
+        let client = ScopedClient::default_for(&self.client, token.as_ref());
+        match client.get_repo(&repo) {
             Ok(body) if body.archived => Err(conflict(format!(
                 "`{repo}` is archived; a pipeline could never build on it"
             ))),
