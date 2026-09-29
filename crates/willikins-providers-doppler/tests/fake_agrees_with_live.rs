@@ -8,21 +8,34 @@
 //! the same gap for Buildkite after mutation found the fake and live
 //! copies of a frozen form could drift while every other test in both
 //! crates stayed green; this file is this milestone's own instance of
-//! that check, for the two config-inheritance tools milestone 3 added.
+//! that check, for the two config-inheritance tools milestone 3 added,
+//! and (milestone 3e task B1) `doppler.branch_config.ensure`.
 //!
 //! Method: for each observation shape (`Present`, `Absent`, `Mismatch`,
 //! and the missing-parent tolerance) seed the fake's state and serve the
 //! live tool a mock body standing for *the same real world*, then assert
 //! both tools answer the same way.
+//!
+//! **The one limit this file records rather than works around**: the fake
+//! `doppler.branch_config.ensure` has no concept of `root` or of one
+//! config's `environment` (`FakeState::doppler_configs` is
+//! membership-only), so it cannot model the live tool's `Foreign` case at
+//! all — the same limit `inheritable_explicitly_false_agrees`'s own
+//! neighbourhood already lives with for the inheritance tools. Only
+//! `Present`/`Absent` are proven equal below.
 
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{Inputs, Observation, PortName, Tool, Value};
-use willikins_providers_doppler::{DopplerClient, DopplerConfigInheritableEnsure};
+use willikins_providers_doppler::{
+    DopplerBranchConfigEnsure, DopplerClient, DopplerConfigInheritableEnsure,
+};
 use willikins_providers_fake::FakeState;
 use willikins_providers_http::testing::{MockProvider, load_fixture};
 use willikins_providers_http::{Credential, Http};
-use willikins_types::{DomainType, DopplerConfig};
+use willikins_types::{
+    DomainType, DopplerConfig, DopplerConfigName, DopplerProject, EnvironmentSlug,
+};
 
 fn fixtures_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures")
@@ -255,6 +268,89 @@ fn inherits_mismatch_on_an_extra_agrees() {
         Mutex::new(state),
     ))
     .read(&inherits_inputs())
+    .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+fn branch_project() -> DopplerProject {
+    DopplerProject::parse("walter").unwrap()
+}
+
+fn branch_environment() -> EnvironmentSlug {
+    EnvironmentSlug::parse("prd").unwrap()
+}
+
+fn branch_name() -> DopplerConfigName {
+    DopplerConfigName::parse("deployment_ios").unwrap()
+}
+
+fn branch_inputs() -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(
+        PortName::parse("project").unwrap(),
+        Value::known(branch_project()),
+    );
+    inputs.insert(
+        PortName::parse("environment").unwrap(),
+        Value::known(branch_environment()),
+    );
+    inputs.insert(
+        PortName::parse("branch").unwrap(),
+        Value::known(branch_name()),
+    );
+    inputs
+}
+
+fn live_branch_config_tool(url: String) -> DopplerBranchConfigEnsure {
+    let credential = Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
+    let http = Http::new(url, Vec::new(), credential);
+    DopplerBranchConfigEnsure::new(Arc::new(DopplerClient::new(http)))
+}
+
+#[test]
+fn branch_config_absent_agrees_with_an_empty_fake_state() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=walter&config=prd_deployment_ios",
+        )
+        .with_status(404)
+        .with_body(fixture("error_404").to_string())
+        .create();
+
+    let live = live_branch_config_tool(provider.url())
+        .read(&branch_inputs())
+        .unwrap();
+    let fake = willikins_providers_fake::tools::DopplerBranchConfigEnsure::new(Arc::new(
+        Mutex::new(FakeState::new()),
+    ))
+    .read(&branch_inputs())
+    .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn branch_config_present_agrees_with_a_seeded_fake_state() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=walter&config=prd_deployment_ios",
+        )
+        .with_status(200)
+        .with_body(fixture("branch_config_get_present").to_string())
+        .create();
+
+    let live = live_branch_config_tool(provider.url())
+        .read(&branch_inputs())
+        .unwrap();
+    let seeded_config = DopplerConfig::parse("walter/prd_deployment_ios").unwrap();
+    let state = FakeState::new().with_doppler_config(&seeded_config);
+    let fake = willikins_providers_fake::tools::DopplerBranchConfigEnsure::new(Arc::new(
+        Mutex::new(state),
+    ))
+    .read(&branch_inputs())
     .unwrap();
     assert_eq!(shape(&live), shape(&fake));
 }

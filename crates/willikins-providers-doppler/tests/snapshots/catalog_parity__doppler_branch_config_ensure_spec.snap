@@ -1,0 +1,41 @@
+---
+source: crates/willikins-providers-doppler/tests/catalog_parity.rs
+expression: "spec_json(DopplerBranchConfigEnsure::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "Ensure a named branch config exists under an environment's root config.",
+  "inputs": {
+    "branch": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerConfigName"
+      }
+    },
+    "environment": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "EnvironmentSlug"
+      }
+    },
+    "project": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerProject"
+      }
+    }
+  },
+  "key": [
+    "project",
+    "environment",
+    "branch"
+  ],
+  "name": "doppler.branch_config.ensure",
+  "outputs": {
+    "config": "DopplerConfig"
+  },
+  "pure": false
+}
