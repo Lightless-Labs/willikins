@@ -332,6 +332,104 @@ rather than red-then-green in separate steps, since the `From` impl is what the 
 to compile at all (the missing impl is a compile error, not a runtime red); the tests were run once,
 immediately after, never against a stub.
 
+**Addendum:** 2026-09-29 (implementer) — **T3c landed, two commits** (`98bad49`,
+next commit). Task T3 as amended by decisions 1, 2 and 6.
+
+Commit 1 (`98bad49`): the two Walter gates T3 needed and the plan left undesigned
+("Walter, for T3 (not designed here)") — `appstore.app.get` (M1, a leaf: `GET
+/v1/apps` filtered by `bundleId`, exact client-side compare, paginated the same
+defensive way `list_bundle_ids` treats an unconfirmed filter semantic) and
+`appstore.app_group.gate` (M2, one per identifier: resolves the parent bundle id
+the same "unregistered is `Absent`" way `appstore.bundle_id_capability.ensure`
+does, then checks the `APP_GROUPS` row on `list_bundle_id_capabilities`; passes
+`identifier` through as its own output, per decision (j) point 2, so a profile
+node orders after *this* gate rather than merely after registration). Both
+`pure`, no key, `Class::Reversible`, `ensure` the identity of `read`. Fake twins,
+catalog registration, `LIVE_TOOL_NAMES` 27 → 29 at every pinned site (including
+a pre-existing one-behind staleness in `willikins-providers-doppler/tests/live_catalog.rs`,
+fixed in passing, not introduced here), `catalog_parity`, `fake_agrees_with_live`
+(six new behavioural-agreement tests), `pure_tools_agree.rs`'s 13 → 15 case list.
+Scoped gates green: fmt; clippy `-p willikins-providers-appstore -p
+willikins-providers-fake -p willikins-server -p willikins-providers-doppler
+--all-targets -D warnings`; `cargo test` over the same four crates; `cargo check
+-p willikins-types`; `cargo test -p willikins-dsl --test acceptance` (byte-identical
+-- no document names either tool yet).
+
+Commit 2 (next): `workflows/walter-ios-app.yaml` and
+`crates/willikins-cli/tests/walter_document.rs`. The document: the seven-node
+ASC credential chain; `app_id`/`nse_id`/`widgets_id` (names bound through the
+`AppleBundleIdentifier => AppleBundleIdName` conversion, decision (h)); the host
+capabilities `healthkit`/`push`/`data_protection` (the last with `setting:
+${{ inputs.data_protection }}`, default `PROTECTED_UNTIL_FIRST_USER_AUTH`); the
+leaf `app_record` gate; the three `app_group.gate` nodes (`app_app_groups`/
+`nse_app_groups`/`widgets_app_groups`); the three profiles (named through the
+`=> AppleProfileName` conversion, each binding `identifier` from its own
+app-group gate, never from the registration node — the data edge decision (j)
+point 2 asks for); their content into Doppler (`app_profile_to_doppler` etc.,
+against a dedicated `prd_config` node, since `doppler.secret.set`'s `config`
+port is `derived_only`); `naming.v1`, `doppler.project.ensure`, per-environment
+root configs and their inheritance; `monorepo_ref` (`github.repo.get`, never
+`ensure`); the Buildkite cluster and pipeline; and the four remaining manual
+steps (M3/M5/M6/M7) as `operator.acknowledge` leaves. M0 (base-config names) and
+M4 (profiles) are gone, exactly as decisions 2 and 1 say; M1/M2 are the two
+observed gates above.
+
+**Two gaps found and recorded, not papered over:**
+1. **No tool can create a *named branch* Doppler config.** Operator decision 2
+   asks for one config, `prd_deployment_ios`, inheriting the three base
+   configs; `doppler.config.ensure` only ever derives a config named after its
+   *environment* (`naming::v1::doppler_root_config`), and `EnvironmentSlug`'s
+   own grammar (kebab-case, 16 characters) cannot even spell that name (snake_case,
+   19 characters). The document instead makes every root config (`dev`/`stg`/`prd`)
+   inherit the three base configs — strictly broader than asked (`dev`/`stg`
+   gain the deployment credentials too). A new tool (or an optional `name` port
+   on `doppler.config.ensure`) is the real fix; out of this task's scope.
+2. **`willikins_types::DopplerConfigName`'s grammar (`[a-z0-9_]+`, no hyphen)
+   cannot spell the `github` project's two real base-config names** (`lightless-labs`,
+   `bande-a-bonnot`, both hyphenated). The document's `base_configs` default
+   substitutes `github/bande_a_bonnot` (underscore) so it type-checks; this is
+   **not** the real config's name. Before a real apply, either the grammar is
+   widened to admit a hyphen (its own type change, with knock-on proptests and
+   JSON-schema-pattern snapshots) or the operator renames the config.
+
+Both gaps are recorded in the document's own header comment (two `KNOWN GAP`
+blocks) and carried to the operator via `needs_operator`, not worked around.
+
+Tests: `crates/willikins-cli/tests/walter_document.rs`, in-process against the
+fake catalog (`check`/`plan`/`apply`, `Approval::Human` since
+`appstore.profile.ensure`'s `Class::Destructive` requires it on every run,
+including a run whose profiles are all skipped). One shared `FakeState` across
+three sequential runs: (1) nothing seeded beyond the credential chain, the
+monorepo, the Buildkite cluster and the certificate — `app_record` and the
+three app-group gates `Blocked`, the four acknowledgement leaves `Blocked`, the
+three profiles and their `doppler.secret.set` nodes `Skip` (never read), every
+independent node (bundle ids, capabilities, Doppler, Buildkite, the monorepo
+reference) plans and applies for real; (2) the fake state is mutated directly
+between runs (`apple_apps`/`apple_bundle_id_capabilities`) to stand in for the
+operator's own portal work — a fresh plan shows exactly the four acknowledgement
+leaves still blocked, the two observed gates now `Compute`, and the three
+profiles plus their Doppler writes newly `Create`, with every node from run 1
+reading `Unchanged`/`NoOp`; (3) the four acknowledgement inputs are supplied
+(`done`) — nothing is `Blocked` or `Skip`, every node applies clean. A second
+test proves `check` alone (the type system's own static proof that no secret
+reaches a non-secret port). Every plan/applied JSON, across all three runs, is
+asserted free of the signing key's PEM marker and the fake profile tool's own
+plaintext content prefix, carrying only `[REDACTED` markers for the two secret
+ports (`key`, `content`). Characterization: the new document's own entry
+(byte-identical elsewhere; fails `plan` at `issuer_id_text`'s `NotFound`, same
+precedent as the signing document).
+
+Scoped gates for commit 2: `cargo fmt --all --check`; `cargo clippy -p
+willikins-cli --all-targets -D warnings`; `cargo test -p willikins-cli` (full
+crate, green); `cargo check -p willikins-types`; `cargo test -p willikins-dsl
+--test acceptance` (characterization snapshot additive only).
+
+**Honest limits.** The dry run (task's own "written and run by the attacker
+after task 3") is not part of this commit — it needs a working sandbox
+Buildkite token (still `401` as of the plan's pre-flight) and is explicitly the
+next lane's job. The live capability cycle's own gaps (verify items) are
+unaffected by this task. Plan not marked Completed.
+
 ## Goal
 
 One workflow document, `workflows/walter-ios-app.yaml`, provisions everything a provider API can
