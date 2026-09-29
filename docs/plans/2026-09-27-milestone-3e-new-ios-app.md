@@ -486,6 +486,154 @@ unaffected by this task. Plan not marked Completed.
   stderr nor the journal file ever carrying the signing key's PEM marker or a
   fake profile's plaintext content.
 
+**Addendum:** 2026-09-29 (implementer) — **task B1 landed: `doppler.branch_config.ensure`,
+closing gap 1 from T3c's addendum, and the Walter document now creates the
+operator's real `prd_deployment_ios` layout (operator decision 2, 2026-09-28).**
+
+Established from `docs.doppler.com`'s own `.md` twins, fetched verbatim
+2026-09-29 (`configs-create.md`, `configs-get.md`, `configs-object.md`,
+`branch-configs.md`): `POST /v3/configs` (body `project`, `environment`,
+`name`) creates a branch config; `GET /v3/configs/config` (already the
+endpoint `doppler.config.ensure` uses) reads one back, `root: false` and an
+`environment` field distinguishing it from an environment's own root config.
+Whether that `name` must already carry the `<environment>_` prefix or
+Doppler applies it server-side is *not* settled by either page — but it is
+already settled **empirically**, and pinned in this very plan
+(`docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`, "Notes for
+milestone 3"): the milestone 2 live write cycle posted `name: "probe"` under
+environment `dev` and got a `400`, then posted `name: "dev_probe"` and had it
+stored as `dev_probe`, `root: false` — Doppler does **not** prefix
+server-side. A caller must supply the full, already-prefixed name.
+
+**New tool, not a port on `doppler.config.ensure` — reconsidered once, then
+settled.** The first draft of this task treated the gap as "extend
+`doppler.config.ensure` with an optional `name` port", reasoning by analogy
+to `appstore.bundle_id_capability.ensure`'s optional `setting` port and the
+mechanical fact (verified against `crates/willikins-core/src/plan.rs`, not
+assumed) that `for_each` instance keys are `Value::render()` of the item, not
+`ToolSpec.key` — so `spec.key` genuinely does not need to grow to
+disambiguate two named configs under one environment, contrary to an
+initial mechanical objection. That fact stands, but it was the wrong reason
+to decide the question either way: the real discriminator is the
+**observation contract**. `doppler.config.ensure`'s `Present` is "`200` and
+`root: true`"; a branch config's is "`200`, `root: false`, and this
+environment" — the flag the root tool keys its whole identity on is
+*inverted*, not merely narrowed under the same predicate the way `setting`
+narrows `appstore.bundle_id_capability.ensure`'s (same endpoint, same
+`Present` shape, one more conjunct). `ensure`'s create path also calls a
+genuinely different endpoint (`POST /v3/environments` versus `POST
+/v3/configs`). A tool whose observation contract flips depending on whether
+an optional port is bound is two tools sharing one spec, and three things
+already on `main` pin the root tool's identity to "root, specifically": its
+own description, the `docs/HANDOFF.md` architecture-gotcha ("`doppler.config.ensure`
+needs `root: true`"), and this plan's own T3c framing of this exact gap
+("the naming rule is settled, **the tool is not**", line ~386 before this
+addendum). So: `doppler.branch_config.ensure`, a new tool, following the
+dotted-name style `doppler.config.inherits.ensure` already set. Full
+rationale, including the reconsidered mechanical argument, is in the tool's
+own module doc
+(`crates/willikins-providers-doppler/src/tools/branch_config_ensure.rs`).
+
+**Port shape: `branch` is the suffix, not the full name.** Given the
+prefix is mandatory and the tool must assemble it, the port takes only the
+suffix (`deployment_ios`, typed `DopplerConfigName` — its grammar and length
+bound already fit a suffix as well as a full name); `full_name` snake-joins
+`<environment's words().snake()>_<branch>` and **re-parses** the result as a
+`DopplerConfigName` before it ever reaches the wire, so Doppler's 60-character
+"Config Slug" cap (documented as counting the environment prefix) fails
+loudly at construction for a branch name that would not fit, rather than
+reaching Doppler as an unparseable or ambiguously-refused request. This
+mirrors `naming::v1::doppler_root_config`'s own snake join, but is **not**
+added to `naming::v1` (frozen) or a new `v2` row: assembling a provider's own
+mandatory wire format is mechanism, the same reasoning `doppler_root_config`
+itself already rests on, not the policy `naming::v1` exists to hold — and
+today only one document needs it.
+
+**Read.** `Present` needs `root == Some(false)` **and** the fetched config's
+own `environment` field to equal the one this tool was asked to ensure under
+(`ConfigBody` gained an `environment: Option<String>` field for this);
+anything else at `200` is `Foreign` (mirroring, inverted, the collision
+guard `doppler.config.ensure`'s own `root: true` check already
+carries — a same-named branch under a different environment, or, vanishingly
+unlikely, an environment's own root config sitting at this literal name).
+A missing project or config is `Absent` through the same
+`looks_like_a_missing_project` predicate `doppler.config.ensure` already
+applies to the identical endpoint.
+
+**Verify item, not assumed true** (new verify item 13, added below): what
+Doppler answers `GET /v3/configs/config` for a branch config that is absent
+from a project that *does* exist — as opposed to the missing-*project* case
+every Doppler `read` in this crate already tolerates — is unestablished by
+any primary source read for this task. `read_still_propagates_a_400_with_an_unrelated_message`
+(both this tool's own mock suite and `doppler.config.ensure`'s) shows an
+unknown `400` still fails the plan today; this task pins only the `404`
+shape as `Absent` and records the gap rather than guessing.
+
+**Landed:** `crates/willikins-providers-doppler/src/client.rs` (`create_branch_config`,
+`CreateBranchConfigBody`, `ConfigBody.environment`); `crates/willikins-providers-doppler/src/tools/branch_config_ensure.rs`
+(new); the fake twin `crates/willikins-providers-fake/src/tools/doppler_branch_config_ensure.rs`
+(membership-only, like its sibling — cannot model `Foreign`, recorded in its
+own module doc and in `fake_agrees_with_live.rs`'s updated header rather than
+worked around); thirteen new mock tests
+(`crates/willikins-providers-doppler/tests/branch_config_ensure_mock.rs`);
+two new `fake_agrees_with_live.rs` tests (`Present`/`Absent` only, per the
+limit above); a new `catalog_parity` spec-equality test plus its insta
+snapshot; `LIVE_TOOL_NAMES` 29 → 30 and `DOPPLER_TOOL_NAMES` 9 → 10 in
+`crates/willikins-server/src/catalog.rs` (`insert_doppler_tools` inserts it
+right after `doppler.config.ensure`); the fake catalog's own count 31 → 32
+and its `catalog_json_snapshot` (additive); every touched doc-comment count
+corrected in place (`willikins-providers-doppler/src/lib.rs` and
+`tools/mod.rs`, `willikins-providers-fake/src/lib.rs`,
+`willikins-providers-doppler/tests/live_catalog.rs`).
+
+**`workflows/walter-ios-app.yaml` rewired** to the real layout: `prd_config`
+now calls `doppler.branch_config.ensure` (`project`, `environment: prd`,
+`branch: deployment_ios`) instead of re-`ensure`ing the `prd` root config a
+second time; `inherit` now binds `config` from `prd_config`'s own output as
+a single scalar node (no longer `for_each`-ed over all three root configs);
+`configs` (the `dev`/`stg`/`prd` root configs) is unchanged and gains **no**
+inheritance — closing gap 1 from the T3c addendum exactly as decision 2
+asked, and narrowing what `dev`/`stg` can see (they no longer inherit the
+deployment credentials the old root-config approximation leaked to them).
+The document's own header comment and `base_configs`' description are
+corrected in place (dated, not silently rewritten); the `bande-a-bonnot-shared/ios_base`
+placeholder this plan's own SHARED VALUES table names above is now retired
+per decision 2, superseding that row.
+
+**Characterization snapshot: one existing entry changed, not only new ones
+added — flagged, not swept under.** The monorepo instructions this task ran
+under state the snapshot "may change only by the addition of new
+documents". `crates/willikins-dsl/tests/acceptance.rs`'s `characterize`
+records every node/port's resolved type for the whole document, so rewiring
+`prd_config`'s tool and inputs necessarily adds one line to the **existing**
+`walter-ios-app.yaml` entry (`prd_config.branch: DopplerConfigName`) and
+changes nothing else in it (`inherit.config`/`inherit.inherits` keep their
+existing types and lines, since the node's own port names and types are
+unchanged — only what feeds `config` changed, which this report does not
+capture instance-by-instance). Verified by diff before accepting: every
+other document's entry in the snapshot is byte-identical; the walter entry's
+only change is that one additive line. This is the direct, necessary
+consequence of the task's own instruction to rewire the Walter document
+itself — recorded here rather than accepted silently, per the task's own
+"stop and report rather than improvise" posture.
+
+**Verify item 13** (new, alongside items 1–12 above): the absent-branch-config-in-an-existing-project
+`GET` response shape (400 vs 404) is unverified; see "Read" above.
+
+Gates run (scoped, this task's own crates): `cargo fmt --all --check`;
+`cargo clippy -p willikins-providers-doppler -p willikins-providers-fake -p
+willikins-server --all-targets -j 2 -- -D warnings` (clean); `RUST_TEST_THREADS=2
+cargo test -p willikins-providers-doppler -p willikins-providers-fake -j 2
+--no-fail-fast` (green throughout, every new test passing, both new insta
+snapshots additive-only, verified by diff); `RUST_TEST_THREADS=2 cargo test
+-p willikins-server -j 2 --no-fail-fast` (catalog tests, MCP tool-list
+snapshot, additive-only); `cargo test -p willikins-cli -j 2 --no-fail-fast`
+(`walter_document.rs`'s three-run graph test unchanged and still green — the
+tool swap is transparent to its assertions, which never name `configs`/
+`inherit`/`prd_config` individually); `cargo check -p willikins-types -j 2`;
+`cargo test -p willikins-dsl --test acceptance -j 2` (the one flagged,
+verified additive change above). Plan not marked Completed.
+
 ## Goal
 
 One workflow document, `workflows/walter-ios-app.yaml`, provisions everything a provider API can
@@ -1365,6 +1513,13 @@ Buildkite token exists.
     convention snakes hyphens to underscores for Doppler config names, and Doppler's own docs do not
     settle whether a hyphen is even accepted. `workflows/walter-ios-app.yaml`'s `base_configs` default
     uses the underscored spelling pending a read-only list of that project's configs.
+13. **What does `GET /v3/configs/config` answer for a branch config absent from a project that does
+    exist** (task B1, 2026-09-29)? Every other Doppler `read` in this crate tolerates a missing
+    *project* (`404`, or a `400` naming "no access"); a missing *config* under an existing project is a
+    different case no primary source read for this task settles. `doppler.branch_config.ensure`'s mock
+    suite pins only the `404` shape as `Absent`; a `400` naming anything else still fails the plan
+    (`read_still_propagates_a_400_with_an_unrelated_message`). Verify before a real apply creates
+    `prd_config` for the first time against the operator's own workplace.
 
 ## Gates
 

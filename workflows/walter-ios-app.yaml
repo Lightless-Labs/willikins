@@ -55,18 +55,17 @@
 #   - M0 (confirming the shared base config names) is gone: operator
 #     decision 2 names the real configs below, not a placeholder.
 #
-# KNOWN GAP, recorded rather than papered over: operator decision 2 asks
-# for one branch config, `prd_deployment_ios`, inheriting the three base
-# configs below. No tool in this workspace can create a Doppler config
-# under any name but its environment's own root name (`doppler.config.ensure`
-# derives it via `naming::v1::doppler_root_config`, and `EnvironmentSlug`'s
-# grammar -- kebab-case, 16 characters -- cannot even spell
-# "prd_deployment_ios", which is snake_case and 19 characters). Until a
-# tool exists for a named branch config, this document instead makes every
-# ROOT config (`dev`, `stg`, `prd`) inherit the three base configs, which is
-# strictly broader than the operator asked for (`dev`/`stg` gain the
-# deployment credentials too, not only `prd`) -- recorded as `remaining`,
-# not implemented here.
+# **Superseded 2026-09-29 (milestone 3e task B1).** The KNOWN GAP this
+# comment used to record -- "no tool can create a named branch Doppler
+# config, so this document approximates by making every root config
+# inherit the three base configs" -- is closed: `doppler.branch_config.ensure`
+# now exists (`crates/willikins-providers-doppler/src/tools/branch_config_ensure.rs`),
+# and `prd_config` below creates the operator's real, single
+# `prd_deployment_ios` branch config, which alone inherits the three base
+# configs. `dev`/`stg`/`prd` are now plain root configs with no
+# inheritance, exactly as operator decision 2 asked -- `dev`/`stg` no
+# longer gain the deployment credentials the old approximation leaked to
+# them.
 #
 # SigNoz: nothing in this document calls it. Decision 2's "the SigNoz key
 # into Doppler" is satisfied by Doppler's own config inheritance from
@@ -104,7 +103,7 @@ inputs:
   buildkite_org: { type: BuildkiteOrg, description: "Buildkite organization the pipeline is created in" }
   cluster: { type: BuildkiteClusterName, description: "The Buildkite cluster the pipeline runs in" }
   environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
-  base_configs: { type: list<DopplerConfig>, default: [appstore-connect/deploy_ios, github/bande_a_bonnot, open-telemetry/prd_signoz], description: "Operator decision 2's real shared base configs, one substituted -- see the two KNOWN GAP notes above." }
+  base_configs: { type: list<DopplerConfig>, default: [appstore-connect/deploy_ios, github/bande_a_bonnot, open-telemetry/prd_signoz], description: "Operator decision 2's real shared base configs, inherited by prd_config alone (task B1) -- see the VERIFY ITEM note above for the github project's config-name spelling." }
   m3_repo_files_done: { type: OperatorAcknowledgement, description: "M3: Walter's files (BUILD.bazel, entitlements, Info.plist, .buildkite/) added under apps/walter/ in the monorepo, following the survey in the milestone plan." }
   m5_apns_key_done: { type: OperatorAcknowledgement, description: "M5: the team's APNs auth key (.p8) is confirmed in a shared base config Walter inherits, or freshly created if none exists." }
   m6_ci_doppler_access_done: { type: OperatorAcknowledgement, description: "M6: the Buildkite CI Doppler service account has been granted read access to project walter." }
@@ -287,10 +286,13 @@ steps:
       profile_type: IOS_APP_STORE
       certificate: ${{ steps.certificate.certificate }}
 
-  # --- Doppler: project walter, dev/stg/prd root configs, each inheriting
-  # the three base configs (see the KNOWN GAP note above); a dedicated prd
-  # config node feeds the three doppler.secret.set nodes below, since that
-  # port only ever binds a derived, non-pure node's own output ---
+  # --- Doppler: project walter, plain dev/stg/prd root configs (no
+  # inheritance), plus prd_config: the operator's real layout (decision 2,
+  # task B1) -- a single named branch config, prd_deployment_ios, under
+  # environment prd, created by doppler.branch_config.ensure and inheriting
+  # the three base configs below. The three doppler.secret.set nodes bind
+  # their own `config` from prd_config's own output, since that port only
+  # ever binds a derived, non-pure node's output. ---
   names:
     tool: naming.v1
     with:
@@ -306,17 +308,17 @@ steps:
     with:
       project: ${{ steps.doppler.project }}
       environment: ${{ item }}
-  inherit:
-    tool: doppler.config.inherits.ensure
-    for_each: ${{ steps.configs.config }}
-    with:
-      config: ${{ item }}
-      inherits: ${{ inputs.base_configs }}
   prd_config:
-    tool: doppler.config.ensure
+    tool: doppler.branch_config.ensure
     with:
       project: ${{ steps.doppler.project }}
       environment: prd
+      branch: deployment_ios
+  inherit:
+    tool: doppler.config.inherits.ensure
+    with:
+      config: ${{ steps.prd_config.config }}
+      inherits: ${{ inputs.base_configs }}
 
   # --- The three profiles' content, into Doppler ---
   app_profile_to_doppler:
