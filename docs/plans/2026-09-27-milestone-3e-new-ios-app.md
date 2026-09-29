@@ -2085,3 +2085,88 @@ Every existing document and the server keep working unchanged: the port is optio
   characterization snapshot gained exactly the one new document's own block, verified by diff (see
   above). The full workspace gate was not run (host rule; the coordinator's).
 
+**Addendum:** 2026-09-29 (R3, base configs checked at plan time) — **a new gate,
+`doppler.config.inheritable.gate`, closes the dry run's carried-forward finding**: a base config
+`doppler.config.inherits.ensure` is about to name that does not exist, or exists but is not marked
+inheritable, now blocks the plan instead of failing an apply mid-run after earlier nodes have
+already written.
+
+- **Gate, not a list-shaped check on the `.ensure` node itself, and why.** `doppler.config.inherits.ensure`'s
+  own `inherits` port is `pure: false` (it writes), so decision (j)'s `Gate` cannot live on that tool
+  at all (`Catalog::insert`'s `validate_gate` refuses a gate whose spec is not pure). A separate,
+  pure tool is the only shape decision (j) allows; that tool's own subject is a **single**
+  `config: DopplerConfig`, not the whole `list<DopplerConfig>` a document's `base_configs` input
+  carries, because `need`/`how` are `&'static str` (a gate never authors a string from its inputs)
+  and a list subject can only ever render the *whole* list back at a blocked report, never say which
+  entry is the actual problem — one gate per base config, `for_each`-expanded over a document's own
+  list, is the only shape that can point at the offender. `doppler.config.inheritable.gate` mirrors
+  `appstore.app_group.gate`'s own shape exactly: `config` in, `config` passed through as its own
+  output (decision (j) point 2, "a gate passes through the key it checked"), `subject: &["config"]`.
+- **Missing and non-inheritable both read `Absent`, never `Mismatch`.** The gate's own `observe` is
+  `crate::tools::DopplerConfigInheritableEnsure::observe` field for field (same `get_config` call,
+  same `inheritable == Some(true)` test, same `looks_like_a_missing_project` tolerance for a missing
+  parent project or config) with one difference in what the two readings *mean*: that tool's
+  `Absent` means "`ensure` will `POST` it inheritable"; this gate's `Absent` means "the operator must
+  make it true", because a shared base config living in another project (App Store Connect's,
+  GitHub's, `open-telemetry`'s) is not this document's to flip inheritable out from under whoever
+  else depends on its current state — the same posture `doppler.config.inherits.ensure`'s own module
+  doc already takes toward an unexpected *extra* inherited entry it will not silently drop. The
+  first draft of this task read "exists but not inheritable" as `Mismatch` (a hard `PlanError`,
+  never reachable through a re-run), on the theory that a boolean already sitting at the wrong value
+  is "something wrong" rather than "something missing" — but `appstore.app_group.gate`'s own
+  precedent already settles this the other way: "registered but `APP_GROUPS` not enabled" is
+  `Absent`, a thing the operator has not yet made true, not an ownership conflict. A gate's only
+  route to a hard `PlanError` is a genuine provider failure (a non-2xx this crate does not otherwise
+  tolerate, or a transport error): `read_propagates_a_genuine_provider_failure_rather_than_blocking`
+  proves a mocked `500` returns `Err`, distinct from every `Absent` shape this gate otherwise
+  tolerates (missing entirely, `404`; visible to no project this token can see, `400`; exists with
+  `inheritable: false`; exists with the field never mentioned at all — `config_get_present.json`'s
+  own omission, the same fixture `doppler.config.inheritable.ensure`'s own tests already read this
+  way) and the one `Present` shape (`inheritable: true`).
+- **Registered end to end, not designed in isolation.** `willikins-providers-doppler` (the live tool,
+  `crates/willikins-providers-doppler/src/tools/config_inheritable_gate.rs`) and
+  `willikins-providers-fake` (the fake twin,
+  `crates/willikins-providers-fake/src/tools/doppler_config_inheritable_gate.rs`) both gained it,
+  `catalog_parity.rs` pins their `ToolSpec`s equal (a new insta snapshot,
+  `catalog_parity__doppler_config_inheritable_gate_spec.snap`), and `willikins-server`'s live catalog
+  gained it too: `LIVE_TOOL_NAMES` 31 → 32, `DOPPLER_TOOL_NAMES` 10 → 11 (it needs the Doppler
+  credential, the same reason `doppler.secret.get` — also pure — sits there and not with the nine
+  provider-independent pure tools), `insert_doppler_tools` inserts it alongside
+  `doppler.config.inheritable.ensure`. `willikins-providers-fake`'s own catalog grew from 33 tools to
+  34 (`catalog_registers_every_fake_tool`'s exhaustive list and count, `catalog_json_snapshot`), and
+  `pure_tools_agree.rs` gained a case (seeding both `with_doppler_config` and
+  `with_doppler_config_inheritable` so its `read` answers `Present`, the shape that test requires of
+  every pure tool it lists).
+- **Mock and fake tests, present/missing/not-inheritable, as asked.** The live tool's own
+  `#[cfg(test)]` module (mock-server, `willikins_providers_http::testing::MockProvider`, exact query
+  string pinned on every case per the HANDOFF's own lesson) proves: present (`inheritable: true`);
+  absent when the field is `false`; absent when the field is never mentioned; absent on a `404`;
+  absent on the `400` "does not have access" shape; a genuine `500` propagates as an `Err` rather
+  than blocking; `Present` passes `config` through unchanged; `ensure` never issues a second (`POST`)
+  request and never reports `changed`. Every case reuses this crate's own already-verified fixtures
+  (`config_get_inheritable_true.json`, `config_get_inheritable_false.json`, `config_get_present.json`,
+  `error_404.json`, `error_400_no_access.json`, `error_5xx.json`) — no new fixture was needed. The
+  fake twin's own tests prove the same three shapes (does not exist; exists but not inheritable;
+  exists and inheritable) purely against `FakeState`'s existing `doppler_configs` and
+  `doppler_config_inheritable` sets, with no change to `FakeState` itself.
+- **Not wired into `workflows/walter-ios-app.yaml` — deliberately, not an oversight.** This task's
+  own boundary says the characterization snapshot of every document's `check` and `plan` may change
+  only by the addition of new documents; inserting a `doppler.config.inheritable.gate` node ahead of
+  `inherit` and rebinding `inherit.inherits` from it would edit an *existing* document's plan output
+  (new node, a rebound edge), which that boundary forbids. So Walter's own `inherit` node still binds
+  `inherits: ${{ inputs.base_configs }}` directly and still plans `Create` without this check — the
+  fix exists and is proven at the tool level, but the document that motivated it is not yet using it.
+  Recorded as `remaining`, for whoever wires it: one gate node per entry of `base_configs`
+  (`for_each: ${{ inputs.base_configs }}`, `config: ${{ item }}`), and `inherit.inherits` rebound to
+  the aggregated `${{ steps.<gate>.config }}` rather than `${{ inputs.base_configs }}` directly — the
+  `for_each`-gate aggregate-to-list path decision (j) point 3 describes (`aggregate_for_each_port`
+  over a `for_each` node's own `Skipped` instances) is designed but, as far as this task found, not
+  yet exercised by any shipped document; proving it belongs to that follow-up, not to this one.
+- **Scoped gates green:** `cargo fmt --all --check`; `cargo clippy -p willikins-providers-doppler -p
+  willikins-providers-fake -p willikins-server --all-targets -j 2 -- -D warnings`; `cargo test -p
+  willikins-providers-doppler -p willikins-providers-fake -j 2` (RUST_TEST_THREADS=2; two insta
+  snapshots accepted, diffed by hand before accepting — the new tool's own spec snapshot and exactly
+  one `+1 tool` entry in the fake catalog's snapshot, both reviewed above); `cargo test -p
+  willikins-server -j 2`, all green. The full workspace gate was not run (host rule; the
+  coordinator's).
+
