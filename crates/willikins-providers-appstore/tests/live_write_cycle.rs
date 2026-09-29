@@ -1083,9 +1083,13 @@ fn appstore_live_profile_replace_cycle() {
         .expect("certificate output is an AppleCertificateId")
         .clone();
 
-    // Step 3: one throwaway identifier, UNIVERSAL (this test never
-    // submits the profile to App Review, so the platform choice is
-    // immaterial beyond "not something the operator uses").
+    // Step 3: one throwaway identifier, IOS ([`probe_platform`]), the
+    // platform Sample's identifiers use. The 2026-09-29 probes proved
+    // `HEALTHKIT` can be enabled on a fresh IOS identifier with or without
+    // a profile, and that the enable turns the profile ACTIVE -> INVALID.
+    // Until `AppstoreClient::list_bundle_id_capabilities` stops sending
+    // `limit` (Apple answers `400 PARAMETER_ERROR.ILLEGAL` on that path),
+    // step 5 STOPs as `Provider: provider returned status 400`.
     let unique = run_unique_suffix();
     let identifier = throwaway_identifier(&unique);
     let bundle_id_tool =
