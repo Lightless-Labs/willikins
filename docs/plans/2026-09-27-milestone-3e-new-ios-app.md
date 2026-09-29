@@ -745,6 +745,50 @@ red-on-arrival suites fixed, one test gap closed, eleven mutations (one survived
   (`a512cb5`).
 - Verify items: none of 5–13 could move without a provider call; item 14 is new (below).
 
+**Addendum:** 2026-09-29 (diagnosis) — **the replace cycle's STOP at "capability enable" was
+willikins' own capability list, not Apple refusing `HEALTHKIT` on an `IOS` identifier.**
+`GET /v1/bundleIds/{id}/bundleIdCapabilities?limit=200` answers **`400`, `errors[].code`
+`PARAMETER_ERROR.ILLEGAL`, `errors[].title` "A given parameter is not allowed for this request"**; the
+same `GET` with no query answers `200`. Every `appstore.bundle_id_capability.ensure` `read` and `ensure`
+starts with that list, and `AppstoreClient::list_bundle_id_capabilities` has sent `?limit=200` since
+`e4ba9af` (the pagination addendum above), which landed **after** the last live capability cycle, so
+no live run had sent it before. The App Store Connect OpenAPI description 4.5 (fetched 2026-09-29)
+lists `limit` (maximum 200) on this path; Apple refuses it. Observed on `IOS` identifiers; the code
+names the parameter, not the platform, and `UNIVERSAL` was not re-probed.
+- **Two live probes**, `appstore_live_ios_capability_probe` (`fdcf332`), each on one fresh `IOS`
+  throwaway `com.willikins.probe.delete-me.<pid>-<unix-seconds>`, deleted by its create id in the same
+  guarded run. Probe 1 (no profile): the list `400`, the tool's `read` `Provider: provider returned status
+  400`, a raw `POST /v1/bundleIdCapabilities` for `HEALTHKIT` **accepted, `201`**. Probe 2 (one throwaway
+  `IOS_APP_STORE` profile first, `ACTIVE`): same `400` with `limit`; with no query the list read
+  `IN_APP_PURCHASE (settings null)` before and `HEALTHKIT (settings null), IN_APP_PURCHASE (settings
+  null)` after; the `POST` **accepted, `201`**; the profile then read **`profileState INVALID`**.
+  Certificates received `GET` only.
+- **Counts** 5 certificates / 13 profiles / 21 bundle ids before and after each probe; independent `404`s
+  on every deleted id; an independent recount afterwards (`appstore_counts_and_leftovers_probe`): 5
+  certificates (4 `DEVELOPER_ID_APPLICATION_G2`, 1 `DISTRIBUTION`), 13 profiles (11 `IOS_APP_STORE`
+  `ACTIVE`, 2 `INVALID`), 21 bundle ids, 0 throwaway leftovers.
+- **What it means.** Walter's capability nodes are sound on `IOS` identifiers as designed: the enable
+  works with or without a profile. An `IOS` identifier arrives with `IN_APP_PURCHASE` already enabled
+  (`settings null`), which the read rule already tolerates. Apple's documented invalidation ("Provisioning
+  profiles that contain a modified App ID become invalid") is **live-confirmed** on a throwaway, so the
+  replace cycle's way of producing an `INVALID` profile is right and needs no alternative. What blocks
+  replace-when-INVALID's live proof, the live capability cycle, and every capability node in `plan --live`
+  or `apply` on any platform is the client's `limit`. **Replace-when-INVALID stays mock-proven until
+  then.**
+- **Prescribed fix (not made here; a diagnosis task, and both live probes are spent):** the first request
+  of `list_bundle_id_capabilities` carries no query; keep following `links.next` (its query string only,
+  re-attached to the fixed path, as now). The capability mocks match `match_query(Any)`, so they would
+  not catch this either way: pin "the first request carries no `limit`" in a mock. Then re-run
+  `live_capability_cycle` and `appstore_live_profile_replace_cycle` once each. Apple's default page size
+  for this path stays unverified (two rows, `links.next` absent, say nothing about it).
+- **Harness, test-first** (`8c17ee5`, `b672c3d`): `tests/support/apple_error_report.rs`, whose tests run
+  in `tests/redaction.rs` in every gate, summarises Apple's error body as status plus every
+  `errors[].code` and `errors[].title`, never `errors[].detail`; `tool_ok` now repeats a `ToolError`
+  message only when willikins wrote it (`provider returned status N`, the fixed `401`/`403` and
+  parse-position texts), so this STOP now reads `Provider: provider returned status 400`; the raw profile
+  `POST` reports codes and titles. `b72e3f5` corrects the replace cycle's comment (the identifier is
+  `IOS`, not `UNIVERSAL`). Verify item 15 below is new and settled.
+
 ## Goal
 
 One workflow document, `workflows/walter-ios-app.yaml`, provisions everything a provider API can
@@ -1643,6 +1687,10 @@ Buildkite token exists.
     with `409` — now reported as "the INVALID profile at this key was deleted … re-run to create it"
     (`79a4f28`) — and converges on the next run. The written, unrun `appstore_live_profile_replace_cycle`
     settles it.
+15. **Does `GET /v1/bundleIds/{id}/bundleIdCapabilities` accept `limit`?** (2026-09-29.) The OpenAPI
+    description 4.5 says yes, up to 200. **Settled 2026-09-29, live: no** — `400 PARAMETER_ERROR.ILLEGAL`
+    "A given parameter is not allowed for this request"; with no query, `200`. The client still sends it
+    (`e4ba9af`); see the diagnosis addendum.
 
 **Verify list, 2026-09-29 (adversarial pass 2):** no provider was called, so items 5–13 are unchanged:
 5, 7 and 11 need the dry run or a live read; 6 stays irrelevant to correctness; 8, 9 and 10 need the
