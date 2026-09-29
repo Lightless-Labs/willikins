@@ -637,10 +637,11 @@ names.slug: ProjectSlug
 doppler.project: DopplerProject
 configs.project: DopplerProject
 configs.environment: EnvironmentSlug
-inherit.config: DopplerConfig
-inherit.inherits: list<DopplerConfig>
 prd_config.project: DopplerProject
 prd_config.environment: EnvironmentSlug
+prd_config.branch: DopplerConfigName
+inherit.config: DopplerConfig
+inherit.inherits: list<DopplerConfig>
 app_profile_to_doppler.config: DopplerConfig
 app_profile_to_doppler.name: SecretName
 app_profile_to_doppler.value: AppleProfileContent
