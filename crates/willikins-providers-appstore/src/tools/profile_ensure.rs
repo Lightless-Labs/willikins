@@ -336,6 +336,19 @@ impl AppstoreProfileEnsure {
             message: format!("App Store Connect returned a malformed profile id: {err}"),
         })?;
         let instance = client.get_profile(&profile_id)?;
+        // The id `ensure` deletes on the `INVALID` path is the one this
+        // instance read answered with, so it must be the row the exact
+        // name compare above matched: an answer carrying another id is
+        // tied to nothing this tool asked for, and is never acted on
+        // (2026-09-29 adversarial pass).
+        if instance.id != row.id {
+            return Err(ToolError {
+                kind: ToolErrorKind::Provider,
+                message: "App Store Connect answered the read of one profile with a \
+                          different profile's id; refusing to act on it"
+                    .to_string(),
+            });
+        }
         Self::resolve_instance(&instance, profile_type, certificate)
     }
 

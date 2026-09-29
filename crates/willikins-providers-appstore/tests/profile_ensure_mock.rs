@@ -409,6 +409,46 @@ fn ensure_stops_before_any_create_when_the_delete_fails() {
     create_mock.assert();
 }
 
+/// 2026-09-29 adversarial pass: the id `ensure` deletes is the one the
+/// single-instance read *answered with*, not the row the name compare
+/// matched. If the two ever differ, nothing ties the answered profile to
+/// this key any more -- so neither `read` nor `ensure` acts on it, and no
+/// `DELETE` is issued on either id.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn an_instance_read_answering_with_another_profiles_id_is_refused_and_nothing_is_deleted() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    mock_profile_list(&mut provider, &fixture("profile_list_one"));
+    mock_profile_get(&mut provider, 200, &fixture("profile_get_invalid_other_id"));
+    let delete_row = provider
+        .mock("DELETE", "/v1/profiles/PR0F1LE1D0001")
+        .with_status(204)
+        .expect(0)
+        .create();
+    let delete_other = provider
+        .mock("DELETE", "/v1/profiles/PR0F1LE1D0009")
+        .with_status(204)
+        .expect(0)
+        .create();
+    let create_mock = provider
+        .mock("POST", "/v1/profiles")
+        .with_status(201)
+        .with_body(fixture("profile_post_created").to_string())
+        .expect(0)
+        .create();
+
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    let read_err = tool.read(&inputs()).unwrap_err();
+    assert_eq!(read_err.kind, ToolErrorKind::Provider, "{read_err:?}");
+    let token = SinkToken::new();
+    let ensure_err = tool.ensure(&inputs(), &token).unwrap_err();
+    assert_eq!(ensure_err.kind, ToolErrorKind::Provider, "{ensure_err:?}");
+    delete_row.assert();
+    delete_other.assert();
+    create_mock.assert();
+}
+
 #[test]
 fn read_reports_conflict_when_the_profile_is_expired() {
     let mut provider = MockProvider::start();
