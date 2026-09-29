@@ -1744,3 +1744,67 @@ One lane at a time on `main`, in order; each commits by path with `git commit --
 5. **The dry run is blocked on a Buildkite token.** Tasks 1–3 do not need it.
 6. **Build time and disk.** Two small crates touched per task; the host's 60 GB target directory and
    the 04:00 cargo-sweep remain the constraint; never gate across the sweep.
+
+**Addendum:** 2026-09-29 (implementer) — **F1 and F2 landed, two commits** (`27a1a09`, `1a4f16d`),
+closing pass 2's finding 4 and the last sentence of its finding 1.
+
+- **F1: an approved plan now shows a replacement's delete, not only `Create`** (`27a1a09`). A tool-declared
+  hook, `Tool::replaces(&self, inputs: &Inputs) -> Result<bool, ToolError>`, default `false`, in the exact
+  manner of `Tool::gate()` and for the same stated reason: an `Observation` variant has about fifteen
+  exhaustive matches across the workspace and `Observation::Absent`'s own struct literal is built at
+  about forty call sites, so widening either would touch code this fix need not touch. `plan` calls it
+  only when a non-pure, non-gate tool's `read` has already answered `Absent` — exactly the case that
+  would otherwise plan `Action::Create` — so every other tool's plan, `read_calls` count, and the fake's
+  own bookkeeping are unaffected. A `true` answer plans `Action::Replace` instead, an additive sibling of
+  `Blocked` and `Skip`, riding in `InstanceFingerprint::action` as `"replace"` exactly as they do.
+  `Plan` gains `replacing: Vec<Replacing>` (`#[serde(default, skip_serializing_if = "Vec::is_empty")]`,
+  learning finding 1's own lesson so the field is never `required` in the published MCP schema), mirroring
+  `Plan.blocked`: each entry names the node, instance, tool, and the resource's own key ports
+  (`ToolSpec::key`) rendered from the bound inputs `plan_one` already holds — known already, since a key
+  port must be `Known` before `Tool::read` is even called, and rendered through `Value::render()`, so it
+  is no secret by construction the same way `BlockedGate::subject` is. `AppstoreProfileEnsure::replaces`
+  re-resolves the bundle id and profile row (the same cost `ensure` already pays to re-resolve at apply
+  time) and answers `true` only for the one `INVALID` record at this exact key; the fake twin mirrors it
+  without incrementing `read_calls`. The CLI's `action_text` renders `Replace` (the compiler forced the
+  new arm); a new `replacing:` section, beside `blocked:`, names what goes away, in both the CLI text and
+  therefore the approval text an operator or approver reads before granting a `Destructive` plan. The MCP
+  `plan` tool's description now tells an agent to forward a non-empty `replacing` entry's `subject` to the
+  approver; `PlanResponse` carries the field for free, since it embeds the same `Plan` type.
+  Tests, test-first: `profile_ensure_mock.rs`'s four `replaces_*` mock tests (`INVALID` → `true`;
+  `ACTIVE`, absent, and a different-named `INVALID` row → `false`; no `DELETE` or `POST` mock registered
+  at all); `fake_agrees_with_live.rs`'s three `profile_replaces_is_*_and_agrees` parity tests; and
+  `profile_documents.rs`'s `an_invalid_profile_plans_as_a_replacement_naming_the_profile_by_its_non_secret_name`,
+  which plans the real signing document (`workflows/appstore-signing-profile-from-doppler.yaml`) against
+  a new `workflows/fixtures/state/appstore-signing-profile-invalid.json` and asserts `Action::Replace`
+  plus one `Plan::replacing` entry naming the profile by its own `(identifier, name)` — both equal to
+  `com.example.willikins-demo`, the document's own convention, never a secret. The existing ACTIVE-profile
+  positive test now asserts `Action::NoOp` and an empty `Plan::replacing` explicitly, so the two arms are
+  both pinned in the same file. `render.rs` gained `plan_text_shows_a_replacement_and_names_what_it_deletes`
+  and its mirror, `plan_text_has_no_replacing_section_when_nothing_replaces`. Every `Plan { .. }` struct
+  literal in the tree (about twenty, across `willikins-cli`, `willikins-core` and `willikins-journal`'s
+  own tests) gained `replacing: Vec::new()` mechanically; none of their behaviour changes. Not done, left
+  for the coordinator: a `Replaced` `NodeStatus`, or a `replacing` field on `Applied`/`RunRecord` — `apply`
+  already re-plans before running and its own node line is the same `PlannedNode`, so `Action::Replace`
+  reaches it for free without either.
+- **F2: `BlockedGate.awaiting_inputs` gets a serde default** (`1a4f16d`). The field arrived at task G3,
+  after `BlockedGate` already derived `Deserialize` at G2, with no `#[serde(default)]` — so a
+  `RunFinished { Blocked }` journal line written by a binary built between G2 and G3 carries no
+  `awaiting_inputs` key at all, and replaying it now failed outright rather than reading it as empty.
+  Fixed with the one attribute; a new test,
+  `a_run_finished_blocked_line_without_awaiting_inputs_still_deserializes`
+  (`crates/willikins-journal/tests/event_shapes.rs`), parses such a line directly and confirms it still
+  round-trips forward. The fix also drops the field from its own published JSON Schema `required` list —
+  the identical corrective move pass 2's finding 1 made for the other three fields, so the
+  `schema_generation` and MCP tool-list snapshots moved the same way, additively.
+- **Both verified test-first**: F2's fix was confirmed red without `#[serde(default)]` (a fresh failure
+  reproduced by temporarily reverting the attribute) and green with it, before either commit.
+- **Gates run, scoped, both commits**: `cargo fmt --all --check`; `cargo clippy --all-targets -D warnings`
+  on every touched crate (`willikins-core`, `willikins-cli`, `willikins-journal`, `willikins-server`,
+  `willikins-providers-appstore`, `willikins-providers-fake`); `cargo test` over the same crates, every
+  suite green (schema-generation and MCP tool-list snapshots accepted additively, reviewed diff by diff
+  before accepting); `cargo test -p willikins-dsl --test acceptance` — the characterization snapshot is
+  byte-identical, confirmed by a passing run with no `INSTA_UPDATE`, not merely by inspection. The full
+  workspace gate was not run (host rule; the coordinator's).
+- **Not settled, unaffected by this addendum**: the plan's own open verify items (5–14) and the
+  T3-blocking `NotFound`-at-plan-time finding from the 2026-09-28 pass; neither touches gates,
+  acknowledgement, or replace-when-INVALID's own resolution logic. Plan not marked Completed.
