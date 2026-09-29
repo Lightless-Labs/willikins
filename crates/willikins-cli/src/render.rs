@@ -324,7 +324,11 @@ pub fn describe_text(description: &Description) -> String {
 /// Render a [`Plan`] for text output: one line per planned node instance
 /// (its instance key, tool, and action) followed by its outputs; then, when
 /// [`Plan::blocked`] is non-empty, the `blocked:` section (decision (j));
-/// then workflow outputs, then the plan's class and approval requirement.
+/// then, when [`Plan::replacing`] is non-empty, the `replacing:` section
+/// (2026-09-29 addendum, finding 4) -- an `Action::Replace` node's own line
+/// already reads `Replace`, so this section is what names the resource that
+/// goes away, which the approval text otherwise never says; then workflow
+/// outputs, then the plan's class and approval requirement.
 #[must_use]
 pub fn plan_text(plan: &Plan) -> String {
     let mut lines = Vec::new();
@@ -336,6 +340,9 @@ pub fn plan_text(plan: &Plan) -> String {
     }
     if !plan.blocked.is_empty() {
         lines.extend(blocked_lines(&plan.blocked));
+    }
+    if !plan.replacing.is_empty() {
+        lines.extend(replacing_lines(&plan.replacing));
     }
     lines.push("outputs:".to_string());
     for (name, value) in &plan.outputs {
@@ -403,6 +410,39 @@ fn blocked_lines(blocked: &[willikins_core::BlockedGate]) -> Vec<String> {
     lines
 }
 
+/// The `replacing:` section (2026-09-29 addendum, milestone 3e's finding
+/// 4): a summary line, then one block per [`willikins_core::Replacing`]
+/// naming its node/instance, tool, and the resource's own key -- the
+/// [`Action::Replace`] node line above already reads `Replace`, but nothing
+/// before this section said a delete would happen or which resource it
+/// targets, which is what an approver reading a `Destructive` plan needs.
+/// Every rendered `subject` value goes through [`single_line`], exactly
+/// like [`blocked_lines`].
+fn replacing_lines(replacing: &[willikins_core::Replacing]) -> Vec<String> {
+    let mut lines = Vec::with_capacity(replacing.len() * 2 + 1);
+    lines.push(format!(
+        "replacing: {} node instance{} would delete an existing resource before creating fresh",
+        replacing.len(),
+        if replacing.len() == 1 { "" } else { "s" },
+    ));
+    for entry in replacing {
+        let header = match &entry.instance {
+            Some(instance) => format!(
+                "  {}[{}] ({}): deletes",
+                entry.node,
+                single_line(instance),
+                entry.tool
+            ),
+            None => format!("  {} ({}): deletes", entry.node, entry.tool),
+        };
+        lines.push(header);
+        for (port, value) in &entry.subject {
+            lines.push(format!("    {port}: {}", single_line(value)));
+        }
+    }
+    lines
+}
+
 /// Render a [`PlanError`] as one line of text.
 ///
 /// `plan`'s failures carry document-shaped strings of their own:
@@ -443,6 +483,7 @@ fn action_text(action: Action) -> &'static str {
     match action {
         Action::Compute => "Compute",
         Action::Create => "Create",
+        Action::Replace => "Replace",
         Action::NoOp => "NoOp",
         Action::Blocked => "Blocked",
         Action::Skip => "Skip",
@@ -741,6 +782,7 @@ mod tests {
             class: Class::Reversible,
             requires_approval: false,
             blocked: Vec::new(),
+            replacing: Vec::new(),
         };
 
         let text = plan_text(&plan);
@@ -794,6 +836,7 @@ mod tests {
             class: Class::Reversible,
             requires_approval: false,
             blocked: vec![blocked],
+            replacing: Vec::new(),
         };
 
         let text = plan_text(&plan);
@@ -854,6 +897,7 @@ mod tests {
             class: Class::Reversible,
             requires_approval: false,
             blocked: vec![blocked],
+            replacing: Vec::new(),
         };
 
         let text = plan_text(&plan);
@@ -875,6 +919,7 @@ mod tests {
             class: Class::Reversible,
             requires_approval: false,
             blocked: Vec::new(),
+            replacing: Vec::new(),
         };
         let text = plan_text(&plan);
         assert!(!text.contains("blocked:"), "text: {text}");
@@ -882,6 +927,98 @@ mod tests {
             !text.contains("re-run this document once done"),
             "text: {text}"
         );
+    }
+
+    /// 2026-09-29 addendum, milestone 3e's finding 4: an `Action::Replace`
+    /// node's line reads `Replace`, never `Create`, and the `replacing:`
+    /// section names the resource `ensure` would delete by its own
+    /// non-secret key -- an approver reading this text sees the delete,
+    /// not only a class flag that already said "approve me" either way.
+    #[test]
+    fn plan_text_shows_a_replacement_and_names_what_it_deletes() {
+        let mut inputs = willikins_core::Inputs::new();
+        inputs.insert(
+            PortName::parse("identifier").unwrap(),
+            Value::known(
+                willikins_types::AppleBundleIdentifier::parse("com.example.walter").unwrap(),
+            ),
+        );
+        inputs.insert(
+            PortName::parse("name").unwrap(),
+            Value::known(willikins_types::AppleProfileName::parse("com.example.walter").unwrap()),
+        );
+        let profile = PlannedNode {
+            name: NodeName::parse("profile").unwrap(),
+            instance: None,
+            tool: ToolName::parse("appstore.profile.ensure").unwrap(),
+            action: Action::Replace,
+            inputs,
+            outputs: Outputs::new(),
+        };
+        let replacing = willikins_core::Replacing {
+            node: NodeName::parse("profile").unwrap(),
+            instance: None,
+            tool: ToolName::parse("appstore.profile.ensure").unwrap(),
+            subject: vec![
+                (
+                    PortName::parse("identifier").unwrap(),
+                    "com.example.walter".to_string(),
+                ),
+                (
+                    PortName::parse("name").unwrap(),
+                    "com.example.walter".to_string(),
+                ),
+            ],
+        };
+        let plan = Plan {
+            workflow: willikins_types::WorkflowName::parse("test").unwrap(),
+            nodes: vec![profile],
+            outputs: IndexMap::new(),
+            class: Class::Destructive,
+            requires_approval: true,
+            blocked: Vec::new(),
+            replacing: vec![replacing],
+        };
+
+        let text = plan_text(&plan);
+        assert!(
+            text.contains("profile (appstore.profile.ensure): Replace"),
+            "text: {text}"
+        );
+        assert!(!text.contains(": Create"), "text: {text}");
+        assert!(
+            text.contains(
+                "replacing: 1 node instance would delete an existing resource before creating fresh"
+            ),
+            "text: {text}"
+        );
+        assert!(
+            text.contains("profile (appstore.profile.ensure): deletes"),
+            "text: {text}"
+        );
+        assert!(
+            text.contains("identifier: com.example.walter"),
+            "text: {text}"
+        );
+        assert!(text.contains("name: com.example.walter"), "text: {text}");
+        assert!(text.contains("requires_approval: true"), "text: {text}");
+    }
+
+    /// The mirror case: no replacement means no `replacing:` section --
+    /// unaffected by this addendum, exactly like the blocked case above.
+    #[test]
+    fn plan_text_has_no_replacing_section_when_nothing_replaces() {
+        let plan = Plan {
+            workflow: willikins_types::WorkflowName::parse("test").unwrap(),
+            nodes: Vec::new(),
+            outputs: IndexMap::new(),
+            class: Class::Reversible,
+            requires_approval: false,
+            blocked: Vec::new(),
+            replacing: Vec::new(),
+        };
+        let text = plan_text(&plan);
+        assert!(!text.contains("replacing:"), "text: {text}");
     }
 
     /// Acceptance test 14: a document's description text, however
@@ -1038,6 +1175,7 @@ mod tests {
             class: Class::Destructive,
             requires_approval: true,
             blocked: Vec::new(),
+            replacing: Vec::new(),
         };
 
         let text = plan_text(&plan);
@@ -1451,6 +1589,7 @@ mod tests {
                 class: Class::Reversible,
                 requires_approval: false,
                 blocked: Vec::new(),
+                replacing: Vec::new(),
             },
             requires_approval: false,
             approval: ApprovalRequirement::Automatic,

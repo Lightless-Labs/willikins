@@ -307,6 +307,58 @@ fn read_reports_absent_when_the_profile_state_is_invalid() {
     );
 }
 
+// ---------------------------------------------------------------------
+// `replaces` (2026-09-29 addendum, milestone 3e's finding 4): the plan
+// distinguishes "nothing here" from "an INVALID profile at this key",
+// and never causes a request of its own beyond the reads `resolve` always
+// makes.
+// ---------------------------------------------------------------------
+
+#[test]
+fn replaces_reports_true_when_the_profile_state_is_invalid() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    mock_profile_list(&mut provider, &fixture("profile_list_one"));
+    mock_profile_get(&mut provider, 200, &fixture("profile_get_invalid"));
+    // No DELETE or POST mock at all: `replaces` only reads.
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    assert!(tool.replaces(&inputs()).unwrap());
+}
+
+#[test]
+fn replaces_reports_false_when_present_and_healthy() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    mock_profile_list(&mut provider, &fixture("profile_list_one"));
+    mock_profile_get(&mut provider, 200, &fixture("profile_get_present_healthy"));
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    assert!(!tool.replaces(&inputs()).unwrap());
+}
+
+#[test]
+fn replaces_reports_false_when_the_identifier_is_not_registered() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_empty"));
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    assert!(!tool.replaces(&inputs()).unwrap());
+}
+
+#[test]
+fn replaces_reports_false_for_an_invalid_profile_of_a_different_name() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    // Same fixture `ensure_never_deletes_an_invalid_profile_of_a_different_name`
+    // uses: the only row is INVALID, but its name is a substring neighbor,
+    // so the exact-name compare excludes it before `profileState` is ever
+    // read.
+    mock_profile_list(
+        &mut provider,
+        &fixture("profile_list_substring_neighbor_invalid"),
+    );
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    assert!(!tool.replaces(&inputs()).unwrap());
+}
+
 #[test]
 #[allow(clippy::disallowed_methods)] // a test mints its own token
 fn ensure_replaces_an_invalid_profile_by_deleting_it_then_creating_fresh() {

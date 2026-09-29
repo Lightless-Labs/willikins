@@ -863,6 +863,7 @@ fn acceptance_08a_redaction_by_construction() {
         class: Class::Reversible,
         requires_approval: false,
         blocked: Vec::new(),
+        replacing: Vec::new(),
     };
     let tool_error = ToolError {
         kind: ToolErrorKind::Provider,

@@ -36,6 +36,13 @@ expression: schema
         }
       }
     },
+    "replacing": {
+      "description": "Every node instance this plan found [`Action::Replace`]: `ensure`\nwould delete an existing resource at this key before creating a\nfresh one (2026-09-29 addendum, milestone 3e's finding 4 --\n`docs/research/2026-09-29-m3e-adversarial-pass-2.md`). Empty for a\nplan whose every tool only ever creates -- the common case, and\nwhy this is `#[serde(default, skip_serializing_if =\n\"Vec::is_empty\")]` exactly like [`Plan::blocked`]: a plan that\nnever replaces anything serializes byte-identically to before\nthis field existed, and (learning finding 1's lesson) is never\n`required` in the published MCP schema either.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Replacing"
+      }
+    },
     "requires_approval": {
       "description": "Whether this plan should require human approval before running:\n`class.requires_approval()`.",
       "type": "boolean"
@@ -65,6 +72,11 @@ expression: schema
           "description": "The resource does not exist yet: `ensure` would create it.",
           "type": "string",
           "const": "create"
+        },
+        {
+          "description": "[`Tool::replaces`] reports that `ensure` would delete an existing\nresource at this key before creating a fresh one -- milestone 3e's\n\"replace-when-INVALID\" (2026-09-29 addendum). An additive sibling\nof `Create`, exactly as `Blocked` and `Skip` were: a document whose\ntools never replace anything never produces this value, so its\nplan is unaffected. See [`Plan::replacing`].",
+          "type": "string",
+          "const": "replace"
         },
         {
           "description": "The resource already exists and is ours: `ensure` would be a no-op.",
@@ -243,6 +255,49 @@ expression: schema
     "PortName": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "Replacing": {
+      "description": "One [`Action::Replace`] node instance in a [`Plan`]: which node (and,\nfor a `for_each` node, which instance) would have `ensure` delete an\nexisting resource before creating a fresh one, and the resource's own\nkey, rendered, so an approver can see exactly what goes away before\napproving a [`Class::Destructive`] plan that shows only `Replace`.\n\nMirrors [`BlockedGate`] rather than adding a new [`Observation`]\nvariant, for the reason [`crate::tool::Gate`] itself gives for\n[`Tool::gate`]: the smallest change that fits the existing model.\nPlain data, never a\n[`Value`]: `subject` is rendered text, from the node's own\n[`ToolSpec::key`] ports -- known already, since [`plan_one`] refuses to\ncall [`Tool::read`] at all when a key port is not\n[`crate::value::ValueState::Known`] ([`PlanError::KeyUnknown`]) -- so\nthis holds no secret by construction the same way\n[`BlockedGate::subject`] does.",
+      "type": "object",
+      "properties": {
+        "instance": {
+          "description": "The `for_each` instance key, if any; `None` for a node with no\n`for_each`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "node": {
+          "description": "The node whose `ensure` would replace something.",
+          "$ref": "#/$defs/NodeName"
+        },
+        "subject": {
+          "description": "The node's own key ports ([`ToolSpec::key`]), rendered from the\nbound input that reached each one, in declaration order.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/PortName"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "tool": {
+          "description": "The tool this node calls.",
+          "$ref": "#/$defs/ToolName"
+        }
+      },
+      "required": [
+        "node",
+        "tool",
+        "subject"
+      ]
     },
     "ToolName": {
       "type": "string",

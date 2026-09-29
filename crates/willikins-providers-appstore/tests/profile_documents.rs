@@ -12,7 +12,7 @@
 
 use indexmap::IndexMap;
 
-use willikins_core::{InputName, TypeName, TypeRef, Value};
+use willikins_core::{Action, InputName, TypeName, TypeRef, Value};
 use willikins_providers_fake::FakeState;
 
 fn workspace_root() -> std::path::PathBuf {
@@ -38,6 +38,22 @@ fn seeded_state() -> std::sync::Arc<std::sync::Mutex<FakeState>> {
         .join("fixtures")
         .join("state")
         .join("appstore-signing-profile.json");
+    let json =
+        std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+    let state =
+        FakeState::from_json(&json).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+    std::sync::Arc::new(std::sync::Mutex::new(state))
+}
+
+/// The same seed as [`seeded_state`], except the one profile at
+/// `com.example.willikins-demo`'s own key is `INVALID` rather than
+/// `ACTIVE` -- 2026-09-29 addendum, milestone 3e's finding 4.
+fn seeded_invalid_state() -> std::sync::Arc<std::sync::Mutex<FakeState>> {
+    let path = workspace_root()
+        .join("workflows")
+        .join("fixtures")
+        .join("state")
+        .join("appstore-signing-profile-invalid.json");
     let json =
         std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
     let state =
@@ -119,6 +135,11 @@ fn the_doppler_chain_plans_and_produces_a_redacted_profile_content() {
         .iter()
         .find(|node| node.name.as_str() == "profile")
         .expect("the `profile` node planned");
+    // 2026-09-29 addendum, milestone 3e's finding 4: the seeded profile is
+    // `ACTIVE` and matches every port, so this must plan a plain `NoOp`,
+    // never `Action::Replace` -- and `plan.replacing` must name nothing.
+    assert_eq!(profile_node.action, Action::NoOp);
+    assert!(plan.replacing.is_empty(), "{:?}", plan.replacing);
     let content = profile_node
         .outputs
         .get(&willikins_core::PortName::parse("content").unwrap())
@@ -139,6 +160,59 @@ fn the_doppler_chain_plans_and_produces_a_redacted_profile_content() {
     for (_, value) in store_node.outputs.iter() {
         assert!(!value.render().to_string().contains("willikins-example"));
     }
+}
+
+/// 2026-09-29 addendum, milestone 3e's finding 4: an `INVALID` profile at
+/// this exact key plans `Action::Replace`, not a plain `Create`, and
+/// `Plan::replacing` names the profile `ensure` would delete -- by its own
+/// non-secret `(identifier, name)` key -- before creating fresh. F1's own
+/// acceptance test.
+#[test]
+fn an_invalid_profile_plans_as_a_replacement_naming_the_profile_by_its_non_secret_name() {
+    let workflow = document("appstore-signing-profile-from-doppler.yaml");
+    let state = seeded_invalid_state();
+    let catalog = willikins_providers_fake::catalog(state);
+    let checked = willikins_core::check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("document must check cleanly: {errors:?}"));
+
+    let plan = willikins_core::plan(&checked, &positive_inputs(), &catalog)
+        .unwrap_or_else(|err| panic!("plan must resolve every node: {err:?}"));
+
+    let profile_node = plan
+        .nodes
+        .iter()
+        .find(|node| node.name.as_str() == "profile")
+        .expect("the `profile` node planned");
+    assert_eq!(profile_node.action, Action::Replace, "{plan:?}");
+
+    assert_eq!(plan.replacing.len(), 1, "{:?}", plan.replacing);
+    let entry = &plan.replacing[0];
+    assert_eq!(entry.node.as_str(), "profile");
+    assert_eq!(entry.instance, None);
+    assert_eq!(entry.tool.as_str(), "appstore.profile.ensure");
+    let subject: std::collections::HashMap<&str, &str> = entry
+        .subject
+        .iter()
+        .map(|(port, value)| (port.as_str(), value.as_str()))
+        .collect();
+    // The document names the profile after the bundle identifier
+    // (milestone 3d's conversion), so both key ports render the same
+    // string here -- the profile's own non-secret name, never a secret.
+    assert_eq!(
+        subject.get("identifier").copied(),
+        Some("com.example.willikins-demo")
+    );
+    assert_eq!(
+        subject.get("name").copied(),
+        Some("com.example.willikins-demo")
+    );
+
+    // The class is still static and still `Destructive` on every run,
+    // exactly as it was before this addendum -- what changes is that the
+    // plan itself now says a delete is coming, not the approval
+    // requirement.
+    assert_eq!(checked.class, willikins_core::Class::Destructive);
+    assert!(plan.requires_approval);
 }
 
 #[test]

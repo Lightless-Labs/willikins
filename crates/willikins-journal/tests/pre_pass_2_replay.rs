@@ -318,6 +318,7 @@ fn regenerate_the_frozen_fixture() {
         class: Class::Reversible,
         requires_approval: false,
         blocked: Vec::new(),
+        replacing: Vec::new(),
     };
 
     let plan_a = PlanId::new();

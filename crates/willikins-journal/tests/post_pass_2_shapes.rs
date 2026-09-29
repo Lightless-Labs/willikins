@@ -257,6 +257,7 @@ fn regenerate_the_frozen_fixture() {
                 class: Class::Reversible,
                 requires_approval: false,
                 blocked: Vec::new(),
+                replacing: Vec::new(),
             }),
             fingerprint: Vec::<InstanceFingerprint>::new(),
             class: Class::Reversible,

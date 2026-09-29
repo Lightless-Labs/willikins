@@ -510,6 +510,33 @@ pub trait Tool: Send + Sync {
     fn gate(&self) -> Option<&Gate> {
         None
     }
+
+    /// Whether `ensure`, called with `inputs` right now, would delete an
+    /// existing resource at this node's key before creating a fresh one --
+    /// milestone 3e's "replace-when-INVALID" (decision 1,
+    /// `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`, 2026-09-29
+    /// addendum). A tool-declared hook in the manner of [`Tool::gate`]:
+    /// `false` by default, so every existing tool, catalog entry and plan
+    /// is unaffected. [`crate::plan::plan`] calls it only for a non-pure,
+    /// non-gate tool whose `read` has already reported
+    /// [`Observation::Absent`] -- exactly the case that would otherwise
+    /// plan [`crate::plan::Action::Create`] -- so a tool that never
+    /// replaces anything pays no extra cost and needs no change.
+    ///
+    /// Preferred over a new [`Observation`] variant for the same reason
+    /// [`Tool::gate`] itself was: an `Observation` match has about fifteen
+    /// exhaustive arms across this workspace, and `Observation::Absent`'s
+    /// own struct-literal shape is built at around forty call sites, so
+    /// widening either would touch code this milestone need not touch.
+    /// See [`Gate`]'s own doc for that decision in full.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolError`] on the same terms as `read`.
+    fn replaces(&self, inputs: &Inputs) -> Result<bool, ToolError> {
+        let _ = inputs;
+        Ok(false)
+    }
 }
 
 #[cfg(test)]

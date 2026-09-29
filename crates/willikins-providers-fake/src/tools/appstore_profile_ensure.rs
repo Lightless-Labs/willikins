@@ -242,6 +242,22 @@ impl Tool for FakeAppstoreProfileEnsure {
         }
     }
 
+    /// Mirrors the live tool's `replaces` (2026-09-29 addendum, milestone
+    /// 3e's finding 4): `true` only for the one `INVALID` record at this
+    /// exact key. Does not itself call `record_read_call`: it is not a
+    /// `read` in the sense any existing test counts, and calling it costs
+    /// every other fake tool nothing since [`Tool::replaces`] defaults to
+    /// `false`.
+    fn replaces(&self, inputs: &Inputs) -> Result<bool, ToolError> {
+        require_present(&self.spec, inputs)?;
+        let (identifier, name, profile_type, certificate) = inputs_of(inputs)?;
+        let state = self.state.lock().unwrap();
+        Ok(matches!(
+            Self::resolve(&state, &identifier, &name, &profile_type, &certificate)?,
+            ProfileResolution::Invalid
+        ))
+    }
+
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         require_present(&self.spec, inputs)?;
         let (identifier, name, profile_type, certificate) = inputs_of(inputs)?;
