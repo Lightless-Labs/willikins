@@ -1,0 +1,386 @@
+# Milestone 3e, task 3: one document provisions everything a provider API
+# can provision for Walter, the operator's iOS health app -- the app, a
+# notification service extension (`.nse`) and a widgets extension
+# (`.widgets`), no watchOS app for now. It lives in the existing
+# Bande-a-Bonnot monorepo (`Bande-a-Bonnot/monorepo`), referenced through
+# `github.repo.get`, never created.
+#
+# The operator's real identifiers (never a default -- trust boundary 2 of
+# `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`):
+#   com.bande-a-bonnot.walter
+#   com.bande-a-bonnot.walter.nse
+#   com.bande-a-bonnot.walter.widgets
+# following the account's existing suffix habit (`.nse`, `.keyboard`,
+# `.stickers`). A dry run instead passes three throwaway identifiers under
+# `com.willikins.probe.delete-me.<unique>`.
+#
+# What this document CANNOT automate, per the pre-flight checklist, becomes
+# either an *observed gate* (this document reads the real state and blocks
+# until it is true) or an *acknowledgement gate* (no API exposes the state,
+# so the document waits for the operator's own `done`) -- decision (j),
+# "a manual step is a gate: blocked, not failed; re-running the document is
+# the resume". Every node is idempotent, so re-running this same document
+# once a gate's `need` is met is the whole resume story; nothing here saves
+# run state.
+#
+#   - M1, the App Store Connect app record: `app_record`, a LEAF gate over
+#     `appstore.app.get` (`GET /v1/apps`) -- no API can create an app
+#     record at all (research note, section 4), so nothing in this
+#     document is ordered by it; it blocks the run and is reported, but
+#     holds nothing back.
+#   - M2, `APP_GROUPS` enabled and the group assigned on all three
+#     identifiers: `app_app_groups` / `nse_app_groups` / `widgets_app_groups`,
+#     one `appstore.app_group.gate` per identifier. Each passes `identifier`
+#     through as its own output, and each profile node below binds
+#     `identifier` from *its own* gate's output, never from the
+#     registration node directly -- that data edge is what orders the
+#     profile after the gate. The API only shows the flag *enabled*, never
+#     the group actually *assigned* (pre-flight row 14), so this gate can
+#     pass before the operator finishes the portal-side assignment; a
+#     profile minted at that point is one Apple will invalidate, and the
+#     *next* run of this same document replaces it
+#     (`appstore.profile.ensure`'s replace-when-INVALID, operator decision
+#     1). So the flow is: run this document; assign the app group by hand
+#     (M2); run the SAME document again, which replaces the profiles Apple
+#     invalidated.
+#   - M3 (repo files), M5 (an APNs key), M6 (the CI Doppler grant), M7
+#     (reseeding the Buildkite pipeline's stored bootstrap): four
+#     `operator.acknowledge` leaves, `m3_repo_files_done` /
+#     `m5_apns_key_done` / `m6_ci_doppler_access_done` / `m7_bootstrap_done`.
+#     None of these has a typed pass-through (decision (j), point 6's own
+#     honest limit), so each is a leaf: it blocks the run's outcome and is
+#     reported, but orders nothing else in this graph.
+#   - M4 (minting the three profiles) is no longer manual: operator
+#     decision 1 put the profiles in this document, behind M2's gates.
+#   - M0 (confirming the shared base config names) is gone: operator
+#     decision 2 names the real configs below, not a placeholder.
+#
+# KNOWN GAP, recorded rather than papered over: operator decision 2 asks
+# for one branch config, `prd_deployment_ios`, inheriting the three base
+# configs below. No tool in this workspace can create a Doppler config
+# under any name but its environment's own root name (`doppler.config.ensure`
+# derives it via `naming::v1::doppler_root_config`, and `EnvironmentSlug`'s
+# grammar -- kebab-case, 16 characters -- cannot even spell
+# "prd_deployment_ios", which is snake_case and 19 characters). Until a
+# tool exists for a named branch config, this document instead makes every
+# ROOT config (`dev`, `stg`, `prd`) inherit the three base configs, which is
+# strictly broader than the operator asked for (`dev`/`stg` gain the
+# deployment credentials too, not only `prd`) -- recorded as `remaining`,
+# not implemented here.
+#
+# SigNoz: nothing in this document calls it. Decision 2's "the SigNoz key
+# into Doppler" is satisfied by Doppler's own config inheritance from
+# `open-telemetry/prd_signoz`, one of the three base configs below --
+# willikins never reads or writes the key itself.
+#
+# SECOND KNOWN GAP: decision 2 names the `github` project's two base
+# configs `lightless-labs` and `bande-a-bonnot` -- real Doppler config
+# names that contain a hyphen. `willikins_types::DopplerConfigName`'s
+# grammar is `[a-z0-9_]+` (underscore, never hyphen), so neither name
+# parses as this workspace's own `DopplerConfig` type today. The default
+# below substitutes `bande_a_bonnot` (underscore) as a placeholder that at
+# least type-checks; it is NOT the real config's name. Before a real
+# apply, either `DopplerConfigName`'s grammar is widened to admit a
+# hyphen (a type change outside this task's scope, with its own knock-on
+# proptests and JSON-schema-pattern snapshots) or the operator renames the
+# config to match this grammar. Recorded, not silently worked around.
+name: walter-ios-app
+description: Provision Walter (app, NSE, widgets) end to end -- bundle identifiers, capabilities, signing profiles, the monorepo reference, Doppler, and the Buildkite pipeline -- reporting every manual step as a gate.
+inputs:
+  config: { type: DopplerConfig, description: "Doppler config holding the App Store Connect credential, e.g. app-store-connect/prd" }
+  app_identifier: { type: AppleBundleIdentifier, description: "The app's bundle identifier, e.g. com.bande-a-bonnot.walter -- no default (trust boundary 2)" }
+  nse_identifier: { type: AppleBundleIdentifier, description: "The notification service extension's bundle identifier, e.g. com.bande-a-bonnot.walter.nse" }
+  widgets_identifier: { type: AppleBundleIdentifier, description: "The widgets extension's bundle identifier, e.g. com.bande-a-bonnot.walter.widgets" }
+  platform: { type: AppleBundleIdPlatform, default: IOS }
+  data_protection: { type: AppleCapabilitySetting, default: "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH", description: "Decision (e): the NSE and HealthKit background delivery both run while the device may be locked, so anything stricter than iOS's own default needs code-level exceptions first." }
+  certificate_type: { type: AppleCertificateType, description: "DISTRIBUTION or IOS_DISTRIBUTION" }
+  serial_number: { type: AppleCertificateSerial, description: "The distribution certificate's serial number every profile below is signed with" }
+  org: { type: GitHubOrg, default: Bande-a-Bonnot }
+  slug: { type: ProjectSlug, default: walter }
+  monorepo: { type: GitHubRepo, default: Bande-a-Bonnot/monorepo, description: "Referenced through github.repo.get, never created (decision (g))." }
+  buildkite_org: { type: BuildkiteOrg, description: "Buildkite organization the pipeline is created in" }
+  cluster: { type: BuildkiteClusterName, description: "The Buildkite cluster the pipeline runs in" }
+  environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
+  base_configs: { type: list<DopplerConfig>, default: [appstore-connect/deploy_ios, github/bande_a_bonnot, open-telemetry/prd_signoz], description: "Operator decision 2's real shared base configs, one substituted -- see the two KNOWN GAP notes above." }
+  m3_repo_files_done: { type: OperatorAcknowledgement, description: "M3: Walter's files (BUILD.bazel, entitlements, Info.plist, .buildkite/) added under apps/walter/ in the monorepo, following the survey in the milestone plan." }
+  m5_apns_key_done: { type: OperatorAcknowledgement, description: "M5: the team's APNs auth key (.p8) is confirmed in a shared base config Walter inherits, or freshly created if none exists." }
+  m6_ci_doppler_access_done: { type: OperatorAcknowledgement, description: "M6: the Buildkite CI Doppler service account has been granted read access to project walter." }
+  m7_bootstrap_done: { type: OperatorAcknowledgement, description: "M7: the walter pipeline's stored bootstrap has been replaced with apps/walter/.buildkite/bootstrap.yml, read back and compared." }
+steps:
+  # --- The App Store Connect credential, resolved from Doppler (the same
+  # seven-node chain as appstore-bundle-id-from-doppler.yaml) ---
+  issuer_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ISSUER_ID
+  issuer_id:
+    tool: apple.issuer_id.parse
+    with:
+      value: ${{ steps.issuer_id_text.value }}
+  key_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ID
+  key_id:
+    tool: apple.key_id.parse
+    with:
+      value: ${{ steps.key_id_text.value }}
+  key_base64:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_BASE64
+  key_decoded:
+    tool: base64.decode
+    with:
+      value: ${{ steps.key_base64.value }}
+  key:
+    tool: apple.signing_key.parse
+    with:
+      value: ${{ steps.key_decoded.value }}
+
+  # --- The three bundle identifiers (decision (h): names bound from the
+  # identifiers through the AppleBundleIdentifier => AppleBundleIdName
+  # conversion, "the operator's bundle-id-everywhere habit") ---
+  app_id:
+    tool: appstore.bundle_id.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.app_identifier }}
+      name: ${{ inputs.app_identifier }}
+      platform: ${{ inputs.platform }}
+  nse_id:
+    tool: appstore.bundle_id.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.nse_identifier }}
+      name: ${{ inputs.nse_identifier }}
+      platform: ${{ inputs.platform }}
+  widgets_id:
+    tool: appstore.bundle_id.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.widgets_identifier }}
+      name: ${{ inputs.widgets_identifier }}
+      platform: ${{ inputs.platform }}
+
+  # --- Host-identifier-only API capabilities (decision (c)): each binds
+  # `identifier` from `steps.app_id.identifier`, never from the input, so
+  # the data edge orders it after registration ---
+  healthkit:
+    tool: appstore.bundle_id_capability.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.app_id.identifier }}
+      capability: HEALTHKIT
+  push:
+    tool: appstore.bundle_id_capability.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.app_id.identifier }}
+      capability: PUSH_NOTIFICATIONS
+  data_protection:
+    tool: appstore.bundle_id_capability.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.app_id.identifier }}
+      capability: DATA_PROTECTION
+      setting: ${{ inputs.data_protection }}
+
+  # --- M1: the app record gate, a leaf. Bound from app_id's own output, so
+  # it is read after the identifier that names it is known, but nothing
+  # downstream depends on this gate's own output. ---
+  app_record:
+    tool: appstore.app.get
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.app_id.identifier }}
+
+  # --- M2: one APP_GROUPS gate per identifier. Each passes `identifier`
+  # through -- the profile nodes below bind from these, never from
+  # app_id/nse_id/widgets_id directly (decision (j), point 2). ---
+  app_app_groups:
+    tool: appstore.app_group.gate
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.app_id.identifier }}
+  nse_app_groups:
+    tool: appstore.app_group.gate
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.nse_id.identifier }}
+  widgets_app_groups:
+    tool: appstore.app_group.gate
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.widgets_id.identifier }}
+
+  # --- The distribution certificate every profile below is signed with
+  # (never a literal id -- milestone 3c's own convention) ---
+  certificate:
+    tool: appstore.certificate.get
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      certificate_type: ${{ inputs.certificate_type }}
+      serial_number: ${{ inputs.serial_number }}
+
+  # --- The three App Store profiles, named after their identifiers
+  # (decision (h)'s "bundle id everywhere" convention, through the
+  # AppleBundleIdentifier => AppleProfileName conversion), each behind its
+  # own app-group gate above (operator decision 1: appstore.profile.ensure
+  # replaces a profile Apple invalidated). ---
+  app_profile:
+    tool: appstore.profile.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.app_app_groups.identifier }}
+      name: ${{ steps.app_app_groups.identifier }}
+      profile_type: IOS_APP_STORE
+      certificate: ${{ steps.certificate.certificate }}
+  nse_profile:
+    tool: appstore.profile.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.nse_app_groups.identifier }}
+      name: ${{ steps.nse_app_groups.identifier }}
+      profile_type: IOS_APP_STORE
+      certificate: ${{ steps.certificate.certificate }}
+  widgets_profile:
+    tool: appstore.profile.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.widgets_app_groups.identifier }}
+      name: ${{ steps.widgets_app_groups.identifier }}
+      profile_type: IOS_APP_STORE
+      certificate: ${{ steps.certificate.certificate }}
+
+  # --- Doppler: project walter, dev/stg/prd root configs, each inheriting
+  # the three base configs (see the KNOWN GAP note above); a dedicated prd
+  # config node feeds the three doppler.secret.set nodes below, since that
+  # port only ever binds a derived, non-pure node's own output ---
+  names:
+    tool: naming.v1
+    with:
+      org: ${{ inputs.org }}
+      slug: ${{ inputs.slug }}
+  doppler:
+    tool: doppler.project.ensure
+    with:
+      project: ${{ steps.names.doppler_project }}
+  configs:
+    tool: doppler.config.ensure
+    for_each: ${{ inputs.environments }}
+    with:
+      project: ${{ steps.doppler.project }}
+      environment: ${{ item }}
+  inherit:
+    tool: doppler.config.inherits.ensure
+    for_each: ${{ steps.configs.config }}
+    with:
+      config: ${{ item }}
+      inherits: ${{ inputs.base_configs }}
+  prd_config:
+    tool: doppler.config.ensure
+    with:
+      project: ${{ steps.doppler.project }}
+      environment: prd
+
+  # --- The three profiles' content, into Doppler ---
+  app_profile_to_doppler:
+    tool: doppler.secret.set
+    with:
+      config: ${{ steps.prd_config.config }}
+      name: APP_STORE_PROFILE_APP
+      value: ${{ steps.app_profile.content }}
+  nse_profile_to_doppler:
+    tool: doppler.secret.set
+    with:
+      config: ${{ steps.prd_config.config }}
+      name: APP_STORE_PROFILE_NSE
+      value: ${{ steps.nse_profile.content }}
+  widgets_profile_to_doppler:
+    tool: doppler.secret.set
+    with:
+      config: ${{ steps.prd_config.config }}
+      name: APP_STORE_PROFILE_WIDGETS
+      value: ${{ steps.widgets_profile.content }}
+
+  # --- The monorepo, referenced, and the Buildkite pipeline (decisions (f)
+  # and (g)) ---
+  monorepo_ref:
+    tool: github.repo.get
+    with:
+      repo: ${{ inputs.monorepo }}
+  buildkite_cluster:
+    tool: buildkite.cluster.get
+    with:
+      org: ${{ inputs.buildkite_org }}
+      name: ${{ inputs.cluster }}
+  pipeline:
+    tool: buildkite.pipeline.ensure
+    with:
+      org: ${{ inputs.buildkite_org }}
+      slug: ${{ steps.names.buildkite_pipeline_slug }}
+      repo: ${{ steps.monorepo_ref.repo }}
+      cluster: ${{ steps.buildkite_cluster.cluster }}
+
+  # --- The four steps that stay reported only: no API exposes their
+  # state, so each waits for the operator's own acknowledgement ---
+  m3_repo_files:
+    tool: operator.acknowledge
+    with:
+      step: "Add Walter's files under apps/walter/ in the monorepo: BUILD.bazel (ios_application embedding two ios_extensions), three entitlements files, Info.plist with both HealthKit usage strings and the two extension points, and .buildkite/ with provider triggers disabled."
+      acknowledged: ${{ inputs.m3_repo_files_done }}
+  m5_apns_key:
+    tool: operator.acknowledge
+    with:
+      step: "Confirm the team's APNs auth key (.p8) is in a shared base config Walter inherits; if none exists, create one in the portal (Account Holder or Admin; downloadable once)."
+      acknowledged: ${{ inputs.m5_apns_key_done }}
+  m6_ci_doppler_access:
+    tool: operator.acknowledge
+    with:
+      step: "Grant the Buildkite CI Doppler service account read access to project walter."
+      acknowledged: ${{ inputs.m6_ci_doppler_access_done }}
+  m7_bootstrap:
+    tool: operator.acknowledge
+    with:
+      step: "Replace the walter pipeline's stored bootstrap with apps/walter/.buildkite/bootstrap.yml, read it back and compare; keep provider triggers disabled until validated."
+      acknowledged: ${{ inputs.m7_bootstrap_done }}
+outputs:
+  app_id: ${{ steps.app_id.id }}
+  nse_id: ${{ steps.nse_id.id }}
+  widgets_id: ${{ steps.widgets_id.id }}
+  app_identifier: ${{ steps.app_id.identifier }}
+  nse_identifier: ${{ steps.nse_id.identifier }}
+  widgets_identifier: ${{ steps.widgets_id.identifier }}
+  pipeline_url: ${{ steps.pipeline.url }}
