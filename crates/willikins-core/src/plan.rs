@@ -190,6 +190,18 @@ pub struct BlockedGate {
     /// report can say which `--input name=done` would satisfy this gate. In
     /// port declaration order, deduplicated by name. Empty for a gate that
     /// observes provider state rather than an operator acknowledgement.
+    ///
+    /// `#[serde(default)]` (2026-09-29 addendum, milestone 3e's finding 1
+    /// last sentence): this field arrived after `BlockedGate` already
+    /// derived `Deserialize` (task G2), so a `RunFinished { Blocked }` line
+    /// written between G2 and G3 carries no `awaiting_inputs` key at all;
+    /// without a default, replaying it fails outright rather than reading
+    /// it as empty, which is the same forward-compatibility gap `Plan`'s
+    /// own fields already close with `#[serde(default,
+    /// skip_serializing_if = "Vec::is_empty")]`. Serialization is
+    /// unaffected: the field is still always written, so the wire shape
+    /// this binary produces does not change.
+    #[serde(default)]
     pub awaiting_inputs: Vec<InputName>,
 }
 
