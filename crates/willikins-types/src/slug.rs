@@ -156,6 +156,23 @@ define_slug! {
 define_slug! {
     /// A deployment environment, such as `dev`, `stg`, or `prd`. Maximum
     /// 16 characters.
+    ///
+    /// Grammar source: this is willikins' own cross-provider concept, not
+    /// a type owned by any one provider, but Doppler calls the identical
+    /// notion an "environment" and exposes it directly: `POST
+    /// /v3/environments`'s `slug` is a bare `"type": "string"` in the
+    /// published schema, no pattern at all
+    /// (`docs.doppler.com/reference/environments-create.md`, fetched
+    /// 2026-09-29), and Doppler's own "Environment Slug" platform limit is
+    /// 2-50 characters (`docs.doppler.com/docs/platform-limits.md`), both
+    /// looser than this type's kebab-case grammar and 16-character cap --
+    /// which are willikins' own convention, shared with every other slug
+    /// in this module, not a Doppler requirement. The live probe behind
+    /// `DopplerConfigName`'s widened grammar
+    /// (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`, "DOPPLER NAME
+    /// GRAMMAR", 2026-09-29) created a Doppler *environment* literally
+    /// named `example-org`: an ordinary multi-word [`EnvironmentSlug`]
+    /// already, needing no change here.
     EnvironmentSlug,
     max_len = 16,
     description = "A slug identifying a deployment environment.",
@@ -193,6 +210,21 @@ mod tests {
     fn accepts_exactly_at_the_limit() {
         let at_limit = "a".repeat(32);
         assert!(ProjectSlug::parse(&at_limit).is_ok());
+    }
+
+    /// The live probe behind `DopplerConfigName`'s widened grammar
+    /// (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`, "DOPPLER NAME
+    /// GRAMMAR", 2026-09-29) created a Doppler environment literally named
+    /// `example-org`: an ordinary multi-word slug, already expressible.
+    #[test]
+    fn environment_slug_accepts_the_live_probed_root_config_name() {
+        assert_eq!(
+            EnvironmentSlug::parse("example-org")
+                .unwrap()
+                .words()
+                .kebab(),
+            "example-org"
+        );
     }
 
     #[test]

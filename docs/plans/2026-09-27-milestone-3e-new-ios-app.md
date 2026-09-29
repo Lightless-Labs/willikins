@@ -1670,7 +1670,12 @@ Buildkite token exists.
     else?** (T3c addendum, 2026-09-29.) Decision 2's prose spells it `example-org`; this codebase's own
     convention snakes hyphens to underscores for Doppler config names, and Doppler's own docs do not
     settle whether a hyphen is even accepted. `workflows/sample-ios-app.yaml`'s `base_configs` default
-    uses the underscored spelling pending a read-only list of that project's configs.
+    uses the underscored spelling pending a read-only list of that project's configs. **Settled 2026-09-29
+    (R1, Doppler name grammars):** the real-workplace probe answers this directly -- the project is named
+    `example-org`, hyphenated, exactly as decision 2 spelled it, not `example_org`. The open half of
+    this item was never Doppler's own answer, it was `willikins_types::DopplerConfigName`'s grammar, which
+    could not spell the hyphenated name until this addendum; the document's `base_configs` default is
+    still the coordinator's to update, once willikins can write to `workflows/`.
 13. **What does `GET /v3/configs/config` answer for a branch config absent from a project that does
     exist** (task B1, 2026-09-29)? Every other Doppler `read` in this crate tolerates a missing
     *project* (`404`, or a `400` naming "no access"); a missing *config* under an existing project is a
@@ -1913,19 +1918,35 @@ verbatim 2026-09-29 (`.md` twins of `projects-create`, `projects-get`, `configs-
 name field a bare `"type": "string"` with no `pattern` at all, so the reference does not mandate any of this
 codebase's tighter grammars — they are recorded as willikins' own convention rather than a Doppler requirement,
 each now with a "Grammar source" note in its own doc comment citing where that reading came from (the reference
-when it speaks, this plan's live probe when the reference is silent). No other type changed. Test-first: three
+when it speaks, this plan's live probe when the reference is silent). `EnvironmentSlug`
+(`crates/willikins-types/src/slug.rs`) was checked the same way even though it lives outside `doppler.rs` and is
+not itself a Doppler-owned type: Doppler calls the identical notion an "environment" and its `POST
+/v3/environments`'s `slug` is equally a bare `"type": "string"` (`environments-create.md`, fetched 2026-09-29),
+with a looser 2-50 character platform limit than this type's 16-character cap, so it too gained a "Grammar
+source" doc note and a test pinning the probed root config's own name (`example-org`, an ordinary multi-word
+slug already inside its grammar). No type's *behaviour* changed except `DopplerConfigName`'s and
+`DopplerConfig`'s. Test-first: three
 new `DopplerConfigName`/`DopplerConfig` tests pin the two probed strings exactly and one flips
 `doppler_config_name_rejects_hyphens` to `doppler_config_name_accepts_hyphens`; the only snapshot this touched,
 `crates/willikins-types/tests/snapshots/catalog__catalog_json_snapshot.snap`, moved by exactly the two lines
 carrying `DopplerConfigName`'s and `DopplerConfig`'s published JSON Schema `pattern`, read diff-by-diff before
 accepting. `naming::v1` is untouched (frozen) and its own invariant still holds: every snake-joined name it
 produces was already inside the old, narrower grammar, so it is still inside the new, wider one. Scoped gates
-green: `cargo fmt --all --check`; `cargo clippy -p willikins-types --all-targets -j 2 -D warnings`; `cargo test
--p willikins-types -j 2` (411 lib tests plus every integration suite, catalog snapshot accepted additively);
-`cargo check -p willikins-types -j 2`; and, since the type is used well beyond its own crate,
-`cargo test -p willikins-dsl --test acceptance -j 2` (characterization snapshot byte-identical), `cargo test -p
-willikins-providers-doppler -j 2` and `cargo test -p willikins-providers-fake -j 2` (both green, no snapshot
-moved in either). The full workspace gate was not run (host rule; the coordinator's). Verify item 12 above is
-superseded by this addendum: the honest answer was never "which spelling does Doppler already use", it was "our
-own type couldn't spell the hyphenated one yet."
+green, on both commits: `cargo fmt --all --check`; `cargo clippy -p willikins-types --all-targets -j 2 -D
+warnings`; `cargo test -p willikins-types -j 2` (412 lib tests plus every integration suite, catalog snapshot
+accepted additively); `cargo check -p willikins-types -j 2`; and, since the type is used well beyond its own
+crate, `cargo test -p willikins-dsl --test acceptance -j 2` (characterization snapshot byte-identical), `cargo
+test -p willikins-providers-doppler -j 2` and `cargo test -p willikins-providers-fake -j 2` (both green, no
+snapshot moved in either). The full workspace gate was not run (host rule; the coordinator's). Verify item 12
+above is superseded by this addendum: the honest answer was never "which spelling does Doppler already use", it
+was "our own type couldn't spell the hyphenated one yet."
+
+**Not done here, recorded rather than fixed:** Doppler's own platform limits give `DopplerProject`,
+`EnvironmentSlug` and `DopplerConfigName` a minimum length of 2, but all three still admit a single character
+(`min_len` isn't set; the derive already supports it) — a one-character name passes `check` and would fail
+live. And `naming.rs`'s `doppler_root_config` doc (the "Panics" note) already misdescribes `DopplerConfigName`
+as "lowercase, digits, underscore; 64-character limit" before this addendum — it is 60, not 64, and now also
+accepts hyphens; `naming::v1` is frozen, so this is a documentation-only staleness to fix in a future pass, not
+a behaviour change, and it does not affect the "never panics" claim it supports (both the old and the new
+grammar are supersets of a snake join's characters).
 
