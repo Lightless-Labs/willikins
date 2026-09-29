@@ -3474,6 +3474,7 @@ dependencies = [
  "http",
  "indexmap",
  "insta",
+ "jsonschema",
  "rand 0.9.5",
  "rmcp",
  "schemars",

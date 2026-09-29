@@ -151,7 +151,14 @@ pub struct RunRecord {
     /// `#[serde(skip_serializing_if = "Vec::is_empty")]` so a `RunRecord`
     /// with none serializes byte-identically to before this field existed
     /// (task G2, decision (j)).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// `default` as well, though nothing deserializes this type: the JSON
+    /// Schema the MCP server publishes as a tool's `outputSchema` is built for
+    /// the deserialize contract, which lists every field without a serde
+    /// default as `required` -- and a skipped field that is `required`
+    /// makes every result without it fail its own published schema
+    /// (`crates/willikins-server/tests/mcp_output_schema_conformance.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked: Vec<BlockedGate>,
     /// What the operator should do next, present exactly when `state` is
     /// [`RunState::Blocked`]: `"re-run this document once every blocked

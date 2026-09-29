@@ -140,7 +140,14 @@ pub struct Plan {
     /// blocked gate serializes byte-identically to before this field
     /// existed. See decision (j),
     /// `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// `default` as well, though nothing deserializes this type: the JSON
+    /// Schema the MCP server publishes as a tool's `outputSchema` is built for
+    /// the deserialize contract, which lists every field without a serde
+    /// default as `required` -- and a skipped field that is `required`
+    /// makes every result without it fail its own published schema
+    /// (`crates/willikins-server/tests/mcp_output_schema_conformance.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked: Vec<BlockedGate>,
 }
 

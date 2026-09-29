@@ -10,7 +10,7 @@ expression: schema
   "type": "object",
   "properties": {
     "awaiting": {
-      "description": "Every declared [`willikins_types::OperatorAcknowledgement`]-typed\ninput describe found no raw value for, in declaration order. Skipped\nwhen serializing if empty (decision (j), point 6), the same\nconvention as [`crate::plan::Plan::blocked`], so a document with no\nawaited input serializes exactly as it did before G3.",
+      "description": "Every declared [`willikins_types::OperatorAcknowledgement`]-typed\ninput describe found no raw value for, in declaration order. Skipped\nwhen serializing if empty (decision (j), point 6), the same\nconvention as [`crate::plan::Plan::blocked`], so a document with no\nawaited input serializes exactly as it did before G3.\n\n`default` as well, though nothing deserializes this type: the JSON\nSchema the MCP server publishes as a tool's `outputSchema` is built for\nthe deserialize contract, which lists every field without a serde\ndefault as `required` -- and a skipped field that is `required`\nmakes every result without it fail its own published schema\n(`crates/willikins-server/tests/mcp_output_schema_conformance.rs`).",
       "type": "array",
       "items": {
         "$ref": "#/$defs/AwaitingInput"
@@ -44,7 +44,6 @@ expression: schema
   "required": [
     "errors",
     "missing",
-    "awaiting",
     "resolved"
   ],
   "$defs": {
