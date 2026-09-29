@@ -2170,3 +2170,64 @@ already written.
   willikins-server -j 2`, all green. The full workspace gate was not run (host rule; the
   coordinator's).
 
+**Addendum:** 2026-09-29 (R4, the Sample document edited onto the real layout) —
+**`workflows/sample-ios-app.yaml` now reads its credentials the way R2 and R3 made possible, from
+the real workplace's own names, in place — no new tool, no new type.**
+
+- **The App Store Connect credential is no longer a caller-supplied input.** The `config` workflow
+  input is gone; `issuer_id_text`, `key_id_text` and `key_base64` now read a literal, fixed base
+  config, `appstore-connect/deploy_ios` (one of the real layout's own shared base configs, decision
+  2), under the real workplace's own secret names — `APP_STORE_CONNECT_API_KEY_ISSUER_ID`,
+  `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_KEY_BASE64` — replacing this document's
+  own former placeholder names (`ASC_API_KEY_ISSUER_ID`/`_ID`/`_BASE64`), which the sandbox
+  workplace still uses. The document's own header now says so explicitly: a sandbox `plan`/`apply`
+  of this document will fail `NotFound` at `issuer_id_text` until the sandbox workplace is reseeded
+  under the real names, or the sandbox stays behind for good and only the real layout is exercised
+  going forward — a decision this task leaves to the operator, not one it makes here.
+- **The GitHub token is resolved from Doppler, mirroring R2's own proof document exactly.** Two new
+  nodes, `gh_token_secret` (`doppler.secret.get` against `github/example-org`, `GH_CLONE_TOKEN`)
+  into `gh_token` (`github.token.parse`), bound to `monorepo_ref`'s optional `token` port — the same
+  `doppler.secret.get` → `github.token.parse` → token-port chain
+  `workflows/github-repo-token-from-doppler.yaml` already proves end to end. `monorepo_ref` (still
+  `github.repo.get`, never `.ensure` — the monorepo is referenced, not created) authenticates as the
+  project's own Doppler-held credential now, not a bare `WILLIKINS_GITHUB_TOKEN` from the process
+  environment; R2's own stated gap still applies verbatim, so that variable must still be set in the
+  process for a live run of any `github.*`-naming document, this one included, until the recorded
+  follow-up (`insert_github_tools`'s lazy credential) lands.
+- **`base_configs`'s own default is now the real, hyphenated spelling.** `github/example_org` →
+  `github/example-org`, settled by R1's grammar widening — this document's own header used to
+  carry a "VERIFY ITEM 12" note guessing at the underscored spelling; that note is now replaced with
+  one recording the settled answer, not still asking the question.
+- **Everything else is unchanged, deliberately: the monorepo, the three bundle identifiers, both
+  capabilities and the app record, both app-group gates, the three profiles, and R3's own
+  `doppler.config.inheritable.gate` (still not wired in here — R3's own addendum already recorded
+  that as its follow-up, not this task's).**
+- **Test-first, both fixtures and tests updated to match.** `crates/willikins-cli/tests/sample_document.rs`'s
+  `base_inputs()` no longer supplies `config`; its `seeded_state()` now seeds the three App Store
+  Connect secrets under `appstore-connect/deploy_ios`'s real names and a `GH_CLONE_TOKEN` secret
+  under `github/example-org`; `assert_no_secret_leaked` gained a check that the seeded GitHub
+  token's raw value (`ghp_example`) never reaches JSON output, proven across all three of that test's
+  own runs. `crates/willikins-cli/tests/sample_apply_blocked_redaction.rs` dropped its now-removed
+  `config=` CLI input and updated `base_configs=` to the hyphenated spelling, and gained the same
+  `ghp_example` non-leak assertion across stdout, stderr and the journal file. Both were run red
+  first (removing the `--input config=...` line against the *old* document failed with "1 missing
+  input(s)", confirming the harness actually exercises the document rather than trivially passing),
+  then green after the document was edited. `workflows/fixtures/state/sample-ios-app.json` — the CLI
+  test's own fixture, read directly through `--fake-state` — moved its two `doppler_values` keys and
+  one `doppler_secrets` key onto `appstore-connect/deploy_ios`'s real names, and gained a
+  `github/example-org#GH_CLONE_TOKEN` entry.
+- **The characterization snapshot moved by exactly this document's own entry, reviewed diff-by-diff**
+  (`diff` against the pre-change snapshot, insta's own stripped `assertion_line` header aside): three
+  new `TYPES` lines for `gh_token_secret`/`gh_token`, one new line for `monorepo_ref.token:
+  GitHubToken`, and the synthesized-input `PLAN ERROR` line's secret path moving from
+  `third-thoughts/prd#ASC_API_KEY_ISSUER_ID` to `appstore-connect/deploy_ios#APP_STORE_CONNECT_API_KEY_ISSUER_ID`
+  — nothing else in the file changed. This is the one document this task's own boundary allows that
+  snapshot to move for; every other document's entry is untouched.
+- **No provider call of any kind was made for this task** — every check above ran against the fake
+  catalog or the empty catalog, never a live account, never the sandbox.
+- **Scoped gates green:** `cargo fmt --all --check`; `cargo clippy -p willikins-cli -p willikins-dsl
+  --all-targets -j 2 -- -D warnings`; `cargo test -p willikins-cli -p willikins-dsl -j 2`
+  (`RUST_TEST_THREADS=2`; every suite `0 failed`, the one new snapshot accepted and reviewed above);
+  `cargo check -p willikins-types -j 2`. The full workspace gate was not run (host rule; the
+  coordinator's).
+

@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-dsl/tests/acceptance.rs
-assertion_line: 284
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
@@ -679,7 +678,11 @@ nse_profile_to_doppler.value: AppleProfileContent
 widgets_profile_to_doppler.config: DopplerConfig
 widgets_profile_to_doppler.name: SecretName
 widgets_profile_to_doppler.value: AppleProfileContent
+gh_token_secret.config: DopplerConfig
+gh_token_secret.name: SecretName
+gh_token.value: DopplerSecretValue
 monorepo_ref.repo: GitHubRepo
+monorepo_ref.token: GitHubToken
 buildkite_cluster.org: BuildkiteOrg
 buildkite_cluster.name: BuildkiteClusterName
 pipeline.org: BuildkiteOrg
@@ -703,4 +706,4 @@ nse_identifier: AppleBundleIdentifier
 widgets_identifier: AppleBundleIdentifier
 pipeline_url: HttpsUrl
 PLAN:
-PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
+PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `appstore-connect/deploy_ios#APP_STORE_CONNECT_API_KEY_ISSUER_ID`
