@@ -1427,25 +1427,54 @@ fn throwaway_profile_state(
     }
 }
 
-/// The throwaway bundle id's capability rows, one page of up to 200: each
-/// row's `capabilityType` (an Apple enum, on an identifier this run made)
-/// and the shape of its `settings` -- never a value inside them.
+/// The query strings [`throwaway_capability_rows`] tries, in order: the
+/// one `AppstoreClient::list_bundle_id_capabilities` sends since `e4ba9af`
+/// (the `OpenAPI` 4.5 description allows `limit` up to 200 on this path),
+/// and none at all, as every live capability read before `e4ba9af` sent.
+/// Probe 1 (2026-09-29) found the first answering `400` on a fresh `IOS`
+/// identifier; comparing the two separates "this query" from "this
+/// platform".
+const CAPABILITY_LIST_QUERIES: [&str; 2] = ["?limit=200", ""];
+
+/// One page of the throwaway bundle id's capability rows, raw so that a
+/// refusal reports its status, `errors[].code` and `errors[].title`
+/// ([`apple_error_report::apple_error_summary`]): each row's
+/// `capabilityType` (an Apple enum, on an identifier this run made) and the
+/// shape of its `settings` -- never a value inside them. `query` is one of
+/// [`CAPABILITY_LIST_QUERIES`]; a `GET` only.
 fn throwaway_capability_rows(
     issuer_id: &AppleIssuerId,
     key_id: &AppleKeyId,
     key: &AppleSigningKey,
     bundle_id: &willikins_types::AppleBundleIdId,
+    query: &str,
 ) -> String {
-    let http = willikins_providers_http::Http::new(
-        willikins_providers_appstore::APPSTORE_API_BASE_URL,
-        Vec::new(),
-        bearer_for(issuer_id, key_id, key),
+    let jwt = raw_jwt(issuer_id, key_id, key);
+    let config = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+    let url = format!(
+        "{}/v1/bundleIds/{bundle_id}/bundleIdCapabilities{query}",
+        willikins_providers_appstore::APPSTORE_API_BASE_URL
     );
-    let page = match http.get::<serde_json::Value>(&format!(
-        "/v1/bundleIds/{bundle_id}/bundleIdCapabilities?limit=200"
-    )) {
-        Ok(page) => page,
-        Err(err) => return format!("<list failed, status {:?}>", err.status),
+    let Ok(mut response) = agent
+        .get(&url)
+        .header("Authorization", format!("Bearer {jwt}"))
+        .call()
+    else {
+        return "<list failed at the transport level>".to_string();
+    };
+    let status = response.status().as_u16();
+    let body_text = response.body_mut().read_to_string().unwrap_or_default();
+    if !(200..300).contains(&status) {
+        return format!(
+            "<list refused: {}>",
+            apple_error_report::apple_error_summary(status, &body_text)
+        );
+    }
+    let Ok(page) = serde_json::from_str::<serde_json::Value>(&body_text) else {
+        return format!("<status {status}, body not JSON>");
     };
     let mut rows: Vec<String> = page
         .get("data")
@@ -1672,10 +1701,12 @@ fn appstore_live_ios_capability_probe() {
         Value::known(capability.clone()),
     );
 
-    println!(
-        "capability rows before: {}",
-        throwaway_capability_rows(&issuer_id, &key_id, &key, &bundle_id)
-    );
+    for query in CAPABILITY_LIST_QUERIES {
+        println!(
+            "capability rows before, query {query:?}: {}",
+            throwaway_capability_rows(&issuer_id, &key_id, &key, &bundle_id, query)
+        );
+    }
     println!(
         "tool read before POST: {}",
         capability_read_outcome(&capability_tool.read(&capability_inputs))
@@ -1686,10 +1717,12 @@ fn appstore_live_ios_capability_probe() {
         Err(summary) => println!("POST HEALTHKIT: refused, {summary}"),
     }
     if post.is_ok() {
-        println!(
-            "capability rows after: {}",
-            throwaway_capability_rows(&issuer_id, &key_id, &key, &bundle_id)
-        );
+        for query in CAPABILITY_LIST_QUERIES {
+            println!(
+                "capability rows after, query {query:?}: {}",
+                throwaway_capability_rows(&issuer_id, &key_id, &key, &bundle_id, query)
+            );
+        }
         println!(
             "tool read after POST: {}",
             capability_read_outcome(&capability_tool.read(&capability_inputs))
