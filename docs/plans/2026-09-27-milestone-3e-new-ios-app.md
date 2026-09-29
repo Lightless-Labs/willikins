@@ -1,6 +1,7 @@
 # Milestone 3e: one document provisions a new iOS app end to end — Sample
 
 **Created:** 2026-09-27
+**Completed:** 2026-09-29 — full gate by the coordinator on `a6cbef2`: fmt, workspace clippy, 183 suites / 2559 tests / 0 failed / 18 ignored, `cargo check -p willikins-types`; all three guards passed. Live on the operator's Apple account: the capability cycle and the profile replace cycle both passed on throwaway identifiers (counts 21/5/13 unchanged). Read-only dry run of `workflows/sample-ios-app.yaml` recorded below.
 **Gate:** PRE-FLIGHT PARTLY BLOCKED, 2026-09-27 — implementation (tasks 1 to 3) is clear; the sandbox
 **dry run** is blocked on one credential: the sandbox Buildkite token answers `401` on
 `GET /v2/access-token`, which needs no scope, so it is revoked or expired rather than under-scoped.
@@ -1874,3 +1875,27 @@ Not done here, for the coordinator: re-running `live_capability_cycle` and
 `appstore_live_profile_replace_cycle` against the live account now that the client no longer sends the
 refused `limit`, per the diagnosis addendum's own instructions — both live probes that diagnosed this
 were already spent, and no provider call was made for this fix.
+
+## Dry run, 2026-09-29 (coordinator)
+
+Read-only `plan --live` of `workflows/sample-ios-app.yaml` for Sample: GitHub, Doppler and Buildkite in the sandbox
+(org `Willikins-Test`, the new sandbox Doppler workplace, Buildkite `willikins-test` / `Default cluster`), App Store
+Connect on the operator's live account, `Lightless-Labs/willikins` (public) standing in for the private monorepo, no
+acknowledgement inputs supplied. Exit 0; nothing written. Class `Destructive`, `requires_approval: true`.
+
+- **Compute (13):** the credential chain (7 nodes), the certificate selection, `names`, `monorepo_ref`,
+  `buildkite_cluster`.
+- **Create (13):** bundle ids `com.example-org.sample`, `.nse`, `.widgets` (named after themselves); capabilities
+  HEALTHKIT, PUSH_NOTIFICATIONS, DATA_PROTECTION on the host; Doppler project `sample`, configs `dev`/`stg`/`prd`, branch
+  config `prd_deployment_ios`, its inheritance; Buildkite pipeline `sample`.
+- **Blocked (8):** `app_record`; `app_app_groups`, `nse_app_groups`, `widgets_app_groups`; acknowledgements
+  `m3_repo_files`, `m5_apns_key`, `m6_ci_doppler_access`, `m7_bootstrap`.
+- **Skip (6):** the three profiles and their three Doppler writes, each held back by its app-group gate.
+- The report ends "re-run this document once done", with a `supply: --input <step>_done=done` line per acknowledgement.
+
+**Found by the dry run, carried forward:** the inheritance node plans `Create` without confirming that its base
+configs exist. In the sandbox they do not (`appstore-connect/deploy_ios`, `github/example_org`,
+`open-telemetry/prd_signoz`), so an apply there would fail at that node. The real apply needs them present in the
+operator's workplace, and the `github` project's real config slug is still verify item 12. The SigNoz key reaches
+Sample through `open-telemetry/prd_signoz` inheritance; the document mints none, so no SigNoz call is made.
+
