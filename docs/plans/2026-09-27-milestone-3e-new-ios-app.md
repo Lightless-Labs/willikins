@@ -374,7 +374,8 @@ steps (M3/M5/M6/M7) as `operator.acknowledge` leaves. M0 (base-config names) and
 M4 (profiles) are gone, exactly as decisions 2 and 1 say; M1/M2 are the two
 observed gates above.
 
-**Two gaps found and recorded, not papered over:**
+**One real gap, one re-diagnosed as a verify item, both recorded rather than
+papered over:**
 1. **No tool can create a *named branch* Doppler config.** Operator decision 2
    asks for one config, `prd_deployment_ios`, inheriting the three base
    configs; `doppler.config.ensure` only ever derives a config named after its
@@ -384,16 +385,23 @@ observed gates above.
    inherit the three base configs — strictly broader than asked (`dev`/`stg`
    gain the deployment credentials too). A new tool (or an optional `name` port
    on `doppler.config.ensure`) is the real fix; out of this task's scope.
-2. **`willikins_types::DopplerConfigName`'s grammar (`[a-z0-9_]+`, no hyphen)
-   cannot spell the `github` project's two real base-config names** (`lightless-labs`,
-   `bande-a-bonnot`, both hyphenated). The document's `base_configs` default
-   substitutes `github/bande_a_bonnot` (underscore) so it type-checks; this is
-   **not** the real config's name. Before a real apply, either the grammar is
-   widened to admit a hyphen (its own type change, with knock-on proptests and
-   JSON-schema-pattern snapshots) or the operator renames the config.
+2. **Not a type gap after all, on reflection — a verify item.** The first cut
+   of this addendum read decision 2's hyphenated `github` project config names
+   (`lightless-labs`, `bande-a-bonnot`) as things `willikins_types::DopplerConfigName`'s
+   grammar (`[a-z0-9_]+`) cannot express, and proposed widening the grammar.
+   But `naming::v1::doppler_root_config`'s own doc already states this
+   codebase's convention: "Doppler config names use underscores rather than
+   hyphens" — and Doppler's own platform docs do not settle whether a config
+   slug accepts a hyphen at all (`docs/research/2026-09-12-m2-dependencies.md`
+   line 589). So decision 2's spelling is very likely just human-readable
+   prose for a slug already named `bande_a_bonnot`, not a name this document
+   cannot express. The document's `base_configs` default uses that underscored
+   spelling; the honest ask is to list project `github`'s configs read-only
+   and confirm the slug before a real apply, not to widen a type that may
+   already be correct.
 
-Both gaps are recorded in the document's own header comment (two `KNOWN GAP`
-blocks) and carried to the operator via `needs_operator`, not worked around.
+Both are recorded in the document's own header comment and carried to the
+operator via `needs_operator`/the verify list, not worked around.
 
 Tests: `crates/willikins-cli/tests/walter_document.rs`, in-process against the
 fake catalog (`check`/`plan`/`apply`, `Approval::Human` since
@@ -1107,6 +1115,11 @@ Each appears in the plan as an output. Order matters where stated.
 
 ## The Walter document
 
+**Superseded 2026-09-29 by the T3c addendum** (gates, not manual-step outputs;
+no `template.render` nodes; the three profiles are in the document; `base_configs`'
+default is decision 2's real configs, one substituted per the addendum's verify
+item). Kept below for history only.
+
 `workflows/walter-ios-app.yaml`. Inputs: `config: DopplerConfig` (ASC credential; no default),
 `app_identifier`, `nse_identifier`, `widgets_identifier: AppleBundleIdentifier` (**no defaults**,
 trust boundary 2), `platform: AppleBundleIdPlatform` (default `IOS`), `data_protection:
@@ -1128,6 +1141,14 @@ deletes by), the three identifiers, `pipeline_url`, and the eight `manual_*` out
 real identifiers, the M-steps, and why profiles are absent.
 
 ## The dry run (written and run by the attacker after task 3)
+
+**Step 4 superseded 2026-09-29 by the T3c addendum**: `base_configs`' real default
+no longer names `bande-a-bonnot-shared/ios_base` (that project is retired, decision
+2), and step 4's "assert all eight `manual_*` outputs" no longer applies -- gates
+replaced outputs. The dry-run harness (still the next lane's job, still blocked on
+the sandbox Buildkite token) should instead assert `plan --live`'s `blocked` names
+the two observed gates it expects unmet, then a second `plan --live` after
+satisfying them shows `blocked` empty and the profile nodes `Create`.
 
 A guarded harness, `crates/willikins-cli/tests/live_walter_dry_run.rs` (`live-tests` feature, `#[ignore]`,
 `WILLIKINS_LIVE_TESTS=1`), driving the built binary against the live providers:
@@ -1176,11 +1197,18 @@ Buildkite token exists.
 7. **Conversions** — two new rows, each with a proptest proving every `AppleBundleIdentifier` parses as
    the target; the reverse (`Text` into an `AppleBundleIdentifier` port) still fails `check` with a type
    mismatch (negative fixture).
-8. **The Walter document** checks clean against both catalogs; plans against the fake catalog with
+8. ~~**The Walter document** checks clean against both catalogs; plans against the fake catalog with
    throwaway inputs; the plan's outputs carry all eight `manual_*` texts, each naming the supplied app
    identifier; each capability node's `identifier` edge comes from `app_id`; no node is a profile; no
    `SinkToken`; a fake `apply` then a second `apply` reads every node `Unchanged`; omitting any identifier
-   input fails `plan` naming it.
+   input fails `plan` naming it.~~ **Rewritten 2026-09-29 by the T3c addendum**: the document checks
+   clean against the fake catalog (`the_document_checks_cleanly_against_the_fake_catalog`); the three
+   profiles ARE nodes, each behind its own app-group gate; a first run over the fake catalogue blocks on
+   the app-record and app-group gates plus the four acknowledgement leaves, skipping exactly the profile
+   and Doppler-write nodes; a second run (fake state mutated to satisfy the two observed gates) creates
+   the profiles and their Doppler writes and nothing else; a third run (the four acknowledgements
+   supplied) is a clean converge with no `Blocked`/`Skip` action anywhere
+   (`crates/willikins-cli/tests/walter_document.rs`).
 9. **Characterization** — `acceptance__characterization_of_every_document.snap` changes only by new
    entries, asserted in each task: task 1 adds the setting-mismatch fixture's entry, task 3 adds the
    document's and the conversion fixture's; every existing entry is byte-identical.
@@ -1284,6 +1312,11 @@ Buildkite token exists.
     `GIT_CONFIG_*` override?** The cookbook says it did on the Mini; M7 copies the override regardless.
 11. **Which `BundleIdPlatform` the operator's existing identifiers use** (counts only); the document
     defaults to `IOS`.
+12. **Is the `github` project's base config actually named `bande_a_bonnot` (underscore), or something
+    else?** (T3c addendum, 2026-09-29.) Decision 2's prose spells it `bande-a-bonnot`; this codebase's own
+    convention snakes hyphens to underscores for Doppler config names, and Doppler's own docs do not
+    settle whether a hyphen is even accepted. `workflows/walter-ios-app.yaml`'s `base_configs` default
+    uses the underscored spelling pending a read-only list of that project's configs.
 
 ## Gates
 

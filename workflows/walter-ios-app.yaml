@@ -73,17 +73,20 @@
 # `open-telemetry/prd_signoz`, one of the three base configs below --
 # willikins never reads or writes the key itself.
 #
-# SECOND KNOWN GAP: decision 2 names the `github` project's two base
-# configs `lightless-labs` and `bande-a-bonnot` -- real Doppler config
-# names that contain a hyphen. `willikins_types::DopplerConfigName`'s
-# grammar is `[a-z0-9_]+` (underscore, never hyphen), so neither name
-# parses as this workspace's own `DopplerConfig` type today. The default
-# below substitutes `bande_a_bonnot` (underscore) as a placeholder that at
-# least type-checks; it is NOT the real config's name. Before a real
-# apply, either `DopplerConfigName`'s grammar is widened to admit a
-# hyphen (a type change outside this task's scope, with its own knock-on
-# proptests and JSON-schema-pattern snapshots) or the operator renames the
-# config to match this grammar. Recorded, not silently worked around.
+# VERIFY ITEM, not a known gap: decision 2 names the `github` project's
+# two base configs `lightless-labs` and `bande-a-bonnot` in prose, but
+# `willikins_types::DopplerConfigName`'s grammar is `[a-z0-9_]+`
+# (underscore, never hyphen) -- `naming::v1::doppler_root_config`'s own
+# doc states the reason: "Doppler config names use underscores rather
+# than hyphens." Doppler's own platform docs do not settle whether a
+# config slug ever accepts a hyphen at all (`docs/research/2026-09-12-m2-dependencies.md`
+# line 589: "the OpenAPI schema gives no character class"), so decision
+# 2's hyphenated spelling is very likely just human-readable prose for a
+# slug this codebase's own convention -- and quite possibly Doppler's own
+# rule -- already snakes to `bande_a_bonnot`, not a name this document
+# cannot express. The default below uses that underscored spelling.
+# **Verify before a real apply**: list project `github`'s configs
+# read-only and confirm the slug, rather than assuming either spelling.
 name: walter-ios-app
 description: Provision Walter (app, NSE, widgets) end to end -- bundle identifiers, capabilities, signing profiles, the monorepo reference, Doppler, and the Buildkite pipeline -- reporting every manual step as a gate.
 inputs:

@@ -491,6 +491,73 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     }
     assert_eq!(applied2.blocked.len(), 4, "run 2's Applied.blocked");
 
+    // The universal claim, not a spot check: run 2's `Created` set is
+    // EXACTLY the six nodes the app-group gates just unblocked -- nothing
+    // else moved.
+    let created2: std::collections::BTreeSet<&str> = applied2
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.status, NodeStatus::Created))
+        .map(|n| n.name.as_str())
+        .collect();
+    assert_eq!(
+        created2,
+        std::collections::BTreeSet::from([
+            "app_profile",
+            "nse_profile",
+            "widgets_profile",
+            "app_profile_to_doppler",
+            "nse_profile_to_doppler",
+            "widgets_profile_to_doppler",
+        ]),
+        "run 2 must create the three profiles and their Doppler writes, and nothing else"
+    );
+
+    // The ordering claim the whole design rests on (decision (j), point 2):
+    // the host app-group gate holds back exactly its own profile and that
+    // profile's Doppler write, never anything else's. `planned2` has no
+    // blocked entries any more (run 2 is past both observed gates), so this
+    // is asserted against run 1's plan, where the gate really was blocked.
+    let app_gate_blocked1 = planned1
+        .blocked
+        .iter()
+        .find(|b| b.node.as_str() == "app_app_groups")
+        .expect("run 1: app_app_groups is blocked");
+    let holds_back: std::collections::BTreeSet<&str> = app_gate_blocked1
+        .holds_back
+        .iter()
+        .map(willikins_core::NodeName::as_str)
+        .collect();
+    assert_eq!(
+        holds_back,
+        std::collections::BTreeSet::from(["app_profile", "app_profile_to_doppler"]),
+        "app_app_groups must hold back exactly its own profile and that profile's Doppler write"
+    );
+
+    // Each acknowledgement gate names exactly its own input in
+    // `awaiting_inputs` -- the data the CLI's `supply:` line renders from.
+    for (node, input) in [
+        ("m3_repo_files", "m3_repo_files_done"),
+        ("m5_apns_key", "m5_apns_key_done"),
+        ("m6_ci_doppler_access", "m6_ci_doppler_access_done"),
+        ("m7_bootstrap", "m7_bootstrap_done"),
+    ] {
+        let entry = planned1
+            .blocked
+            .iter()
+            .find(|b| b.node.as_str() == node)
+            .unwrap_or_else(|| panic!("run 1: `{node}` is blocked"));
+        assert_eq!(
+            entry
+                .awaiting_inputs
+                .iter()
+                .map(willikins_core::InputName::as_str)
+                .collect::<Vec<_>>(),
+            vec![input],
+            "`{node}`'s awaiting_inputs"
+        );
+    }
+
     let applied2_json = serde_json::to_string(&applied2).unwrap();
     assert_no_secret_leaked(&applied2_json);
 
@@ -549,6 +616,41 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         &mut observer3,
     )
     .expect("run 3 is a clean NoOp run");
+
+    // The universal claim, not a spot check: nothing is freshly `Created` on
+    // a converged run -- a stray `Created` here would mean something
+    // silently re-ran instead of reading its already-converged state.
+    //
+    // Exactly three nodes are excluded, by design, not by omission:
+    // `doppler.secret.set` is a write-only sink that can never compare its
+    // `value` against what is already stored (`willikins_providers_doppler::tools::secret_set`'s
+    // own module doc; the fake mirrors it), so its own `ensure` reports
+    // `changed: true` -- `NodeStatus::Created` -- on *every* call, run 3
+    // included. That is this tool's documented behaviour everywhere it is
+    // used in this workspace, not a defect this document introduces.
+    let always_created: std::collections::BTreeSet<&str> = std::collections::BTreeSet::from([
+        "app_profile_to_doppler",
+        "nse_profile_to_doppler",
+        "widgets_profile_to_doppler",
+    ]);
+    let unexpectedly_created: Vec<&str> = applied3
+        .nodes
+        .iter()
+        .filter(|n| {
+            matches!(n.status, NodeStatus::Created) && !always_created.contains(n.name.as_str())
+        })
+        .map(|n| n.name.as_str())
+        .collect();
+    assert!(
+        unexpectedly_created.is_empty(),
+        "run 3 must create nothing outside the three write-only Doppler sinks: {unexpectedly_created:?}"
+    );
+    for node in &always_created {
+        assert!(
+            matches!(status_of(&applied3, node, None), NodeStatus::Created),
+            "`{node}` is a write-only sink and must report Created on every apply, run 3 included"
+        );
+    }
 
     for node in &applied3.nodes {
         assert!(
