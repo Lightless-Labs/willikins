@@ -1691,8 +1691,9 @@ Buildkite token exists.
     settles it.
 15. **Does `GET /v1/bundleIds/{id}/bundleIdCapabilities` accept `limit`?** (2026-09-29.) The OpenAPI
     description 4.5 says yes, up to 200. **Settled 2026-09-29, live: no** — `400 PARAMETER_ERROR.ILLEGAL`
-    "A given parameter is not allowed for this request"; with no query, `200`. The client still sends it
-    (`e4ba9af`); see the diagnosis addendum.
+    "A given parameter is not allowed for this request"; with no query, `200`. ~~The client still sends it
+    (`e4ba9af`); see the diagnosis addendum.~~ **Fixed 2026-09-29** — the first request now carries no
+    query string at all; see the addendum at the end of this file.
 
 **Verify list, 2026-09-29 (adversarial pass 2):** no provider was called, so items 5–13 are unchanged:
 5, 7 and 11 need the dry run or a live read; 6 stays irrelevant to correctness; 8, 9 and 10 need the
@@ -1832,6 +1833,44 @@ test-first (`3bd1ee9`), one test gap closed and F1's open coverage added (`43920
 - **Added:** `ACTIVE` at approval, `INVALID` at `apply` refuses as `DriftKind::Action { NoOp -> Replace }`
   with nothing deleted.
 - **Accepted risks, recorded:** Apple's `title` is echoed (escaped, bounded); `is_code_shape` admits an
-  id-shaped string. **Still open:** the capability list's `limit` fix (the diagnosis addendum's prescribed
-  fix), so replace-when-INVALID stays mock-proven; an MCP conformance case for a non-empty `replacing`.
+  id-shaped string. **Still open:** ~~the capability list's `limit` fix (the diagnosis addendum's
+  prescribed fix), so replace-when-INVALID stays mock-proven~~ **closed 2026-09-29, see the addendum
+  below** — replace-when-INVALID still stays mock-proven, since the fix is client-only and no live
+  cycle was re-run; an MCP conformance case for a non-empty `replacing`.
   Plan not marked Completed.
+
+**Addendum:** 2026-09-29 (implementer) — **the diagnosis addendum's prescribed fix landed test-first,
+one commit.** `AppstoreClient::list_bundle_id_capabilities`'s first request now carries no query string
+at all; only a later page, reached through `links.next`, carries one, and only because Apple's own
+`next` URL does — exactly as prescribed. The three existing pagination mocks that pinned
+`limit=200` on the first page now pin `Matcher::Missing` (no query) instead. A new mock test,
+`read_sends_the_first_capabilities_request_with_no_query_string`
+(`crates/willikins-providers-appstore/tests/bundle_id_capability_ensure_mock.rs`), registers its mock
+with `match_query(Matcher::Missing)` (so it only matches a request whose full path carries no query
+whatsoever) and fails if the first request still attaches `?limit=200` — the gap every other
+capability mock's `match_query(Matcher::Any)` left open, per the diagnosis addendum. **Confirmed not
+vacuous, observed rather than assumed:** reintroducing `?limit={PAGE_LIMIT}` on the first request (in
+the real file, restored from a saved copy after) made exactly four tests fail --
+`read_sends_the_first_capabilities_request_with_no_query_string` (the new one) and the three retargeted
+`Matcher::Missing` pagination tests, `read_finds_the_requested_capability_on_a_later_page`,
+`ensure_never_posts_when_the_requested_capability_is_on_a_later_page`, and
+`read_reattaches_only_the_query_string_never_the_host_or_path_links_next_names` -- 23 passed, 4 failed;
+`read_refuses_past_the_page_cap_rather_than_spinning` (`Matcher::Any`) stayed green throughout, as
+expected. The saved copy was restored (`cp`), `cmp` confirmed byte-identical, and the file was
+`touch`ed; a re-run of the same single test target on the restored bytes was green, 27 passed, 0 failed
+-- the last observed run is on exactly what this commit carries. One live clippy hit along the way,
+also fixed: `clippy::doc_markdown` on a bare "OpenAPI" in two of this fix's own new doc comments
+(`client.rs`, `bundle_id_capability_ensure_mock.rs`), backticked. The doc comment above the method is
+corrected to state the live `400` and the first-request exception, citing this file's own diagnosis
+addendum rather than repeating the old, now-wrong "asks for `PAGE_LIMIT` rows" claim; `live_write_cycle.rs`'s
+`CAPABILITY_LIST_QUERIES` doc, which had claimed the client "sends" `?limit=200` in the present tense,
+is corrected to the past tense window it actually describes (between `e4ba9af` and this fix).
+`list_bundle_ids` (which does accept `limit` live) is unchanged. **Scoped gates green, observed:**
+`cargo fmt --all --check` (no output); `cargo clippy -p willikins-providers-appstore --all-targets
+--features live-tests -j 2 -- -D warnings` (clean after the one `doc_markdown` fix above); `RUST_TEST_THREADS=2
+cargo test -p willikins-providers-appstore -j 2` (16 test binaries, every `test result:` line `0 failed`,
+`live_probe.rs`'s 3 ignored the only non-zero-ignored suite, as expected for its opt-in live tests).
+Not done here, for the coordinator: re-running `live_capability_cycle` and
+`appstore_live_profile_replace_cycle` against the live account now that the client no longer sends the
+refused `limit`, per the diagnosis addendum's own instructions — both live probes that diagnosed this
+were already spent, and no provider call was made for this fix.
