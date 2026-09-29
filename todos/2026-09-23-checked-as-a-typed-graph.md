@@ -94,3 +94,14 @@ until `Checked::workflow` is needed only for its name and inputs.
 - Secrecy inference (`todos/2026-09-22-secrecy-inference.md`) also wants per-edge structure (one
   constraint per use site). Sequence the two deliberately: whichever lands second builds on the
   other's edge type rather than inventing its own.
+
+## Added 2026-09-29, from milestones 3d and 3e
+
+- "No second lookup" of the conversion table is enforced by a clippy rule and a tripwire test, not by
+  a type boundary: `plan` and `apply` still receive a `&Catalog` whose registry is public. This
+  milestone is where it becomes structural.
+- A hand-built `Checked` can bypass both parse-time checks: a converted edge moved onto another port,
+  and an input bound but not declared by the workflow (both recorded in the 3d adversarial passes).
+- A tool's own outputs are not type-checked where they are produced, and a misnamed object in a
+  tool's list output still panics in `for_each` keying.
+
