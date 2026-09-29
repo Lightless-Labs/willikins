@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{PortName, Tool, Value};
-use willikins_providers_github::{GitHubClient, GitHubRepoEnsure};
+use willikins_providers_github::{GitHubClient, GitHubRepoEnsure, GitHubRepoGet};
 use willikins_providers_http::testing::MockProvider;
 use willikins_providers_http::{Credential, Http};
 use willikins_types::{DomainType, GitHubRepo, GitHubToken, RepoVisibility};
@@ -365,5 +365,54 @@ fn a_bound_token_port_marker_reaches_no_observation_or_error() {
             !text.contains(PORT_TOKEN_MARKER),
             "the bound-token-port marker leaked into: {text}"
         );
+    }
+}
+
+/// Adversarial pass 4 (2026-09-29): the two bound-token proofs above drive
+/// `github.repo.ensure` only, but the one GitHub tool the Sample document
+/// binds `token` on is `github.repo.get` -- a separate `lookup` with its
+/// own error path. A mutation that wrote the bound token into that
+/// path's `ToolError` message left every test in this crate green. Every
+/// error `github.repo.get` can return for a request it authorized with a
+/// bound token -- a `404` (`NotFound`), a `401` (`Provider`) and a failing
+/// `500` (`Provider`) -- must carry the marker in neither its `Debug` nor
+/// its `message`.
+#[test]
+fn a_bound_token_port_marker_reaches_no_repo_get_error() {
+    for (status, body) in [
+        (404, r#"{"message":"Not Found"}"#),
+        (401, r#"{"message":"Bad credentials"}"#),
+        (500, r#"{"message":"boom"}"#),
+    ] {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/repos/acme/widget")
+            .with_status(status)
+            .with_body(body)
+            .create();
+        let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_unrelated");
+        let http = Http::new(
+            provider.url(),
+            willikins_providers_github::default_headers(),
+            credential,
+        );
+        let mut inputs = willikins_core::Inputs::new();
+        inputs.insert(
+            PortName::parse("repo").unwrap(),
+            Value::known(GitHubRepo::parse("acme/widget").unwrap()),
+        );
+        inputs.insert(
+            PortName::parse("token").unwrap(),
+            Value::known(GitHubToken::parse(PORT_TOKEN_MARKER).unwrap()),
+        );
+        let err = GitHubRepoGet::new(Arc::new(GitHubClient::new(http)))
+            .read(&inputs)
+            .expect_err("every one of these statuses is an error for github.repo.get");
+        for text in [format!("{err:?}"), err.message.clone()] {
+            assert!(
+                !text.contains(PORT_TOKEN_MARKER),
+                "a {status}: the bound-token-port marker leaked into: {text}"
+            );
+        }
     }
 }
