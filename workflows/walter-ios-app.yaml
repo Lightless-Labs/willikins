@@ -72,24 +72,45 @@
 # `open-telemetry/prd_signoz`, one of the three base configs below --
 # willikins never reads or writes the key itself.
 #
-# VERIFY ITEM, not a known gap: decision 2 names the `github` project's
-# two base configs `lightless-labs` and `bande-a-bonnot` in prose, but
-# `willikins_types::DopplerConfigName`'s grammar is `[a-z0-9_]+`
-# (underscore, never hyphen) -- `naming::v1::doppler_root_config`'s own
-# doc states the reason: "Doppler config names use underscores rather
-# than hyphens." Doppler's own platform docs do not settle whether a
-# config slug ever accepts a hyphen at all (`docs/research/2026-09-12-m2-dependencies.md`
-# line 589: "the OpenAPI schema gives no character class"), so decision
-# 2's hyphenated spelling is very likely just human-readable prose for a
-# slug this codebase's own convention -- and quite possibly Doppler's own
-# rule -- already snakes to `bande_a_bonnot`, not a name this document
-# cannot express. The default below uses that underscored spelling.
-# **Verify before a real apply**: list project `github`'s configs
-# read-only and confirm the slug, rather than assuming either spelling.
+# VERIFY ITEM 12, settled (R1, 2026-09-29): a live probe against the
+# sandbox workplace found Doppler accepts a config literally named
+# `bande-a-bonnot`, hyphenated, exactly as operator decision 2 wrote it --
+# `DopplerConfigName`'s grammar widened to accept the hyphen rather than
+# this document needing to guess an underscored substitute. `base_configs`
+# below names the real config directly, `github/bande-a-bonnot`.
+#
+# **R4 (2026-09-29, this task): the real layout, edited in place.** The
+# App Store Connect credential is no longer read from a caller-supplied
+# `config` input: this document now reads it directly from
+# `appstore-connect/deploy_ios`, one of the operator's real shared base
+# configs (decision 2), under `APP_STORE_CONNECT_API_KEY_ISSUER_ID`,
+# `APP_STORE_CONNECT_API_KEY_ID` and `APP_STORE_CONNECT_API_KEY_BASE64` --
+# the real workplace's own names for those three secrets, not the
+# `ASC_API_KEY_*` names this document used before this task. The GitHub
+# token is resolved from Doppler the same way, mirroring R2's
+# `workflows/github-repo-token-from-doppler.yaml` exactly: `gh_token_secret`
+# (`doppler.secret.get` against `github/bande-a-bonnot`, `GH_CLONE_TOKEN`)
+# into `gh_token` (`github.token.parse`), bound to `monorepo_ref`'s own
+# optional `token` port -- so the monorepo reference authenticates as the
+# project's own Doppler-held credential, never a bare
+# `WILLIKINS_GITHUB_TOKEN` from the process environment (R2's own stated
+# gap still applies: the live server still reads that variable from the
+# process whenever *any* `github.*` tool is named in a document, so it
+# must still be set in the process environment for a live run of this
+# document even though this graph no longer needs it to resolve).
+#
+# **Sandbox naming gap, not fixed here.** The sandbox Doppler workplace's
+# App Store Connect config still names these three secrets
+# `ASC_API_KEY_ISSUER_ID` / `ASC_API_KEY_ID` / `ASC_API_KEY_BASE64` (this
+# document's own names before this task) -- so a sandbox `plan`/`apply` of
+# this document will not find `APP_STORE_CONNECT_API_KEY_*` under
+# whatever config the sandbox calls `appstore-connect/deploy_ios`, and
+# will fail with `NotFound` at `issuer_id_text` unless the sandbox
+# workplace is reseeded under the real names first. This document is
+# written for the real workplace's own naming now, not the sandbox's.
 name: walter-ios-app
 description: Provision Walter (app, NSE, widgets) end to end -- bundle identifiers, capabilities, signing profiles, the monorepo reference, Doppler, and the Buildkite pipeline -- reporting every manual step as a gate.
 inputs:
-  config: { type: DopplerConfig, description: "Doppler config holding the App Store Connect credential, e.g. app-store-connect/prd" }
   app_identifier: { type: AppleBundleIdentifier, description: "The app's bundle identifier, e.g. com.bande-a-bonnot.walter -- no default (trust boundary 2)" }
   nse_identifier: { type: AppleBundleIdentifier, description: "The notification service extension's bundle identifier, e.g. com.bande-a-bonnot.walter.nse" }
   widgets_identifier: { type: AppleBundleIdentifier, description: "The widgets extension's bundle identifier, e.g. com.bande-a-bonnot.walter.widgets" }
@@ -103,19 +124,23 @@ inputs:
   buildkite_org: { type: BuildkiteOrg, description: "Buildkite organization the pipeline is created in" }
   cluster: { type: BuildkiteClusterName, description: "The Buildkite cluster the pipeline runs in" }
   environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
-  base_configs: { type: list<DopplerConfig>, default: [appstore-connect/deploy_ios, github/bande_a_bonnot, open-telemetry/prd_signoz], description: "Operator decision 2's real shared base configs, inherited by prd_config alone (task B1) -- see the VERIFY ITEM note above for the github project's config-name spelling." }
+  base_configs: { type: list<DopplerConfig>, default: [appstore-connect/deploy_ios, github/bande-a-bonnot, open-telemetry/prd_signoz], description: "Operator decision 2's real shared base configs, inherited by prd_config alone (task B1)." }
   m3_repo_files_done: { type: OperatorAcknowledgement, description: "M3: Walter's files (BUILD.bazel, entitlements, Info.plist, .buildkite/) added under apps/walter/ in the monorepo, following the survey in the milestone plan." }
   m5_apns_key_done: { type: OperatorAcknowledgement, description: "M5: the team's APNs auth key (.p8) is confirmed in a shared base config Walter inherits, or freshly created if none exists." }
   m6_ci_doppler_access_done: { type: OperatorAcknowledgement, description: "M6: the Buildkite CI Doppler service account has been granted read access to project walter." }
   m7_bootstrap_done: { type: OperatorAcknowledgement, description: "M7: the walter pipeline's stored bootstrap has been replaced with apps/walter/.buildkite/bootstrap.yml, read back and compared." }
 steps:
   # --- The App Store Connect credential, resolved from Doppler (the same
-  # seven-node chain as appstore-bundle-id-from-doppler.yaml) ---
+  # seven-node chain as appstore-bundle-id-from-doppler.yaml). `config` is
+  # a literal, not a caller-supplied input (R4): the real, fixed base
+  # config appstore-connect/deploy_ios, under this document's own real
+  # secret names -- see this file's own header for the sandbox-naming
+  # gap this leaves. ---
   issuer_id_text:
     tool: doppler.value.get
     with:
-      config: ${{ inputs.config }}
-      name: ASC_API_KEY_ISSUER_ID
+      config: appstore-connect/deploy_ios
+      name: APP_STORE_CONNECT_API_KEY_ISSUER_ID
   issuer_id:
     tool: apple.issuer_id.parse
     with:
@@ -123,8 +148,8 @@ steps:
   key_id_text:
     tool: doppler.value.get
     with:
-      config: ${{ inputs.config }}
-      name: ASC_API_KEY_ID
+      config: appstore-connect/deploy_ios
+      name: APP_STORE_CONNECT_API_KEY_ID
   key_id:
     tool: apple.key_id.parse
     with:
@@ -132,8 +157,8 @@ steps:
   key_base64:
     tool: doppler.secret.get
     with:
-      config: ${{ inputs.config }}
-      name: ASC_API_KEY_BASE64
+      config: appstore-connect/deploy_ios
+      name: APP_STORE_CONNECT_API_KEY_BASE64
   key_decoded:
     tool: base64.decode
     with:
@@ -341,11 +366,24 @@ steps:
       value: ${{ steps.widgets_profile.content }}
 
   # --- The monorepo, referenced, and the Buildkite pipeline (decisions (f)
-  # and (g)) ---
+  # and (g)). The GitHub token is resolved from Doppler (R4), mirroring
+  # R2's workflows/github-repo-token-from-doppler.yaml exactly:
+  # gh_token_secret into gh_token, bound to monorepo_ref's own optional
+  # `token` port. ---
+  gh_token_secret:
+    tool: doppler.secret.get
+    with:
+      config: github/bande-a-bonnot
+      name: GH_CLONE_TOKEN
+  gh_token:
+    tool: github.token.parse
+    with:
+      value: ${{ steps.gh_token_secret.value }}
   monorepo_ref:
     tool: github.repo.get
     with:
       repo: ${{ inputs.monorepo }}
+      token: ${{ steps.gh_token.value }}
   buildkite_cluster:
     tool: buildkite.cluster.get
     with:

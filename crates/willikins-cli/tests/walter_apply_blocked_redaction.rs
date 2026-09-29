@@ -101,8 +101,6 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         journal.to_str().unwrap(),
         "--approve",
         "--input",
-        "config=app-store-connect/prd",
-        "--input",
         "app_identifier=com.example.walter",
         "--input",
         "nse_identifier=com.example.walter.nse",
@@ -129,7 +127,7 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         "--input",
         "environments=dev,stg,prd",
         "--input",
-        "base_configs=appstore-connect/deploy_ios,github/bande_a_bonnot,open-telemetry/prd_signoz",
+        "base_configs=appstore-connect/deploy_ios,github/bande-a-bonnot,open-telemetry/prd_signoz",
         // Supplied, not left awaited -- see this file's own module doc for
         // why: leaving any of these unmet trips a separate, pre-existing
         // defect in the journal-replay path, not the gate mechanism this
@@ -200,6 +198,10 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         assert!(
             !text.contains("fakeprofilecontent"),
             "{label} carries a fake profile's plaintext content: {text}"
+        );
+        assert!(
+            !text.contains("ghp_example"),
+            "{label} carries the seeded GitHub token's raw value: {text}"
         );
     }
 }

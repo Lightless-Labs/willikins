@@ -88,10 +88,6 @@ const BUILDKITE_ORG: &str = "bande-a-bonnot";
 fn base_inputs() -> IndexMap<InputName, Value> {
     let mut inputs = IndexMap::new();
     inputs.insert(
-        InputName::parse("config").unwrap(),
-        scalar("DopplerConfig", "app-store-connect/prd"),
-    );
-    inputs.insert(
         InputName::parse("app_identifier").unwrap(),
         scalar("AppleBundleIdentifier", APP_IDENTIFIER),
     );
@@ -152,7 +148,7 @@ fn base_inputs() -> IndexMap<InputName, Value> {
             "DopplerConfig",
             &[
                 "appstore-connect/deploy_ios",
-                "github/bande_a_bonnot",
+                "github/bande-a-bonnot",
                 "open-telemetry/prd_signoz",
             ],
         ),
@@ -176,20 +172,26 @@ fn with_acknowledgements(mut inputs: IndexMap<InputName, Value>) -> IndexMap<Inp
 }
 
 /// Everything the document needs *before* the two observed gates can ever
-/// open: the credential chain's three Doppler values, the monorepo (for
+/// open: the credential chain's three Doppler values (App Store Connect,
+/// read from the real, fixed base config `appstore-connect/deploy_ios`,
+/// not a caller-supplied input -- R4), the GitHub token (from
+/// `github/bande-a-bonnot`, R4's own new resolver chain, mirroring R2's
+/// `workflows/github-repo-token-from-doppler.yaml`), the monorepo (for
 /// `github.repo.get`), the Buildkite cluster (for `buildkite.cluster.get`),
 /// and the distribution certificate (for `appstore.certificate.get`). No
 /// bundle id, no app record, no capability is seeded -- those are exactly
 /// what run 1 must create or find blocked.
 fn seeded_state() -> Arc<Mutex<FakeState>> {
-    let config = willikins_types::DopplerConfig::parse("app-store-connect/prd").unwrap();
+    let config = willikins_types::DopplerConfig::parse("appstore-connect/deploy_ios").unwrap();
+    let github_config = willikins_types::DopplerConfig::parse("github/bande-a-bonnot").unwrap();
     let json = serde_json::json!({
         "doppler_values": {
-            format!("{config}#ASC_API_KEY_ISSUER_ID"): "57246542-96fe-1a63-e053-0824d011072a",
-            format!("{config}#ASC_API_KEY_ID"): "2X9R4HXF34",
+            format!("{config}#APP_STORE_CONNECT_API_KEY_ISSUER_ID"): "57246542-96fe-1a63-e053-0824d011072a",
+            format!("{config}#APP_STORE_CONNECT_API_KEY_ID"): "2X9R4HXF34",
         },
         "doppler_secrets": {
-            format!("{config}#ASC_API_KEY_BASE64"): "VGhpcyBpcyBhbiBleGFtcGxlIGtleSBmb3IgdGVzdHMgb25seS4KLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3ZMNTJyZWtFcWdHcW9XbjkKK1lCa0lRdVFXRU9UaEtxcUlYYnZvbmVuY0FXaFJBTkNBQVRkdC9YZDRjL0NMT0thMmpvRDlHMXBCOTh1d0tOKwpMR0p2SzNoS1RyeFRXbkowR3lRaVAzUm1DdWJ6bCtHUVIvL2g5Y2lGYW1qeU5jSE1qVlUyY0tiQQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==",
+            format!("{config}#APP_STORE_CONNECT_API_KEY_BASE64"): "VGhpcyBpcyBhbiBleGFtcGxlIGtleSBmb3IgdGVzdHMgb25seS4KLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3ZMNTJyZWtFcWdHcW9XbjkKK1lCa0lRdVFXRU9UaEtxcUlYYnZvbmVuY0FXaFJBTkNBQVRkdC9YZDRjL0NMT0thMmpvRDlHMXBCOTh1d0tOKwpMR0p2SzNoS1RyeFRXbkowR3lRaVAzUm1DdWJ6bCtHUVIvL2g5Y2lGYW1qeU5jSE1qVlUyY0tiQQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==",
+            format!("{github_config}#GH_CLONE_TOKEN"): "ghp_example",
         },
     })
     .to_string();
@@ -245,13 +247,17 @@ fn approval() -> Approval {
 }
 
 /// No secret value ever reaches JSON output: only its `[REDACTED` marker
-/// does. The signing key's own PEM marker and the fake profile tool's own
-/// plaintext content prefix are the two concrete secrets this graph
-/// carries.
+/// does. The signing key's own PEM marker, the fake profile tool's own
+/// plaintext content prefix, and R4's seeded GitHub token are the
+/// concrete secrets this graph carries.
 fn assert_no_secret_leaked(json: &str) {
     assert!(
         !json.contains("PRIVATE KEY"),
         "the signing key's PEM marker leaked into JSON output"
+    );
+    assert!(
+        !json.contains("ghp_example"),
+        "the seeded GitHub token's raw value leaked into JSON output"
     );
     assert!(
         !json.contains("fakeprofilecontent"),
