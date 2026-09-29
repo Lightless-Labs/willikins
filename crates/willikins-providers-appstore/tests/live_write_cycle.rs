@@ -1432,10 +1432,12 @@ fn throwaway_profile_state(
 }
 
 /// The query strings [`throwaway_capability_rows`] tries, in order: the
-/// one `AppstoreClient::list_bundle_id_capabilities` sends since `e4ba9af`
-/// (the `OpenAPI` 4.5 description allows `limit` up to 200 on this path),
-/// and none at all, as every live capability read before `e4ba9af` sent.
-/// Probe 1 (2026-09-29) found the first answering `400` on a fresh `IOS`
+/// one `AppstoreClient::list_bundle_id_capabilities` sent on its first
+/// request between `e4ba9af` and the diagnosis addendum's fix (the
+/// `OpenAPI` 4.5 description allows `limit` up to 200 on this path), and
+/// none at all, as every live capability read before `e4ba9af` sent, and
+/// as the client's first request sends again after the fix. Probe 1
+/// (2026-09-29) found the first answering `400` on a fresh `IOS`
 /// identifier; comparing the two separates "this query" from "this
 /// platform".
 const CAPABILITY_LIST_QUERIES: [&str; 2] = ["?limit=200", ""];

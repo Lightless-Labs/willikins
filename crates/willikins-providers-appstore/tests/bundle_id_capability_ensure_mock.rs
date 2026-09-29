@@ -179,6 +179,40 @@ fn read_of_a_capability_is_unaffected_by_another_rows_unexpected_settings_shape(
 }
 
 // ---------------------------------------------------------------------
+// `read`: the first capabilities request carries no query string
+// ---------------------------------------------------------------------
+
+/// LIVE FINDING, 2026-09-29: `GET
+/// /v1/bundleIds/{id}/bundleIdCapabilities?limit=200` answers `400`,
+/// `errors[].code` `PARAMETER_ERROR.ILLEGAL` ("A given parameter is not
+/// allowed for this request"), even though Apple's `OpenAPI` description
+/// 4.5 lists `limit` on this path; the same `GET` with no query answers
+/// `200`. Every other mock in this file matches the capabilities list
+/// with `match_query(Matcher::Any)`, which is exactly why this regression
+/// (introduced by the pagination fix, `e4ba9af`) went uncaught: `Any`
+/// matches a request whether or not it carries `?limit=200`. This mock
+/// matches `Matcher::Missing` instead, so it only matches a request whose
+/// full path carries no query string whatsoever -- a first request that
+/// still attached `?limit=200` would find no matching mock, get an
+/// unmocked response, and fail this test.
+#[test]
+fn read_sends_the_first_capabilities_request_with_no_query_string() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_lookup(&mut provider);
+    provider
+        .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Missing)
+        .with_status(200)
+        .with_body(fixture("capabilities_list_with_push").to_string())
+        .create();
+    let tool = AppstoreBundleIdCapabilityEnsure::new(provider.url());
+    let observation = tool
+        .read(&inputs_for("PUSH_NOTIFICATIONS"))
+        .unwrap_or_else(|err| panic!("{:?}: {}", err.kind, err.message));
+    assert!(matches!(observation, Observation::Present(_)));
+}
+
+// ---------------------------------------------------------------------
 // `read`/`ensure`: the capability list paginates
 // ---------------------------------------------------------------------
 
@@ -204,7 +238,7 @@ fn read_finds_the_requested_capability_on_a_later_page() {
     });
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
-        .match_query(mockito::Matcher::Exact("limit=200".into()))
+        .match_query(mockito::Matcher::Missing)
         .with_status(200)
         .with_body(page_one.to_string())
         .create();
@@ -239,7 +273,7 @@ fn ensure_never_posts_when_the_requested_capability_is_on_a_later_page() {
     });
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
-        .match_query(mockito::Matcher::Exact("limit=200".into()))
+        .match_query(mockito::Matcher::Missing)
         .with_status(200)
         .with_body(page_one.to_string())
         .create();
@@ -317,7 +351,7 @@ fn read_reattaches_only_the_query_string_never_the_host_or_path_links_next_names
     });
     provider
         .mock("GET", "/v1/bundleIds/T6G4XCV345/bundleIdCapabilities")
-        .match_query(mockito::Matcher::Exact("limit=200".into()))
+        .match_query(mockito::Matcher::Missing)
         .with_status(200)
         .with_body(page_one.to_string())
         .create();
