@@ -94,6 +94,7 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
             "doppler-backend",
             "doppler-ios",
             "doppler-project",
+            "github-repo-token-from-doppler",
             "new-rust-service-buildkite",
             "new-rust-service",
             "rotate-service-token",

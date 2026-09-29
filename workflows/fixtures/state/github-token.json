@@ -1,0 +1,8 @@
+{
+  "doppler_secrets": {
+    "github/prd#GH_CLONE_TOKEN": "ghp_example"
+  },
+  "github_repos": {
+    "example-org/monorepo": { "visibility": "private", "ours": false }
+  }
+}

@@ -2,13 +2,14 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the live catalog (thirty tools since
-//! milestone 3e task B1 added `doppler.branch_config.ensure`, after task
-//! 3 added the two Sample gates, `appstore.app.get` and
-//! `appstore.app_group.gate`) --
-//! `willikins-tools`' seven pure tools (`naming.v1`, `template.render`,
+//! `live_catalog` assembles the live catalog (thirty-one tools since
+//! milestone 3e task R2 added `github.token.parse`, after task B1 added
+//! `doppler.branch_config.ensure`, after task 3 added the two Sample
+//! gates, `appstore.app.get` and `appstore.app_group.gate`) --
+//! `willikins-tools`' nine pure tools (`naming.v1`, `template.render`,
 //! `env.get`, `base64.decode`, `apple.signing_key.parse`,
-//! `apple.issuer_id.parse`, `apple.key_id.parse`),
+//! `apple.issuer_id.parse`, `apple.key_id.parse`, `github.token.parse`,
+//! `operator.acknowledge`),
 //! `willikins-providers-github`'s three
 //! live tools (milestone 3e task 2 added `github.repo.get`),
 //! `willikins-providers-doppler`'s ten (milestone 3 added
@@ -53,7 +54,7 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 30] = [
+pub const LIVE_TOOL_NAMES: [&str; 31] = [
     "naming.v1",
     "template.render",
     "operator.acknowledge",
@@ -62,6 +63,7 @@ pub const LIVE_TOOL_NAMES: [&str; 30] = [
     "apple.signing_key.parse",
     "apple.issuer_id.parse",
     "apple.key_id.parse",
+    "github.token.parse",
     "github.repo.ensure",
     "github.actions_secret.ensure",
     "github.repo.get",
@@ -86,7 +88,7 @@ pub const LIVE_TOOL_NAMES: [&str; 30] = [
     "appstore.app_group.gate",
 ];
 
-/// Insert `willikins-tools`' eight pure tools -- no provider, no
+/// Insert `willikins-tools`' nine pure tools -- no provider, no
 /// credential, always present regardless of which providers a document
 /// uses. `env.get`, `base64.decode`, and `apple.signing_key.parse` joined
 /// `naming.v1` and `template.render` here once the App Store Connect
@@ -97,7 +99,9 @@ pub const LIVE_TOOL_NAMES: [&str; 30] = [
 /// gave a `Text`-emitting resolver (`doppler.value.get`) a typed port to
 /// reach; `operator.acknowledge` joined in G3, the gate over an operator's
 /// own acknowledgement (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`,
-/// decision (j), point 6).
+/// decision (j), point 6); `github.token.parse` joined in task R2, the same
+/// resolver-chain shape given to `willikins-providers-github`'s three
+/// tools' new optional `token` port.
 fn insert_pure_tools(catalog: &mut Catalog) {
     insert(catalog, Arc::new(willikins_tools::NamingV1::new()));
     insert(catalog, Arc::new(willikins_tools::TemplateRender::new()));
@@ -116,6 +120,7 @@ fn insert_pure_tools(catalog: &mut Catalog) {
         Arc::new(willikins_tools::AppleIssuerIdParse::new()),
     );
     insert(catalog, Arc::new(willikins_tools::AppleKeyIdParse::new()));
+    insert(catalog, Arc::new(willikins_tools::GitHubTokenParse::new()));
 }
 
 /// Insert `willikins-providers-appstore`'s four live tools. Unlike every
@@ -128,7 +133,7 @@ fn insert_pure_tools(catalog: &mut Catalog) {
 /// [`insert_pure_tools`], in both [`live_catalog_with`] and
 /// [`live_catalog_for_document`] -- there is no environment credential
 /// to gate them behind, and `tests::the_provider_tool_name_arrays_partition_live_tool_names`
-/// tracks them alongside the eight pure tool names for exactly that
+/// tracks them alongside the nine pure tool names for exactly that
 /// reason.
 fn insert_appstore_tools(catalog: &mut Catalog) {
     insert(
@@ -484,7 +489,7 @@ enum Provider {
 /// (rather than slicing [`LIVE_TOOL_NAMES`]) so it names exactly the tools
 /// [`insert_github_tools`] inserts; `tests::the_provider_tool_name_arrays_partition_live_tool_names`
 /// pins that this array, [`DOPPLER_TOOL_NAMES`], [`BUILDKITE_TOOL_NAMES`],
-/// and the eight pure tool names together are exactly [`LIVE_TOOL_NAMES`],
+/// and the nine pure tool names together are exactly [`LIVE_TOOL_NAMES`],
 /// so the two lists cannot silently drift apart.
 const GITHUB_TOOL_NAMES: [&str; 3] = [
     "github.repo.ensure",
@@ -791,7 +796,7 @@ mod tests {
     }
 
     /// Every array feeding [`live_catalog_for_document`]'s per-provider
-    /// gate, together with the eight pure tool names, is exactly
+    /// gate, together with the nine pure tool names, is exactly
     /// [`LIVE_TOOL_NAMES`] -- so a tool added to one list and not the
     /// other (e.g. a new Doppler tool added to [`insert_doppler_tools`]
     /// but not [`DOPPLER_TOOL_NAMES`]) fails here instead of silently
@@ -811,6 +816,7 @@ mod tests {
             "apple.signing_key.parse",
             "apple.issuer_id.parse",
             "apple.key_id.parse",
+            "github.token.parse",
             "appstore.bundle_id.ensure",
             "appstore.bundle_id_capability.ensure",
             "appstore.certificate.get",
@@ -863,6 +869,7 @@ mod tests {
             "apple.signing_key.parse",
             "apple.issuer_id.parse",
             "apple.key_id.parse",
+            "github.token.parse",
             "appstore.bundle_id.ensure",
             "appstore.bundle_id_capability.ensure",
             "appstore.certificate.get",

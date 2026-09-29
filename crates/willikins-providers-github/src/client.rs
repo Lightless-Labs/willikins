@@ -22,6 +22,36 @@
 //! own 60-second cap, then gives up and reports it as
 //! [`willikins_core::ToolErrorKind::Provider`] naming the rate limit and,
 //! when GitHub sent one, the reset time — never as a missing permission.
+//!
+//! # GitHub credentials as ports (milestone 3e, R2)
+//!
+//! Every tool in this crate is still built once, at catalog-construction
+//! time, from a [`GitHubClient`] that itself owns a [`Credential`] read
+//! from `WILLIKINS_GITHUB_TOKEN` ([`credential_from_env`]) — nothing
+//! about that changes, so every document and server invocation that
+//! predates this section keeps working exactly as it did.
+//!
+//! What is new: each of the three tools' `ToolSpec` now also declares an
+//! **optional** `token` port, [`willikins_types::GitHubToken`], the same
+//! "credentials are ports, resolvers are nodes" shape
+//! (`docs/plans/2026-09-11-willikins-design.md`, 2026-09-21 addendum)
+//! `willikins-providers-appstore` already uses for the three parts of its
+//! credential. A document that binds it (typically `doppler.secret.get`
+//! into `github.token.parse`) gets a *fresh* [`GitHubClient`] built from
+//! that resolved token instead — [`client_for_token`] mints it. Unlike
+//! `willikins-providers-appstore`'s own `client_for`, which mints a JWT
+//! and so always talks to the real API, a bound `GitHubToken` is used
+//! verbatim as a bearer credential and must still reach whatever
+//! `base_url` the tool's own default client already carries (a mock
+//! server in a test, the real API in production) — so `client_for_token`
+//! takes the default client and calls [`GitHubClient::with_credential`]
+//! (in turn [`Http::with_credential`]) to swap only the credential,
+//! never [`GITHUB_API_BASE_URL`] unconditionally. A document that does
+//! not bind `token` is unaffected: [`ScopedClient::default_for`] simply
+//! borrows the tool's own held client, exactly as before this addition.
+//! Optional, not required, on purpose: making it required would demand
+//! every existing document bind it, which is precisely what this task's
+//! own boundary rules out.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -32,7 +62,7 @@ use willikins_core::{ToolError, ToolErrorKind};
 use willikins_providers_http::{
     Credential, Http, MAX_RETRY_AFTER, ProviderError, RealSleeper, Sleeper,
 };
-use willikins_types::{ActionsSecretName, GitHubRepo, RepoVisibility};
+use willikins_types::{ActionsSecretName, GitHubRepo, GitHubToken, RepoVisibility};
 
 /// GitHub's REST API base URL.
 pub const GITHUB_API_BASE_URL: &str = "https://api.github.com";
@@ -164,6 +194,20 @@ impl GitHubClient {
     pub fn with_sleeper(mut self, sleeper: Arc<dyn Sleeper>) -> Self {
         self.sleeper = sleeper;
         self
+    }
+
+    /// Build a client identical to this one — same route, headers, and
+    /// sleeper — except for its credential, which [`client_for_token`]
+    /// uses so a document-bound `token` port still reaches whatever
+    /// `base_url` this client was built against (a mock server in a test,
+    /// the real API in production), never [`GITHUB_API_BASE_URL`]
+    /// unconditionally. See [`Http::with_credential`].
+    #[must_use]
+    fn with_credential(&self, credential: Credential) -> Self {
+        Self {
+            http: self.http.with_credential(credential),
+            sleeper: Arc::clone(&self.sleeper),
+        }
     }
 
     /// Run `attempt` (one already-retried-by-`Http` call), retrying again
@@ -299,6 +343,66 @@ impl GitHubClient {
     }
 }
 
+/// The label a bound `token` port's minted [`Credential`] carries in its
+/// own redacted `Debug` — distinct from [`CREDENTIAL_VAR`] on purpose: a
+/// 401 against a Doppler-sourced token must never point an operator at
+/// `WILLIKINS_GITHUB_TOKEN`, which this credential was never read from.
+/// Mirrors `willikins_providers_appstore::client`'s own `CREDENTIAL_LABEL`.
+const BOUND_TOKEN_LABEL: &str = "GitHubToken port";
+
+/// Build a fresh [`GitHubClient`] from a document-bound `token` port,
+/// minting a [`Credential`] straight from its resolved bytes via
+/// [`GitHubToken::reveal_for_authorization`] — the only place this crate
+/// reads them — while keeping `default`'s own route (base URL, default
+/// headers, sleeper): [`Http::with_credential`] swaps only the
+/// credential, so this reaches whatever `default` was built against (a
+/// mock server in a test, the real API in production), never
+/// [`crate::GITHUB_API_BASE_URL`] unconditionally. See this module's own
+/// "GitHub credentials as ports" doc section.
+pub(crate) fn client_for_token(default: &GitHubClient, token: &GitHubToken) -> GitHubClient {
+    let credential = token.reveal_for_authorization(|bytes| {
+        Credential::from_bearer_token(BOUND_TOKEN_LABEL, bytes.to_owned())
+    });
+    default.with_credential(credential)
+}
+
+/// Either the tool's own held [`GitHubClient`] (built once, from
+/// `WILLIKINS_GITHUB_TOKEN`, at catalog-construction time — the
+/// unbound-port, execution-context case) or a freshly minted one built
+/// from a document-bound `token` port. `Deref`s to [`GitHubClient`] so
+/// every existing `self.client.method(...)` call site becomes
+/// `client.method(...)` regardless of which case applies.
+pub(crate) enum ScopedClient<'a> {
+    /// No `token` port was bound: use the client this tool already holds.
+    Default(&'a GitHubClient),
+    /// A `token` port was bound: use the client [`client_for_token`] just
+    /// built from it.
+    Bound(GitHubClient),
+}
+
+impl<'a> ScopedClient<'a> {
+    /// Choose between `default` and a client built from `token`, exactly
+    /// as this module's own "GitHub credentials as ports" doc section
+    /// describes.
+    pub(crate) fn default_for(default: &'a GitHubClient, token: Option<&GitHubToken>) -> Self {
+        match token {
+            Some(token) => Self::Bound(client_for_token(default, token)),
+            None => Self::Default(default),
+        }
+    }
+}
+
+impl std::ops::Deref for ScopedClient<'_> {
+    type Target = GitHubClient;
+
+    fn deref(&self) -> &GitHubClient {
+        match self {
+            Self::Default(client) => client,
+            Self::Bound(client) => client,
+        }
+    }
+}
+
 fn repo_path(repo: &GitHubRepo) -> String {
     format!("/repos/{}/{}", repo.owner(), repo.name())
 }
@@ -368,4 +472,67 @@ where
 pub(crate) struct PublicKeyBody {
     pub(crate) key_id: String,
     pub(crate) key: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use willikins_types::DomainType;
+
+    #[test]
+    fn client_for_token_builds_a_client() {
+        let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+        let default = GitHubClient::new(Http::new("http://127.0.0.1:1", Vec::new(), credential));
+        let token = GitHubToken::parse(GitHubToken::example()).unwrap();
+        let _client = client_for_token(&default, &token);
+    }
+
+    /// The whole point of the fix: a bound token still reaches the
+    /// *same route* the default client was built against (a mock
+    /// server here, the real API in production) — never
+    /// `GITHUB_API_BASE_URL` unconditionally, which would make this
+    /// request go nowhere the mock could ever see it.
+    #[test]
+    fn client_for_token_preserves_the_default_clients_base_url() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        // Pins the credential too, not only the route: only the *bound*
+        // token's bearer value is accepted here.
+        let mock = provider
+            .mock("GET", "/repos/acme/widget")
+            .match_header(
+                "authorization",
+                format!("Bearer {}", GitHubToken::example()).as_str(),
+            )
+            .with_status(200)
+            .with_body(r#"{"visibility":"private","topics":[]}"#)
+            .create();
+        let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+        let default = GitHubClient::new(Http::new(provider.url(), Vec::new(), credential));
+        let token = GitHubToken::parse(GitHubToken::example()).unwrap();
+        let bound = client_for_token(&default, &token);
+        bound
+            .get_repo(&willikins_types::GitHubRepo::parse("acme/widget").unwrap())
+            .expect(
+                "the bound client must reach the mock at its own route, authorized with the \
+                 bound token, not GITHUB_API_BASE_URL or the default credential",
+            );
+        mock.assert();
+    }
+
+    #[test]
+    fn scoped_client_default_for_borrows_the_default_without_a_bound_token() {
+        let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+        let default = GitHubClient::new(Http::new("http://127.0.0.1:1", Vec::new(), credential));
+        let scoped = ScopedClient::default_for(&default, None);
+        assert!(matches!(scoped, ScopedClient::Default(_)));
+    }
+
+    #[test]
+    fn scoped_client_default_for_builds_a_fresh_client_with_a_bound_token() {
+        let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+        let default = GitHubClient::new(Http::new("http://127.0.0.1:1", Vec::new(), credential));
+        let token = GitHubToken::parse(GitHubToken::example()).unwrap();
+        let scoped = ScopedClient::default_for(&default, Some(&token));
+        assert!(matches!(scoped, ScopedClient::Bound(_)));
+    }
 }

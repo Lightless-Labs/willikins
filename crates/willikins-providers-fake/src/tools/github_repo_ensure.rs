@@ -30,6 +30,7 @@ impl GitHubRepoEnsure {
         let mut inputs = IndexMap::new();
         inputs.insert(port("repo"), exact("GitHubRepo", true));
         inputs.insert(port("visibility"), exact("RepoVisibility", true));
+        inputs.insert(port("token"), exact("GitHubToken", false));
         let mut outputs = IndexMap::new();
         outputs.insert(port("repo"), scalar("GitHubRepo"));
         outputs.insert(port("url"), scalar("HttpsUrl"));

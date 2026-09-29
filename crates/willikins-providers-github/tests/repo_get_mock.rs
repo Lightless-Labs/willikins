@@ -170,3 +170,85 @@ fn spec_is_pure_with_no_key() {
     assert!(tool.spec().pure);
     assert!(tool.spec().key.is_empty());
 }
+
+/// Milestone 3e, task R2: the spec grows one optional, secret-typed
+/// `token` port.
+#[test]
+fn spec_carries_token_as_an_optional_secret_port() {
+    let tool = tool_against("http://127.0.0.1:1".to_string());
+    let token_port = tool
+        .spec()
+        .inputs
+        .get(&PortName::parse("token").unwrap())
+        .expect("a `token` port is declared");
+    assert!(!token_port.required, "`token` must be optional");
+}
+
+/// A document that binds `token` authorizes with it, not the credential
+/// the tool was constructed with.
+#[test]
+fn read_authorizes_with_the_bound_token_port_not_the_default_credential() {
+    let captured = Arc::new(Mutex::new(String::new()));
+    let capture = captured.clone();
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/repos/example-org/monorepo")
+        .with_status(200)
+        .with_body_from_request(move |request| {
+            let authorization = request
+                .header("Authorization")
+                .first()
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            *capture.lock().expect("not poisoned") = authorization;
+            fixture("repo_get_present").to_string().into_bytes()
+        })
+        .create();
+    let tool = tool_against(provider.url());
+    let mut request_inputs = inputs();
+    request_inputs.insert(
+        PortName::parse("token").unwrap(),
+        Value::known(willikins_types::GitHubToken::parse("ghp_theboundtoken").unwrap()),
+    );
+    let observation = tool.read(&request_inputs).unwrap();
+    assert!(matches!(observation, Observation::Present(_)));
+    assert_eq!(
+        captured.lock().expect("not poisoned").as_str(),
+        "Bearer ghp_theboundtoken"
+    );
+}
+
+/// The stronger version of the proof above: the tool's own default
+/// credential is refused outright by the mock, so this can only pass if
+/// the bound `token` port's credential is what actually authorized the
+/// request -- a regression that made `ScopedClient` fall back to the
+/// default (even a *valid* default, as the previous test alone would
+/// tolerate) fails here.
+#[test]
+fn a_bound_token_port_is_used_even_when_the_default_credential_would_be_refused() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/repos/example-org/monorepo")
+        .match_header("authorization", "Bearer ghp_theboundtoken")
+        .with_status(200)
+        .with_body(fixture("repo_get_present").to_string())
+        .create();
+    provider
+        .mock("GET", "/repos/example-org/monorepo")
+        .match_header("authorization", "Bearer ghp_testtoken")
+        .with_status(401)
+        .with_body(r#"{"message":"Bad credentials"}"#)
+        .create();
+
+    let tool = tool_against(provider.url());
+    let mut request_inputs = inputs();
+    request_inputs.insert(
+        PortName::parse("token").unwrap(),
+        Value::known(willikins_types::GitHubToken::parse("ghp_theboundtoken").unwrap()),
+    );
+    let observation = tool
+        .read(&request_inputs)
+        .expect("the bound token's credential, not the default, must authorize this request");
+    assert!(matches!(observation, Observation::Present(_)));
+}

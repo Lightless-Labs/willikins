@@ -20,8 +20,11 @@
 //! G3 added `operator.acknowledge`, also pure and provider-independent;
 //! milestone 3e task 3 added the two Sample gates, `appstore.app.get`
 //! and `appstore.app_group.gate`; milestone 3e task B1 added
-//! `doppler.branch_config.ensure`),
-//! so the catalog this crate produces holds thirty-two tools, in the
+//! `doppler.branch_config.ensure`; milestone 3e task R2 added
+//! `github.token.parse`, the parse tool `github.repo.ensure`'s,
+//! `github.actions_secret.ensure`'s, and `github.repo.get`'s new optional
+//! `token` credential port binds to),
+//! so the catalog this crate produces holds thirty-three tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -77,6 +80,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(willikins_tools::AppleSigningKeyParse::new());
     insert!(willikins_tools::AppleIssuerIdParse::new());
     insert!(willikins_tools::AppleKeyIdParse::new());
+    insert!(willikins_tools::GitHubTokenParse::new());
     insert!(tools::GitHubRepoEnsure::new(state.clone()));
     insert!(tools::GitHubActionsSecretEnsure::new(state.clone()));
     insert!(tools::FakeGitHubRepoGet::new(state.clone()));
@@ -135,6 +139,7 @@ mod tests {
             "apple.signing_key.parse",
             "apple.issuer_id.parse",
             "apple.key_id.parse",
+            "github.token.parse",
             "github.repo.ensure",
             "github.actions_secret.ensure",
             "github.repo.get",
@@ -164,7 +169,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 32);
+        assert_eq!(names.len(), 33);
     }
 
     #[test]

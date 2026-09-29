@@ -1,0 +1,38 @@
+# Milestone 3e, task R2: proof that `github.repo.ensure`'s (and its
+# siblings') new optional `token` port is a genuinely free credential
+# port, the same "credentials are ports, resolvers are nodes" shape
+# `appstore-bundle-id-from-doppler.yaml` already proves for App Store
+# Connect (docs/plans/2026-09-11-willikins-design.md, 2026-09-21
+# addendum). The operator's own words, quoted in this milestone's task
+# brief: the GitHub token "is in... doppler! The whole point of the damn
+# thing!" -- so this document resolves it from Doppler, through
+# `github.token.parse`, and binds it to `github.repo.get`'s `token` port
+# instead of relying on `WILLIKINS_GITHUB_TOKEN` in the process
+# environment.
+#
+# `github.repo.get` (not `.ensure`) on purpose: it is pure, so `plan`
+# resolves this whole document -- including the referenced repository --
+# without any approval, the same reason the milestone 3e Sample document
+# uses it to reference the monorepo.
+name: github-repo-token-from-doppler
+description: Resolve a GitHub token from Doppler and reference a repository with it.
+inputs:
+  config: { type: DopplerConfig, description: "Doppler config holding the credential, e.g. github/prd" }
+  repo: { type: GitHubRepo, description: "The repository to reference, e.g. example-org/monorepo" }
+steps:
+  token_secret:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: GH_CLONE_TOKEN
+  token:
+    tool: github.token.parse
+    with:
+      value: ${{ steps.token_secret.value }}
+  repo_ref:
+    tool: github.repo.get
+    with:
+      repo: ${{ inputs.repo }}
+      token: ${{ steps.token.value }}
+outputs:
+  repo: ${{ steps.repo_ref.repo }}
