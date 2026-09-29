@@ -15,6 +15,8 @@ and this plan's own pre-flight, fetched 2026-09-27 and quoted below with its URL
 **Depends on:** milestones 3a (Buildkite), 3c (signing), 3d (conversions), all Completed.
 **Reviewed:** 2026-09-28 (independent adversarial pass over T1 and T2,
 `docs/research/2026-09-28-m3e-adversarial-pass.md`)
+**Reviewed:** 2026-09-29 (independent adversarial pass over T3a, G1–G3, T3b, T3c, B1 and B2,
+`docs/research/2026-09-29-m3e-adversarial-pass-2.md`)
 **Addendum:** 2026-09-28 (attacker) — **four defects fixed test-first.** `c054a09`: every capability
 read parsed every row's `settings` strictly, so another row's missing `enabled` or `null` `options`
 failed a `HEALTHKIT` read; the four fields are now optional. `92dec9e`: decision (d)'s "exactly one
@@ -707,6 +709,41 @@ willikins-server -j 2` (green apart from the two pre-existing,
 unrelated failures above); `cargo check -p willikins-types -j 2`; `cargo
 test -p willikins-dsl --test acceptance -j 2` (additive-only, verified
 by diff). Plan not marked Completed.
+
+**Addendum:** 2026-09-29 (attacker, second pass) — **replace-when-INVALID, the gates, the
+acknowledgement, the conversions and the Sample document attacked; three defects fixed test-first, two
+red-on-arrival suites fixed, one test gap closed, eleven mutations (one survived, then killed).** Record:
+`docs/research/2026-09-29-m3e-adversarial-pass-2.md`.
+- **Every gate-free MCP `describe`, `plan` and `run_status` result failed its own published
+  `outputSchema`** (`d986c75`). `Plan.blocked`, `Applied.blocked`, `Description.awaiting` and
+  `RunRecord.blocked` are skipped when empty, but rmcp builds output schemas for the deserialize
+  contract, which listed them as `required` — so decision (j)'s "a document with no gate is unaffected"
+  held for the bytes and not for the contract. G1's addendum had called this cosmetic; a validating MCP
+  client refuses such a result. The four fields now carry `serde(default)`; a new test
+  (`crates/willikins-server/tests/mcp_output_schema_conformance.rs`) validates `describe`, `plan`,
+  `apply` and `run_status` against the server's own schemas for a gate-free and a blocked document. The
+  schema snapshots moved by **removing** those `required` entries, deliberately.
+- **`appstore.profile.ensure` deleted by the id the instance read answered with**, never checked against
+  the row its exact name compare matched (`50de4a2`): now refused with `Provider`, nothing deleted.
+- **A create failing after replace-when-INVALID's delete was journaled as the create's error alone**
+  (`79a4f28`): it now says the `INVALID` profile was deleted and a re-run creates the replacement.
+- **Held, by mutation:** a blocked gate's dependents are never read or run (m1c, m2, and m10 on the
+  Sample document's own gate edge); a gate-free plan stays byte-identical in the characterization
+  snapshot (m3); an acknowledgement cannot be defaulted (m4) and an unrecorded one no longer refuses a
+  journal rebuild (m9); a blocked run exits 3 (m5); replace-when-INVALID never touches an `ACTIVE`
+  profile (m6), never creates after a failed delete (m7), and never acts on a mismatched instance (m8);
+  the `=> AppleBundleIdName` conversion is byte-for-byte (m11). `Class::Destructive` is right under
+  `class.rs`'s "destroys or overwrites something".
+- **Not fixed, for the coordinator:** an approved plan renders a replacement as `create`; nothing in it
+  says a delete will run (a plan-visible replace marker would close it). `BlockedGate.awaiting_inputs`
+  has no serde default, so a `RunFinished { Blocked }` journal line written between G2 and G3 no longer
+  reads back (local, unpushed commits only). An acknowledgement does not persist between runs, by
+  design: every re-run must supply every `*_done=done` again or block (exit 3).
+- **Red on arrival, fixed:** B1/B2's two `willikins-server` workflow-list tests (`b9287db`), and
+  `willikins-cli`'s MCP `validate` sweep, rate-limited on its 61st document since B2's fixture
+  (`369706f`). A test gap: `plan_gates.rs` never pinned a `Step` binding on a blocked scalar gate
+  (`a512cb5`).
+- Verify items: none of 5–13 could move without a provider call; item 14 is new (below).
 
 ## Goal
 
@@ -1600,6 +1637,17 @@ Buildkite token exists.
     out to be an unverified `400`, the plan fails at `inherit`, not at `prd_config`, and the coordinator
     should look there first. Verify before a real apply creates `prd_config` for the first time against
     the operator's own workplace.
+14. **Does an immediate same-name `POST /v1/profiles` succeed right after replace-when-INVALID's
+    `DELETE`?** (2026-09-29, adversarial pass 2.) Milestone 3c found profile names unique per identifier
+    (`409 ENTITY_ERROR` on a duplicate). If the delete propagates lazily, every first replacement fails
+    with `409` — now reported as "the INVALID profile at this key was deleted … re-run to create it"
+    (`79a4f28`) — and converges on the next run. The written, unrun `appstore_live_profile_replace_cycle`
+    settles it.
+
+**Verify list, 2026-09-29 (adversarial pass 2):** no provider was called, so items 5–13 are unchanged:
+5, 7 and 11 need the dry run or a live read; 6 stays irrelevant to correctness; 8, 9 and 10 need the
+operator; 12 and 13 need a read-only list and a `GET` against the operator's own Doppler workplace
+before a real apply.
 
 ## Gates
 
