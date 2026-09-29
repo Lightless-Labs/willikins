@@ -4,6 +4,12 @@
 //! `ToolSpec` exactly (`tests/catalog_parity.rs`, in
 //! `willikins-providers-buildkite`, pins the two equal) and the same
 //! three outcomes: zero matches, one match, or two or more.
+//!
+//! Milestone 3e task K1 gave the live tool an optional, secret-typed
+//! `token` port; this fake carries the same port for spec parity but
+//! never inspects its value (it has no real credential to check), the
+//! correct behaviour for a fake -- see `github.repo.get`'s fake twin for
+//! the identical precedent.
 
 use std::sync::{Arc, Mutex};
 
@@ -30,6 +36,7 @@ impl FakeBuildkiteClusterGet {
         let mut inputs = IndexMap::new();
         inputs.insert(port("org"), exact("BuildkiteOrg", true));
         inputs.insert(port("name"), exact("BuildkiteClusterName", true));
+        inputs.insert(port("token"), exact("BuildkiteToken", false));
         let mut outputs = IndexMap::new();
         outputs.insert(port("cluster"), scalar("BuildkiteClusterId"));
         Self {

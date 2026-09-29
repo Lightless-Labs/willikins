@@ -2,14 +2,15 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the live catalog (thirty-one tools since
-//! milestone 3e task R2 added `github.token.parse`, after task B1 added
+//! `live_catalog` assembles the live catalog (thirty-three tools since
+//! milestone 3e task K1 added `buildkite.token.parse`, after task R2
+//! added `github.token.parse`, after task B1 added
 //! `doppler.branch_config.ensure`, after task 3 added the two Sample
 //! gates, `appstore.app.get` and `appstore.app_group.gate`) --
-//! `willikins-tools`' nine pure tools (`naming.v1`, `template.render`,
+//! `willikins-tools`' ten pure tools (`naming.v1`, `template.render`,
 //! `env.get`, `base64.decode`, `apple.signing_key.parse`,
 //! `apple.issuer_id.parse`, `apple.key_id.parse`, `github.token.parse`,
-//! `operator.acknowledge`),
+//! `buildkite.token.parse`, `operator.acknowledge`),
 //! `willikins-providers-github`'s three
 //! live tools (milestone 3e task 2 added `github.repo.get`),
 //! `willikins-providers-doppler`'s ten (milestone 3 added
@@ -55,7 +56,7 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 32] = [
+pub const LIVE_TOOL_NAMES: [&str; 33] = [
     "naming.v1",
     "template.render",
     "operator.acknowledge",
@@ -65,6 +66,7 @@ pub const LIVE_TOOL_NAMES: [&str; 32] = [
     "apple.issuer_id.parse",
     "apple.key_id.parse",
     "github.token.parse",
+    "buildkite.token.parse",
     "github.repo.ensure",
     "github.actions_secret.ensure",
     "github.repo.get",
@@ -90,7 +92,7 @@ pub const LIVE_TOOL_NAMES: [&str; 32] = [
     "appstore.app_group.gate",
 ];
 
-/// Insert `willikins-tools`' nine pure tools -- no provider, no
+/// Insert `willikins-tools`' ten pure tools -- no provider, no
 /// credential, always present regardless of which providers a document
 /// uses. `env.get`, `base64.decode`, and `apple.signing_key.parse` joined
 /// `naming.v1` and `template.render` here once the App Store Connect
@@ -103,7 +105,9 @@ pub const LIVE_TOOL_NAMES: [&str; 32] = [
 /// own acknowledgement (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`,
 /// decision (j), point 6); `github.token.parse` joined in task R2, the same
 /// resolver-chain shape given to `willikins-providers-github`'s three
-/// tools' new optional `token` port.
+/// tools' new optional `token` port; `buildkite.token.parse` joined in
+/// task K1, mirroring R2 exactly for `willikins-providers-buildkite`'s
+/// own two tools' new optional `token` port.
 fn insert_pure_tools(catalog: &mut Catalog) {
     insert(catalog, Arc::new(willikins_tools::NamingV1::new()));
     insert(catalog, Arc::new(willikins_tools::TemplateRender::new()));
@@ -123,6 +127,10 @@ fn insert_pure_tools(catalog: &mut Catalog) {
     );
     insert(catalog, Arc::new(willikins_tools::AppleKeyIdParse::new()));
     insert(catalog, Arc::new(willikins_tools::GitHubTokenParse::new()));
+    insert(
+        catalog,
+        Arc::new(willikins_tools::BuildkiteTokenParse::new()),
+    );
 }
 
 /// Insert `willikins-providers-appstore`'s four live tools. Unlike every
@@ -824,6 +832,7 @@ mod tests {
             "apple.issuer_id.parse",
             "apple.key_id.parse",
             "github.token.parse",
+            "buildkite.token.parse",
             "appstore.bundle_id.ensure",
             "appstore.bundle_id_capability.ensure",
             "appstore.certificate.get",
@@ -877,6 +886,7 @@ mod tests {
             "apple.issuer_id.parse",
             "apple.key_id.parse",
             "github.token.parse",
+            "buildkite.token.parse",
             "appstore.bundle_id.ensure",
             "appstore.bundle_id_capability.ensure",
             "appstore.certificate.get",

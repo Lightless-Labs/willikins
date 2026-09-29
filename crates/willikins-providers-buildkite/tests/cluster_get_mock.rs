@@ -1,6 +1,7 @@
-//! Acceptance test 6 for `buildkite.cluster.get`.
+//! Acceptance test 6 for `buildkite.cluster.get`. The last section
+//! (milestone 3e task K1) covers the tool's own optional `token` port.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use willikins_core::{Observation, PortName, Tool, ToolErrorKind, Value};
 use willikins_providers_buildkite::{BuildkiteClient, BuildkiteClusterGet, MAX_CLUSTER_PAGES};
@@ -260,4 +261,149 @@ fn the_ignored_link_headers_api_key_reaches_no_output_debug_or_error() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// Milestone 3e task K1: the optional `token` port
+// ---------------------------------------------------------------------
+
+/// The gap the milestone 3e adversarial pass over `github.repo.get`'s own
+/// optional `token` port found and left open (finding 3, "no tool-level
+/// mock pins that an unbound request carries the environment
+/// credential's value"): a mutation that made the unbound path authorize
+/// with a fixed, bogus credential instead of falling back to the tool's
+/// own default survived every mock suite there. Closed here, proactively,
+/// for Buildkite's own two tools: a `read` with no `token` port bound
+/// must carry *this tool's own* default credential -- not a generic,
+/// interchangeable test token, but the exact bytes this test built the
+/// tool's default client with -- in its `Authorization` header, and no
+/// other value.
+#[test]
+fn unbound_read_authorizes_with_the_tools_own_default_credential() {
+    let mut provider = MockProvider::start();
+    let captured = Arc::new(Mutex::new(String::new()));
+    let capture = captured.clone();
+    provider
+        .mock("GET", "/v2/organizations/willikins-test/clusters")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body_from_request(move |request| {
+            let authorization = request
+                .header("Authorization")
+                .first()
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            *capture.lock().expect("not poisoned") = authorization;
+            serde_json::json!([cluster_json(
+                "018e5a22-d14c-7085-bb28-db0f83f43a1c",
+                "Default cluster"
+            )])
+            .to_string()
+            .into_bytes()
+        })
+        .create();
+    let credential =
+        Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_thetoolsowndefault");
+    let http = Http::new(provider.url(), Vec::new(), credential);
+    let tool = BuildkiteClusterGet::new(Arc::new(BuildkiteClient::new(http)));
+
+    // `inputs()` binds no `token` port: this is the unbound, execution-
+    // context path.
+    let observation = tool.read(&inputs()).unwrap();
+    assert!(matches!(observation, Observation::Present(_)));
+    assert_eq!(
+        captured.lock().expect("not poisoned").as_str(),
+        "Bearer bkua_thetoolsowndefault"
+    );
+}
+
+#[test]
+fn read_authorizes_with_the_bound_token_port_not_the_default_credential() {
+    let mut provider = MockProvider::start();
+    let captured = Arc::new(Mutex::new(String::new()));
+    let capture = captured.clone();
+    provider
+        .mock("GET", "/v2/organizations/willikins-test/clusters")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body_from_request(move |request| {
+            let authorization = request
+                .header("Authorization")
+                .first()
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            *capture.lock().expect("not poisoned") = authorization;
+            serde_json::json!([cluster_json(
+                "018e5a22-d14c-7085-bb28-db0f83f43a1c",
+                "Default cluster"
+            )])
+            .to_string()
+            .into_bytes()
+        })
+        .create();
+    let tool = BuildkiteClusterGet::new(client_against(provider.url()));
+    let mut request_inputs = inputs();
+    request_inputs.insert(
+        PortName::parse("token").unwrap(),
+        Value::known(
+            willikins_types::BuildkiteToken::parse(concat!("bkua_", "theboundtokenexampleexample"))
+                .unwrap(),
+        ),
+    );
+    let observation = tool.read(&request_inputs).unwrap();
+    assert!(matches!(observation, Observation::Present(_)));
+    assert_eq!(
+        captured.lock().expect("not poisoned").as_str(),
+        concat!("Bearer ", "bkua_theboundtokenexampleexample")
+    );
+}
+
+/// The stronger version of the proof above: the tool's own default
+/// credential is refused outright by the mock, so this can only pass if
+/// the bound `token` port's credential is what actually authorized the
+/// request -- a regression that made `ScopedClient` fall back to the
+/// default (even a *valid* default, as the previous test alone would
+/// tolerate) fails here.
+#[test]
+fn a_bound_token_port_is_used_even_when_the_default_credential_would_be_refused() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v2/organizations/willikins-test/clusters")
+        .match_query(mockito::Matcher::Any)
+        .match_header(
+            "authorization",
+            concat!("Bearer ", "bkua_theboundtokenexampleexample"),
+        )
+        .with_status(200)
+        .with_body(
+            serde_json::json!([cluster_json(
+                "018e5a22-d14c-7085-bb28-db0f83f43a1c",
+                "Default cluster"
+            )])
+            .to_string(),
+        )
+        .create();
+    provider
+        .mock("GET", "/v2/organizations/willikins-test/clusters")
+        .match_query(mockito::Matcher::Any)
+        .match_header("authorization", "Bearer bkua_testtoken")
+        .with_status(401)
+        .with_body(r#"{"message":"Forbidden"}"#)
+        .create();
+
+    let tool = BuildkiteClusterGet::new(client_against(provider.url()));
+    let mut request_inputs = inputs();
+    request_inputs.insert(
+        PortName::parse("token").unwrap(),
+        Value::known(
+            willikins_types::BuildkiteToken::parse(concat!("bkua_", "theboundtokenexampleexample"))
+                .unwrap(),
+        ),
+    );
+    let observation = tool
+        .read(&request_inputs)
+        .expect("the bound token, not the refused default, must authorize this request");
+    assert!(matches!(observation, Observation::Present(_)));
 }

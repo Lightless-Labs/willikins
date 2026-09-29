@@ -6,7 +6,8 @@
 //! node must produce the same outputs at apply time as the plan showed.
 //! `naming.v1`, `template.render`, `env.get`, `base64.decode`,
 //! `apple.signing_key.parse`, `apple.issuer_id.parse`,
-//! `apple.key_id.parse`, and (task R2) `github.token.parse` from
+//! `apple.key_id.parse`, (task R2) `github.token.parse`, and (task K1)
+//! `buildkite.token.parse` from
 //! `willikins-tools`, `doppler.secret.get`,
 //! `doppler.value.get`, `fake.secret_list`, (milestone 3a)
 //! `buildkite.cluster.get`, (milestone 3c) `appstore.certificate.get`,
@@ -35,9 +36,9 @@ use willikins_providers_fake::{FakeState, catalog};
 use willikins_types::{
     AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCapabilityType,
     AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId, AppleSigningKey,
-    BuildkiteClusterName, BuildkiteOrg, DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg,
-    GitHubRepo, GitHubToken, OpaqueSecret, OperatorAcknowledgement, ProjectSlug, RepoVisibility,
-    SecretName, TemplateSource, Text,
+    BuildkiteClusterName, BuildkiteOrg, BuildkiteToken, DomainType, DopplerConfig,
+    DopplerSecretValue, GitHubOrg, GitHubRepo, GitHubToken, OpaqueSecret, OperatorAcknowledgement,
+    ProjectSlug, RepoVisibility, SecretName, TemplateSource, Text,
 };
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
@@ -204,6 +205,12 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         Value::known(OpaqueSecret::parse(GitHubToken::example()).expect("valid opaque secret")),
     );
 
+    let mut buildkite_token_parse_inputs = Inputs::new();
+    buildkite_token_parse_inputs.insert(
+        port("value"),
+        Value::known(OpaqueSecret::parse(BuildkiteToken::example()).expect("valid opaque secret")),
+    );
+
     let mut certificate_get_inputs = Inputs::new();
     certificate_get_inputs.insert(
         port("issuer_id"),
@@ -269,6 +276,7 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         ("apple.issuer_id.parse", apple_issuer_id_parse_inputs),
         ("apple.key_id.parse", apple_key_id_parse_inputs),
         ("github.token.parse", github_token_parse_inputs),
+        ("buildkite.token.parse", buildkite_token_parse_inputs),
         ("doppler.secret.get", secret_get_inputs),
         ("doppler.value.get", value_get_inputs),
         ("fake.secret_list", secret_list_inputs),

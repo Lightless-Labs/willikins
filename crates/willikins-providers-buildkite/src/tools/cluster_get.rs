@@ -1,19 +1,25 @@
 //! `buildkite.cluster.get`: resolves a human-written Buildkite cluster
 //! name to its opaque UUID. Pure and read-only, modelled one-for-one on
 //! `doppler.secret.get`: `ensure` is the identity of `read`.
+//!
+//! Milestone 3e task K1 gave this tool an optional, secret-typed `token`
+//! port ([`BuildkiteToken`]), mirroring `github.repo.get`'s own -- see
+//! `crate::client`'s "Buildkite credentials as ports" doc section.
 
 use std::sync::Arc;
 
 use willikins_core::tool::helpers::{
-    conflict, exact, get, not_found, port, require_present, scalar, tool_name,
+    conflict, exact, get, get_optional, not_found, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolErrorKind,
     ToolSpec, Value,
 };
-use willikins_types::{BuildkiteClusterId, BuildkiteClusterName, BuildkiteOrg, DomainType};
+use willikins_types::{
+    BuildkiteClusterId, BuildkiteClusterName, BuildkiteOrg, BuildkiteToken, DomainType,
+};
 
-use crate::client::{BuildkiteClient, CLUSTERS_PER_PAGE, MAX_CLUSTER_PAGES};
+use crate::client::{BuildkiteClient, CLUSTERS_PER_PAGE, MAX_CLUSTER_PAGES, ScopedClient};
 
 /// `buildkite.cluster.get`.
 pub struct BuildkiteClusterGet {
@@ -28,6 +34,7 @@ impl BuildkiteClusterGet {
         let mut inputs = indexmap::IndexMap::new();
         inputs.insert(port("org"), exact("BuildkiteOrg", true));
         inputs.insert(port("name"), exact("BuildkiteClusterName", true));
+        inputs.insert(port("token"), exact("BuildkiteToken", false));
         let mut outputs = indexmap::IndexMap::new();
         outputs.insert(port("cluster"), scalar("BuildkiteClusterId"));
         Self {
@@ -62,11 +69,13 @@ impl BuildkiteClusterGet {
         require_present(&self.spec, inputs)?;
         let org: BuildkiteOrg = get(inputs, "org")?;
         let name: BuildkiteClusterName = get(inputs, "name")?;
+        let token: Option<BuildkiteToken> = get_optional(inputs, "token")?;
+        let client = ScopedClient::default_for(&self.client, token.as_ref());
 
         let mut matches: Vec<String> = Vec::new();
         let mut found_short_page = false;
         for page in 1..=MAX_CLUSTER_PAGES {
-            let clusters = self.client.list_clusters_page(&org, page)?;
+            let clusters = client.list_clusters_page(&org, page)?;
             let len = clusters.len();
             matches.extend(
                 clusters
