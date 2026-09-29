@@ -234,7 +234,14 @@ pub struct Description {
     /// when serializing if empty (decision (j), point 6), the same
     /// convention as [`crate::plan::Plan::blocked`], so a document with no
     /// awaited input serializes exactly as it did before G3.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// `default` as well, though nothing deserializes this type: the JSON
+    /// Schema the MCP server publishes as a tool's `outputSchema` is built for
+    /// the deserialize contract, which lists every field without a serde
+    /// default as `required` -- and a skipped field that is `required`
+    /// makes every result without it fail its own published schema
+    /// (`crates/willikins-server/tests/mcp_output_schema_conformance.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub awaiting: Vec<AwaitingInput>,
     /// Every input that resolved to a concrete [`Value`]: a parsed raw
     /// value, or a declared default. In declaration order.

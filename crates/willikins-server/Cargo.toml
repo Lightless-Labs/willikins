@@ -42,6 +42,9 @@ base64.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# `tests/mcp_output_schema_conformance.rs` validates structured results
+# against the outputSchema this server publishes for each tool.
+jsonschema.workspace = true
 insta.workspace = true
 rmcp = { workspace = true, features = ["client", "transport-io"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "sync", "net", "signal"] }

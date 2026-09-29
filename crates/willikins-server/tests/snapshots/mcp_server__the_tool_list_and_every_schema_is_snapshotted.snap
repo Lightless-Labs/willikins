@@ -366,7 +366,7 @@ expression: snapshot
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "awaiting": {
-          "description": "Every declared [`willikins_types::OperatorAcknowledgement`]-typed\ninput describe found no raw value for, in declaration order. Skipped\nwhen serializing if empty (decision (j), point 6), the same\nconvention as [`crate::plan::Plan::blocked`], so a document with no\nawaited input serializes exactly as it did before G3.",
+          "description": "Every declared [`willikins_types::OperatorAcknowledgement`]-typed\ninput describe found no raw value for, in declaration order. Skipped\nwhen serializing if empty (decision (j), point 6), the same\nconvention as [`crate::plan::Plan::blocked`], so a document with no\nawaited input serializes exactly as it did before G3.\n\n`default` as well, though nothing deserializes this type: the JSON\nSchema the MCP server publishes as a tool's `outputSchema` is built for\nthe deserialize contract, which lists every field without a serde\ndefault as `required` -- and a skipped field that is `required`\nmakes every result without it fail its own published schema\n(`crates/willikins-server/tests/mcp_output_schema_conformance.rs`).",
           "items": {
             "$ref": "#/$defs/AwaitingInput"
           },
@@ -400,7 +400,6 @@ expression: snapshot
       "required": [
         "errors",
         "missing",
-        "awaiting",
         "resolved"
       ],
       "type": "object"
@@ -732,7 +731,7 @@ expression: snapshot
           "description": "A concrete, approval-classified plan.",
           "properties": {
             "blocked": {
-              "description": "Every gate this plan found [`Action::Blocked`], each naming what it\nholds back. Empty for a plan with no gate, or whose every gate read\n[`Observation::Present`] — the common case, and the reason this is\n`#[serde(skip_serializing_if = \"Vec::is_empty\")]`: a plan with no\nblocked gate serializes byte-identically to before this field\nexisted. See decision (j),\n`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.",
+              "description": "Every gate this plan found [`Action::Blocked`], each naming what it\nholds back. Empty for a plan with no gate, or whose every gate read\n[`Observation::Present`] — the common case, and the reason this is\n`#[serde(skip_serializing_if = \"Vec::is_empty\")]`: a plan with no\nblocked gate serializes byte-identically to before this field\nexisted. See decision (j),\n`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.\n\n`default` as well, though nothing deserializes this type: the JSON\nSchema the MCP server publishes as a tool's `outputSchema` is built for\nthe deserialize contract, which lists every field without a serde\ndefault as `required` -- and a skipped field that is `required`\nmakes every result without it fail its own published schema\n(`crates/willikins-server/tests/mcp_output_schema_conformance.rs`).",
               "items": {
                 "$ref": "#/$defs/BlockedGate"
               },
@@ -773,8 +772,7 @@ expression: snapshot
             "nodes",
             "outputs",
             "class",
-            "requires_approval",
-            "blocked"
+            "requires_approval"
           ],
           "type": "object"
         },
@@ -1366,7 +1364,7 @@ expression: snapshot
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "blocked": {
-          "description": "Every gate this run found blocked, from [`Outcome::Blocked`]. Empty\nfor a run that never reports that outcome --\n`#[serde(skip_serializing_if = \"Vec::is_empty\")]` so a `RunRecord`\nwith none serializes byte-identically to before this field existed\n(task G2, decision (j)).",
+          "description": "Every gate this run found blocked, from [`Outcome::Blocked`]. Empty\nfor a run that never reports that outcome --\n`#[serde(skip_serializing_if = \"Vec::is_empty\")]` so a `RunRecord`\nwith none serializes byte-identically to before this field existed\n(task G2, decision (j)).\n\n`default` as well, though nothing deserializes this type: the JSON\nSchema the MCP server publishes as a tool's `outputSchema` is built for\nthe deserialize contract, which lists every field without a serde\ndefault as `required` -- and a skipped field that is `required`\nmakes every result without it fail its own published schema\n(`crates/willikins-server/tests/mcp_output_schema_conformance.rs`).",
           "items": {
             "$ref": "#/$defs/BlockedGate"
           },
@@ -1440,8 +1438,7 @@ expression: snapshot
         "started_at",
         "state",
         "nodes",
-        "outputs",
-        "blocked"
+        "outputs"
       ],
       "type": "object"
     }

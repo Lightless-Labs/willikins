@@ -10,7 +10,7 @@ expression: schema
   "type": "object",
   "properties": {
     "blocked": {
-      "description": "Every gate this run found blocked, from [`Outcome::Blocked`]. Empty\nfor a run that never reports that outcome --\n`#[serde(skip_serializing_if = \"Vec::is_empty\")]` so a `RunRecord`\nwith none serializes byte-identically to before this field existed\n(task G2, decision (j)).",
+      "description": "Every gate this run found blocked, from [`Outcome::Blocked`]. Empty\nfor a run that never reports that outcome --\n`#[serde(skip_serializing_if = \"Vec::is_empty\")]` so a `RunRecord`\nwith none serializes byte-identically to before this field existed\n(task G2, decision (j)).\n\n`default` as well, though nothing deserializes this type: the JSON\nSchema the MCP server publishes as a tool's `outputSchema` is built for\nthe deserialize contract, which lists every field without a serde\ndefault as `required` -- and a skipped field that is `required`\nmakes every result without it fail its own published schema\n(`crates/willikins-server/tests/mcp_output_schema_conformance.rs`).",
       "type": "array",
       "items": {
         "$ref": "#/$defs/BlockedGate"
@@ -84,8 +84,7 @@ expression: schema
     "started_at",
     "state",
     "nodes",
-    "outputs",
-    "blocked"
+    "outputs"
   ],
   "$defs": {
     "BlockedGate": {
