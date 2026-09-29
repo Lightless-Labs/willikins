@@ -20,6 +20,8 @@ and this plan's own pre-flight, fetched 2026-09-27 and quoted below with its URL
 `docs/research/2026-09-29-m3e-adversarial-pass-2.md`)
 **Reviewed:** 2026-09-29 (independent adversarial pass 3 over the diagnosis harness, F1 and F2,
 `docs/research/2026-09-29-m3e-adversarial-pass-3.md`)
+**Reviewed:** 2026-09-29 (independent adversarial pass 4 over R1, R2, R3 and R4,
+`docs/research/2026-09-29-m3e-adversarial-pass-4.md`)
 **Addendum:** 2026-09-28 (attacker) — **four defects fixed test-first.** `c054a09`: every capability
 read parsed every row's `settings` strictly, so another row's missing `enabled` or `null` `options`
 failed a `HEALTHKIT` read; the four fields are now optional. `92dec9e`: decision (d)'s "exactly one
@@ -2231,3 +2233,33 @@ the real workplace's own names, in place — no new tool, no new type.**
   `cargo check -p willikins-types -j 2`. The full workspace gate was not run (host rule; the
   coordinator's).
 
+**Addendum:** 2026-09-29 (attacker, pass 4 over R1–R4) — **three coverage gaps closed test-first; the
+headline finding is that Walter still does not stop on a missing base config.** Record:
+`docs/research/2026-09-29-m3e-adversarial-pass-4.md`. Ten mutations, each restored and `cmp`'d
+byte-identical, no provider called.
+
+- **Closed, `e00d8f3`.** A Doppler config name is interpolated unescaped into every Doppler query string,
+  so `DopplerConfigName`'s grammar is the only guard against a smuggled parameter. Widening it (and
+  `DopplerConfig`'s combined pattern) to also admit `& = ? # . / % + ;`, space and newline left all 419
+  lib tests green; two new tests refuse each of them.
+- **Closed, `72659fe`.** R2's bound-token redaction proofs drive `github.repo.ensure` only. Writing the bound
+  token into `github.repo.get`'s error — the one GitHub node Walter binds `token` on — left the whole crate
+  green. The new test reads `github.repo.get` with a marker token bound against a 404, a 401 and a 500.
+- **Closed, `4a3d0dd`.** Every Walter test supplies `base_configs` itself and seeds under the names the
+  document reads, so reverting the default to `github/bande_a_bonnot` was caught by nothing, and dropping
+  `monorepo_ref`'s `token` binding only by the characterization snapshot.
+  `the_document_reads_the_real_layout_by_name` pins the real configs, secret names, the
+  `github/bande-a-bonnot#GH_CLONE_TOKEN` → `github.token.parse` → `token` chain on every GitHub node, and the
+  default.
+- **Proven sound:** the unbound port falls back to the default credential (both directions killed, the
+  unbound one only by a unit test and one redaction test, not by any tool mock); the gate's
+  omitted-field and genuine-failure readings; every existing document's characterization entry; and
+  fingerprints, which hash outputs only, never a `ToolSpec`, so the new optional port cannot move one.
+- **Open, for the coordinator, in order:** (1) wire R3's gate into Walter — today `walter_document.rs`'s
+  fake state seeds no base config at all, `inherit` is never blocked, and run 3 applies clean, so a real apply
+  would create project `walter` and its configs before `inherit` fails; (2) R2's server gap
+  (`WILLIKINS_GITHUB_TOKEN` still read for any `github.*` document); (3) `base_configs`, `org`, `slug` and
+  `monorepo` are still caller-overridable inputs, against "the names are the policy"; (4) every other App
+  Store Connect document and the sandbox still use `ASC_API_KEY_*`. Verify items: `GH_CLONE_TOKEN` must begin
+  `ghp_` or `github_pat_` (the only prefixes `GitHubToken` accepts); whether Doppler refuses a config name
+  that is `-` or starts, ends or doubles a hyphen, which the grammar now admits.
