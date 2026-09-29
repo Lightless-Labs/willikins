@@ -675,6 +675,112 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
 /// The document itself, independent of any input: `check` alone is the
 /// static proof that no secret reaches a non-secret port here (the design
 /// doc's own invariant, enforced structurally, never by review).
+/// Adversarial pass 4 (2026-09-29): the operator's own names are this
+/// document's policy ("Just update the doc"), so they are pinned here
+/// against the document itself. Every other test in this file supplies
+/// `base_configs` explicitly and seeds its fake state under the same
+/// names the document reads, so a drifted default, a drifted literal, or
+/// a GitHub node that stopped binding its Doppler-resolved `token` (and
+/// silently fell back to `WILLIKINS_GITHUB_TOKEN`) would pass unnoticed
+/// there.
+#[test]
+fn the_document_reads_the_real_layout_by_name() {
+    use willikins_core::{Binding, NodeName, PortName};
+
+    let workflow = document();
+    let node = |name: &str| {
+        workflow
+            .nodes
+            .get(&NodeName::parse(name).unwrap())
+            .unwrap_or_else(|| panic!("node `{name}` exists"))
+    };
+    let literal =
+        |name: &str, port: &str| match node(name).with.get(&PortName::parse(port).unwrap()) {
+            Some(Binding::Literal(text)) => text.clone(),
+            other => panic!("`{name}.{port}` must be a literal, got {other:?}"),
+        };
+
+    // App Store Connect: the real base config, the real secret names.
+    for (name, tool, secret) in [
+        (
+            "issuer_id_text",
+            "doppler.value.get",
+            "APP_STORE_CONNECT_API_KEY_ISSUER_ID",
+        ),
+        (
+            "key_id_text",
+            "doppler.value.get",
+            "APP_STORE_CONNECT_API_KEY_ID",
+        ),
+        (
+            "key_base64",
+            "doppler.secret.get",
+            "APP_STORE_CONNECT_API_KEY_BASE64",
+        ),
+    ] {
+        assert_eq!(node(name).tool.as_str(), tool, "`{name}`'s tool");
+        assert_eq!(literal(name, "config"), "appstore-connect/deploy_ios");
+        assert_eq!(literal(name, "name"), secret);
+    }
+
+    // GitHub: the token comes from github/bande-a-bonnot, through the
+    // parse tool, into every GitHub provider node's `token` port.
+    assert_eq!(node("gh_token_secret").tool.as_str(), "doppler.secret.get");
+    assert_eq!(
+        literal("gh_token_secret", "config"),
+        "github/bande-a-bonnot"
+    );
+    assert_eq!(literal("gh_token_secret", "name"), "GH_CLONE_TOKEN");
+    assert_eq!(node("gh_token").tool.as_str(), "github.token.parse");
+    let from = |node: &str, port: &str| Binding::Step {
+        node: NodeName::parse(node).unwrap(),
+        port: PortName::parse(port).unwrap(),
+    };
+    assert_eq!(
+        node("gh_token")
+            .with
+            .get(&PortName::parse("value").unwrap()),
+        Some(&from("gh_token_secret", "value"))
+    );
+    let github_nodes: Vec<&str> = workflow
+        .nodes
+        .iter()
+        .filter(|(_, n)| {
+            n.tool.as_str().starts_with("github.") && n.tool.as_str() != "github.token.parse"
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(github_nodes, ["monorepo_ref"]);
+    for name in github_nodes {
+        assert_eq!(
+            node(name).with.get(&PortName::parse("token").unwrap()),
+            Some(&from("gh_token", "value")),
+            "`{name}` must authenticate with the Doppler-resolved token, never the environment"
+        );
+    }
+
+    // The three shared base configs prd_config inherits, by default.
+    let default = workflow
+        .inputs
+        .get(&InputName::parse("base_configs").unwrap())
+        .and_then(|input| input.default.as_ref())
+        .expect("base_configs has a default");
+    let names: Vec<String> = default
+        .as_list()
+        .expect("a list default")
+        .iter()
+        .map(|item| item.render().to_string())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "appstore-connect/deploy_ios",
+            "github/bande-a-bonnot",
+            "open-telemetry/prd_signoz"
+        ]
+    );
+}
+
 #[test]
 fn the_document_checks_cleanly_against_the_fake_catalog() {
     let (_state, catalog) = willikins_providers_fake::empty();
