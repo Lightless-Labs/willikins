@@ -476,6 +476,63 @@ fn a_blocked_gate_skips_its_dependents_and_leaves_every_other_branch_alone() {
     assert!(!json.contains("REDACTED"));
 }
 
+/// A scalar gate (no `for_each`) held by one `Step` binding: the
+/// dependent is `Skip`, never read, and named in the gate's `holds_back`.
+/// `workflow()` above only ever blocks a `for_each` instance, and its
+/// transitive `downstream` binds by `Keyed`, so without this test the
+/// whole-node `Step` arm of the skip rule was pinned by `apply_gates.rs`
+/// alone (2026-09-29 adversarial pass, mutation m1: disabling that arm
+/// left this file green).
+#[test]
+fn a_step_binding_on_a_blocked_scalar_gate_is_skipped_and_never_read() {
+    let (catalog, reads) = catalog_with(HashSet::new());
+    let workflow = Workflow::new(workflow_name("scalar-gate-test"))
+        .node(
+            node("gate"),
+            Node::new(tool_name("test.gate"))
+                .port(port("key"), Binding::Literal("dev".to_string())),
+        )
+        .node(
+            node("dependent"),
+            Node::new(tool_name("test.counted")).port(
+                port("value"),
+                Binding::Step {
+                    node: node("gate"),
+                    port: port("key"),
+                },
+            ),
+        )
+        .node(
+            node("independent"),
+            Node::new(tool_name("test.passthrough_independent"))
+                .port(port("value"), Binding::Literal("prd".to_string())),
+        );
+    let checked = check(&workflow, &catalog).expect("the test graph checks cleanly");
+    let result = plan(&checked, &IndexMap::new(), &catalog).expect("a blocked gate never fails");
+
+    assert_eq!(by_name(&result.nodes, "gate", None).action, Action::Blocked);
+    assert_eq!(
+        by_name(&result.nodes, "dependent", None).action,
+        Action::Skip
+    );
+    assert!(by_name(&result.nodes, "dependent", None).inputs.is_empty());
+    assert_eq!(*reads.lock().unwrap(), 0, "a skipped node is never read");
+    assert_eq!(
+        by_name(&result.nodes, "independent", None).action,
+        Action::Create
+    );
+    assert_eq!(result.blocked.len(), 1);
+    assert_eq!(result.blocked[0].instance, None);
+    assert_eq!(
+        result.blocked[0]
+            .holds_back
+            .iter()
+            .map(willikins_core::NodeName::as_str)
+            .collect::<Vec<_>>(),
+        vec!["dependent"]
+    );
+}
+
 /// With every instance satisfied: every node plans `Compute`/`Create`
 /// exactly as it would with no gate at all, `Plan.blocked` is empty, and
 /// the plan's JSON carries no `blocked` key whatsoever.
