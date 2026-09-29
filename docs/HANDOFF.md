@@ -3,11 +3,42 @@
 Current state of the project and active work. Read this at session start. Update before
 compaction, before handing off, after a milestone, and after a plan change or discovery.
 
-**Last updated:** 2026-09-27
+**Last updated:** 2026-09-29
 
 ## Current Status
 
-### RESUME HERE (2026-09-27) — milestone 3d is complete: total, secrecy-monotone, one-hop conversions parsed into the checked graph, and wrong-typed values fail loudly at parsing
+### RESUME HERE (2026-09-29) — milestone 3e is complete: one document plans a whole new iOS app (Sample), manual steps are gates that block instead of fail, and re-running the document resumes
+
+- **Live state:** `main` pushed at the handoff commit on top of `a6cbef2`. Full gate by the coordinator on `a6cbef2`:
+  183 suites / 2559 tests / 0 failed / 18 ignored; all three guards passed. Plan
+  `docs/plans/2026-09-27-milestone-3e-new-ios-app.md` is Completed, with the dry run recorded at its end.
+- **What willikins gained.** Gates: a manual step is a pure tool whose read observes reality (`appstore.app.get`,
+  `appstore.app_group.gate`) or takes an `OperatorAcknowledgement` input (`operator.acknowledge`); an unmet gate plans
+  `Blocked`, its data dependents `Skip`, every independent node still runs, and the run ends with a structured
+  "what's needed, then re-run this document" report through the CLI (apply exits 3) and MCP (`state: blocked`). No
+  saved run state: idempotence is the resume (the operator's design). Also: capability settings, `github.repo.get`,
+  Doppler branch configs, replace-when-INVALID for App Store profiles (shown as `Replace` in an approved plan, and only
+  ever run where the plan said so), and `workflows/sample-ios-app.yaml`.
+- **Proven live on the operator's Apple account (throwaway identifiers only, counts 21/5/13 unchanged every time):**
+  HEALTHKIT, PUSH_NOTIFICATIONS and DATA_PROTECTION at PROTECTED_UNTIL_FIRST_USER_AUTH created and converged; a
+  profile invalidated by a capability change and then replaced. Apple facts learned: a setting's selected option is
+  the single listed option (no `enabled` field); the capability list's row order is unstable; that endpoint REJECTS
+  `?limit=` with 400 PARAMETER_ERROR.ILLEGAL although its OpenAPI allows it (our own pagination fix broke every live
+  capability read until `25824c2`); a new IOS identifier arrives with IN_APP_PURCHASE enabled.
+- **Credentials:** the sandbox Doppler workplace moved (the old one's trial ended; its token is kept as
+  `WILLIKINS_SANDBOX_DOPPLER_OLD_TOKEN`); the sandbox Buildkite token was renewed and is far broader than needed. The
+  SigNoz key expired on 2026-09-23 and is not needed by Sample (it inherits from `open-telemetry/prd_signoz`).
+- **Before a real apply of Sample (operator):** the base configs `appstore-connect/deploy_ios`,
+  `github/<example-org slug>` (verify item 12) and `open-telemetry/prd_signoz` must exist in the real workplace, since
+  the inheritance node does not check them at plan time; a real-workplace Doppler token, a GitHub token with read on
+  `Example-Org/monorepo`, and a real-org Buildkite token scoped to `read_pipelines`/`write_pipelines`/`read_clusters`.
+- **Process lessons.** Agents are routinely cut off before finishing; verifiers end up writing code, so every such
+  piece got a second independent attack. The coordinator runs every full gate itself. Mocks that accept any query
+  hid a live-breaking request change: pin the exact query in mocks.
+- **Open / next:** the inheritance node should verify its base configs exist at plan time; Checked as a typed graph
+  (`todos/2026-09-23-checked-as-a-typed-graph.md`); file-writing (the remaining manual step M3); secrecy inference.
+
+### Earlier (2026-09-27) — milestone 3d is complete: total, secrecy-monotone, one-hop conversions parsed into the checked graph, and wrong-typed values fail loudly at parsing
 
 - **Live state:** `main` at the handoff commit on top of `143500c`. Full gate by the coordinator on
   `357b552`: fmt, workspace clippy, **171 suites / 2347 tests / 0 failed / 18 ignored**, `cargo check
