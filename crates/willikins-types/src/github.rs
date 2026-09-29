@@ -403,6 +403,79 @@ impl schemars::JsonSchema for ActionsSecretName {
 
 crate::impl_domain_object_non_secret!(ActionsSecretName);
 
+/// A GitHub token: a personal access token, fine-grained (`github_pat_`)
+/// or classic (`ghp_`). Secret.
+///
+/// This is the graph-port counterpart of
+/// `willikins_providers_github::CREDENTIAL_VAR`'s own value -- the
+/// design addendum "Credentials are ports, resolvers are nodes"
+/// (`docs/plans/2026-09-11-willikins-design.md`, 2026-09-21) applied to
+/// GitHub the same way `AppleIssuerId`/`AppleKeyId`/`AppleSigningKey`
+/// already apply it to App Store Connect: a document may bind
+/// `github.repo.ensure`'s (and its two siblings') optional `token` port
+/// to a resolver chain ending here (`doppler.secret.get` into
+/// `github.token.parse`, say), rather than relying solely on
+/// `WILLIKINS_GITHUB_TOKEN` in the process environment.
+///
+/// The pattern mirrors `willikins_providers_github::CREDENTIAL_PATTERN`
+/// in shape, duplicated rather than imported: a provider crate depends on
+/// `willikins-types`, never the reverse, so a domain type in this crate
+/// cannot name a provider crate's constant. GitHub publishes the two
+/// prefixes but not the body's length or charset (that provider crate's
+/// own doc says so), so -- like `AppleKeyId`'s undocumented grammar --
+/// this pattern states only the shape GitHub does document, with no
+/// `min_len`/`max_len` beyond the regex's own `+`. That is also why, unlike
+/// `DopplerServiceToken`'s fixed-length real shape (or Buildkite's own
+/// token, which has no domain type at all in this workspace), no test
+/// value here needs `concat!`-assembly to dodge
+/// `secret_literal_guard.rs`'s `GITHUB_TOKEN` pattern (which requires
+/// twenty characters after the prefix): a short example such as
+/// `ghp_example` is a fully valid value of this type and never reaches
+/// that guard's own floor.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "(?:github_pat_|ghp_)[A-Za-z0-9_]+",
+    secret,
+    description = "A GitHub personal access token (fine-grained or classic).",
+    example = "ghp_example"
+)]
+pub struct GitHubToken(secrecy::SecretString);
+
+impl GitHubToken {
+    /// Apply `f` to this token's raw bytes, producing whatever `f`
+    /// produces -- typically a `willikins_providers_http::Credential`
+    /// built from it via `Credential::from_bearer_token`.
+    ///
+    /// # Why this exists, and why it is the fourth and narrowest
+    /// token-less exception
+    ///
+    /// Every other secret domain type's bytes are reachable only through
+    /// the derive-generated `expose(&SinkToken)`, and a
+    /// [`SinkToken`](crate::SinkToken) can only be constructed inside the
+    /// apply executor. That is exactly right for a tool that *does
+    /// something* with a secret from inside `Tool::ensure`. But
+    /// `github.repo.ensure`, `github.actions_secret.ensure` and
+    /// `github.repo.get` all authorize their `Tool::read` too -- a
+    /// document's bound `token` port must be usable to authenticate the
+    /// very `GET` that `plan` depends on, and `read` never receives a
+    /// `SinkToken` (see `crate::appstore::AppleSigningKey`'s own
+    /// `reveal_for_signing`, which this mirrors). Scoped exactly as narrowly as that
+    /// exception: using the token's bytes to build one outbound
+    /// `Authorization` header, never to move them anywhere a document or
+    /// an agent could read them back.
+    ///
+    /// [`SinkToken`]: crate::SinkToken
+    // The fourth production call site of `expose_secret` outside the
+    // derive's own codegen -- named in `clippy.toml`'s
+    // `disallowed-methods` reason and walked by
+    // `crates/willikins-core/tests/expose_secret_guard.rs`, which exempts
+    // exactly this function in this file.
+    #[allow(clippy::disallowed_methods)]
+    pub fn reveal_for_authorization<T>(&self, f: impl FnOnce(&str) -> T) -> T {
+        f(secrecy::ExposeSecret::expose_secret(&self.0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,6 +800,50 @@ mod tests {
         crate::assert_example_parses::<HttpsUrl>();
         crate::assert_example_parses::<GitHubRepo>();
         crate::assert_example_parses::<ActionsSecretName>();
+        crate::assert_example_parses::<GitHubToken>();
         assert!(RepoVisibility::parse(RepoVisibility::example()).is_ok());
+    }
+
+    // -------------------------------------------------------------
+    // GitHubToken
+    // -------------------------------------------------------------
+
+    #[test]
+    fn github_token_accepts_the_classic_prefix() {
+        assert!(GitHubToken::parse("ghp_example").is_ok());
+    }
+
+    #[test]
+    fn github_token_accepts_the_fine_grained_prefix() {
+        assert!(GitHubToken::parse("github_pat_example").is_ok());
+    }
+
+    #[test]
+    fn github_token_rejects_an_unknown_prefix() {
+        assert!(GitHubToken::parse("gho_example").is_err());
+    }
+
+    #[test]
+    fn github_token_rejects_an_empty_body() {
+        assert!(GitHubToken::parse("ghp_").is_err());
+    }
+
+    #[test]
+    fn github_token_is_secret() {
+        const { assert!(GitHubToken::IS_SECRET) };
+    }
+
+    #[test]
+    fn github_token_display_and_debug_are_redacted() {
+        let token = GitHubToken::parse("ghp_example").unwrap();
+        assert_eq!(format!("{token}"), "[REDACTED GitHubToken]");
+        assert_eq!(format!("{token:?}"), "[REDACTED GitHubToken]");
+    }
+
+    #[test]
+    fn github_token_reveal_for_authorization_reaches_the_raw_bytes() {
+        let token = GitHubToken::parse("ghp_example").unwrap();
+        let revealed = token.reveal_for_authorization(str::to_string);
+        assert_eq!(revealed, "ghp_example");
     }
 }

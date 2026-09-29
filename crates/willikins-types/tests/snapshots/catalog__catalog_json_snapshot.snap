@@ -208,6 +208,22 @@ expression: redacted
     }
   },
   {
+    "name": "GitHubToken",
+    "secret": true,
+    "description": "A GitHub personal access token (fine-grained or classic).",
+    "example": "[ELIDED SECRET EXAMPLE]",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GitHubToken",
+      "description": "A GitHub personal access token (fine-grained or classic).",
+      "type": "string",
+      "examples": [
+        "[ELIDED SECRET EXAMPLE]"
+      ],
+      "pattern": "^(?:(?:github_pat_|ghp_)[A-Za-z0-9_]+)$"
+    }
+  },
+  {
     "name": "EnvVarName",
     "secret": false,
     "description": "The name of a WILLIKINS_-namespaced environment variable.",

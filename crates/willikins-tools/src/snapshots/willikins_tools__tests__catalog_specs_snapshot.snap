@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-tools/src/lib.rs
-assertion_line: 95
+assertion_line: 103
 expression: specs
 ---
 [
@@ -146,6 +146,24 @@ expression: specs
     },
     "outputs": {
       "value": "AppleKeyId"
+    },
+    "key": [],
+    "class": "reversible",
+    "pure": true
+  },
+  {
+    "name": "github.token.parse",
+    "description": "Parse a resolved secret as a GitHub personal access token (fine-grained or classic).",
+    "inputs": {
+      "value": {
+        "ty": {
+          "kind": "any_secret"
+        },
+        "required": true
+      }
+    },
+    "outputs": {
+      "value": "GitHubToken"
     },
     "key": [],
     "class": "reversible",
