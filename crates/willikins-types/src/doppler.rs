@@ -407,6 +407,57 @@ mod tests {
         assert!(DopplerConfigName::parse(&at_limit).is_ok());
     }
 
+    /// Adversarial pass 4 (2026-09-29): a config name is interpolated
+    /// unescaped into every Doppler query string
+    /// (`willikins-providers-doppler`'s `client.rs`,
+    /// `?project={project}&config={name}`), so this type's grammar is the
+    /// only thing standing between a document's literal and a smuggled
+    /// query parameter or path segment. R1 widened it by one character;
+    /// nothing pinned that it widened by *only* that one.
+    #[test]
+    fn doppler_config_name_refuses_every_query_and_path_metacharacter() {
+        for bad in [
+            "prd&project=other",
+            "prd=x",
+            "prd?x",
+            "prd#x",
+            "prd/x",
+            "..",
+            "prd.x",
+            "prd%26x",
+            "prd x",
+            "prd+x",
+            "prd\n",
+            "prd;x",
+        ] {
+            assert!(
+                DopplerConfigName::parse(bad).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+    }
+
+    /// The same attack through the combined `project/name` identity a
+    /// document actually writes (`base_configs`, `doppler.secret.get`'s
+    /// `config`), which has its own hand-written parse and its own
+    /// published pattern.
+    #[test]
+    fn doppler_config_refuses_a_smuggled_query_parameter_in_its_name() {
+        for bad in [
+            "github/bande-a-bonnot&project=other",
+            "github/bande-a-bonnot?x",
+            "github/bande-a-bonnot#x",
+            "github/bande-a-bonnot%26x",
+            "github/bande-a-bonnot.x",
+            "github/..",
+        ] {
+            assert!(
+                DopplerConfig::parse(bad).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+    }
+
     #[test]
     fn doppler_config_name_serde_round_trips() {
         let value = DopplerConfigName::parse("dev_ci").unwrap();
