@@ -587,7 +587,10 @@ impl WillikinsHandler {
         auto-approved or needs a human decision. If `plan.blocked` is \
         non-empty, a manual step is needed: forward each entry's `need`, \
         `how` and `subject` to the operator, then call `plan` again with \
-        the same inputs (plus any `awaiting_inputs`) once it is done.",
+        the same inputs (plus any `awaiting_inputs`) once it is done. If \
+        `plan.replacing` is non-empty, tell the approver which resource -- \
+        named by that entry's `subject` -- a `replace` node would delete \
+        before creating a fresh one.",
         output_schema = "rmcp::handler::server::tool::schema_for_output::<PlanResponse>()"
     )]
     async fn plan(

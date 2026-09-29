@@ -35,7 +35,9 @@ pub use describe::{
     AwaitingInput, Description, InputArg, InputError, MissingInput, PartialInputs, RawInput,
     describe,
 };
-pub use plan::{Action, BlockedGate, InstanceFingerprint, Plan, PlanError, PlannedNode, plan};
+pub use plan::{
+    Action, BlockedGate, InstanceFingerprint, Plan, PlanError, PlannedNode, Replacing, plan,
+};
 pub use reported::Reported;
 pub use site::Site;
 /// Generic tool-authoring helpers (port/type construction, input checks,

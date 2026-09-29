@@ -80,6 +80,13 @@ pub enum Action {
     Compute,
     /// The resource does not exist yet: `ensure` would create it.
     Create,
+    /// [`Tool::replaces`] reports that `ensure` would delete an existing
+    /// resource at this key before creating a fresh one -- milestone 3e's
+    /// "replace-when-INVALID" (2026-09-29 addendum). An additive sibling
+    /// of `Create`, exactly as `Blocked` and `Skip` were: a document whose
+    /// tools never replace anything never produces this value, so its
+    /// plan is unaffected. See [`Plan::replacing`].
+    Replace,
     /// The resource already exists and is ours: `ensure` would be a no-op.
     NoOp,
     /// A [`crate::tool::Gate`]'s `read` reported [`Observation::Absent`]:
@@ -149,6 +156,74 @@ pub struct Plan {
     /// (`crates/willikins-server/tests/mcp_output_schema_conformance.rs`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked: Vec<BlockedGate>,
+    /// Every node instance this plan found [`Action::Replace`]: `ensure`
+    /// would delete an existing resource at this key before creating a
+    /// fresh one (2026-09-29 addendum, milestone 3e's finding 4 --
+    /// `docs/research/2026-09-29-m3e-adversarial-pass-2.md`). Empty for a
+    /// plan whose every tool only ever creates -- the common case, and
+    /// why this is `#[serde(default, skip_serializing_if =
+    /// "Vec::is_empty")]` exactly like [`Plan::blocked`]: a plan that
+    /// never replaces anything serializes byte-identically to before
+    /// this field existed, and (learning finding 1's lesson) is never
+    /// `required` in the published MCP schema either.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replacing: Vec<Replacing>,
+}
+
+/// One [`Action::Replace`] node instance in a [`Plan`]: which node (and,
+/// for a `for_each` node, which instance) would have `ensure` delete an
+/// existing resource before creating a fresh one, and the resource's own
+/// key, rendered, so an approver can see exactly what goes away before
+/// approving a [`Class::Destructive`] plan that shows only `Replace`.
+///
+/// Mirrors [`BlockedGate`] rather than adding a new [`Observation`]
+/// variant, for the reason [`crate::tool::Gate`] itself gives for
+/// [`Tool::gate`]: the smallest change that fits the existing model.
+/// Plain data, never a
+/// [`Value`]: `subject` is rendered text, from the node's own
+/// [`ToolSpec::key`] ports -- known already, since [`plan_one`] refuses to
+/// call [`Tool::read`] at all when a key port is not
+/// [`crate::value::ValueState::Known`] ([`PlanError::KeyUnknown`]) -- so
+/// this holds no secret by construction the same way
+/// [`BlockedGate::subject`] does.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+pub struct Replacing {
+    /// The node whose `ensure` would replace something.
+    pub node: NodeName,
+    /// The `for_each` instance key, if any; `None` for a node with no
+    /// `for_each`.
+    pub instance: Option<String>,
+    /// The tool this node calls.
+    pub tool: ToolName,
+    /// The node's own key ports ([`ToolSpec::key`]), rendered from the
+    /// bound input that reached each one, in declaration order.
+    pub subject: Vec<(PortName, String)>,
+}
+
+/// Build one [`Replacing`] report entry for a node instance whose
+/// [`Action`] is [`Action::Replace`].
+fn replacing_entry(
+    node: NodeName,
+    instance: Option<String>,
+    spec: &ToolSpec,
+    bound: &Inputs,
+) -> Replacing {
+    let subject = spec
+        .key
+        .iter()
+        .map(|port| {
+            let rendered = bound.get(port).unwrap_or_else(|| {
+                unreachable!("plan_one refuses to call Tool::read before every key port is known")
+            });
+            (port.clone(), rendered.render().to_string())
+        })
+        .collect();
+    Replacing {
+        node,
+        instance,
+        tool: spec.name.clone(),
+        subject,
+    }
 }
 
 /// One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it
@@ -597,6 +672,7 @@ pub fn plan(
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut planned: Vec<PlannedNode> = Vec::new();
     let mut gates = GateTracking::default();
+    let mut replacing: Vec<Replacing> = Vec::new();
 
     for name in &checked.order {
         let node = workflow
@@ -661,6 +737,9 @@ pub fn plan(
                         &node.with,
                     );
                 }
+                if node_plan.action == Action::Replace {
+                    replacing.push(replacing_entry(name.clone(), None, spec, &node_plan.inputs));
+                }
                 let outputs = node_plan.outputs.clone();
                 planned.push(node_plan);
                 NodeResult::Scalar(outputs)
@@ -707,6 +786,14 @@ pub fn plan(
                             &node.with,
                         );
                     }
+                    if node_plan.action == Action::Replace {
+                        replacing.push(replacing_entry(
+                            name.clone(),
+                            Some(key.clone()),
+                            spec,
+                            &node_plan.inputs,
+                        ));
+                    }
                     instances.push(ForEachInstance {
                         key,
                         outputs: node_plan.outputs.clone(),
@@ -748,6 +835,7 @@ pub fn plan(
         class: checked.class,
         requires_approval: checked.class.requires_approval(),
         blocked: gates.into_blocked(),
+        replacing,
     })
 }
 
@@ -1252,7 +1340,18 @@ fn plan_one(
     } else if spec.pure {
         Action::Compute
     } else if matches!(observation, Observation::Absent { .. }) {
-        Action::Create
+        // 2026-09-29 addendum, milestone 3e's finding 4: ask the tool,
+        // only in exactly this case, whether `ensure` would delete
+        // something first. `Tool::replaces`' own doc explains why this is
+        // a second call rather than a richer `Observation::Absent`.
+        if tool.replaces(&inputs).map_err(|error| PlanError::Tool {
+            node: name.clone(),
+            error,
+        })? {
+            Action::Replace
+        } else {
+            Action::Create
+        }
     } else {
         Action::NoOp
     };
@@ -1347,6 +1446,7 @@ mod tests {
             class: Class::Reversible,
             requires_approval: false,
             blocked: Vec::new(),
+            replacing: Vec::new(),
         }
     }
 
@@ -1372,6 +1472,7 @@ mod tests {
             class: Class::Reversible,
             requires_approval: false,
             blocked: Vec::new(),
+            replacing: Vec::new(),
         }
     }
 

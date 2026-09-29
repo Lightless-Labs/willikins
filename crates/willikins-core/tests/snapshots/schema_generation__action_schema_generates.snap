@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-core/tests/schema_generation.rs
-assertion_line: 26
 expression: schema
 ---
 {
@@ -17,6 +16,11 @@ expression: schema
       "description": "The resource does not exist yet: `ensure` would create it.",
       "type": "string",
       "const": "create"
+    },
+    {
+      "description": "[`Tool::replaces`] reports that `ensure` would delete an existing\nresource at this key before creating a fresh one -- milestone 3e's\n\"replace-when-INVALID\" (2026-09-29 addendum). An additive sibling\nof `Create`, exactly as `Blocked` and `Skip` were: a document whose\ntools never replace anything never produces this value, so its\nplan is unaffected. See [`Plan::replacing`].",
+      "type": "string",
+      "const": "replace"
     },
     {
       "description": "The resource already exists and is ours: `ensure` would be a no-op.",

@@ -40,6 +40,7 @@ fn plan_recorded(plan_id: PlanId, requires_approval: bool, instances: &[&str]) -
         },
         requires_approval,
         blocked: Vec::new(),
+        replacing: Vec::new(),
     };
     Event::PlanRecorded {
         plan_id,

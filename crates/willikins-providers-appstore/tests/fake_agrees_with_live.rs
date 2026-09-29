@@ -943,6 +943,146 @@ fn profile_invalid_state_agrees() {
     );
 }
 
+/// 2026-09-29 addendum, milestone 3e's finding 4: `Tool::replaces` agrees
+/// on the fake and the live tool the same way `Tool::read` does --
+/// `assert_profile_agree`'s own shape, calling `replaces` instead.
+fn assert_profile_replaces_agree(
+    case: &str,
+    state: FakeState,
+    bundle_id: &str,
+    served_profile_list: Option<String>,
+    served_profile_get: Option<(&str, String)>,
+    expected: bool,
+) {
+    let mut provider = MockProvider::start();
+    mock_profile_reads(
+        &mut provider,
+        bundle_id,
+        served_profile_list,
+        served_profile_get,
+    );
+
+    let live = AppstoreProfileEnsure::new(provider.url())
+        .replaces(&profile_inputs())
+        .unwrap_or_else(|err| panic!("{case}: the live tool failed: {err}"));
+    let fake = FakeAppstoreProfileEnsure::new(Arc::new(Mutex::new(state)))
+        .replaces(&profile_inputs())
+        .unwrap_or_else(|err| panic!("{case}: the fake tool failed: {err}"));
+
+    assert_eq!(live, expected, "{case}: live");
+    assert_eq!(fake, expected, "{case}: fake");
+}
+
+#[test]
+fn profile_replaces_is_true_when_invalid_and_agrees() {
+    let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());
+    let state = FakeState::new()
+        .with_apple_bundle_id(
+            &identifier(),
+            &AppleBundleIdName::parse("example").unwrap(),
+            &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+        )
+        .with_apple_profile(
+            &identifier(),
+            &profile_name(),
+            "PROFILE1",
+            profile_certificate().as_str(),
+            "IOS_APP_STORE",
+            "INVALID",
+            false,
+            "ZmFrZWNvbnRlbnQ=",
+        );
+    assert_profile_replaces_agree(
+        "replaces-invalid",
+        state,
+        &bundle_id,
+        Some(profile_list_body(
+            "PROFILE1",
+            "willikins-example-profile",
+            "IOS_APP_STORE",
+        )),
+        Some((
+            "PROFILE1",
+            profile_get_body(
+                "PROFILE1",
+                "willikins-example-profile",
+                "IOS_APP_STORE",
+                "INVALID",
+                false,
+                profile_certificate().as_str(),
+                "ZmFrZWNvbnRlbnQ=",
+            ),
+        )),
+        true,
+    );
+}
+
+#[test]
+fn profile_replaces_is_false_when_active_and_agrees() {
+    let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());
+    let state = FakeState::new()
+        .with_apple_bundle_id(
+            &identifier(),
+            &AppleBundleIdName::parse("example").unwrap(),
+            &AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+        )
+        .with_apple_profile(
+            &identifier(),
+            &profile_name(),
+            "PROFILE1",
+            profile_certificate().as_str(),
+            "IOS_APP_STORE",
+            "ACTIVE",
+            false,
+            "ZmFrZWNvbnRlbnQ=",
+        );
+    assert_profile_replaces_agree(
+        "replaces-active",
+        state,
+        &bundle_id,
+        Some(profile_list_body(
+            "PROFILE1",
+            "willikins-example-profile",
+            "IOS_APP_STORE",
+        )),
+        Some((
+            "PROFILE1",
+            profile_get_body(
+                "PROFILE1",
+                "willikins-example-profile",
+                "IOS_APP_STORE",
+                "ACTIVE",
+                false,
+                profile_certificate().as_str(),
+                "ZmFrZWNvbnRlbnQ=",
+            ),
+        )),
+        false,
+    );
+}
+
+/// Mirrors [`profile_absent_when_identifier_not_registered_agrees`]:
+/// neither side has the identifier registered at all, for the identical
+/// reason on each side, not merely the same final boolean by accident.
+#[test]
+fn profile_replaces_is_false_when_the_identifier_is_not_registered_and_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"data": []}).to_string())
+        .create();
+    let live = AppstoreProfileEnsure::new(provider.url())
+        .replaces(&profile_inputs())
+        .expect("the live tool reads");
+    let fake = FakeAppstoreProfileEnsure::new(Arc::new(Mutex::new(FakeState::new())))
+        .replaces(&profile_inputs())
+        .expect("the fake tool reads");
+    assert!(!live, "live");
+    assert!(!fake, "fake");
+}
+
 #[test]
 fn profile_conflict_on_two_names_agrees() {
     let bundle_id = willikins_providers_fake::state::fake_apple_bundle_id_id(identifier().as_str());

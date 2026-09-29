@@ -67,6 +67,7 @@ fn events_carrying_the_secret() -> Vec<Event> {
         class: Class::Irreversible,
         requires_approval: true,
         blocked: Vec::new(),
+        replacing: Vec::new(),
     };
 
     let applied_error = willikins_core::ApplyError::UnknownRequiredInput {

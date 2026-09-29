@@ -59,10 +59,19 @@
 //! itself just create in the same call, which is exactly what
 //! `willikins_core::class`'s own doc calls destructive ("destroys or
 //! overwrites something"), the same reasoning that makes
-//! `doppler.service_token.rotate` destructive. A plan that reaches this
-//! tool's `Action::Create` now requires approval even though nothing
-//! about the *plan* shows a delete -- the class is a static property of
-//! the tool, not a fact about one particular run.
+//! `doppler.service_token.rotate` destructive. The class is a static
+//! property of the tool, not a fact about one particular run, so a plan
+//! containing this tool requires approval on every run, whether or not
+//! that run's own key is `INVALID` today.
+//!
+//! **The plan itself says so too (2026-09-29 addendum, milestone 3e's
+//! finding 4).** [`Tool::replaces`] answers, for this exact call, whether
+//! `read`'s `Absent` is "nothing here" or "an `INVALID` profile at this
+//! key" -- `willikins_core::plan` turns the latter into `Action::Replace`
+//! rather than `Action::Create`, and lists the profile's own
+//! `(identifier, name)` key in `Plan::replacing`, so an approver reading a
+//! plan that shows `Replace` sees the delete named, not only a class flag
+//! that was already going to say "approve me" either way.
 //!
 //! # The key: `(identifier, name)`, and the read that uses the
 //! relationship rather than a filter
@@ -499,6 +508,33 @@ impl Tool for AppstoreProfileEnsure {
             }
             ProfileResolution::Decided(observation) => Ok(observation),
         }
+    }
+
+    /// 2026-09-29 addendum, milestone 3e's finding 4: whether the `Absent`
+    /// `read` just reported is a genuine "nothing here" or "an `INVALID`
+    /// profile at this key that `ensure` would delete first" --
+    /// `resolve`'s own distinction, which `read` collapses into one
+    /// `Observation::Absent` (this module's own doc, "`INVALID` is
+    /// replaced, not terminal"). Re-resolves rather than caching `read`'s
+    /// own answer: `Tool::replaces`'s doc explains why a second call is
+    /// the chosen cost, and this tool's `ensure` already re-resolves for
+    /// the identical reason.
+    fn replaces(&self, inputs: &Inputs) -> Result<bool, ToolError> {
+        require_present(&self.spec, inputs)?;
+        let ProfileInputs {
+            issuer_id,
+            key_id,
+            key,
+            identifier,
+            name,
+            profile_type,
+            certificate,
+        } = inputs_of(inputs)?;
+        let client = client_for(&self.base_url, &issuer_id, &key_id, &key)?;
+        Ok(matches!(
+            Self::resolve(&client, &identifier, &name, &profile_type, &certificate)?,
+            ProfileResolution::Invalid { .. }
+        ))
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
