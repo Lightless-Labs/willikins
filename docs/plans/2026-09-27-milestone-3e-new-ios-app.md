@@ -1899,3 +1899,33 @@ configs exist. In the sandbox they do not (`appstore-connect/deploy_ios`, `githu
 operator's workplace, and the `github` project's real config slug is still verify item 12. The SigNoz key reaches
 Walter through `open-telemetry/prd_signoz` inheritance; the document mints none, so no SigNoz call is made.
 
+**Addendum:** 2026-09-29 (R1, Doppler name grammars) — **`DopplerConfigName` now accepts hyphens, settling verify
+item 12 the other way than the T3c addendum guessed.** A fresh live probe against the sandbox workplace (this
+plan's own "DOPPLER NAME GRAMMAR" header note) found Doppler accepted a branch config literally named
+`prd_bande-a-bonnot` and a root config literally named `bande-a-bonnot`, with no underscore substitution — so
+`github/bande-a-bonnot` was never a name this codebase's types could not express; it needed one character added
+to a pattern, not a read-only list to disambiguate a spelling. `DopplerConfigName`'s grammar widens from
+`[a-z0-9_]+` to `[a-z0-9_-]+` (max length, case and digit rules unchanged), and `DopplerConfig`'s hand-written
+combined pattern is updated to match. Every other Doppler name type in `crates/willikins-types/src/doppler.rs`
+(`DopplerProject`, `DopplerTokenName`, `SecretName`) was checked against Doppler's own API reference, fetched
+verbatim 2026-09-29 (`.md` twins of `projects-create`, `projects-get`, `configs-create`, `configs-get`,
+`service_tokens-create`, `secrets-update`, plus `docs/platform-limits`): every one of those schemas declares its
+name field a bare `"type": "string"` with no `pattern` at all, so the reference does not mandate any of this
+codebase's tighter grammars — they are recorded as willikins' own convention rather than a Doppler requirement,
+each now with a "Grammar source" note in its own doc comment citing where that reading came from (the reference
+when it speaks, this plan's live probe when the reference is silent). No other type changed. Test-first: three
+new `DopplerConfigName`/`DopplerConfig` tests pin the two probed strings exactly and one flips
+`doppler_config_name_rejects_hyphens` to `doppler_config_name_accepts_hyphens`; the only snapshot this touched,
+`crates/willikins-types/tests/snapshots/catalog__catalog_json_snapshot.snap`, moved by exactly the two lines
+carrying `DopplerConfigName`'s and `DopplerConfig`'s published JSON Schema `pattern`, read diff-by-diff before
+accepting. `naming::v1` is untouched (frozen) and its own invariant still holds: every snake-joined name it
+produces was already inside the old, narrower grammar, so it is still inside the new, wider one. Scoped gates
+green: `cargo fmt --all --check`; `cargo clippy -p willikins-types --all-targets -j 2 -D warnings`; `cargo test
+-p willikins-types -j 2` (411 lib tests plus every integration suite, catalog snapshot accepted additively);
+`cargo check -p willikins-types -j 2`; and, since the type is used well beyond its own crate,
+`cargo test -p willikins-dsl --test acceptance -j 2` (characterization snapshot byte-identical), `cargo test -p
+willikins-providers-doppler -j 2` and `cargo test -p willikins-providers-fake -j 2` (both green, no snapshot
+moved in either). The full workspace gate was not run (host rule; the coordinator's). Verify item 12 above is
+superseded by this addendum: the honest answer was never "which spelling does Doppler already use", it was "our
+own type couldn't spell the hyphenated one yet."
+
