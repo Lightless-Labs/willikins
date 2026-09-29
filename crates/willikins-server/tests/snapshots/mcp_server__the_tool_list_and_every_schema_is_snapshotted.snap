@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-server/tests/mcp_server.rs
-assertion_line: 241
 expression: snapshot
 ---
 [
@@ -614,7 +613,8 @@ expression: snapshot
           "description": "One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it\ntrue, what it was checking, and every node it holds back.\n\nPlain data — never a [`Value`] — so it holds no secret by construction:\n`need` and `how` come straight from the gate's own `&'static str`s, and\n`subject` is rendered text, never a live value. See\n[`crate::tool::Gate`]'s own doc.\n\nDerives [`serde::Deserialize`] as well as `Serialize` (added by task G2):\n`willikins-journal`'s `Event::RunFinished` stores a run's own\n`Vec<BlockedGate>` directly rather than through `Redacted`, since none\nof its fields is ever a [`Value`] — the same reasoning that lets\n[`crate::apply::NodeStatus`] round-trip untouched.",
           "properties": {
             "awaiting_inputs": {
-              "description": "Every workflow input, bound directly to one of this node's ports,\nwhose value is still [`crate::value::ValueState::Unknown`] — G3: an\nunsupplied [`willikins_types::OperatorAcknowledgement`] input, so the\nreport can say which `--input name=done` would satisfy this gate. In\nport declaration order, deduplicated by name. Empty for a gate that\nobserves provider state rather than an operator acknowledgement.",
+              "default": [],
+              "description": "Every workflow input, bound directly to one of this node's ports,\nwhose value is still [`crate::value::ValueState::Unknown`] — G3: an\nunsupplied [`willikins_types::OperatorAcknowledgement`] input, so the\nreport can say which `--input name=done` would satisfy this gate. In\nport declaration order, deduplicated by name. Empty for a gate that\nobserves provider state rather than an operator acknowledgement.\n\n`#[serde(default)]` (2026-09-29 addendum, milestone 3e's finding 1\nlast sentence): this field arrived after `BlockedGate` already\nderived `Deserialize` (task G2), so a `RunFinished { Blocked }` line\nwritten between G2 and G3 carries no `awaiting_inputs` key at all;\nwithout a default, replaying it fails outright rather than reading\nit as empty, which is the same forward-compatibility gap `Plan`'s\nown fields already close with `#[serde(default,\nskip_serializing_if = \"Vec::is_empty\")]`. Serialization is\nunaffected: the field is still always written, so the wire shape\nthis binary produces does not change.",
               "items": {
                 "$ref": "#/$defs/InputName"
               },
@@ -674,8 +674,7 @@ expression: snapshot
             "need",
             "how",
             "subject",
-            "holds_back",
-            "awaiting_inputs"
+            "holds_back"
           ],
           "type": "object"
         },
@@ -1048,7 +1047,8 @@ expression: snapshot
           "description": "One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it\ntrue, what it was checking, and every node it holds back.\n\nPlain data — never a [`Value`] — so it holds no secret by construction:\n`need` and `how` come straight from the gate's own `&'static str`s, and\n`subject` is rendered text, never a live value. See\n[`crate::tool::Gate`]'s own doc.\n\nDerives [`serde::Deserialize`] as well as `Serialize` (added by task G2):\n`willikins-journal`'s `Event::RunFinished` stores a run's own\n`Vec<BlockedGate>` directly rather than through `Redacted`, since none\nof its fields is ever a [`Value`] — the same reasoning that lets\n[`crate::apply::NodeStatus`] round-trip untouched.",
           "properties": {
             "awaiting_inputs": {
-              "description": "Every workflow input, bound directly to one of this node's ports,\nwhose value is still [`crate::value::ValueState::Unknown`] — G3: an\nunsupplied [`willikins_types::OperatorAcknowledgement`] input, so the\nreport can say which `--input name=done` would satisfy this gate. In\nport declaration order, deduplicated by name. Empty for a gate that\nobserves provider state rather than an operator acknowledgement.",
+              "default": [],
+              "description": "Every workflow input, bound directly to one of this node's ports,\nwhose value is still [`crate::value::ValueState::Unknown`] — G3: an\nunsupplied [`willikins_types::OperatorAcknowledgement`] input, so the\nreport can say which `--input name=done` would satisfy this gate. In\nport declaration order, deduplicated by name. Empty for a gate that\nobserves provider state rather than an operator acknowledgement.\n\n`#[serde(default)]` (2026-09-29 addendum, milestone 3e's finding 1\nlast sentence): this field arrived after `BlockedGate` already\nderived `Deserialize` (task G2), so a `RunFinished { Blocked }` line\nwritten between G2 and G3 carries no `awaiting_inputs` key at all;\nwithout a default, replaying it fails outright rather than reading\nit as empty, which is the same forward-compatibility gap `Plan`'s\nown fields already close with `#[serde(default,\nskip_serializing_if = \"Vec::is_empty\")]`. Serialization is\nunaffected: the field is still always written, so the wire shape\nthis binary produces does not change.",
               "items": {
                 "$ref": "#/$defs/InputName"
               },
@@ -1108,8 +1108,7 @@ expression: snapshot
             "need",
             "how",
             "subject",
-            "holds_back",
-            "awaiting_inputs"
+            "holds_back"
           ],
           "type": "object"
         },

@@ -195,6 +195,47 @@ fn a_run_finished_event_with_a_blocked_outcome_serializes_with_its_kind_and_roun
     assert_eq!(json, back_json, "round trip changed the wire shape");
 }
 
+/// `BlockedGate.awaiting_inputs` (G3) is additive over a `BlockedGate` that
+/// already existed and already derived `Deserialize` (G2): a
+/// `RunFinished { Blocked }` line written by a binary between G2 and G3
+/// carries a `blocked` entry with no `awaiting_inputs` key at all. 2026-09-29
+/// addendum, milestone 3e's finding 1 last sentence: without a default this
+/// failed to deserialize outright; now it reads as empty, the same
+/// direction `Plan.blocked` itself is already forgiving in.
+#[test]
+fn a_run_finished_blocked_line_without_awaiting_inputs_still_deserializes() {
+    let pre_g3 = concat!(
+        r#"{"kind":"run_finished","run_id":"018f0000-0000-7000-8000-000000000000","#,
+        r#""outcome":{"kind":"blocked","outputs":{},"blocked":[{"#,
+        r#""node":"app_group","instance":null,"tool":"test.gate","#,
+        r#""need":"APP_GROUPS enabled on this bundle identifier","#,
+        r#""how":"register the group in the portal","#,
+        r#""subject":[["identifier","com.example.app"]],"#,
+        r#""holds_back":["profile"]}]}}"#,
+    );
+    let event: Event = serde_json::from_str(pre_g3)
+        .expect("a RunFinished { Blocked } line written before G3 must still replay");
+    let Event::RunFinished {
+        outcome: Outcome::Blocked { blocked, .. },
+        ..
+    } = &event
+    else {
+        panic!("expected RunFinished with Outcome::Blocked");
+    };
+    assert_eq!(blocked.len(), 1);
+    assert!(
+        blocked[0].awaiting_inputs.is_empty(),
+        "a line with no `awaiting_inputs` key must read as empty, not fail"
+    );
+    // Going forward the field is still always written, never omitted:
+    // this binary's own wire shape does not change.
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(
+        json["outcome"]["blocked"][0]["awaiting_inputs"],
+        serde_json::json!([])
+    );
+}
+
 #[test]
 fn every_event_variant_round_trips_through_json() {
     for sample in event_samples() {
