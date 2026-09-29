@@ -7,6 +7,18 @@ use std::str::FromStr;
 use crate::{DomainType, ParseError};
 
 /// A Doppler project slug.
+///
+/// Grammar source: Doppler's API reference places no character-set
+/// constraint on a project identifier at all -- `POST /v3/projects`'s
+/// `name` and `GET /v3/projects/project`'s `project` query parameter are
+/// both a bare `"type": "string"` in the published schema
+/// (`docs.doppler.com/reference/projects-create.md`,
+/// `.../projects-get.md`, fetched 2026-09-29); the 2-80 character length
+/// bound comes from `docs.doppler.com/docs/platform-limits.md` alone.
+/// This type's tighter kebab-case grammar is willikins' own convention,
+/// not a Doppler requirement: every project this codebase creates is
+/// named after a [`crate::ProjectSlug`] (`naming::v1::doppler_project`),
+/// whose kebab-case form is always inside this pattern.
 #[derive(willikins_derive::DomainType)]
 #[domain(
     pattern = "[a-z0-9]+(?:-[a-z0-9]+)*",
@@ -16,14 +28,33 @@ use crate::{DomainType, ParseError};
 )]
 pub struct DopplerProject(String);
 
-/// A Doppler config name, such as an environment's root config.
+/// A Doppler config name, such as an environment's root config or a
+/// caller-named branch config.
 ///
 /// Max 60 characters: Doppler's own "Config Slug" platform limit, which
 /// counts the environment-slug prefix (research note
-/// `docs/research/2026-09-12-m2-dependencies.md`, section 3).
+/// `docs/research/2026-09-12-m2-dependencies.md`, section 3;
+/// `docs.doppler.com/docs/platform-limits.md`).
+///
+/// Grammar source: `POST /v3/configs`'s `name` and `GET
+/// /v3/configs/config`'s `config` query parameter are both a bare
+/// `"type": "string"` in the published schema
+/// (`docs.doppler.com/reference/configs-create.md`,
+/// `.../configs-get.md`, fetched 2026-09-29) -- the reference does not
+/// settle the character set, so this type's grammar is drawn from a live
+/// probe instead (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`,
+/// "DOPPLER NAME GRAMMAR", 2026-09-29): the sandbox workplace accepted
+/// both a branch config named `prd_example-org` and a root config
+/// (an "environment" in Doppler's own vocabulary) named `example-org`
+/// outright, with no underscore substitution. Hyphens are therefore real
+/// Doppler config-name characters, not only this codebase's own
+/// underscore convention (`naming::v1::doppler_root_config`'s doc);
+/// lowercase letters, digits, underscore and hyphen, unstructured -- the
+/// same flat character class this type has always used, now widened by
+/// one character.
 #[derive(willikins_derive::DomainType)]
 #[domain(
-    pattern = "[a-z0-9_]+",
+    pattern = "[a-z0-9_-]+",
     max_len = 60,
     description = "A Doppler config name.",
     example = "prd"
@@ -31,6 +62,14 @@ pub struct DopplerProject(String);
 pub struct DopplerConfigName(String);
 
 /// A Doppler service token name.
+///
+/// Grammar source: `POST /v3/configs/config/tokens`'s `name` is a bare
+/// `"type": "string"` in the schema, with no pattern at all, and
+/// Doppler's own example token name is free-form display text ("AWS
+/// Lambda": mixed case, a space) (`docs.doppler.com/reference/service_tokens-create.md`,
+/// fetched 2026-09-29). This type's kebab-case grammar is willikins' own
+/// convention, matching every other name this codebase derives through
+/// `naming::v1` (such as `ci`), not something Doppler requires.
 #[derive(willikins_derive::DomainType)]
 #[domain(
     pattern = "[a-z0-9]+(?:-[a-z0-9]+)*",
@@ -44,7 +83,16 @@ pub struct DopplerTokenName(String);
 ///
 /// Max 200 characters: Doppler's own "Secret Name" platform limit
 /// (research note `docs/research/2026-09-12-m2-dependencies.md`,
-/// section 3).
+/// section 3; `docs.doppler.com/docs/platform-limits.md`).
+///
+/// Grammar source: `POST /v3/configs/config/secrets`'s `name` field is a
+/// bare `"type": "string"` in the schema, with no pattern
+/// (`docs.doppler.com/reference/secrets-update.md`, fetched 2026-09-29).
+/// This type's `[A-Z_][A-Z0-9_]*` grammar is willikins' own convention --
+/// the standard environment-variable shape -- but it matches every
+/// example name Doppler's own documentation shows (`STRIPE`, `ALGOLIA`,
+/// `DATABASE_URL`), so it is not a stricter rule than real secrets use in
+/// practice.
 #[derive(willikins_derive::DomainType)]
 #[domain(
     pattern = "[A-Z_][A-Z0-9_]*",
@@ -133,7 +181,7 @@ const DOPPLER_CONFIG_MAX_LEN: usize = 64 + 1 + 60;
 /// The published schema pattern: [`DopplerProject`]'s pattern, a literal
 /// slash, then [`DopplerConfigName`]'s pattern, unanchored individually so
 /// they combine into one whole-string match.
-const DOPPLER_CONFIG_PATTERN: &str = r"^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9_]+$";
+const DOPPLER_CONFIG_PATTERN: &str = r"^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9_-]+$";
 
 impl DopplerConfig {
     /// Build a config identity directly from its already-parsed parts.
@@ -308,8 +356,38 @@ mod tests {
     }
 
     #[test]
-    fn doppler_config_name_rejects_hyphens() {
-        assert!(DopplerConfigName::parse("dev-ci").is_err());
+    fn doppler_config_name_accepts_hyphens() {
+        assert_eq!(
+            DopplerConfigName::parse("dev-ci").unwrap().as_str(),
+            "dev-ci"
+        );
+    }
+
+    /// The live probe against the sandbox workplace, 2026-09-29
+    /// (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`, "DOPPLER NAME
+    /// GRAMMAR"): Doppler accepted a *branch* config literally named
+    /// `prd_example-org` under environment `prd`. The reference schema
+    /// carries no pattern for a config name, so this type's own grammar
+    /// is drawn from what the live platform actually did, not the docs.
+    #[test]
+    fn doppler_config_name_accepts_the_live_probed_branch_config_name() {
+        assert_eq!(
+            DopplerConfigName::parse("prd_example-org")
+                .unwrap()
+                .as_str(),
+            "prd_example-org"
+        );
+    }
+
+    /// Same probe: Doppler also accepted a *root* config (an environment
+    /// in Doppler's own vocabulary) literally named `example-org`, with
+    /// no underscore substitution at all.
+    #[test]
+    fn doppler_config_name_accepts_the_live_probed_root_config_name() {
+        assert_eq!(
+            DopplerConfigName::parse("example-org").unwrap().as_str(),
+            "example-org"
+        );
     }
 
     #[test]
@@ -580,6 +658,16 @@ mod tests {
         assert_eq!(config.project().as_str(), "third-thoughts");
         assert_eq!(config.name().as_str(), "prd");
         assert_eq!(config.to_string(), "third-thoughts/prd");
+    }
+
+    /// The real usage the probe settles (T3c's verify item 12): a base
+    /// config for a hyphenated real-world project name, expressed
+    /// directly rather than snaked, in the `github` Doppler project.
+    #[test]
+    fn doppler_config_accepts_a_hyphenated_base_config_name() {
+        let config = DopplerConfig::parse("github/example-org").unwrap();
+        assert_eq!(config.project().as_str(), "github");
+        assert_eq!(config.name().as_str(), "example-org");
     }
 
     #[test]
