@@ -17,6 +17,8 @@ and this plan's own pre-flight, fetched 2026-09-27 and quoted below with its URL
 `docs/research/2026-09-28-m3e-adversarial-pass.md`)
 **Reviewed:** 2026-09-29 (independent adversarial pass over T3a, G1–G3, T3b, T3c, B1 and B2,
 `docs/research/2026-09-29-m3e-adversarial-pass-2.md`)
+**Reviewed:** 2026-09-29 (independent adversarial pass 3 over the diagnosis harness, F1 and F2,
+`docs/research/2026-09-29-m3e-adversarial-pass-3.md`)
 **Addendum:** 2026-09-28 (attacker) — **four defects fixed test-first.** `c054a09`: every capability
 read parsed every row's `settings` strictly, so another row's missing `enabled` or `null` `options`
 failed a `HEALTHKIT` read; the four fields are now optional. `92dec9e`: decision (d)'s "exactly one
@@ -1808,3 +1810,28 @@ closing pass 2's finding 4 and the last sentence of its finding 1.
 - **Not settled, unaffected by this addendum**: the plan's own open verify items (5–14) and the
   T3-blocking `NotFound`-at-plan-time finding from the 2026-09-28 pass; neither touches gates,
   acknowledgement, or replace-when-INVALID's own resolution logic. Plan not marked Completed.
+
+**Addendum:** 2026-09-29 (attacker, third pass) — **F1's guarantee had a hole inside the run; closed
+test-first (`3bd1ee9`), one test gap closed and F1's open coverage added (`439207d`), eight mutation runs
+(one survived, then killed).** Record: `docs/research/2026-09-29-m3e-adversarial-pass-3.md`.
+- **An approved plan could show `NoOp` while `apply` deleted.** `check_drift` runs once before any node,
+  and `apply` calls `ensure` on every non-pure instance, `NoOp` included. A profile `ACTIVE` at approval
+  and at the re-plan, invalidated mid-run by an earlier capability node on its identifier (Walter's
+  capability nodes are declared first and run first), was deleted and recreated by
+  `appstore.profile.ensure` while the plan said `NoOp` and `Plan::replacing` was empty. **Rule 4a** in
+  `willikins_core::apply`: just before `ensure`, an instance not planned `Replace` asks
+  `Tool::replaces`; `true` fails it with `Conflict`, nothing deleted, and the re-run plans and names the
+  `Replace`. Every other tool pays nothing (default `false`); **the profile tool pays one extra read-only
+  resolve per instance per `apply`**, so a live `apply` of Walter reads each profile twice.
+- **Held, by mutation:** the replacement's subject is exactly the key (`identifier`, `name`), and neither
+  the certificate id nor the `INVALID` profile's id reaches `Plan::replacing` (m7a survived the old test,
+  m7b killed by the strengthened one); a replacement-free plan stays byte-identical in the
+  characterization snapshot (m1); `plan` never shows `Create` where `replaces()` says `true` (m2); an old
+  `RunFinished { Blocked }` line reads back (m3); the harness never prints `errors[].detail` (m4) and
+  repeats only anchored willikins-written messages (m5); rule 4a is load-bearing (m6).
+- **Added:** `ACTIVE` at approval, `INVALID` at `apply` refuses as `DriftKind::Action { NoOp -> Replace }`
+  with nothing deleted.
+- **Accepted risks, recorded:** Apple's `title` is echoed (escaped, bounded); `is_code_shape` admits an
+  id-shaped string. **Still open:** the capability list's `limit` fix (the diagnosis addendum's prescribed
+  fix), so replace-when-INVALID stays mock-proven; an MCP conformance case for a non-empty `replacing`.
+  Plan not marked Completed.
