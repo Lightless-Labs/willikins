@@ -69,6 +69,8 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
         "appstore-bundle-id-from-inputs.yaml",
         "appstore-signing-profile-from-doppler.yaml",
         "walter-ios-app.yaml",
+        "github-repo-token-from-doppler.yaml",
+        "buildkite-cluster-token-from-doppler.yaml",
     ] {
         assert!(hashes.contains_key(file), "{file}: {hashes:?}");
     }
@@ -90,6 +92,7 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
             "appstore-bundle-id-from-doppler",
             "appstore-bundle-id-from-inputs",
             "appstore-signing-profile-from-doppler",
+            "buildkite-cluster-token-from-doppler",
             "doppler-backend-for-ios",
             "doppler-backend",
             "doppler-ios",

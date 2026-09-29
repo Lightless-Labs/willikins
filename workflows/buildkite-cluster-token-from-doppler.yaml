@@ -1,0 +1,41 @@
+# Milestone 3e, task K1: proof that `buildkite.cluster.get`'s (and its
+# sibling `buildkite.pipeline.ensure`'s) new optional `token` port is a
+# genuinely free credential port, the same "credentials are ports,
+# resolvers are nodes" shape `github-repo-token-from-doppler.yaml`
+# already proves for GitHub (task R2) and
+# `appstore-bundle-id-from-doppler.yaml` proves for App Store Connect
+# (docs/plans/2026-09-11-willikins-design.md, 2026-09-21 addendum). This
+# document resolves a Buildkite API access token from Doppler, through
+# `buildkite.token.parse`, and binds it to `buildkite.cluster.get`'s
+# `token` port instead of relying on `WILLIKINS_BUILDKITE_TOKEN` in the
+# process environment.
+#
+# `buildkite.cluster.get` (not `.pipeline.ensure`) on purpose: it is
+# pure, so `plan` resolves this whole document -- including the
+# referenced cluster -- without any approval, the same reason
+# `github-repo-token-from-doppler.yaml` uses `github.repo.get` rather
+# than `.repo.ensure`.
+name: buildkite-cluster-token-from-doppler
+description: Resolve a Buildkite token from Doppler and reference a cluster with it.
+inputs:
+  config: { type: DopplerConfig, description: "Doppler config holding the credential, e.g. buildkite/prd" }
+  org: { type: BuildkiteOrg, description: "Buildkite organisation the cluster belongs to" }
+  name: { type: BuildkiteClusterName, description: "The cluster's human-written name, e.g. Default cluster" }
+steps:
+  token_secret:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: BUILDKITE_TOKEN
+  token:
+    tool: buildkite.token.parse
+    with:
+      value: ${{ steps.token_secret.value }}
+  cluster_ref:
+    tool: buildkite.cluster.get
+    with:
+      org: ${{ inputs.org }}
+      name: ${{ inputs.name }}
+      token: ${{ steps.token.value }}
+outputs:
+  cluster: ${{ steps.cluster_ref.cluster }}
