@@ -1671,11 +1671,13 @@ Buildkite token exists.
     convention snakes hyphens to underscores for Doppler config names, and Doppler's own docs do not
     settle whether a hyphen is even accepted. `workflows/sample-ios-app.yaml`'s `base_configs` default
     uses the underscored spelling pending a read-only list of that project's configs. **Settled 2026-09-29
-    (R1, Doppler name grammars):** the real-workplace probe answers this directly -- the project is named
-    `example-org`, hyphenated, exactly as decision 2 spelled it, not `example_org`. The open half of
-    this item was never Doppler's own answer, it was `willikins_types::DopplerConfigName`'s grammar, which
-    could not spell the hyphenated name until this addendum; the document's `base_configs` default is
-    still the coordinator's to update, once willikins can write to `workflows/`.
+    (R1, Doppler name grammars):** the real-workplace probe answers this directly -- the `github` project's
+    config is named `example-org`, hyphenated, exactly as decision 2 spelled it, not `example_org`. The
+    open half of this item was never Doppler's own answer, it was `willikins_types::DopplerConfigName`'s
+    grammar, which could not spell the hyphenated name until this addendum; correcting the document's
+    `base_configs` default is not R1's to make, though: this plan's own characterization-snapshot boundary
+    says the snapshot may change only by *adding* a document, and editing an existing document's default
+    changes its `describe`/`plan` output, so it stays the coordinator's call.
 13. **What does `GET /v3/configs/config` answer for a branch config absent from a project that does
     exist** (task B1, 2026-09-29)? Every other Doppler `read` in this crate tolerates a missing
     *project* (`404`, or a `400` naming "no access"); a missing *config* under an existing project is a
