@@ -42,8 +42,9 @@ use willikins_providers_buildkite::{
 };
 use willikins_providers_doppler::{
     DopplerBranchConfigEnsure, DopplerClient, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
-    DopplerConfigInheritsEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerSecretSet,
-    DopplerServiceTokenEnsure, DopplerServiceTokenRotate, DopplerValueGet,
+    DopplerConfigInheritableGate, DopplerConfigInheritsEnsure, DopplerProjectEnsure,
+    DopplerSecretGet, DopplerSecretSet, DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
+    DopplerValueGet,
 };
 use willikins_providers_github::{
     GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure, GitHubRepoGet,
@@ -54,7 +55,7 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 31] = [
+pub const LIVE_TOOL_NAMES: [&str; 32] = [
     "naming.v1",
     "template.render",
     "operator.acknowledge",
@@ -71,6 +72,7 @@ pub const LIVE_TOOL_NAMES: [&str; 31] = [
     "doppler.config.ensure",
     "doppler.branch_config.ensure",
     "doppler.config.inheritable.ensure",
+    "doppler.config.inheritable.gate",
     "doppler.config.inherits.ensure",
     "doppler.service_token.ensure",
     "doppler.service_token.rotate",
@@ -189,7 +191,7 @@ fn insert_github_tools(catalog: &mut Catalog, http: Http) {
     insert(catalog, Arc::new(GitHubRepoGet::new(github)));
 }
 
-/// Insert `willikins-providers-doppler`'s ten live tools, built from
+/// Insert `willikins-providers-doppler`'s eleven live tools, built from
 /// `http`.
 fn insert_doppler_tools(catalog: &mut Catalog, http: Http) {
     let doppler = Arc::new(DopplerClient::new(http));
@@ -208,6 +210,10 @@ fn insert_doppler_tools(catalog: &mut Catalog, http: Http) {
     insert(
         catalog,
         Arc::new(DopplerConfigInheritableEnsure::new(Arc::clone(&doppler))),
+    );
+    insert(
+        catalog,
+        Arc::new(DopplerConfigInheritableGate::new(Arc::clone(&doppler))),
     );
     insert(
         catalog,
@@ -499,11 +505,12 @@ const GITHUB_TOOL_NAMES: [&str; 3] = [
 
 /// `willikins-providers-doppler`'s live tool names. See
 /// [`GITHUB_TOOL_NAMES`].
-const DOPPLER_TOOL_NAMES: [&str; 10] = [
+const DOPPLER_TOOL_NAMES: [&str; 11] = [
     "doppler.project.ensure",
     "doppler.config.ensure",
     "doppler.branch_config.ensure",
     "doppler.config.inheritable.ensure",
+    "doppler.config.inheritable.gate",
     "doppler.config.inherits.ensure",
     "doppler.service_token.ensure",
     "doppler.service_token.rotate",
