@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-dsl/tests/acceptance.rs
-assertion_line: 284
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
@@ -543,3 +542,136 @@ config: DopplerConfig
 PLAN:
 plan_json: {"workflow":"signoz-ingestion-key","nodes":[{"name":"config","instance":null,"tool":"doppler.config.ensure","action":"create","inputs":{"project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"environment":{"type":"EnvironmentSlug","list":false,"state":"known","value":"prd"}},"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}}},{"name":"key","instance":null,"tool":"signoz.ingestion_key.ensure","action":"create","inputs":{"name":{"type":"SigNozIngestionKeyName","list":false,"state":"known","value":"willikins-example-key"}},"outputs":{"key":{"type":"SigNozIngestionKeyValue","list":false,"state":"unknown"}}},{"name":"sink","instance":null,"tool":"doppler.secret.set","action":"create","inputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"},"name":{"type":"SecretName","list":false,"state":"known","value":"SIGNOZ_INGESTION_KEY"},"value":{"type":"SigNozIngestionKeyValue","list":false,"state":"unknown"}},"outputs":{}}],"outputs":{"config":{"type":"DopplerConfig","list":false,"state":"known","value":"third-thoughts/prd"}},"class":"reversible","requires_approval":false}
 fingerprint: [{"name":"config","instance":null,"action":"create","outputs":[["config","third-thoughts/prd"]]},{"name":"key","instance":null,"action":"create","outputs":[["key","<secret>"]]},{"name":"sink","instance":null,"action":"create","outputs":[]}]
+
+=== workflows/sample-ios-app.yaml ===
+WARNINGS:
+TYPES:
+issuer_id_text.config: DopplerConfig
+issuer_id_text.name: SecretName
+issuer_id.value: Text
+key_id_text.config: DopplerConfig
+key_id_text.name: SecretName
+key_id.value: Text
+key_base64.config: DopplerConfig
+key_base64.name: SecretName
+key_decoded.value: DopplerSecretValue
+key.value: OpaqueSecret
+app_id.issuer_id: AppleIssuerId
+app_id.key_id: AppleKeyId
+app_id.key: AppleSigningKey
+app_id.identifier: AppleBundleIdentifier
+app_id.name: AppleBundleIdentifier -> AppleBundleIdName
+app_id.platform: AppleBundleIdPlatform
+nse_id.issuer_id: AppleIssuerId
+nse_id.key_id: AppleKeyId
+nse_id.key: AppleSigningKey
+nse_id.identifier: AppleBundleIdentifier
+nse_id.name: AppleBundleIdentifier -> AppleBundleIdName
+nse_id.platform: AppleBundleIdPlatform
+widgets_id.issuer_id: AppleIssuerId
+widgets_id.key_id: AppleKeyId
+widgets_id.key: AppleSigningKey
+widgets_id.identifier: AppleBundleIdentifier
+widgets_id.name: AppleBundleIdentifier -> AppleBundleIdName
+widgets_id.platform: AppleBundleIdPlatform
+healthkit.issuer_id: AppleIssuerId
+healthkit.key_id: AppleKeyId
+healthkit.key: AppleSigningKey
+healthkit.identifier: AppleBundleIdentifier
+healthkit.capability: AppleCapabilityType
+push.issuer_id: AppleIssuerId
+push.key_id: AppleKeyId
+push.key: AppleSigningKey
+push.identifier: AppleBundleIdentifier
+push.capability: AppleCapabilityType
+data_protection.issuer_id: AppleIssuerId
+data_protection.key_id: AppleKeyId
+data_protection.key: AppleSigningKey
+data_protection.identifier: AppleBundleIdentifier
+data_protection.capability: AppleCapabilityType
+data_protection.setting: AppleCapabilitySetting
+app_record.issuer_id: AppleIssuerId
+app_record.key_id: AppleKeyId
+app_record.key: AppleSigningKey
+app_record.identifier: AppleBundleIdentifier
+app_app_groups.issuer_id: AppleIssuerId
+app_app_groups.key_id: AppleKeyId
+app_app_groups.key: AppleSigningKey
+app_app_groups.identifier: AppleBundleIdentifier
+nse_app_groups.issuer_id: AppleIssuerId
+nse_app_groups.key_id: AppleKeyId
+nse_app_groups.key: AppleSigningKey
+nse_app_groups.identifier: AppleBundleIdentifier
+widgets_app_groups.issuer_id: AppleIssuerId
+widgets_app_groups.key_id: AppleKeyId
+widgets_app_groups.key: AppleSigningKey
+widgets_app_groups.identifier: AppleBundleIdentifier
+certificate.issuer_id: AppleIssuerId
+certificate.key_id: AppleKeyId
+certificate.key: AppleSigningKey
+certificate.certificate_type: AppleCertificateType
+certificate.serial_number: AppleCertificateSerial
+app_profile.issuer_id: AppleIssuerId
+app_profile.key_id: AppleKeyId
+app_profile.key: AppleSigningKey
+app_profile.identifier: AppleBundleIdentifier
+app_profile.name: AppleBundleIdentifier -> AppleProfileName
+app_profile.profile_type: AppleProfileType
+app_profile.certificate: AppleCertificateId
+nse_profile.issuer_id: AppleIssuerId
+nse_profile.key_id: AppleKeyId
+nse_profile.key: AppleSigningKey
+nse_profile.identifier: AppleBundleIdentifier
+nse_profile.name: AppleBundleIdentifier -> AppleProfileName
+nse_profile.profile_type: AppleProfileType
+nse_profile.certificate: AppleCertificateId
+widgets_profile.issuer_id: AppleIssuerId
+widgets_profile.key_id: AppleKeyId
+widgets_profile.key: AppleSigningKey
+widgets_profile.identifier: AppleBundleIdentifier
+widgets_profile.name: AppleBundleIdentifier -> AppleProfileName
+widgets_profile.profile_type: AppleProfileType
+widgets_profile.certificate: AppleCertificateId
+names.org: GitHubOrg
+names.slug: ProjectSlug
+doppler.project: DopplerProject
+configs.project: DopplerProject
+configs.environment: EnvironmentSlug
+inherit.config: DopplerConfig
+inherit.inherits: list<DopplerConfig>
+prd_config.project: DopplerProject
+prd_config.environment: EnvironmentSlug
+app_profile_to_doppler.config: DopplerConfig
+app_profile_to_doppler.name: SecretName
+app_profile_to_doppler.value: AppleProfileContent
+nse_profile_to_doppler.config: DopplerConfig
+nse_profile_to_doppler.name: SecretName
+nse_profile_to_doppler.value: AppleProfileContent
+widgets_profile_to_doppler.config: DopplerConfig
+widgets_profile_to_doppler.name: SecretName
+widgets_profile_to_doppler.value: AppleProfileContent
+monorepo_ref.repo: GitHubRepo
+buildkite_cluster.org: BuildkiteOrg
+buildkite_cluster.name: BuildkiteClusterName
+pipeline.org: BuildkiteOrg
+pipeline.slug: BuildkitePipelineSlug
+pipeline.repo: GitHubRepo
+pipeline.cluster: BuildkiteClusterId
+m3_repo_files.step: Text
+m3_repo_files.acknowledged: OperatorAcknowledgement
+m5_apns_key.step: Text
+m5_apns_key.acknowledged: OperatorAcknowledgement
+m6_ci_doppler_access.step: Text
+m6_ci_doppler_access.acknowledged: OperatorAcknowledgement
+m7_bootstrap.step: Text
+m7_bootstrap.acknowledged: OperatorAcknowledgement
+OUTPUTS:
+app_id: AppleBundleIdId
+nse_id: AppleBundleIdId
+widgets_id: AppleBundleIdId
+app_identifier: AppleBundleIdentifier
+nse_identifier: AppleBundleIdentifier
+widgets_identifier: AppleBundleIdentifier
+pipeline_url: HttpsUrl
+PLAN:
+PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
