@@ -68,6 +68,7 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
         "appstore-bundle-id-from-doppler.yaml",
         "appstore-bundle-id-from-inputs.yaml",
         "appstore-signing-profile-from-doppler.yaml",
+        "walter-ios-app.yaml",
     ] {
         assert!(hashes.contains_key(file), "{file}: {hashes:?}");
     }
@@ -97,6 +98,7 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
             "new-rust-service",
             "rotate-service-token",
             "signoz-ingestion-key",
+            "walter-ios-app",
         ]
     );
 }
