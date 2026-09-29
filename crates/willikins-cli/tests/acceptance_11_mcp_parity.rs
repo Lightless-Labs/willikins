@@ -77,6 +77,16 @@ fn principal() -> PrincipalId {
 /// `acceptance_11_parity.rs::butler()` uses, so a plan's output is
 /// directly comparable between the two test files too.
 fn butler() -> Butler {
+    butler_with_read_rate(ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE)
+}
+
+/// As [`butler`], but with `read_rate_per_minute` set: the sweep below
+/// makes one `validate` call per shipped document against a clock that
+/// never advances, so the default of 60 reads a minute refused the 61st
+/// document (`sample-ios-app.yaml`, last in sort order) with
+/// `RateLimited` once the fixture count passed 60 -- the rate limiter is
+/// not what that sweep tests.
+fn butler_with_read_rate(read_rate_per_minute: u32) -> Butler {
     let clock: Arc<ManualClock> = Arc::new(ManualClock::new(
         Timestamp::parse("2026-09-14T00:00:00+00:00").unwrap(),
     ));
@@ -92,15 +102,20 @@ fn butler() -> Butler {
         approval_window: ButlerConfig::DEFAULT_APPROVAL_WINDOW,
         apply_window: ButlerConfig::DEFAULT_APPLY_WINDOW,
         plan_rate_per_minute: ButlerConfig::DEFAULT_PLAN_RATE_PER_MINUTE,
-        read_rate_per_minute: ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE,
+        read_rate_per_minute,
     })
 }
 
 /// Serve a fresh `butler()` over an in-process duplex pair and connect a
 /// plain rmcp client to it.
 async fn connect() -> RunningService<RoleClient, ()> {
+    connect_to(butler()).await
+}
+
+/// As [`connect`], over an already-built `Butler`.
+async fn connect_to(butler: Butler) -> RunningService<RoleClient, ()> {
     let (client_io, server_io) = tokio::io::duplex(1024 * 1024);
-    let b = Arc::new(butler());
+    let b = Arc::new(butler);
     tokio::spawn(async move {
         let handler = WillikinsHandler::new(b, principal());
         if let Ok(service) = handler.serve(server_io).await {
@@ -483,8 +498,6 @@ async fn plan_input_failure_parity() {
 /// fixture, asserted here for all of them.
 #[tokio::test(flavor = "multi_thread")]
 async fn validate_parity_for_every_shipped_document() {
-    let client = connect().await;
-
     let mut documents: Vec<PathBuf> = Vec::new();
     for dir in [workflows_dir(), workflows_dir().join("fixtures")] {
         for entry in std::fs::read_dir(&dir).expect("the directory is readable") {
@@ -500,6 +513,10 @@ async fn validate_parity_for_every_shipped_document() {
         "every shipped document must be swept, found {}",
         documents.len()
     );
+    let read_rate = u32::try_from(documents.len())
+        .expect("a document count fits a u32")
+        .max(ButlerConfig::DEFAULT_READ_RATE_PER_MINUTE);
+    let client = connect_to(butler_with_read_rate(read_rate)).await;
 
     let mut parse_failures = 0;
     let mut check_failures = 0;
