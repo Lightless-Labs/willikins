@@ -206,6 +206,18 @@ fn an_invalid_profile_plans_as_a_replacement_naming_the_profile_by_its_non_secre
         subject.get("name").copied(),
         Some("com.example.willikins-demo")
     );
+    // Adversarial pass 3: the key ports are the *only* thing named -- never
+    // the certificate the profile is signed with, nor the `INVALID`
+    // profile's own id (`CERT1` and `PROFILE1` in the fixture). The
+    // profile's id reaches no part of the plan at all: `read` answers
+    // `Absent` with an unknown `profile` output.
+    assert_eq!(entry.subject.len(), 2, "{:?}", entry.subject);
+    let replacing_json = serde_json::to_string(&plan.replacing).unwrap();
+    for id in ["CERT1", "PROFILE1"] {
+        assert!(!replacing_json.contains(id), "{replacing_json}");
+    }
+    let plan_json = serde_json::to_string(&plan).unwrap();
+    assert!(!plan_json.contains("PROFILE1"), "{plan_json}");
 
     // The class is still static and still `Destructive` on every run,
     // exactly as it was before this addendum -- what changes is that the
@@ -213,6 +225,74 @@ fn an_invalid_profile_plans_as_a_replacement_naming_the_profile_by_its_non_secre
     // requirement.
     assert_eq!(checked.class, willikins_core::Class::Destructive);
     assert!(plan.requires_approval);
+}
+
+/// The coverage F1 left for later: a profile `ACTIVE` when the plan was
+/// approved and `INVALID` by the time `apply` re-plans. The approved plan
+/// said `NoOp`; the fresh one says `Replace`; `apply` refuses as action
+/// drift before any node runs, so nothing is deleted.
+#[test]
+fn a_profile_invalidated_after_approval_refuses_as_action_drift_and_deletes_nothing() {
+    let workflow = document("appstore-signing-profile-from-doppler.yaml");
+    let state = seeded_state();
+    let catalog = willikins_providers_fake::catalog(std::sync::Arc::clone(&state));
+    let checked = willikins_core::check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("document must check cleanly: {errors:?}"));
+    let approved = willikins_core::plan(&checked, &positive_inputs(), &catalog)
+        .unwrap_or_else(|err| panic!("plan must resolve every node: {err:?}"));
+    let profile_action = approved
+        .nodes
+        .iter()
+        .find(|node| node.name.as_str() == "profile")
+        .expect("the `profile` node planned")
+        .action;
+    assert_eq!(profile_action, Action::NoOp);
+    assert!(approved.replacing.is_empty());
+
+    // Apple invalidates it after approval.
+    for records in state.lock().unwrap().apple_profiles.values_mut() {
+        for record in records {
+            record.profile_state = "INVALID".to_string();
+        }
+    }
+
+    let approval = willikins_core::Approval::Human {
+        approver: willikins_core::PrincipalId::parse("operator").unwrap(),
+        at: willikins_core::Timestamp::parse("2026-09-29T00:00:00Z").unwrap(),
+    };
+    let mut observer = willikins_core::RecordingObserver::new();
+    let error = willikins_core::apply(
+        &checked,
+        &positive_inputs(),
+        &catalog,
+        &approved,
+        &approval,
+        &mut observer,
+    )
+    .expect_err("a profile invalidated after approval must not run");
+    let willikins_core::ApplyError::Drift { node, kind, .. } = error else {
+        panic!("expected action drift, got {error:?}");
+    };
+    assert_eq!(node.as_str(), "profile");
+    assert!(
+        matches!(
+            *kind,
+            willikins_core::DriftKind::Action {
+                planned: Action::NoOp,
+                observed: Action::Replace,
+            }
+        ),
+        "{kind:?}"
+    );
+    // Nothing ran, so the INVALID profile is still there.
+    let remaining: usize = state
+        .lock()
+        .unwrap()
+        .apple_profiles
+        .values()
+        .map(Vec::len)
+        .sum();
+    assert_eq!(remaining, 1);
 }
 
 #[test]
