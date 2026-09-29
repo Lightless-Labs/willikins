@@ -129,6 +129,34 @@ impl Http {
         self
     }
 
+    /// Build a client identical to this one — same base URL, default
+    /// headers, credential header scheme, connection pool, and sleeper —
+    /// except for `credential`, which replaces the one this client was
+    /// built with.
+    ///
+    /// The seam a provider crate uses to build a fresh client for a
+    /// document-bound credential port while still sending requests to the
+    /// same route a mock test (or a live base URL) already pointed the
+    /// default client at — `willikins-providers-github`'s
+    /// `ScopedClient::default_for` is the first caller
+    /// (`docs/plans/2026-09-11-willikins-design.md`'s "Credentials are
+    /// ports, resolvers are nodes" addendum): unlike
+    /// `willikins-providers-appstore`'s own per-call `client_for`, which
+    /// mints a JWT and so always talks to the real API, a bound
+    /// `GitHubToken` is used verbatim and must still reach whatever
+    /// `base_url` this client already carries, mock or real.
+    #[must_use]
+    pub fn with_credential(&self, credential: Credential) -> Self {
+        Self {
+            agent: self.agent.clone(),
+            base_url: self.base_url.clone(),
+            default_headers: self.default_headers.clone(),
+            credential,
+            credential_header: self.credential_header,
+            sleeper: Arc::clone(&self.sleeper),
+        }
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base_url)
     }
@@ -833,6 +861,34 @@ mod tests {
         )
         .with_sleeper(sleeper);
         let thing: Thing = http.get("/thing").expect("succeeds");
+        assert_eq!(thing.name, "widget");
+        mock.assert();
+    }
+
+    /// [`Http::with_credential`]'s whole reason to exist: the swapped
+    /// client still reaches the same route (base URL and default
+    /// headers), authorizing with the *new* credential, not the one it
+    /// was built with.
+    #[test]
+    fn with_credential_keeps_the_route_and_swaps_the_authorization() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/thing")
+            .match_header("X-Extra", "value")
+            .match_header("authorization", "Bearer swapped-token")
+            .with_status(200)
+            .with_body(r#"{"name":"widget"}"#)
+            .create();
+        let original = Http::new(
+            server.url(),
+            vec![("X-Extra".to_string(), "value".to_string())],
+            credential(),
+        );
+        let swapped = original.with_credential(Credential::for_testing(
+            "WILLIKINS_TEST_HTTP_CREDENTIAL_2",
+            "swapped-token",
+        ));
+        let thing: Thing = swapped.get("/thing").expect("succeeds");
         assert_eq!(thing.name, "widget");
         mock.assert();
     }

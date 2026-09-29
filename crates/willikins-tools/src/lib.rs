@@ -1,21 +1,26 @@
 //! Pure, provider-independent tools: `naming.v1`, `template.render`,
 //! `env.get`, `base64.decode`, `apple.signing_key.parse`,
-//! `apple.issuer_id.parse`, `apple.key_id.parse`, and `operator.acknowledge`.
+//! `apple.issuer_id.parse`, `apple.key_id.parse`, `github.token.parse`,
+//! and `operator.acknowledge`.
 //!
-//! All three are pure — no key, no external state, `ensure` is the
-//! identity of `read` — so they need nothing beyond `willikins-core` and
+//! All are pure — no key, no external state, `ensure` is the identity of
+//! `read` — so they need nothing beyond `willikins-core` and
 //! `willikins-types`. `naming.v1` and `template.render` were moved out of
 //! `willikins-providers-fake` unchanged in name, ports, behaviour, and
 //! tests; see `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s
 //! `willikins-tools` crate contract. `env.get` landed later, once the
 //! design addendum "Credentials are ports, resolvers are nodes"
 //! (`docs/plans/2026-09-11-willikins-design.md`) gave it a consumer.
+//! `github.token.parse` joined the same way milestone 3e's R2 task gave
+//! `willikins-providers-github`'s tools an optional credential port to
+//! parse into, mirroring `apple.signing_key.parse` exactly.
 
 mod apple_issuer_id_parse;
 mod apple_key_id_parse;
 mod apple_signing_key_parse;
 mod base64_decode;
 mod env_get;
+mod github_token_parse;
 mod naming_v1;
 mod operator_acknowledge;
 mod template_render;
@@ -25,6 +30,7 @@ pub use apple_key_id_parse::AppleKeyIdParse;
 pub use apple_signing_key_parse::AppleSigningKeyParse;
 pub use base64_decode::Base64Decode;
 pub use env_get::EnvGet;
+pub use github_token_parse::GitHubTokenParse;
 pub use naming_v1::NamingV1;
 pub use operator_acknowledge::OperatorAcknowledge;
 pub use template_render::TemplateRender;
@@ -46,6 +52,7 @@ pub fn register(catalog: &mut Catalog) -> Result<(), CatalogError> {
     catalog.insert(std::sync::Arc::new(AppleSigningKeyParse::new()))?;
     catalog.insert(std::sync::Arc::new(AppleIssuerIdParse::new()))?;
     catalog.insert(std::sync::Arc::new(AppleKeyIdParse::new()))?;
+    catalog.insert(std::sync::Arc::new(GitHubTokenParse::new()))?;
     catalog.insert(std::sync::Arc::new(OperatorAcknowledge::new()))?;
     Ok(())
 }
@@ -74,6 +81,7 @@ mod tests {
                 "apple.signing_key.parse",
                 "apple.issuer_id.parse",
                 "apple.key_id.parse",
+                "github.token.parse",
                 "operator.acknowledge",
             ]
         );

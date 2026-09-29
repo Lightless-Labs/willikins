@@ -173,7 +173,7 @@ pub use doppler::{
     DopplerTokenName, SecretName,
 };
 pub use env::EnvVarName;
-pub use github::{ActionsSecretName, GitHubOrg, GitHubRepo, HttpsUrl, RepoVisibility};
+pub use github::{ActionsSecretName, GitHubOrg, GitHubRepo, GitHubToken, HttpsUrl, RepoVisibility};
 pub use name::ProjectName;
 pub use naming::NamingScheme;
 pub use operator::OperatorAcknowledgement;
@@ -203,6 +203,7 @@ registry::domain_types! {
     GitHubRepo,
     HttpsUrl,
     ActionsSecretName,
+    GitHubToken,
     EnvVarName,
     DopplerProject,
     DopplerConfigName,
