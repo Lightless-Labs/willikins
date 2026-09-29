@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use willikins_providers_http::{Credential, CredentialError, Http, ProviderError};
 use willikins_types::{
     DopplerConfig, DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken,
-    DopplerTokenName, SecretName, Text,
+    DopplerTokenName, EnvironmentSlug, SecretName, Text,
 };
 
 /// Doppler's REST API base URL.
@@ -279,6 +279,39 @@ impl DopplerClient {
         Ok(())
     }
 
+    /// `POST /v3/configs` with `project`, `environment`, and `name` —
+    /// Doppler's dedicated *branch* config create endpoint (its own
+    /// `OpenAPI` spec, `configs-create.md`, fetched verbatim 2026-09-29:
+    /// request `{project, environment, name}`, response `{"config":
+    /// {...}}`, the same envelope [`Self::get_config`] already parses).
+    /// `name` must be the config's **already-prefixed** full name
+    /// (`<environment>_<branch>`), never a bare suffix: the milestone 2
+    /// live write cycle proved this empirically (`docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`,
+    /// "Notes for milestone 3" — `name: "probe"` under environment `dev`
+    /// answered `400`, while `name: "dev_probe"` was stored as
+    /// `dev_probe` with `root: false`; Doppler does not prepend the
+    /// environment server-side). `willikins_providers_doppler::tools::DopplerBranchConfigEnsure`
+    /// assembles that prefix itself before this method ever sees the
+    /// name. Never retried, for the same reason as [`Self::create_project`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub(crate) fn create_branch_config(
+        &self,
+        project: &DopplerProject,
+        environment: &EnvironmentSlug,
+        name: &DopplerConfigName,
+    ) -> Result<(), ProviderError> {
+        let body = CreateBranchConfigBody {
+            project: project.to_string(),
+            environment: environment.to_string(),
+            name: name.to_string(),
+        };
+        self.http.post::<ConfigEnvelope>("/v3/configs", &body)?;
+        Ok(())
+    }
+
     /// `POST /v3/configs/config/inheritable` with `project`, `config`,
     /// and `inheritable`. Never retried, for the same reason as
     /// [`Self::create_project`].
@@ -532,6 +565,14 @@ struct CreateEnvironmentBody {
     slug: String,
 }
 
+/// [`DopplerClient::create_branch_config`]'s request body.
+#[derive(Debug, Serialize)]
+struct CreateBranchConfigBody {
+    project: String,
+    environment: String,
+    name: String,
+}
+
 /// Doppler's config envelope: `{"config": {...}}`.
 #[derive(Debug, Deserialize)]
 struct ConfigEnvelope {
@@ -549,10 +590,16 @@ struct ConfigEnvelope {
 /// deliberately left out: no tool reads them (research note section
 /// "Config Inheritance": both answer bodies carry all four, but only
 /// `inheritable` and `inherits` name what a config was *asked* to be,
-/// which is the half `ensure` compares against).
+/// which is the half `ensure` compares against). `environment` was added
+/// for `doppler.branch_config.ensure`: the same name-collision risk
+/// `doppler.config.ensure`'s own `root` check guards against (a config
+/// sitting at the right string but the wrong logical place) applies to a
+/// literal branch name too, so that tool's `Present` also requires this
+/// field to equal the environment it was asked to ensure under.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ConfigBody {
     pub(crate) root: Option<bool>,
+    pub(crate) environment: Option<String>,
     pub(crate) inheritable: Option<bool>,
     pub(crate) inherits: Option<Vec<ConfigRefBody>>,
 }

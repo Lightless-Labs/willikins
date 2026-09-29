@@ -1,5 +1,6 @@
 //! Live Doppler provider tools: `doppler.project.ensure`,
-//! `doppler.config.ensure`, `doppler.config.inheritable.ensure`,
+//! `doppler.config.ensure`, `doppler.branch_config.ensure`,
+//! `doppler.config.inheritable.ensure`,
 //! `doppler.config.inherits.ensure`, `doppler.service_token.ensure`,
 //! `doppler.service_token.rotate`, `doppler.secret.get`,
 //! `doppler.secret.set`, and `doppler.value.get`.
@@ -57,7 +58,7 @@ pub use client::{
     looks_like_a_missing_project,
 };
 pub use tools::{
-    DopplerConfigEnsure, DopplerConfigInheritableEnsure, DopplerConfigInheritsEnsure,
-    DopplerProjectEnsure, DopplerSecretGet, DopplerSecretSet, DopplerServiceTokenEnsure,
-    DopplerServiceTokenRotate, DopplerValueGet,
+    DopplerBranchConfigEnsure, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
+    DopplerConfigInheritsEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerSecretSet,
+    DopplerServiceTokenEnsure, DopplerServiceTokenRotate, DopplerValueGet,
 };

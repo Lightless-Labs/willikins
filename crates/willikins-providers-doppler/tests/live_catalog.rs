@@ -1,16 +1,17 @@
 //! The *whole* live catalog — `willikins-tools`' seven pure tools,
 //! `willikins-providers-github`'s three live tools (milestone 3e task 2
-//! added `github.repo.get`), this crate's nine live
+//! added `github.repo.get`), this crate's ten live
 //! Doppler tools (milestone 3 added `doppler.config.inheritable.ensure`
 //! and `doppler.config.inherits.ensure`; the `SigNoz` task added
 //! `doppler.secret.set`; the App Store Connect credential correction
-//! added `doppler.value.get`), (milestone 3a)
+//! added `doppler.value.get`; milestone 3e task B1 added
+//! `doppler.branch_config.ensure`), (milestone 3a)
 //! `willikins-providers-buildkite`'s two live tools, and (the App Store
 //! Connect provider crate, plus milestone 3c's `appstore.certificate.get`)
 //! `willikins-providers-appstore`'s six live tools (milestone 3c task 2
 //! added `appstore.profile.ensure`; milestone 3e task 3 added the two
 //! Sample gates, `appstore.app.get` and `appstore.app_group.gate`).
-//! Twenty-nine tools, no fake among them.
+//! Thirty tools, no fake among them.
 //!
 //! The assembly itself lives in `willikins-server` now
 //! (`willikins_server::live_catalog_with`, task 10a's `Butler::live_catalog`)
@@ -62,7 +63,7 @@ const POSITIVE_FIXTURES: [&str; 7] = [
 ];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 29] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 30] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

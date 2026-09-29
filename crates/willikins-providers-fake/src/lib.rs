@@ -19,8 +19,9 @@
 //! `appstore.certificate.get`; milestone 3e task 2 added `github.repo.get`;
 //! G3 added `operator.acknowledge`, also pure and provider-independent;
 //! milestone 3e task 3 added the two Sample gates, `appstore.app.get`
-//! and `appstore.app_group.gate`),
-//! so the catalog this crate produces holds thirty-one tools, in the
+//! and `appstore.app_group.gate`; milestone 3e task B1 added
+//! `doppler.branch_config.ensure`),
+//! so the catalog this crate produces holds thirty-two tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -81,6 +82,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::FakeGitHubRepoGet::new(state.clone()));
     insert!(tools::DopplerProjectEnsure::new(state.clone()));
     insert!(tools::DopplerConfigEnsure::new(state.clone()));
+    insert!(tools::DopplerBranchConfigEnsure::new(state.clone()));
     insert!(tools::DopplerConfigInheritableEnsure::new(state.clone()));
     insert!(tools::DopplerConfigInheritsEnsure::new(state.clone()));
     insert!(tools::DopplerServiceTokenEnsure::new(state.clone()));
@@ -138,6 +140,7 @@ mod tests {
             "github.repo.get",
             "doppler.project.ensure",
             "doppler.config.ensure",
+            "doppler.branch_config.ensure",
             "doppler.config.inheritable.ensure",
             "doppler.config.inherits.ensure",
             "doppler.service_token.ensure",
@@ -161,7 +164,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 31);
+        assert_eq!(names.len(), 32);
     }
 
     #[test]

@@ -2,19 +2,21 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the live catalog (twenty-nine tools since
-//! milestone 3e task 3 added the two Sample gates,
-//! `appstore.app.get` and `appstore.app_group.gate`) --
+//! `live_catalog` assembles the live catalog (thirty tools since
+//! milestone 3e task B1 added `doppler.branch_config.ensure`, after task
+//! 3 added the two Sample gates, `appstore.app.get` and
+//! `appstore.app_group.gate`) --
 //! `willikins-tools`' seven pure tools (`naming.v1`, `template.render`,
 //! `env.get`, `base64.decode`, `apple.signing_key.parse`,
 //! `apple.issuer_id.parse`, `apple.key_id.parse`),
 //! `willikins-providers-github`'s three
 //! live tools (milestone 3e task 2 added `github.repo.get`),
-//! `willikins-providers-doppler`'s nine (milestone 3 added
+//! `willikins-providers-doppler`'s ten (milestone 3 added
 //! `doppler.config.inheritable.ensure` and
 //! `doppler.config.inherits.ensure`; the `SigNoz` task added
 //! `doppler.secret.set`; the App Store Connect credential correction
-//! added `doppler.value.get`), `willikins-providers-buildkite`'s two
+//! added `doppler.value.get`; milestone 3e task B1 added
+//! `doppler.branch_config.ensure`), `willikins-providers-buildkite`'s two
 //! (milestone 3a), `willikins-providers-signoz`'s one (the `SigNoz`
 //! task), and `willikins-providers-appstore`'s three (two from the App
 //! Store Connect provider crate; milestone 3c added
@@ -38,7 +40,7 @@ use willikins_providers_buildkite::{
     BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineEnsure,
 };
 use willikins_providers_doppler::{
-    DopplerClient, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
+    DopplerBranchConfigEnsure, DopplerClient, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
     DopplerConfigInheritsEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerSecretSet,
     DopplerServiceTokenEnsure, DopplerServiceTokenRotate, DopplerValueGet,
 };
@@ -51,7 +53,7 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 29] = [
+pub const LIVE_TOOL_NAMES: [&str; 30] = [
     "naming.v1",
     "template.render",
     "operator.acknowledge",
@@ -65,6 +67,7 @@ pub const LIVE_TOOL_NAMES: [&str; 29] = [
     "github.repo.get",
     "doppler.project.ensure",
     "doppler.config.ensure",
+    "doppler.branch_config.ensure",
     "doppler.config.inheritable.ensure",
     "doppler.config.inherits.ensure",
     "doppler.service_token.ensure",
@@ -181,7 +184,7 @@ fn insert_github_tools(catalog: &mut Catalog, http: Http) {
     insert(catalog, Arc::new(GitHubRepoGet::new(github)));
 }
 
-/// Insert `willikins-providers-doppler`'s nine live tools, built from
+/// Insert `willikins-providers-doppler`'s ten live tools, built from
 /// `http`.
 fn insert_doppler_tools(catalog: &mut Catalog, http: Http) {
     let doppler = Arc::new(DopplerClient::new(http));
@@ -192,6 +195,10 @@ fn insert_doppler_tools(catalog: &mut Catalog, http: Http) {
     insert(
         catalog,
         Arc::new(DopplerConfigEnsure::new(Arc::clone(&doppler))),
+    );
+    insert(
+        catalog,
+        Arc::new(DopplerBranchConfigEnsure::new(Arc::clone(&doppler))),
     );
     insert(
         catalog,
@@ -487,9 +494,10 @@ const GITHUB_TOOL_NAMES: [&str; 3] = [
 
 /// `willikins-providers-doppler`'s live tool names. See
 /// [`GITHUB_TOOL_NAMES`].
-const DOPPLER_TOOL_NAMES: [&str; 9] = [
+const DOPPLER_TOOL_NAMES: [&str; 10] = [
     "doppler.project.ensure",
     "doppler.config.ensure",
+    "doppler.branch_config.ensure",
     "doppler.config.inheritable.ensure",
     "doppler.config.inherits.ensure",
     "doppler.service_token.ensure",
@@ -792,6 +800,8 @@ mod tests {
     fn the_provider_tool_name_arrays_partition_live_tool_names() {
         use std::collections::BTreeSet;
 
+        // `DOPPLER_TOOL_NAMES` already carries `doppler.branch_config.ensure`
+        // (milestone 3e task B1), so it needs no entry here.
         let mut from_provider_arrays: Vec<&str> = vec![
             "naming.v1",
             "template.render",
