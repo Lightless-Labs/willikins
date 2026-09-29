@@ -663,6 +663,51 @@ neither touches Doppler or anything this task changed. Filed for the
 coordinator to dispatch, matching this plan's own precedent for the
 `resolve_recorded_inputs` defect T3c's follow-up found.
 
+**Addendum:** 2026-09-29 (implementer) — **task B2 landed, two commits
+(`162d7f7`, `ffc418d`): the `resolve_recorded_inputs` defect T3c's
+follow-up recorded is fixed test-first.** `willikins_core::value::is_operator_acknowledgement`
+moves from `pub(crate)` to `pub` (the same registry-`TypeId` test, never
+by name) so `willikins-server`'s `resolve_recorded_inputs` -- a different
+crate -- can recognise an unsupplied `OperatorAcknowledgement` input the
+same way `plan.rs`'s own `Binding::Input` arm already does, and leave it
+out of the resolved map instead of refusing with `RecordedInputUnreadable`.
+New end-to-end test over the fake catalogue,
+`crates/willikins-server/tests/acknowledgement_gate_blocked_resume.rs`,
+against a new positive fixture (`workflows/fixtures/acknowledgement-gate-resume.yaml`:
+one independent node, one `operator.acknowledge` gate, one node
+downstream of the gate) — proves, through a real `Butler::apply` over a
+real `FileJournal` (reopened independently mid-test to prove durability,
+mirroring `tests/file_journal_round_trip.rs`) and the MCP surface
+(`plan`/`apply`/`run_status`): the first run starts and blocks rather
+than refusing (the independent node computes, the gate blocks, the
+downstream node is skipped, `run_status` reports `blocked` with the
+fixed `next_step` text); a second run, over a fresh `Butler` reopening
+the same on-disk journal once the operator supplies the acknowledgement,
+converges (the downstream node now computes, nothing blocked). The DSL
+characterization snapshot gains exactly the new fixture's own entry,
+verified by diff before accepting. A second, unrelated pre-existing
+failure was found and fixed in passing, in this task's own scoped
+`willikins-core` gate: `catalog::tests::list_tools_json_snapshot`'s
+hardcoded conversions literal was one commit behind T3b's own two new
+rows (`AppleBundleIdentifier => AppleBundleIdName`/`=> Text`), landed
+before this task started — a mechanical, no-design-content fix, its own
+commit (`162d7f7`), matching this plan's own precedent
+(`live_catalog.rs`'s one-behind `LIVE_TOOL_NAMES`, B1's addendum above).
+**Not re-attacked** in this task: `RecordedInputUnreadable`'s *other*
+failure mode (the whole recorded `inputs` payload being unreadable JSON)
+is unchanged and untouched; the two willikins-server pre-existing
+failures B1 already filed for the coordinator
+(`acceptance_13_trusted_directory.rs`, `image_contents.rs`, both about
+`walter-ios-app.yaml`'s own entry) still fail, confirmed unrelated to
+this task's diff (neither file nor test this task touched). Gates run
+(scoped): `cargo fmt --all --check`; `cargo clippy -p willikins-core -p
+willikins-server --all-targets -j 2 -- -D warnings` (clean); `cargo test
+-p willikins-core -j 2` (19 suites, all green); `cargo test -p
+willikins-server -j 2` (green apart from the two pre-existing,
+unrelated failures above); `cargo check -p willikins-types -j 2`; `cargo
+test -p willikins-dsl --test acceptance -j 2` (additive-only, verified
+by diff). Plan not marked Completed.
+
 ## Goal
 
 One workflow document, `workflows/walter-ios-app.yaml`, provisions everything a provider API can
