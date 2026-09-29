@@ -2326,28 +2326,69 @@ catalog-construction time).**
   `a_bound_token_port_is_used_even_when_the_default_credential_would_be_refused` (the latter's default
   credential is refused outright by the mock, so the test can only pass if the bound token authorized
   the request), mirroring `github.repo.get`'s own `repo_get_mock.rs` pair.
-- **No new document.** Unlike R2 (which added `workflows/github-repo-token-from-doppler.yaml`), this
-  task's own boundary asks only that the port exist and that every existing document and the
-  server keep working unchanged -- proven by `workflows/new-rust-service-buildkite.yaml`'s own
-  acceptance tests (`acceptance_m3a_buildkite.rs`, unmodified, all green) and by
-  `cargo test -p willikins-dsl --test acceptance`'s characterization snapshot staying **byte-identical**
-  (confirmed: `git status` shows no change to
-  `crates/willikins-dsl/tests/snapshots/acceptance__characterization_of_every_document.snap`). No
-  exhaustive document-list test (`acceptance_13_trusted_directory.rs`, `image_contents.rs`) needed
-  updating for the same reason.
+- **A new document, an addition, not a change:** `workflows/buildkite-cluster-token-from-doppler.yaml`
+  resolves a Buildkite API access token from Doppler through `buildkite.token.parse` and binds it to
+  `buildkite.cluster.get`'s `token` port, mirroring `github-repo-token-from-doppler.yaml` (R2) exactly
+  (`buildkite.cluster.get`, not `.pipeline.ensure`, for the same reason: it is pure, so `plan` resolves
+  the whole document without approval). Its own document test
+  (`crates/willikins-providers-buildkite/tests/buildkite_token_documents.rs`) plans it end to end
+  against seeded fake state (`workflows/fixtures/state/buildkite-token.json`) and asserts the whole
+  serialized `Plan` never carries the seeded token's raw value -- the task's own "never reaches a
+  plan" claim, proven directly rather than only inherited from `render()`. The "error" claim is
+  `redaction.rs`'s two bound-token tests (above); the "journal"/"log" claims are inherited from the
+  same rendering path Sample's own CLI-level test (`sample_apply_blocked_redaction.rs`) already proves
+  for a bound secret port in general -- Sample binds no Buildkite token, so nothing here re-proves it
+  at that level, and this is stated rather than left to look like it was. The fixture's own seeded
+  secret is the placeholder `BUILDKITE_TOKEN_PLACEHOLDER`, substituted for a `concat!`-assembled real
+  token at test run time, the same technique
+  `willikins-providers-doppler/fixtures/doppler/README.md` documents for
+  `service_token_post_created.json`'s `key`. `crates/willikins-dsl/tests/acceptance.rs`'s
+  characterization sweep picks the new document up automatically; its snapshot gained exactly one
+  `=== workflows/buildkite-cluster-token-from-doppler.yaml ===` block and nothing else -- confirmed by
+  diffing the pre-change snapshot against the accepted one (filtering the insta-metadata line): one
+  new block, zero lines changed anywhere else. `acceptance_13_trusted_directory.rs`'s two document-list
+  assertions and `image_contents.rs`'s exhaustive `COPY workflows/*.yaml` set both gained the new
+  filename in sorted position (fifteen to sixteen positive documents); both green.
+- **A real, committed guard violation, found by the advisor, not by re-running the guard.** Four of
+  the bound-token-port mock/agreement tests wrote `concat!("Bearer ", "bkua_theboundtokenexampleexample")`
+  -- splitting at the wrong seam. The *second* literal alone spells `bkua_` immediately followed by 28
+  real alphanumeric characters, contiguously, in source: exactly what `secret_literal_guard.rs`'s
+  `BUILDKITE_TOKEN` pattern (`{20,}` after any of nine prefixes) exists to catch, and it does --
+  `no_provider_token_shaped_literal_anywhere_in_the_tree` fails on the committed tree. `willikins-core`
+  was re-run once after commit 1 (before any bound-token test existed) and not again before commit 2,
+  so this shipped. Fixed by moving the split to `concat!("Bearer bkua_", "theboundtokenexampleexample")`
+  -- the same seam the type's own `example` and every other marker in this task already used -- in all
+  four call sites (`cluster_get_mock.rs` x2, `pipeline_ensure_mock.rs` x2); re-verified against the
+  guard's own regex by hand (nine-prefix alternation, `{20,}` floor) before re-running, not only by the
+  test passing. **Lesson for the next task in this pattern: re-run `willikins-core --test
+  secret_literal_guard` after every new test file that mints a credential-shaped test value, not only
+  after the type and its own `example` are added.**
+- **`willikins-providers-doppler/tests/live_catalog.rs` hardcodes `LIVE_TOOL_NAMES`'s own array length**
+  (`const LIVE_TOOL_NAMES: [&str; N] = willikins_server::LIVE_TOOL_NAMES;`) and was not touched by the
+  server-side count bump (32 → 33): this is a compile error, not a runtime failure, so
+  `cargo test -p willikins-providers-doppler --test live_catalog` would not even build until fixed.
+  Found by the advisor (R2's own `ad8c190` touched this exact file for the same reason when
+  `github.token.parse` joined the live catalog, and this task had not grepped for it). Fixed: `32` →
+  `33`, plus the module doc's stale tool count and provider list corrected in the same edit. Green
+  after the fix.
 - **No provider call of any kind was made for this task** -- every check ran against the fake catalog,
   the empty catalog, or a mock server that never leaves the process.
-- **Scoped gates green:** `cargo fmt --all --check`; `cargo clippy` on every touched crate
-  (`willikins-types`, `willikins-tools`, `willikins-core`, `willikins-providers-buildkite`,
-  `willikins-providers-fake`, `willikins-server`) `--all-targets -D warnings`; `cargo test` over
-  `willikins-types`, `willikins-core`, `willikins-tools`, `willikins-providers-buildkite`,
-  `willikins-providers-fake`, `willikins-server`, `willikins-cli --test acceptance_m3a_buildkite`, and
-  `willikins-dsl --test acceptance` -- every suite green (`RUST_TEST_THREADS=2`). Insta snapshots
-  accepted additively and reviewed diff-by-diff: buildkite `catalog_parity`'s two tool specs (`+token`
-  port each), `willikins-tools`' `catalog_specs_snapshot` (+1 tool), `willikins-providers-fake`'s
-  `catalog_json_snapshot` (two `+token` ports, +1 tool), `willikins-types`' own `catalog_json_snapshot`
-  (+1 registered type). `cargo check -p willikins-types -j 2`. The full workspace gate was not run
-  (host rule; the coordinator's).
+- **Scoped gates green, all three commits:** `cargo fmt --all --check`; `cargo clippy` on every touched
+  crate (`willikins-types`, `willikins-tools`, `willikins-core`, `willikins-providers-buildkite`,
+  `willikins-providers-fake`, `willikins-server`, `willikins-providers-doppler`) `--all-targets -D
+  warnings`; `cargo test` over `willikins-types`, `willikins-core` (including
+  `secret_literal_guard`/`expose_secret_guard`, re-run after the fix above), `willikins-tools`,
+  `willikins-providers-buildkite` (including the new `buildkite_token_documents.rs`),
+  `willikins-providers-fake`, `willikins-server` (including the two updated exhaustive document-list
+  tests), `willikins-providers-doppler --test live_catalog` (re-run after the fix above),
+  `willikins-providers-github` (regression check: untouched, still green), `willikins-cli --test
+  acceptance_m3a_buildkite`, and `willikins-dsl --test acceptance` -- every suite green
+  (`RUST_TEST_THREADS=2`). Insta snapshots accepted additively and reviewed diff-by-diff: buildkite
+  `catalog_parity`'s two tool specs (`+token` port each), `willikins-tools`' `catalog_specs_snapshot`
+  (+1 tool), `willikins-providers-fake`'s `catalog_json_snapshot` (two `+token` ports, +1 tool),
+  `willikins-types`' own `catalog_json_snapshot` (+1 registered type), `willikins-dsl`'s
+  characterization snapshot (+1 document block, diffed line by line). `cargo check -p willikins-types
+  -j 2`. The full workspace gate was not run (host rule; the coordinator's).
 - **Remaining, carried forward, unchanged by this task:** the same server-side gap R2 recorded still
   applies to Buildkite too -- `live_catalog_for_document`/`live_catalog_from_env` still read
   `WILLIKINS_BUILDKITE_TOKEN` from the process environment whenever a document names any

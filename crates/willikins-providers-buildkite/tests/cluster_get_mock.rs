@@ -356,7 +356,7 @@ fn read_authorizes_with_the_bound_token_port_not_the_default_credential() {
     assert!(matches!(observation, Observation::Present(_)));
     assert_eq!(
         captured.lock().expect("not poisoned").as_str(),
-        concat!("Bearer ", "bkua_theboundtokenexampleexample")
+        concat!("Bearer bkua_", "theboundtokenexampleexample")
     );
 }
 
@@ -374,7 +374,7 @@ fn a_bound_token_port_is_used_even_when_the_default_credential_would_be_refused(
         .match_query(mockito::Matcher::Any)
         .match_header(
             "authorization",
-            concat!("Bearer ", "bkua_theboundtokenexampleexample"),
+            concat!("Bearer bkua_", "theboundtokenexampleexample"),
         )
         .with_status(200)
         .with_body(

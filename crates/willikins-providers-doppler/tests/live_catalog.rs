@@ -11,7 +11,9 @@
 //! `willikins-providers-appstore`'s six live tools (milestone 3c task 2
 //! added `appstore.profile.ensure`; milestone 3e task 3 added the two
 //! Sample gates, `appstore.app.get` and `appstore.app_group.gate`).
-//! Thirty tools, no fake among them.
+//! Thirty-three tools since milestone 3e task K1 added
+//! `buildkite.token.parse` (after task R2 added `github.token.parse`),
+//! no fake among them.
 //!
 //! The assembly itself lives in `willikins-server` now
 //! (`willikins_server::live_catalog_with`, task 10a's `Butler::live_catalog`)
@@ -63,7 +65,7 @@ const POSITIVE_FIXTURES: [&str; 7] = [
 ];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 32] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 33] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

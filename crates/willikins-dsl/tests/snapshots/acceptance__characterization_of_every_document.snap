@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-dsl/tests/acceptance.rs
+assertion_line: 284
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
@@ -112,6 +113,20 @@ OUTPUTS:
 profile: AppleProfileId
 PLAN:
 PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
+
+=== workflows/buildkite-cluster-token-from-doppler.yaml ===
+WARNINGS:
+TYPES:
+token_secret.config: DopplerConfig
+token_secret.name: SecretName
+token.value: DopplerSecretValue
+cluster_ref.org: BuildkiteOrg
+cluster_ref.name: BuildkiteClusterName
+cluster_ref.token: BuildkiteToken
+OUTPUTS:
+cluster: BuildkiteClusterId
+PLAN:
+PLAN ERROR: node `token_secret`: NotFound: no secret at `third-thoughts/prd#BUILDKITE_TOKEN`
 
 === workflows/doppler-backend-for-ios.yaml ===
 WARNINGS:
