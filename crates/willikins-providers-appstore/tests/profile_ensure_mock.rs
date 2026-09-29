@@ -449,6 +449,46 @@ fn an_instance_read_answering_with_another_profiles_id_is_refused_and_nothing_is
     create_mock.assert();
 }
 
+/// 2026-09-29 adversarial pass: replace-when-INVALID deletes first, so a
+/// create that then fails leaves no profile at this key. That converges
+/// on a re-run, but the failure this destructive tool reports must name
+/// its own side effect, not only the create's error.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_failed_create_after_the_invalid_profile_was_deleted_says_it_was_deleted() {
+    let mut provider = MockProvider::start();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    mock_profile_list(&mut provider, &fixture("profile_list_one"));
+    mock_profile_get(&mut provider, 200, &fixture("profile_get_invalid"));
+    let delete_mock = provider
+        .mock("DELETE", "/v1/profiles/PR0F1LE1D0001")
+        .with_status(204)
+        .expect(1)
+        .create();
+    provider
+        .mock("POST", "/v1/profiles")
+        .with_status(500)
+        .with_body(fixture("error_5xx").to_string())
+        .create();
+
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    let token = SinkToken::new();
+    let err = tool.ensure(&inputs(), &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider, "{err:?}");
+    assert!(
+        err.message
+            .contains("INVALID profile at this key was deleted"),
+        "the failure must name the delete that already happened: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("re-run"),
+        "and say how to recover: {}",
+        err.message
+    );
+    delete_mock.assert();
+}
+
 #[test]
 fn read_reports_conflict_when_the_profile_is_expired() {
     let mut provider = MockProvider::start();

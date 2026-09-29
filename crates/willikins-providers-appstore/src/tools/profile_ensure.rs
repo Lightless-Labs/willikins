@@ -536,10 +536,23 @@ impl Tool for AppstoreProfileEnsure {
             }
             // Replace-when-INVALID: delete by the id `resolve` returned,
             // then create fresh. A delete failure propagates before any
-            // create is attempted -- `?` never reaches `create_new`.
+            // create is attempted -- `?` never reaches `create_new`. A
+            // create failure *after* the delete leaves no profile at this
+            // key (a re-run creates it), so the error says the delete
+            // already happened rather than naming only the create's own
+            // failure (2026-09-29 adversarial pass).
             ProfileResolution::Invalid { id } => {
                 client.delete_profile(&id)?;
-                Self::create_new(&client, &identifier, &name, &profile_type, &certificate)
+                Self::create_new(&client, &identifier, &name, &profile_type, &certificate).map_err(
+                    |error| ToolError {
+                        kind: error.kind,
+                        message: format!(
+                            "the INVALID profile at this key was deleted, but creating its \
+                             replacement failed; re-run to create it: {}",
+                            error.message
+                        ),
+                    },
+                )
             }
         }
     }
