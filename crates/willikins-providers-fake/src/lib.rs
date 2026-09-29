@@ -23,8 +23,9 @@
 //! `doppler.branch_config.ensure`; milestone 3e task R2 added
 //! `github.token.parse`, the parse tool `github.repo.ensure`'s,
 //! `github.actions_secret.ensure`'s, and `github.repo.get`'s new optional
-//! `token` credential port binds to),
-//! so the catalog this crate produces holds thirty-three tools, in the
+//! `token` credential port binds to; milestone 3e task R3 added the gate
+//! `doppler.config.inheritable.gate`),
+//! so the catalog this crate produces holds thirty-four tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -88,6 +89,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::DopplerConfigEnsure::new(state.clone()));
     insert!(tools::DopplerBranchConfigEnsure::new(state.clone()));
     insert!(tools::DopplerConfigInheritableEnsure::new(state.clone()));
+    insert!(tools::DopplerConfigInheritableGate::new(state.clone()));
     insert!(tools::DopplerConfigInheritsEnsure::new(state.clone()));
     insert!(tools::DopplerServiceTokenEnsure::new(state.clone()));
     insert!(tools::DopplerServiceTokenRotate::new(state.clone()));
@@ -147,6 +149,7 @@ mod tests {
             "doppler.config.ensure",
             "doppler.branch_config.ensure",
             "doppler.config.inheritable.ensure",
+            "doppler.config.inheritable.gate",
             "doppler.config.inherits.ensure",
             "doppler.service_token.ensure",
             "doppler.service_token.rotate",
@@ -169,7 +172,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 33);
+        assert_eq!(names.len(), 34);
     }
 
     #[test]

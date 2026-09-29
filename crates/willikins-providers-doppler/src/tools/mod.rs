@@ -1,8 +1,9 @@
-//! The ten live Doppler tools (milestone 3's config-inheritance
+//! The eleven live Doppler tools (milestone 3's config-inheritance
 //! additions: `doppler.config.inheritable.ensure` and
 //! `doppler.config.inherits.ensure`, alongside the original five, plus
 //! the sink `doppler.secret.set`; milestone 3e's task B1 added
-//! `doppler.branch_config.ensure`). Their [`willikins_core::ToolSpec`]s
+//! `doppler.branch_config.ensure`; task R3 added the gate
+//! `doppler.config.inheritable.gate`). Their [`willikins_core::ToolSpec`]s
 //! must equal, field for field, `willikins_providers_fake`'s tools of the
 //! same names — pinned in `tests/catalog_parity.rs` by comparing each
 //! spec's JSON form (`ToolSpec` derives `Serialize` but not `PartialEq`)
@@ -11,6 +12,7 @@
 mod branch_config_ensure;
 mod config_ensure;
 mod config_inheritable_ensure;
+mod config_inheritable_gate;
 mod config_inherits_ensure;
 mod project_ensure;
 mod secret_get;
@@ -22,6 +24,7 @@ mod value_get;
 pub use branch_config_ensure::DopplerBranchConfigEnsure;
 pub use config_ensure::DopplerConfigEnsure;
 pub use config_inheritable_ensure::DopplerConfigInheritableEnsure;
+pub use config_inheritable_gate::DopplerConfigInheritableGate;
 pub use config_inherits_ensure::DopplerConfigInheritsEnsure;
 pub use project_ensure::DopplerProjectEnsure;
 pub use secret_get::DopplerSecretGet;

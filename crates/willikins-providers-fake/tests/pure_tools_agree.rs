@@ -10,7 +10,8 @@
 //! `willikins-tools`, `doppler.secret.get`,
 //! `doppler.value.get`, `fake.secret_list`, (milestone 3a)
 //! `buildkite.cluster.get`, (milestone 3c) `appstore.certificate.get`,
-//! (milestone 3e task 2) `github.repo.get`, and (G3) `operator.acknowledge`
+//! (milestone 3e task 2) `github.repo.get`, (G3) `operator.acknowledge`,
+//! and (task R3) `doppler.config.inheritable.gate`
 //! from this crate — are checked here in one
 //! place, through the catalog, so a new pure tool registered later is a
 //! one-line addition rather than a test nobody writes.
@@ -111,6 +112,8 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
                 &value_name(),
                 Text::parse("57246542-96fe-1a63-e053-0824d011072a").expect("a valid text value"),
             )
+            .with_doppler_config(&config())
+            .with_doppler_config_inheritable(&config())
             .with_buildkite_cluster(&cluster_name(), "018e5a22-d14c-7085-bb28-db0f83f43a1c")
             .with_apple_certificate(
                 &certificate_type(),
@@ -255,6 +258,9 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
 
     let app_group_gate_inputs = app_get_inputs.clone();
 
+    let mut config_inheritable_gate_inputs = Inputs::new();
+    config_inheritable_gate_inputs.insert(port("config"), Value::known(config()));
+
     let cases = [
         ("naming.v1", naming_inputs),
         ("template.render", template_inputs),
@@ -272,6 +278,10 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         ("operator.acknowledge", acknowledge_inputs),
         ("appstore.app.get", app_get_inputs),
         ("appstore.app_group.gate", app_group_gate_inputs),
+        (
+            "doppler.config.inheritable.gate",
+            config_inheritable_gate_inputs,
+        ),
     ];
 
     let mut checked = 0;

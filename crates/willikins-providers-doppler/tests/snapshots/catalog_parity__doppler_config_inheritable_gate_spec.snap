@@ -1,0 +1,23 @@
+---
+source: crates/willikins-providers-doppler/tests/catalog_parity.rs
+expression: "spec_json(DopplerConfigInheritableGate::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "A gate: whether a Doppler config exists and is inheritable.",
+  "inputs": {
+    "config": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "DopplerConfig"
+      }
+    }
+  },
+  "key": [],
+  "name": "doppler.config.inheritable.gate",
+  "outputs": {
+    "config": "DopplerConfig"
+  },
+  "pure": true
+}

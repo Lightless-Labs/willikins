@@ -1,6 +1,6 @@
 //! Acceptance test 1's share for this crate: the live `doppler.project.ensure`,
 //! `doppler.config.ensure`, `doppler.branch_config.ensure`,
-//! `doppler.config.inheritable.ensure`,
+//! `doppler.config.inheritable.ensure`, `doppler.config.inheritable.gate`,
 //! `doppler.config.inherits.ensure`, `doppler.service_token.ensure`,
 //! `doppler.service_token.rotate`, `doppler.secret.get`,
 //! `doppler.secret.set`, and `doppler.value.get` `ToolSpec`s equal
@@ -8,15 +8,16 @@
 //! `ToolSpec` derives `Serialize` but not `PartialEq` (its `class` and
 //! `pure` fields aside, comparing it structurally means comparing its
 //! `Serialize` form), so equality here is JSON equality; an insta
-//! snapshot of all ten specs pins the exact shape besides.
+//! snapshot of all eleven specs pins the exact shape besides.
 
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{Tool, ToolSpec};
 use willikins_providers_doppler::{
     DopplerBranchConfigEnsure, DopplerClient, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
-    DopplerConfigInheritsEnsure, DopplerProjectEnsure, DopplerSecretGet, DopplerSecretSet,
-    DopplerServiceTokenEnsure, DopplerServiceTokenRotate, DopplerValueGet,
+    DopplerConfigInheritableGate, DopplerConfigInheritsEnsure, DopplerProjectEnsure,
+    DopplerSecretGet, DopplerSecretSet, DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
+    DopplerValueGet,
 };
 use willikins_providers_http::{Credential, Http};
 
@@ -59,6 +60,13 @@ fn doppler_branch_config_ensure_spec_equals_the_fake_tools() {
 fn doppler_config_inheritable_ensure_spec_equals_the_fake_tools() {
     let live = DopplerConfigInheritableEnsure::new(test_client());
     let fake = willikins_providers_fake::tools::DopplerConfigInheritableEnsure::new(fake_state());
+    assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
+}
+
+#[test]
+fn doppler_config_inheritable_gate_spec_equals_the_fake_tools() {
+    let live = DopplerConfigInheritableGate::new(test_client());
+    let fake = willikins_providers_fake::tools::DopplerConfigInheritableGate::new(fake_state());
     assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
 }
 
@@ -111,6 +119,7 @@ fn every_spec_validates_against_the_type_registry() {
         DopplerConfigEnsure::new(test_client()).spec(),
         DopplerBranchConfigEnsure::new(test_client()).spec(),
         DopplerConfigInheritableEnsure::new(test_client()).spec(),
+        DopplerConfigInheritableGate::new(test_client()).spec(),
         DopplerConfigInheritsEnsure::new(test_client()).spec(),
         DopplerServiceTokenEnsure::new(test_client()).spec(),
         DopplerServiceTokenRotate::new(test_client()).spec(),
@@ -140,6 +149,10 @@ fn snapshot_all_live_tool_specs() {
     insta::assert_json_snapshot!(
         "doppler_config_inheritable_ensure_spec",
         spec_json(DopplerConfigInheritableEnsure::new(test_client()).spec())
+    );
+    insta::assert_json_snapshot!(
+        "doppler_config_inheritable_gate_spec",
+        spec_json(DopplerConfigInheritableGate::new(test_client()).spec())
     );
     insta::assert_json_snapshot!(
         "doppler_config_inherits_ensure_spec",

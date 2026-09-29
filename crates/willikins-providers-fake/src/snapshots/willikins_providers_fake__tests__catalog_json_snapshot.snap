@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
-assertion_line: 198
+assertion_line: 201
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -350,6 +350,25 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "name": "doppler.config.inheritable.ensure",
     "outputs": {},
     "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "A gate: whether a Doppler config exists and is inheritable.",
+    "inputs": {
+      "config": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerConfig"
+        }
+      }
+    },
+    "key": [],
+    "name": "doppler.config.inheritable.gate",
+    "outputs": {
+      "config": "DopplerConfig"
+    },
+    "pure": true
   },
   {
     "class": "reversible",
