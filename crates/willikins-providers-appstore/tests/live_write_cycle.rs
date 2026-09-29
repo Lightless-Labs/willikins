@@ -496,6 +496,68 @@ struct RawPostResult {
     content_present: bool,
 }
 
+/// One raw `POST /v1/bundleIdCapabilities` enabling `capability` (no
+/// `settings`: only a capability that takes none is ever enabled here) on
+/// the throwaway bundle id this run created -- the same body
+/// `AppstoreClient::create_bundle_id_capability` sends for a capability
+/// without a setting. Raw, like [`raw_post_profile`], for one reason: a
+/// refusal must say why. `willikins-providers-http` drops Apple's error
+/// body by design, so the tool's own `ensure` can only ever STOP with
+/// `Provider: provider returned status N`; this helper also reports every
+/// `errors[].code` and `errors[].title`, never `errors[].detail`
+/// ([`apple_error_report::apple_error_summary`]). Added 2026-09-29 after
+/// `appstore_live_profile_replace_cycle` stopped here with nothing but
+/// `Provider: <withheld>`.
+///
+/// The path is a fixed literal, never a parameter, for the same reason as
+/// [`raw_post_profile`]'s. Returns `Ok(status)` on a `2xx` and
+/// `Err(summary)` otherwise; never panics on a non-`2xx`, so the caller's
+/// guard still cleans up.
+///
+/// # Panics
+///
+/// Panics on a transport-level failure (no response at all): whether the
+/// capability was enabled is then unknown.
+fn raw_post_capability(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+    bundle_id: &willikins_types::AppleBundleIdId,
+    capability: &AppleCapabilityType,
+) -> Result<u16, String> {
+    let jwt = raw_jwt(issuer_id, key_id, key);
+    let config = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+    let url = format!(
+        "{}/v1/bundleIdCapabilities",
+        willikins_providers_appstore::APPSTORE_API_BASE_URL
+    );
+    let body = serde_json::json!({
+        "data": {
+            "type": "bundleIdCapabilities",
+            "attributes": {"capabilityType": capability.to_string()},
+            "relationships": {
+                "bundleId": {"data": {"type": "bundleIds", "id": bundle_id.to_string()}},
+            },
+        },
+    });
+    let mut response = agent
+        .post(&url)
+        .header("Authorization", format!("Bearer {jwt}"))
+        .send_json(&body)
+        .unwrap_or_else(|_| {
+            panic!("STOP: POST /v1/bundleIdCapabilities failed at the transport level")
+        });
+    let status = response.status().as_u16();
+    if (200..300).contains(&status) {
+        return Ok(status);
+    }
+    let body_text = response.body_mut().read_to_string().unwrap_or_default();
+    Err(apple_error_report::apple_error_summary(status, &body_text))
+}
+
 /// Deletes every recorded profile id first, then the recorded bundle id
 /// -- decision (h) step 7's cleanup order ("Provisioning profiles that
 /// contain a deleted App ID become invalid"). Runs on every drop
@@ -1296,4 +1358,411 @@ fn appstore_live_profile_replace_cycle() {
     );
 
     println!("profile replace cycle complete: identifier and 1 live profile deleted");
+}
+
+/// The one usable `DISTRIBUTION` certificate's id, selected through
+/// `appstore.certificate.get` exactly as this file's two cycles select it
+/// (a `GET`, never anything else), and never printed beyond its length.
+fn select_distribution_certificate(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+) -> AppleCertificateId {
+    let serial_number = usable_distribution_certificate_serial(issuer_id, key_id, key);
+    let certificate_tool =
+        AppstoreCertificateGet::new(willikins_providers_appstore::APPSTORE_API_BASE_URL);
+    let mut inputs = willikins_core::Inputs::new();
+    inputs.insert(
+        PortName::parse("issuer_id").unwrap(),
+        Value::known(issuer_id.clone()),
+    );
+    inputs.insert(
+        PortName::parse("key_id").unwrap(),
+        Value::known(key_id.clone()),
+    );
+    inputs.insert(PortName::parse("key").unwrap(), Value::known(key.clone()));
+    inputs.insert(
+        PortName::parse("certificate_type").unwrap(),
+        Value::known(AppleCertificateType::parse("DISTRIBUTION").unwrap()),
+    );
+    inputs.insert(
+        PortName::parse("serial_number").unwrap(),
+        Value::known(serial_number),
+    );
+    let Observation::Present(outputs) =
+        tool_ok(certificate_tool.read(&inputs), "certificate selection")
+    else {
+        panic!("STOP: the selected certificate did not read Present -- investigate by hand");
+    };
+    outputs
+        .get(&PortName::parse("certificate").unwrap())
+        .expect("certificate output present")
+        .downcast::<AppleCertificateId>()
+        .expect("certificate output is an AppleCertificateId")
+        .clone()
+}
+
+/// `profileState` of a profile this run created, or the status a failed
+/// read answered -- nothing else of the profile is read.
+fn throwaway_profile_state(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+    profile_id: &willikins_types::AppleProfileId,
+) -> String {
+    let http = willikins_providers_http::Http::new(
+        willikins_providers_appstore::APPSTORE_API_BASE_URL,
+        Vec::new(),
+        bearer_for(issuer_id, key_id, key),
+    );
+    match http.get::<serde_json::Value>(&format!(
+        "/v1/profiles/{profile_id}?fields[profiles]=profileState"
+    )) {
+        Ok(instance) => instance
+            .pointer("/data/attributes/profileState")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("<missing>")
+            .to_string(),
+        Err(err) => format!("<read failed, status {:?}>", err.status),
+    }
+}
+
+/// The throwaway bundle id's capability rows, one page of up to 200: each
+/// row's `capabilityType` (an Apple enum, on an identifier this run made)
+/// and the shape of its `settings` -- never a value inside them.
+fn throwaway_capability_rows(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+    bundle_id: &willikins_types::AppleBundleIdId,
+) -> String {
+    let http = willikins_providers_http::Http::new(
+        willikins_providers_appstore::APPSTORE_API_BASE_URL,
+        Vec::new(),
+        bearer_for(issuer_id, key_id, key),
+    );
+    let page = match http.get::<serde_json::Value>(&format!(
+        "/v1/bundleIds/{bundle_id}/bundleIdCapabilities?limit=200"
+    )) {
+        Ok(page) => page,
+        Err(err) => return format!("<list failed, status {:?}>", err.status),
+    };
+    let mut rows: Vec<String> = page
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    let capability = row
+                        .pointer("/attributes/capabilityType")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<no capabilityType>");
+                    let settings = match row.pointer("/attributes/settings") {
+                        None => "settings absent".to_string(),
+                        Some(serde_json::Value::Null) => "settings null".to_string(),
+                        Some(serde_json::Value::Array(entries)) => {
+                            format!("settings[{}]", entries.len())
+                        }
+                        Some(_) => "settings of another type".to_string(),
+                    };
+                    format!("{capability} ({settings})")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    rows.sort();
+    let next = page.pointer("/links/next").is_some();
+    format!(
+        "{} row(s), links.next {next}: [{}]",
+        rows.len(),
+        rows.join(", ")
+    )
+}
+
+/// A capability read's outcome, by variant, or its error kind and only a
+/// message willikins wrote itself ([`apple_error_report::stop_message`]).
+fn capability_read_outcome(result: &Result<Observation, willikins_core::ToolError>) -> String {
+    match result {
+        Ok(Observation::Absent { .. }) => "Absent".to_string(),
+        Ok(Observation::Present(_)) => "Present".to_string(),
+        Ok(Observation::Mismatch { .. }) => "Mismatch".to_string(),
+        Ok(Observation::Foreign) => "Foreign".to_string(),
+        Err(err) => format!(
+            "{:?}: {}",
+            err.kind,
+            apple_error_report::stop_message(&err.message)
+        ),
+    }
+}
+
+/// The 2026-09-29 diagnosis of `appstore_live_profile_replace_cycle`'s
+/// STOP at its capability enable: can `HEALTHKIT` be enabled on a fresh
+/// **IOS** identifier (probe 1), and on one that already has a profile
+/// (probe 2, `WILLIKINS_LIVE_PROBE_WITH_PROFILE=1`)? Walter's identifiers
+/// are `IOS`; the capability cycle only ever proved `UNIVERSAL`.
+///
+/// It separates the read side from the write side, since the tool's
+/// `ensure` lists capabilities before it posts and either failure STOPs as
+/// the same `Provider` kind: the raw capability rows first, then the
+/// tool's `read`, then one raw `POST` ([`raw_post_capability`], which
+/// reports status, `errors[].code` and `errors[].title`), then, on a
+/// `2xx`, the rows, the tool's `read` and (probe 2) the profile's
+/// `profileState` again.
+///
+/// Boundary: one throwaway identifier, at most one throwaway profile (probe
+/// 2), `HEALTHKIT` only and only on that identifier, a certificate `GET`
+/// only; profile then identifier deleted by their create ids; counts before
+/// and after; independent `404`s. The run fails after cleanup if Apple
+/// refused the `POST`, naming the summary.
+#[test]
+#[ignore = "creates and deletes one throwaway identifier (and, with \
+            WILLIKINS_LIVE_PROBE_WITH_PROFILE=1, one throwaway profile) on the operator's LIVE \
+            App Store Connect account and enables HEALTHKIT on that identifier only; run with \
+            WILLIKINS_LIVE_TESTS=1 and the sandbox credential sourced in the same command. Never \
+            touches a certificate beyond a GET, and never an existing identifier, app, or \
+            profile."]
+#[allow(clippy::disallowed_methods)] // a live-cycle test mints its own token, as every other does
+#[allow(clippy::too_many_lines)] // one linear probe, kept in one place like its siblings
+fn appstore_live_ios_capability_probe() {
+    if std::env::var("WILLIKINS_LIVE_TESTS").as_deref() != Ok("1") {
+        println!("skip: WILLIKINS_LIVE_TESTS is not 1");
+        return;
+    }
+    let with_profile = std::env::var("WILLIKINS_LIVE_PROBE_WITH_PROFILE").as_deref() == Ok("1");
+    let (issuer_id, key_id, key) = credential_parts();
+
+    let certificates_before = count_certificates(&issuer_id, &key_id, &key);
+    let profiles_before = count_profiles(&issuer_id, &key_id, &key);
+    let bundle_ids_before = count_bundle_ids(&issuer_id, &key_id, &key);
+    println!(
+        "IOS-CAPABILITY-PROBE (profile first: {with_profile}) counts BEFORE: \
+         certificates={certificates_before} profiles={profiles_before} \
+         bundle_ids={bundle_ids_before}"
+    );
+    let certificate =
+        with_profile.then(|| select_distribution_certificate(&issuer_id, &key_id, &key));
+
+    let unique = run_unique_suffix();
+    let identifier = throwaway_identifier(&unique);
+    let bundle_id_tool =
+        AppstoreBundleIdEnsure::new(willikins_providers_appstore::APPSTORE_API_BASE_URL);
+    let mut bundle_id_inputs = willikins_core::Inputs::new();
+    bundle_id_inputs.insert(
+        PortName::parse("issuer_id").unwrap(),
+        Value::known(issuer_id.clone()),
+    );
+    bundle_id_inputs.insert(
+        PortName::parse("key_id").unwrap(),
+        Value::known(key_id.clone()),
+    );
+    bundle_id_inputs.insert(PortName::parse("key").unwrap(), Value::known(key.clone()));
+    bundle_id_inputs.insert(
+        PortName::parse("identifier").unwrap(),
+        Value::known(identifier.clone()),
+    );
+    bundle_id_inputs.insert(
+        PortName::parse("name").unwrap(),
+        Value::known(probe_bundle_name()),
+    );
+    bundle_id_inputs.insert(
+        PortName::parse("platform").unwrap(),
+        Value::known(probe_platform()),
+    );
+    match tool_ok(bundle_id_tool.read(&bundle_id_inputs), "identifier read") {
+        Observation::Absent { .. } => {}
+        other => panic!(
+            "the freshly generated throwaway identifier is not Absent ({other:?}) -- STOP: \
+             this is unexpected and must be investigated by hand, not improvised around"
+        ),
+    }
+    let sink = SinkToken::new();
+    let created_bundle_id = tool_ok(
+        bundle_id_tool.ensure(&bundle_id_inputs, &sink),
+        "identifier create",
+    );
+    let bundle_id = created_bundle_id
+        .outputs
+        .get(&PortName::parse("id").unwrap())
+        .expect("the id output is present")
+        .downcast::<willikins_types::AppleBundleIdId>()
+        .expect("the id output is an AppleBundleIdId")
+        .clone();
+    let mut guard = Guard {
+        credential: (issuer_id.clone(), key_id.clone(), key.clone()),
+        profile_ids: Vec::new(),
+        bundle_id: Some(bundle_id.clone()),
+        armed: true,
+    };
+    assert!(
+        created_bundle_id.changed,
+        "the first ensure must create the identifier"
+    );
+    println!("identifier created, platform IOS");
+
+    if let Some(certificate) = certificate {
+        let profile_tool =
+            AppstoreProfileEnsure::new(willikins_providers_appstore::APPSTORE_API_BASE_URL);
+        let mut profile_inputs = willikins_core::Inputs::new();
+        profile_inputs.insert(
+            PortName::parse("issuer_id").unwrap(),
+            Value::known(issuer_id.clone()),
+        );
+        profile_inputs.insert(
+            PortName::parse("key_id").unwrap(),
+            Value::known(key_id.clone()),
+        );
+        profile_inputs.insert(PortName::parse("key").unwrap(), Value::known(key.clone()));
+        profile_inputs.insert(
+            PortName::parse("identifier").unwrap(),
+            Value::known(identifier.clone()),
+        );
+        profile_inputs.insert(
+            PortName::parse("name").unwrap(),
+            Value::known(throwaway_profile_name(&unique)),
+        );
+        profile_inputs.insert(
+            PortName::parse("profile_type").unwrap(),
+            Value::known(AppleProfileType::parse("IOS_APP_STORE").unwrap()),
+        );
+        profile_inputs.insert(
+            PortName::parse("certificate").unwrap(),
+            Value::known(certificate),
+        );
+        let created_profile = tool_ok(
+            profile_tool.ensure(&profile_inputs, &sink),
+            "profile create",
+        );
+        let profile_id = created_profile
+            .outputs
+            .get(&PortName::parse("profile").unwrap())
+            .expect("the profile output is present")
+            .downcast::<willikins_types::AppleProfileId>()
+            .expect("the profile output is an AppleProfileId")
+            .clone();
+        guard.profile_ids.push(profile_id.clone());
+        assert!(
+            created_profile.changed,
+            "the first ensure must create the profile"
+        );
+        println!(
+            "profile created, profileState {}",
+            throwaway_profile_state(&issuer_id, &key_id, &key, &profile_id)
+        );
+    }
+
+    let capability = AppleCapabilityType::parse("HEALTHKIT").unwrap();
+    let capability_tool =
+        AppstoreBundleIdCapabilityEnsure::new(willikins_providers_appstore::APPSTORE_API_BASE_URL);
+    let mut capability_inputs = willikins_core::Inputs::new();
+    capability_inputs.insert(
+        PortName::parse("issuer_id").unwrap(),
+        Value::known(issuer_id.clone()),
+    );
+    capability_inputs.insert(
+        PortName::parse("key_id").unwrap(),
+        Value::known(key_id.clone()),
+    );
+    capability_inputs.insert(PortName::parse("key").unwrap(), Value::known(key.clone()));
+    capability_inputs.insert(
+        PortName::parse("identifier").unwrap(),
+        Value::known(identifier.clone()),
+    );
+    capability_inputs.insert(
+        PortName::parse("capability").unwrap(),
+        Value::known(capability.clone()),
+    );
+
+    println!(
+        "capability rows before: {}",
+        throwaway_capability_rows(&issuer_id, &key_id, &key, &bundle_id)
+    );
+    println!(
+        "tool read before POST: {}",
+        capability_read_outcome(&capability_tool.read(&capability_inputs))
+    );
+    let post = raw_post_capability(&issuer_id, &key_id, &key, &bundle_id, &capability);
+    match &post {
+        Ok(status) => println!("POST HEALTHKIT: accepted, status {status}"),
+        Err(summary) => println!("POST HEALTHKIT: refused, {summary}"),
+    }
+    if post.is_ok() {
+        println!(
+            "capability rows after: {}",
+            throwaway_capability_rows(&issuer_id, &key_id, &key, &bundle_id)
+        );
+        println!(
+            "tool read after POST: {}",
+            capability_read_outcome(&capability_tool.read(&capability_inputs))
+        );
+        for profile_id in &guard.profile_ids {
+            println!(
+                "profile after POST: profileState {}",
+                throwaway_profile_state(&issuer_id, &key_id, &key, profile_id)
+            );
+        }
+    }
+
+    let client = fresh_client(&issuer_id, &key_id, &key);
+    for profile_id in guard.profile_ids.clone() {
+        client.delete_profile(&profile_id).unwrap_or_else(|err| {
+            panic!(
+                "STOP: deleting the throwaway profile failed, status {:?}",
+                err.status
+            )
+        });
+    }
+    client.delete_bundle_id(&bundle_id).unwrap_or_else(|err| {
+        panic!(
+            "STOP: deleting the throwaway identifier failed, status {:?}",
+            err.status
+        )
+    });
+    guard.disarm();
+    println!(
+        "cleanup: {} profile(s) then the identifier deleted by recorded id",
+        guard.profile_ids.len()
+    );
+
+    let certificates_after = count_certificates(&issuer_id, &key_id, &key);
+    let profiles_after = count_profiles(&issuer_id, &key_id, &key);
+    let bundle_ids_after = count_bundle_ids(&issuer_id, &key_id, &key);
+    println!(
+        "IOS-CAPABILITY-PROBE counts AFTER: certificates={certificates_after} \
+         profiles={profiles_after} bundle_ids={bundle_ids_after}"
+    );
+    assert_eq!(certificates_before, certificates_after);
+    assert_eq!(profiles_before, profiles_after);
+    assert_eq!(bundle_ids_before, bundle_ids_after);
+
+    let independent_http = willikins_providers_http::Http::new(
+        willikins_providers_appstore::APPSTORE_API_BASE_URL,
+        Vec::new(),
+        bearer_for(&issuer_id, &key_id, &key),
+    );
+    let status_of = |path: &str| -> Option<u16> {
+        match independent_http.get::<serde_json::Value>(path) {
+            Ok(_) => Some(200),
+            Err(err) => err.status,
+        }
+    };
+    assert_eq!(
+        status_of(&format!("/v1/bundleIds/{bundle_id}")),
+        Some(404),
+        "the deleted identifier must answer 404"
+    );
+    for profile_id in &guard.profile_ids {
+        assert_eq!(
+            status_of(&format!("/v1/profiles/{profile_id}")),
+            Some(404),
+            "a deleted profile must answer 404"
+        );
+    }
+    println!("independent read: the identifier and every profile id answer 404");
+
+    if let Err(summary) = post {
+        panic!(
+            "STOP: Apple refused HEALTHKIT on a fresh IOS identifier (profile first: \
+             {with_profile}): {summary} -- cleaned up, counts equal"
+        );
+    }
 }
