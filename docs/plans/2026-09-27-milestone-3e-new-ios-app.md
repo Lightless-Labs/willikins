@@ -377,7 +377,7 @@ observed gates above.
 
 **One real gap, one re-diagnosed as a verify item, both recorded rather than
 papered over:**
-1. **No tool can create a *named branch* Doppler config.** Operator decision 2
+1. ~~**No tool can create a *named branch* Doppler config.** Operator decision 2
    asks for one config, `prd_deployment_ios`, inheriting the three base
    configs; `doppler.config.ensure` only ever derives a config named after its
    *environment* (`naming::v1::doppler_root_config`), and `EnvironmentSlug`'s
@@ -385,7 +385,10 @@ papered over:**
    19 characters). The document instead makes every root config (`dev`/`stg`/`prd`)
    inherit the three base configs — strictly broader than asked (`dev`/`stg`
    gain the deployment credentials too). A new tool (or an optional `name` port
-   on `doppler.config.ensure`) is the real fix; out of this task's scope.
+   on `doppler.config.ensure`) is the real fix; out of this task's scope.~~
+   **Closed 2026-09-29, task B1** — `doppler.branch_config.ensure` now exists
+   and the document creates the operator's real, single `prd_deployment_ios`
+   config; see the B1 addendum below.
 2. **Not a type gap after all, on reflection — a verify item.** The first cut
    of this addendum read decision 2's hyphenated `github` project config names
    (`lightless-labs`, `bande-a-bonnot`) as things `willikins_types::DopplerConfigName`'s
@@ -596,9 +599,18 @@ inheritance — closing gap 1 from the T3c addendum exactly as decision 2
 asked, and narrowing what `dev`/`stg` can see (they no longer inherit the
 deployment credentials the old root-config approximation leaked to them).
 The document's own header comment and `base_configs`' description are
-corrected in place (dated, not silently rewritten); the `bande-a-bonnot-shared/ios_base`
-placeholder this plan's own SHARED VALUES table names above is now retired
-per decision 2, superseding that row.
+corrected in place (dated, not silently rewritten). **Correction to this
+addendum's own first version:** it said the SHARED VALUES table's "Sandbox
+Doppler base config (dry run)" row (`bande-a-bonnot-shared/ios_base`) was
+superseded by this task. On inspection that row is unaffected — it is the
+*dry-run harness's own sandbox stand-in* (the sandbox workplace holds none of
+decision 2's three real base configs, so the not-yet-run dry run still needs
+to create `bande-a-bonnot-shared/ios_base` and pass it as its own
+`base_configs` override, exactly as "The dry run" section already states).
+Only the *document's own default* for `base_configs` stopped naming
+`bande-a-bonnot-shared/ios_base` — done by T3c, not by B1 — and that row was
+already marked superseded there. Nothing in the SHARED VALUES table needed a
+change.
 
 **Characterization snapshot: one existing entry changed, not only new ones
 added — flagged, not swept under.** The monorepo instructions this task ran
@@ -627,12 +639,29 @@ cargo test -p willikins-providers-doppler -p willikins-providers-fake -j 2
 --no-fail-fast` (green throughout, every new test passing, both new insta
 snapshots additive-only, verified by diff); `RUST_TEST_THREADS=2 cargo test
 -p willikins-server -j 2 --no-fail-fast` (catalog tests, MCP tool-list
-snapshot, additive-only); `cargo test -p willikins-cli -j 2 --no-fail-fast`
+snapshot, additive-only **apart from two pre-existing, unrelated failures**,
+below); `cargo test -p willikins-cli -j 2 --no-fail-fast`
 (`walter_document.rs`'s three-run graph test unchanged and still green — the
 tool swap is transparent to its assertions, which never name `configs`/
 `inherit`/`prd_config` individually); `cargo check -p willikins-types -j 2`;
 `cargo test -p willikins-dsl --test acceptance -j 2` (the one flagged,
 verified additive change above). Plan not marked Completed.
+
+**Found, not fixed — for the coordinator, since the full workspace gate will
+hit these regardless of this task.** `cargo test -p willikins-server`
+(unrelated to this task's own diff, but a scoped gate this task's own touch
+of `catalog.rs` required) surfaces two pre-existing failures, both hardcoded
+workflow-directory listings never updated when T3c added
+`workflows/walter-ios-app.yaml` (T3c's own gates never ran `cargo test -p
+willikins-server` at all):
+`crates/willikins-server/tests/acceptance_13_trusted_directory.rs::starting_against_the_real_workflows_directory_succeeds_and_journals_server_started`
+(a hardcoded `names` array missing `"walter-ios-app"`) and
+`crates/willikins-server/tests/image_contents.rs::the_image_workflows_directory_holds_exactly_the_thirteen_positive_documents`
+(a hardcoded set and its "thirteen" claim, now fourteen). Both are one-line
+fixes (add the missing entry, correct the count) with no design content;
+neither touches Doppler or anything this task changed. Filed for the
+coordinator to dispatch, matching this plan's own precedent for the
+`resolve_recorded_inputs` defect T3c's follow-up found.
 
 ## Goal
 
@@ -1518,8 +1547,14 @@ Buildkite token exists.
     *project* (`404`, or a `400` naming "no access"); a missing *config* under an existing project is a
     different case no primary source read for this task settles. `doppler.branch_config.ensure`'s mock
     suite pins only the `404` shape as `Absent`; a `400` naming anything else still fails the plan
-    (`read_still_propagates_a_400_with_an_unrelated_message`). Verify before a real apply creates
-    `prd_config` for the first time against the operator's own workplace.
+    (`read_still_propagates_a_400_with_an_unrelated_message`). **Not only that tool's own node**: on the
+    very first run against a real workplace, `walter-ios-app.yaml`'s `inherit` node
+    (`doppler.config.inherits.ensure`, which reads the same `GET /v3/configs/config` for
+    `walter/prd_deployment_ios` and uses the identical `looks_like_a_missing_project` predicate) reads
+    this exact config *before* `prd_config`'s own `ensure` has created it — so if the real answer turns
+    out to be an unverified `400`, the plan fails at `inherit`, not at `prd_config`, and the coordinator
+    should look there first. Verify before a real apply creates `prd_config` for the first time against
+    the operator's own workplace.
 
 ## Gates
 
