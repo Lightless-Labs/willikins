@@ -206,6 +206,49 @@ fn agrees_on_foreign() {
     assert!(matches!(live, Observation::Foreign));
 }
 
+/// Both sides report `Foreign` for a marker whose first line merely
+/// starts with the header (adversarial pass, render and write).
+#[test]
+fn agrees_on_a_marker_whose_first_line_only_starts_with_the_header() {
+    let impostor = "managed-by: willikins-impostor\n";
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider);
+    provider
+        .mock("GET", "/repos/acme/widget/git/trees/root-tree")
+        .match_query(mockito::Matcher::Missing)
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"sha": "root-tree", "tree": [
+                tree_entry(".willikins-scaffold", "100644", "blob", "marker-sha"),
+            ]})
+            .to_string(),
+        )
+        .create();
+    provider
+        .mock("GET", "/repos/acme/widget/git/blobs/marker-sha")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"content": STANDARD.encode(impostor), "encoding": "base64"})
+                .to_string(),
+        )
+        .create();
+
+    let live = live_against(provider.url())
+        .read(&inputs(seed_files()))
+        .expect("live tool reads");
+    let state = FakeState::new().with_scaffold_files(
+        &repo(),
+        &branch(),
+        &[(".willikins-scaffold", impostor)],
+    );
+    let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
+        .read(&inputs(seed_files()))
+        .expect("fake tool reads");
+
+    assert!(matches!(live, Observation::Foreign), "{live:?}");
+    assert!(matches!(fake, Observation::Foreign), "{fake:?}");
+}
+
 /// Both sides refuse the same shape problems before touching any state
 /// or request at all.
 #[test]

@@ -178,6 +178,50 @@ fn read_reports_foreign_when_the_markers_first_line_is_wrong() {
     );
 }
 
+/// The first line must *equal* the header, not merely start with it.
+/// Adversarial pass (render and write): a `starts_with` mutation of the
+/// comparison survived every test while the only foreign first line was
+/// `not ours`.
+#[test]
+fn read_reports_foreign_when_the_markers_first_line_only_starts_with_the_header() {
+    for first_line in [
+        "managed-by: willikins-impostor\n",
+        "managed-by: willikins \n",
+        "managed-by: willikins\r\n",
+    ] {
+        let mut provider = MockProvider::start();
+        mock_ref_and_commit(&mut provider, "head-1", "root-tree");
+        mock_tree(
+            &mut provider,
+            "root-tree",
+            vec![tree_entry(
+                ".willikins-scaffold",
+                "100644",
+                "blob",
+                "marker-sha",
+            )],
+        );
+        provider
+            .mock("GET", "/repos/acme/widget/git/blobs/marker-sha")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "content": STANDARD.encode(first_line),
+                    "encoding": "base64",
+                })
+                .to_string(),
+            )
+            .create();
+
+        let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+        let observation = tool.read(&scaffold_inputs(seed_files())).unwrap();
+        assert!(
+            matches!(observation, Observation::Foreign),
+            "{first_line:?}: {observation:?}"
+        );
+    }
+}
+
 #[test]
 fn read_reports_foreign_when_the_marker_path_is_a_directory() {
     let mut provider = MockProvider::start();
