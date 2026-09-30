@@ -1805,3 +1805,242 @@ fn appstore_live_ios_capability_probe() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// Milestone 3e task T3f: Apple's real character rule for a bundle id's
+// `name` attribute, live. `docs/research/2026-09-16-app-store-connect.md`
+// (section 2) already establishes that Apple's own OpenAPI description
+// declares `name` as a bare `{"type": "string"}` with no `pattern` and no
+// `maxLength`, and its help pages state only "Enter a name or description
+// for the App ID in the Description field" -- no character rule at all.
+// The one live fact already on record (the 2026-09-30 finding, this
+// milestone's plan) is that a `name` identical to its own dotted,
+// reverse-domain identifier answers 409 `ENTITY_ERROR.ATTRIBUTE.INVALID`.
+// That leaves genuinely open whether the *dot character itself* is
+// refused, or only a name shaped exactly like an identifier -- and
+// whether a hyphen surrounded by spaces, an apostrophe, an ampersand, or
+// a digit-leading name are accepted at all. This probe answers both, in
+// six writes.
+// ---------------------------------------------------------------------
+
+/// One raw `POST /v1/bundleIds`, bypassing `willikins-providers-http`'s
+/// typed client so this probe can send names the current
+/// [`AppleBundleIdName`] grammar may accept today but Apple itself does
+/// not -- the whole point of probing before tightening that grammar.
+/// Mirrors [`raw_post_profile`] exactly: on success, `data.id` only (so
+/// the caller can delete it by id, never by a follow-up list-and-guess);
+/// on failure, the status and every `errors[].code`/`errors[].title`
+/// ([`apple_error_report::apple_error_summary`]), never `errors[].detail`.
+///
+/// # Panics
+///
+/// Panics on a transport-level failure, or on a `2xx` response whose body
+/// carries no `data.id` -- either would mean this harness cannot account
+/// for what it just created.
+fn raw_post_bundle_id(
+    issuer_id: &AppleIssuerId,
+    key_id: &AppleKeyId,
+    key: &AppleSigningKey,
+    identifier: &str,
+    name: &str,
+    platform: &str,
+) -> BundleIdProbeResult {
+    let jwt = raw_jwt(issuer_id, key_id, key);
+    let config = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+    let url = format!(
+        "{}/v1/bundleIds",
+        willikins_providers_appstore::APPSTORE_API_BASE_URL
+    );
+    let body = serde_json::json!({
+        "data": {
+            "type": "bundleIds",
+            "attributes": {
+                "identifier": identifier,
+                "name": name,
+                "platform": platform,
+            },
+        },
+    });
+    let mut response = agent
+        .post(&url)
+        .header("Authorization", format!("Bearer {jwt}"))
+        .send_json(&body)
+        .unwrap_or_else(|_| panic!("STOP: POST /v1/bundleIds failed at the transport level"));
+    let status = response.status().as_u16();
+    let body_text = response.body_mut().read_to_string().unwrap_or_default();
+    if (200..300).contains(&status) {
+        let parsed = serde_json::from_str::<serde_json::Value>(&body_text).ok();
+        let id = parsed
+            .as_ref()
+            .and_then(|value| value.pointer("/data/id"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| {
+                panic!(
+                    "STOP: a {status} response to POST /v1/bundleIds carried no data.id -- this \
+                     harness cannot account for what it just created, so it will not guess"
+                )
+            })
+            .to_string();
+        BundleIdProbeResult {
+            status,
+            created_id: Some(id),
+            error_summary: None,
+        }
+    } else {
+        BundleIdProbeResult {
+            status,
+            created_id: None,
+            error_summary: Some(apple_error_report::apple_error_summary(status, &body_text)),
+        }
+    }
+}
+
+/// [`raw_post_bundle_id`]'s result: the status always; `created_id` on a
+/// `2xx` only; `error_summary` (status, codes and titles, never detail)
+/// on a non-`2xx` only.
+struct BundleIdProbeResult {
+    status: u16,
+    created_id: Option<String>,
+    error_summary: Option<String>,
+}
+
+/// A candidate `name`, one per probe: either a fixed literal or, for the
+/// sixth case, the probe's own dotted identifier (computed per case, so
+/// the name is identical to the identifier byte for byte -- the exact
+/// shape the 2026-09-30 finding already saw refused).
+enum NameCase {
+    Literal(&'static str),
+    EqualsOwnIdentifier,
+}
+
+/// Deletes every id it still holds on drop, so a panic mid-probe still
+/// cleans up. Each probe removes its own id from `ids` immediately after
+/// a confirmed `204`, so in the ordinary path this never has anything
+/// left to do.
+struct BundleIdCleanupGuard {
+    credential: (AppleIssuerId, AppleKeyId, AppleSigningKey),
+    ids: Vec<willikins_types::AppleBundleIdId>,
+}
+
+impl Drop for BundleIdCleanupGuard {
+    fn drop(&mut self) {
+        if self.ids.is_empty() {
+            return;
+        }
+        let (issuer_id, key_id, key) = &self.credential;
+        let client = fresh_client(issuer_id, key_id, key);
+        for id in &self.ids {
+            match client.delete_bundle_id(id) {
+                Ok(()) => println!("GUARD deleted a leftover probe bundle id by its recorded id"),
+                Err(err) => println!(
+                    "GUARD could not delete a leftover probe bundle id, status {:?} -- report it",
+                    err.status
+                ),
+            }
+        }
+    }
+}
+
+/// Establishes Apple's real character rule for a bundle id's `name`
+/// attribute, live, on the operator's App Store Connect account -- six
+/// writes, each its own throwaway identifier
+/// (`com.willikins.probe.delete-me.<pid>-<unix-time>-<n>`) and its own
+/// candidate name, created and deleted by its own returned id before the
+/// next probe runs. Reports only each probe's HTTP status and, on
+/// refusal, `errors[].code`/`errors[].title` -- never a name or
+/// identifier this run did not itself pick, and never `errors[].detail`.
+/// The account's bundle id count is read before the first probe and
+/// after the last; they must be equal.
+#[test]
+#[ignore = "creates and deletes six throwaway bundle ids on the operator's LIVE App Store \
+            Connect account to probe Apple's real character rule for a bundle id's `name` \
+            attribute; run with WILLIKINS_LIVE_TESTS=1 and the sandbox credential sourced in \
+            the same command. Six writes, no more -- see \
+            docs/plans/2026-09-27-milestone-3e-new-ios-app.md, task T3f."]
+#[allow(clippy::disallowed_methods)] // a live-cycle test mints its own token, as every other does
+fn appstore_live_bundle_id_name_probe() {
+    if std::env::var("WILLIKINS_LIVE_TESTS").as_deref() != Ok("1") {
+        println!("skip: WILLIKINS_LIVE_TESTS is not 1");
+        return;
+    }
+
+    let (issuer_id, key_id, key) = credential_parts();
+
+    let bundle_ids_before = count_bundle_ids(&issuer_id, &key_id, &key);
+    println!("NAME-PROBE bundle_ids BEFORE: {bundle_ids_before}");
+
+    let mut guard = BundleIdCleanupGuard {
+        credential: (issuer_id.clone(), key_id.clone(), key.clone()),
+        ids: Vec::new(),
+    };
+
+    let unique = run_unique_suffix();
+    // Six distinct identifiers, six distinct candidate names -- never the
+    // same name twice, so a duplicate-name rule (unverified, and not what
+    // this probe is for) can never be confused with the character under
+    // test.
+    let cases: [(&str, NameCase); 6] = [
+        ("dot", NameCase::Literal("Probe.Dot.Name")),
+        ("hyphen-with-spaces", NameCase::Literal("Probe - Hyphen")),
+        ("apostrophe", NameCase::Literal("Probe's Apostrophe")),
+        ("ampersand", NameCase::Literal("Probe & Ampersand")),
+        ("digit-leading", NameCase::Literal("1Probe Digit")),
+        ("name-equals-dotted-identifier", NameCase::EqualsOwnIdentifier),
+    ];
+
+    for (n, (label, case)) in cases.iter().enumerate() {
+        let identifier_str = format!("com.willikins.probe.delete-me.{unique}-{n}");
+        let name = match case {
+            NameCase::Literal(literal) => (*literal).to_string(),
+            NameCase::EqualsOwnIdentifier => identifier_str.clone(),
+        };
+        let result = raw_post_bundle_id(
+            &issuer_id,
+            &key_id,
+            &key,
+            &identifier_str,
+            &name,
+            &probe_platform().to_string(),
+        );
+        match result.created_id {
+            Some(id) => {
+                println!("PROBE[{label}] status {}: created", result.status);
+                let parsed_id = willikins_types::AppleBundleIdId::parse(&id)
+                    .expect("a real bundle id id parses as AppleBundleIdId");
+                guard.ids.push(parsed_id.clone());
+                let client = fresh_client(&issuer_id, &key_id, &key);
+                client.delete_bundle_id(&parsed_id).unwrap_or_else(|err| {
+                    panic!(
+                        "STOP: deleting probe[{label}]'s throwaway bundle id failed, status \
+                         {:?} -- it may still exist, check by hand",
+                        err.status
+                    )
+                });
+                guard.ids.clear();
+                println!("PROBE[{label}] cleaned up");
+            }
+            None => {
+                println!(
+                    "PROBE[{label}] status {}: {}",
+                    result.status,
+                    result.error_summary.as_deref().unwrap_or("<no summary>")
+                );
+            }
+        }
+    }
+
+    let bundle_ids_after = count_bundle_ids(&issuer_id, &key_id, &key);
+    println!("NAME-PROBE bundle_ids AFTER: {bundle_ids_after}");
+    assert_eq!(
+        bundle_ids_before, bundle_ids_after,
+        "the account's bundle id count changed -- something this probe created was not cleaned \
+         up, or something else changed the account while it ran"
+    );
+    assert!(
+        guard.ids.is_empty(),
+        "a probe's bundle id was left uncleaned"
+    );
+}
