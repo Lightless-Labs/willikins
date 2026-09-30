@@ -22,6 +22,52 @@ pub struct Text(String);
 )]
 pub struct TemplateSource(String);
 
+/// A single substitution value for `repo.file.render`'s positional
+/// placeholders (`{{ 0 }}` .. `{{ 15 }}`): `[A-Za-z0-9_][A-Za-z0-9._/-]*`,
+/// at most 255 characters.
+///
+/// Milestone 3g decision (e), "no caller-controlled command in an executed
+/// file": every character that could break out of a shell command, a YAML
+/// scalar, or a quoted string in any of the four file syntaxes Sample's
+/// scaffold writes is refused by the grammar itself -- no whitespace,
+/// quote, `$`, backtick, `;`, `|`, `&`, `<`, `>`, `{`, `}`, `*`, `?`, `[`,
+/// or newline, and no leading `-` (the first character's class,
+/// `[A-Za-z0-9_]`, excludes it). A substituted value can therefore never
+/// end a quoted string, start a command or a flag, or inject another
+/// placeholder.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "[A-Za-z0-9_][A-Za-z0-9._/-]*",
+    max_len = 255,
+    description = "A substitution value for a rendered template placeholder. Refuses shell and quoting metacharacters.",
+    example = "com.example-org.sample"
+)]
+pub struct TemplateValue(String);
+
+/// Every bundle identifier is a valid template value, byte for byte:
+/// [`crate::AppleBundleIdentifier`]'s grammar,
+/// `[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*` up to 255 characters, is contained
+/// in [`TemplateValue`]'s, `[A-Za-z0-9_][A-Za-z0-9._/-]*` up to the same
+/// 255-character bound: its first character is alphanumeric (a subset of
+/// `[A-Za-z0-9_]`) and every later character is alphanumeric, `.`, or `-`
+/// (each a member of `[A-Za-z0-9._/-]`).
+///
+/// Milestone 3g task E2 registers this so Sample's three bundle
+/// identifiers can bind directly to `repo.file.render`'s `values` list.
+/// **Never** through [`Text`]: no `Text => TemplateValue` row is
+/// registered (pinned by
+/// `the_production_registry_has_no_text_to_template_value_conversion_row`
+/// in `registry.rs`), because `Text` accepts every character
+/// `TemplateValue` must refuse -- a document input converted to `Text`
+/// could otherwise reach a committed file through this one hop, which is
+/// exactly the hole decision (e)'s "no caller-controlled command" rule
+/// exists to close.
+impl From<crate::AppleBundleIdentifier> for TemplateValue {
+    fn from(identifier: crate::AppleBundleIdentifier) -> Self {
+        Self(identifier.as_str().to_owned())
+    }
+}
+
 /// Every bundle identifier is a valid piece of free-form text, byte for
 /// byte -- `Text::parse` refuses only a string over 65536 characters, and
 /// [`crate::AppleBundleIdentifier`]'s own bound is 255, so every
@@ -121,6 +167,57 @@ mod tests {
     fn examples_parse_as_their_own_types() {
         crate::assert_example_parses::<Text>();
         crate::assert_example_parses::<TemplateSource>();
+        crate::assert_example_parses::<TemplateValue>();
+    }
+
+    #[test]
+    fn template_value_accepts_the_example() {
+        assert_eq!(
+            TemplateValue::parse("com.example-org.sample")
+                .unwrap()
+                .as_str(),
+            "com.example-org.sample"
+        );
+    }
+
+    #[test]
+    fn template_value_rejects_empty() {
+        assert!(TemplateValue::parse("").is_err());
+    }
+
+    #[test]
+    fn template_value_rejects_leading_hyphen() {
+        assert!(TemplateValue::parse("-x").is_err());
+    }
+
+    #[test]
+    fn template_value_rejects_every_listed_metacharacter() {
+        for bad in [
+            " ", "\t", "\n", "\"", "'", "$", "`", ";", "|", "&", "<", ">", "{", "}", "*", "?", "[",
+        ] {
+            let candidate = format!("a{bad}b");
+            assert!(
+                TemplateValue::parse(&candidate).is_err(),
+                "{candidate:?} should have been refused"
+            );
+        }
+    }
+
+    #[test]
+    fn template_value_accepts_dots_underscores_and_slashes() {
+        assert!(TemplateValue::parse("apps/sample_v2.1").is_ok());
+    }
+
+    #[test]
+    fn template_value_rejects_over_the_length_limit() {
+        let too_long = "a".repeat(256);
+        assert!(TemplateValue::parse(&too_long).is_err());
+    }
+
+    #[test]
+    fn template_value_accepts_exactly_at_the_length_limit() {
+        let at_limit = "a".repeat(255);
+        assert!(TemplateValue::parse(&at_limit).is_ok());
     }
 
     #[test]
@@ -217,6 +314,90 @@ mod tests {
             let text = Text::parse("").expect("the empty string is valid text");
             assert_eq!(text.as_str(), "");
             assert!(AppleBundleIdentifier::parse("").is_err());
+        }
+    }
+
+    // -------------------------------------------------------------
+    // `AppleBundleIdentifier => TemplateValue` (milestone 3g, task E2):
+    // every bundle identifier is a valid template value, byte for byte,
+    // proved the same way as `bundle_identifier_to_text` above.
+    // -------------------------------------------------------------
+
+    mod bundle_identifier_to_template_value {
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::AppleBundleIdentifier;
+
+        proptest! {
+            /// Strategy 1: generate directly from the bundle-identifier
+            /// grammar, discarding any candidate over 255 characters.
+            #[test]
+            fn every_bundle_identifier_is_valid_template_value(
+                raw in "[A-Za-z0-9]{1,8}([.-][A-Za-z0-9]{1,8}){0,40}"
+            ) {
+                prop_assume!(raw.chars().count() <= 255);
+                let identifier = AppleBundleIdentifier::parse(&raw)
+                    .unwrap_or_else(|err| panic!("{raw:?} must be a valid AppleBundleIdentifier: {err}"));
+                let value = TemplateValue::parse(identifier.as_str())
+                    .unwrap_or_else(|err| panic!("{raw:?} must also be valid TemplateValue: {err}"));
+                let converted = TemplateValue::from(identifier.clone());
+                prop_assert_eq!(&converted, &value);
+                prop_assert_eq!(converted.as_str(), identifier.as_str());
+            }
+
+            /// Strategy 2: the implication stated directly over arbitrary
+            /// strings, with no grammar-shaped generator to bias coverage.
+            #[test]
+            fn every_string_a_bundle_identifier_accepts_template_value_also_accepts(s in ".*") {
+                if let Ok(identifier) = AppleBundleIdentifier::parse(&s) {
+                    let value = TemplateValue::parse(identifier.as_str())
+                        .unwrap_or_else(|err| panic!("{s:?} parsed as AppleBundleIdentifier but not TemplateValue: {err}"));
+                    prop_assert_eq!(value.as_str(), identifier.as_str());
+                }
+            }
+        }
+
+        proptest! {
+            /// Strategy 3: the identifier's own alphabet with no
+            /// grammar-shaped structure and lengths from 1 to 300, so
+            /// candidates straddle the 255 bound.
+            #[test]
+            fn over_the_identifier_alphabet_every_identifier_converts_byte_for_byte(
+                raw in "[A-Za-z0-9.-]{1,300}"
+            ) {
+                if let Ok(identifier) = AppleBundleIdentifier::parse(&raw) {
+                    prop_assert!(raw.chars().count() <= 255);
+                    let converted = TemplateValue::from(identifier);
+                    prop_assert_eq!(converted.as_str(), raw.as_str());
+                    prop_assert_eq!(
+                        TemplateValue::parse(&raw).expect("an identifier is valid template value"),
+                        converted
+                    );
+                }
+            }
+        }
+
+        /// A 255-character identifier -- the bound -- converts byte for
+        /// byte, exactly at `TemplateValue`'s own 255-character bound.
+        #[test]
+        fn a_255_character_identifier_converts() {
+            let raw = "a".repeat(255);
+            let identifier = AppleBundleIdentifier::parse(&raw)
+                .expect("255 characters is the limit, not over it");
+            let value = TemplateValue::from(identifier);
+            assert_eq!(value.as_str(), raw);
+        }
+
+        /// The reverse is not a fact: `_x` is valid `TemplateValue` (it
+        /// starts with `_`) and `a/b` is too (it contains `/`), neither of
+        /// which is a valid bundle identifier, so no reverse row exists.
+        #[test]
+        fn some_template_values_are_not_bundle_identifiers() {
+            assert!(TemplateValue::parse("_x").is_ok());
+            assert!(AppleBundleIdentifier::parse("_x").is_err());
+            assert!(TemplateValue::parse("a/b").is_ok());
+            assert!(AppleBundleIdentifier::parse("a/b").is_err());
         }
     }
 }

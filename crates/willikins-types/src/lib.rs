@@ -150,6 +150,7 @@ pub mod naming;
 pub mod operator;
 pub mod propose;
 pub mod registry;
+pub mod repo;
 pub mod reserved;
 pub mod secret;
 pub mod signoz;
@@ -179,11 +180,12 @@ pub use naming::NamingScheme;
 pub use operator::OperatorAcknowledgement;
 pub use propose::{ProposeError, propose_slug};
 pub use registry::{Conversion, TypeName, TypeRef, TypeRegistry};
+pub use repo::{CommitHeadline, GitBranchName, RepoFile, RepoPath};
 pub use reserved::is_reserved;
 pub use secret::OpaqueSecret;
 pub use signoz::{SigNozIngestionKeyName, SigNozIngestionKeyValue};
 pub use slug::{ComponentSlug, EnvironmentSlug, ProjectSlug};
-pub use text::{TemplateSource, Text};
+pub use text::{TemplateSource, TemplateValue, Text};
 pub use word::{Word, WordList};
 pub use workflow_name::WorkflowName;
 
@@ -198,6 +200,11 @@ registry::domain_types! {
     ProjectName,
     Text,
     TemplateSource,
+    TemplateValue,
+    RepoPath,
+    GitBranchName,
+    CommitHeadline,
+    RepoFile,
     GitHubOrg,
     RepoVisibility,
     GitHubRepo,
@@ -278,6 +285,17 @@ fn conversion_rows() -> Vec<registry::Conversion> {
         // byte: the containment proof is on the `From` impl in
         // `text.rs`, pinned by `every_bundle_identifier_is_valid_text`.
         AppleBundleIdentifier => Text,
+        // Milestone 3g task E2: every bundle identifier is also a valid
+        // template-substitution value, byte for byte: the containment
+        // proof is on the `From` impl in `text.rs`, pinned by
+        // `every_bundle_identifier_is_valid_template_value`. No row
+        // exists from `Text` to `TemplateValue` -- pinned by
+        // `the_production_registry_has_no_text_to_template_value_conversion_row`
+        // in `registry.rs` -- because `Text` accepts characters
+        // `TemplateValue` must refuse (decision (e)'s "no
+        // caller-controlled command" rule,
+        // `docs/plans/2026-09-30-milestone-3g-file-writing.md`).
+        AppleBundleIdentifier => TemplateValue,
     ]
 }
 
