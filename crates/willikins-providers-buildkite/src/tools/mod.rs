@@ -3,7 +3,9 @@
 //! Buildkite tool table.
 
 pub mod cluster_get;
+pub mod pipeline_bootstrap_gate;
 pub mod pipeline_ensure;
 
 pub use cluster_get::BuildkiteClusterGet;
+pub use pipeline_bootstrap_gate::BuildkitePipelineBootstrapGate;
 pub use pipeline_ensure::BuildkitePipelineEnsure;
