@@ -7,6 +7,19 @@
 //! whose grammars are alphanumeric-and-hyphen-or-underscore, so none of
 //! them can smuggle a `/` or a query string into the request line.
 //!
+//! # Reading a repository's files (milestone 3g, task G1, commit 1)
+//!
+//! `docs/plans/2026-09-30-milestone-3g-file-writing.md` decision (b): reads go through the
+//! REST git database, pinned to one commit ([`Self::get_branch_head`] →
+//! [`Self::get_commit_root_tree`] → [`Self::resolve_tree_paths`], which walks only the
+//! non-recursive trees a declared [`RepoPath`] actually needs, memoised per directory, and
+//! never downloads a file's content — content is compared by [`git_blob_sha`], computed
+//! locally). The only blob this client ever downloads is a scaffold's marker
+//! ([`Self::get_blob`]). The write (GraphQL's `createCommitOnBranch`) is this task's second
+//! commit. Neither `github.scaffold.ensure` (task G2) nor its business rules for what
+//! `Present`/`Foreign`/`Absent`/a conflict mean live here — this module exposes only the
+//! typed calls.
+//!
 //! # GitHub's secondary rate limit
 //!
 //! `willikins-providers-http`'s shared [`Http`] client never retries a
@@ -53,16 +66,22 @@
 //! every existing document bind it, which is precisely what this task's
 //! own boundary rules out.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
+use sha1::{Digest, Sha1};
 
 use willikins_core::{ToolError, ToolErrorKind};
 use willikins_providers_http::{
     Credential, Http, MAX_RETRY_AFTER, ProviderError, RealSleeper, Sleeper,
 };
-use willikins_types::{ActionsSecretName, GitHubRepo, GitHubToken, RepoVisibility};
+use willikins_types::{
+    ActionsSecretName, GitBranchName, GitHubRepo, GitHubToken, RepoPath, RepoVisibility,
+};
 
 /// GitHub's REST API base URL.
 pub const GITHUB_API_BASE_URL: &str = "https://api.github.com";
@@ -357,6 +376,176 @@ impl GitHubClient {
         };
         self.retry_secondary_limit(|| self.http.put_empty(&path, &body))
     }
+
+    /// `GET /repos/{owner}/{repo}/git/ref/heads/{branch}`, returning the
+    /// branch's current head commit sha. A `404` means the branch itself
+    /// does not exist -- this client never creates one (decision (b),
+    /// `docs/plans/2026-09-30-milestone-3g-file-writing.md`).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_repo`].
+    #[allow(dead_code)] // not yet called outside tests: wired in by github.scaffold.ensure, milestone 3g task G2
+    pub(crate) fn get_branch_head(
+        &self,
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+    ) -> Result<String, ProviderError> {
+        let path = format!("{}/git/ref/heads/{branch}", repo_path(repo));
+        self.retry_secondary_limit(|| self.http.get::<RefBody>(&path))
+            .map(|body| body.object.sha)
+    }
+
+    /// `GET /repos/{owner}/{repo}/git/commits/{commit_sha}`, returning the
+    /// root tree sha that commit points to.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_repo`].
+    #[allow(dead_code)] // see get_branch_head's own note above
+    pub(crate) fn get_commit_root_tree(
+        &self,
+        repo: &GitHubRepo,
+        commit_sha: &str,
+    ) -> Result<String, ProviderError> {
+        let path = format!("{}/git/commits/{commit_sha}", repo_path(repo));
+        self.retry_secondary_limit(|| self.http.get::<CommitBody>(&path))
+            .map(|body| body.tree.sha)
+    }
+
+    /// `GET /repos/{owner}/{repo}/git/trees/{tree_sha}`, **never**
+    /// `?recursive=1`: a caller only ever needs one directory level at a
+    /// time (see [`Self::resolve_tree_paths`]), and a recursive read of a
+    /// busy monorepo's root risks GitHub's own truncation.
+    #[allow(dead_code)] // see get_branch_head's own note above
+    fn get_tree_entries(
+        &self,
+        repo: &GitHubRepo,
+        tree_sha: &str,
+    ) -> Result<Vec<TreeEntryBody>, ProviderError> {
+        let path = format!("{}/git/trees/{tree_sha}", repo_path(repo));
+        self.retry_secondary_limit(|| self.http.get::<TreeBody>(&path))
+            .map(|body| body.tree)
+    }
+
+    /// Resolve every one of `paths` against the tree rooted at
+    /// `root_tree_sha` (itself [`Self::get_commit_root_tree`]'s own
+    /// output), walking only the directories those paths actually pass
+    /// through and fetching each such directory's tree **at most once**,
+    /// even when several paths share a prefix: a tree sha is
+    /// content-addressed, so caching by it (rather than by directory path)
+    /// is both simpler and correct even if the same directory were somehow
+    /// reachable two different ways. No blob's content is ever downloaded
+    /// here — see [`git_blob_sha`] for how a caller compares content
+    /// without one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] the first time a directory read fails;
+    /// paths later in `paths` are never attempted.
+    #[allow(dead_code)] // see get_branch_head's own note above
+    pub(crate) fn resolve_tree_paths(
+        &self,
+        repo: &GitHubRepo,
+        root_tree_sha: &str,
+        paths: &[RepoPath],
+    ) -> Result<HashMap<RepoPath, PathEntry>, ProviderError> {
+        let mut cache: HashMap<String, Vec<TreeEntryBody>> = HashMap::new();
+        let mut results = HashMap::with_capacity(paths.len());
+        for path in paths {
+            let entry = self.resolve_one_path(repo, root_tree_sha, path, &mut cache)?;
+            results.insert(path.clone(), entry);
+        }
+        Ok(results)
+    }
+
+    /// Walk one [`RepoPath`]'s segments from `root_tree_sha`, directory by
+    /// directory, through `cache` (shared across every path
+    /// [`Self::resolve_tree_paths`] resolves in the same call).
+    #[allow(dead_code)] // see get_branch_head's own note above
+    fn resolve_one_path(
+        &self,
+        repo: &GitHubRepo,
+        root_tree_sha: &str,
+        path: &RepoPath,
+        cache: &mut HashMap<String, Vec<TreeEntryBody>>,
+    ) -> Result<PathEntry, ProviderError> {
+        let segments: Vec<&str> = path.segments().collect();
+        let mut current_tree_sha = root_tree_sha.to_string();
+        for (index, segment) in segments.iter().enumerate() {
+            let entries = self.cached_tree_entries(repo, &current_tree_sha, cache)?;
+            let Some(found) = entries.iter().find(|entry| entry.path == *segment) else {
+                return Ok(PathEntry::Absent);
+            };
+            if index + 1 == segments.len() {
+                return Ok(found.classify());
+            }
+            if found.entry_type != "tree" {
+                // An intermediate segment exists but is not a directory,
+                // so the declared path underneath it cannot exist either.
+                return Ok(PathEntry::Absent);
+            }
+            current_tree_sha = found.sha.clone();
+        }
+        // `RepoPath::parse` refuses an empty path, so `segments` always
+        // holds at least one element and the loop above always returns
+        // before reaching here.
+        unreachable!("a RepoPath always has at least one segment")
+    }
+
+    /// Fetch `tree_sha`'s entries, memoised in `cache` for the lifetime of
+    /// one [`Self::resolve_tree_paths`] call — the "each directory fetched
+    /// once" half of decision (b).
+    #[allow(dead_code)] // see get_branch_head's own note above
+    fn cached_tree_entries<'a>(
+        &self,
+        repo: &GitHubRepo,
+        tree_sha: &str,
+        cache: &'a mut HashMap<String, Vec<TreeEntryBody>>,
+    ) -> Result<&'a Vec<TreeEntryBody>, ProviderError> {
+        if !cache.contains_key(tree_sha) {
+            let entries = self.get_tree_entries(repo, tree_sha)?;
+            cache.insert(tree_sha.to_string(), entries);
+        }
+        Ok(cache
+            .get(tree_sha)
+            .expect("just inserted above, or already present"))
+    }
+
+    /// `GET /repos/{owner}/{repo}/git/blobs/{sha}`, decoded to raw bytes.
+    /// The only caller in this milestone is `github.scaffold.ensure`'s own
+    /// `read` (task G2), and only ever for the scaffold's marker blob —
+    /// decision (b) forbids downloading any other file's content, which is
+    /// instead compared by [`git_blob_sha`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_repo`], plus a statusless [`ProviderError`] when
+    /// GitHub's `encoding` field is not `"base64"` or the content does not
+    /// decode as base64 — both would otherwise silently read as an empty
+    /// or nonsensical marker rather than a loud failure.
+    #[allow(dead_code)] // see get_branch_head's own note above
+    pub(crate) fn get_blob(&self, repo: &GitHubRepo, sha: &str) -> Result<Vec<u8>, ProviderError> {
+        let path = format!("{}/git/blobs/{sha}", repo_path(repo));
+        let body: BlobBody = self.retry_secondary_limit(|| self.http.get(&path))?;
+        if body.encoding != "base64" {
+            return Err(ProviderError::new(
+                None,
+                "GitHub returned a blob in an encoding this client does not support",
+            ));
+        }
+        // GitHub wraps base64 content with a newline every 60 characters;
+        // the standard engine's decoder rejects embedded whitespace, so
+        // it is stripped first.
+        let cleaned: String = body
+            .content
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        STANDARD.decode(cleaned).map_err(|_| {
+            ProviderError::new(None, "GitHub returned a blob that was not valid base64")
+        })
+    }
 }
 
 /// The label a bound `token` port's minted [`Credential`] carries in its
@@ -490,6 +679,116 @@ pub(crate) struct PublicKeyBody {
     pub(crate) key: String,
 }
 
+/// The state one declared [`RepoPath`] resolves to inside a tree
+/// [`GitHubClient::resolve_tree_paths`] already pinned to one commit.
+/// Content is never downloaded to produce this — see [`git_blob_sha`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // see get_branch_head's own note above
+pub(crate) enum PathEntry {
+    /// No entry of that name exists, or an ancestor directory along the
+    /// way does not exist or is itself not a directory.
+    Absent,
+    /// A regular or executable file. `mode` is GitHub's own string
+    /// (`"100644"` or `"100755"`), `sha` its git blob sha.
+    Blob { mode: String, sha: String },
+    /// Something other than a file at that exact path: a subdirectory
+    /// (`"040000"`), a symlink (`"120000"`), or a submodule (`"160000"`).
+    NonBlob,
+}
+
+/// GitHub's `git-ref` schema: the one field this crate reads.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct RefBody {
+    object: RefObject,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct RefObject {
+    sha: String,
+}
+
+/// GitHub's `git-commit` schema: the one field this crate reads.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct CommitBody {
+    tree: TreeRef,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct TreeRef {
+    sha: String,
+}
+
+/// GitHub's `git-tree` schema, read non-recursively: one directory level
+/// of entries.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct TreeBody {
+    tree: Vec<TreeEntryBody>,
+}
+
+/// One entry of a non-recursive git tree: a name relative to its parent
+/// directory, its mode, its git object type, and its own sha.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct TreeEntryBody {
+    path: String,
+    mode: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+    sha: String,
+}
+
+impl TreeEntryBody {
+    /// Classify this entry the way decision (b)'s read table does: a
+    /// regular or executable file is [`PathEntry::Blob`]; a subdirectory,
+    /// symlink, or submodule is [`PathEntry::NonBlob`] — by `mode`, since
+    /// GitHub's `type` field alone does not distinguish a symlink
+    /// (`"120000"`) from a regular file (`"100644"`/`"100755"`): both
+    /// report `type: "blob"`.
+    #[allow(dead_code)] // see get_branch_head's own note above
+    fn classify(&self) -> PathEntry {
+        match self.mode.as_str() {
+            "100644" | "100755" => PathEntry::Blob {
+                mode: self.mode.clone(),
+                sha: self.sha.clone(),
+            },
+            _ => PathEntry::NonBlob,
+        }
+    }
+}
+
+/// GitHub's `git-blob` schema: the two fields this crate reads.
+#[derive(Debug, Deserialize)]
+struct BlobBody {
+    content: String,
+    encoding: String,
+}
+
+/// Compute the git blob sha for `content`: SHA-1 over
+/// `blob <byte length>\0<bytes>`, the same algorithm `git hash-object`
+/// uses. Lets a caller compare a would-be file's content against a tree
+/// entry's own [`PathEntry::Blob`] sha without ever downloading that
+/// entry's content (decision (b),
+/// `docs/plans/2026-09-30-milestone-3g-file-writing.md`).
+#[must_use]
+#[allow(dead_code)] // see get_branch_head's own note above
+pub(crate) fn git_blob_sha(content: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut hasher = Sha1::new();
+    hasher.update(format!("blob {}\0", content.len()));
+    hasher.update(content);
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(40);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,5 +849,246 @@ mod tests {
         let token = GitHubToken::parse(GitHubToken::example()).unwrap();
         let scoped = ScopedClient::default_for(&default, Some(&token));
         assert!(matches!(scoped, ScopedClient::Bound(_)));
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3g, task G1: reads and the `createCommitOnBranch` write.
+    // -----------------------------------------------------------------
+
+    fn client_against(url: String) -> GitHubClient {
+        let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+        GitHubClient::new(Http::new(url, Vec::new(), credential))
+    }
+
+    fn repo() -> GitHubRepo {
+        GitHubRepo::parse("acme/widget").unwrap()
+    }
+
+    fn tree_entry_json(name: &str, mode: &str, entry_type: &str, sha: &str) -> serde_json::Value {
+        serde_json::json!({
+            "path": name,
+            "mode": mode,
+            "type": entry_type,
+            "sha": sha,
+            "size": 10,
+            "url": "https://api.github.com/x",
+        })
+    }
+
+    #[test]
+    fn git_blob_sha_matches_known_git_hash_object_vectors() {
+        // `git hash-object --stdin` on each of these three, captured
+        // locally: an empty file, a plain ASCII file, and a UTF-8 file —
+        // acceptance 6's own "known vectors".
+        assert_eq!(
+            git_blob_sha(b""),
+            "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        );
+        assert_eq!(
+            git_blob_sha(b"hello world\n"),
+            "3b18e512dba79e4c8300dd08aeb37f8e728b8dad"
+        );
+        assert_eq!(
+            git_blob_sha("héllo wörld\n".as_bytes()),
+            "9d4a8bab579c9317dc648e018736aec79914b21a"
+        );
+    }
+
+    #[test]
+    fn get_branch_head_then_commit_root_tree_pin_the_exact_endpoints() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let branch = GitBranchName::parse("main").unwrap();
+        let ref_mock = provider
+            .mock("GET", "/repos/acme/widget/git/ref/heads/main")
+            .with_status(200)
+            .with_body(serde_json::json!({"object": {"sha": "head-commit-sha"}}).to_string())
+            .expect(1)
+            .create();
+        let commit_mock = provider
+            .mock("GET", "/repos/acme/widget/git/commits/head-commit-sha")
+            .with_status(200)
+            .with_body(serde_json::json!({"tree": {"sha": "root-tree-sha"}}).to_string())
+            .expect(1)
+            .create();
+
+        let client = client_against(provider.url());
+        let head = client.get_branch_head(&repo(), &branch).unwrap();
+        assert_eq!(head, "head-commit-sha");
+        let root_tree = client.get_commit_root_tree(&repo(), &head).unwrap();
+        assert_eq!(root_tree, "root-tree-sha");
+
+        ref_mock.assert();
+        commit_mock.assert();
+    }
+
+    /// Acceptance 6, in full: a multi-directory layout resolved from one
+    /// root tree, several declared paths sharing prefixes so each
+    /// directory's tree is fetched exactly once (`.expect(1)` per mock), a
+    /// symlink/tree/submodule each reported as [`PathEntry::NonBlob`], an
+    /// absent file and a file under a directory that never existed both
+    /// [`PathEntry::Absent`], and no blob ever downloaded by this call at
+    /// all.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one scenario proving every row of decision (b)'s read table at once
+    fn resolve_tree_paths_walks_declared_paths_fetching_each_directory_once() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let root_tree = provider
+            .mock("GET", "/repos/acme/widget/git/trees/root-tree-sha")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({"sha": "root-tree-sha", "tree": [
+                    tree_entry_json("apps", "040000", "tree", "apps-tree-sha"),
+                ]})
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let apps_tree = provider
+            .mock("GET", "/repos/acme/widget/git/trees/apps-tree-sha")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({"sha": "apps-tree-sha", "tree": [
+                    tree_entry_json("sample", "040000", "tree", "sample-tree-sha"),
+                ]})
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let sample_tree = provider
+            .mock("GET", "/repos/acme/widget/git/trees/sample-tree-sha")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({"sha": "sample-tree-sha", "tree": [
+                    tree_entry_json("ios", "040000", "tree", "ios-tree-sha"),
+                    tree_entry_json("BUILD.bazel", "100644", "blob", "buildbazel-sha"),
+                ]})
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let ios_tree = provider
+            .mock("GET", "/repos/acme/widget/git/trees/ios-tree-sha")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({"sha": "ios-tree-sha", "tree": [
+                    tree_entry_json("Resources", "040000", "tree", "resources-tree-sha"),
+                    tree_entry_json("BUILD.bazel", "100644", "blob", "ios-build-sha"),
+                    tree_entry_json("some-symlink", "120000", "blob", "symlink-sha"),
+                    tree_entry_json("some-submodule", "160000", "commit", "submodule-sha"),
+                ]})
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let resources_tree = provider
+            .mock("GET", "/repos/acme/widget/git/trees/resources-tree-sha")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({"sha": "resources-tree-sha", "tree": [
+                    tree_entry_json("Info.plist", "100644", "blob", "info-plist-sha"),
+                ]})
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let no_blob = provider
+            .mock("GET", "/repos/acme/widget/git/blobs/buildbazel-sha")
+            .expect(0)
+            .create();
+
+        let client = client_against(provider.url());
+        let build_bazel = RepoPath::parse("apps/sample/BUILD.bazel").unwrap();
+        let ios_build_bazel = RepoPath::parse("apps/sample/ios/BUILD.bazel").unwrap();
+        let info_plist = RepoPath::parse("apps/sample/ios/Resources/Info.plist").unwrap();
+        let symlink = RepoPath::parse("apps/sample/ios/some-symlink").unwrap();
+        let submodule = RepoPath::parse("apps/sample/ios/some-submodule").unwrap();
+        let under_missing_dir = RepoPath::parse("apps/sample/ios/missing-dir/x").unwrap();
+        let missing_file = RepoPath::parse("apps/sample/missing.txt").unwrap();
+        let paths = vec![
+            build_bazel.clone(),
+            ios_build_bazel.clone(),
+            info_plist.clone(),
+            symlink.clone(),
+            submodule.clone(),
+            under_missing_dir.clone(),
+            missing_file.clone(),
+        ];
+
+        let resolved = client
+            .resolve_tree_paths(&repo(), "root-tree-sha", &paths)
+            .unwrap();
+
+        assert_eq!(
+            resolved[&build_bazel],
+            PathEntry::Blob {
+                mode: "100644".to_string(),
+                sha: "buildbazel-sha".to_string(),
+            }
+        );
+        assert_eq!(
+            resolved[&ios_build_bazel],
+            PathEntry::Blob {
+                mode: "100644".to_string(),
+                sha: "ios-build-sha".to_string(),
+            }
+        );
+        assert_eq!(
+            resolved[&info_plist],
+            PathEntry::Blob {
+                mode: "100644".to_string(),
+                sha: "info-plist-sha".to_string(),
+            }
+        );
+        assert_eq!(resolved[&symlink], PathEntry::NonBlob);
+        assert_eq!(resolved[&submodule], PathEntry::NonBlob);
+        assert_eq!(resolved[&under_missing_dir], PathEntry::Absent);
+        assert_eq!(resolved[&missing_file], PathEntry::Absent);
+
+        root_tree.assert();
+        apps_tree.assert();
+        sample_tree.assert();
+        ios_tree.assert();
+        resources_tree.assert();
+        no_blob.assert();
+    }
+
+    #[test]
+    fn get_blob_decodes_base64_content_stripping_githubs_line_wrapping() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let marker_text = "managed-by: willikins\napps/sample/BUILD.bazel deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n";
+        let encoded = STANDARD.encode(marker_text.as_bytes());
+        // GitHub wraps its base64 `content` with a newline every 60
+        // characters; reproducing that here proves this client's own
+        // stripping, not merely that unwrapped base64 decodes.
+        let wrapped = encoded
+            .as_bytes()
+            .chunks(60)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mock = provider
+            .mock("GET", "/repos/acme/widget/git/blobs/marker-sha")
+            .with_status(200)
+            .with_body(serde_json::json!({"content": wrapped, "encoding": "base64"}).to_string())
+            .create();
+        let client = client_against(provider.url());
+        let bytes = client.get_blob(&repo(), "marker-sha").unwrap();
+        assert_eq!(bytes, marker_text.as_bytes());
+        mock.assert();
+    }
+
+    #[test]
+    fn get_blob_refuses_an_encoding_other_than_base64() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        provider
+            .mock("GET", "/repos/acme/widget/git/blobs/marker-sha")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({"content": "plain text", "encoding": "utf-8"}).to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let err = client.get_blob(&repo(), "marker-sha").unwrap_err();
+        assert_eq!(err.status, None);
     }
 }
