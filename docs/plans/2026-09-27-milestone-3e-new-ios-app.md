@@ -22,6 +22,8 @@ and this plan's own pre-flight, fetched 2026-09-27 and quoted below with its URL
 `docs/research/2026-09-29-m3e-adversarial-pass-3.md`)
 **Reviewed:** 2026-09-29 (independent adversarial pass 4 over R1, R2, R3 and R4,
 `docs/research/2026-09-29-m3e-adversarial-pass-4.md`)
+**Reviewed:** 2026-09-30 (independent adversarial pass 5 over K1, L1, D1 and D2,
+`docs/research/2026-09-30-m3e-adversarial-pass-5.md`)
 **Addendum:** 2026-09-28 (attacker) — **four defects fixed test-first.** `c054a09`: every capability
 read parsed every row's `settings` strictly, so another row's missing `enabled` or `null` `options`
 failed a `HEALTHKIT` read; the four fields are now optional. `92dec9e`: decision (d)'s "exactly one
@@ -2758,3 +2760,47 @@ words) applied to the one pair of caller-overridable names D1 itself did not tou
   sandbox-versus-real Doppler naming split R4 recorded is untouched; Buildkite scope sufficiency
   above is a static claim, not live-proven; this document's four
   `operator.acknowledge` leaves and its two observed gates are unaffected by this task.
+
+**Addendum:** 2026-09-30 (attacker, pass 5 over K1, L1, D1 and D2) -- **one coverage gap closed
+test-first (`753d1e8`); two findings recorded for the coordinator; seven mutations, six killed by
+existing tests and one (M5) killed only by the new test.** Full record:
+`docs/research/2026-09-30-m3e-adversarial-pass-5.md`. No live test, no provider call.
+
+- **Confirmed by mutation:** Sample reads exactly `PIPELINE_CREATION_TOKEN` from `buildkite/prd`
+  through `doppler.secret.get` (M1). `plan`/`apply <file> --live` on Sample need only
+  `WILLIKINS_DOPPLER_TOKEN`, and unbinding one Buildkite node's `token` brings back an exit-2 refusal
+  that names `WILLIKINS_BUILDKITE_TOKEN` and that node (M2). `inherit` is held back by the
+  base-config gate (M3). The Buildkite org, cluster, GitHub org, slug and monorepo are literals, not
+  inputs (M4). A bound token authorizes the request (M6), and an unbound one falls back to the
+  tool's own environment-built client (M7). Every mutation was restored with `cmp` 0.
+- **F1, fixed (`753d1e8`):** the Buildkite half of L1's "an unbound port still refuses" had no test.
+  A mutant that never required `WILLIKINS_BUILDKITE_TOKEN` in `live_catalog_for_document` survived
+  `serve_and_live`, `sample_document`, `acceptance_m3a_buildkite` and `willikins-server --lib`.
+  `plan_live_on_a_document_leaving_buildkite_unbound_still_refuses_naming_the_variable`
+  (`new-rust-service-buildkite.yaml`) was red against that mutant and is green on the tree.
+- **D1 qualified:** a missing or non-inheritable base config does **not** stop Sample before any
+  write. By decision (j) it holds back `inherit` alone, and every independent writer (bundle
+  identifiers, `doppler`, `configs`, `prd_config`, `pipeline`) still plans `create`.
+- **F2, recorded:** `base_configs` can still be overridden, and that defeats the gate.
+  `--input base_configs=` yields an empty list, so the plan has zero gate instances and `inherit`
+  plans `noop` with `inherits: []`, with nothing blocked or reported. A substituted list gates and
+  inherits whatever the caller names, provided it exists and is inheritable. Approval is the only
+  thing that limits this today. Closing it needs a document-format decision: a list literal for
+  `for_each`/`with:`, or a fixed-input marker.
+- **F4, recorded:** `apply --plan-id --live` and `serve` still require GitHub, Doppler, Buildkite
+  and `SigNoz` (credential and host) credentials. The `SigNoz` key expired on 2026-09-23, and that
+  check is shape-only. For the real Sample run, only the one-shot `apply
+  workflows/sample-ios-app.yaml --live --approve --journal <path>` is Doppler-only.
+  `ApplyArgs::live`'s doc comment says "three" where four are required.
+- **Not a leak:** the token was refused at every non-secret port tried, as a literal, as an input,
+  and unparsed. It is accepted as a document output (by design) and rendered `[REDACTED
+  BuildkiteToken]` in the plan, the apply output and the journal, with the raw run appearing 0 times.
+- **Snapshot:** from `37136a2` to `HEAD` the snapshot has 21 insertions and 0 deletions: the new
+  document's block, six `TYPES` lines in Sample's own entry, and insta's `assertion_line` metadata.
+  No other document's lines moved.
+- **Scoped gates green:** `cargo fmt --all --check`; `cargo clippy -p willikins-cli --all-targets
+  -j 2 -- -D warnings`; `cargo test -p willikins-cli --test serve_and_live` (17 passed),
+  `--test sample_document` (4 passed), `--test sample_apply_blocked_redaction`, `--test acceptance_m3a_buildkite`;
+  `cargo test -p willikins-providers-buildkite --test cluster_get_mock --test pipeline_ensure_mock`;
+  `cargo test -p willikins-dsl --test acceptance`; `cargo test -p willikins-core --test
+  secret_literal_guard`. The full workspace gate was not run (host rule; the coordinator's).
