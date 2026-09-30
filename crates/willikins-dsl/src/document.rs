@@ -133,14 +133,107 @@ pub struct StepDecl {
     #[serde(default)]
     pub for_each: Option<String>,
     /// This step's input port bindings, keyed by port name. Each value is
-    /// a reference or a literal string.
+    /// a reference or a literal string ([`WithValue::Scalar`]), or a YAML
+    /// sequence of the same ([`WithValue::List`], milestone 3g decision
+    /// (a)).
     #[serde(default, deserialize_with = "deserialize_with_map")]
-    pub with: IndexMap<String, String>,
+    pub with: IndexMap<String, WithValue>,
+}
+
+/// One `with:` map value: a single reference-or-literal string
+/// ([`Self::Scalar`]), or a YAML sequence of them ([`Self::List`],
+/// milestone 3g decision (a)) -- one binding per element, each itself a
+/// reference or a literal, never nested. A mapping is rejected wherever it
+/// appears (as the whole value, or as a sequence element) with a message
+/// naming what a `with` value may actually be, rather than serde's generic
+/// "invalid type" wording; so is a nested sequence, as a sequence element.
+///
+/// `Deserialize` is hand-written, not derived, because `#[serde(untagged)]`
+/// would give a generic "data did not match any variant" message for a
+/// mapping instead of the message above -- the same reason
+/// [`WithString`], its predecessor, existed before this type did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WithValue {
+    /// A single reference or literal.
+    Scalar(String),
+    /// A sequence of references and/or literals, one binding per element.
+    List(Vec<String>),
+}
+
+impl<'de> Deserialize<'de> for WithValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct WithValueVisitor;
+
+        impl<'de> Visitor<'de> for WithValueVisitor {
+            type Value = WithValue;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "a string, or a sequence of strings")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(WithValue::Scalar(value.to_string()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(WithValue::Scalar(value))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                let mut items = Vec::new();
+                while let Some(WithString(item)) = seq.next_element::<WithString>()? {
+                    items.push(item);
+                }
+                Ok(WithValue::List(items))
+            }
+
+            fn visit_map<A>(self, _map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                Err(de::Error::custom(
+                    "with values must be strings or references",
+                ))
+            }
+        }
+
+        deserializer.deserialize_any(WithValueVisitor)
+    }
+}
+
+impl schemars::JsonSchema for WithValue {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("WithValue")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "anyOf": [
+                { "type": "string" },
+                { "type": "array", "items": { "type": "string" } },
+            ],
+        })
+    }
 }
 
 /// A `with` map value: like a plain `String`, except a YAML sequence or
 /// mapping is rejected with a message naming what a `with` value may
-/// actually be, rather than serde's generic "invalid type" wording.
+/// actually be, rather than serde's generic "invalid type" wording. Also
+/// used, unchanged, to parse each element of a [`WithValue::List`]
+/// sequence -- a nested sequence or a mapping element is rejected the same
+/// way.
 struct WithString(String);
 
 impl<'de> Deserialize<'de> for WithString {
@@ -236,12 +329,11 @@ where
 }
 
 /// Deserialize a step's `with` mapping: unique keys, string-only values.
-fn deserialize_with_map<'de, D>(deserializer: D) -> Result<IndexMap<String, String>, D::Error>
+fn deserialize_with_map<'de, D>(deserializer: D) -> Result<IndexMap<String, WithValue>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let map: IndexMap<String, WithString> = deserialize_unique_map(deserializer)?;
-    Ok(map.into_iter().map(|(k, v)| (k, v.0)).collect())
+    deserialize_unique_map(deserializer)
 }
 
 #[cfg(test)]
@@ -265,7 +357,7 @@ steps:
         assert_eq!(document.steps.len(), 1);
         let step = &document.steps["a"];
         assert_eq!(step.tool, "naming.v1");
-        assert_eq!(step.with["org"], "literal-org");
+        assert!(matches!(&step.with["org"], WithValue::Scalar(value) if value == "literal-org"));
         assert!(step.for_each.is_none());
     }
 
@@ -356,15 +448,69 @@ outputs:
         assert!(err.to_string().contains("duplicate key"), "{err}");
     }
 
+    /// Milestone 3g, decision (a): a `with:` value that is a YAML sequence
+    /// now parses, as [`WithValue::List`] -- one element per binding, each
+    /// a reference or a literal.
     #[test]
-    fn with_value_that_is_a_list_is_rejected() {
+    fn with_value_that_is_a_list_parses_as_a_list_of_scalars() {
         let yaml = "\
 name: demo
 steps:
   a:
     tool: naming.v1
     with:
-      org: [one, two]
+      org: [one, '${{ inputs.two }}']
+";
+        let document: Document = serde_yaml_ng::from_str(yaml).unwrap();
+        let step = &document.steps["a"];
+        assert!(matches!(
+            &step.with["org"],
+            WithValue::List(items) if items == &["one".to_string(), "${{ inputs.two }}".to_string()]
+        ));
+    }
+
+    #[test]
+    fn with_value_that_is_an_empty_list_parses_as_an_empty_list() {
+        let yaml = "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: { org: [] } }
+";
+        let document: Document = serde_yaml_ng::from_str(yaml).unwrap();
+        let step = &document.steps["a"];
+        assert!(matches!(&step.with["org"], WithValue::List(items) if items.is_empty()));
+    }
+
+    /// A sequence element that is itself a sequence is rejected -- no
+    /// nested lists (decision (a)).
+    #[test]
+    fn with_list_element_that_is_a_nested_sequence_is_rejected() {
+        let yaml = "\
+name: demo
+steps:
+  a:
+    tool: naming.v1
+    with:
+      org: [one, [two, three]]
+";
+        let err = serde_yaml_ng::from_str::<Document>(yaml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("values must be strings or references"),
+            "{err}"
+        );
+    }
+
+    /// A sequence element that is a mapping is rejected the same way.
+    #[test]
+    fn with_list_element_that_is_a_mapping_is_rejected() {
+        let yaml = "\
+name: demo
+steps:
+  a:
+    tool: naming.v1
+    with:
+      org: [one, { nested: true }]
 ";
         let err = serde_yaml_ng::from_str::<Document>(yaml).unwrap_err();
         assert!(
@@ -390,6 +536,36 @@ steps:
                 .contains("values must be strings or references"),
             "{err}"
         );
+    }
+
+    /// Decision (a): `for_each:` never accepts a sequence -- its field
+    /// type stays a plain `String`, so a YAML sequence there fails to
+    /// deserialize exactly as before milestone 3g.
+    #[test]
+    fn for_each_that_is_a_sequence_is_rejected() {
+        let yaml = "\
+name: demo
+steps:
+  a:
+    tool: naming.v1
+    for_each: [one, two]
+    with: {}
+";
+        assert!(serde_yaml_ng::from_str::<Document>(yaml).is_err());
+    }
+
+    /// Decision (a): `outputs:` never accepts a sequence either, for the
+    /// same reason.
+    #[test]
+    fn output_value_that_is_a_sequence_is_rejected() {
+        let yaml = "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: {} }
+outputs:
+  x: [one, two]
+";
+        assert!(serde_yaml_ng::from_str::<Document>(yaml).is_err());
     }
 
     #[test]

@@ -252,6 +252,17 @@ fn check_error_detail(error: &CheckError) -> String {
         CheckError::AcknowledgementLiteral { node, port } => {
             format!("{node}.{port}: a literal cannot supply an operator acknowledgement")
         }
+        CheckError::ListOnScalarPort { site, expected } => {
+            format!("{site}: a list binding cannot be delivered to a port of type {expected}")
+        }
+        CheckError::ListElementTypeMismatch {
+            site,
+            expected,
+            found,
+        } => format!("{site}: expected {expected}, found `{found}`"),
+        CheckError::SequenceNotAllowedHere { site } => {
+            format!("{site}: a list binding is not valid here")
+        }
     }
 }
 

@@ -53,7 +53,7 @@ use willikins_core::{
 };
 use willikins_types::DomainType;
 
-pub use document::{DefaultValue, Document, InputDecl, StepDecl};
+pub use document::{DefaultValue, Document, InputDecl, StepDecl, WithValue};
 
 /// The greatest size, in bytes, of a document source [`parse_document`]
 /// will attempt to parse at all.
@@ -415,7 +415,7 @@ fn document_to_workflow(document: &Document) -> Result<Workflow, DocumentError> 
             let port_path = format!("{path}.with.{raw_port}");
             let port = PortName::parse(raw_port)
                 .map_err(|err| DocumentError::semantic(port_path.clone(), err.to_string()))?;
-            let binding = parse_reference_value(raw_value, &port_path)?;
+            let binding = parse_with_binding(raw_value, &port_path)?;
             node = node.port(port, binding);
         }
 
@@ -442,6 +442,25 @@ fn parse_reference_value(raw_value: &str, path: &str) -> Result<Binding, Documen
     {
         reference::Parsed::Literal(text) => Ok(Binding::Literal(text)),
         reference::Parsed::Binding(binding) => Ok(binding),
+    }
+}
+
+/// Parse one `with:` map value (milestone 3g, decision (a)): a
+/// [`document::WithValue::Scalar`] through [`parse_reference_value`]
+/// exactly as before; a [`document::WithValue::List`] into a
+/// [`Binding::List`], parsing each element the same way, at
+/// `{path}[{index}]`.
+fn parse_with_binding(raw_value: &WithValue, path: &str) -> Result<Binding, DocumentError> {
+    match raw_value {
+        WithValue::Scalar(text) => parse_reference_value(text, path),
+        WithValue::List(items) => {
+            let elements = items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| parse_reference_value(item, &format!("{path}[{index}]")))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Binding::List(elements))
+        }
     }
 }
 
@@ -552,6 +571,81 @@ steps:
             json["nodes"]["token"]["with"]["config"]["value"]["key"],
             "prd"
         );
+    }
+
+    /// Milestone 3g, decision (a): a `with:` sequence parses into a
+    /// [`willikins_core::Binding::List`], one binding per element, each a
+    /// reference or a literal exactly as a scalar `with` value would be.
+    #[test]
+    fn a_with_sequence_parses_as_a_list_binding() {
+        let json = workflow_json(
+            "\
+name: demo
+inputs:
+  org: { type: GitHubOrg }
+steps:
+  a:
+    tool: naming.v1
+    with:
+      org: ${{ inputs.org }}
+      slug: [literal-one, '${{ inputs.org }}']
+",
+        );
+        assert_eq!(json["nodes"]["a"]["with"]["slug"]["kind"], "list");
+        let elements = json["nodes"]["a"]["with"]["slug"]["value"]
+            .as_array()
+            .expect("a list binding's value is a JSON array");
+        assert_eq!(elements.len(), 2);
+        assert_eq!(elements[0]["kind"], "literal");
+        assert_eq!(elements[0]["value"], "literal-one");
+        assert_eq!(elements[1]["kind"], "input");
+        assert_eq!(elements[1]["value"], "org");
+    }
+
+    /// An empty sequence parses as an empty `Binding::List`.
+    #[test]
+    fn an_empty_with_sequence_parses_as_an_empty_list_binding() {
+        let json = workflow_json(
+            "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: { slug: [] } }
+",
+        );
+        assert_eq!(json["nodes"]["a"]["with"]["slug"]["kind"], "list");
+        assert_eq!(
+            json["nodes"]["a"]["with"]["slug"]["value"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    /// A malformed reference inside a `with:` sequence is a semantic error
+    /// naming the element's own index, `steps.<node>.with.<port>[<index>]`.
+    #[test]
+    fn a_bad_reference_inside_a_with_sequence_names_its_own_index() {
+        let err = parse_document(
+            "\
+name: demo
+steps:
+  a:
+    tool: naming.v1
+    with:
+      slug: [ok, '${{ org.x }}']
+",
+        )
+        .unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Semantic { path, message } => {
+                assert_eq!(path, "steps.a.with.slug[1]");
+                assert!(message.contains("org.x"), "{message}");
+            }
+            DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a semantic error")
+            }
+        }
     }
 
     #[test]
@@ -847,9 +941,15 @@ steps:
         );
     }
 
+    /// Milestone 3g, decision (a): a `with:` value that is a YAML sequence
+    /// parses end to end into a `Binding::List`, through the full
+    /// `parse_document` entry point -- this used to be
+    /// `with_value_that_is_a_list_is_a_yaml_error_with_a_location`, whose
+    /// name is now false; `willikins_dsl::lib::a_with_sequence_parses_as_a_list_binding`
+    /// (`workflow_json`) and `document::tests` cover the shape in detail.
     #[test]
-    fn with_value_that_is_a_list_is_a_yaml_error_with_a_location() {
-        let err = parse_document(
+    fn with_value_that_is_a_list_parses_into_a_list_binding_end_to_end() {
+        let workflow = parse_document(
             "\
 name: demo
 steps:
@@ -859,24 +959,16 @@ steps:
       org: [one, two]
 ",
         )
-        .unwrap_err();
-        match err.kind {
-            DocumentErrorKind::Yaml {
-                message,
-                line,
-                column,
-            } => {
-                assert!(
-                    message.contains("values must be strings or references"),
-                    "{message}"
-                );
-                assert!(line.is_some());
-                assert!(column.is_some());
-            }
-            DocumentErrorKind::Semantic { .. } | DocumentErrorKind::TooLarge { .. } => {
-                panic!("expected a YAML error")
-            }
-        }
+        .expect("a with sequence now parses");
+        let binding =
+            &workflow.nodes[&NodeName::parse("a").unwrap()].with[&PortName::parse("org").unwrap()];
+        assert_eq!(
+            binding,
+            &Binding::List(vec![
+                Binding::Literal("one".to_string()),
+                Binding::Literal("two".to_string()),
+            ])
+        );
     }
 
     #[test]

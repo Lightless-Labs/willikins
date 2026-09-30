@@ -55,16 +55,52 @@ pub enum Site {
         /// The output.
         name: OutputName,
     },
+    /// One element of a node's `with`-bound list binding
+    /// ([`crate::workflow::Binding::List`], milestone 3g decision (a)).
+    /// Rendered `node.port[i]`, distinct from [`Self::ForEach`]'s
+    /// `node[for_each]` (no real node/port pair can render either form:
+    /// `port` is a real identifier, never literally `for_each`, and the
+    /// bracketed suffix here always holds a decimal index, never the
+    /// literal text `for_each`).
+    ///
+    /// Boxed, unlike every other variant: an inline third field alongside
+    /// `node` and `port` would make this `Site`'s largest variant, and
+    /// `Site` is embedded in `CheckError`, `PlanError`, and -- through
+    /// `ApplyError::Plan` -- every `apply()` call's `Result`. Crossing
+    /// clippy's `result_large_err` default threshold there would ripple
+    /// into every crate that calls `check`, `plan`, or `apply` (about two
+    /// dozen files across five other crates, none of which this task
+    /// touches); boxing keeps `Site` exactly as large as [`Self::Port`]
+    /// already was. Build one with [`Self::list_element`].
+    ListElement(Box<ListElementSite>),
+}
+
+/// The node, port, and element index a [`Site::ListElement`] names.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+pub struct ListElementSite {
+    /// The node.
+    pub node: NodeName,
+    /// The port holding the list binding.
+    pub port: PortName,
+    /// The zero-based index of the offending element.
+    pub index: usize,
 }
 
 impl Site {
+    /// Build a [`Self::ListElement`] site.
+    #[must_use]
+    pub fn list_element(node: NodeName, port: PortName, index: usize) -> Self {
+        Self::ListElement(Box::new(ListElementSite { node, port, index }))
+    }
+
     /// The node this site belongs to, when it names one: `Some` for
-    /// [`Self::Port`] and [`Self::ForEach`], `None` for [`Self::Output`]
-    /// (a workflow output is not itself a node).
+    /// [`Self::Port`], [`Self::ForEach`], and [`Self::ListElement`], `None`
+    /// for [`Self::Output`] (a workflow output is not itself a node).
     #[must_use]
     pub fn node(&self) -> Option<&NodeName> {
         match self {
             Self::Port { node, .. } | Self::ForEach { node } => Some(node),
+            Self::ListElement(site) => Some(&site.node),
             Self::Output { .. } => None,
         }
     }
@@ -76,6 +112,7 @@ impl fmt::Display for Site {
             Self::Port { node, port } => write!(f, "{node}.{port}"),
             Self::ForEach { node } => write!(f, "{node}[for_each]"),
             Self::Output { name } => write!(f, "workflow.outputs.{name}"),
+            Self::ListElement(site) => write!(f, "{}.{}[{}]", site.node, site.port, site.index),
         }
     }
 }
@@ -123,6 +160,16 @@ mod tests {
         );
         assert_eq!(Site::ForEach { node: node("n") }.node(), Some(&node("n")));
         assert_eq!(Site::Output { name: output("x") }.node(), None);
+        assert_eq!(
+            Site::list_element(node("n"), port("p"), 0).node(),
+            Some(&node("n"))
+        );
+    }
+
+    #[test]
+    fn list_element_displays_bracketed_by_index() {
+        let site = Site::list_element(node("n"), port("p"), 2);
+        assert_eq!(site.to_string(), "n.p[2]");
     }
 
     /// The `workflow.` prefix is what keeps this apart from a
@@ -168,6 +215,22 @@ mod tests {
             .to_string(),
             Site::ForEach { node: node("n") }.to_string(),
         );
+        // `n.p[0]` (a list element) versus `n[for_each]`: no real node name
+        // can equal another node's `port[index]` rendering, and the two
+        // forms use different bracket contents (a decimal index versus the
+        // literal text `for_each`) so they can never collide either.
+        assert_ne!(
+            Site::list_element(node("n"), port("p"), 0).to_string(),
+            Site::ForEach { node: node("n") }.to_string(),
+        );
+        assert_ne!(
+            Site::list_element(node("n"), port("p"), 0).to_string(),
+            Site::Port {
+                node: node("n"),
+                port: port("p"),
+            }
+            .to_string(),
+        );
     }
 
     #[test]
@@ -182,6 +245,7 @@ mod tests {
             ),
             (Site::ForEach { node: node("n") }, "for_each"),
             (Site::Output { name: output("x") }, "output"),
+            (Site::list_element(node("n"), port("p"), 0), "list_element"),
         ];
         for (site, kind) in cases {
             let json = serde_json::to_value(&site).unwrap();
@@ -196,7 +260,7 @@ mod tests {
         let schema = schemars::schema_for!(Site);
         let json = schema.as_value();
         let rendered = serde_json::to_string(json).expect("schema serializes");
-        for kind in ["port", "for_each", "output"] {
+        for kind in ["port", "for_each", "output", "list_element"] {
             assert!(
                 rendered.contains(kind),
                 "schema does not mention `{kind}`: {rendered}"

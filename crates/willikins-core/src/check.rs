@@ -122,8 +122,25 @@ pub struct Checked {
 /// own doc for why it is `check`'s alone to call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edge {
-    ty: TypeRef,
-    conversion: Option<Conversion>,
+    kind: EdgeKind,
+}
+
+/// [`Edge`]'s two shapes: a scalar binding (everything before milestone
+/// 3g), or a [`crate::workflow::Binding::List`]'s own edge, which is one
+/// [`Edge`] per element (each itself a [`Self::Scalar`]) plus the port's
+/// declared element type -- a list binding can convert element 0 through a
+/// registered row while element 1 matches exactly, so one `Conversion`
+/// cannot describe the whole port the way it can a scalar one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EdgeKind {
+    Scalar {
+        ty: TypeRef,
+        conversion: Option<Conversion>,
+    },
+    List {
+        element_ty: TypeRef,
+        elements: Vec<Edge>,
+    },
 }
 
 impl Edge {
@@ -131,8 +148,10 @@ impl Edge {
     /// only one that existed before milestone 3d.
     pub(crate) fn exact(ty: TypeRef) -> Self {
         Self {
-            ty,
-            conversion: None,
+            kind: EdgeKind::Scalar {
+                ty,
+                conversion: None,
+            },
         }
     }
 
@@ -141,39 +160,87 @@ impl Edge {
     /// `conversion` is the row `check` probed the registry for.
     pub(crate) fn converted(ty: TypeRef, conversion: Conversion) -> Self {
         Self {
-            ty,
-            conversion: Some(conversion),
+            kind: EdgeKind::Scalar {
+                ty,
+                conversion: Some(conversion),
+            },
+        }
+    }
+
+    /// A [`crate::workflow::Binding::List`]'s own edge: `element_ty` is the
+    /// port's declared scalar element type `T`, and `elements` is one
+    /// [`Self::exact`]/[`Self::converted`] edge per list element, in
+    /// declaration order. `plan` and `apply` resolve and deliver each
+    /// element through its own entry, then assemble the list — see
+    /// [`Self::elements`].
+    pub(crate) fn list(element_ty: TypeRef, elements: Vec<Edge>) -> Self {
+        Self {
+            kind: EdgeKind::List {
+                element_ty,
+                elements,
+            },
         }
     }
 
     /// The binding's own resolved type: exactly what [`Checked::types`]
     /// held before milestone 3d, and the conversion's source when
-    /// [`Self::conversion`] is `Some`.
+    /// [`Self::conversion`] is `Some`. For a [`EdgeKind::List`] edge, its
+    /// declared element type `T` — elements may individually convert or
+    /// not, so no single source type describes the whole list; see
+    /// [`Self::elements`] for the per-element detail.
     #[must_use]
     pub fn ty(&self) -> &TypeRef {
-        &self.ty
+        match &self.kind {
+            EdgeKind::Scalar { ty, .. } => ty,
+            EdgeKind::List { element_ty, .. } => element_ty,
+        }
     }
 
     /// The conversion `check` chose to deliver this binding to the port's
     /// type, or `None` when the binding's own type already matched it
-    /// exactly.
+    /// exactly, or when this is a [`EdgeKind::List`] edge (whose
+    /// conversions, if any, are per element; see [`Self::elements`]).
     #[must_use]
     pub fn conversion(&self) -> Option<&Conversion> {
-        self.conversion.as_ref()
+        match &self.kind {
+            EdgeKind::Scalar { conversion, .. } => conversion.as_ref(),
+            EdgeKind::List { .. } => None,
+        }
     }
 
     /// The type the port actually receives: [`Self::ty`] unchanged, or the
     /// conversion's target when one applies, carrying [`Self::ty`]'s own
     /// list-ness (a conversion is defined over scalars only; see
     /// `docs/plans/2026-09-23-milestone-3d-conversions.md`, decision (e)).
+    /// For a [`EdgeKind::List`] edge, `list<T>`.
     #[must_use]
     pub fn delivered(&self) -> TypeRef {
-        match &self.conversion {
-            None => self.ty.clone(),
-            Some(conversion) => TypeRef {
-                name: conversion.to().clone(),
-                list: self.ty.list,
+        match &self.kind {
+            EdgeKind::Scalar { ty, conversion } => match conversion {
+                None => ty.clone(),
+                Some(conversion) => TypeRef {
+                    name: conversion.to().clone(),
+                    list: ty.list,
+                },
             },
+            EdgeKind::List { element_ty, .. } => TypeRef::list_of(element_ty.name.clone()),
+        }
+    }
+
+    /// This edge's own per-element edges, when it is a
+    /// [`EdgeKind::List`] edge built by [`Self::list`] — `None` for a
+    /// scalar edge. `plan` and `apply` resolve a
+    /// [`crate::workflow::Binding::List`] element by element through
+    /// these, in order, rather than through [`Self::deliver`] (which a
+    /// list edge never receives a whole list [`Value`] to call). Public
+    /// for the same reason [`Self::ty`] and [`Self::conversion`] are: a
+    /// test (or a future introspection caller) can read exactly what
+    /// `check` recorded for each element.
+    #[must_use]
+    pub fn elements(&self) -> Option<&[Edge]> {
+        match &self.kind {
+            EdgeKind::List { elements, .. } => Some(elements),
+            EdgeKind::Scalar { .. } => None,
         }
     }
 
@@ -184,6 +251,11 @@ impl Edge {
     /// `check` recorded. `plan` and `apply` reach this only through their
     /// shared resolution context, and never look a conversion up
     /// themselves.
+    ///
+    /// A [`EdgeKind::List`] edge always passes `value` through unchanged:
+    /// `plan` and `apply` never call this on one — they deliver each
+    /// element through [`Self::elements`] instead — so this exists only as
+    /// a safe default for a hand-built [`Checked`] that did.
     ///
     /// # Errors
     ///
@@ -196,9 +268,12 @@ impl Edge {
     /// naming the node and port, never a panic and never the value's own
     /// content (follow-up to milestone 3d, 2026-09-24).
     pub fn deliver(&self, value: Value) -> Result<Value, ConversionMismatch> {
-        match &self.conversion {
-            None => Ok(value),
-            Some(conversion) => value.converted(conversion),
+        match &self.kind {
+            EdgeKind::Scalar { conversion, .. } => match conversion {
+                None => Ok(value),
+                Some(conversion) => value.converted(conversion),
+            },
+            EdgeKind::List { .. } => Ok(value),
         }
     }
 }
@@ -502,6 +577,46 @@ pub enum CheckError {
         /// The port it was bound to.
         port: PortName,
     },
+    /// A [`crate::workflow::Binding::List`] (a `with:` sequence) was bound
+    /// to a port whose type is not `list<T>` for any `T` -- a scalar port,
+    /// or a secret-accepting [`PortType::AnySecret`] port, which never
+    /// names a single element type to check a list against.
+    ///
+    /// Not one of the plan's variants; milestone 3g, decision (a).
+    ListOnScalarPort {
+        /// The binding's own location.
+        site: Site,
+        /// The port's declared type.
+        expected: PortType,
+    },
+    /// One element of a [`crate::workflow::Binding::List`] did not
+    /// type-check against the port's declared element type: it resolved to
+    /// a list itself (no flattening — a list element is always a scalar),
+    /// or its scalar type did not match and no one-hop conversion applies
+    /// either.
+    ///
+    /// Not one of the plan's variants; milestone 3g, decision (a).
+    ListElementTypeMismatch {
+        /// The offending element's own location
+        /// ([`Site::ListElement`]).
+        site: Site,
+        /// The port's declared element type.
+        expected: TypeRef,
+        /// The element's resolved type.
+        found: TypeRef,
+    },
+    /// A [`crate::workflow::Binding::List`] (a `with:` sequence) was found
+    /// where only a reference or a literal is valid: a `for_each` source,
+    /// or a workflow output. Never produced by `willikins-dsl`, whose
+    /// `for_each:` and `outputs:` fields are plain strings and so cannot
+    /// hold a sequence at all; exists so `check` still refuses one reaching
+    /// either site through a hand-built [`Workflow`].
+    ///
+    /// Not one of the plan's variants; milestone 3g, decision (a).
+    SequenceNotAllowedHere {
+        /// The binding's own location.
+        site: Site,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -584,6 +699,19 @@ impl fmt::Display for CheckError {
             Self::AcknowledgementLiteral { node, port } => write!(
                 f,
                 "node `{node}`, port `{port}`: a literal cannot supply an operator acknowledgement"
+            ),
+            Self::ListOnScalarPort { site, expected } => write!(
+                f,
+                "{site}: a list binding cannot be delivered to a port of type {expected}"
+            ),
+            Self::ListElementTypeMismatch {
+                site,
+                expected,
+                found,
+            } => write!(f, "{site}: expected {expected}, found `{found}`"),
+            Self::SequenceNotAllowedHere { site } => write!(
+                f,
+                "{site}: a list binding is only valid bound to a node's with-port; not here"
             ),
             // Errors about a *declaration* rather than a node's port: see
             // `fmt_declaration_error`. Listed explicitly so this match
@@ -682,6 +810,9 @@ impl CheckError {
             Self::LiteralOutput { .. } => "LiteralOutput",
             Self::AcknowledgementDefault { .. } => "AcknowledgementDefault",
             Self::AcknowledgementLiteral { .. } => "AcknowledgementLiteral",
+            Self::ListOnScalarPort { .. } => "ListOnScalarPort",
+            Self::ListElementTypeMismatch { .. } => "ListElementTypeMismatch",
+            Self::SequenceNotAllowedHere { .. } => "SequenceNotAllowedHere",
         }
     }
 }
@@ -1074,6 +1205,11 @@ impl<'a> Resolver<'a> {
             return;
         }
 
+        if let Binding::List(elements) = binding {
+            self.check_list_port(node, port, port_spec, elements, item_ctx, errors);
+            return;
+        }
+
         let site_idx = self.index_of.get(node).copied();
         let site = Site::Port {
             node: node.clone(),
@@ -1145,14 +1281,185 @@ impl<'a> Resolver<'a> {
         });
     }
 
+    /// Check a [`Binding::List`] bound to `port`: milestone 3g, decision
+    /// (a). Refuses outright when `port_spec` is not `Exact(list<T>)` (a
+    /// scalar port, or `AnySecret`, which names no single element type to
+    /// check a list against) or is `derived_only` (no list binding can ever
+    /// be "the output of one earlier, non-pure node" — each element has its
+    /// own, possibly different, source). Otherwise checks every element in
+    /// order against the element type `T`: a literal parses directly
+    /// against `T` (never converted, exactly like a scalar literal); a
+    /// resolved reference that is itself list-typed is
+    /// [`CheckError::ListElementTypeMismatch`] (no flattening); a secret
+    /// element with an attributable source is
+    /// [`CheckError::SecretToNonSecretSink`], reported in preference to the
+    /// type mismatch it also is, exactly like the scalar case; otherwise an
+    /// exact match records a plain [`Edge::exact`], and a one-hop
+    /// conversion (the milestone 3d rule, scalars only) records
+    /// [`Edge::converted`]. One error per bad element, never stopping at
+    /// the first; on any element error, no edge is recorded for the whole
+    /// port at all (matching the scalar case, where a failed binding
+    /// records nothing either).
+    fn check_list_port(
+        &mut self,
+        node: &NodeName,
+        port: &PortName,
+        port_spec: &PortSpec,
+        elements: &[Binding],
+        item_ctx: &ItemContext,
+        errors: &mut Vec<CheckError>,
+    ) {
+        let site = Site::Port {
+            node: node.clone(),
+            port: port.clone(),
+        };
+
+        if port_spec.derived_only {
+            errors.push(CheckError::UnderivedBinding {
+                node: node.clone(),
+                port: port.clone(),
+            });
+            return;
+        }
+
+        let PortType::Exact(list_ty) = &port_spec.ty else {
+            errors.push(CheckError::ListOnScalarPort {
+                site,
+                expected: port_spec.ty.clone(),
+            });
+            return;
+        };
+        if !list_ty.list {
+            errors.push(CheckError::ListOnScalarPort {
+                site,
+                expected: port_spec.ty.clone(),
+            });
+            return;
+        }
+        let element_ty = list_ty.element();
+
+        let mut element_edges: Vec<Edge> = Vec::with_capacity(elements.len());
+        let mut ok = true;
+        for (index, element) in elements.iter().enumerate() {
+            let elem_site = Site::list_element(node.clone(), port.clone(), index);
+            match self.check_list_element(
+                node,
+                port,
+                &element_ty,
+                element,
+                &elem_site,
+                item_ctx,
+                errors,
+            ) {
+                Some(edge) => element_edges.push(edge),
+                None => ok = false,
+            }
+        }
+
+        if ok {
+            self.record_edge(node, port, Edge::list(element_ty, element_edges));
+        }
+    }
+
+    /// Check one element of a [`Binding::List`] against `element_ty` (`T`),
+    /// pushing an error and returning `None` on any failure, or the
+    /// element's own [`Edge`] (never converted for a literal; otherwise
+    /// exact or one-hop converted) on success. Split out of
+    /// [`Self::check_list_port`] to keep that method's own line count down.
+    #[allow(clippy::too_many_arguments)] // mirrors check_with_port's own parameter shape, one per fact the caller already has in hand
+    fn check_list_element(
+        &mut self,
+        node: &NodeName,
+        port: &PortName,
+        element_ty: &TypeRef,
+        element: &Binding,
+        elem_site: &Site,
+        item_ctx: &ItemContext,
+        errors: &mut Vec<CheckError>,
+    ) -> Option<Edge> {
+        if let Binding::Literal(text) = element {
+            return check_list_literal(node, port, text, element_ty, self.registry, errors)
+                .map(Edge::exact);
+        }
+
+        // A nested list (never produced by `willikins-dsl`, which refuses
+        // one at parse time) is refused defensively here too, rather than
+        // recursing: `Resolver::resolve` is not exhaustive over it, since
+        // resolving a list has no single type to report through that
+        // generic path.
+        if matches!(element, Binding::List(_)) {
+            errors.push(CheckError::ListElementTypeMismatch {
+                site: elem_site.clone(),
+                expected: element_ty.clone(),
+                found: TypeRef::list_of(element_ty.name.clone()),
+            });
+            return None;
+        }
+
+        let site_idx = self.index_of.get(node).copied();
+        let (found, source) = self.resolve(site_idx, elem_site, item_ctx, element, errors)?;
+
+        if is_secret(&found, self.registry) {
+            match source {
+                Some(from) => errors.push(CheckError::SecretToNonSecretSink {
+                    from,
+                    to: elem_site.clone(),
+                }),
+                None => errors.push(CheckError::ListElementTypeMismatch {
+                    site: elem_site.clone(),
+                    expected: element_ty.clone(),
+                    found,
+                }),
+            }
+            return None;
+        }
+
+        if found.list {
+            errors.push(CheckError::ListElementTypeMismatch {
+                site: elem_site.clone(),
+                expected: element_ty.clone(),
+                found,
+            });
+            return None;
+        }
+
+        if found == *element_ty {
+            return Some(Edge::exact(found));
+        }
+
+        // One hop, scalars only -- the same rule `check_with_port` applies;
+        // see its own comment for why this can only ever turn a mismatch
+        // into an accepted edge, never the reverse.
+        #[allow(clippy::disallowed_methods)]
+        let row = self
+            .registry
+            .probe_conversion(&found.name, &element_ty.name);
+        if let Some(row) = row {
+            return Some(Edge::converted(found, row));
+        }
+
+        errors.push(CheckError::ListElementTypeMismatch {
+            site: elem_site.clone(),
+            expected: element_ty.clone(),
+            found,
+        });
+        None
+    }
+
     /// Record the side effects of a `with` key that is not one of its
     /// node's ports, without emitting any further error for it: mark an
     /// `Input` as used, and add a graph edge for a `Step`/`Keyed` binding
-    /// whose referenced node exists.
+    /// whose referenced node exists -- recursively, for every element of a
+    /// [`Binding::List`].
     fn record_extra(&mut self, binding: &Binding, site: &NodeName) {
         match binding {
             Binding::Input(name) => {
                 self.used_inputs.insert(name.clone());
+            }
+            Binding::List(elements) => {
+                for element in elements {
+                    self.record_extra(element, site);
+                }
             }
             Binding::Step {
                 node: referenced, ..
@@ -1217,6 +1524,19 @@ impl<'a> Resolver<'a> {
             Binding::Literal(_) => unreachable!(
                 "callers resolve Literal via check_literal, which needs the port's expected type"
             ),
+            Binding::List(_) => {
+                // Reached only for a `for_each` source or a workflow
+                // output: `check_with_port` intercepts a with-bound
+                // `Binding::List` itself, via `check_list_port`, before
+                // ever calling `resolve`. Neither site names a single
+                // expected type for `resolve` to check a list binding
+                // against, and `willikins-dsl` never produces one there
+                // (its `for_each:` and `outputs:` fields are plain
+                // strings) -- this exists so a hand-built `Workflow` still
+                // gets a real error instead of a panic.
+                errors.push(CheckError::SequenceNotAllowedHere { site: site.clone() });
+                None
+            }
             Binding::Item => match item_ctx {
                 ItemContext::NotInForEach => {
                     errors.push(CheckError::ItemOutsideForEach { site: site.clone() });
@@ -1382,6 +1702,51 @@ fn check_literal(
     }
 
     match Value::parse(ty, text) {
+        Ok(value) => Some(value.ty().clone()),
+        Err(error) => {
+            errors.push(CheckError::InvalidLiteral {
+                node: node.clone(),
+                port: port.clone(),
+                error,
+            });
+            None
+        }
+    }
+}
+
+/// Check one literal element of a [`Binding::List`] against `element_ty`
+/// (the port's declared, always-scalar element type `T`): a secret `T`
+/// refuses it outright, exactly like [`check_literal`] does for a
+/// secret-accepting scalar port (a list element is never `AnySecret` --
+/// [`check_list_port`] only reaches here once `element_ty` is already known
+/// to be `T`, a concrete type); otherwise it is parsed directly against
+/// `T`, never converted (decision (e), step 2, the same rule a scalar
+/// literal follows).
+fn check_list_literal(
+    node: &NodeName,
+    port: &PortName,
+    text: &str,
+    element_ty: &TypeRef,
+    registry: &TypeRegistry,
+    errors: &mut Vec<CheckError>,
+) -> Option<TypeRef> {
+    if registry.is_secret(&element_ty.name) == Some(true) {
+        errors.push(CheckError::SecretLiteral {
+            node: node.clone(),
+            port: port.clone(),
+        });
+        return None;
+    }
+
+    if crate::value::is_operator_acknowledgement(registry, &element_ty.name) {
+        errors.push(CheckError::AcknowledgementLiteral {
+            node: node.clone(),
+            port: port.clone(),
+        });
+        return None;
+    }
+
+    match Value::parse(element_ty, text) {
         Ok(value) => Some(value.ty().clone()),
         Err(error) => {
             errors.push(CheckError::InvalidLiteral {
@@ -2449,6 +2814,7 @@ mod tests {
     /// One instance of every [`CheckError`] variant. Kept in lockstep with
     /// the enum by `variant_kinds!` above and the length assertion in
     /// [`every_check_error_variant_serializes_with_its_kind`].
+    #[allow(clippy::too_many_lines)] // one literal per variant; splitting it would only move the count, not reduce it
     fn check_error_samples() -> Vec<CheckError> {
         vec![
             CheckError::UnknownTool {
@@ -2545,6 +2911,20 @@ mod tests {
                 node: node_name("n"),
                 port: port("p"),
             },
+            CheckError::ListOnScalarPort {
+                site: port_site("n", "p"),
+                expected: exact("GitHubOrg"),
+            },
+            CheckError::ListElementTypeMismatch {
+                site: Site::list_element(node_name("n"), port("p"), 0),
+                expected: ty("GitHubOrg"),
+                found: ty("HttpsUrl"),
+            },
+            CheckError::SequenceNotAllowedHere {
+                site: Site::ForEach {
+                    node: node_name("n"),
+                },
+            },
         ]
     }
 
@@ -2576,6 +2956,9 @@ mod tests {
         LiteralOutput,
         AcknowledgementDefault,
         AcknowledgementLiteral,
+        ListOnScalarPort,
+        ListElementTypeMismatch,
+        SequenceNotAllowedHere,
     );
 
     #[test]
