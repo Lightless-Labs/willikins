@@ -184,6 +184,23 @@ gap. The fake tool gained its own `validated_marker_file` (identical shape, `Rep
 validated value rather than a bare string. `scaffold_fake_agrees_with_live.rs` gained
 `agrees_on_an_over_long_marker`, pinning `Invalid` on both `read` and `ensure` on both sides.
 
+**Addendum:** 2026-09-30 (adversarial pass, render and write) — an independent attack on T1, G1 and G2,
+recorded in `docs/research/2026-09-30-m3g-adversarial-pass-render-and-write.md`. Eight mutations: four
+killed by existing tests (T1's render bound, the same-head guard, the additions sort, the three-attempt
+bound); two survived and are now killed by new tests (the placeholder's closing space, `eac5c41`; a marker
+first line that merely starts with the header, `9dec0ce`); two confirm the fixes below. Four real defects,
+fixed test-first on both the live tool and the fake: G1's open item (a path beneath an existing file read
+`Absent`, so the commit could only fail or replace that file with a directory) is settled as
+`PathEntry::UnderNonDirectory`, a `Conflict` for a seed and `Foreign` for the marker, with no live probe
+needed since refusing is safe whichever way GitHub behaves (`9422d3e`); a `truncated` tree listing is a
+`Provider` failure, never `Absent` (`281e0ef`); the fake now agrees on directories, closing a pre-existing
+acceptance-8 gap where a seed path that is a directory refused live but planned `Create` on the fake
+(`9422d3e`); and declared paths nested under one another are `Invalid` before any request (`3b4120e`).
+The six acceptance-4 negative fixtures E2 deferred to T1 and G2 were missing and are added with their
+tests (`3e3d766`); the characterization snapshot changes only by their six added entries, and every
+existing document plans byte-identically. No secret, `Text` or caller byte reaches a committed file; a
+moved head can neither duplicate nor lose a commit. B1's configuration leak is out of this group.
+
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Example-Org/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
