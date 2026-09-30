@@ -260,8 +260,13 @@ registry::domain_types! {
 /// Apple's real rule for a bundle id's `name` (a live probe found a dot,
 /// an apostrophe, and an ampersand all refused, though every bundle
 /// identifier's grammar admits a dot) -- see `AppleBundleIdName`'s own doc
-/// in `appstore.rs`. `=> AppleProfileName` is untouched: Apple accepts
-/// dots in a profile's `name`.
+/// in `appstore.rs`. `=> AppleProfileName` is untouched: profiles named
+/// exactly after their dotted bundle identifiers exist on the operator's
+/// account, but nothing shows they were created through the API (neither
+/// willikins nor the monorepo's fastlane made them; fastlane only
+/// downloads them, `readonly: true`). A dotted `name` on
+/// `POST /v1/profiles` has not been probed; see the `From` impl's doc in
+/// `appstore.rs`.
 fn conversion_rows() -> Vec<registry::Conversion> {
     conversions![
         // Every bundle identifier is a valid profile name, byte for byte:
