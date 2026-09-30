@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
-assertion_line: 212
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -1104,6 +1103,39 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "name": "operator.acknowledge",
     "outputs": {
       "step": "Text"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "Render a template against up to 16 positional `{{ N }}` values into a file at a repository path.",
+    "inputs": {
+      "path": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "RepoPath"
+        }
+      },
+      "template": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "TemplateSource"
+        }
+      },
+      "values": {
+        "required": false,
+        "ty": {
+          "kind": "exact",
+          "type": "list<TemplateValue>"
+        }
+      }
+    },
+    "key": [],
+    "name": "repo.file.render",
+    "outputs": {
+      "file": "RepoFile"
     },
     "pure": true
   }

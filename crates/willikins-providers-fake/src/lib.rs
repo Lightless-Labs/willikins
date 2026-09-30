@@ -29,8 +29,10 @@
 //! `buildkite.pipeline.ensure`'s new optional `token` credential port
 //! binds to, mirroring R2 exactly; the App Attest gate task added
 //! `appstore.bundle_id_capability.gate`, generalizing
-//! `appstore.app_group.gate` to any observable capability),
-//! so the catalog this crate produces holds thirty-six tools, in the
+//! `appstore.app_group.gate` to any observable capability; milestone 3g
+//! task T1 added `repo.file.render`, the first pure tool with a `list<T>`
+//! input port),
+//! so the catalog this crate produces holds thirty-seven tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -122,6 +124,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::FakeIrreversibleEnsure::new(state));
     insert!(willikins_tools::TemplateRender::new());
     insert!(willikins_tools::OperatorAcknowledge::new());
+    insert!(willikins_tools::RepoFileRender::new());
     catalog
 }
 
@@ -180,10 +183,11 @@ mod tests {
             "fake.irreversible.ensure",
             "template.render",
             "operator.acknowledge",
+            "repo.file.render",
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 36);
+        assert_eq!(names.len(), 37);
     }
 
     #[test]
