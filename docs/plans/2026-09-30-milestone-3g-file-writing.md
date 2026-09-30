@@ -1,6 +1,7 @@
 # Milestone 3g: file-writing — Walter's files become something the document does
 
 **Created:** 2026-09-30
+**Addendum:** 2026-09-30 (coordinator) — the operator settled the open choice: "Commit straight." Walter's document commits directly to `main` of Bande-a-Bonnot/monorepo, matching the monorepo's own ruling of 2026-07-09. Tasks P1–P3 (branch and pull-request tools) are dropped from this milestone; the tool still writes to whatever branch a document names, so another document may choose differently.
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Bande-a-Bonnot/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
