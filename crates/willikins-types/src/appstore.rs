@@ -637,6 +637,38 @@ pub struct AppleBundleIdId(String);
 )]
 pub struct AppleCapabilityType(String);
 
+/// Every `capabilityType` this crate can *observe* on a bundle id's
+/// `GET .../bundleIdCapabilities` listing -- a strict superset of
+/// [`AppleCapabilityType`], which stays exactly the 28 members Apple's
+/// specification declares as writable through `POST
+/// /v1/bundleIdCapabilities` (research note, section 2). This type backs
+/// `appstore.bundle_id_capability.gate` alone (milestone 3e, the App
+/// Attest gate task): a read-only gate has no create path to protect, so
+/// it can safely admit a capability this crate can read but never write.
+///
+/// The extra two members, `APP_ATTEST` and `APP_ATTEST_OPT_IN`, are
+/// **not** in Apple's specification's `CapabilityType` enum at all (the
+/// same `OpenAPI` description 4.5 [`AppleCapabilityType`]'s own doc cites)
+/// -- they were witnessed live, 2026-09-30, on a host bundle id whose
+/// capability list the operator had turned both on for in the App Store
+/// Connect portal: `GET .../bundleIdCapabilities` echoed both rows back
+/// (readable), while `POST /v1/bundleIdCapabilities` with either as
+/// `capabilityType`, on a throwaway `UNIVERSAL` identifier, answered
+/// `409 ENTITY_ERROR.ATTRIBUTE.TYPE` ("An attribute in the provided
+/// entity has the wrong type") -- confirming both are read-only from this
+/// API, never a value `AppleCapabilityType`'s own writable-28 grammar may
+/// ever admit. **Do not widen [`AppleCapabilityType`] with either member**
+/// -- that type is what `appstore.bundle_id_capability.ensure`'s `POST`
+/// path writes with, and CLAUDE.md's own invariant is that it stays the
+/// 28 writable members exactly.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "ICLOUD|IN_APP_PURCHASE|GAME_CENTER|PUSH_NOTIFICATIONS|WALLET|INTER_APP_AUDIO|MAPS|ASSOCIATED_DOMAINS|PERSONAL_VPN|APP_GROUPS|HEALTHKIT|HOMEKIT|WIRELESS_ACCESSORY_CONFIGURATION|APPLE_PAY|DATA_PROTECTION|SIRIKIT|NETWORK_EXTENSIONS|MULTIPATH|HOT_SPOT|NFC_TAG_READING|CLASSKIT|AUTOFILL_CREDENTIAL_PROVIDER|ACCESS_WIFI_INFORMATION|NETWORK_CUSTOM_PROTOCOL|COREMEDIA_HLS_LOW_LATENCY|SYSTEM_EXTENSION_INSTALL|USER_MANAGEMENT|APPLE_ID_AUTH|APP_ATTEST|APP_ATTEST_OPT_IN",
+    description = "Every bundle id capability type this crate can observe on a read, including two (APP_ATTEST, APP_ATTEST_OPT_IN) the API reports but refuses to create -- a read-only superset of AppleCapabilityType.",
+    example = "APP_ATTEST"
+)]
+pub struct AppleObservableCapabilityType(String);
+
 /// A bundle id capability's optional `setting`: `KEY=OPTION`, one of the
 /// four pairs App Store Connect's specification admits for a capability
 /// this crate can enable
@@ -1372,12 +1404,73 @@ mod tests {
         assert!(AppleCapabilityType::parse("NOT_A_REAL_CAPABILITY").is_err());
     }
 
+    /// Pins the superset relation `AppleObservableCapabilityType` exists
+    /// for: every writable member parses as observable too, and the two
+    /// live-witnessed read-only members parse as observable but are
+    /// refused by `AppleCapabilityType` -- the assertion that would fail
+    /// the moment either grammar drifted out of that relationship.
+    #[test]
+    fn observable_capability_type_is_a_strict_superset_of_the_writable_one() {
+        for capability in [
+            "ICLOUD",
+            "IN_APP_PURCHASE",
+            "GAME_CENTER",
+            "PUSH_NOTIFICATIONS",
+            "WALLET",
+            "INTER_APP_AUDIO",
+            "MAPS",
+            "ASSOCIATED_DOMAINS",
+            "PERSONAL_VPN",
+            "APP_GROUPS",
+            "HEALTHKIT",
+            "HOMEKIT",
+            "WIRELESS_ACCESSORY_CONFIGURATION",
+            "APPLE_PAY",
+            "DATA_PROTECTION",
+            "SIRIKIT",
+            "NETWORK_EXTENSIONS",
+            "MULTIPATH",
+            "HOT_SPOT",
+            "NFC_TAG_READING",
+            "CLASSKIT",
+            "AUTOFILL_CREDENTIAL_PROVIDER",
+            "ACCESS_WIFI_INFORMATION",
+            "NETWORK_CUSTOM_PROTOCOL",
+            "COREMEDIA_HLS_LOW_LATENCY",
+            "SYSTEM_EXTENSION_INSTALL",
+            "USER_MANAGEMENT",
+            "APPLE_ID_AUTH",
+        ] {
+            assert!(
+                AppleCapabilityType::parse(capability).is_ok(),
+                "writable: {capability}"
+            );
+            assert!(
+                AppleObservableCapabilityType::parse(capability).is_ok(),
+                "observable (from writable): {capability}"
+            );
+        }
+        for capability in ["APP_ATTEST", "APP_ATTEST_OPT_IN"] {
+            assert!(
+                AppleObservableCapabilityType::parse(capability).is_ok(),
+                "observable (read-only): {capability}"
+            );
+            assert!(
+                AppleCapabilityType::parse(capability).is_err(),
+                "`{capability}` must stay refused by the writable type -- it is read-only \
+                 (409 ENTITY_ERROR.ATTRIBUTE.TYPE on POST, live 2026-09-30)"
+            );
+        }
+        assert!(AppleObservableCapabilityType::parse("NOT_A_REAL_CAPABILITY").is_err());
+    }
+
     #[test]
     fn bundle_id_types_examples_parse_as_their_own_types() {
         crate::assert_example_parses::<AppleBundleIdentifier>();
         crate::assert_example_parses::<AppleBundleIdPlatform>();
         crate::assert_example_parses::<AppleBundleIdId>();
         crate::assert_example_parses::<AppleCapabilityType>();
+        crate::assert_example_parses::<AppleObservableCapabilityType>();
     }
 
     // -------------------------------------------------------------

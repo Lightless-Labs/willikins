@@ -654,6 +654,22 @@ expression: redacted
     }
   },
   {
+    "name": "AppleObservableCapabilityType",
+    "secret": false,
+    "description": "Every bundle id capability type this crate can observe on a read, including two (APP_ATTEST, APP_ATTEST_OPT_IN) the API reports but refuses to create -- a read-only superset of AppleCapabilityType.",
+    "example": "APP_ATTEST",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AppleObservableCapabilityType",
+      "description": "Every bundle id capability type this crate can observe on a read, including two (APP_ATTEST, APP_ATTEST_OPT_IN) the API reports but refuses to create -- a read-only superset of AppleCapabilityType.",
+      "type": "string",
+      "examples": [
+        "APP_ATTEST"
+      ],
+      "pattern": "^(?:ICLOUD|IN_APP_PURCHASE|GAME_CENTER|PUSH_NOTIFICATIONS|WALLET|INTER_APP_AUDIO|MAPS|ASSOCIATED_DOMAINS|PERSONAL_VPN|APP_GROUPS|HEALTHKIT|HOMEKIT|WIRELESS_ACCESSORY_CONFIGURATION|APPLE_PAY|DATA_PROTECTION|SIRIKIT|NETWORK_EXTENSIONS|MULTIPATH|HOT_SPOT|NFC_TAG_READING|CLASSKIT|AUTOFILL_CREDENTIAL_PROVIDER|ACCESS_WIFI_INFORMATION|NETWORK_CUSTOM_PROTOCOL|COREMEDIA_HLS_LOW_LATENCY|SYSTEM_EXTENSION_INSTALL|USER_MANAGEMENT|APPLE_ID_AUTH|APP_ATTEST|APP_ATTEST_OPT_IN)$"
+    }
+  },
+  {
     "name": "AppleCapabilitySetting",
     "secret": false,
     "description": "An App Store Connect bundle id capability setting, KEY=OPTION (a data protection class or a Sign in with Apple consent scope).",
