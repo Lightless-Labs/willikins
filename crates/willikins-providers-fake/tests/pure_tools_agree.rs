@@ -6,8 +6,9 @@
 //! node must produce the same outputs at apply time as the plan showed.
 //! `naming.v1`, `template.render`, `env.get`, `base64.decode`,
 //! `apple.signing_key.parse`, `apple.issuer_id.parse`,
-//! `apple.key_id.parse`, (task R2) `github.token.parse`, and (task K1)
-//! `buildkite.token.parse` from
+//! `apple.key_id.parse`, (task R2) `github.token.parse`, (task K1)
+//! `buildkite.token.parse`, and (milestone 3g task T1) `repo.file.render`
+//! from
 //! `willikins-tools`, `doppler.secret.get`,
 //! `doppler.value.get`, `fake.secret_list`, (milestone 3a)
 //! `buildkite.cluster.get`, (milestone 3c) `appstore.certificate.get`,
@@ -38,8 +39,8 @@ use willikins_types::{
     AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId,
     AppleObservableCapabilityType, AppleSigningKey, BuildkiteClusterName, BuildkiteOrg,
     BuildkiteToken, DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg, GitHubRepo,
-    GitHubToken, OpaqueSecret, OperatorAcknowledgement, ProjectSlug, RepoVisibility, SecretName,
-    TemplateSource, Text,
+    GitHubToken, OpaqueSecret, OperatorAcknowledgement, ProjectSlug, RepoPath, RepoVisibility,
+    SecretName, TemplateSource, TemplateValue, Text,
 };
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
@@ -282,6 +283,22 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
     let mut config_inheritable_gate_inputs = Inputs::new();
     config_inheritable_gate_inputs.insert(port("config"), Value::known(config()));
 
+    let mut repo_file_render_inputs = Inputs::new();
+    repo_file_render_inputs.insert(
+        port("path"),
+        Value::known(RepoPath::parse("apps/example/file.txt").expect("a valid repo path")),
+    );
+    repo_file_render_inputs.insert(
+        port("template"),
+        Value::known(TemplateSource::parse("Hello, {{ 0 }}!").expect("valid template source")),
+    );
+    repo_file_render_inputs.insert(
+        port("values"),
+        Value::known_list(vec![
+            TemplateValue::parse("World").expect("a valid template value"),
+        ]),
+    );
+
     let cases = [
         ("naming.v1", naming_inputs),
         ("template.render", template_inputs),
@@ -305,6 +322,7 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
             "doppler.config.inheritable.gate",
             config_inheritable_gate_inputs,
         ),
+        ("repo.file.render", repo_file_render_inputs),
     ];
 
     let mut checked = 0;

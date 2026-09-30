@@ -58,6 +58,27 @@ byte-identical. For later tasks: `RepoFileLiteral` carries no element index; `ma
 `awaiting_inputs` ignores inputs inside a list (unreachable today); the `TemplateValue` grammar protects
 quoting, not placement, so T1/W1 must keep every placeholder out of command, path and unquoted-YAML
 positions; W1 should pin that `walter_files.files` is known at plan, since approval is the diff review.
+**Addendum:** 2026-09-30 (T1) — `repo.file.render` landed in `willikins-tools`
+(`crates/willikins-tools/src/repo_file_render.rs`): `path`/`template` required, `values` an optional
+`list<TemplateValue>` read by hand (no `list<T>`-reading helper existed yet; G2's `files: list<RepoFile>`
+may want its own, but adding one to `willikins-core::tool::helpers` speculatively was judged wider than
+this task). Placeholders are found by a manual scanner, never a regex dependency, matching the crate's
+existing style (`RepoPath`/`GitBranchName` are hand-written for the same reason): every `{{` must open
+exactly `{{ N }}` (one space each side, `N` a decimal index, no required leading-zero canonicalisation)
+or the whole call refuses, before checking `N` against the `0..=15` range; index-vs-value matching and
+the amplification bound (mirroring `template.render`'s own arithmetic-before-allocation fix) come after.
+The task row said "One commit, willikins-tools + catalog pins"; acceptance 5's own "both catalogs
+validate; LIVE_TOOL_NAMES pinned" made that pins plural in practice, so the same commit also touches:
+`willikins-server/src/catalog.rs` (`LIVE_TOOL_NAMES` 34 → 35, `insert_pure_tools`, both inline
+pure-tool-name lists in its tests, doc-comment counts), `willikins-providers-fake/src/lib.rs` (its own
+`catalog()` and `catalog_registers_every_fake_tool`, 36 → 37) and `tests/pure_tools_agree.rs` (a new
+case, required by that file's own completeness assertion over every pure tool in the fake catalog), and
+`willikins-providers-doppler/tests/live_catalog.rs` (its local `LIVE_TOOL_NAMES` copy's array-length
+annotation, which does not compile otherwise, plus its doc-comment counts). No behaviour changed in any
+of the three catalog-assembly crates beyond registering the one new tool; every ripple is mechanical and
+was required for the touched crates' own existing tests to stay green, not a design choice. Verified with
+`cargo clippy` and `cargo test`, scoped per crate, all green; `cargo fmt --all --check` pending this
+addendum's own save.
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Bande-a-Bonnot/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the

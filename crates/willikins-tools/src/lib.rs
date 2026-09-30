@@ -1,7 +1,7 @@
 //! Pure, provider-independent tools: `naming.v1`, `template.render`,
 //! `env.get`, `base64.decode`, `apple.signing_key.parse`,
 //! `apple.issuer_id.parse`, `apple.key_id.parse`, `github.token.parse`,
-//! `buildkite.token.parse`, and `operator.acknowledge`.
+//! `buildkite.token.parse`, `operator.acknowledge`, and `repo.file.render`.
 //!
 //! All are pure — no key, no external state, `ensure` is the identity of
 //! `read` — so they need nothing beyond `willikins-core` and
@@ -16,7 +16,11 @@
 //! parse into, mirroring `apple.signing_key.parse` exactly.
 //! `buildkite.token.parse` joined the same way again, task K1's own
 //! optional credential port on `willikins-providers-buildkite`'s two
-//! tools, mirroring `github.token.parse` exactly.
+//! tools, mirroring `github.token.parse` exactly. `repo.file.render`
+//! joined for milestone 3g task T1
+//! (`docs/plans/2026-09-30-milestone-3g-file-writing.md`, decision (d)):
+//! the first tool with a `list<T>` input port, rendering a `TemplateSource`
+//! against up to 16 positional `TemplateValue`s into a `RepoFile`.
 
 mod apple_issuer_id_parse;
 mod apple_key_id_parse;
@@ -27,6 +31,7 @@ mod env_get;
 mod github_token_parse;
 mod naming_v1;
 mod operator_acknowledge;
+mod repo_file_render;
 mod template_render;
 
 pub use apple_issuer_id_parse::AppleIssuerIdParse;
@@ -38,6 +43,7 @@ pub use env_get::EnvGet;
 pub use github_token_parse::GitHubTokenParse;
 pub use naming_v1::NamingV1;
 pub use operator_acknowledge::OperatorAcknowledge;
+pub use repo_file_render::RepoFileRender;
 pub use template_render::TemplateRender;
 
 use willikins_core::{Catalog, CatalogError};
@@ -60,6 +66,7 @@ pub fn register(catalog: &mut Catalog) -> Result<(), CatalogError> {
     catalog.insert(std::sync::Arc::new(GitHubTokenParse::new()))?;
     catalog.insert(std::sync::Arc::new(BuildkiteTokenParse::new()))?;
     catalog.insert(std::sync::Arc::new(OperatorAcknowledge::new()))?;
+    catalog.insert(std::sync::Arc::new(RepoFileRender::new()))?;
     Ok(())
 }
 
@@ -90,6 +97,7 @@ mod tests {
                 "github.token.parse",
                 "buildkite.token.parse",
                 "operator.acknowledge",
+                "repo.file.render",
             ]
         );
     }

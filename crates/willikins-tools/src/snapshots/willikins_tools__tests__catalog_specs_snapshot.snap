@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-tools/src/lib.rs
-assertion_line: 110
 expression: specs
 ---
 [
@@ -208,6 +207,39 @@ expression: specs
     },
     "outputs": {
       "step": "Text"
+    },
+    "key": [],
+    "class": "reversible",
+    "pure": true
+  },
+  {
+    "name": "repo.file.render",
+    "description": "Render a template against up to 16 positional `{{ N }}` values into a file at a repository path.",
+    "inputs": {
+      "path": {
+        "ty": {
+          "kind": "exact",
+          "type": "RepoPath"
+        },
+        "required": true
+      },
+      "template": {
+        "ty": {
+          "kind": "exact",
+          "type": "TemplateSource"
+        },
+        "required": true
+      },
+      "values": {
+        "ty": {
+          "kind": "exact",
+          "type": "list<TemplateValue>"
+        },
+        "required": false
+      }
+    },
+    "outputs": {
+      "file": "RepoFile"
     },
     "key": [],
     "class": "reversible",
