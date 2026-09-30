@@ -1988,7 +1988,10 @@ fn appstore_live_bundle_id_name_probe() {
         ("apostrophe", NameCase::Literal("Probe's Apostrophe")),
         ("ampersand", NameCase::Literal("Probe & Ampersand")),
         ("digit-leading", NameCase::Literal("1Probe Digit")),
-        ("name-equals-dotted-identifier", NameCase::EqualsOwnIdentifier),
+        (
+            "name-equals-dotted-identifier",
+            NameCase::EqualsOwnIdentifier,
+        ),
     ];
 
     for (n, (label, case)) in cases.iter().enumerate() {
