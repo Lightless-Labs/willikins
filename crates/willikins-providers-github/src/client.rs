@@ -1143,6 +1143,9 @@ mod tests {
         let mut provider = willikins_providers_http::testing::MockProvider::start();
         let root_tree = provider
             .mock("GET", "/repos/acme/widget/git/trees/root-tree-sha")
+            // Pins the "never recursive" half of decision (b): a request
+            // carrying `?recursive=1` must not satisfy this mock.
+            .match_query(mockito::Matcher::Missing)
             .with_status(200)
             .with_body(
                 serde_json::json!({"sha": "root-tree-sha", "tree": [
@@ -1154,6 +1157,7 @@ mod tests {
             .create();
         let apps_tree = provider
             .mock("GET", "/repos/acme/widget/git/trees/apps-tree-sha")
+            .match_query(mockito::Matcher::Missing)
             .with_status(200)
             .with_body(
                 serde_json::json!({"sha": "apps-tree-sha", "tree": [
@@ -1165,6 +1169,7 @@ mod tests {
             .create();
         let walter_tree = provider
             .mock("GET", "/repos/acme/widget/git/trees/walter-tree-sha")
+            .match_query(mockito::Matcher::Missing)
             .with_status(200)
             .with_body(
                 serde_json::json!({"sha": "walter-tree-sha", "tree": [
@@ -1177,6 +1182,7 @@ mod tests {
             .create();
         let ios_tree = provider
             .mock("GET", "/repos/acme/widget/git/trees/ios-tree-sha")
+            .match_query(mockito::Matcher::Missing)
             .with_status(200)
             .with_body(
                 serde_json::json!({"sha": "ios-tree-sha", "tree": [
@@ -1191,6 +1197,7 @@ mod tests {
             .create();
         let resources_tree = provider
             .mock("GET", "/repos/acme/widget/git/trees/resources-tree-sha")
+            .match_query(mockito::Matcher::Missing)
             .with_status(200)
             .with_body(
                 serde_json::json!({"sha": "resources-tree-sha", "tree": [
@@ -1209,6 +1216,7 @@ mod tests {
         let build_bazel = RepoPath::parse("apps/walter/BUILD.bazel").unwrap();
         let ios_build_bazel = RepoPath::parse("apps/walter/ios/BUILD.bazel").unwrap();
         let info_plist = RepoPath::parse("apps/walter/ios/Resources/Info.plist").unwrap();
+        let resources_dir = RepoPath::parse("apps/walter/ios/Resources").unwrap();
         let symlink = RepoPath::parse("apps/walter/ios/some-symlink").unwrap();
         let submodule = RepoPath::parse("apps/walter/ios/some-submodule").unwrap();
         let under_missing_dir = RepoPath::parse("apps/walter/ios/missing-dir/x").unwrap();
@@ -1217,6 +1225,7 @@ mod tests {
             build_bazel.clone(),
             ios_build_bazel.clone(),
             info_plist.clone(),
+            resources_dir.clone(),
             symlink.clone(),
             submodule.clone(),
             under_missing_dir.clone(),
@@ -1248,6 +1257,10 @@ mod tests {
                 sha: "info-plist-sha".to_string(),
             }
         );
+        // `Resources` itself, as a *terminal* path (not merely a directory
+        // walked through on the way to something else): decision (b)'s
+        // "a tree" non-blob case, distinct from a symlink or a submodule.
+        assert_eq!(resolved[&resources_dir], PathEntry::NonBlob);
         assert_eq!(resolved[&symlink], PathEntry::NonBlob);
         assert_eq!(resolved[&submodule], PathEntry::NonBlob);
         assert_eq!(resolved[&under_missing_dir], PathEntry::Absent);
