@@ -2,7 +2,8 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the live catalog (thirty-three tools since
+//! `live_catalog` assembles the live catalog (thirty-four tools since the
+//! App Attest gate task added `appstore.bundle_id_capability.gate`, after
 //! milestone 3e task K1 added `buildkite.token.parse`, after task R2
 //! added `github.token.parse`, after task B1 added
 //! `doppler.branch_config.ensure`, after task 3 added the two Sample
@@ -20,11 +21,12 @@
 //! added `doppler.value.get`; milestone 3e task B1 added
 //! `doppler.branch_config.ensure`), `willikins-providers-buildkite`'s two
 //! (milestone 3a), `willikins-providers-signoz`'s one (the `SigNoz`
-//! task), and `willikins-providers-appstore`'s three (two from the App
+//! task), and `willikins-providers-appstore`'s seven (two from the App
 //! Store Connect provider crate; milestone 3c added
 //! `appstore.certificate.get`; milestone 3c task 2 added
 //! `appstore.profile.ensure`; milestone 3e task 3 added the two Sample
-//! gates, `appstore.app.get` and `appstore.app_group.gate`) -- exactly as
+//! gates, `appstore.app.get` and `appstore.app_group.gate`; the App
+//! Attest gate task added `appstore.bundle_id_capability.gate`) -- exactly as
 //! `crates/willikins-providers-doppler/tests/live_catalog.rs` built it
 //! before this task; that test now calls [`live_catalog_with`] (this
 //! module's own assembly, taking `Http`s rather than `Credential`s so a
@@ -35,8 +37,9 @@ use std::sync::Arc;
 
 use willikins_core::{Catalog, Tool, ToolName, Workflow, helpers};
 use willikins_providers_appstore::{
-    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure,
-    AppstoreCertificateGet, AppstoreProfileEnsure,
+    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure,
+    AppstoreBundleIdCapabilityGate, AppstoreBundleIdEnsure, AppstoreCertificateGet,
+    AppstoreProfileEnsure,
 };
 use willikins_providers_buildkite::{
     BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineEnsure,
@@ -56,7 +59,7 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 33] = [
+pub const LIVE_TOOL_NAMES: [&str; 34] = [
     "naming.v1",
     "template.render",
     "operator.acknowledge",
@@ -90,6 +93,7 @@ pub const LIVE_TOOL_NAMES: [&str; 33] = [
     "appstore.profile.ensure",
     "appstore.app.get",
     "appstore.app_group.gate",
+    "appstore.bundle_id_capability.gate",
 ];
 
 /// Insert `willikins-tools`' ten pure tools -- no provider, no
@@ -133,7 +137,11 @@ fn insert_pure_tools(catalog: &mut Catalog) {
     );
 }
 
-/// Insert `willikins-providers-appstore`'s four live tools. Unlike every
+/// Insert `willikins-providers-appstore`'s seven live tools (task 3 added
+/// two of these, the gates `appstore.app.get` and `appstore.app_group.gate`;
+/// the App Attest gate task added a third gate,
+/// `appstore.bundle_id_capability.gate` -- this doc comment's own count
+/// had drifted to "four" before this task, corrected here). Unlike every
 /// other `insert_*_tools` function in this module, this one takes no
 /// `Http` and no credential at all: the App Store Connect credential's
 /// three parts are ordinary graph ports, resolved per-call from a
@@ -179,6 +187,12 @@ fn insert_appstore_tools(catalog: &mut Catalog) {
     insert(
         catalog,
         Arc::new(AppstoreAppGroupGate::new(
+            willikins_providers_appstore::APPSTORE_API_BASE_URL,
+        )),
+    );
+    insert(
+        catalog,
+        Arc::new(AppstoreBundleIdCapabilityGate::new(
             willikins_providers_appstore::APPSTORE_API_BASE_URL,
         )),
     );
@@ -924,6 +938,7 @@ mod tests {
             "appstore.profile.ensure",
             "appstore.app.get",
             "appstore.app_group.gate",
+            "appstore.bundle_id_capability.gate",
         ];
         from_provider_arrays.extend(GITHUB_TOOL_NAMES);
         from_provider_arrays.extend(DOPPLER_TOOL_NAMES);
@@ -978,6 +993,7 @@ mod tests {
             "appstore.profile.ensure",
             "appstore.app.get",
             "appstore.app_group.gate",
+            "appstore.bundle_id_capability.gate",
         ] {
             let tool = willikins_core::ToolName::parse(name).unwrap();
             assert_eq!(provider_of(&tool), None, "{name}");
