@@ -348,17 +348,16 @@ mod tests {
                 .is_some_and(|types| !types.is_empty())
         );
         // Milestone 3d, acceptance test 10 (`AppleProfileName`), plus
-        // task T3b's two further rows out of the same `from`
-        // (`AppleBundleIdName`, `Text`) -- every registered conversion,
-        // and nothing else. Stale since T3b landed those two rows and
-        // this literal was not updated with them; found in passing by
-        // task B2's own scoped `willikins-core` gate, unrelated to that
-        // task's own diff.
+        // task T3b's `Text` row out of the same `from` -- every
+        // registered conversion, and nothing else. T3b's third row,
+        // `AppleBundleIdName`, was removed on 2026-09-30 (0f15efd): Apple
+        // refuses a dot in a bundle id's name (409
+        // ENTITY_ERROR.ATTRIBUTE.INVALID, probed live), so that
+        // conversion was never total.
         assert_eq!(
             json["conversions"],
             serde_json::json!([
                 { "from": "AppleBundleIdentifier", "to": "AppleProfileName" },
-                { "from": "AppleBundleIdentifier", "to": "AppleBundleIdName" },
                 { "from": "AppleBundleIdentifier", "to": "Text" },
             ])
         );
