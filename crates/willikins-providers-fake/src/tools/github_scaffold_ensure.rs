@@ -216,6 +216,23 @@ impl GitHubScaffoldEnsure {
         ))
     }
 
+    /// Whether `path`, itself absent from the flat `map`, is nonetheless
+    /// occupied the way the live tool's tree walk sees it: some key lies
+    /// beneath it (so it is a directory, the live tool's non-blob), or a
+    /// proper ancestor of it is a key (so it sits beneath a file, the live
+    /// tool's `UnderNonDirectory`). Adversarial pass (render and write).
+    fn occupied_as_directory_or_beneath_a_file(
+        map: &HashMap<String, String>,
+        path: &RepoPath,
+    ) -> bool {
+        let path = path.as_str();
+        let beneath_a_file = path
+            .match_indices('/')
+            .any(|(index, _)| map.contains_key(&path[..index]));
+        let prefix = format!("{path}/");
+        beneath_a_file || map.keys().any(|key| key.starts_with(&prefix))
+    }
+
     /// Observe `entry` (the scaffold's current path-to-content map, or
     /// none at all) the way decision (b)'s read table describes, with
     /// string equality standing in for the live tool's blob sha
@@ -234,10 +251,16 @@ impl GitHubScaffoldEnsure {
             }
             return Ok(ScaffoldState::Foreign);
         }
+        if Self::occupied_as_directory_or_beneath_a_file(map, marker) {
+            return Ok(ScaffoldState::Foreign);
+        }
         let mut already_equal: HashSet<String> = HashSet::new();
         let mut conflicts: Vec<String> = Vec::new();
         for file in files {
             match map.get(file.path().as_str()) {
+                None if Self::occupied_as_directory_or_beneath_a_file(map, file.path()) => {
+                    conflicts.push(file.path().as_str().to_string());
+                }
                 None => {}
                 Some(existing) if existing == file.content() => {
                     already_equal.insert(file.path().as_str().to_string());

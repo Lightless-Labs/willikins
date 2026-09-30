@@ -431,6 +431,60 @@ fn read_conflicts_when_a_seed_path_is_a_symlink() {
     assert!(err.message.contains("BUILD.bazel"), "{}", err.message);
 }
 
+/// A seed path beneath an existing *file* (`ios` is a blob, the seed is
+/// `ios/BUILD.bazel`) is not absent: a tree cannot hold both, so the
+/// commit could only fail or replace `ios` with a directory, deleting
+/// it. Adversarial pass (render and write): refused as a `Conflict`
+/// naming the path, and nothing is committed.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_seed_path_beneath_an_existing_file_conflicts_and_is_never_committed() {
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider, "head-1", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry("ios", "100644", "blob", "ios-is-a-file-sha")],
+    );
+    let commit = provider.mock("POST", "/graphql").expect(0).create();
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict, "{}", err.message);
+    assert!(err.message.contains("ios/BUILD.bazel"), "{}", err.message);
+
+    let token = SinkToken::new();
+    let err = tool
+        .ensure(&scaffold_inputs(seed_files()), &token)
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict, "{}", err.message);
+    commit.assert();
+}
+
+/// The marker beneath an existing file is `Foreign`, never `Absent`.
+#[test]
+fn a_marker_beneath_an_existing_file_is_foreign() {
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider, "head-1", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry("app", "100644", "blob", "app-is-a-file-sha")],
+    );
+    let mut inputs = scaffold_inputs(seed_files());
+    inputs.insert(
+        PortName::parse("marker").unwrap(),
+        Value::known(RepoPath::parse("app/.willikins-scaffold").unwrap()),
+    );
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let observation = tool.read(&inputs).unwrap();
+    assert!(
+        matches!(observation, Observation::Foreign),
+        "{observation:?}"
+    );
+}
+
 /// A tree listing GitHub marks `truncated: true` may have dropped the very
 /// entry a declared path names; reading its absence as `Absent` would
 /// hand an existing file to `createCommitOnBranch` as a new one, an
