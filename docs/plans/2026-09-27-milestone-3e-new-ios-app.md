@@ -2611,3 +2611,117 @@ policy'").**
   server-side gap (`WILLIKINS_GITHUB_TOKEN` read unconditionally at `serve`/`apply --plan-id`
   startup) is untouched, unrelated to this task; the sandbox-versus-real Doppler naming split R4
   recorded is untouched.
+
+**Addendum:** 2026-09-30 (D2, the Buildkite credential resolved from Doppler; `buildkite_org`/
+`cluster` become literals) -- **closes the one credential K1/L1 left the real Walter document
+still reading from the process environment: `workflows/walter-ios-app.yaml`'s own
+`buildkite.cluster.get`/`buildkite.pipeline.ensure` nodes now bind K1's optional `token` port,
+resolved from Doppler exactly the way R4's own GitHub chain already is, and `buildkite_org`/
+`cluster` are edited in place to the real workplace's own names, "Just update the doc" (D1's own
+words) applied to the one pair of caller-overridable names D1 itself did not touch.**
+
+- **The chain, mirroring `gh_token_secret`/`gh_token` exactly.** `bk_token_secret`
+  (`doppler.secret.get`, `config: buildkite/prd`, `name: PIPELINE_CREATION_TOKEN` -- the real
+  workplace's own secret, per the task brief probed read-only 2026-09-29) into `bk_token`
+  (`buildkite.token.parse`), bound to both `buildkite_cluster.token` and `pipeline.token`. Neither
+  Buildkite node in this document leaves `token` unbound any more, so -- by L1's own rule,
+  unmodified by this task -- `plan`/`apply workflows/walter-ios-app.yaml --live` no longer read
+  `WILLIKINS_BUILDKITE_TOKEN` at all; combined with R4's GitHub chain (already bound) and App
+  Store Connect's own three-port credential (never an environment variable in the first place),
+  this document now needs exactly one environment credential to plan or apply live:
+  `WILLIKINS_DOPPLER_TOKEN`.
+- **`buildkite_org` and `cluster` are bare literals now, not inputs**, the same treatment D1 gave
+  `org`/`slug`/`monorepo`: each was a scalar `with:` port used at exactly one site each on two
+  nodes (`buildkite_cluster.org`/`.name`, `pipeline.org`), so each is now the literal value
+  directly -- `la-bande-a-bonnot` (the real Buildkite org slug) and `Default cluster` (the real
+  org's only cluster), both probed read-only 2026-09-29 and named in this task's own brief. No
+  document-format limit applies here the way it does to `base_configs` (D1): both are plain
+  scalars, not a list, so nothing stops the literal binding.
+- **The fixture is the tightest constraint in this task, not the document.** Any string that
+  parses as a `BuildkiteToken` is exactly the shape `secret_literal_guard.rs`'s `BUILDKITE_TOKEN`
+  pattern exists to catch (K1's own addendum already recorded this for
+  `buildkite-cluster-token-from-doppler.yaml`'s own fixture), and the guard scans every file in
+  the tree, JSON included -- so `workflows/fixtures/state/walter-ios-app.json` carries only the
+  placeholder `BUILDKITE_TOKEN_PLACEHOLDER` under `buildkite/prd#PIPELINE_CREATION_TOKEN`, never a
+  real-shaped literal on disk. `crates/willikins-cli/tests/walter_document.rs` builds its own fake
+  state inline (`serde_json::json!`, never reading this file), so it seeds a `concat!`-assembled
+  token directly (`SEEDED_BUILDKITE_TOKEN`, same seam K1's own `SEEDED_TOKEN` uses:
+  `concat!("bkua_", "...")`), no placeholder needed. `crates/willikins-cli/tests/walter_apply_blocked_redaction.rs`
+  is the one consumer that cannot do that -- it hands the fixture's own path straight to the built
+  binary's `--fake-state` -- so it now reads the checked-in file, substitutes the placeholder for
+  the same `concat!`-assembled token, and writes the result into its own `TempDir` before passing
+  *that* path instead; its existing "no secret leaks into stdout/stderr/journal" assertions gained
+  a fourth check for this token, alongside the PEM marker, the fake profile's plaintext prefix, and
+  the seeded GitHub token. The fixture's `buildkite_clusters` key also moved from
+  `ci-macos-apple-silicon` to `Default cluster` -- the document now requests the real literal name,
+  and the fake tool ignores `org` for its own lookup (confirmed directly against
+  `FakeBuildkiteClusterGet::lookup`, not assumed), so only the name needed to change.
+- **Test-first, both graph tests and the CLI-level test extended to match.** `walter_document.rs`:
+  `base_inputs()` no longer supplies `buildkite_org`/`cluster`; `CLUSTER` is now `"Default
+  cluster"`; `seeded_state_with_base_configs` seeds `buildkite/prd#PIPELINE_CREATION_TOKEN`;
+  `assert_no_secret_leaked` gained the new token constant. `the_document_reads_the_real_layout_by_name`
+  gained the Buildkite mirror of its own existing GitHub block: `bk_token_secret`'s literals,
+  `bk_token`'s binding, every `buildkite.*` node (`buildkite_cluster`, `pipeline`) binding `token`
+  from `bk_token.value`, both nodes' `org` literal `la-bande-a-bonnot`, `buildkite_cluster.name`
+  literal `Default cluster`, and `buildkite_org`/`cluster` no longer declared inputs.
+  `walter_apply_blocked_redaction.rs` dropped its now-stale `--input buildkite_org=…`/`cluster=…`
+  lines (the same harmless cleanup D1 made for `org`/`slug`/`monorepo` -- `build_partial_inputs`
+  passes an unrecognised `--input` through unused rather than refusing it, so these two lines sat
+  unused, never causing a refusal) and gained the placeholder-substitution step and leak assertion
+  above.
+- **The L1 proof, extended from the two single-tool documents to the real one.** K1/L1's own
+  `crates/willikins-cli/tests/serve_and_live.rs` tests proved the rule for
+  `github-repo-token-from-doppler.yaml` and `buildkite-cluster-token-from-doppler.yaml` in
+  isolation; this task's own brief asks for the same proof over `workflows/walter-ios-app.yaml`
+  itself. Two new tests, `plan_live_on_walter_needs_neither_github_nor_buildkite_credential` and
+  `apply_live_on_walter_needs_neither_github_nor_buildkite_credential`: subprocess, `env_clear`,
+  only `WILLIKINS_DOPPLER_TOKEN` set (never `WILLIKINS_GITHUB_TOKEN`/`WILLIKINS_BUILDKITE_TOKEN`),
+  no `--input` -- reach the ordinary missing-input refusal (exit 1, on stdout, `missing
+  \`app_identifier\`` for `plan`) rather than a config refusal naming GitHub or Buildkite (exit 2),
+  proving the live catalog was built without demanding either credential. Checked by hand against
+  the built binary before writing the assertions (`willikins plan workflows/walter-ios-app.yaml
+  --live` with a shaped `dp.sa.` token and no other input), not guessed: exit 1, empty stderr,
+  first missing input named is `app_identifier` (declaration order); `apply` behaves identically.
+  App Store Connect's own tools are inserted unconditionally by `live_catalog_for_document`
+  (`insert_appstore_tools`, no credential gate at all -- its credential is three ports, never an
+  environment variable), confirmed by reading `willikins-server/src/catalog.rs` before writing the
+  test rather than assumed, so nothing about this task touches that path.
+- **No provider call of any kind was made for this task** -- every check ran against the fake
+  catalog, the empty catalog, or a subprocess with `env_clear` and no registered credential for the
+  provider under test.
+- **The characterization snapshot moved by exactly five lines, all additive, all inside this
+  document's own `TYPES:` block, diffed byte for byte against the pre-change snapshot** (`diff`'s
+  own count, not estimated): `bk_token_secret.config`, `bk_token_secret.name`, `bk_token.value`,
+  `buildkite_cluster.token`, `pipeline.token`. The snapshot format prints only each port's resolved
+  type, never whether it is literal- or input-bound, so `buildkite_cluster.org`/`.name` and
+  `pipeline.org` moving from an input reference to a literal changed no line (D1's own
+  `names.org`/`monorepo_ref.repo` made the identical point for `org`/`slug`/`monorepo`). Nothing
+  outside `=== workflows/walter-ios-app.yaml ===` moved.
+- **Scoped gates green:** `cargo fmt --all --check` (one real formatting fix applied by `cargo fmt
+  --all` before the check passed -- a wrapped `.get()` chain in the new test assertions);
+  `cargo clippy -p willikins-cli -p willikins-dsl -p willikins-core --all-targets -j 2 -- -D
+  warnings`; `cargo test -p willikins-cli -j 2` (17 suites, 0 failed, including
+  `walter_document.rs`'s four tests, `walter_apply_blocked_redaction.rs`, and `serve_and_live.rs`'s
+  sixteen, two of them new); `cargo test -p willikins-dsl -j 2` (one insta snapshot accepted and
+  diffed line-by-line, reviewed above); `cargo test -p willikins-server -j 2` (regression check,
+  full crate, all suites, 0 failed -- this task touches no `willikins-server` source, run because
+  the crate's own document-list tests name `walter-ios-app.yaml`); `cargo test -p willikins-core
+  --test secret_literal_guard --test expose_secret_guard` (both green after the fixture and the new
+  test files, per K1/L1's own recorded lesson: re-run the guard after any new text that mints a
+  credential-shaped value); `cargo check -p willikins-types -j 2`. All green
+  (`RUST_TEST_THREADS=2`). The full workspace gate was not run (host rule; the coordinator's).
+- **Honest process note: neither `walter_document.rs`'s nor `serve_and_live.rs`'s new assertions
+  were run red against the pre-change document/binary first.** They were written together with the
+  document edit and run once, green -- except the characterization snapshot, whose own assertion
+  failed on the predicted new `TYPES:` lines before being accepted (real evidence the change
+  reached the document), and the two new `serve_and_live.rs` tests' expected exit code and message,
+  which were confirmed by hand against the *pre-change* built binary (`missing \`app_identifier\``,
+  exit 1) before being written into the test, precisely to have that red-then-understood step
+  somewhere in the loop.
+- **Remaining, carried forward, unchanged by this task:** `base_configs` is still a
+  caller-overridable input by mechanical necessity (D1); R2's own server-side gap
+  (`WILLIKINS_GITHUB_TOKEN`/`WILLIKINS_BUILDKITE_TOKEN` read unconditionally at `serve`/`apply
+  --plan-id` startup, L1's own addendum) is untouched -- a long-lived server or a
+  `--workflows-dir` apply still cannot narrow to one document's own bound ports; the
+  sandbox-versus-real Doppler naming split R4 recorded is untouched; this document's four
+  `operator.acknowledge` leaves and its two observed gates are unaffected by this task.
