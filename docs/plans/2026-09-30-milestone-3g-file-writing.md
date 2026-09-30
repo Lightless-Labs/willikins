@@ -265,6 +265,72 @@ test -p willikins-providers-doppler --test live_catalog`; `cargo check -p willik
 willikins-dsl --test acceptance` (characterization snapshot byte-identical: no document binds this tool
 yet) — all green.
 
+**Addendum:** 2026-09-30 (L1) — the live scaffold cycle harness landed, written and compiling, never run:
+`crates/willikins-providers-github/tests/live_scaffold_cycle.rs`, gated by a new `live-tests` feature on
+this crate (`Cargo.toml`'s own `[[test]] name = "live_scaffold_cycle" required-features = ["live-tests"]`,
+mirroring `willikins-providers-doppler`/`-buildkite`/`-appstore`'s own feature exactly) plus `#[ignore]`
+plus `WILLIKINS_LIVE_TESTS=1` — the same three-deep gate every other live write cycle in this workspace
+uses. This crate's two older live tests (`tests/live_write_cycle.rs`, `tests/live_probe.rs`) predate the
+`live-tests` feature and are untouched: still `#[ignore]`d but always compiled, exactly as before.
+
+Nine steps, one function each, following the plan's own "The live scaffold cycle" section literally: count
+and refuse a leftover (1); a raw `POST .../orgs/{org}/repos` with `auto_init: true`, guard armed before the
+call (2 — `github.repo.ensure`'s own `create_repo` never sets `auto_init`, and an uninitialized repository
+gives `createCommitOnBranch` no branch to land on); `github.scaffold.ensure` creates the scaffold,
+independently confirmed by a raw `GET` of the resulting commit (one parent, the init commit;
+`verification.verified` recorded, settling verify item 2) and its tree (every file plus the marker,
+`100644`, the expected git blob sha) (3); a second `ensure` converges (4); a raw `PUT .../contents/{path}`
+edits one seeded file directly, and it survives untouched (5); a second scaffold naming the edited path
+with its original content is refused `Conflict` (6); a client-level `createCommitOnBranch` with a stale
+`expectedHeadOid` fails, recorded by status/key-set/`errors[].type` only, never `message` (7, settling
+verify item 4); one `read` through the bound `token` port against an *uncredentialed* default client, so
+the read can only have succeeded through the port (8); delete, confirm `404`, confirm the repository count
+returns to step 1's (9). Three further `#[test]`s, not `#[ignore]`d, run today under the feature with no
+network call and actually pass: `ProjectSlug::parse` accepts this cycle's own repository-name grammar,
+`blob_sha` matches git's well-known empty-blob sha1, and `expected_marker_content` sorts by path under the
+required header.
+
+Two choices G1's own addendum (note 3) left "to whichever of G2/L1 lands first" — G2 landed first and
+chose not to widen anything, so this task follows that answer rather than reopening it:
+
+1. **The five read/write methods on `GitHubClient` stay `pub(crate)`.** Step 3's tree/commit verification
+   and step 7's stale-`expectedHeadOid` mutation are both raw, hand-built requests against the shared
+   `Http` client instead — the same shape `tests/live_write_cycle.rs`'s own `repo_path` comment and
+   `tests/scaffold_ensure_mock.rs`'s own duplicated `blob_sha` already use for a `pub(crate)` algorithm or
+   path an external test crate cannot reach. This file carries its own copies of `client::git_blob_sha`,
+   `scaffold_ensure::marker_content` (as `expected_marker_content`), and `client.rs`'s own fixed GraphQL
+   mutation text, on purpose: step 3 and step 7 are meant to check independently of what the tool itself
+   believes, not call back into it.
+2. **Step 8 reads `WILLIKINS_GITHUB_TOKEN` directly, once, via `std::env::var`** — the one thing
+   `tests/live_write_cycle.rs`'s own doc comment says its cycle never needs to do. This cycle does: a bound
+   `token` port needs an actual `GitHubToken`, and a `Credential` has no sanctioned way to hand its bytes to
+   a caller outside `willikins-providers-http`. The plan's own words sanction exactly this ("the `token`
+   port with the same sandbox PAT resolved in-process"). The plaintext `String` is parsed into a
+   `GitHubToken` and dropped immediately; it is never pushed onto the sweep, printed, or formatted.
+
+One deviation from a literal reading of the plan's own step list: step 1 and step 9's repository count is a
+single `GET /orgs/{org}/repos?per_page=100&type=all`, which refuses (panics, naming the org) rather than
+silently miscounting if a page ever comes back full — this harness implements no pagination, on the
+judgement that the sandbox org's repository count stays well under 100 and a loud refusal is safer than a
+quiet undercount.
+
+Verified with `cargo fmt --all --check`; `cargo clippy -p willikins-providers-github --features live-tests
+--tests -j 2 -- -D warnings` green (one `clippy::doc_markdown` fix and one `clippy::too_many_lines` split,
+factoring step 3's own tree/commit verification out into `verify_landed_scaffold`); `cargo test -p
+willikins-providers-github --features live-tests --test live_scaffold_cycle --no-run -j 2` green (compiles;
+never executed), and the same test run without `--no-run` shows its three non-`#[ignore]`d unit tests pass
+while `github_live_scaffold_cycle` itself is correctly filtered out; `cargo clippy -p
+willikins-providers-github --all-targets -j 2 -- -D warnings` and `RUST_TEST_THREADS=2 cargo test -p
+willikins-providers-github -j 2 --no-fail-fast` both green without the feature, confirming
+`live_write_cycle.rs`/`live_probe.rs` and every existing test are unaffected; `cargo check -p
+willikins-types -j 2` green. `cargo test -p willikins-dsl --test acceptance` was not run: `willikins-dsl`
+carries no dependency on `willikins-providers-github` at all (checked directly in its `Cargo.toml`), so this
+task cannot have moved that snapshot.
+
+This harness is written, not run: per the task table, opus runs it once against the sandbox org
+`Willikins-Test` (`WILLIKINS_SANDBOX_GITHUB_ORG`), sourcing `~/.config/willikins/sandbox.env` in the same
+command as the run itself.
+
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Bande-a-Bonnot/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the

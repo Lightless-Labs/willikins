@@ -8,6 +8,22 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Compiles `tests/live_scaffold_cycle.rs`, and nothing else -- mirrors
+# `willikins-providers-doppler`'s own `live-tests` feature exactly, for
+# exactly the same reason: a plain `cargo test --workspace` must never
+# provision or delete anything against a real GitHub org. The test is
+# `#[ignore]`d and needs `WILLIKINS_LIVE_TESTS=1` on top of the feature
+# before it makes a call. This crate's two older live tests
+# (`tests/live_write_cycle.rs`, `tests/live_probe.rs`) predate this
+# feature and stay exactly as they were -- `#[ignore]`d but always
+# compiled -- so this addition touches neither.
+live-tests = []
+
+[[test]]
+name = "live_scaffold_cycle"
+required-features = ["live-tests"]
+
 [dependencies]
 willikins-core.workspace = true
 willikins-types.workspace = true
