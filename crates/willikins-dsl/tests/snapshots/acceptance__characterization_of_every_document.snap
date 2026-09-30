@@ -699,12 +699,17 @@ gh_token_secret.name: SecretName
 gh_token.value: DopplerSecretValue
 monorepo_ref.repo: GitHubRepo
 monorepo_ref.token: GitHubToken
+bk_token_secret.config: DopplerConfig
+bk_token_secret.name: SecretName
+bk_token.value: DopplerSecretValue
 buildkite_cluster.org: BuildkiteOrg
 buildkite_cluster.name: BuildkiteClusterName
+buildkite_cluster.token: BuildkiteToken
 pipeline.org: BuildkiteOrg
 pipeline.slug: BuildkitePipelineSlug
 pipeline.repo: GitHubRepo
 pipeline.cluster: BuildkiteClusterId
+pipeline.token: BuildkiteToken
 m3_repo_files.step: Text
 m3_repo_files.acknowledged: OperatorAcknowledgement
 m5_apns_key.step: Text
