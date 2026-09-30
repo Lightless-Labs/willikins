@@ -15,6 +15,37 @@ reason (its doc comment names the lint), so boxing here matches the codebase's o
 than adding `#[allow(clippy::result_large_err)]` at every affected call site. Contained entirely within
 `willikins-core` (`site.rs`, `check.rs`, `plan.rs`); no other crate's files were touched. Verified with
 `cargo clippy -p willikins-cli -p willikins-server --all-targets -j 2 -- -D warnings`, green.
+**Addendum:** 2026-09-30 (E2) — the five new types (`RepoPath`, `GitBranchName`, `CommitHeadline`,
+`TemplateValue`, `RepoFile`) and the `AppleBundleIdentifier => TemplateValue` conversion landed in
+`willikins-types`; the four check refusals landed in `willikins-core` as one `DisallowedInputType { input, ty }`
+variant (covers "as a workflow input type" and "as an input default" for both `TemplateSource` and `RepoFile`
+in one branch, so a defaulted disallowed input is still exactly one error) plus `RepoFileLiteral { node, port }`
+(checked in both `check_literal` and `check_list_literal`, since `github.scaffold.ensure`'s own port is the
+list form, `files: list<RepoFile>`). Two deviations from a literal reading of "their negative fixtures,
+secret-into-repo-file.yaml" under E2's task row:
+1. **No YAML fixture files were added** under `workflows/fixtures/`, including the four that need no tool
+   (`TemplateSource`/`RepoFile` as an input type or a default) and would have characterized cleanly today.
+   `T1` doesn't land `repo.file.render` and `G2` doesn't land `github.scaffold.ensure` until later tasks, so
+   `secret-into-repo-file.yaml` and a `RepoFile`-literal fixture would characterize as `UnknownTool`, not the
+   intended error, and whichever of `T1`/`G2` lands the real tool would then have to change an *existing*
+   characterization entry — forbidden by this task's own boundary ("only by the addition of new documents").
+   Keeping all six fixtures together, deferred to the tasks that land their tools (`T1` for
+   `secret-into-repo-file.yaml`, `G2` for a `RepoFile`-literal-on-a-list-element fixture; the other four have
+   no such dependency and can be added by either), was judged simpler and less error-prone than splitting them
+   by dependency now. All four refusals, and the secret-into-`values` taint, are instead proved directly in
+   `crates/willikins-core/tests/check.rs` against synthetic `test_catalog()` entries shaped exactly like `T1`'s
+   `repo.file.render` and `G2`'s `github.scaffold.ensure` (SHARED VALUES table), the same pattern `E1` used for
+   `fake.list_sink.ensure` before any real tool had a `list<T>` port.
+2. **The ripple beyond `willikins-core`'s own scoped gate was fixed, matching E1's own addendum precedent**:
+   `willikins-cli/src/render.rs`'s exhaustive `check_error_detail` needed two new arms (plus
+   `#[allow(clippy::too_many_lines)]`, already needed independently by `Display::fmt`'s own match in
+   `check.rs`, both over clippy's 100-line default), and
+   `willikins-server/tests/snapshots/mcp_server__the_tool_list_and_every_schema_is_snapshotted.snap` needed
+   regenerating (diff confirmed as exactly the two new variants' schemas, nothing removed). Verified with
+   `cargo clippy -p willikins-cli -p willikins-server --all-targets -j 2 -- -D warnings`,
+   `cargo test -p willikins-cli --bin willikins`, `cargo test -p willikins-server --test mcp_server`, and
+   `cargo test -p willikins-dsl --test acceptance` (characterization snapshot confirmed byte-identical, since
+   no document yet declares either new type), all green.
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Bande-a-Bonnot/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the

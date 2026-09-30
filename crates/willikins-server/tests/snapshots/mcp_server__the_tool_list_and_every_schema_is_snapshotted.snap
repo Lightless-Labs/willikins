@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-server/tests/mcp_server.rs
+assertion_line: 241
 expression: snapshot
 ---
 [
@@ -2163,6 +2164,52 @@ expression: snapshot
               "required": [
                 "kind",
                 "site"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A workflow input's declared type is\n[`willikins_types::TemplateSource`] or [`willikins_types::RepoFile`]\n-- recognised by the registry entry's own `TypeId` test\n([`crate::value::is_template_source`], [`crate::value::is_repo_file`]),\nnever by comparing [`willikins_types::DomainType::TYPE_NAME`]\nstrings (the milestone 3d rule). Reported whether or not the input\nalso carries a default -- checking further would only repeat this\nsame root cause -- so this doubles as \"a default of either type\",\nmilestone 3g decision (e)'s second refusal.\n\nTemplates and rendered files are privileged, trusted-ref document\ncontent (the design doc's Trust model): a workflow input is exactly\nhow a caller supplies a value, so neither type may ever be one. A\n`TemplateSource` is instead always a document literal, bound\nstraight to `repo.file.render.template`; a `RepoFile` is produced\nonly by that same tool.\n\nNot one of the plan's variants; milestone 3g, decision (e).",
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The offending input."
+                },
+                "kind": {
+                  "const": "DisallowedInputType",
+                  "type": "string"
+                },
+                "ty": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "Its disallowed declared type."
+                }
+              },
+              "required": [
+                "kind",
+                "input",
+                "ty"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `Binding::Literal` bound to a port whose type is\n[`willikins_types::RepoFile`]. Reported before the literal is ever\nhanded to a parser, exactly like [`Self::SecretLiteral`] and\n[`Self::AcknowledgementLiteral`].\n\nThe only producer of a `RepoFile` is `repo.file.render`: a document\nliteral that happens to parse in `RepoFile`'s own canonical\n`<path>\\n<content>` form must still never reach a sink that writes\nit, so this is refused by type regardless of what the literal's\ntext actually says. Unlike [`willikins_types::TemplateSource`],\nwhose literals are the intended route into `repo.file.render`'s own\n`template` port, a `RepoFile` has no legitimate literal at all.\n\nNot one of the plan's variants; milestone 3g, decision (e).",
+              "properties": {
+                "kind": {
+                  "const": "RepoFileLiteral",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node whose binding is the literal."
+                },
+                "port": {
+                  "$ref": "#/$defs/PortName",
+                  "description": "The port it was bound to."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "port"
               ],
               "type": "object"
             }

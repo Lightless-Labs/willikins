@@ -242,6 +242,58 @@ fn test_catalog() -> Catalog {
             Class::Reversible,
             false,
         ),
+        // Milestone 3g, task E2: shaped exactly like `T1`'s own
+        // `repo.file.render` (SHARED VALUES table) so the check-level
+        // refusals this task adds -- a `RepoFile` output cannot be
+        // supplied by a literal, and a secret bound into `values` is
+        // `SecretToNonSecretSink` -- are proved against the real port
+        // shape before `T1` exists.
+        spec_of(
+            "repo.file.render",
+            &[
+                ("path", exact("RepoPath"), true),
+                ("template", exact("TemplateSource"), true),
+                ("values", PortType::Exact(list_ty("TemplateValue")), false),
+            ],
+            &[("file", ty("RepoFile"))],
+            &[],
+            Class::Reversible,
+            true,
+        ),
+        // Milestone 3g, task E2: shaped exactly like `G2`'s own
+        // `github.scaffold.ensure` (SHARED VALUES table), so the
+        // list-element `RepoFile` literal refusal is proved against the
+        // very port Walter's document binds (`files: list<RepoFile>`)
+        // before `G2` exists.
+        spec_of(
+            "github.scaffold.ensure",
+            &[
+                ("repo", exact("GitHubRepo"), true),
+                ("branch", exact("GitBranchName"), true),
+                ("marker", exact("RepoPath"), true),
+                ("files", PortType::Exact(list_ty("RepoFile")), true),
+                ("message", exact("CommitHeadline"), true),
+            ],
+            &[
+                ("repo", ty("GitHubRepo")),
+                ("branch", ty("GitBranchName")),
+                ("marker", ty("RepoPath")),
+            ],
+            &["repo", "branch", "marker"],
+            Class::Irreversible,
+            false,
+        ),
+        // A bare scalar `RepoFile` sink, for testing the literal refusal
+        // on a non-list port too (no shipped tool has a scalar `RepoFile`
+        // input; `github.scaffold.ensure`'s is a list).
+        spec_of(
+            "fake.repo_file_sink.ensure",
+            &[("file", exact("RepoFile"), true)],
+            &[],
+            &["file"],
+            Class::Reversible,
+            false,
+        ),
     ];
     for spec in specs {
         catalog.insert(Arc::new(DummyTool { spec })).unwrap();
@@ -346,6 +398,209 @@ fn acceptance_2_secret_workflow_input_is_rejected_for_a_secret_list_too() {
         vec![CheckError::SecretWorkflowInput {
             input: input("tokens"),
             ty: list_ty("DopplerServiceToken"),
+        }]
+    );
+}
+
+// ---------------------------------------------------------------------
+// Milestone 3g, task E2 (decision (e); acceptance 4): `TemplateSource` and
+// `RepoFile` may never be a workflow input type, a default of either is
+// exactly the same one error (not two), and a literal may never supply a
+// `RepoFile`, scalar or as a list element.
+// ---------------------------------------------------------------------
+
+#[test]
+fn e2_a_template_source_workflow_input_is_rejected() {
+    let workflow = Workflow::new(workflow_name("bad"))
+        .input(input("tmpl"), InputSpec::new(ty("TemplateSource")));
+    let catalog = test_catalog();
+    let errors = check(&workflow, &catalog).expect_err("a TemplateSource input must be rejected");
+    assert_eq!(
+        errors,
+        vec![CheckError::DisallowedInputType {
+            input: input("tmpl"),
+            ty: ty("TemplateSource"),
+        }]
+    );
+}
+
+#[test]
+fn e2_a_repo_file_workflow_input_is_rejected() {
+    let workflow =
+        Workflow::new(workflow_name("bad")).input(input("file"), InputSpec::new(ty("RepoFile")));
+    let catalog = test_catalog();
+    let errors = check(&workflow, &catalog).expect_err("a RepoFile input must be rejected");
+    assert_eq!(
+        errors,
+        vec![CheckError::DisallowedInputType {
+            input: input("file"),
+            ty: ty("RepoFile"),
+        }]
+    );
+}
+
+#[test]
+fn e2_a_template_source_input_with_a_default_is_still_exactly_one_error() {
+    let workflow = Workflow::new(workflow_name("bad")).input(
+        input("tmpl"),
+        InputSpec::new(ty("TemplateSource")).with_default(Value::known(
+            willikins_types::TemplateSource::parse("Hello, {{ 0 }}!").unwrap(),
+        )),
+    );
+    let catalog = test_catalog();
+    let errors = check(&workflow, &catalog)
+        .expect_err("a TemplateSource input with a default must still be rejected");
+    assert_eq!(
+        errors,
+        vec![CheckError::DisallowedInputType {
+            input: input("tmpl"),
+            ty: ty("TemplateSource"),
+        }]
+    );
+}
+
+#[test]
+fn e2_a_repo_file_input_with_a_default_is_still_exactly_one_error() {
+    let path = willikins_types::RepoPath::parse("apps/walter/BUILD.bazel").unwrap();
+    let file = willikins_types::RepoFile::new(path, "content\n").unwrap();
+    let workflow = Workflow::new(workflow_name("bad")).input(
+        input("file"),
+        InputSpec::new(ty("RepoFile")).with_default(Value::known(file)),
+    );
+    let catalog = test_catalog();
+    let errors = check(&workflow, &catalog)
+        .expect_err("a RepoFile input with a default must still be rejected");
+    assert_eq!(
+        errors,
+        vec![CheckError::DisallowedInputType {
+            input: input("file"),
+            ty: ty("RepoFile"),
+        }]
+    );
+}
+
+#[test]
+fn e2_a_literal_cannot_supply_a_scalar_repo_file_port() {
+    let workflow = Workflow::new(workflow_name("bad")).node(
+        node("sink"),
+        Node::new(tool_name("fake.repo_file_sink.ensure")).port(
+            port("file"),
+            Binding::Literal("apps/walter/BUILD.bazel\ncontent\n".to_string()),
+        ),
+    );
+    let catalog = test_catalog();
+    let errors =
+        check(&workflow, &catalog).expect_err("a literal must not supply a scalar RepoFile");
+    assert_eq!(
+        errors,
+        vec![CheckError::RepoFileLiteral {
+            node: node("sink"),
+            port: port("file"),
+        }]
+    );
+}
+
+#[test]
+fn e2_a_literal_cannot_supply_a_repo_file_list_element() {
+    // `github.scaffold.ensure`'s own port shape: `files: list<RepoFile>`
+    // is exactly what Walter's document binds (decision (b)).
+    let workflow = Workflow::new(workflow_name("bad")).node(
+        node("scaffold"),
+        Node::new(tool_name("github.scaffold.ensure"))
+            .port(
+                port("repo"),
+                Binding::Literal("lightless-labs/monorepo".to_string()),
+            )
+            .port(port("branch"), Binding::Literal("main".to_string()))
+            .port(
+                port("marker"),
+                Binding::Literal("apps/walter/.willikins-scaffold".to_string()),
+            )
+            .port(
+                port("files"),
+                Binding::List(vec![Binding::Literal(
+                    "apps/walter/BUILD.bazel\ncontent\n".to_string(),
+                )]),
+            )
+            .port(
+                port("message"),
+                Binding::Literal("feat: scaffold".to_string()),
+            ),
+    );
+    let catalog = test_catalog();
+    let errors =
+        check(&workflow, &catalog).expect_err("a literal must not supply a RepoFile list element");
+    assert_eq!(
+        errors,
+        vec![CheckError::RepoFileLiteral {
+            node: node("scaffold"),
+            port: port("files"),
+        }]
+    );
+}
+
+#[test]
+fn e2_a_secret_value_as_a_repo_file_render_values_element_is_exactly_one_taint_error() {
+    // Decision (e): `workflows/fixtures/secret-into-repo-file.yaml`'s
+    // shape, built directly as a `Workflow` (`T1` does not exist yet, so
+    // this proves the rule against `repo.file.render`'s real port shape
+    // from `test_catalog`, exactly as `secret_into_template_workflow`
+    // does for `template.render`).
+    let workflow = Workflow::new(workflow_name("secret-into-repo-file"))
+        .input(input("project"), InputSpec::new(ty("DopplerProject")))
+        .node(
+            node("doppler"),
+            Node::new(tool_name("doppler.project.ensure"))
+                .port(port("project"), Binding::Input(input("project"))),
+        )
+        .node(
+            node("config"),
+            Node::new(tool_name("doppler.config.ensure"))
+                .port(
+                    port("project"),
+                    Binding::Step {
+                        node: node("doppler"),
+                        port: port("project"),
+                    },
+                )
+                .port(port("environment"), Binding::Literal("prd".to_string())),
+        )
+        .node(
+            node("secret"),
+            Node::new(tool_name("doppler.secret.get"))
+                .port(
+                    port("config"),
+                    Binding::Step {
+                        node: node("config"),
+                        port: port("config"),
+                    },
+                )
+                .port(port("name"), Binding::Literal("SOME_SECRET".to_string())),
+        )
+        .node(
+            node("render"),
+            Node::new(tool_name("repo.file.render"))
+                .port(
+                    port("path"),
+                    Binding::Literal("apps/walter/BUILD.bazel".to_string()),
+                )
+                .port(port("template"), Binding::Literal("{{ 0 }}".to_string()))
+                .port(
+                    port("values"),
+                    Binding::List(vec![Binding::Step {
+                        node: node("secret"),
+                        port: port("value"),
+                    }]),
+                ),
+        );
+    let catalog = test_catalog();
+    let errors = check(&workflow, &catalog)
+        .expect_err("a secret must not reach repo.file.render's values list");
+    assert_eq!(
+        errors,
+        vec![CheckError::SecretToNonSecretSink {
+            from: (node("secret"), port("value")),
+            to: Site::list_element(node("render"), port("values"), 0),
         }]
     );
 }

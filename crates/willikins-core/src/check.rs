@@ -617,9 +617,54 @@ pub enum CheckError {
         /// The binding's own location.
         site: Site,
     },
+    /// A workflow input's declared type is
+    /// [`willikins_types::TemplateSource`] or [`willikins_types::RepoFile`]
+    /// -- recognised by the registry entry's own `TypeId` test
+    /// ([`crate::value::is_template_source`], [`crate::value::is_repo_file`]),
+    /// never by comparing [`willikins_types::DomainType::TYPE_NAME`]
+    /// strings (the milestone 3d rule). Reported whether or not the input
+    /// also carries a default -- checking further would only repeat this
+    /// same root cause -- so this doubles as "a default of either type",
+    /// milestone 3g decision (e)'s second refusal.
+    ///
+    /// Templates and rendered files are privileged, trusted-ref document
+    /// content (the design doc's Trust model): a workflow input is exactly
+    /// how a caller supplies a value, so neither type may ever be one. A
+    /// `TemplateSource` is instead always a document literal, bound
+    /// straight to `repo.file.render.template`; a `RepoFile` is produced
+    /// only by that same tool.
+    ///
+    /// Not one of the plan's variants; milestone 3g, decision (e).
+    DisallowedInputType {
+        /// The offending input.
+        input: InputName,
+        /// Its disallowed declared type.
+        ty: TypeRef,
+    },
+    /// A `Binding::Literal` bound to a port whose type is
+    /// [`willikins_types::RepoFile`]. Reported before the literal is ever
+    /// handed to a parser, exactly like [`Self::SecretLiteral`] and
+    /// [`Self::AcknowledgementLiteral`].
+    ///
+    /// The only producer of a `RepoFile` is `repo.file.render`: a document
+    /// literal that happens to parse in `RepoFile`'s own canonical
+    /// `<path>\n<content>` form must still never reach a sink that writes
+    /// it, so this is refused by type regardless of what the literal's
+    /// text actually says. Unlike [`willikins_types::TemplateSource`],
+    /// whose literals are the intended route into `repo.file.render`'s own
+    /// `template` port, a `RepoFile` has no legitimate literal at all.
+    ///
+    /// Not one of the plan's variants; milestone 3g, decision (e).
+    RepoFileLiteral {
+        /// The node whose binding is the literal.
+        node: NodeName,
+        /// The port it was bound to.
+        port: PortName,
+    },
 }
 
 impl fmt::Display for CheckError {
+    #[allow(clippy::too_many_lines)] // one arm per variant; splitting it would only move the count, not reduce it
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownTool { node, tool } => {
@@ -700,6 +745,10 @@ impl fmt::Display for CheckError {
                 f,
                 "node `{node}`, port `{port}`: a literal cannot supply an operator acknowledgement"
             ),
+            Self::RepoFileLiteral { node, port } => write!(
+                f,
+                "node `{node}`, port `{port}`: a literal cannot supply a repository file"
+            ),
             Self::ListOnScalarPort { site, expected } => write!(
                 f,
                 "{site}: a list binding cannot be delivered to a port of type {expected}"
@@ -721,7 +770,8 @@ impl fmt::Display for CheckError {
             | Self::UnregisteredInputType { .. }
             | Self::DuplicateNode { .. }
             | Self::LiteralOutput { .. }
-            | Self::AcknowledgementDefault { .. } => self.fmt_declaration_error(f),
+            | Self::AcknowledgementDefault { .. }
+            | Self::DisallowedInputType { .. } => self.fmt_declaration_error(f),
         }
     }
 }
@@ -765,6 +815,10 @@ impl CheckError {
             Self::AcknowledgementDefault { input } => write!(
                 f,
                 "input `{input}`: an operator acknowledgement input may not have a default"
+            ),
+            Self::DisallowedInputType { input, ty } => write!(
+                f,
+                "input `{input}`: declared type `{ty}` may never be a workflow input or a default; it is privileged, trusted-ref document content"
             ),
             other => unreachable!("not a declaration error: {other:?}"),
         }
@@ -813,6 +867,8 @@ impl CheckError {
             Self::ListOnScalarPort { .. } => "ListOnScalarPort",
             Self::ListElementTypeMismatch { .. } => "ListElementTypeMismatch",
             Self::SequenceNotAllowedHere { .. } => "SequenceNotAllowedHere",
+            Self::DisallowedInputType { .. } => "DisallowedInputType",
+            Self::RepoFileLiteral { .. } => "RepoFileLiteral",
         }
     }
 }
@@ -882,13 +938,21 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
 
 /// Check every declared input: [`CheckError::SecretWorkflowInput`] when
 /// its type is secret, [`CheckError::UnregisteredInputType`] when its type
-/// is not in the registry at all, or else [`CheckError::DefaultTypeMismatch`]
-/// when its default value is not of the declared type: its own `TypeRef`
-/// differs, or one of its known objects fails the registry entry's `TypeId`
-/// test ([`TypeRegistry::type_matches`]), never a name comparison. Either of the first
-/// two is a root cause that suppresses the default check for that input,
-/// which could only repeat it (a secret type cannot have a valid default at
-/// all, and an unregistered type has nothing to check the default against).
+/// is not in the registry at all,
+/// [`CheckError::DisallowedInputType`] when its type is
+/// [`willikins_types::TemplateSource`] or [`willikins_types::RepoFile`]
+/// (milestone 3g decision (e) -- whether or not a default is also present),
+/// [`CheckError::AcknowledgementDefault`] when its type is
+/// [`willikins_types::OperatorAcknowledgement`] and it carries a default, or
+/// else [`CheckError::DefaultTypeMismatch`] when its default value is not
+/// of the declared type: its own `TypeRef` differs, or one of its known
+/// objects fails the registry entry's `TypeId` test
+/// ([`TypeRegistry::type_matches`]), never a name comparison. Any of the
+/// first three is a root cause that suppresses the default check for that
+/// input, which could only repeat it (a secret type cannot have a valid
+/// default at all; an unregistered type has nothing to check the default
+/// against; `TemplateSource` and `RepoFile` may never be defaulted either,
+/// same as they may never be the type at all).
 fn check_workflow_inputs(
     workflow: &Workflow,
     registry: &TypeRegistry,
@@ -918,6 +982,20 @@ fn check_workflow_inputs(
                     input: name.clone(),
                 });
             }
+            continue;
+        }
+        if crate::value::is_template_source(registry, &spec.ty.name)
+            || crate::value::is_repo_file(registry, &spec.ty.name)
+        {
+            // One error whether or not `spec.default` is set: this is the
+            // root cause, and checking the default further (below) could
+            // only repeat it. Milestone 3g decision (e)'s two refusals
+            // ("as a workflow input type" and "as an input default")
+            // collapse into this one branch.
+            errors.push(CheckError::DisallowedInputType {
+                input: name.clone(),
+                ty: spec.ty.clone(),
+            });
             continue;
         }
         let Some(default) = &spec.default else {
@@ -1660,9 +1738,12 @@ impl<'a> Resolver<'a> {
 }
 
 /// Check a `with`-bound literal against `expected`: a secret-accepting
-/// port refuses it outright; a list-typed port refuses it because no
-/// literal can supply a list; otherwise it is parsed against the port's
-/// scalar type.
+/// port refuses it outright; an operator-acknowledgement or
+/// [`willikins_types::RepoFile`] port refuses it too, before ever handing
+/// the text to a parser (milestone 3g decision (e): the only producer of a
+/// `RepoFile` is `repo.file.render`, so no literal may supply one); a
+/// list-typed port refuses it because no literal can supply a list;
+/// otherwise it is parsed against the port's scalar type.
 fn check_literal(
     node: &NodeName,
     port: &PortName,
@@ -1685,6 +1766,14 @@ fn check_literal(
 
     if crate::value::is_operator_acknowledgement(registry, &ty.name) {
         errors.push(CheckError::AcknowledgementLiteral {
+            node: node.clone(),
+            port: port.clone(),
+        });
+        return None;
+    }
+
+    if crate::value::is_repo_file(registry, &ty.name) {
+        errors.push(CheckError::RepoFileLiteral {
             node: node.clone(),
             port: port.clone(),
         });
@@ -1719,9 +1808,12 @@ fn check_literal(
 /// refuses it outright, exactly like [`check_literal`] does for a
 /// secret-accepting scalar port (a list element is never `AnySecret` --
 /// [`check_list_port`] only reaches here once `element_ty` is already known
-/// to be `T`, a concrete type); otherwise it is parsed directly against
-/// `T`, never converted (decision (e), step 2, the same rule a scalar
-/// literal follows).
+/// to be `T`, a concrete type); an operator-acknowledgement or
+/// [`willikins_types::RepoFile`] `T` refuses it too, for the same reason
+/// [`check_literal`] does (milestone 3g decision (e): `files: list<RepoFile>`
+/// is exactly `github.scaffold.ensure`'s own port shape); otherwise it is
+/// parsed directly against `T`, never converted (decision (e), step 2, the
+/// same rule a scalar literal follows).
 fn check_list_literal(
     node: &NodeName,
     port: &PortName,
@@ -1740,6 +1832,14 @@ fn check_list_literal(
 
     if crate::value::is_operator_acknowledgement(registry, &element_ty.name) {
         errors.push(CheckError::AcknowledgementLiteral {
+            node: node.clone(),
+            port: port.clone(),
+        });
+        return None;
+    }
+
+    if crate::value::is_repo_file(registry, &element_ty.name) {
+        errors.push(CheckError::RepoFileLiteral {
             node: node.clone(),
             port: port.clone(),
         });
@@ -2925,6 +3025,14 @@ mod tests {
                     node: node_name("n"),
                 },
             },
+            CheckError::DisallowedInputType {
+                input: input_name("i"),
+                ty: ty("TemplateSource"),
+            },
+            CheckError::RepoFileLiteral {
+                node: node_name("n"),
+                port: port("p"),
+            },
         ]
     }
 
@@ -2959,6 +3067,8 @@ mod tests {
         ListOnScalarPort,
         ListElementTypeMismatch,
         SequenceNotAllowedHere,
+        DisallowedInputType,
+        RepoFileLiteral,
     );
 
     #[test]
