@@ -331,6 +331,18 @@ This harness is written, not run: per the task table, opus runs it once against 
 `Willikins-Test` (`WILLIKINS_SANDBOX_GITHUB_ORG`), sourcing `~/.config/willikins/sandbox.env` in the same
 command as the run itself.
 
+A "Fix commit" after advisor review: the four facts this harness is supposed to *record* for verify items 2
+and 4 (step 3's `commit.verification.verified`, step 7's response top-level keys, its `errors[0]` key set
+and `type`, and its transport-failure status) were going through `Cycle::note`, which only keeps a string
+for the final redaction sweep and never prints it -- so a `--nocapture` run would have shown "step 3 …
+pass" / "step 7 … pass" and settled neither verify item, with the facts themselves dropped at exit
+alongside `sweep`. All four now go through `Cycle::say` instead (still swept, now also printed); nothing in
+them is secret (a `bool`, JSON key names, and an `errors[].type` enum string -- exactly the "key names
+only, never `message`" rule already in force). Verified again with the same four scoped gates (`cargo fmt
+--all --check`; `cargo clippy -p willikins-providers-github --features live-tests --tests -j 2 -- -D
+warnings`; `cargo test -p willikins-providers-github --features live-tests --test live_scaffold_cycle
+--no-run -j 2`; the same run without `--no-run`, its three offline tests still passing), all green.
+
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Bande-a-Bonnot/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the

@@ -587,7 +587,7 @@ fn verify_landed_scaffold(cycle: &mut Cycle, head_after: &str) {
     let verified = commit
         .pointer("/commit/verification/verified")
         .and_then(Json::as_bool);
-    cycle.note(format!(
+    cycle.say(&format!(
         "step 3 commit verification.verified = {verified:?} (verify item 2, recorded, not asserted)"
     ));
 
@@ -872,7 +872,7 @@ fn step_7_stale_expected_head_fails(cycle: &mut Cycle) {
     match cycle.raw.post::<Json>("/graphql", &body) {
         Ok(response) => {
             let keys = top_level_keys(&response);
-            cycle.note(format!("step 7 response top-level keys: {keys:?}"));
+            cycle.say(&format!("step 7 response top-level keys: {keys:?}"));
             let errors = response.get("errors").and_then(Json::as_array);
             let has_errors = errors.is_some_and(|list| !list.is_empty());
             let data_is_null = response.get("data").is_none_or(Json::is_null);
@@ -883,13 +883,13 @@ fn step_7_stale_expected_head_fails(cycle: &mut Cycle) {
             if let Some(first) = errors.and_then(|list| list.first()) {
                 let error_keys = top_level_keys(first);
                 let error_type = first.get("type").and_then(Json::as_str);
-                cycle.note(format!(
+                cycle.say(&format!(
                     "step 7 errors[0] keys: {error_keys:?}, type: {error_type:?} (verify item 4, recorded, not pinned)"
                 ));
             }
         }
         Err(err) => {
-            cycle.note(format!(
+            cycle.say(&format!(
                 "step 7 request failed at the transport/status level: status {:?} (verify item 4)",
                 err.status
             ));
