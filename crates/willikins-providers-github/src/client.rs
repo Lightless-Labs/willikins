@@ -493,9 +493,13 @@ impl GitHubClient {
                 return Ok(found.classify());
             }
             if found.entry_type != "tree" {
-                // An intermediate segment exists but is not a directory,
-                // so the declared path underneath it cannot exist either.
-                return Ok(PathEntry::Absent);
+                // An intermediate segment exists but is not a directory.
+                // The declared path cannot exist, but it is not free
+                // either: writing it would have to replace that entry
+                // with a directory, deleting it. Adversarial pass (render
+                // and write): reported apart from `Absent`, so a caller
+                // refuses rather than commits.
+                return Ok(PathEntry::UnderNonDirectory);
             }
             current_tree_sha = found.sha.clone();
         }
@@ -766,7 +770,7 @@ pub(crate) struct PublicKeyBody {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PathEntry {
     /// No entry of that name exists, or an ancestor directory along the
-    /// way does not exist or is itself not a directory.
+    /// way does not exist.
     Absent,
     /// A regular or executable file. `mode` is GitHub's own string
     /// (`"100644"` or `"100755"`), `sha` its git blob sha.
@@ -774,6 +778,11 @@ pub(crate) enum PathEntry {
     /// Something other than a file at that exact path: a subdirectory
     /// (`"040000"`), a symlink (`"120000"`), or a submodule (`"160000"`).
     NonBlob,
+    /// An ancestor along the way exists but is not a directory (a file,
+    /// symlink or submodule sits where the path needs a subdirectory). A
+    /// tree cannot hold both, so writing the path could only fail or
+    /// replace that entry: occupied, never absent.
+    UnderNonDirectory,
 }
 
 /// GitHub's `git-ref` schema: the one field this crate reads.
@@ -1204,7 +1213,13 @@ mod tests {
         let submodule = RepoPath::parse("apps/walter/ios/some-submodule").unwrap();
         let under_missing_dir = RepoPath::parse("apps/walter/ios/missing-dir/x").unwrap();
         let missing_file = RepoPath::parse("apps/walter/missing.txt").unwrap();
+        // A path beneath an existing *file* or *symlink*: not absent, since
+        // writing it would have to replace that entry with a directory.
+        let under_a_file = RepoPath::parse("apps/walter/BUILD.bazel/x").unwrap();
+        let under_a_symlink = RepoPath::parse("apps/walter/ios/some-symlink/x").unwrap();
         let paths = vec![
+            under_a_file.clone(),
+            under_a_symlink.clone(),
             build_bazel.clone(),
             ios_build_bazel.clone(),
             info_plist.clone(),
@@ -1248,6 +1263,8 @@ mod tests {
         assert_eq!(resolved[&submodule], PathEntry::NonBlob);
         assert_eq!(resolved[&under_missing_dir], PathEntry::Absent);
         assert_eq!(resolved[&missing_file], PathEntry::Absent);
+        assert_eq!(resolved[&under_a_file], PathEntry::UnderNonDirectory);
+        assert_eq!(resolved[&under_a_symlink], PathEntry::UnderNonDirectory);
 
         root_tree.assert();
         apps_tree.assert();

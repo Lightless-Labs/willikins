@@ -249,6 +249,126 @@ fn agrees_on_a_marker_whose_first_line_only_starts_with_the_header() {
     assert!(matches!(fake, Observation::Foreign), "{fake:?}");
 }
 
+fn serve_root_tree(provider: &mut MockProvider, entries: &[serde_json::Value]) {
+    provider
+        .mock("GET", "/repos/acme/widget/git/trees/root-tree")
+        .match_query(mockito::Matcher::Missing)
+        .with_status(200)
+        .with_body(serde_json::json!({"sha": "root-tree", "tree": entries}).to_string())
+        .create();
+}
+
+/// A seed path beneath an existing file (`ios` is a file; the seed is
+/// `ios/BUILD.bazel`): both sides refuse with `Conflict`. Adversarial pass
+/// (render and write) -- before it, the live tool read `Absent` and the
+/// fake, a flat map with no directories, agreed only by accident.
+#[test]
+fn agrees_on_a_seed_path_beneath_an_existing_file() {
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider);
+    serve_root_tree(
+        &mut provider,
+        &[tree_entry("ios", "100644", "blob", "ios-is-a-file-sha")],
+    );
+    let live = live_against(provider.url())
+        .read(&inputs(seed_files()))
+        .unwrap_err();
+
+    let state = FakeState::new().with_scaffold_files(&repo(), &branch(), &[("ios", "a file\n")]);
+    let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
+        .read(&inputs(seed_files()))
+        .unwrap_err();
+
+    assert_eq!(live.kind, ToolErrorKind::Conflict, "{}", live.message);
+    assert_eq!(fake.kind, ToolErrorKind::Conflict, "{}", fake.message);
+    assert!(fake.message.contains("ios/BUILD.bazel"), "{}", fake.message);
+}
+
+/// A seed path that is an existing *directory* (`ios` holds files; the
+/// seed is a file named `ios`): both sides refuse with `Conflict`. Before
+/// the adversarial pass the live tool refused (a tree is a non-blob) but
+/// the fake read `Absent` and planned `Create`.
+#[test]
+fn agrees_on_a_seed_path_that_is_an_existing_directory() {
+    let files = vec![RepoFile::new(RepoPath::parse("ios").unwrap(), "a file now\n").unwrap()];
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider);
+    serve_root_tree(
+        &mut provider,
+        &[tree_entry("ios", "040000", "tree", "ios-tree")],
+    );
+    let live = live_against(provider.url())
+        .read(&inputs(files.clone()))
+        .unwrap_err();
+
+    let state = FakeState::new().with_scaffold_files(
+        &repo(),
+        &branch(),
+        &[("ios/BUILD.bazel", "someone's\n")],
+    );
+    let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
+        .read(&inputs(files))
+        .unwrap_err();
+
+    assert_eq!(live.kind, ToolErrorKind::Conflict, "{}", live.message);
+    assert_eq!(fake.kind, ToolErrorKind::Conflict, "{}", fake.message);
+}
+
+/// The marker beneath an existing file, or the marker path an existing
+/// directory: `Foreign` on both sides.
+#[test]
+fn agrees_on_a_marker_path_occupied_by_a_file_or_a_directory() {
+    // Marker `.willikins-scaffold/inner` beneath a file `.willikins-scaffold`.
+    let mut under_file = inputs(seed_files());
+    under_file.insert(
+        PortName::parse("marker").unwrap(),
+        Value::known(RepoPath::parse(".willikins-scaffold/inner").unwrap()),
+    );
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider);
+    serve_root_tree(
+        &mut provider,
+        &[tree_entry(".willikins-scaffold", "100644", "blob", "a-sha")],
+    );
+    let live = live_against(provider.url()).read(&under_file).unwrap();
+    let state = FakeState::new().with_scaffold_files(
+        &repo(),
+        &branch(),
+        &[(".willikins-scaffold", "a file\n")],
+    );
+    let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
+        .read(&under_file)
+        .unwrap();
+    assert!(matches!(live, Observation::Foreign), "{live:?}");
+    assert!(matches!(fake, Observation::Foreign), "{fake:?}");
+
+    // Marker `.willikins-scaffold` that is itself a directory.
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider);
+    serve_root_tree(
+        &mut provider,
+        &[tree_entry(
+            ".willikins-scaffold",
+            "040000",
+            "tree",
+            "dir-sha",
+        )],
+    );
+    let live = live_against(provider.url())
+        .read(&inputs(seed_files()))
+        .unwrap();
+    let state = FakeState::new().with_scaffold_files(
+        &repo(),
+        &branch(),
+        &[(".willikins-scaffold/x", "inside\n")],
+    );
+    let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
+        .read(&inputs(seed_files()))
+        .unwrap();
+    assert!(matches!(live, Observation::Foreign), "{live:?}");
+    assert!(matches!(fake, Observation::Foreign), "{fake:?}");
+}
+
 /// Both sides refuse the same shape problems before touching any state
 /// or request at all.
 #[test]
