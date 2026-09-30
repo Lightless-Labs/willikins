@@ -385,6 +385,28 @@ fn agrees_on_invalid_shape() {
     assert_eq!(fake.kind, ToolErrorKind::Invalid);
 }
 
+/// Nested declared paths (`a` and `a/b`) are `Invalid` on both sides,
+/// before any request or state lookup (adversarial pass, render and
+/// write): before it, the live tool sent the commit and the fake wrote
+/// both paths into its map.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn agrees_on_declared_paths_nested_under_one_another() {
+    let files = vec![
+        RepoFile::new(RepoPath::parse("a").unwrap(), "x").unwrap(),
+        RepoFile::new(RepoPath::parse("a/b").unwrap(), "y").unwrap(),
+    ];
+    let token = mint();
+    let live = live_against("http://127.0.0.1:1".to_string())
+        .ensure(&inputs(files.clone()), &token)
+        .unwrap_err();
+    let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(FakeState::new())))
+        .ensure(&inputs(files), &token)
+        .unwrap_err();
+    assert_eq!(live.kind, ToolErrorKind::Invalid, "{}", live.message);
+    assert_eq!(fake.kind, ToolErrorKind::Invalid, "{}", fake.message);
+}
+
 /// The marker-too-long shape refusal (64 files each with a long path,
 /// producing a marker over `RepoFile`'s bound) agrees between both sides
 /// too, on both `read` and `ensure` -- the fix commit that added this

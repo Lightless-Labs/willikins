@@ -602,6 +602,46 @@ fn ensure_refuses_a_duplicate_path_before_any_request() {
     assert_eq!(err.kind, ToolErrorKind::Invalid);
 }
 
+/// Declared paths where one is a directory of another -- two files, or a
+/// file and the marker, either way round -- cannot all exist in one tree.
+/// Knowable from inputs alone, so refused `Invalid` before any request on
+/// both `read` and `ensure`, never left for GitHub to refuse (or the fake
+/// to accept). Adversarial pass (render and write).
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn declared_paths_nested_under_one_another_are_invalid_before_any_request() {
+    let file = |path: &str| RepoFile::new(RepoPath::parse(path).unwrap(), "x").unwrap();
+    let cases: Vec<(Vec<RepoFile>, &str)> = vec![
+        (vec![file("a"), file("a/b")], ".willikins-scaffold"),
+        (vec![file("a/b/c"), file("a/b")], ".willikins-scaffold"),
+        (vec![file("ios/BUILD.bazel")], "ios"),
+        (vec![file("BUILD.bazel")], "BUILD.bazel/.willikins-scaffold"),
+    ];
+    let tool = GitHubScaffoldEnsure::new(unreachable_client());
+    let token = SinkToken::new();
+    for (files, marker) in cases {
+        let mut inputs = scaffold_inputs(files);
+        inputs.insert(
+            PortName::parse("marker").unwrap(),
+            Value::known(RepoPath::parse(marker).unwrap()),
+        );
+        let err = tool.read(&inputs).unwrap_err();
+        assert_eq!(
+            err.kind,
+            ToolErrorKind::Invalid,
+            "{marker}: {}",
+            err.message
+        );
+        let err = tool.ensure(&inputs, &token).unwrap_err();
+        assert_eq!(
+            err.kind,
+            ToolErrorKind::Invalid,
+            "{marker}: {}",
+            err.message
+        );
+    }
+}
+
 #[test]
 #[allow(clippy::disallowed_methods)] // a test mints its own token
 fn ensure_refuses_when_the_marker_path_is_also_one_of_files() {
