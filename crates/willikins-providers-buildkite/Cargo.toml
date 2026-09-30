@@ -27,6 +27,7 @@ willikins-types.workspace = true
 willikins-providers-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml_ng.workspace = true
 indexmap.workspace = true
 regex.workspace = true
 thiserror.workspace = true

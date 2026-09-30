@@ -6,13 +6,15 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use willikins_core::{PortName, Tool, Value};
-use willikins_providers_buildkite::{BuildkiteClient, BuildkitePipelineEnsure};
+use willikins_core::{Inputs, PortName, Tool, Value};
+use willikins_providers_buildkite::{
+    BuildkiteClient, BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure,
+};
 use willikins_providers_http::testing::MockProvider;
 use willikins_providers_http::{Credential, Http};
 use willikins_types::{
     BuildkiteClusterId, BuildkiteOrg, BuildkitePipelineSlug, DomainType, GitHubOrg, GitHubRepo,
-    ProjectSlug,
+    ProjectSlug, RepoFile, RepoPath,
 };
 
 /// Stands in for a real Buildkite API access token: shaped like one so
@@ -358,6 +360,236 @@ fn a_bound_token_port_marker_reaches_no_observation_or_error() {
         assert!(
             !text.contains(PORT_TOKEN_MARKER),
             "the bound-token-port marker leaked into: {text}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------
+// Milestone 3g task B1: decision (h) widens trust boundary 6 (narrowly)
+// to let `buildkite.pipeline.bootstrap.gate` read a pipeline's stored
+// `configuration` -- "the gate uses its own `PipelineConfigurationBody`,
+// compares, and drops it: the value never reaches an output, an error,
+// the journal, `tracing`, or `Debug`". A stored configuration may carry
+// an operator's own `env`, so this is proven the same way every other
+// credential-shaped marker is proven above: a distinctive marker planted
+// in `configuration`, then grepped for everywhere this crate could have
+// let it leak.
+// ---------------------------------------------------------------------
+
+/// Stands in for a secret an operator's own `env:` block in a stored
+/// pipeline configuration might carry -- secret-*shaped*, the same way
+/// [`CREDENTIAL_MARKER`] is, since decision (h) names exactly this case
+/// ("a stored bootstrap may carry an operator's own `env`"); `concat!`-joined
+/// for the same secret-literal-guard reason.
+const CONFIGURATION_MARKER: &str = concat!("bkua_", "wlknConfigurationMarker00000000000000");
+
+fn bootstrap_gate_inputs(expected_content: &str) -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(PortName::parse("org").unwrap(), Value::known(org()));
+    inputs.insert(PortName::parse("slug").unwrap(), Value::known(slug()));
+    inputs.insert(
+        PortName::parse("expected").unwrap(),
+        Value::known(
+            RepoFile::new(
+                RepoPath::parse("apps/sample/.buildkite/bootstrap.yml").unwrap(),
+                expected_content,
+            )
+            .unwrap(),
+        ),
+    );
+    inputs
+}
+
+/// A stored `configuration` carrying the marker, different from
+/// `expected` (so the gate reads `Absent`), never reaches the
+/// `Observation`'s own `Debug`, the `Ensured`'s, or any `ToolError`
+/// message -- across `read`, a failing `ensure`, and a provider error.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_configuration_marker_reaches_no_observation_ensured_or_error() {
+    // `expected` is bound to the *same* YAML the mock serves (marker
+    // included -- `RepoFile` accepts any grammar-legal content), so this
+    // reads `Present`, the branch that actually carries outputs. A test
+    // that only exercised `Absent` would never prove the marker stays
+    // out of a successful gate's own rendering.
+    let configuration = format!(
+        "steps:\n  - command: \"echo hi\"\n    env:\n      TOKEN: \"{CONFIGURATION_MARKER}\"\n"
+    );
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(200)
+        .with_body(serde_json::json!({"configuration": configuration.clone()}).to_string())
+        .create();
+    let credential = Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+    let client = Arc::new(BuildkiteClient::new(Http::new(
+        provider.url(),
+        Vec::new(),
+        credential,
+    )));
+    let tool = BuildkitePipelineBootstrapGate::new(client);
+    let inputs = bootstrap_gate_inputs(&configuration);
+
+    let observation = tool.read(&inputs).expect("reads");
+    assert!(
+        matches!(observation, willikins_core::Observation::Present(_)),
+        "{observation:?}"
+    );
+    let token = willikins_core::SinkToken::new();
+    let ensured = tool.ensure(&inputs, &token).expect("ensures");
+    assert!(!ensured.changed);
+
+    let mut failing = MockProvider::start();
+    failing
+        .mock(
+            "GET",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(500)
+        // The marker sits in `configuration`, which a `5xx` body-mapping
+        // never reads at all (only `message` is), not in `message`
+        // itself -- trust boundary 5 already permits (bounded, escaped)
+        // provider `message` text into a `ToolError`, so a marker placed
+        // there would fail this test for the wrong reason.
+        .with_body(
+            serde_json::json!({"message": "boom", "configuration": CONFIGURATION_MARKER})
+                .to_string(),
+        )
+        .create();
+    let failing_credential =
+        Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+    let failing_client = Arc::new(BuildkiteClient::new(Http::new(
+        failing.url(),
+        Vec::new(),
+        failing_credential,
+    )));
+    let err = BuildkitePipelineBootstrapGate::new(failing_client)
+        .read(&inputs)
+        .expect_err("500");
+
+    for text in [
+        format!("{observation:?}"),
+        format!("{ensured:?}"),
+        format!("{err:?}"),
+        err.message.clone(),
+    ] {
+        assert!(
+            !text.contains(CONFIGURATION_MARKER),
+            "the configuration marker leaked into: {text}"
+        );
+    }
+}
+
+/// A `configuration` field of the wrong JSON type (an object instead of
+/// a string, carrying the marker inside it) is a provider failure -- and
+/// even then, the marker never reaches the resulting `ToolError`: a
+/// `serde` type-mismatch error must never echo the offending value.
+#[test]
+fn a_wrong_typed_configuration_carrying_the_marker_reaches_no_error() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "configuration": {"env": {"TOKEN": CONFIGURATION_MARKER}},
+            })
+            .to_string(),
+        )
+        .create();
+    let credential = Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+    let client = Arc::new(BuildkiteClient::new(Http::new(
+        provider.url(),
+        Vec::new(),
+        credential,
+    )));
+    let tool = BuildkitePipelineBootstrapGate::new(client);
+    let inputs = bootstrap_gate_inputs("steps:\n  - command: \"echo hi\"\n");
+
+    let err = tool
+        .read(&inputs)
+        .expect_err("a type mismatch is a failure");
+    assert!(
+        !format!("{err:?}").contains(CONFIGURATION_MARKER),
+        "the marker leaked into: {err:?}"
+    );
+    assert!(
+        !err.message.contains(CONFIGURATION_MARKER),
+        "the marker leaked into: {}",
+        err.message
+    );
+}
+
+/// Acceptance 9: "only `GET` is ever recorded". Records every request's
+/// method across `read` and `ensure`, on both a matching (`Present`) and
+/// a differing (`Absent`) stored configuration -- a gate that ever sent
+/// anything but `GET` (a write this tool must never issue) would show up
+/// here.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn only_get_is_ever_recorded_across_read_and_ensure_present_and_absent() {
+    let recorded = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+
+    for (case, configuration) in [
+        ("present", "steps:\n  - command: \"echo hi\"\n"),
+        (
+            "absent",
+            "steps:\n  - command: \"buildkite-agent pipeline upload\"\n",
+        ),
+    ] {
+        let mut provider = MockProvider::start();
+        let capture = recorded.clone();
+        provider
+            .mock(
+                "GET",
+                "/v2/organizations/willikins-test/pipelines/third-thoughts",
+            )
+            .with_status(200)
+            .with_body_from_request(move |request| {
+                let mut seen = capture.lock().expect("not poisoned");
+                seen.push((
+                    request.method().to_string(),
+                    request.path_and_query().to_string(),
+                ));
+                serde_json::json!({"configuration": configuration})
+                    .to_string()
+                    .into_bytes()
+            })
+            .create();
+
+        let credential =
+            Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+        let client = Arc::new(BuildkiteClient::new(Http::new(
+            provider.url(),
+            Vec::new(),
+            credential,
+        )));
+        let tool = BuildkitePipelineBootstrapGate::new(client);
+        let inputs = bootstrap_gate_inputs("steps:\n  - command: \"echo hi\"\n");
+
+        tool.read(&inputs)
+            .unwrap_or_else(|err| panic!("{case}: read failed: {err}"));
+        let token = willikins_core::SinkToken::new();
+        tool.ensure(&inputs, &token)
+            .unwrap_or_else(|err| panic!("{case}: ensure failed: {err}"));
+    }
+
+    let recorded = recorded.lock().expect("not poisoned").clone();
+    assert_eq!(
+        recorded.len(),
+        4,
+        "read and ensure each made one request, twice"
+    );
+    for (method, path) in &recorded {
+        assert_eq!(
+            method, "GET",
+            "a request other than GET was recorded: {path}"
         );
     }
 }

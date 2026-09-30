@@ -240,6 +240,27 @@ impl BuildkiteClient {
         self.http.get(&path)
     }
 
+    /// `GET /v2/organizations/{org}/pipelines/{slug}`, the same endpoint
+    /// [`Self::get_pipeline`] reads, but deserializing only `configuration`
+    /// -- [`buildkite.pipeline.bootstrap.gate`](crate::tools::BuildkitePipelineBootstrapGate)'s
+    /// own call, kept as its own method and its own response type
+    /// ([`PipelineConfigurationBody`]) rather than adding a seventh field
+    /// to [`PipelineBody`], exactly as milestone 3g decision (h) requires:
+    /// `buildkite.pipeline.ensure` must never deserialize `configuration`
+    /// at all.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_pipeline`].
+    pub(crate) fn get_pipeline_configuration(
+        &self,
+        org: &BuildkiteOrg,
+        slug: &BuildkitePipelineSlug,
+    ) -> Result<PipelineConfigurationBody, ProviderError> {
+        let path = format!("/v2/organizations/{org}/pipelines/{slug}");
+        self.http.get(&path)
+    }
+
     /// `POST /v2/organizations/{org}/pipelines` with exactly `name`
     /// (equal to `slug`), `slug`, `cluster_id`, `repository`,
     /// `description` (the [`MANAGED_DESCRIPTION`] marker), and
@@ -427,6 +448,30 @@ pub(crate) struct PipelineBody {
     pub(crate) description: Option<String>,
 }
 
+/// A Buildkite pipeline's REST representation, deserializing **only**
+/// `configuration` -- the one field milestone 3g decision (h) widens
+/// trust boundary 6 for, narrowly, and only for this one caller
+/// ([`BuildkiteClient::get_pipeline_configuration`]).
+/// [`PipelineBody`] above keeps its own six fields unchanged;
+/// `buildkite.pipeline.ensure` never deserializes `configuration` at all.
+///
+/// **Never printed.** No `Debug` derive: the stored configuration may
+/// carry an operator's own `env`, and this type's only caller
+/// (`buildkite.pipeline.bootstrap.gate`'s `observe`) compares it and
+/// drops it -- it never becomes an output, an error message, a journal
+/// entry, or a `tracing` field. Deliberately narrower than
+/// [`PipelineBody`]'s own `#[allow(dead_code)]` shape: there is nothing
+/// else on this struct for a reviewer to check against trust boundary 7,
+/// since it carries only the one field this crate is now allowed to read.
+#[derive(Deserialize)]
+pub(crate) struct PipelineConfigurationBody {
+    /// The pipeline's stored configuration, compared structurally (as
+    /// parsed YAML) against the bootstrap `RepoFile` the calling document
+    /// renders. `None` when Buildkite reports no configuration at all --
+    /// treated the same as "different" by the gate's own `observe`.
+    pub(crate) configuration: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct CreatePipelineBody {
     name: String,
@@ -525,6 +570,78 @@ mod tests {
         assert_eq!(
             UPLOAD_CONFIGURATION,
             "steps:\n - command: \"buildkite-agent pipeline upload\""
+        );
+    }
+
+    /// `PipelineBody` still has exactly six fields (trust boundary 7;
+    /// milestone 3g acceptance 9). An exhaustive destructure with no
+    /// `..` fails to compile the moment a seventh field (`configuration`,
+    /// `steps`, `provider`, or anything else) is added to the struct, so
+    /// this test is the compile-time pin, not the assertions inside it.
+    /// The response also carries `provider`, `steps`, and
+    /// `configuration` (exactly as a real Buildkite response does), and
+    /// this still deserializes and reads only the six named fields --
+    /// proving, again, that `PipelineBody` never reads `configuration`
+    /// at all.
+    #[test]
+    fn pipeline_body_still_has_exactly_six_fields() {
+        let body: PipelineBody = serde_json::from_str(
+            &serde_json::json!({
+                "id": "018e5a22-0000-0000-0000-000000000001",
+                "slug": "third-thoughts",
+                "web_url": "https://buildkite.com/willikins-test/third-thoughts",
+                "repository": "git@github.com:lightless-labs/third-thoughts.git",
+                "cluster_id": "018e5a22-d14c-7085-bb28-db0f83f43a1c",
+                "description": "managed-by: willikins",
+                "provider": {"webhook_url": "https://webhook.buildkite.com/deliver/NEVER-READ"},
+                "steps": [{"type": "script", "command": "echo never read"}],
+                "configuration": "steps:\n - command: \"echo never read\"",
+            })
+            .to_string(),
+        )
+        .expect("deserializes, dropping the three unknown fields");
+        let PipelineBody {
+            id,
+            slug,
+            web_url,
+            repository,
+            cluster_id,
+            description,
+        } = body;
+        assert_eq!(id, "018e5a22-0000-0000-0000-000000000001");
+        assert_eq!(slug, "third-thoughts");
+        assert_eq!(
+            web_url,
+            "https://buildkite.com/willikins-test/third-thoughts"
+        );
+        assert_eq!(
+            repository,
+            "git@github.com:lightless-labs/third-thoughts.git"
+        );
+        assert_eq!(
+            cluster_id,
+            Some("018e5a22-d14c-7085-bb28-db0f83f43a1c".to_string())
+        );
+        assert_eq!(description, Some("managed-by: willikins".to_string()));
+    }
+
+    /// [`PipelineConfigurationBody`] has exactly the one field its own
+    /// doc claims -- the complementary pin: `get_pipeline_configuration`'s
+    /// response type is as narrow as `PipelineBody` is wide.
+    #[test]
+    fn pipeline_configuration_body_has_exactly_one_field() {
+        let body: PipelineConfigurationBody = serde_json::from_str(
+            &serde_json::json!({
+                "id": "018e5a22-0000-0000-0000-000000000001",
+                "configuration": "steps:\n - command: \"echo hi\"",
+            })
+            .to_string(),
+        )
+        .expect("deserializes, dropping the unknown `id`");
+        let PipelineConfigurationBody { configuration } = body;
+        assert_eq!(
+            configuration,
+            Some("steps:\n - command: \"echo hi\"".to_string())
         );
     }
 

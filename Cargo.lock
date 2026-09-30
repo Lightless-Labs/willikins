@@ -3367,6 +3367,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "thiserror",
  "willikins-core",
  "willikins-dsl",

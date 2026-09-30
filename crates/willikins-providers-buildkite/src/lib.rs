@@ -1,5 +1,6 @@
 //! Live Buildkite provider tools: `buildkite.pipeline.ensure`,
-//! `buildkite.cluster.get`.
+//! `buildkite.cluster.get`, `buildkite.pipeline.bootstrap.gate` (milestone
+//! 3g task B1).
 //!
 //! See `docs/plans/2026-09-16-milestone-3a-buildkite-and-the-real-workflow.md`'s
 //! `willikins-providers-buildkite` crate contract and trust boundaries 6
@@ -23,4 +24,4 @@ pub use client::{
     credential_from_env, http_client, http_client_without_credential, pipeline_web_url,
     ssh_repository_url,
 };
-pub use tools::{BuildkiteClusterGet, BuildkitePipelineEnsure};
+pub use tools::{BuildkiteClusterGet, BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure};
