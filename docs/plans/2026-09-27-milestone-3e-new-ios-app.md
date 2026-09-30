@@ -2924,3 +2924,90 @@ provider call.
   --all-targets -j 2 -- -D warnings`; `cargo test -p willikins-types`; `cargo check -p
   willikins-types`; `cargo test -p willikins-cli --test sample_document` (4 passed). Both snapshots are
   unmoved. The full workspace gate was not run (host rule; it is the coordinator's).
+
+**Addendum:** 2026-09-30 (the App Attest gate task) — **the operator asked "Could we update the
+workflow to enable App Attest on apps by default?" Since App Store Connect's API can only read this
+capability, never write it, the honest answer is a gate, not a write: `appstore.bundle_id_capability.gate`
+(a read-only gate over any observed capability, generalizing `appstore.app_group.gate`) and Sample's own
+`app_app_attest` node, which holds back the host app's profile until App Attest is confirmed enabled.
+Platform is also corrected to the literal `UNIVERSAL` (fact 1, below). Six commits, test-first, no live
+call. No provider call of any kind in this task.**
+
+- **The coordinator's live facts this task rests on (2026-09-30, read-only plus one guarded live probe):**
+  1. **Platform is a permanent trap on this account.** The first real Sample apply created all three
+     identifiers `IOS`; after the operator restored the app record and configured App Groups in the
+     portal, all three — and all 21 of the operator's other bundle ids — read `platform: UNIVERSAL`. A
+     re-run then refused at plan time (`app_id.platform`: the resource is ours, but its current value
+     does not match what was requested, and this tool will not change it). Platform is immutable through
+     the API, so `IOS` was never a safe default here.
+  2. **App Attest is readable, not writable.** The host identifier's capability list now returns
+     `APP_ATTEST` and `APP_ATTEST_OPT_IN` (the operator enabled them by hand in the portal), although
+     neither is among the 28 members of Apple's own `CapabilityType` enum (specification 4.5). On a
+     throwaway `UNIVERSAL` identifier, `POST /v1/bundleIdCapabilities` with either as `capabilityType`
+     answered `409 ENTITY_ERROR.ATTRIBUTE.TYPE` ("An attribute in the provided entity has the wrong
+     type"). Apple's own docs: App Attest works in the host app and in watchOS/action/SSO extensions
+     only — `generateKey` fails when called from an app extension regardless of `isSupported` — so no
+     gate applies to the NSE or widgets extensions.
+  3. **The gate design follows M2's own precedent exactly** (decision (j) point 2, "a gate passes
+     through the key it checked"): enabling a capability changes the App ID and invalidates profiles
+     minted before it, so a gate — never a write the tool cannot make anyway — holds the dependent
+     profile back until the capability reads enabled, and `appstore.profile.ensure`'s own
+     replace-when-INVALID heals a profile invalidated by the operator's later portal work on the
+     document's next run, the same healing M2 already relies on.
+- **Task 1, the gate tool.** `AppleObservableCapabilityType` (`willikins-types`) admits
+  `AppleCapabilityType`'s 28 writable members plus the two observed-only ones, each sourced in its own
+  doc comment (the specification for the 28, the 2026-09-30 live read for the two) — `AppleCapabilityType`
+  itself is untouched, staying exactly the 28 writable members the CLAUDE.md invariant requires. A new
+  unit test pins the superset relation directly (every writable member parses as observable; the two
+  extras parse as observable but are refused by `AppleCapabilityType`). `appstore.bundle_id_capability.gate`
+  (`crates/willikins-providers-appstore/src/tools/capability_gate.rs`) generalizes
+  `appstore.app_group.gate` to any `AppleObservableCapabilityType`: `identifier` and `capability` are
+  both ordinary input ports, both named in `Gate::subject` (`Gate::need`/`how` are `&'static str` and
+  cannot interpolate either), with `how` stating plainly that willikins cannot enable the capability and
+  the operator does it in the portal or Xcode. Mock tests cover parent-absent, registered-but-not-listed,
+  and present (using `APP_ATTEST`); a fake twin, `fake_agrees_with_live.rs` parity (three cases), a
+  catalog-parity spec-equality and snapshot test, and a `pure_tools_agree.rs` case (using `APP_GROUPS`,
+  already seeded there, since the fake's `with_apple_bundle_id_capability` seed helper cannot express a
+  read-only capability) all pass. Registered in the live catalog (`LIVE_TOOL_NAMES` 33 → 34,
+  `insert_appstore_tools` — whose own doc comment's stale "four" live tools is corrected to seven, the
+  count it had already drifted to before this task) and the fake catalog (35 → 36 tools); the pinned
+  array length in `willikins-providers-doppler/tests/live_catalog.rs` moves with it.
+- **Task 2, the Sample document, edited in place.** `platform` is the bare literal `UNIVERSAL` on all
+  three bundle identifiers (fact 1); `platform` is no longer a declared input. A new node,
+  `app_app_attest` (host identifier only, reading `identifier` from `app_id` directly rather than
+  chained through `app_app_groups`, so both gates report together on the very first run rather than one
+  surfacing only after the other is already met), holds back `app_profile`'s `identifier` port — while
+  `app_profile.name` still binds through `app_app_groups`, the same "gate passes through the key it
+  checked" shape applied through two independent ports of the same node — and so `app_profile_to_doppler`
+  transitively. The NSE and widgets profiles are unaffected; they keep binding through their own
+  `app_group.gate` alone. `crates/willikins-cli/tests/sample_document.rs`: `base_inputs` drops
+  `platform`; run 1's blocked set and `Applied.blocked` count (8 → 9) gain `app_app_attest`; a new
+  plan-only interleaved case (App Groups on, App Attest still off) proves the host profile and its
+  Doppler write alone are held back while the NSE and widgets profiles and their Doppler writes proceed;
+  run 2 and run 3's node lists gain `app_app_attest`; `the_document_reads_the_real_layout_by_name` pins
+  the `UNIVERSAL` literals, the gate's own binding shape (`identifier` from `app_id` directly, the
+  profile's `identifier`/`name` split across the two gates), and that the NSE/widgets profiles are
+  unaffected. `sample_apply_blocked_redaction.rs` drops the stale `--input platform=IOS` (the fixture
+  seeds no bundle id at all, so this was never a platform-mismatch trap) and names `app_app_attest` among
+  the blocked nodes it expects in stdout.
+- **The characterization snapshot moved by exactly five additive lines**, all inside Sample's own
+  `TYPES:` block, for `app_app_attest`'s five ports — diffed byte for byte against the pre-change
+  snapshot. Sample's own `PLAN ERROR` line is unaffected (the characterization's synthesized inputs
+  still fail at the very first Doppler read, before any Apple node). No other document's lines moved.
+  `willikins-types`' and `willikins-providers-fake`'s own catalog snapshots moved additively (new
+  registered type, new registered tool) — neither is the restricted characterization snapshot.
+- **Scoped gates green throughout, one commit at a time:** `cargo fmt --all --check`; `cargo clippy`
+  (`-D warnings`) on every touched crate (`willikins-types`, `willikins-providers-appstore`,
+  `willikins-providers-fake`, `willikins-server`, `willikins-providers-doppler`, `willikins-cli`);
+  `cargo test` on the same crates plus `willikins-dsl --test acceptance` (the characterization) and
+  `willikins-core --test secret_literal_guard` (no provider-token-shaped literal introduced), every
+  suite green; `cargo check -p willikins-types`. The full workspace gate was not run (host rule; the
+  coordinator's).
+- **No provider call of any kind was made for this task** — every check ran against the fake catalog,
+  the mock server, or the type registry directly.
+- **Not done here, left for the coordinator/operator:** a live probe confirming `APP_ATTEST`/
+  `APP_ATTEST_OPT_IN` behave identically on an `IOS`-platform identifier, not only `UNIVERSAL` (every
+  identifier on this account is already `UNIVERSAL`, so this is a theoretical gap, not a known one);
+  whether the operator wants `APP_ATTEST_OPT_IN` gated too (Sample's own document only asks for
+  `APP_ATTEST`, the base capability); this plan is not re-marked Completed (it already is, from task 3)
+  and its own gate design decisions above are additive to, not a revision of, decision (j).
