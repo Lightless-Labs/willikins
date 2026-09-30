@@ -35,10 +35,11 @@ use willikins_core::{Inputs, Observation, Outputs, PortName, SinkToken, ToolName
 use willikins_providers_fake::{FakeState, catalog};
 use willikins_types::{
     AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCapabilityType,
-    AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId, AppleSigningKey,
-    BuildkiteClusterName, BuildkiteOrg, BuildkiteToken, DomainType, DopplerConfig,
-    DopplerSecretValue, GitHubOrg, GitHubRepo, GitHubToken, OpaqueSecret, OperatorAcknowledgement,
-    ProjectSlug, RepoVisibility, SecretName, TemplateSource, Text,
+    AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId,
+    AppleObservableCapabilityType, AppleSigningKey, BuildkiteClusterName, BuildkiteOrg,
+    BuildkiteToken, DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg, GitHubRepo,
+    GitHubToken, OpaqueSecret, OperatorAcknowledgement, ProjectSlug, RepoVisibility, SecretName,
+    TemplateSource, Text,
 };
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
@@ -265,6 +266,19 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
 
     let app_group_gate_inputs = app_get_inputs.clone();
 
+    // `capability` is bound to `APP_GROUPS`, already seeded above --
+    // this test only proves the pure-tool `ensure` == `read` contract,
+    // not the gate's own generality over read-only capabilities (that is
+    // `appstore_bundle_id_capability_gate.rs`'s own unit tests and
+    // `fake_agrees_with_live.rs`'s job).
+    let mut capability_gate_inputs = app_get_inputs.clone();
+    capability_gate_inputs.insert(
+        port("capability"),
+        Value::known(
+            AppleObservableCapabilityType::parse("APP_GROUPS").expect("a valid capability"),
+        ),
+    );
+
     let mut config_inheritable_gate_inputs = Inputs::new();
     config_inheritable_gate_inputs.insert(port("config"), Value::known(config()));
 
@@ -286,6 +300,7 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
         ("operator.acknowledge", acknowledge_inputs),
         ("appstore.app.get", app_get_inputs),
         ("appstore.app_group.gate", app_group_gate_inputs),
+        ("appstore.bundle_id_capability.gate", capability_gate_inputs),
         (
             "doppler.config.inheritable.gate",
             config_inheritable_gate_inputs,

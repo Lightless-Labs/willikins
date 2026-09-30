@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
-assertion_line: 206
+assertion_line: 212
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -965,6 +965,53 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     },
     "key": [],
     "name": "appstore.app_group.gate",
+    "outputs": {
+      "identifier": "AppleBundleIdentifier"
+    },
+    "pure": true
+  },
+  {
+    "class": "reversible",
+    "description": "A gate: whether a named capability is enabled on a bundle identifier.",
+    "inputs": {
+      "capability": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleObservableCapabilityType"
+        }
+      },
+      "identifier": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleBundleIdentifier"
+        }
+      },
+      "issuer_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleIssuerId"
+        }
+      },
+      "key": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleSigningKey"
+        }
+      },
+      "key_id": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "AppleKeyId"
+        }
+      }
+    },
+    "key": [],
+    "name": "appstore.bundle_id_capability.gate",
     "outputs": {
       "identifier": "AppleBundleIdentifier"
     },

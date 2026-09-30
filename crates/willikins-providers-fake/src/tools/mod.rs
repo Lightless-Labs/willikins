@@ -9,6 +9,7 @@
 pub mod appstore_app_get;
 pub mod appstore_app_group_gate;
 pub mod appstore_bundle_id_capability_ensure;
+pub mod appstore_bundle_id_capability_gate;
 pub mod appstore_bundle_id_ensure;
 pub mod appstore_certificate_get;
 pub mod appstore_profile_ensure;
@@ -35,6 +36,7 @@ pub mod signoz_ingestion_key_ensure;
 pub use appstore_app_get::FakeAppstoreAppGet;
 pub use appstore_app_group_gate::FakeAppstoreAppGroupGate;
 pub use appstore_bundle_id_capability_ensure::FakeAppstoreBundleIdCapabilityEnsure;
+pub use appstore_bundle_id_capability_gate::FakeAppstoreBundleIdCapabilityGate;
 pub use appstore_bundle_id_ensure::FakeAppstoreBundleIdEnsure;
 pub use appstore_certificate_get::FakeAppstoreCertificateGet;
 pub use appstore_profile_ensure::FakeAppstoreProfileEnsure;

@@ -10,8 +10,9 @@ use std::sync::{Arc, Mutex};
 
 use willikins_core::{Tool, ToolSpec};
 use willikins_providers_appstore::{
-    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure,
-    AppstoreCertificateGet, AppstoreProfileEnsure,
+    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure,
+    AppstoreBundleIdCapabilityGate, AppstoreBundleIdEnsure, AppstoreCertificateGet,
+    AppstoreProfileEnsure,
 };
 
 const NOWHERE: &str = "http://127.0.0.1:1";
@@ -68,6 +69,14 @@ fn appstore_app_group_gate_spec_equals_the_fake_tool() {
 }
 
 #[test]
+fn appstore_bundle_id_capability_gate_spec_equals_the_fake_tool() {
+    let live = AppstoreBundleIdCapabilityGate::new(NOWHERE);
+    let fake =
+        willikins_providers_fake::tools::FakeAppstoreBundleIdCapabilityGate::new(fake_state());
+    assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
+}
+
+#[test]
 fn every_spec_validates_against_the_type_registry() {
     for spec in [
         AppstoreBundleIdEnsure::new(NOWHERE).spec(),
@@ -76,6 +85,7 @@ fn every_spec_validates_against_the_type_registry() {
         AppstoreProfileEnsure::new(NOWHERE).spec(),
         AppstoreAppGet::new(NOWHERE).spec(),
         AppstoreAppGroupGate::new(NOWHERE).spec(),
+        AppstoreBundleIdCapabilityGate::new(NOWHERE).spec(),
     ] {
         spec.validate(willikins_types::registry())
             .expect("valid spec");
@@ -107,5 +117,9 @@ fn snapshot_every_live_tool_spec() {
     insta::assert_json_snapshot!(
         "appstore_app_group_gate_spec",
         spec_json(AppstoreAppGroupGate::new(NOWHERE).spec())
+    );
+    insta::assert_json_snapshot!(
+        "appstore_bundle_id_capability_gate_spec",
+        spec_json(AppstoreBundleIdCapabilityGate::new(NOWHERE).spec())
     );
 }
