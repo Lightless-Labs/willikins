@@ -490,6 +490,37 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         std::collections::BTreeSet::from(["app_profile", "app_profile_to_doppler"]),
         "app_app_attest must hold back exactly the host profile and its Doppler write"
     );
+    // Adversarial pass 7: `need`/`how` are `&'static` and cannot name the
+    // capability, so the rendered `subject` is the only place the operator
+    // learns *which* capability is missing on *which* identifier.
+    let attest_subject: Vec<(&str, &str)> = attest_blocked
+        .subject
+        .iter()
+        .map(|(port, text)| (port.as_str(), text.as_str()))
+        .collect();
+    assert_eq!(
+        attest_subject,
+        vec![("identifier", APP_IDENTIFIER), ("capability", "APP_ATTEST")],
+        "app_app_attest's blocked report must name the host identifier and APP_ATTEST"
+    );
+    // And nothing but App Attest and the four acknowledgements is still
+    // blocked: the three app-group gates and the app record are open.
+    let blocked_attest_off: std::collections::BTreeSet<&str> = planned_attest_off
+        .blocked
+        .iter()
+        .map(|b| b.node.as_str())
+        .collect();
+    assert_eq!(
+        blocked_attest_off,
+        std::collections::BTreeSet::from([
+            "app_app_attest",
+            "m3_repo_files",
+            "m5_apns_key",
+            "m6_ci_doppler_access",
+            "m7_bootstrap",
+        ]),
+        "with App Groups on and App Attest off, only App Attest and the acknowledgements block"
+    );
 
     // ------------------------------------------------------------------
     // Between the interleaved plan and run 2: the operator finishes the
