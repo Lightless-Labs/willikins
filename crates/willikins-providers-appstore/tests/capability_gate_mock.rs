@@ -156,3 +156,75 @@ fn ensure_agrees_with_read_and_never_reports_changed() {
         .expect("ensure succeeds");
     assert!(!ensured.changed);
 }
+
+// ---------------------------------------------------------------------
+// Adversarial pass 7: the gate never writes, even when its capability is
+// missing. Structurally it cannot write a read-only capability at all
+// (the client's only capability write takes `&AppleCapabilityType`, which
+// this module never imports, and no conversion reaches it); these pin the
+// executable half: `ensure` on an unmet gate sends no `POST` (the mock
+// below must see zero calls) and any other unmocked write would have
+// failed `ensure` outright with mockito's 501.
+// ---------------------------------------------------------------------
+
+#[test]
+fn ensure_on_an_unregistered_parent_never_writes() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"data": []}).to_string())
+        .create();
+    let create_bundle_id = provider.mock("POST", "/v1/bundleIds").expect(0).create();
+    let create_capability = provider
+        .mock("POST", "/v1/bundleIdCapabilities")
+        .expect(0)
+        .create();
+
+    let tool = AppstoreBundleIdCapabilityGate::new(provider.url());
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    let token = willikins_core::SinkToken::new();
+    let ensured = tool
+        .ensure(&inputs("APP_ATTEST"), &token)
+        .expect("an unmet gate's ensure still succeeds, reporting nothing changed");
+    assert!(!ensured.changed);
+    create_bundle_id.assert();
+    create_capability.assert();
+}
+
+#[test]
+fn ensure_when_the_capability_is_not_listed_never_writes() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": [{
+                "id": "BID1",
+                "attributes": {"identifier": "com.example.MyApp", "name": "third-thoughts", "platform": "UNIVERSAL"}
+            }]})
+            .to_string(),
+        )
+        .create();
+    provider
+        .mock("GET", "/v1/bundleIds/BID1/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"data": []}).to_string())
+        .create();
+    let create_capability = provider
+        .mock("POST", "/v1/bundleIdCapabilities")
+        .expect(0)
+        .create();
+
+    let tool = AppstoreBundleIdCapabilityGate::new(provider.url());
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    let token = willikins_core::SinkToken::new();
+    let ensured = tool
+        .ensure(&inputs("APP_ATTEST"), &token)
+        .expect("an unmet gate's ensure still succeeds, reporting nothing changed");
+    assert!(!ensured.changed);
+    create_capability.assert();
+}
