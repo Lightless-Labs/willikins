@@ -164,6 +164,20 @@ pub fn http_client(credential: Credential) -> Http {
     Http::new(BUILDKITE_API_BASE_URL, Vec::new(), credential)
 }
 
+/// Build an [`Http`] against Buildkite's real API, carrying no
+/// [`Credential`] at all: every request this crate's tools send through
+/// it refuses locally, naming [`CREDENTIAL_VAR`], unless
+/// [`willikins_providers_http::Http::with_credential`] first replaces
+/// it (which every tool's own `token`-port handling already does when a
+/// document binds one). Mirrors
+/// `willikins_providers_github::http_client_without_credential` exactly;
+/// see its own doc for the one caller today
+/// (`willikins_server::catalog`'s per-document credential narrowing).
+#[must_use]
+pub fn http_client_without_credential() -> Http {
+    Http::without_credential(BUILDKITE_API_BASE_URL, Vec::new(), CREDENTIAL_VAR)
+}
+
 /// The repository URL this crate sends on create and compares on read:
 /// `git@github.com:{owner}/{name}.git`, built from an already-parsed
 /// [`GitHubRepo`] rather than accepted as a string anywhere (plan

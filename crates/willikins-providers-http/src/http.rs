@@ -50,13 +50,24 @@ pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 /// sleeper waits.
 const BASE_BACKOFF: Duration = Duration::from_millis(200);
 
-/// A synchronous HTTP client bound to one provider's base URL and one
-/// [`Credential`].
+/// A synchronous HTTP client bound to one provider's base URL and, in
+/// the common case, one [`Credential`].
 pub struct Http {
     agent: Agent,
     base_url: String,
     default_headers: Vec<(String, String)>,
-    credential: Credential,
+    /// `None` only for a client built by [`Self::without_credential`]
+    /// and not yet replaced by [`Self::with_credential`]: every request
+    /// method refuses locally, naming [`Self::missing_credential_var`],
+    /// before this client ever reaches the network. See
+    /// [`Self::without_credential`]'s own doc for why that state exists
+    /// at all.
+    credential: Option<Credential>,
+    /// The environment variable a caller would have read [`Self::credential`]
+    /// from, kept even while `credential` is `Some` (unused in that case)
+    /// so [`Self::with_credential`] need not decide whether to carry it
+    /// forward — it always does, harmlessly.
+    missing_credential_var: Option<&'static str>,
     /// `None`: every request carries `credential` via
     /// [`Credential::authorize`] (`Authorization: Bearer <token>`), the
     /// shape every provider but `SigNoz` uses. `Some(name)`: every request
@@ -94,6 +105,58 @@ impl Http {
         credential: Credential,
         header_name: Option<&'static str>,
     ) -> Self {
+        Self::build(
+            base_url,
+            default_headers,
+            Some(credential),
+            None,
+            header_name,
+        )
+    }
+
+    /// Build a client identical to [`Self::new`] in route and headers,
+    /// but with no [`Credential`] at all: every request method refuses
+    /// locally with a [`ProviderError`] naming `missing_var`, before
+    /// building or sending anything, until [`Self::with_credential`]
+    /// gives it one.
+    ///
+    /// For `willikins_server::catalog`'s per-document credential
+    /// narrowing (milestone 3e tasks R2, K1, and their own follow-up):
+    /// when every node in a document that calls a provider's tools
+    /// binds that provider's own optional credential port, the
+    /// provider's environment variable is not required at all, but its
+    /// tools are still inserted into the catalog (a document's nodes
+    /// must resolve), each holding one *default* client shared by every
+    /// call that leaves the port unbound. Building that default client
+    /// from a missing environment variable used to be a hard refusal at
+    /// catalog-construction time even when nothing would ever reach it —
+    /// this constructor is what makes it not one: the default client
+    /// exists, but is a live *refusal*, not a live credential.
+    ///
+    /// This is deliberately not a silent success with an empty or
+    /// placeholder credential: if the "every node binds its own port"
+    /// analysis this exists to serve is ever wrong (a bug in the
+    /// analysis, not in this crate), the alternative would be sending an
+    /// unauthenticated request to the real provider API — a live
+    /// network call this workspace's own boundaries never allow as a
+    /// side effect of a documentation error. Refusing locally, with no
+    /// network call at all, is the only safe default.
+    #[must_use]
+    pub fn without_credential(
+        base_url: impl Into<String>,
+        default_headers: Vec<(String, String)>,
+        missing_var: &'static str,
+    ) -> Self {
+        Self::build(base_url, default_headers, None, Some(missing_var), None)
+    }
+
+    fn build(
+        base_url: impl Into<String>,
+        default_headers: Vec<(String, String)>,
+        credential: Option<Credential>,
+        missing_credential_var: Option<&'static str>,
+        header_name: Option<&'static str>,
+    ) -> Self {
         let config = Agent::config_builder()
             .timeout_connect(Some(CONNECT_TIMEOUT))
             .timeout_global(Some(TOTAL_TIMEOUT))
@@ -116,6 +179,7 @@ impl Http {
             base_url: base_url.into(),
             default_headers,
             credential,
+            missing_credential_var,
             credential_header: header_name,
             sleeper: sleeper::real(),
         }
@@ -151,7 +215,8 @@ impl Http {
             agent: self.agent.clone(),
             base_url: self.base_url.clone(),
             default_headers: self.default_headers.clone(),
-            credential,
+            credential: Some(credential),
+            missing_credential_var: self.missing_credential_var,
             credential_header: self.credential_header,
             sleeper: Arc::clone(&self.sleeper),
         }
@@ -175,9 +240,15 @@ impl Http {
     /// goes through, so a provider crate never chooses between the two
     /// itself.
     fn apply_credential<B>(&self, builder: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
+        // `run_retrying` already refused, before this is ever reached,
+        // when `self.credential` is `None` — see its own comment.
+        let credential = self
+            .credential
+            .as_ref()
+            .expect("apply_credential is only reached once run_retrying has confirmed a credential is bound");
         match self.credential_header {
-            Some(name) => self.credential.authorize_header(builder, name),
-            None => self.credential.authorize(builder),
+            Some(name) => credential.authorize_header(builder, name),
+            None => credential.authorize(builder),
         }
     }
 
@@ -374,6 +445,25 @@ impl Http {
         retryable: bool,
         mut attempt: impl FnMut() -> Result<ureq::http::Response<ureq::Body>, ureq::Error>,
     ) -> Result<(u16, String, ProviderFacts), ProviderError> {
+        // The one choke point every public request method routes
+        // through: refuse here, before `attempt` is ever called (so
+        // before any connection is opened), when this client was built
+        // by `without_credential` and nothing has bound it a credential
+        // since. See that constructor's own doc for why this exists and
+        // why it is a local refusal rather than an unauthenticated
+        // request.
+        if self.credential.is_none() {
+            let var = self
+                .missing_credential_var
+                .unwrap_or("this provider's credential");
+            return Err(ProviderError::new(
+                None,
+                format!(
+                    "{var} is not set, and this request's own node bound no credential port \
+                     either"
+                ),
+            ));
+        }
         let max_attempts = if retryable { MAX_RETRIES + 1 } else { 1 };
         for attempt_index in 0..max_attempts {
             let is_last = attempt_index + 1 == max_attempts;
@@ -889,6 +979,94 @@ mod tests {
             "swapped-token",
         ));
         let thing: Thing = swapped.get("/thing").expect("succeeds");
+        assert_eq!(thing.name, "widget");
+        mock.assert();
+    }
+
+    /// [`Http::without_credential`]'s whole reason to exist: a request
+    /// method refuses locally, naming the variable, and the mock server
+    /// never receives it at all (`.expect(0)` fails this test if it
+    /// does) -- not merely "fails eventually", but "never reaches the
+    /// network".
+    #[test]
+    fn without_credential_refuses_get_before_touching_the_network() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/thing")
+            .with_status(200)
+            .with_body(r#"{"name":"widget"}"#)
+            .expect(0)
+            .create();
+        let http = Http::without_credential(
+            server.url(),
+            Vec::new(),
+            "WILLIKINS_TEST_HTTP_MISSING_CREDENTIAL",
+        );
+        let err = http
+            .get::<Thing>("/thing")
+            .expect_err("no credential is bound");
+        assert_eq!(err.status, None);
+        assert!(
+            err.message
+                .contains("WILLIKINS_TEST_HTTP_MISSING_CREDENTIAL"),
+            "{}",
+            err.message
+        );
+        mock.assert();
+    }
+
+    /// The same refusal, for `post` -- proving the choke point in
+    /// `run_retrying` covers the one request method that does not retry,
+    /// not only the ones that do.
+    #[test]
+    fn without_credential_refuses_post_before_touching_the_network() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("POST", "/thing")
+            .with_status(200)
+            .with_body(r#"{"name":"widget"}"#)
+            .expect(0)
+            .create();
+        let http = Http::without_credential(
+            server.url(),
+            Vec::new(),
+            "WILLIKINS_TEST_HTTP_MISSING_CREDENTIAL",
+        );
+        let err = http
+            .post::<Thing>("/thing", &serde_json::json!({}))
+            .expect_err("no credential is bound");
+        assert_eq!(err.status, None);
+        assert!(
+            err.message
+                .contains("WILLIKINS_TEST_HTTP_MISSING_CREDENTIAL")
+        );
+        mock.assert();
+    }
+
+    /// [`Http::with_credential`] on a client built by
+    /// [`Http::without_credential`] behaves exactly like a normally-built
+    /// client: the very shape `willikins-providers-github`'s and
+    /// `willikins-providers-buildkite`'s `ScopedClient::Bound` relies on
+    /// once a document binds a node's own `token` port.
+    #[test]
+    fn with_credential_on_a_credentialless_client_reaches_the_network_normally() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/thing")
+            .match_header("authorization", "Bearer bound-token")
+            .with_status(200)
+            .with_body(r#"{"name":"widget"}"#)
+            .create();
+        let without = Http::without_credential(
+            server.url(),
+            Vec::new(),
+            "WILLIKINS_TEST_HTTP_MISSING_CREDENTIAL",
+        );
+        let bound = without.with_credential(Credential::for_testing(
+            "WILLIKINS_TEST_HTTP_BOUND",
+            "bound-token",
+        ));
+        let thing: Thing = bound.get("/thing").expect("a bound credential succeeds");
         assert_eq!(thing.name, "widget");
         mock.assert();
     }

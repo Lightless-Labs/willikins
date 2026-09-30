@@ -14,7 +14,7 @@ pub mod tools;
 
 pub use client::{
     CREDENTIAL_PATTERN, CREDENTIAL_VAR, GITHUB_API_BASE_URL, GitHubClient, credential_from_env,
-    default_headers, http_client,
+    default_headers, http_client, http_client_without_credential,
 };
 pub use tools::{GitHubActionsSecretEnsure, GitHubRepoEnsure, GitHubRepoGet};
 
