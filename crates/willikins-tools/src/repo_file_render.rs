@@ -451,6 +451,24 @@ mod tests {
         assert!(err.message.contains("not a valid"), "{}", err.message);
     }
 
+    /// The *closing* space is as required as the opening one. Adversarial
+    /// pass (render and write): making the second `strip_prefix(' ')`
+    /// optional survived every other test, because each malformed case
+    /// above fails earlier in the scan; with a value bound, `{{ 0}}` would
+    /// then have rendered instead of refusing.
+    #[test]
+    fn refuses_a_placeholder_missing_its_closing_space() {
+        for template in ["{{ 0}}", "a {{ 0}} b", "{{ 0 }} {{ 0}}"] {
+            let inputs = full_inputs("a", template, &["x"]);
+            let err = RepoFileRender::new().read(&inputs).unwrap_err();
+            assert!(
+                err.message.contains("not a valid"),
+                "template {template:?}: {}",
+                err.message
+            );
+        }
+    }
+
     #[test]
     fn refuses_index_16() {
         let inputs = full_inputs("a", "{{ 16 }}", &[]);
