@@ -445,6 +445,137 @@ fn for_each_unknown_when_the_source_resolves_to_unknown() {
 }
 
 // -------------------------------------------------------------
+// Milestone 3g, decision (a): `Binding::List` resolution, acceptance 2.
+// -------------------------------------------------------------
+
+#[test]
+fn list_binding_resolves_a_known_list_of_known_elements_in_order() {
+    let mut fake_catalog = Catalog::new(willikins_types::registry());
+    fake_catalog
+        .insert(Arc::new(AlwaysAbsent {
+            spec: dummy_spec(
+                "test.list_sink",
+                &[("xs", PortType::Exact(list_ty("GitHubOrg")), true)],
+                &[],
+                &[],
+                false,
+            ),
+        }))
+        .unwrap();
+
+    let workflow = Workflow::new(workflow_name("list-known"))
+        .input(input("org1"), InputSpec::new(ty("GitHubOrg")))
+        .input(input("org2"), InputSpec::new(ty("GitHubOrg")))
+        .node(
+            node("sink"),
+            Node::new(tool_name("test.list_sink")).port(
+                port("xs"),
+                Binding::List(vec![
+                    Binding::Input(input("org1")),
+                    Binding::Input(input("org2")),
+                ]),
+            ),
+        );
+    let checked = check(&workflow, &fake_catalog).expect("a list binding of two inputs checks");
+
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("org1"),
+        Value::known(willikins_types::GitHubOrg::parse("acme").unwrap()),
+    );
+    inputs.insert(
+        input("org2"),
+        Value::known(willikins_types::GitHubOrg::parse("other").unwrap()),
+    );
+    let result = plan(&checked, &inputs, &fake_catalog).expect("both elements are known");
+
+    let sink = result
+        .nodes
+        .iter()
+        .find(|n| n.name.as_str() == "sink")
+        .unwrap();
+    let xs = sink.inputs.get(&port("xs")).expect("xs is bound");
+    assert!(xs.is_known());
+    let items: Vec<String> = xs
+        .as_list()
+        .expect("a fully known list binding resolves to a known list")
+        .iter()
+        .map(|object| object.render().to_string())
+        .collect();
+    assert_eq!(items, vec!["acme".to_string(), "other".to_string()]);
+}
+
+/// Any `Unknown` element makes the whole list `Unknown`, at `list<T>` --
+/// not merely that element.
+#[test]
+fn list_binding_with_one_unknown_element_resolves_to_an_unknown_list() {
+    let mut fake_catalog = Catalog::new(willikins_types::registry());
+    fake_catalog
+        .insert(Arc::new(AlwaysAbsent {
+            spec: dummy_spec(
+                "test.produces_unknown_org",
+                &[],
+                &[("out", ty("GitHubOrg"))],
+                &[],
+                false,
+            ),
+        }))
+        .unwrap();
+    fake_catalog
+        .insert(Arc::new(AlwaysAbsent {
+            spec: dummy_spec(
+                "test.list_sink2",
+                &[("xs", PortType::Exact(list_ty("GitHubOrg")), true)],
+                &[],
+                &[],
+                false,
+            ),
+        }))
+        .unwrap();
+
+    let workflow = Workflow::new(workflow_name("list-unknown"))
+        .input(input("org1"), InputSpec::new(ty("GitHubOrg")))
+        .node(
+            node("producer"),
+            Node::new(tool_name("test.produces_unknown_org")),
+        )
+        .node(
+            node("sink"),
+            Node::new(tool_name("test.list_sink2")).port(
+                port("xs"),
+                Binding::List(vec![
+                    Binding::Input(input("org1")),
+                    Binding::Step {
+                        node: node("producer"),
+                        port: port("out"),
+                    },
+                ]),
+            ),
+        );
+    let checked = check(&workflow, &fake_catalog).expect("a mixed list binding checks");
+
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("org1"),
+        Value::known(willikins_types::GitHubOrg::parse("acme").unwrap()),
+    );
+    let result =
+        plan(&checked, &inputs, &fake_catalog).expect("an unknown element never fails plan");
+
+    let sink = result
+        .nodes
+        .iter()
+        .find(|n| n.name.as_str() == "sink")
+        .unwrap();
+    let xs = sink.inputs.get(&port("xs")).expect("xs is bound");
+    assert!(
+        !xs.is_known(),
+        "one unknown element makes the whole list unknown"
+    );
+    assert_eq!(xs.ty(), &list_ty("GitHubOrg"));
+}
+
+// -------------------------------------------------------------
 // MissingInput and PlanError::Display
 // -------------------------------------------------------------
 

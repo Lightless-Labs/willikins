@@ -32,7 +32,7 @@ use crate::class::Class;
 use crate::plan::{Action, BlockedGate, Plan, PlannedNode};
 use crate::plan::{
     ForEachInstance, InstanceFingerprint, NodeResult, PlanError, ResolveCtx, fill_outputs, plan,
-    resolve_binding,
+    resolve_and_deliver, resolve_binding,
 };
 use crate::site::Site;
 use crate::tool::{Ensured, Inputs, Outputs, PortName, Tool, ToolError, ToolErrorKind};
@@ -558,7 +558,8 @@ impl ApplyObserver for RecordingObserver {
 /// inconsistent (a node or tool `approved` names that `checked` or
 /// `catalog` does not have) — a caller contract violation, the same way
 /// [`plan`] panics on one; see `plan`'s own doc.
-#[allow(clippy::too_many_lines)] // one function, six numbered rules; splitting further would scatter the sequence the module doc walks through
+#[allow(clippy::too_many_lines)]
+// one function, six numbered rules; splitting further would scatter the sequence the module doc walks through
 pub fn apply(
     checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
@@ -929,10 +930,12 @@ fn not_run_tail(remaining: &[PlannedNode]) -> Vec<AppliedNode> {
 /// Resolve `planned`'s inputs the way this run has actually gone so far:
 /// start from the values [`plan`] itself resolved (correct for every port
 /// bound by [`Binding::Literal`], [`Binding::Input`], or [`Binding::Item`],
-/// none of which can change mid-run), then re-resolve every
-/// [`Binding::Step`] or [`Binding::Keyed`] port against `results`, this
-/// run's own accumulating outputs, delivering each through the edge
-/// `check` recorded for it, exactly as [`plan`] delivered the rest.
+/// none of which can change mid-run), then re-resolve every port whose
+/// binding [`binding_may_change_mid_run`] -- a [`Binding::Step`] or
+/// [`Binding::Keyed`], or a [`Binding::List`] holding one -- against
+/// `results`, this run's own accumulating outputs, delivering each through
+/// the edge (or, for a list, the per-element edges) `check` recorded for
+/// it, exactly as [`plan`] delivered the rest.
 fn resolve_instance_inputs(
     checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
@@ -950,20 +953,27 @@ fn resolve_instance_inputs(
         edges: &checked.types,
     };
     for (port, binding) in &node.with {
-        if matches!(binding, Binding::Step { .. } | Binding::Keyed { .. }) {
-            let site = Site::Port {
-                node: planned.name.clone(),
-                port: port.clone(),
-            };
-            let value = resolve_binding(&ctx, &site, binding, None)
-                .map_err(|error| ApplyError::Plan { error })?;
-            let delivered = ctx
-                .deliver(&planned.name, port, value)
+        if binding_may_change_mid_run(binding) {
+            let delivered = resolve_and_deliver(&ctx, &planned.name, port, binding, None)
                 .map_err(|error| ApplyError::Plan { error })?;
             resolved.insert(port.clone(), delivered);
         }
     }
     Ok(resolved)
+}
+
+/// Whether `binding` can resolve to a different value partway through a
+/// run than [`plan`] itself saw: a [`Binding::Step`] or [`Binding::Keyed`]
+/// reference (an earlier node's output, re-read as this run's own nodes
+/// finish), or a [`Binding::List`] holding one anywhere among its
+/// elements. [`Binding::Input`], [`Binding::Item`], and [`Binding::Literal`]
+/// can never change mid-run — see [`resolve_instance_inputs`].
+fn binding_may_change_mid_run(binding: &Binding) -> bool {
+    match binding {
+        Binding::Step { .. } | Binding::Keyed { .. } => true,
+        Binding::List(elements) => elements.iter().any(binding_may_change_mid_run),
+        Binding::Input(_) | Binding::Item | Binding::Literal(_) => false,
+    }
 }
 
 /// Where an unknown required input's value was supposed to come from.
@@ -1014,25 +1024,60 @@ fn first_unknown_required_input(
         if known {
             continue;
         }
-        return match node.with.get(port) {
-            Some(Binding::Step { node: upstream, .. } | Binding::Keyed { node: upstream, .. }) => {
-                Some(UnknownRequired::Upstream {
-                    port: port.clone(),
-                    from: upstream.clone(),
-                })
-            }
-            Some(Binding::Input(input)) => Some(UnknownRequired::WorkflowInput {
-                port: port.clone(),
-                input: input.clone(),
-            }),
-            Some(Binding::Literal(_) | Binding::Item) | None => unreachable!(
-                "a literal is parsed into a known value, a for_each item is an element of a \
-                 known list, and `check` refuses an unbound required port, so none of them can \
-                 be Unknown here"
-            ),
+        let Some(binding) = node.with.get(port) else {
+            unreachable!("`check` refuses an unbound required port")
         };
+        return Some(classify_unknown_binding(binding, port));
     }
     None
+}
+
+/// Where `binding` (bound at `port`) says an unknown required value was
+/// supposed to come from: [`UnknownRequired::Upstream`] for a `Step` or
+/// `Keyed` reference, [`UnknownRequired::WorkflowInput`] for an `Input`, or,
+/// for a [`Binding::List`], whichever of its elements is the first to name
+/// one of those two (a literal or an `item` element is always known, so it
+/// is never the reason the whole list came back unknown; skipped rather
+/// than recursed into, since recursing would hit the panic below for a
+/// blamelessly-known element sitting before the real cause).
+///
+/// # Panics
+///
+/// Panics if `binding` is a [`Binding::Literal`] or [`Binding::Item`], or a
+/// [`Binding::List`] whose every element is one of those two — see
+/// [`first_unknown_required_input`]'s own panic doc for why none of them
+/// can be the reason a required port is unknown.
+fn classify_unknown_binding(binding: &Binding, port: &PortName) -> UnknownRequired {
+    match binding {
+        Binding::Step { node: upstream, .. } | Binding::Keyed { node: upstream, .. } => {
+            UnknownRequired::Upstream {
+                port: port.clone(),
+                from: upstream.clone(),
+            }
+        }
+        Binding::Input(input) => UnknownRequired::WorkflowInput {
+            port: port.clone(),
+            input: input.clone(),
+        },
+        Binding::List(elements) => {
+            let attributable = elements.iter().find(|element| {
+                matches!(
+                    element,
+                    Binding::Step { .. } | Binding::Keyed { .. } | Binding::Input(_)
+                )
+            });
+            match attributable {
+                Some(element) => classify_unknown_binding(element, port),
+                None => unreachable!(
+                    "a list bound entirely to literals and items cannot be Unknown here"
+                ),
+            }
+        }
+        Binding::Literal(_) | Binding::Item => unreachable!(
+            "a literal is parsed into a known value, a for_each item is an element of a known \
+             list, so neither can be Unknown here"
+        ),
+    }
 }
 
 /// Compare `approved`'s and `fresh`'s fingerprints, instance by instance in

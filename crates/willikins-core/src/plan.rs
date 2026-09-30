@@ -903,6 +903,11 @@ impl GateTracking {
                     causes.extend(root_of(&(node.clone(), Some(key.clone()))));
                 }
             }
+            Binding::List(elements) => {
+                for element in elements {
+                    self.collect_causes(element, causes);
+                }
+            }
             Binding::Input(_) | Binding::Item | Binding::Literal(_) => {}
         }
     }
@@ -1085,18 +1090,113 @@ fn bind_ports(
                 unreachable!("`check` already validated this literal against its port type: {err}")
             })
         } else {
-            let site = Site::Port {
-                node: node_name.clone(),
-                port: port.clone(),
-            };
-            ctx.deliver(node_name, port, resolve_binding(ctx, &site, binding, item)?)?
+            resolve_and_deliver(ctx, node_name, port, binding, item)?
         };
         inputs.insert(port.clone(), value);
     }
     Ok(inputs)
 }
 
-/// Resolve one non-literal binding to its [`Value`].
+/// Resolve `binding`, bound at `node`.`port`, to its delivered [`Value`]:
+/// a [`Binding::List`] resolves and delivers each element through its own
+/// element edge and assembles a list ([`resolve_list_binding`]); anything
+/// else resolves through [`resolve_binding`] and delivers through the
+/// port's own edge ([`ResolveCtx::deliver`]), exactly as every binding did
+/// before milestone 3g. `item` is the current `for_each` item, when inside
+/// one.
+///
+/// # Errors
+///
+/// Whatever [`resolve_binding`] or [`ResolveCtx::deliver`] returns.
+pub(crate) fn resolve_and_deliver(
+    ctx: &ResolveCtx,
+    node: &NodeName,
+    port: &PortName,
+    binding: &Binding,
+    item: Option<&Value>,
+) -> Result<Value, PlanError> {
+    if let Binding::List(elements) = binding {
+        return resolve_list_binding(ctx, node, port, elements, item);
+    }
+    let site = Site::Port {
+        node: node.clone(),
+        port: port.clone(),
+    };
+    ctx.deliver(node, port, resolve_binding(ctx, &site, binding, item)?)
+}
+
+/// Resolve a [`Binding::List`] bound at `node`.`port` (milestone 3g,
+/// decision (a)): each element resolves in order -- a literal parses
+/// directly against the port's declared element type, exactly as `check`
+/// already validated it (never converted, like any literal); anything else
+/// goes through [`resolve_binding`], attributed to
+/// [`Site::ListElement`] -- and is delivered through that element's own
+/// edge (`check` records one per element; [`Edge::elements`]). Any element
+/// whose delivered value is [`crate::value::ValueState::Unknown`] makes the
+/// whole value `Unknown`, at `list<T>`; otherwise every element's known
+/// scalar object is assembled into one known list, in declaration order.
+///
+/// # Errors
+///
+/// Returns [`PlanError::EdgeTypeMismatch`], attributed to the offending
+/// element, on the same backstop [`crate::check::Edge::deliver`] documents;
+/// otherwise whatever [`resolve_binding`] returns for a non-literal
+/// element.
+fn resolve_list_binding(
+    ctx: &ResolveCtx,
+    node: &NodeName,
+    port: &PortName,
+    elements: &[Binding],
+    item: Option<&Value>,
+) -> Result<Value, PlanError> {
+    let edge = ctx
+        .edges
+        .get(node)
+        .and_then(|ports| ports.get(port))
+        .unwrap_or_else(|| unreachable!("`check` records an edge for every bound list port"));
+    let element_ty = edge.delivered().element();
+    let element_edges = edge
+        .elements()
+        .unwrap_or_else(|| unreachable!("a Binding::List's own edge is always Edge::list"));
+
+    let mut known: Vec<std::sync::Arc<dyn willikins_types::DomainObject>> =
+        Vec::with_capacity(elements.len());
+    let mut unknown = false;
+    for (index, (element, element_edge)) in elements.iter().zip(element_edges).enumerate() {
+        let raw = if let Binding::Literal(text) = element {
+            Value::parse(&element_ty, text).unwrap_or_else(|err| {
+                unreachable!(
+                    "`check` already validated this literal against the element type: {err}"
+                )
+            })
+        } else {
+            let site = Site::list_element(node.clone(), port.clone(), index);
+            resolve_binding(ctx, &site, element, item)?
+        };
+        let delivered =
+            element_edge
+                .deliver(raw)
+                .map_err(|mismatch| PlanError::EdgeTypeMismatch {
+                    site: Site::list_element(node.clone(), port.clone(), index),
+                    expected: mismatch.expected,
+                    found: mismatch.found,
+                })?;
+        if unknown {
+            continue;
+        }
+        match delivered.as_scalar_arc() {
+            Some(object) => known.push(object),
+            None => unknown = true,
+        }
+    }
+
+    if unknown {
+        return Ok(Value::unknown(TypeRef::list_of(element_ty.name.clone())));
+    }
+    Ok(Value::known_dyn_list(element_ty.name.clone(), known))
+}
+
+/// Resolve one non-literal, non-list binding to its [`Value`].
 ///
 /// `site` is only used to attribute [`PlanError::KeyNotInForEach`] to the
 /// binding's own location, never to the `for_each` node it points at.
@@ -1109,6 +1209,9 @@ pub(crate) fn resolve_binding(
     match binding {
         Binding::Literal(_) => unreachable!(
             "callers resolve a Literal directly, with the port's expected type in hand"
+        ),
+        Binding::List(_) => unreachable!(
+            "callers resolve a List directly, via resolve_and_deliver / resolve_list_binding"
         ),
         Binding::Item => Ok(item.cloned().unwrap_or_else(|| {
             unreachable!("`check` rejects `item` used outside a for_each node")

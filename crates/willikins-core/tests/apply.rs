@@ -1394,6 +1394,33 @@ mod conversions {
         }
     }
 
+    /// Milestone 3g, decision (a): like [`Recorder`], but its one input
+    /// port is `list<ConvB>` instead of scalar, so a test can bind it with
+    /// a [`Binding::List`] and observe what `apply` actually calls
+    /// `ensure` with.
+    struct RecorderList {
+        spec: ToolSpec,
+        ensures: Mutex<Vec<Inputs>>,
+    }
+
+    impl Tool for RecorderList {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+        fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            self.ensures.lock().unwrap().push(inputs.clone());
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+    }
+
     /// A non-pure source whose `read` cannot predict its `out` (a
     /// `ConvA`), and whose `ensure` produces `ConvA("fromensure")`.
     struct UnknownAtPlan {
@@ -1476,6 +1503,7 @@ mod conversions {
         catalog: Catalog,
         sink_b: Arc<Recorder>,
         sink_secret: Arc<Recorder>,
+        sink_list_b: Arc<RecorderList>,
     }
 
     fn fixture() -> Fixture {
@@ -1490,11 +1518,33 @@ mod conversions {
             reads: Mutex::new(Vec::new()),
             ensures: Mutex::new(Vec::new()),
         });
+        let sink_list_b = Arc::new(RecorderList {
+            spec: ToolSpec {
+                name: ToolName::parse("conv.sink_list_b").unwrap(),
+                description: "Conversion test double `conv.sink_list_b`.".to_string(),
+                inputs: IndexMap::from([(
+                    port("bs"),
+                    PortSpec {
+                        ty: PortType::Exact(TypeRef::list_of(name("ConvB"))),
+                        required: true,
+                        derived_only: false,
+                    },
+                )]),
+                outputs: IndexMap::new(),
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+            ensures: Mutex::new(Vec::new()),
+        });
         catalog
             .insert(Arc::clone(&sink_b) as Arc<dyn Tool>)
             .unwrap();
         catalog
             .insert(Arc::clone(&sink_secret) as Arc<dyn Tool>)
+            .unwrap();
+        catalog
+            .insert(Arc::clone(&sink_list_b) as Arc<dyn Tool>)
             .unwrap();
         catalog
             .insert(Arc::new(UnknownAtPlan {
@@ -1515,6 +1565,7 @@ mod conversions {
             catalog,
             sink_b,
             sink_secret,
+            sink_list_b,
         }
     }
 
@@ -1524,6 +1575,10 @@ mod conversions {
 
     fn sink_b_node(binding: Binding) -> Node {
         Node::new(ToolName::parse("conv.sink_b").unwrap()).port(port("b"), binding)
+    }
+
+    fn sink_list_b_node(binding: Binding) -> Node {
+        Node::new(ToolName::parse("conv.sink_list_b").unwrap()).port(port("bs"), binding)
     }
 
     fn only_b(inputs: &Inputs) -> &Value {
@@ -1630,6 +1685,83 @@ mod conversions {
         assert_eq!(ensures.len(), 1);
         assert_eq!(only_b(&ensures[0]).ty(), &scalar("ConvB"));
         assert_eq!(b_text(only_b(&ensures[0])), "fromensure");
+    }
+
+    /// Milestone 3g, decision (a): the same story as
+    /// [`an_unknown_step_edge_plans_unknown_b_and_ensures_known_b`], but the
+    /// `Step` is one element of a `Binding::List` alongside a plain `Input`
+    /// (a `Binding::Literal` always parses through the *global* type
+    /// registry, never a catalog's own, so a second `Input` stands in for
+    /// it here -- `ConvB` exists only in this test's own isolated
+    /// registry): `plan` delivers the whole list `Unknown(list<ConvB>)`
+    /// (one unknown element makes the whole value unknown), and `apply`'s
+    /// `resolve_instance_inputs` re-resolves the list -- because
+    /// `binding_may_change_mid_run` says so for a list holding a `Step` --
+    /// delivering a known two-element list, in order, through each
+    /// element's own edge, before `ensure`.
+    #[test]
+    fn an_unknown_list_element_plans_unknown_list_and_ensures_known_list() {
+        let fixture = fixture();
+        let workflow = Workflow::new(workflow_name("conv-list-step"))
+            .input(input("z"), InputSpec::new(scalar("ConvB")))
+            .node(
+                node("source"),
+                Node::new(ToolName::parse("conv.source").unwrap()),
+            )
+            .node(
+                node("sink"),
+                sink_list_b_node(Binding::List(vec![
+                    Binding::Step {
+                        node: node("source"),
+                        port: port("out"),
+                    },
+                    Binding::Input(input("z")),
+                ])),
+            );
+        let checked =
+            check(&workflow, &fixture.catalog).expect("A converts to B in one hop, inside a list");
+        let mut inputs = IndexMap::new();
+        inputs.insert(input("z"), Value::known(ConvB::parse("z").unwrap()));
+
+        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans");
+        let sink = planned
+            .nodes
+            .iter()
+            .find(|n| n.name == node("sink"))
+            .unwrap();
+        let bs = sink
+            .inputs
+            .get(&port("bs"))
+            .expect("the sink's `bs` port is bound");
+        assert!(
+            !bs.is_known(),
+            "the source's out is unknown at plan time, so the whole list is"
+        );
+        assert_eq!(bs.ty(), &TypeRef::list_of(name("ConvB")));
+
+        let mut observer = RecordingObserver::new();
+        apply(
+            &checked,
+            &inputs,
+            &fixture.catalog,
+            &planned,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect("applies");
+        let ensures = fixture.sink_list_b.ensures.lock().unwrap();
+        assert_eq!(ensures.len(), 1);
+        let bs = ensures[0]
+            .get(&port("bs"))
+            .expect("bs is bound at ensure time");
+        assert!(bs.is_known(), "ensure runs after `source` converges");
+        let items: Vec<String> = bs
+            .as_list()
+            .expect("a fully known list")
+            .iter()
+            .map(|object| object.render().to_string())
+            .collect();
+        assert_eq!(items, vec!["fromensure".to_string(), "z".to_string()]);
     }
 
     /// Acceptance 6, the `Keyed` and `Item` edges: a `for_each` over a
