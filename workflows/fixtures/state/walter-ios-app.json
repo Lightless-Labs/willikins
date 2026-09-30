@@ -5,7 +5,8 @@
   },
   "doppler_secrets": {
     "appstore-connect/deploy_ios#APP_STORE_CONNECT_API_KEY_BASE64": "VGhpcyBpcyBhbiBleGFtcGxlIGtleSBmb3IgdGVzdHMgb25seS4KLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3ZMNTJyZWtFcWdHcW9XbjkKK1lCa0lRdVFXRU9UaEtxcUlYYnZvbmVuY0FXaFJBTkNBQVRkdC9YZDRjL0NMT0thMmpvRDlHMXBCOTh1d0tOKwpMR0p2SzNoS1RyeFRXbkowR3lRaVAzUm1DdWJ6bCtHUVIvL2g5Y2lGYW1qeU5jSE1qVlUyY0tiQQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==",
-    "github/bande-a-bonnot#GH_CLONE_TOKEN": "ghp_example"
+    "github/bande-a-bonnot#GH_CLONE_TOKEN": "ghp_example",
+    "buildkite/prd#PIPELINE_CREATION_TOKEN": "BUILDKITE_TOKEN_PLACEHOLDER"
   },
   "github_repos": {
     "Bande-a-Bonnot/monorepo": {
@@ -14,7 +15,7 @@
     }
   },
   "buildkite_clusters": {
-    "ci-macos-apple-silicon": ["018e5a22-d14c-7085-bb28-db0f83f43a1c"]
+    "Default cluster": ["018e5a22-d14c-7085-bb28-db0f83f43a1c"]
   },
   "apple_certificates": {
     "DISTRIBUTION#7B3F2A9C1D4E5F607182930A1B2C3D4E": [

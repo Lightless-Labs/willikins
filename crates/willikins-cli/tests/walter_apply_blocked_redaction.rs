@@ -84,13 +84,36 @@ impl Drop for TempDir {
     }
 }
 
+/// A valid [`willikins_types::BuildkiteToken`], `concat!`-assembled so no
+/// single literal in this file spells a real-shaped Buildkite token
+/// contiguously -- mirrors
+/// `crates/willikins-cli/tests/walter_document.rs`'s own
+/// `SEEDED_BUILDKITE_TOKEN` and
+/// `crates/willikins-providers-buildkite/tests/buildkite_token_documents.rs`'s
+/// `SEEDED_TOKEN`.
+const SEEDED_BUILDKITE_TOKEN: &str = concat!("bkua_", "wlknFixtureTokenNotARealCredential00");
+
 #[test]
 #[allow(clippy::too_many_lines)] // one linear scenario: build args, run, assert
 fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
     let dir = TempDir::new("blocked");
     let journal = dir.join("journal.jsonl");
     let document = workspace_root().join("workflows/walter-ios-app.yaml");
-    let seed = workspace_root().join("workflows/fixtures/state/walter-ios-app.json");
+    let seed_source = workspace_root().join("workflows/fixtures/state/walter-ios-app.json");
+
+    // The committed fixture carries only the placeholder
+    // `BUILDKITE_TOKEN_PLACEHOLDER` (D2), never a real-shaped Buildkite
+    // token on disk -- `secret_literal_guard.rs` scans this JSON file
+    // too, and a real `bkua_...` token is exactly its `BUILDKITE_TOKEN`
+    // pattern. Unlike an in-process test, this one runs the built binary
+    // against a file path, so the substitution has to happen here rather
+    // than in a Rust reader: write a substituted copy into this test's
+    // own `TempDir` and point `--fake-state` at that instead.
+    let seed_json = std::fs::read_to_string(&seed_source)
+        .unwrap_or_else(|err| panic!("{}: {err}", seed_source.display()));
+    let seed_json = seed_json.replace("BUILDKITE_TOKEN_PLACEHOLDER", SEEDED_BUILDKITE_TOKEN);
+    let seed = dir.join("state.json");
+    std::fs::write(&seed, seed_json).expect("write substituted fake state");
 
     let output = run(&[
         "apply",
@@ -114,10 +137,6 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         "certificate_type=DISTRIBUTION",
         "--input",
         "serial_number=7B3F2A9C1D4E5F607182930A1B2C3D4E",
-        "--input",
-        "buildkite_org=bande-a-bonnot",
-        "--input",
-        "cluster=ci-macos-apple-silicon",
         "--input",
         "environments=dev,stg,prd",
         "--input",
@@ -196,6 +215,10 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         assert!(
             !text.contains("ghp_example"),
             "{label} carries the seeded GitHub token's raw value: {text}"
+        );
+        assert!(
+            !text.contains(SEEDED_BUILDKITE_TOKEN),
+            "{label} carries the seeded Buildkite token's raw value: {text}"
         );
     }
 }

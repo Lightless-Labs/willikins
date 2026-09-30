@@ -76,8 +76,15 @@ const APP_IDENTIFIER: &str = "com.example.walter";
 const NSE_IDENTIFIER: &str = "com.example.walter.nse";
 const WIDGETS_IDENTIFIER: &str = "com.example.walter.widgets";
 const MONOREPO: &str = "Bande-a-Bonnot/monorepo";
-const CLUSTER: &str = "ci-macos-apple-silicon";
-const BUILDKITE_ORG: &str = "bande-a-bonnot";
+// D2: the document's own literal cluster name (`buildkite_cluster.name`),
+// the real org's only cluster, probed read-only 2026-09-29.
+const CLUSTER: &str = "Default cluster";
+/// A valid [`willikins_types::BuildkiteToken`], `concat!`-assembled so no
+/// single literal in this file spells a real-shaped Buildkite token
+/// contiguously (the same technique
+/// `crates/willikins-providers-buildkite/tests/buildkite_token_documents.rs`'s
+/// own `SEEDED_TOKEN` uses).
+const SEEDED_BUILDKITE_TOKEN: &str = concat!("bkua_", "wlknFixtureTokenNotARealCredential00");
 
 /// Every input the document declares, with a fixed value -- `plan` never
 /// backfills a default itself (`Binding::Input` fails `MissingInput` on an
@@ -119,14 +126,6 @@ fn base_inputs() -> IndexMap<InputName, Value> {
         scalar("AppleCertificateSerial", "7B3F2A9C1D4E5F607182930A1B2C3D4E"),
     );
     inputs.insert(
-        InputName::parse("buildkite_org").unwrap(),
-        scalar("BuildkiteOrg", BUILDKITE_ORG),
-    );
-    inputs.insert(
-        InputName::parse("cluster").unwrap(),
-        scalar("BuildkiteClusterName", CLUSTER),
-    );
-    inputs.insert(
         InputName::parse("environments").unwrap(),
         list("EnvironmentSlug", &["dev", "stg", "prd"]),
     );
@@ -164,11 +163,14 @@ fn with_acknowledgements(mut inputs: IndexMap<InputName, Value>) -> IndexMap<Inp
 /// read from the real, fixed base config `appstore-connect/deploy_ios`,
 /// not a caller-supplied input -- R4), the GitHub token (from
 /// `github/bande-a-bonnot`, R4's own new resolver chain, mirroring R2's
-/// `workflows/github-repo-token-from-doppler.yaml`), the monorepo (for
-/// `github.repo.get`), the Buildkite cluster (for `buildkite.cluster.get`),
-/// and the distribution certificate (for `appstore.certificate.get`). No
-/// bundle id, no app record, no capability is seeded -- those are exactly
-/// what run 1 must create or find blocked.
+/// `workflows/github-repo-token-from-doppler.yaml`), the Buildkite token
+/// (from `buildkite/prd`, D2's own resolver chain, mirroring K1's
+/// `workflows/buildkite-cluster-token-from-doppler.yaml`), the monorepo
+/// (for `github.repo.get`), the Buildkite cluster (for
+/// `buildkite.cluster.get`), and the distribution certificate (for
+/// `appstore.certificate.get`). No bundle id, no app record, no
+/// capability is seeded -- those are exactly what run 1 must create or
+/// find blocked.
 /// D1: the three base configs `base_config_gate` checks, ahead of
 /// `inherit` (the document's own `base_configs` default, in declared
 /// order).
@@ -196,6 +198,7 @@ fn seeded_state_with_base_configs(present: &[&str]) -> Arc<Mutex<FakeState>> {
         "doppler_secrets": {
             format!("{config}#APP_STORE_CONNECT_API_KEY_BASE64"): "VGhpcyBpcyBhbiBleGFtcGxlIGtleSBmb3IgdGVzdHMgb25seS4KLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3ZMNTJyZWtFcWdHcW9XbjkKK1lCa0lRdVFXRU9UaEtxcUlYYnZvbmVuY0FXaFJBTkNBQVRkdC9YZDRjL0NMT0thMmpvRDlHMXBCOTh1d0tOKwpMR0p2SzNoS1RyeFRXbkowR3lRaVAzUm1DdWJ6bCtHUVIvL2g5Y2lGYW1qeU5jSE1qVlUyY0tiQQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==",
             format!("{github_config}#GH_CLONE_TOKEN"): "ghp_example",
+            "buildkite/prd#PIPELINE_CREATION_TOKEN": SEEDED_BUILDKITE_TOKEN,
         },
     })
     .to_string();
@@ -259,8 +262,8 @@ fn approval() -> Approval {
 
 /// No secret value ever reaches JSON output: only its `[REDACTED` marker
 /// does. The signing key's own PEM marker, the fake profile tool's own
-/// plaintext content prefix, and R4's seeded GitHub token are the
-/// concrete secrets this graph carries.
+/// plaintext content prefix, and R4/D2's seeded GitHub/Buildkite tokens
+/// are the concrete secrets this graph carries.
 fn assert_no_secret_leaked(json: &str) {
     assert!(
         !json.contains("PRIVATE KEY"),
@@ -269,6 +272,10 @@ fn assert_no_secret_leaked(json: &str) {
     assert!(
         !json.contains("ghp_example"),
         "the seeded GitHub token's raw value leaked into JSON output"
+    );
+    assert!(
+        !json.contains(SEEDED_BUILDKITE_TOKEN),
+        "the seeded Buildkite token's raw value leaked into JSON output"
     );
     assert!(
         !json.contains("fakeprofilecontent"),
@@ -771,6 +778,53 @@ fn the_document_reads_the_real_layout_by_name() {
             node(name).with.get(&PortName::parse("token").unwrap()),
             Some(&from("gh_token", "value")),
             "`{name}` must authenticate with the Doppler-resolved token, never the environment"
+        );
+    }
+
+    // D2: Buildkite, the same shape -- the token comes from buildkite/prd,
+    // through the parse tool, into every Buildkite provider node's `token`
+    // port.
+    assert_eq!(node("bk_token_secret").tool.as_str(), "doppler.secret.get");
+    assert_eq!(literal("bk_token_secret", "config"), "buildkite/prd");
+    assert_eq!(
+        literal("bk_token_secret", "name"),
+        "PIPELINE_CREATION_TOKEN"
+    );
+    assert_eq!(node("bk_token").tool.as_str(), "buildkite.token.parse");
+    assert_eq!(
+        node("bk_token")
+            .with
+            .get(&PortName::parse("value").unwrap()),
+        Some(&from("bk_token_secret", "value"))
+    );
+    let buildkite_nodes: Vec<&str> = workflow
+        .nodes
+        .iter()
+        .filter(|(_, n)| {
+            n.tool.as_str().starts_with("buildkite.") && n.tool.as_str() != "buildkite.token.parse"
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(buildkite_nodes, ["buildkite_cluster", "pipeline"]);
+    for name in &buildkite_nodes {
+        assert_eq!(
+            node(name).with.get(&PortName::parse("token").unwrap()),
+            Some(&from("bk_token", "value")),
+            "`{name}` must authenticate with the Doppler-resolved token, never the environment"
+        );
+        assert_eq!(
+            literal(name, "org"),
+            "la-bande-a-bonnot",
+            "`{name}` must reference the real Buildkite org, not a caller-supplied input"
+        );
+    }
+    assert_eq!(literal("buildkite_cluster", "name"), "Default cluster");
+    for removed in ["buildkite_org", "cluster"] {
+        assert!(
+            !workflow
+                .inputs
+                .contains_key(&InputName::parse(removed).unwrap()),
+            "`{removed}` must not be a declared input any more"
         );
     }
 
