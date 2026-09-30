@@ -343,6 +343,55 @@ only, never `message`" rule already in force). Verified again with the same four
 warnings`; `cargo test -p willikins-providers-github --features live-tests --test live_scaffold_cycle
 --no-run -j 2`; the same run without `--no-run`, its three offline tests still passing), all green.
 
+**Addendum:** 2026-09-30 (W1) — the Sample document landed, exactly the task row's two commits:
+commit 1, `workflows/sample-ios-app.yaml` edited in place (the seventeen `repo.file.render`
+templates of decision (i), `sample_files`, the new write-token chain, the `pipeline.repo`
+rebinding, the two removed acknowledgements and their input, and the header's own new dated
+section), plus the minimal edits to the two existing tests that exercise it
+(`sample_document.rs`, `sample_apply_blocked_redaction.rs`) and the characterization state
+fixture, so the tree stayed green at every step (the document's own `gates_unmet_then_satisfied_then_acknowledged`
+scenario now stands in for the operator's M7 paste between its run 2 and run 3 by writing the
+rendered bootstrap into the fake pipeline's own stored `configuration`, extracted from an
+applied node's own output rather than re-typed by hand); commit 2, five new acceptance-10/11
+tests (the data-protection/entitlement class pin, the pre-landing conflict case, the
+`pipeline`-ordered-after-`sample_files` pin, the all-seventeen-renders pin) and one `insta`
+snapshot per rendered file, read at plan time against the real identifiers (`repo.file.render`
+is pure, so `plan` itself carries every render's known `file` output -- no apply needed), each
+reviewed by hand before accepting.
+
+Two deviations from a literal reading of this section's own text:
+
+1. **The `.buildkite/bootstrap.yml` and `pipeline.yml` templates omit the `GIT_CONFIG_*`
+   host-credential-helper override** AppTwo's own files carry (decision (i)'s own
+   "operator item"). AppTwo's override names an absolute path on the operator's own Mac
+   (`/Users/operator/buildkite-ci-smoke/github-credential-helper.sh`); committing that path into
+   Willikins' own public repository, or into the monorepo through this document, was judged a
+   worse trade than leaving it out and reporting the gap (trust boundary 8's same instinct:
+   "reproduce nothing identifying from the monorepo that this workspace does not already
+   hold"). Flagged for the operator: confirm whether Sample's pipeline needs the same host
+   override AppTwo's does, and if so add it to the committed files by hand (or extend this
+   document) before the real apply.
+2. **The acceptance-10 "pre-landing conflict" test seeds a differing file directly** through
+   `FakeState::with_scaffold_files` at a path with no marker present, rather than through a
+   first real `apply` followed by a hand-edit -- the shorter, more direct way to reach the same
+   `Absent`-with-a-conflicting-seed state decision (b)'s read table describes, and the one
+   `github.scaffold.ensure`'s own G2 tests already use for the identical case.
+
+One fact, not a deviation: the write token's Doppler config is `github/example-org_willikins`
+(project `github`, config name `example-org_willikins`), exactly decision (l)'s own
+recommended name; `DopplerConfigName`'s grammar (`[a-z0-9_-]+`) accepts it without further
+widening, matching verify item 11's own expectation.
+
+Verified with `cargo fmt --all --check`; `cargo clippy -p willikins-cli --all-targets -j 2 -- -D
+warnings`; `RUST_TEST_THREADS=2 cargo test -p willikins-cli -j 2 --no-fail-fast`; `cargo check -p
+willikins-types -j 2`; `cargo test -p willikins-dsl --test acceptance -j 2` (characterization
+snapshot diff confirmed as exactly `workflows/sample-ios-app.yaml`'s own entry gaining the new
+nodes' port types and losing `m3_repo_files`/`m7_bootstrap`'s, the `PLAN ERROR` line at
+`issuer_id_text` unchanged -- acceptance 14); `cargo test -p willikins-core --test
+secret_literal_guard -j 2` — all green. Not done by this task, per its own boundary: the
+operator's real write token (decision (l)'s own "does not exist yet"), the live scaffold cycle
+run (L1, the coordinator's), and marking this plan Completed.
+
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Example-Org/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
