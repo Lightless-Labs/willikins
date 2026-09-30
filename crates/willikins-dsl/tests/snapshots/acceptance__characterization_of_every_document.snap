@@ -652,6 +652,11 @@ widgets_app_groups.issuer_id: AppleIssuerId
 widgets_app_groups.key_id: AppleKeyId
 widgets_app_groups.key: AppleSigningKey
 widgets_app_groups.identifier: AppleBundleIdentifier
+app_app_attest.issuer_id: AppleIssuerId
+app_app_attest.key_id: AppleKeyId
+app_app_attest.key: AppleSigningKey
+app_app_attest.identifier: AppleBundleIdentifier
+app_app_attest.capability: AppleObservableCapabilityType
 certificate.issuer_id: AppleIssuerId
 certificate.key_id: AppleKeyId
 certificate.key: AppleSigningKey
