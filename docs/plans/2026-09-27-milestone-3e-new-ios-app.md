@@ -2710,18 +2710,43 @@ words) applied to the one pair of caller-overridable names D1 itself did not tou
   test files, per K1/L1's own recorded lesson: re-run the guard after any new text that mints a
   credential-shaped value); `cargo check -p willikins-types -j 2`. All green
   (`RUST_TEST_THREADS=2`). The full workspace gate was not run (host rule; the coordinator's).
-- **Honest process note: neither `sample_document.rs`'s nor `serve_and_live.rs`'s new assertions
-  were run red against the pre-change document/binary first.** They were written together with the
-  document edit and run once, green -- except the characterization snapshot, whose own assertion
-  failed on the predicted new `TYPES:` lines before being accepted (real evidence the change
-  reached the document), and the two new `serve_and_live.rs` tests' expected exit code and message,
-  which were confirmed by hand against the *pre-change* built binary (`missing \`app_identifier\``,
-  exit 1) before being written into the test, precisely to have that red-then-understood step
-  somewhere in the loop.
+- **`sample_document.rs`'s own graph-test assertions were not run red against the pre-change
+  document first** -- they were written together with the document edit and run once, green,
+  except the characterization snapshot, whose own assertion failed on the predicted new `TYPES:`
+  lines before being accepted (real evidence the change reached the document). **The two new
+  `serve_and_live.rs` tests were, honestly this time (a correction to this addendum's own first
+  draft, which wrongly claimed the reverse): the pre-change document was recovered from the parent
+  commit (`git show 794bae1:workflows/sample-ios-app.yaml`, since the tracked file was already
+  edited by the time the test was written) and run by hand against the built binary --
+  `WILLIKINS_DOPPLER_TOKEN` alone, no `--input`, `--live` -- and it refused exit 2, `kind:
+  "Buildkite"`, `node: "buildkite_cluster"`, `tool: "buildkite.cluster.get"` (`buildkite_cluster`
+  left `token` unbound before this task, so `first_unbound_node_for(Buildkite)` named it and the
+  catalog demanded `WILLIKINS_BUILDKITE_TOKEN`). Only after seeing that genuine red was the
+  post-change binary run and its exit 1 / `missing \`app_identifier\`` observed, then written into
+  the two new tests. The lesson D1's own correction (`794bae1`) already recorded applies here too:
+  say what was actually observed, not what the change was intended to produce.
+- **Buildkite scope sufficiency, asserted from the endpoint list, not live-tested.** The real
+  token's three scopes are `read_pipelines`, `write_pipelines` and `read_clusters` --
+  *deliberately* no `read_organizations` (task brief). Read directly against
+  `crates/willikins-providers-buildkite/src/client.rs`: every request either tool builds is
+  `/v2/organizations/{org}/pipelines...` or `/v2/organizations/{org}/clusters...` (nested resource
+  paths, covered by the three granted scopes); neither tool ever calls the bare `GET
+  /v2/organizations`/`GET /v2/organizations/{org}` that `read_organizations` alone would gate. Not
+  live-tested (this task made no provider call of any kind), so this is a static read of the
+  client's own request-building code, not a settled fact about Buildkite's own scope enforcement.
+- **The fixture's placeholder has exactly one other consumer, checked rather than assumed.**
+  `grep -rn "sample-ios-app.json" docs/ workflows/ crates/ todos/` finds only this addendum's own
+  prose and `sample_apply_blocked_redaction.rs` (which already substitutes the placeholder before
+  use) -- no `HANDOFF.md` line or other document hands the checked-in fixture straight to
+  `--fake-state` without that step, so nothing else silently breaks on `bk_token`'s parse failure.
+  A future hand run of `--fake-state workflows/fixtures/state/sample-ios-app.json` outside a test
+  harness would still hit exactly that failure by design -- worth remembering if one is ever run
+  ad hoc.
 - **Remaining, carried forward, unchanged by this task:** `base_configs` is still a
   caller-overridable input by mechanical necessity (D1); R2's own server-side gap
   (`WILLIKINS_GITHUB_TOKEN`/`WILLIKINS_BUILDKITE_TOKEN` read unconditionally at `serve`/`apply
   --plan-id` startup, L1's own addendum) is untouched -- a long-lived server or a
   `--workflows-dir` apply still cannot narrow to one document's own bound ports; the
-  sandbox-versus-real Doppler naming split R4 recorded is untouched; this document's four
+  sandbox-versus-real Doppler naming split R4 recorded is untouched; Buildkite scope sufficiency
+  above is a static claim, not live-proven; this document's four
   `operator.acknowledge` leaves and its two observed gates are unaffected by this task.
