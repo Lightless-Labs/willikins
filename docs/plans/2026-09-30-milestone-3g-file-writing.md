@@ -209,11 +209,18 @@ a new `BuildkiteClient::get_pipeline_configuration` and `PipelineConfigurationBo
 `BuildkitePipelineRecord` (`#[serde(default)]`, so no existing fixture breaks). Step 0 (the sandbox probe of
 verify item 9) was skipped per the coordinator's own instructions: it was already settled read-only on
 2026-09-30 (`GET` on Walter's real pipeline answered `200` with a `configuration` field, currently the
-frozen upload bootstrap). A third, small "Fix commit" followed: `willikins-providers-fake/src/lib.rs`'s own
-whole-catalog JSON-listing snapshot (separate from `catalog_parity.rs`'s per-tool ones) needed regenerating
-too, missed in commit 2's own gate because the crate's scoped `cargo test` run before that gate had not yet
-included it in the failure surfaced; diff confirmed as exactly the new tool's entry, reviewed before
-accepting.
+frozen upload bootstrap). A third, small "Fix commit" followed, and owns its own miss plainly: commit 2
+(`64cddfa`) was committed before its own scoped gate was run against it, and that gate then failed --
+`willikins-providers-fake/src/lib.rs`'s own whole-catalog JSON-listing snapshot (separate from
+`catalog_parity.rs`'s per-tool ones) still held the pre-B1 catalog. `64cddfa` is not green in isolation;
+`83f4075` fixes it (diff confirmed as exactly the new tool's one entry, reviewed before accepting), and the
+tree is green again from `83f4075` onward. The lesson, same as `docs/plans/2026-09-23-milestone-3c-app-store-signing.md`'s
+own verifier note: run the scoped gate *before* the commit it belongs to, not after.
+
+One acceptance-9 clause this task cannot prove: "appears in no `BlockedGate` or journal line" needs a
+`plan` run over a document that actually binds this gate, which does not exist yet -- that is W1's own
+acceptance 10 ("a first fake run creates the scaffold and blocks on the bootstrap gate"), not B1's. This
+task proves the narrower, provable half: the marker appears in no `Observation`, `Ensured`, or `ToolError`.
 
 Four deviations from a literal reading of this section's own text:
 
