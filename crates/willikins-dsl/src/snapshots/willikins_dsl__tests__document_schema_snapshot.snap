@@ -128,17 +128,29 @@ expression: json
           "type": "string"
         },
         "with": {
-          "description": "This step's input port bindings, keyed by port name. Each value is\na reference or a literal string.",
+          "description": "This step's input port bindings, keyed by port name. Each value is\na reference or a literal string ([`WithValue::Scalar`]), or a YAML\nsequence of the same ([`WithValue::List`], milestone 3g decision\n(a)).",
           "type": "object",
           "additionalProperties": {
-            "type": "string"
-          },
-          "default": {}
+            "$ref": "#/$defs/WithValue"
+          }
         }
       },
       "additionalProperties": false,
       "required": [
         "tool"
+      ]
+    },
+    "WithValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       ]
     }
   }

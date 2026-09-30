@@ -39,7 +39,7 @@ pub use plan::{
     Action, BlockedGate, InstanceFingerprint, Plan, PlanError, PlannedNode, Replacing, plan,
 };
 pub use reported::Reported;
-pub use site::Site;
+pub use site::{ListElementSite, Site};
 /// Generic tool-authoring helpers (port/type construction, input checks,
 /// `ToolError` constructors) shared by every tool crate downstream of
 /// `willikins-core`; see [`tool::helpers`] for the full set.

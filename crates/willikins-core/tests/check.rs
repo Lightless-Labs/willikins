@@ -230,6 +230,18 @@ fn test_catalog() -> Catalog {
             Class::Reversible,
             true,
         ),
+        // Milestone 3g, decision (a): a tool with a required `list<T>`
+        // input port, for testing `Binding::List` against a real catalog
+        // entry (no shipped tool has one yet -- `T1` adds the first,
+        // `repo.file.render`).
+        spec_of(
+            "fake.list_sink.ensure",
+            &[("orgs", PortType::Exact(list_ty("GitHubOrg")), true)],
+            &[],
+            &["orgs"],
+            Class::Reversible,
+            false,
+        ),
     ];
     for spec in specs {
         catalog.insert(Arc::new(DummyTool { spec })).unwrap();
@@ -934,4 +946,291 @@ fn list_a_into_a_list_b_port_stays_a_type_mismatch() {
             found: list_ty("ChainA"),
         }]
     );
+}
+
+// ---------------------------------------------------------------------
+// Milestone 3g, decision (a): `Binding::List`, acceptance test 1.
+// ---------------------------------------------------------------------
+
+/// A `Binding::List` bound to a scalar port is `ListOnScalarPort`, named
+/// at the binding's own `Site::Port`.
+#[test]
+fn list_binding_on_a_scalar_port_is_rejected() {
+    let workflow = Workflow::new(workflow_name("list-on-scalar")).node(
+        node("repo"),
+        Node::new(tool_name("github.repo.ensure"))
+            .port(
+                port("repo"),
+                Binding::List(vec![Binding::Literal("a/b".to_string())]),
+            )
+            .port(port("visibility"), Binding::Literal("private".to_string())),
+    );
+    let errors = check(&workflow, &test_catalog())
+        .expect_err("a list cannot bind to a scalar GitHubRepo port");
+    assert_eq!(
+        errors,
+        vec![CheckError::ListOnScalarPort {
+            site: Site::Port {
+                node: node("repo"),
+                port: port("repo"),
+            },
+            expected: exact("GitHubRepo"),
+        }]
+    );
+}
+
+/// A `Binding::List` bound to an `AnySecret` port is `ListOnScalarPort`
+/// too: `AnySecret` names no single element type to check a list against.
+#[test]
+fn list_binding_on_an_any_secret_port_is_rejected() {
+    let workflow = Workflow::new(workflow_name("list-on-any-secret")).node(
+        node("secret"),
+        Node::new(tool_name("github.actions_secret.ensure"))
+            .port(port("repo"), Binding::Literal("a/b".to_string()))
+            .port(port("name"), Binding::Literal("TOKEN".to_string()))
+            .port(
+                port("value"),
+                Binding::List(vec![Binding::Literal("x".to_string())]),
+            ),
+    );
+    let errors =
+        check(&workflow, &test_catalog()).expect_err("a list cannot bind to an AnySecret port");
+    assert_eq!(
+        errors,
+        vec![CheckError::ListOnScalarPort {
+            site: Site::Port {
+                node: node("secret"),
+                port: port("value"),
+            },
+            expected: PortType::AnySecret,
+        }]
+    );
+}
+
+/// A `Binding::List` bound to a `derived_only` port is `UnderivedBinding`:
+/// no list element can be "the output of one earlier, non-pure node" the
+/// way a bare `Step` binding can.
+#[test]
+fn list_binding_on_a_derived_only_port_is_underived() {
+    let mut catalog = Catalog::new(willikins_types::registry());
+    catalog
+        .insert(Arc::new(DummyTool {
+            spec: ToolSpec {
+                name: tool_name("derived.sink"),
+                description: "Test double.".to_string(),
+                inputs: IndexMap::from([(
+                    port("config"),
+                    PortSpec {
+                        ty: PortType::Exact(list_ty("DopplerConfig")),
+                        required: true,
+                        derived_only: true,
+                    },
+                )]),
+                outputs: IndexMap::new(),
+                key: vec![],
+                class: Class::Reversible,
+                pure: false,
+            },
+        }))
+        .unwrap();
+    let workflow = Workflow::new(workflow_name("list-derived-only")).node(
+        node("sink"),
+        Node::new(tool_name("derived.sink")).port(
+            port("config"),
+            Binding::List(vec![Binding::Literal("x".to_string())]),
+        ),
+    );
+    let errors =
+        check(&workflow, &catalog).expect_err("no list binding is ever a derived-only source");
+    assert_eq!(
+        errors,
+        vec![CheckError::UnderivedBinding {
+            node: node("sink"),
+            port: port("config"),
+        }]
+    );
+}
+
+/// Every element of a `Binding::List` is checked, and one error per bad
+/// element is reported -- not just the first.
+#[test]
+fn every_bad_element_of_a_list_binding_is_reported() {
+    let workflow = Workflow::new(workflow_name("list-two-bad"))
+        .input(input("url"), InputSpec::new(ty("HttpsUrl")))
+        .node(
+            node("sink"),
+            Node::new(tool_name("fake.list_sink.ensure")).port(
+                port("orgs"),
+                Binding::List(vec![
+                    Binding::Input(input("url")),
+                    Binding::Input(input("url")),
+                ]),
+            ),
+        );
+    let errors = check(&workflow, &test_catalog())
+        .expect_err("neither element is a GitHubOrg, and there is no HttpsUrl => GitHubOrg row");
+    assert_eq!(
+        errors,
+        vec![
+            CheckError::ListElementTypeMismatch {
+                site: Site::list_element(node("sink"), port("orgs"), 0),
+                expected: ty("GitHubOrg"),
+                found: ty("HttpsUrl"),
+            },
+            CheckError::ListElementTypeMismatch {
+                site: Site::list_element(node("sink"), port("orgs"), 1),
+                expected: ty("GitHubOrg"),
+                found: ty("HttpsUrl"),
+            },
+        ]
+    );
+    assert_eq!(
+        errors[0].to_string(),
+        "sink.orgs[0]: expected GitHubOrg, found `HttpsUrl`"
+    );
+}
+
+/// A list-typed element -- here, a plain `Step` reference onto a
+/// `for_each` node's own output, itself already `list<DopplerConfig>` --
+/// is `ListElementTypeMismatch`: no flattening, exactly like a scalar
+/// port would refuse the same reference.
+#[test]
+fn a_list_typed_element_is_rejected_with_no_flattening() {
+    let workflow = common::new_rust_service_workflow().node(
+        node("sink"),
+        Node::new(tool_name("fake.list_sink.ensure")).port(
+            port("orgs"),
+            Binding::List(vec![Binding::Step {
+                node: node("configs"),
+                port: port("config"),
+            }]),
+        ),
+    );
+    let errors = check(&workflow, &test_catalog())
+        .expect_err("configs.config, as a plain Step, is already list<DopplerConfig>");
+    assert_eq!(
+        errors,
+        vec![CheckError::ListElementTypeMismatch {
+            site: Site::list_element(node("sink"), port("orgs"), 0),
+            expected: ty("GitHubOrg"),
+            found: list_ty("DopplerConfig"),
+        }]
+    );
+}
+
+/// A secret element flowing into a list-typed, non-secret port is
+/// `SecretToNonSecretSink`, attributed to its own `Site::ListElement`, and
+/// reported instead of the type mismatch it also is -- exactly the scalar
+/// rule (decision (a): "reported before any type mismatch").
+#[test]
+fn a_secret_element_in_a_list_is_a_taint_violation() {
+    let workflow = Workflow::new(workflow_name("list-secret-element"))
+        .input(input("project"), InputSpec::new(ty("DopplerProject")))
+        .node(
+            node("doppler"),
+            Node::new(tool_name("doppler.project.ensure"))
+                .port(port("project"), Binding::Input(input("project"))),
+        )
+        .node(
+            node("config"),
+            Node::new(tool_name("doppler.config.ensure"))
+                .port(
+                    port("project"),
+                    Binding::Step {
+                        node: node("doppler"),
+                        port: port("project"),
+                    },
+                )
+                .port(port("environment"), Binding::Literal("prd".to_string())),
+        )
+        .node(
+            node("token"),
+            Node::new(tool_name("doppler.service_token.ensure"))
+                .port(
+                    port("config"),
+                    Binding::Step {
+                        node: node("config"),
+                        port: port("config"),
+                    },
+                )
+                .port(port("name"), Binding::Literal("ci".to_string())),
+        )
+        .node(
+            node("sink"),
+            Node::new(tool_name("fake.list_sink.ensure")).port(
+                port("orgs"),
+                Binding::List(vec![Binding::Step {
+                    node: node("token"),
+                    port: port("token"),
+                }]),
+            ),
+        );
+    let errors = check(&workflow, &test_catalog())
+        .expect_err("a secret token must not reach a non-secret list element");
+    assert_eq!(
+        errors,
+        vec![CheckError::SecretToNonSecretSink {
+            from: (node("token"), port("token")),
+            to: Site::list_element(node("sink"), port("orgs"), 0),
+        }]
+    );
+}
+
+/// Positive control: a list binding whose elements need different
+/// treatment -- one an exact match, one a one-hop conversion -- checks
+/// cleanly and records one [`Edge`] per element, in order.
+#[test]
+fn list_binding_records_one_edge_per_element_with_conversion_where_needed() {
+    // A `Binding::Literal` always parses through the *global* type
+    // registry (`Value::parse`), never a catalog's own, so element 0 is an
+    // `Input` of `ChainB` (an exact match, no conversion) rather than a
+    // literal -- `chain_catalog`'s `ChainA`/`ChainB`/`ChainC` exist only in
+    // its own isolated registry.
+    let workflow = Workflow::new(workflow_name("list-per-element-edges"))
+        .input(input("b"), InputSpec::new(ty("ChainB")))
+        .input(input("a"), InputSpec::new(ty("ChainA")))
+        .node(
+            node("sink"),
+            Node::new(tool_name("chain.sink_list_b")).port(
+                port("xs"),
+                Binding::List(vec![Binding::Input(input("b")), Binding::Input(input("a"))]),
+            ),
+        );
+    let checked = check(&workflow, &chain_catalog())
+        .expect("an exact ChainB and a converting ChainA input both belong in list<ChainB>");
+    let edge = &checked.types[&node("sink")][&port("xs")];
+    assert_eq!(edge.delivered(), list_ty("ChainB"));
+    let elements = edge
+        .elements()
+        .expect("a list binding records element edges");
+    assert_eq!(elements.len(), 2);
+    assert_eq!(elements[0].ty(), &ty("ChainB"));
+    assert!(
+        elements[0].conversion().is_none(),
+        "an exact-match element is never converted"
+    );
+    assert_eq!(elements[1].ty(), &ty("ChainA"));
+    assert_eq!(
+        elements[1]
+            .conversion()
+            .expect("the ChainA element converts one hop")
+            .to()
+            .as_str(),
+        "ChainB"
+    );
+}
+
+/// An input referenced only as an element of a `Binding::List` counts as
+/// used: no [`CheckWarning::UnusedInput`].
+#[test]
+fn an_input_used_only_inside_a_list_is_not_reported_unused() {
+    let workflow = Workflow::new(workflow_name("list-marks-input-used"))
+        .input(input("a"), InputSpec::new(ty("ChainA")))
+        .node(
+            node("sink"),
+            Node::new(tool_name("chain.sink_list_b"))
+                .port(port("xs"), Binding::List(vec![Binding::Input(input("a"))])),
+        );
+    let checked = check(&workflow, &chain_catalog()).expect("a converting element checks cleanly");
+    assert!(checked.warnings.is_empty(), "{:?}", checked.warnings);
 }

@@ -187,6 +187,14 @@ pub enum Binding {
     /// A literal string, parsed against the bound port's scalar type at
     /// check time. Never valid for a secret-accepting port.
     Literal(String),
+    /// A YAML sequence under `with:`: one binding per element, each a
+    /// reference or a literal, never itself a [`Self::List`] (no nested
+    /// lists; `willikins-dsl` refuses one at parse time, and `check`
+    /// refuses one reaching it any other way). Valid only bound to a
+    /// node's `with` port whose declared type is `list<T>`; never valid as
+    /// a `for_each` source or a workflow output (milestone 3g, decision
+    /// (a)).
+    List(Vec<Binding>),
 }
 
 /// One node in a workflow graph: a call to one tool, optionally expanded
@@ -351,6 +359,15 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Binding::Literal("private".to_string())).unwrap(),
             r#"{"kind":"literal","value":"private"}"#
+        );
+
+        let list = Binding::List(vec![
+            Binding::Literal("a".to_string()),
+            Binding::Input(InputName::parse("b").unwrap()),
+        ]);
+        assert_eq!(
+            serde_json::to_string(&list).unwrap(),
+            r#"{"kind":"list","value":[{"kind":"literal","value":"a"},{"kind":"input","value":"b"}]}"#
         );
     }
 
