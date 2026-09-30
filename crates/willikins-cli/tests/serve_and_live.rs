@@ -492,6 +492,50 @@ fn plan_live_on_a_document_whose_buildkite_node_binds_its_own_token_needs_no_bui
     assert!(stderr(&output).is_empty(), "stderr: {}", stderr(&output));
 }
 
+/// Adversarial pass 5 (2026-09-30): the Buildkite half of the control
+/// `plan_live_on_a_document_using_github_still_refuses_with_only_a_doppler_token_set`
+/// is for GitHub. `workflows/new-rust-service-buildkite.yaml`'s two
+/// `buildkite.*` nodes leave `token` unbound, so `plan <file> --live`
+/// must still demand `WILLIKINS_BUILDKITE_TOKEN` up front, naming the
+/// variable and the first node that needs it -- not build a
+/// credential-less Buildkite client and leave the refusal to a later
+/// `read()`. Before this test, a mutant that made
+/// `live_catalog_for_document` never require the Buildkite credential
+/// survived this file (pass 5's own record). The GitHub credential is
+/// set (a short, shaped `ghp_` value) so the GitHub check, which runs
+/// first, passes and the Buildkite one is reached.
+#[test]
+fn plan_live_on_a_document_leaving_buildkite_unbound_still_refuses_naming_the_variable() {
+    let token = doppler_test_token();
+    let output = run(
+        &[
+            "--json",
+            "plan",
+            workflow("workflows/new-rust-service-buildkite.yaml")
+                .to_str()
+                .unwrap(),
+            "--live",
+        ],
+        &[
+            ("WILLIKINS_DOPPLER_TOKEN", token.as_str()),
+            ("WILLIKINS_GITHUB_TOKEN", "ghp_example"),
+        ],
+    );
+    assert_eq!(exit_code(&output), 2, "stderr: {}", stderr(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stderr(&output).trim()).expect("valid JSON on stderr");
+    assert_eq!(json["kind"], "Buildkite", "{json}");
+    assert_eq!(json["document"], "new-rust-service-buildkite", "{json}");
+    assert_eq!(json["node"], "buildkite_cluster", "{json}");
+    assert_eq!(json["tool"], "buildkite.cluster.get", "{json}");
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("WILLIKINS_BUILDKITE_TOKEN")),
+        "{json}"
+    );
+}
+
 // ---------------------------------------------------------------------
 // D2: the real Sample document, both its own `github.*` node
 // (`monorepo_ref`, R4) and its two `buildkite.*` nodes
