@@ -497,19 +497,24 @@ mod tests {
     fn the_projected_bound_is_exactly_the_bound_repo_file_itself_enforces() {
         let value = "a".repeat(255);
         let placeholder = "{{ 0 }}";
-        // 65536 / 255 placeholders each substituting a 255-character
-        // value stays at or under the bound; one more pushes it over.
+        // As many substitutions as fit under the bound, then pad with a
+        // handful of literal (non-placeholder) characters to land on
+        // exactly `MAX_RENDERED_CHARS` -- not merely under it, so this
+        // pins the boundary itself: a `>=` in place of `render`'s `>`
+        // would refuse this render and still pass a looser assertion.
         let at_bound_count = MAX_RENDERED_CHARS / value.len();
-        let template = placeholder.repeat(at_bound_count);
-        let inputs = full_inputs("a", &template, &[&value]);
+        let substituted = at_bound_count * value.len();
+        let padding = "x".repeat(MAX_RENDERED_CHARS - substituted);
+        let exactly_at_bound = format!("{}{padding}", placeholder.repeat(at_bound_count));
+        let inputs = full_inputs("a", &exactly_at_bound, &[&value]);
         let observation = RepoFileRender::new().read(&inputs).unwrap();
         assert_eq!(
             rendered_content(observation).chars().count(),
-            at_bound_count * value.len()
+            MAX_RENDERED_CHARS
         );
 
-        let one_more = format!("{template}{placeholder}");
-        let inputs = full_inputs("a", &one_more, &[&value]);
+        let one_over_bound = format!("{exactly_at_bound}x");
+        let inputs = full_inputs("a", &one_over_bound, &[&value]);
         assert!(RepoFileRender::new().read(&inputs).is_err());
     }
 

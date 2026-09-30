@@ -77,8 +77,11 @@ case, required by that file's own completeness assertion over every pure tool in
 annotation, which does not compile otherwise, plus its doc-comment counts). No behaviour changed in any
 of the three catalog-assembly crates beyond registering the one new tool; every ripple is mechanical and
 was required for the touched crates' own existing tests to stay green, not a design choice. Verified with
-`cargo clippy` and `cargo test`, scoped per crate, all green; `cargo fmt --all --check` pending this
-addendum's own save.
+`cargo fmt --all --check`, `cargo clippy --all-targets -D warnings` and `cargo test`, each scoped to every
+touched crate (`willikins-tools`, `willikins-server`, `willikins-providers-fake`,
+`willikins-providers-doppler`), plus `cargo check -p willikins-types` and
+`cargo test -p willikins-dsl --test acceptance` for the characterization snapshot (byte-identical: no
+shipped document binds `repo.file.render` yet) — all green.
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Example-Org/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
