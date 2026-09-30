@@ -50,7 +50,8 @@ pub struct DopplerProjectRecord {
 }
 
 /// A Buildkite pipeline record: enough to answer
-/// `buildkite.pipeline.ensure`'s `read`.
+/// `buildkite.pipeline.ensure`'s `read` and (milestone 3g task B1)
+/// `buildkite.pipeline.bootstrap.gate`'s.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildkitePipelineRecord {
@@ -66,6 +67,16 @@ pub struct BuildkitePipelineRecord {
     /// natural key exists but the resource is
     /// [`Foreign`](willikins_core::Observation::Foreign)).
     pub ours: bool,
+    /// This pipeline's stored configuration, compared structurally by
+    /// `buildkite.pipeline.bootstrap.gate`'s fake twin -- the same field
+    /// the live provider's own `configuration` answers. `#[serde(default)]`
+    /// so a state fixture written before this field existed (none seed
+    /// `buildkite_pipelines` today) still deserializes, as an empty
+    /// string -- which equals no real bootstrap and so reads `Absent`,
+    /// same as a pipeline this fake has never heard of holding
+    /// configuration at all.
+    #[serde(default)]
+    pub configuration: String,
 }
 
 /// An App Store Connect bundle id record: enough to answer

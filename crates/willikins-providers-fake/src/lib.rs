@@ -32,8 +32,9 @@
 //! `appstore.app_group.gate` to any observable capability; milestone 3g
 //! task T1 added `repo.file.render`, the first pure tool with a `list<T>`
 //! input port; milestone 3g task G2 added `github.scaffold.ensure`, the
-//! first non-pure tool with a `list<T>` input port),
-//! so the catalog this crate produces holds thirty-eight tools, in the
+//! first non-pure tool with a `list<T>` input port; milestone 3g task B1
+//! added `buildkite.pipeline.bootstrap.gate`),
+//! so the catalog this crate produces holds thirty-nine tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -109,6 +110,9 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::SigNozIngestionKeyEnsure::new(state.clone()));
     insert!(tools::FakeBuildkiteClusterGet::new(state.clone()));
     insert!(tools::FakeBuildkitePipelineEnsure::new(state.clone()));
+    insert!(tools::FakeBuildkitePipelineBootstrapGate::new(
+        state.clone()
+    ));
     insert!(tools::FakeAppstoreBundleIdEnsure::new(state.clone()));
     insert!(tools::FakeAppstoreBundleIdCapabilityEnsure::new(
         state.clone()
@@ -175,6 +179,7 @@ mod tests {
             "signoz.ingestion_key.ensure",
             "buildkite.cluster.get",
             "buildkite.pipeline.ensure",
+            "buildkite.pipeline.bootstrap.gate",
             "appstore.bundle_id.ensure",
             "appstore.bundle_id_capability.ensure",
             "appstore.certificate.get",
@@ -190,7 +195,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 38);
+        assert_eq!(names.len(), 39);
     }
 
     #[test]

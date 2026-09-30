@@ -3410,6 +3410,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha1",
  "thiserror",
  "willikins-core",

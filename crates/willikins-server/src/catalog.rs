@@ -2,12 +2,13 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the live catalog (thirty-six tools since
-//! milestone 3g task G2 added `github.scaffold.ensure`, after task T1
+//! `live_catalog` assembles the live catalog (thirty-seven tools since
+//! milestone 3g task B1 added `buildkite.pipeline.bootstrap.gate`, after
+//! task G2 added `github.scaffold.ensure`, after task T1
 //! added `repo.file.render`, after the App Attest
 //! gate task added `appstore.bundle_id_capability.gate`, after
 //! milestone 3e task K1 added `buildkite.token.parse`, after task R2
-//! added `github.token.parse`, after task B1 added
+//! added `github.token.parse`, after milestone 3e's own task B1 added
 //! `doppler.branch_config.ensure`, after task 3 added the two Walter
 //! gates, `appstore.app.get` and `appstore.app_group.gate`) --
 //! `willikins-tools`' eleven pure tools (`naming.v1`, `template.render`,
@@ -22,8 +23,10 @@
 //! `doppler.config.inherits.ensure`; the `SigNoz` task added
 //! `doppler.secret.set`; the App Store Connect credential correction
 //! added `doppler.value.get`; milestone 3e task B1 added
-//! `doppler.branch_config.ensure`), `willikins-providers-buildkite`'s two
-//! (milestone 3a), `willikins-providers-signoz`'s one (the `SigNoz`
+//! `doppler.branch_config.ensure`), `willikins-providers-buildkite`'s
+//! three (milestone 3a; milestone 3g task B1 added
+//! `buildkite.pipeline.bootstrap.gate`), `willikins-providers-signoz`'s
+//! one (the `SigNoz`
 //! task), and `willikins-providers-appstore`'s seven (two from the App
 //! Store Connect provider crate; milestone 3c added
 //! `appstore.certificate.get`; milestone 3c task 2 added
@@ -45,7 +48,7 @@ use willikins_providers_appstore::{
     AppstoreProfileEnsure,
 };
 use willikins_providers_buildkite::{
-    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineEnsure,
+    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure,
 };
 use willikins_providers_doppler::{
     DopplerBranchConfigEnsure, DopplerClient, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
@@ -62,7 +65,7 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 36] = [
+pub const LIVE_TOOL_NAMES: [&str; 37] = [
     "naming.v1",
     "template.render",
     "operator.acknowledge",
@@ -92,6 +95,7 @@ pub const LIVE_TOOL_NAMES: [&str; 36] = [
     "signoz.ingestion_key.ensure",
     "buildkite.pipeline.ensure",
     "buildkite.cluster.get",
+    "buildkite.pipeline.bootstrap.gate",
     "appstore.bundle_id.ensure",
     "appstore.bundle_id_capability.ensure",
     "appstore.certificate.get",
@@ -277,15 +281,22 @@ fn insert_signoz_tools(catalog: &mut Catalog, http: Http) {
     insert(catalog, Arc::new(SigNozIngestionKeyEnsure::new(signoz)));
 }
 
-/// Insert `willikins-providers-buildkite`'s two live tools, built from
-/// `http`.
+/// Insert `willikins-providers-buildkite`'s three live tools, built from
+/// `http` (milestone 3g task B1 added `buildkite.pipeline.bootstrap.gate`).
 fn insert_buildkite_tools(catalog: &mut Catalog, http: Http) {
     let buildkite = Arc::new(BuildkiteClient::new(http));
     insert(
         catalog,
         Arc::new(BuildkitePipelineEnsure::new(Arc::clone(&buildkite))),
     );
-    insert(catalog, Arc::new(BuildkiteClusterGet::new(buildkite)));
+    insert(
+        catalog,
+        Arc::new(BuildkiteClusterGet::new(Arc::clone(&buildkite))),
+    );
+    insert(
+        catalog,
+        Arc::new(BuildkitePipelineBootstrapGate::new(buildkite)),
+    );
 }
 
 /// Insert `tool` into `catalog`, panicking (the live catalog's own tool
@@ -554,7 +565,11 @@ const DOPPLER_TOOL_NAMES: [&str; 11] = [
 
 /// `willikins-providers-buildkite`'s live tool names. See
 /// [`GITHUB_TOOL_NAMES`].
-const BUILDKITE_TOOL_NAMES: [&str; 2] = ["buildkite.pipeline.ensure", "buildkite.cluster.get"];
+const BUILDKITE_TOOL_NAMES: [&str; 3] = [
+    "buildkite.pipeline.ensure",
+    "buildkite.cluster.get",
+    "buildkite.pipeline.bootstrap.gate",
+];
 
 /// `willikins-providers-signoz`'s live tool names. See
 /// [`GITHUB_TOOL_NAMES`]. `doppler.secret.set` needs the *Doppler*

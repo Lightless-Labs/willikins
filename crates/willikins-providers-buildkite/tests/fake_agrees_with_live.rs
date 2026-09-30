@@ -31,17 +31,19 @@ use std::sync::{Arc, Mutex};
 
 use willikins_core::{Inputs, Observation, PortName, Tool, Value};
 use willikins_providers_buildkite::{
-    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineEnsure, MANAGED_DESCRIPTION,
-    ssh_repository_url,
+    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure,
+    MANAGED_DESCRIPTION, UPLOAD_CONFIGURATION, ssh_repository_url,
 };
 use willikins_providers_fake::FakeState;
 use willikins_providers_fake::state::BuildkitePipelineRecord;
-use willikins_providers_fake::tools::{FakeBuildkiteClusterGet, FakeBuildkitePipelineEnsure};
+use willikins_providers_fake::tools::{
+    FakeBuildkiteClusterGet, FakeBuildkitePipelineBootstrapGate, FakeBuildkitePipelineEnsure,
+};
 use willikins_providers_http::testing::MockProvider;
 use willikins_providers_http::{Credential, Http};
 use willikins_types::{
     BuildkiteClusterId, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
-    GitHubOrg, GitHubRepo, ProjectSlug,
+    GitHubOrg, GitHubRepo, ProjectSlug, RepoFile, RepoPath,
 };
 
 const CLUSTER_ID: &str = "018e5a22-d14c-7085-bb28-db0f83f43a1c";
@@ -206,6 +208,7 @@ fn present_agrees_and_pins_the_frozen_repository_form() {
             repository: ssh_repository_url(&repo()),
             cluster_id: CLUSTER_ID.to_string(),
             ours: true,
+            configuration: String::new(),
         },
     );
     assert_agree(
@@ -228,6 +231,7 @@ fn foreign_agrees_and_pins_the_frozen_ownership_marker() {
             repository: ssh_repository_url(&repo()),
             cluster_id: CLUSTER_ID.to_string(),
             ours: false,
+            configuration: String::new(),
         },
     );
     assert_agree(
@@ -250,6 +254,7 @@ fn mismatch_on_the_repository_agrees() {
             repository: ssh_repository_url(&other_repo()),
             cluster_id: CLUSTER_ID.to_string(),
             ours: true,
+            configuration: String::new(),
         },
     );
     assert_agree(
@@ -275,6 +280,7 @@ fn mismatch_on_the_cluster_agrees_and_repo_is_checked_first() {
             repository: ssh_repository_url(&repo()),
             cluster_id: OTHER_CLUSTER_ID.to_string(),
             ours: true,
+            configuration: String::new(),
         },
     );
     assert_agree(
@@ -294,6 +300,7 @@ fn mismatch_on_the_cluster_agrees_and_repo_is_checked_first() {
             repository: ssh_repository_url(&other_repo()),
             cluster_id: OTHER_CLUSTER_ID.to_string(),
             ours: true,
+            configuration: String::new(),
         },
     );
     assert_agree(
@@ -423,6 +430,7 @@ fn pipeline_ensure_agrees_on_present_with_the_token_port_bound() {
             repository: ssh_repository_url(&repo()),
             cluster_id: CLUSTER_ID.to_string(),
             ours: true,
+            configuration: String::new(),
         },
     );
     let fake = FakeBuildkitePipelineEnsure::new(Arc::new(Mutex::new(state)))
@@ -466,4 +474,225 @@ fn cluster_get_agrees_on_a_single_match_with_the_token_port_bound() {
 
     assert_eq!(shape(&live), shape(&fake));
     assert_eq!(rendered(&live), rendered(&fake));
+}
+
+// ---------------------------------------------------------------------
+// Milestone 3g task B1: `buildkite.pipeline.bootstrap.gate`'s own
+// agreement, over the same three shapes its own unit tests cover --
+// equal (structurally, not byte for byte), different, and absent.
+// ---------------------------------------------------------------------
+
+fn expected_bootstrap() -> RepoFile {
+    RepoFile::new(
+        RepoPath::parse("apps/walter/.buildkite/bootstrap.yml").unwrap(),
+        "steps:\n  - command: \"echo hi\"\n",
+    )
+    .unwrap()
+}
+
+fn bootstrap_gate_inputs() -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(port("org"), Value::known(org()));
+    inputs.insert(port("slug"), Value::known(slug()));
+    inputs.insert(port("expected"), Value::known(expected_bootstrap()));
+    inputs
+}
+
+fn live_bootstrap_gate_tool(url: String) -> BuildkitePipelineBootstrapGate {
+    let credential = Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+    let http = Http::new(url, Vec::new(), credential);
+    BuildkitePipelineBootstrapGate::new(Arc::new(BuildkiteClient::new(http)))
+}
+
+/// One case: `configuration` is what Buildkite's mocked `GET` answers
+/// with (a `404` when `None`), `seeded_configuration` is what the fake's
+/// own pipeline record carries (irrelevant when `None`, since no pipeline
+/// is seeded at all). Both are meant to describe the same world.
+fn assert_bootstrap_gate_agrees(
+    case: &str,
+    configuration: Option<&str>,
+    seeded_configuration: Option<&str>,
+) {
+    let mut provider = MockProvider::start();
+    let mock = provider.mock(
+        "GET",
+        "/v2/organizations/willikins-test/pipelines/third-thoughts",
+    );
+    let _mock = match configuration {
+        Some(configuration) => mock
+            .with_status(200)
+            .with_body(serde_json::json!({"configuration": configuration}).to_string())
+            .create(),
+        None => mock.with_status(404).create(),
+    };
+
+    let live = live_bootstrap_gate_tool(provider.url())
+        .read(&bootstrap_gate_inputs())
+        .unwrap_or_else(|err| panic!("{case}: the live tool failed: {err}"));
+
+    let state = match seeded_configuration {
+        Some(configuration) => FakeState::new().with_buildkite_pipeline(
+            &org(),
+            &slug(),
+            BuildkitePipelineRecord {
+                repository: ssh_repository_url(&repo()),
+                cluster_id: CLUSTER_ID.to_string(),
+                ours: true,
+                configuration: configuration.to_string(),
+            },
+        ),
+        None => FakeState::new(),
+    };
+    let fake = FakeBuildkitePipelineBootstrapGate::new(Arc::new(Mutex::new(state)))
+        .read(&bootstrap_gate_inputs())
+        .unwrap_or_else(|err| panic!("{case}: the fake tool failed: {err}"));
+
+    assert_eq!(
+        shape(&live),
+        shape(&fake),
+        "{case}: the live tool says {live:?}, the fake says {fake:?}"
+    );
+    assert_eq!(
+        rendered(&live),
+        rendered(&fake),
+        "{case}: the two tools' outputs differ"
+    );
+}
+
+#[test]
+fn bootstrap_gate_agrees_when_equal_though_re_quoted() {
+    assert_bootstrap_gate_agrees(
+        "present",
+        // Re-quoted, exactly the shape Buildkite's own documentation
+        // shows for a stored configuration -- still structurally equal.
+        Some("steps:\n  - command: 'echo hi'\n"),
+        Some("steps:\n  - command: 'echo hi'\n"),
+    );
+}
+
+#[test]
+fn bootstrap_gate_agrees_when_different() {
+    assert_bootstrap_gate_agrees(
+        "different",
+        Some("steps:\n  - command: \"buildkite-agent pipeline upload\"\n"),
+        Some("steps:\n  - command: \"buildkite-agent pipeline upload\"\n"),
+    );
+}
+
+#[test]
+fn bootstrap_gate_agrees_when_the_pipeline_does_not_exist() {
+    assert_bootstrap_gate_agrees("absent", None, None);
+}
+
+/// Pins the fake's own local copy of the frozen upload bootstrap
+/// (`willikins_providers_fake`'s private `FROZEN_UPLOAD_CONFIGURATION`,
+/// exercised only by `FakeBuildkitePipelineEnsure::ensure`'s `Absent`
+/// branch) to the live crate's own [`UPLOAD_CONFIGURATION`] -- exactly
+/// the shape of duplicate-constant mutation this file's own module doc
+/// explains (`ssh_repository_url`'s own precedent). A fresh fake
+/// `buildkite.pipeline.ensure` create is read back through the bootstrap
+/// gate with `expected` built from the *live* crate's own constant: if
+/// either copy's bytes ever drifted from the other, the freshly created
+/// record's `configuration` would no longer be structurally equal to
+/// `expected`, and this would read `Absent` instead of `Present`.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_freshly_created_fake_pipeline_holds_the_same_frozen_bootstrap_the_live_crate_freezes() {
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let token = willikins_core::SinkToken::new();
+    FakeBuildkitePipelineEnsure::new(state.clone())
+        .ensure(&pipeline_inputs(), &token)
+        .expect("creates the fake pipeline");
+
+    let mut gate_inputs = Inputs::new();
+    gate_inputs.insert(port("org"), Value::known(org()));
+    gate_inputs.insert(port("slug"), Value::known(slug()));
+    gate_inputs.insert(
+        port("expected"),
+        Value::known(
+            RepoFile::new(
+                RepoPath::parse("apps/walter/.buildkite/bootstrap.yml").unwrap(),
+                UPLOAD_CONFIGURATION,
+            )
+            .unwrap(),
+        ),
+    );
+
+    let observation = FakeBuildkitePipelineBootstrapGate::new(state)
+        .read(&gate_inputs)
+        .expect("reads");
+    assert!(
+        matches!(observation, Observation::Present(_)),
+        "{observation:?}: the fake's own frozen upload bootstrap no longer matches \
+         `UPLOAD_CONFIGURATION`"
+    );
+
+    // The live half of the same pin: a *real* pipeline whose stored
+    // configuration is exactly `UPLOAD_CONFIGURATION` (what a live
+    // `buildkite.pipeline.ensure` create actually sends) reads `Present`
+    // against the identical `gate_inputs` too, so this proves agreement,
+    // not only that the fake's own copy happens to parse the same as
+    // itself.
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(200)
+        .with_body(serde_json::json!({"configuration": UPLOAD_CONFIGURATION}).to_string())
+        .create();
+    let live = live_bootstrap_gate_tool(provider.url())
+        .read(&gate_inputs)
+        .expect("the live tool reads");
+    assert!(matches!(live, Observation::Present(_)), "{live:?}");
+}
+
+/// The bootstrap gate's own `token` port, agreeing the same way K1 proved
+/// it for the other two Buildkite tools: the fake ignores the port's
+/// value entirely, so this proves the *shape* of the two sides' answers
+/// still matches with the port bound.
+#[test]
+fn bootstrap_gate_agrees_on_present_with_the_token_port_bound() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"configuration": "steps:\n  - command: 'echo hi'\n"}).to_string(),
+        )
+        .create();
+
+    let mut bound_inputs = bootstrap_gate_inputs();
+    bound_inputs.insert(
+        port("token"),
+        Value::known(
+            willikins_types::BuildkiteToken::parse(concat!("bkua_", "theboundtokenexampleexample"))
+                .unwrap(),
+        ),
+    );
+
+    let live = live_bootstrap_gate_tool(provider.url())
+        .read(&bound_inputs)
+        .unwrap_or_else(|err| panic!("live tool errored: {err:?}"));
+
+    let state = FakeState::new().with_buildkite_pipeline(
+        &org(),
+        &slug(),
+        BuildkitePipelineRecord {
+            repository: ssh_repository_url(&repo()),
+            cluster_id: CLUSTER_ID.to_string(),
+            ours: true,
+            configuration: "steps:\n  - command: 'echo hi'\n".to_string(),
+        },
+    );
+    let fake = FakeBuildkitePipelineBootstrapGate::new(Arc::new(Mutex::new(state)))
+        .read(&bound_inputs)
+        .unwrap_or_else(|err| panic!("fake tool errored: {err:?}"));
+
+    assert_eq!(shape(&live), shape(&fake));
+    assert!(matches!(live, Observation::Present(_)), "{live:?}");
 }
