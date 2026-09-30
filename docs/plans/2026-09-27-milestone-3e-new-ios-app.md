@@ -24,6 +24,8 @@ and this plan's own pre-flight, fetched 2026-09-27 and quoted below with its URL
 `docs/research/2026-09-29-m3e-adversarial-pass-4.md`)
 **Reviewed:** 2026-09-30 (independent adversarial pass 5 over K1, L1, D1 and D2,
 `docs/research/2026-09-30-m3e-adversarial-pass-5.md`)
+**Reviewed:** 2026-09-30 (independent adversarial pass 7 over the App Attest gate task,
+`docs/research/2026-09-30-m3e-adversarial-pass-7.md`)
 **Addendum:** 2026-09-28 (attacker) — **four defects fixed test-first.** `c054a09`: every capability
 read parsed every row's `settings` strictly, so another row's missing `enabled` or `null` `options`
 failed a `HEALTHKIT` read; the four fields are now optional. `92dec9e`: decision (d)'s "exactly one
@@ -3011,3 +3013,24 @@ call. No provider call of any kind in this task.**
   whether the operator wants `APP_ATTEST_OPT_IN` gated too (Sample's own document only asks for
   `APP_ATTEST`, the base capability); this plan is not re-marked Completed (it already is, from task 3)
   and its own gate design decisions above are additive to, not a revision of, decision (j).
+
+**Addendum:** 2026-09-30 (attacker, pass 7 over the App Attest gate task) — **no defect found; three
+coverage commits, eight mutations killed.** Record: `docs/research/2026-09-30-m3e-adversarial-pass-7.md`.
+- **Confirmed by mutation:** `appstore.bundle_id_capability.ensure` cannot be asked to write `APP_ATTEST`
+  (widening `AppleCapabilityType` is killed by the superset unit test and a new fixture test; the literal
+  on Sample's own `healthkit` fails `check`); the gate blocks exactly when the capability is absent
+  (inverting `enabled` is killed); it holds back the host profile and its Doppler write and nothing else
+  (re-binding the host profile through `app_app_groups`, or the NSE profile through `app_app_attest`, is
+  killed); platform is the literal `UNIVERSAL` on all three identifiers (an `IOS` literal is killed, by the
+  real-layout pin alone: the fake does not care); the characterization moved only additively.
+- **Committed, tests only:** `191f91c` (the gate's `ensure` sends no `POST` while unmet, parent absent or
+  capability unlisted); `6d5f28d` (negative fixtures `appstore-capability-read-only-literal.yaml`,
+  `InvalidLiteral`, and `appstore-capability-observable-into-ensure.yaml`, `TypeMismatch`, with their
+  acceptance tests; the characterization gained only those two documents); `69c04f8` (Sample's interleaved
+  plan pins the gate's rendered subject, host identifier and `APP_ATTEST`, and the exact blocked set).
+- **Apple's docs, re-read:** App Attest works in the app and in action, extensible SSO and watchOS
+  extensions only, so gating the host alone is right; Xcode has an App Attest capability that writes the
+  environment entitlement, and a distributed build ignores that entitlement and uses production.
+- **Verify, no live call made:** whether a freshly created `UNIVERSAL` identifier already lists `APP_ATTEST`
+  (if so, the gate never blocks on a new app; safe either way). **Open to the operator:** gating
+  `APP_ATTEST_OPT_IN` too; naming the App Attest entitlement in `m3_repo_files`'s step text.
