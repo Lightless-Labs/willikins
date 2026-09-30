@@ -197,7 +197,7 @@ fn is_git_branch_name_char(c: char) -> bool {
 /// A git branch name: `[A-Za-z0-9._/-]+`, at most 100 characters -- a
 /// **subset** of `git check-ref-format`, not the whole rule (milestone 3g
 /// decision (g)). Refuses, over the whole name: `..`, `//`, a leading `/`
-/// or `-`, a trailing `/`, and `@{` anywhere. Refuses, per `/`-separated
+/// or `-`, a trailing `/` or `.`, and `@{` anywhere. Refuses, per `/`-separated
 /// component (git's own rule applies these to each component, not only to
 /// the whole ref, so `a/.b` and `a.lock/b` are invalid refs exactly like
 /// `.b` and `a.lock` on their own): a component starting with `.`, and a
@@ -270,8 +270,11 @@ impl DomainType for GitBranchName {
                 "must not start with `/` or `-`",
             ));
         }
-        if input.ends_with('/') {
-            return Err(ParseError::new(Self::TYPE_NAME, "must not end with `/`"));
+        if input.ends_with('/') || input.ends_with('.') {
+            return Err(ParseError::new(
+                Self::TYPE_NAME,
+                "must not end with `/` or `.`",
+            ));
         }
         for component in input.split('/') {
             if component.starts_with('.') {
@@ -746,6 +749,14 @@ mod tests {
     #[test]
     fn git_branch_name_rejects_trailing_slash() {
         assert!(GitBranchName::parse("main/").is_err());
+    }
+
+    #[test]
+    fn git_branch_name_rejects_trailing_dot() {
+        // git check-ref-format rule 7: a ref cannot end with a dot. The
+        // whole-name trailing check must cover this, not only the
+        // per-component leading-dot and `.lock` rules.
+        assert!(GitBranchName::parse("main.").is_err());
     }
 
     #[test]
