@@ -97,6 +97,43 @@ tree-walk fixture had a symlink and a submodule as declared paths but no tree na
 the query string so a stray `?recursive=1` could not silently satisfy them (the exact mock-precision
 lesson milestone 3e already paid for once).
 
+**Addendum:** 2026-09-30 (G2) — `github.scaffold.ensure` landed in both crates, exactly the task row's two
+commits: commit 1, the live tool (`crates/willikins-providers-github/src/tools/scaffold_ensure.rs`) and
+its mocks; commit 2, the fake twin, `catalog_parity.rs`'s new spec-equality/registry/snapshot tests, and
+catalog registration (`LIVE_TOOL_NAMES` 35 → 36, `GITHUB_TOOL_NAMES` 3 → 4). Two small deviations from this
+section's own text, neither changing the tool's observable behaviour:
+
+- **Trees are memoised per `resolve_tree_paths` call, not across the marker-then-seeds pair of calls.**
+  Decision (b) says a directory is "fetched each ... once", and within either call that still holds; what
+  it does not do is thread one cache across both calls, so in the `Absent` case every ancestor directory
+  the marker and the seed paths share (for Sample: `apps`, `apps/sample`) is fetched twice — once resolving
+  the marker alone, once resolving the seeds. This is deliberate, not an oversight: decision (b)'s own
+  "Present issues no tree walk past the marker" requires resolving the marker by itself first, and G1's
+  client built `resolve_tree_paths` as one self-contained call with its own cache, not a cache-threading
+  API. The cost is at most a handful of extra `GET`s on a scaffold's first run only (a repeat run is
+  `Present` after the marker's own single lookup) — accepted rather than widening G1's client for a second
+  caller this milestone doesn't otherwise need.
+- **A new crate dependency**, `sha1 = "0.10"` on `willikins-providers-fake` (already in `Cargo.lock` since
+  G1 added it to `willikins-providers-github`, so no new fetch), so the fake tool computes the same git
+  blob sha the live client does and writes a byte-identical marker — pinned in
+  `scaffold_fake_agrees_with_live.rs`'s `the_written_marker_is_byte_identical_between_fake_and_live`.
+
+One "Fix commit" followed advisor review, landing before the two above were closed out: `validate_shape`
+only bounded `files` to 1–64 entries and refused duplicate/colliding paths, all independent of any single
+path's length — but 64 files each near `RepoPath`'s own 1,024-character bound can still produce a marker
+over `RepoFile`'s 65,536-character bound, a refusal decision (b)'s table means to make "before any
+request" like every other shape refusal, not from inside the commit attempt. A new
+`validated_marker_file` helper builds and validates the marker right after `validate_shape` in both `read`
+and `ensure` (all of it is knowable from inputs alone), and `ensure`'s retry loop now reuses that one
+built value instead of rebuilding it on every attempt. A new test
+(`an_over_long_marker_is_invalid_before_any_request_on_read_and_ensure`) pins `Invalid` on both entry
+points, against an unreachable client so a request would surface as `Provider` instead if the ordering
+regressed. The same pass added four more mock tests decision (b)'s table implied but the first commit's
+suite had not yet exercised: two differing seed paths named together in one `Conflict` (not only the
+first found), a `100755` marker (right content, wrong mode) reported `Foreign`, a `100755` seed with a
+sha this tool would otherwise have written as `Conflict` (mode alone is enough), and a symlink seed path
+as `Conflict` too.
+
 Three deviations/notes, none changing decision (b)'s own three-state read table:
 
 1. **A new dependency, not named in this plan or its pre-flight**: `sha1 = "0.10"`, added directly to
