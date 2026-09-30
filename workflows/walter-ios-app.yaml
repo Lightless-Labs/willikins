@@ -144,10 +144,11 @@
 # literal at its one use site, `la-bande-a-bonnot` (the real Buildkite
 # org slug) and `Default cluster` (the real org's only cluster, both
 # probed read-only 2026-09-29). **R4's own "must still be set in the
-# process environment" claim above is superseded for Buildkite by L1
-# (2026-09-30): `live_catalog_for_document` now demands
-# `WILLIKINS_BUILDKITE_TOKEN` only when some `buildkite.*` node leaves
-# `token` unbound, and after this task neither one does, so `plan
+# process environment" claim above was about `WILLIKINS_GITHUB_TOKEN`,
+# and L1 (2026-09-30) already superseded it for GitHub: this task
+# extends the same relief to Buildkite. `live_catalog_for_document` now
+# demands `WILLIKINS_BUILDKITE_TOKEN` only when some `buildkite.*` node
+# leaves `token` unbound, and after this task neither one does, so `plan
 # workflows/walter-ios-app.yaml --live` / `apply ... --live` need neither
 # `WILLIKINS_GITHUB_TOKEN` nor `WILLIKINS_BUILDKITE_TOKEN` -- only
 # `WILLIKINS_DOPPLER_TOKEN` (`serve` and `apply --plan-id --live` are
