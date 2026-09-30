@@ -209,6 +209,14 @@ CHECK ERRORS:
 CHECK ERRORS:
 - kind=TypeMismatch display=node `bundle_id`, port `identifier`: expected AppleBundleIdentifier, found `Text` json={"kind":"TypeMismatch","node":"bundle_id","port":"identifier","expected":{"kind":"exact","type":"AppleBundleIdentifier"},"found":"Text"}
 
+=== workflows/fixtures/appstore-capability-observable-into-ensure.yaml ===
+CHECK ERRORS:
+- kind=TypeMismatch display=node `capability`, port `capability`: expected AppleCapabilityType, found `AppleObservableCapabilityType` json={"kind":"TypeMismatch","node":"capability","port":"capability","expected":{"kind":"exact","type":"AppleCapabilityType"},"found":"AppleObservableCapabilityType"}
+
+=== workflows/fixtures/appstore-capability-read-only-literal.yaml ===
+CHECK ERRORS:
+- kind=InvalidLiteral display=node `app_attest`, port `capability`: invalid literal: AppleCapabilityType: does not match the required pattern json={"kind":"InvalidLiteral","node":"app_attest","port":"capability","error":{"type_name":"AppleCapabilityType","reason":"does not match the required pattern"}}
+
 === workflows/fixtures/appstore-capability-setting-mismatch.yaml ===
 WARNINGS:
 TYPES:

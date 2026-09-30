@@ -1,0 +1,58 @@
+# Negative fixture (adversarial pass 7, 2026-09-30, the App Attest gate task).
+# Acceptance test: `capability_documents.rs`,
+# `an_observable_capability_input_is_refused_by_check_on_capability_ensure`.
+# The same refusal as `appstore-capability-read-only-literal.yaml`, reached
+# through a typed binding instead of a literal: an input declared
+# `AppleObservableCapabilityType` (the read-only gate's type, a strict
+# superset of the writable one) bound into
+# `appstore.bundle_id_capability.ensure`'s `AppleCapabilityType` port. No
+# conversion between the two is registered (and none may be: it could not
+# be total), so `check` returns exactly one error:
+#   TypeMismatch { node: capability, port: capability,
+#     expected: Exact(AppleCapabilityType), found: AppleObservableCapabilityType }
+name: appstore-capability-observable-into-ensure
+description: An AppleObservableCapabilityType input bound into appstore.bundle_id_capability.ensure's writable capability port -- refused by check.
+inputs:
+  config: { type: DopplerConfig }
+  identifier: { type: AppleBundleIdentifier }
+  capability: { type: AppleObservableCapabilityType }
+steps:
+  issuer_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ISSUER_ID
+  issuer_id:
+    tool: apple.issuer_id.parse
+    with:
+      value: ${{ steps.issuer_id_text.value }}
+  key_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ID
+  key_id:
+    tool: apple.key_id.parse
+    with:
+      value: ${{ steps.key_id_text.value }}
+  key_base64:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_BASE64
+  key_decoded:
+    tool: base64.decode
+    with:
+      value: ${{ steps.key_base64.value }}
+  key:
+    tool: apple.signing_key.parse
+    with:
+      value: ${{ steps.key_decoded.value }}
+  capability:
+    tool: appstore.bundle_id_capability.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.identifier }}
+      capability: ${{ inputs.capability }}

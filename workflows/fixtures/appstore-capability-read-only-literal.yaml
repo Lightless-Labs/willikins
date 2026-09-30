@@ -1,0 +1,57 @@
+# Negative fixture (adversarial pass 7, 2026-09-30, the App Attest gate task).
+# Acceptance test: `capability_documents.rs`,
+# `a_read_only_capability_literal_is_refused_by_check_on_capability_ensure`.
+# `APP_ATTEST` is observable (`AppleObservableCapabilityType`, the gate's
+# port) but never writable: a live `POST /v1/bundleIdCapabilities` with it
+# answered `409 ENTITY_ERROR.ATTRIBUTE.TYPE`, and it is not one of the 28
+# members of Apple's own `CapabilityType`. So
+# `appstore.bundle_id_capability.ensure`, whose `capability` port is the
+# writable `AppleCapabilityType`, must never be asked to write it. `check`
+# returns exactly one error:
+#   InvalidLiteral { node: app_attest, port: capability,
+#     error: ParseError { type_name: "AppleCapabilityType", .. } }
+name: appstore-capability-read-only-literal
+description: appstore.bundle_id_capability.ensure asked to write APP_ATTEST, a capability App Store Connect only ever reports -- refused by check.
+inputs:
+  config: { type: DopplerConfig }
+  identifier: { type: AppleBundleIdentifier }
+steps:
+  issuer_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ISSUER_ID
+  issuer_id:
+    tool: apple.issuer_id.parse
+    with:
+      value: ${{ steps.issuer_id_text.value }}
+  key_id_text:
+    tool: doppler.value.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_ID
+  key_id:
+    tool: apple.key_id.parse
+    with:
+      value: ${{ steps.key_id_text.value }}
+  key_base64:
+    tool: doppler.secret.get
+    with:
+      config: ${{ inputs.config }}
+      name: ASC_API_KEY_BASE64
+  key_decoded:
+    tool: base64.decode
+    with:
+      value: ${{ steps.key_base64.value }}
+  key:
+    tool: apple.signing_key.parse
+    with:
+      value: ${{ steps.key_decoded.value }}
+  app_attest:
+    tool: appstore.bundle_id_capability.ensure
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ inputs.identifier }}
+      capability: APP_ATTEST
