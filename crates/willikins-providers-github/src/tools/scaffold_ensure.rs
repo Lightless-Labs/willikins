@@ -205,6 +205,20 @@ impl GitHubScaffoldEnsure {
         content
     }
 
+    /// Build and validate the marker [`RepoFile`] from `files` and
+    /// `marker` -- both fully known from inputs alone, so this is a shape
+    /// refusal decision (b)'s table puts "before any request", not one
+    /// [`ensure`](Tool::ensure) may discover only after committing
+    /// everything else. Without this, 64 files each near [`RepoPath`]'s
+    /// own 1,024-character bound can produce a marker over
+    /// [`RepoFile`]'s 65,536-character bound, and the failure would
+    /// otherwise surface from inside the commit attempt instead of here.
+    fn validated_marker_file(files: &[RepoFile], marker: &RepoPath) -> Result<RepoFile, ToolError> {
+        let content = Self::marker_content(files);
+        RepoFile::new(marker.clone(), content)
+            .map_err(|err| invalid(format!("marker file is invalid: {}", err.reason)))
+    }
+
     /// The `Conflict` a foreign marker or an owned-but-differing seed path
     /// produces.
     fn foreign_conflict(repo: &GitHubRepo, branch: &GitBranchName, marker: &RepoPath) -> ToolError {
@@ -318,6 +332,7 @@ impl Tool for GitHubScaffoldEnsure {
         let marker: RepoPath = get(inputs, "marker")?;
         let files = Self::read_files(inputs)?;
         Self::validate_shape(&files, &marker)?;
+        Self::validated_marker_file(&files, &marker)?;
         let token: Option<GitHubToken> = get_optional(inputs, "token")?;
         let client = ScopedClient::default_for(&self.client, token.as_ref());
         match Self::observe(&client, &repo, &branch, &marker, &files)? {
@@ -338,6 +353,7 @@ impl Tool for GitHubScaffoldEnsure {
         let marker: RepoPath = get(inputs, "marker")?;
         let files = Self::read_files(inputs)?;
         Self::validate_shape(&files, &marker)?;
+        let marker_file = Self::validated_marker_file(&files, &marker)?;
         let message: CommitHeadline = get(inputs, "message")?;
         let bound_token: Option<GitHubToken> = get_optional(inputs, "token")?;
         let client = ScopedClient::default_for(&self.client, bound_token.as_ref());
@@ -363,15 +379,12 @@ impl Tool for GitHubScaffoldEnsure {
                 } => (head, already_equal),
             };
 
-            let marker_content = Self::marker_content(&files);
-            let marker_file = RepoFile::new(marker.clone(), marker_content)
-                .map_err(|err| invalid(format!("marker file is invalid: {}", err.reason)))?;
             let mut additions: Vec<RepoFile> = files
                 .iter()
                 .filter(|file| !already_equal.contains(file.path().as_str()))
                 .cloned()
                 .collect();
-            additions.push(marker_file);
+            additions.push(marker_file.clone());
 
             attempts += 1;
             match client.create_commit_on_branch(

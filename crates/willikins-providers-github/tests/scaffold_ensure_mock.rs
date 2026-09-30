@@ -234,6 +234,14 @@ fn read_reports_absent_and_predicts_the_pass_through_outputs() {
     );
     assert_eq!(
         predicted
+            .get(&PortName::parse("branch").unwrap())
+            .unwrap()
+            .render()
+            .to_string(),
+        "main"
+    );
+    assert_eq!(
+        predicted
             .get(&PortName::parse("marker").unwrap())
             .unwrap()
             .render()
@@ -268,6 +276,115 @@ fn read_conflicts_naming_the_differing_path_and_never_its_content() {
     assert!(!err.message.contains("ios/BUILD.bazel"), "{}", err.message);
     assert!(!err.message.contains("# reserve"), "{}", err.message);
     assert!(!err.message.contains("ios content"), "{}", err.message);
+}
+
+/// Every differing path is named, not only the first one found.
+#[test]
+fn read_conflict_names_every_differing_path_not_only_the_first() {
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider, "head-1", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![
+            tree_entry("BUILD.bazel", "100644", "blob", "some-other-sha"),
+            tree_entry("ios", "040000", "tree", "ios-tree"),
+        ],
+    );
+    mock_tree(
+        &mut provider,
+        "ios-tree",
+        vec![tree_entry(
+            "BUILD.bazel",
+            "100644",
+            "blob",
+            "yet-another-sha",
+        )],
+    );
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    assert!(err.message.contains("BUILD.bazel"), "{}", err.message);
+    assert!(err.message.contains("ios/BUILD.bazel"), "{}", err.message);
+}
+
+/// A marker blob with the right content but the *executable* mode is
+/// not the `100644` this tool ever writes, so it is `Foreign`, not
+/// `Present` -- decision (b)'s table: "any other first line, **or the
+/// marker path is not a `100644` blob**".
+#[test]
+fn read_reports_foreign_when_the_marker_is_a_100755_executable() {
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider, "head-1", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry(
+            ".willikins-scaffold",
+            "100755",
+            "blob",
+            "marker-sha",
+        )],
+    );
+    let blob = provider
+        .mock("GET", "/repos/acme/widget/git/blobs/marker-sha")
+        .expect(0)
+        .create();
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let observation = tool.read(&scaffold_inputs(seed_files())).unwrap();
+    assert!(
+        matches!(observation, Observation::Foreign),
+        "{observation:?}"
+    );
+    blob.assert();
+}
+
+/// A seed path present as a `100755` executable, even with the exact
+/// sha this tool would write as a plain `100644` file, is still a
+/// conflict: the mode differs, and this tool never changes a mode.
+#[test]
+fn read_conflicts_when_a_seed_path_is_present_as_an_executable_with_a_matching_sha() {
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider, "head-1", "root-tree");
+    let build_bazel_sha = blob_sha(seed_files()[0].content().as_bytes());
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![
+            tree_entry("BUILD.bazel", "100755", "blob", &build_bazel_sha),
+            tree_entry("ios", "040000", "tree", "ios-tree"),
+        ],
+    );
+    mock_tree(&mut provider, "ios-tree", vec![]);
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    assert!(err.message.contains("BUILD.bazel"), "{}", err.message);
+}
+
+/// A seed path present as a symlink (a `NonBlob`) is a conflict too,
+/// whatever its sha.
+#[test]
+fn read_conflicts_when_a_seed_path_is_a_symlink() {
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider, "head-1", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![
+            tree_entry("BUILD.bazel", "120000", "blob", "symlink-target-sha"),
+            tree_entry("ios", "040000", "tree", "ios-tree"),
+        ],
+    );
+    mock_tree(&mut provider, "ios-tree", vec![]);
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    assert!(err.message.contains("BUILD.bazel"), "{}", err.message);
 }
 
 #[test]
@@ -314,6 +431,31 @@ fn ensure_refuses_over_64_files_before_any_request() {
     let token = SinkToken::new();
     let err = tool.ensure(&scaffold_inputs(files), &token).unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::Invalid);
+}
+
+/// 64 files (the maximum `validate_shape` allows) each with a long
+/// `RepoPath` produce a marker over `RepoFile`'s own 65,536-character
+/// bound. That must be caught as `Invalid` before any request, on both
+/// `read` and `ensure` -- decision (b)'s table puts every shape refusal
+/// "before any request", and this one is only knowable once every
+/// file's path is in hand, not from the file count alone.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn an_over_long_marker_is_invalid_before_any_request_on_read_and_ensure() {
+    let files: Vec<RepoFile> = (0..64)
+        .map(|i| {
+            let path = format!("{}{i}.txt", "a".repeat(990));
+            RepoFile::new(RepoPath::parse(&path).unwrap(), "x").unwrap()
+        })
+        .collect();
+    let tool = GitHubScaffoldEnsure::new(unreachable_client());
+
+    let read_err = tool.read(&scaffold_inputs(files.clone())).unwrap_err();
+    assert_eq!(read_err.kind, ToolErrorKind::Invalid);
+
+    let token = SinkToken::new();
+    let ensure_err = tool.ensure(&scaffold_inputs(files), &token).unwrap_err();
+    assert_eq!(ensure_err.kind, ToolErrorKind::Invalid);
 }
 
 #[test]
