@@ -16,7 +16,7 @@ pub use client::{
     CREDENTIAL_PATTERN, CREDENTIAL_VAR, GITHUB_API_BASE_URL, GitHubClient, credential_from_env,
     default_headers, http_client, http_client_without_credential,
 };
-pub use tools::{GitHubActionsSecretEnsure, GitHubRepoEnsure, GitHubRepoGet};
+pub use tools::{GitHubActionsSecretEnsure, GitHubRepoEnsure, GitHubRepoGet, GitHubScaffoldEnsure};
 
 /// The repository topic willikins uses to mark a repository as its own.
 /// GitHub's topic rule (lowercase letters, digits, hyphens; at most 50

@@ -392,7 +392,6 @@ impl GitHubClient {
     /// # Errors
     ///
     /// See [`Self::get_repo`].
-    #[allow(dead_code)] // not yet called outside tests: wired in by github.scaffold.ensure, milestone 3g task G2
     pub(crate) fn get_branch_head(
         &self,
         repo: &GitHubRepo,
@@ -409,7 +408,6 @@ impl GitHubClient {
     /// # Errors
     ///
     /// See [`Self::get_repo`].
-    #[allow(dead_code)] // see get_branch_head's own note above
     pub(crate) fn get_commit_root_tree(
         &self,
         repo: &GitHubRepo,
@@ -424,7 +422,6 @@ impl GitHubClient {
     /// `?recursive=1`: a caller only ever needs one directory level at a
     /// time (see [`Self::resolve_tree_paths`]), and a recursive read of a
     /// busy monorepo's root risks GitHub's own truncation.
-    #[allow(dead_code)] // see get_branch_head's own note above
     fn get_tree_entries(
         &self,
         repo: &GitHubRepo,
@@ -450,7 +447,6 @@ impl GitHubClient {
     ///
     /// Returns [`ProviderError`] the first time a directory read fails;
     /// paths later in `paths` are never attempted.
-    #[allow(dead_code)] // see get_branch_head's own note above
     pub(crate) fn resolve_tree_paths(
         &self,
         repo: &GitHubRepo,
@@ -469,7 +465,6 @@ impl GitHubClient {
     /// Walk one [`RepoPath`]'s segments from `root_tree_sha`, directory by
     /// directory, through `cache` (shared across every path
     /// [`Self::resolve_tree_paths`] resolves in the same call).
-    #[allow(dead_code)] // see get_branch_head's own note above
     fn resolve_one_path(
         &self,
         repo: &GitHubRepo,
@@ -503,7 +498,6 @@ impl GitHubClient {
     /// Fetch `tree_sha`'s entries, memoised in `cache` for the lifetime of
     /// one [`Self::resolve_tree_paths`] call — the "each directory fetched
     /// once" half of decision (b).
-    #[allow(dead_code)] // see get_branch_head's own note above
     fn cached_tree_entries<'a>(
         &self,
         repo: &GitHubRepo,
@@ -531,7 +525,6 @@ impl GitHubClient {
     /// GitHub's `encoding` field is not `"base64"` or the content does not
     /// decode as base64 — both would otherwise silently read as an empty
     /// or nonsensical marker rather than a loud failure.
-    #[allow(dead_code)] // see get_branch_head's own note above
     pub(crate) fn get_blob(&self, repo: &GitHubRepo, sha: &str) -> Result<Vec<u8>, ProviderError> {
         let path = format!("{}/git/blobs/{sha}", repo_path(repo));
         let body: BlobBody = self.retry_secondary_limit(|| self.http.get(&path))?;
@@ -573,7 +566,6 @@ impl GitHubClient {
     /// `401`/`403` (whose shared fixed messages already carry no body
     /// text). A `401`/`403` and a transport failure are returned exactly
     /// as [`Http::post`] produced them.
-    #[allow(dead_code)] // see get_branch_head's own note above
     pub(crate) fn create_commit_on_branch(
         &self,
         repo: &GitHubRepo,
@@ -762,7 +754,6 @@ pub(crate) struct PublicKeyBody {
 /// [`GitHubClient::resolve_tree_paths`] already pinned to one commit.
 /// Content is never downloaded to produce this — see [`git_blob_sha`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // see get_branch_head's own note above
 pub(crate) enum PathEntry {
     /// No entry of that name exists, or an ancestor directory along the
     /// way does not exist or is itself not a directory.
@@ -777,26 +768,22 @@ pub(crate) enum PathEntry {
 
 /// GitHub's `git-ref` schema: the one field this crate reads.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct RefBody {
     object: RefObject,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct RefObject {
     sha: String,
 }
 
 /// GitHub's `git-commit` schema: the one field this crate reads.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct CommitBody {
     tree: TreeRef,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct TreeRef {
     sha: String,
 }
@@ -804,7 +791,6 @@ struct TreeRef {
 /// GitHub's `git-tree` schema, read non-recursively: one directory level
 /// of entries.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct TreeBody {
     tree: Vec<TreeEntryBody>,
 }
@@ -812,7 +798,6 @@ struct TreeBody {
 /// One entry of a non-recursive git tree: a name relative to its parent
 /// directory, its mode, its git object type, and its own sha.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct TreeEntryBody {
     path: String,
     mode: String,
@@ -828,7 +813,6 @@ impl TreeEntryBody {
     /// GitHub's `type` field alone does not distinguish a symlink
     /// (`"120000"`) from a regular file (`"100644"`/`"100755"`): both
     /// report `type: "blob"`.
-    #[allow(dead_code)] // see get_branch_head's own note above
     fn classify(&self) -> PathEntry {
         match self.mode.as_str() {
             "100644" | "100755" => PathEntry::Blob {
@@ -854,7 +838,6 @@ struct BlobBody {
 /// entry's content (decision (b),
 /// `docs/plans/2026-09-30-milestone-3g-file-writing.md`).
 #[must_use]
-#[allow(dead_code)] // see get_branch_head's own note above
 pub(crate) fn git_blob_sha(content: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut hasher = Sha1::new();
@@ -872,7 +855,6 @@ pub(crate) fn git_blob_sha(content: &[u8]) -> String {
 /// tool or document ever supplies GraphQL text of its own (the
 /// no-arbitrary-API-path invariant, applied to GraphQL the same way it
 /// applies to every fixed REST path in this workspace).
-#[allow(dead_code)] // see get_branch_head's own note above
 const CREATE_COMMIT_ON_BRANCH_MUTATION: &str = "mutation($input: CreateCommitOnBranchInput!) { \
      createCommitOnBranch(input: $input) { commit { oid } } }";
 
@@ -880,7 +862,6 @@ const CREATE_COMMIT_ON_BRANCH_MUTATION: &str = "mutation($input: CreateCommitOnB
 /// GitHub's own `errors[].message` or any other response-body text — see
 /// this module's own doc section on why that bar is stricter here than
 /// `willikins-providers-http`'s shared REST error handling.
-#[allow(dead_code)] // see get_branch_head's own note above
 const GRAPHQL_FAILURE_MESSAGE: &str =
     "GitHub's GraphQL API did not report the commit as successful";
 
@@ -888,7 +869,6 @@ const GRAPHQL_FAILURE_MESSAGE: &str =
 /// variables. Generic so [`create_commit_on_branch`](GitHubClient::create_commit_on_branch)
 /// is the only place that names the mutation's own variable shape.
 #[derive(Debug, Serialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct GraphQLRequest<'a, V> {
     query: &'a str,
     variables: V,
@@ -896,14 +876,12 @@ struct GraphQLRequest<'a, V> {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct CreateCommitVariables {
     input: CreateCommitInput,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct CreateCommitInput {
     branch: CommittableBranchInput,
     file_changes: FileChangesInput,
@@ -913,27 +891,23 @@ struct CreateCommitInput {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct CommittableBranchInput {
     repository_name_with_owner: String,
     branch_name: String,
 }
 
 #[derive(Debug, Serialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct FileChangesInput {
     additions: Vec<FileAdditionInput>,
 }
 
 #[derive(Debug, Serialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct FileAdditionInput {
     path: String,
     contents: String,
 }
 
 #[derive(Debug, Serialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct CommitMessageInput {
     headline: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -949,7 +923,6 @@ struct CommitMessageInput {
 /// one, so GitHub's own words can never reach a [`ProviderError`] built
 /// from a GraphQL response.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct GraphQLResponse<T> {
     data: Option<T>,
     errors: Option<Vec<serde_json::Value>>,
@@ -957,19 +930,16 @@ struct GraphQLResponse<T> {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct CreateCommitOnBranchData {
     create_commit_on_branch: Option<CreateCommitOnBranchPayload>,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct CreateCommitOnBranchPayload {
     commit: CommitOidBody,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // see get_branch_head's own note above
 struct CommitOidBody {
     oid: String,
 }
@@ -987,7 +957,6 @@ struct CommitOidBody {
 /// workspace just tried to commit — decision (b)'s "never echoes ...
 /// any response body" is read as covering that case too, not only
 /// GraphQL's own 200-with-`errors` shape.
-#[allow(dead_code)] // see get_branch_head's own note above
 fn suppress_graphql_response_body(err: ProviderError) -> ProviderError {
     match err.status {
         None | Some(401 | 403) => err,
