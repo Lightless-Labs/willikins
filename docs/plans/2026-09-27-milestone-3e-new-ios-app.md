@@ -2568,9 +2568,13 @@ policy'").**
   `doppler.config.inheritable.gate` and expands over `${{ inputs.base_configs }}` with `config: ${{
   item }}`, and that `inherit.inherits` binds `base_config_gate`'s own aggregate, never
   `inputs.base_configs` directly. `crates/willikins-cli/tests/walter_apply_blocked_redaction.rs`
-  dropped its now-invalid `--input org=…`/`slug=…`/`monorepo=…` lines (an undeclared `--input` would
-  otherwise be silently ignored rather than fail loudly, so removing them is correctness, not
-  cleanup). `workflows/fixtures/state/walter-ios-app.json` gained `doppler_configs`/
+  dropped its now-stale `--input org=…`/`slug=…`/`monorepo=…` lines -- **verified, not assumed, that
+  this is cleanup and not a correctness fix**: `build_partial_inputs`
+  (`crates/willikins-cli/src/main.rs`) passes an argument naming an input `checked`'s workflow does
+  not declare through as a scalar rather than refusing it (its own doc comment: "since
+  `willikins_core::describe` only needs its name to report it as unrecognised"), so the three stale
+  lines would have sat in `PartialInputs` unused and harmless, never causing a refusal. Removing them
+  keeps the invocation honest about what the document now reads, nothing more. `workflows/fixtures/state/walter-ios-app.json` gained `doppler_configs`/
   `doppler_config_inheritable` entries for all three base configs, so the CLI-level test's own run
   clears the new gate exactly as it did before this task.
 - **The characterization snapshot moved by exactly one line, in this document's own entry, diffed
@@ -2593,6 +2597,15 @@ policy'").**
   secret_literal_guard` and `--test expose_secret_guard` (this addendum's own text scanned clean, per
   K1/L1's own recorded lesson); `cargo check -p willikins-types -j 2`. All green
   (`RUST_TEST_THREADS=2`). The full workspace gate was not run (host rule; the coordinator's).
+- **Decision (h) is now stale in one clause, not edited in place** (its own header block is not this
+  task's to touch): "Names: `naming.v1` for Doppler and Buildkite, the monorepo as an input" -- the
+  monorepo is a literal now, not an input; this addendum supersedes that clause.
+- **Honest process note: the new test was not run red against the pre-change document.** The gate
+  node, the rebound edge and `a_missing_base_config_blocks_its_gate_and_skips_inherit` were written
+  together, then run once, green. The one genuine red this task produced was the characterization
+  snapshot's own assertion failing on the predicted new `TYPES` line (confirmed byte-for-byte against
+  the pre-change snapshot before accepting it) -- real evidence the change reached the document, but
+  not the same thing as watching the new test fail against the old graph first.
 - **Remaining, carried forward:** `base_configs` itself is still a caller-overridable input by
   mechanical necessity (above) -- not a gap this task can close, only document honestly; R2's own
   server-side gap (`WILLIKINS_GITHUB_TOKEN` read unconditionally at `serve`/`apply --plan-id`
