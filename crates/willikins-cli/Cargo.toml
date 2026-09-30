@@ -56,6 +56,9 @@ tempfile.workspace = true
 
 [dev-dependencies]
 indexmap.workspace = true
+# W1's rendered-file snapshots (milestone 3g): one `insta` snapshot per
+# `repo.file.render` output, the artefact the operator reviews.
+insta.workspace = true
 # Task 14's live smoke test reads the Doppler project back after the
 # teardown script has run, through the same client the provider uses --
 # an independent leftover check, not the script's own word for it. Only
