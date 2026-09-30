@@ -33,6 +33,15 @@ fn ssh_repository_url(repo: &GitHubRepo) -> String {
     format!("git@github.com:{}/{}.git", repo.owner(), repo.name())
 }
 
+/// The frozen bootstrap configuration a freshly created pipeline holds,
+/// exactly the bytes `willikins_providers_buildkite::UPLOAD_CONFIGURATION`
+/// is -- its own local copy for the same reason [`ssh_repository_url`]
+/// above is one. `buildkite.pipeline.bootstrap.gate`'s fake twin
+/// (`FakeBuildkitePipelineBootstrapGate`) compares against this same
+/// constant.
+pub(crate) const FROZEN_UPLOAD_CONFIGURATION: &str =
+    "steps:\n - command: \"buildkite-agent pipeline upload\"";
+
 /// `buildkite.pipeline.ensure`.
 pub struct FakeBuildkitePipelineEnsure {
     spec: ToolSpec,
@@ -158,6 +167,7 @@ impl Tool for FakeBuildkitePipelineEnsure {
                         repository: ssh_repository_url(&repo),
                         cluster_id: cluster.to_string(),
                         ours: true,
+                        configuration: FROZEN_UPLOAD_CONFIGURATION.to_string(),
                     },
                 );
                 Ok(Ensured {
@@ -240,6 +250,7 @@ mod tests {
                 repository: ssh_repository_url(&repo()),
                 cluster_id: cluster().to_string(),
                 ours: false,
+                configuration: String::new(),
             },
         )));
         let tool = FakeBuildkitePipelineEnsure::new(state);
@@ -256,6 +267,7 @@ mod tests {
                 repository: "git@github.com:lightless-labs/other.git".to_string(),
                 cluster_id: "different-cluster".to_string(),
                 ours: true,
+                configuration: String::new(),
             },
         )));
         let tool = FakeBuildkitePipelineEnsure::new(state);
@@ -275,6 +287,7 @@ mod tests {
                 repository: ssh_repository_url(&repo()),
                 cluster_id: "different-cluster".to_string(),
                 ours: true,
+                configuration: String::new(),
             },
         )));
         let tool = FakeBuildkitePipelineEnsure::new(state);
@@ -295,6 +308,7 @@ mod tests {
                 repository: ssh_repository_url(&repo()),
                 cluster_id: cluster().to_string(),
                 ours: false,
+                configuration: String::new(),
             },
         )));
         let tool = FakeBuildkitePipelineEnsure::new(state);

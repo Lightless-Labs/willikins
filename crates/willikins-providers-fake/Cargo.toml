@@ -14,6 +14,7 @@ willikins-core.workspace = true
 willikins-tools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml_ng.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
 sha1 = "0.10"

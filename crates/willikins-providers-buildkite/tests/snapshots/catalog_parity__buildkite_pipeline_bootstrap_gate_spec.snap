@@ -1,0 +1,45 @@
+---
+source: crates/willikins-providers-buildkite/tests/catalog_parity.rs
+assertion_line: 74
+expression: "spec_json(BuildkitePipelineBootstrapGate::new(test_client()).spec())"
+---
+{
+  "class": "reversible",
+  "description": "A gate: whether a Buildkite pipeline's stored configuration equals the bootstrap a document renders.",
+  "inputs": {
+    "expected": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "RepoFile"
+      }
+    },
+    "org": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "BuildkiteOrg"
+      }
+    },
+    "slug": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "BuildkitePipelineSlug"
+      }
+    },
+    "token": {
+      "required": false,
+      "ty": {
+        "kind": "exact",
+        "type": "BuildkiteToken"
+      }
+    }
+  },
+  "key": [],
+  "name": "buildkite.pipeline.bootstrap.gate",
+  "outputs": {
+    "slug": "BuildkitePipelineSlug"
+  },
+  "pure": true
+}

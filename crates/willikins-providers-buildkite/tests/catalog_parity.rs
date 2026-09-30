@@ -1,15 +1,16 @@
 //! Acceptance test 1's share for this crate: the live
-//! `buildkite.pipeline.ensure` and `buildkite.cluster.get` `ToolSpec`s
+//! `buildkite.pipeline.ensure`, `buildkite.cluster.get`, and (milestone 3g
+//! task B1) `buildkite.pipeline.bootstrap.gate` `ToolSpec`s
 //! equal `willikins_providers_fake`'s tools of the same names, field for
 //! field. `ToolSpec` derives `Serialize` but not `PartialEq`, so equality
-//! here is JSON equality; an insta snapshot of both specs pins the exact
+//! here is JSON equality; an insta snapshot of every spec pins the exact
 //! shape besides.
 
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{Tool, ToolSpec};
 use willikins_providers_buildkite::{
-    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineEnsure,
+    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure,
 };
 use willikins_providers_http::{Credential, Http};
 
@@ -42,10 +43,19 @@ fn buildkite_cluster_get_spec_equals_the_fake_tools() {
 }
 
 #[test]
+fn buildkite_pipeline_bootstrap_gate_spec_equals_the_fake_tools() {
+    let live = BuildkitePipelineBootstrapGate::new(test_client());
+    let fake =
+        willikins_providers_fake::tools::FakeBuildkitePipelineBootstrapGate::new(fake_state());
+    assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
+}
+
+#[test]
 fn every_spec_validates_against_the_type_registry() {
     for spec in [
         BuildkitePipelineEnsure::new(test_client()).spec(),
         BuildkiteClusterGet::new(test_client()).spec(),
+        BuildkitePipelineBootstrapGate::new(test_client()).spec(),
     ] {
         spec.validate(willikins_types::registry())
             .expect("valid spec");
@@ -53,7 +63,7 @@ fn every_spec_validates_against_the_type_registry() {
 }
 
 #[test]
-fn snapshot_both_live_tool_specs() {
+fn snapshot_all_live_tool_specs() {
     insta::assert_json_snapshot!(
         "buildkite_pipeline_ensure_spec",
         spec_json(BuildkitePipelineEnsure::new(test_client()).spec())
@@ -61,5 +71,9 @@ fn snapshot_both_live_tool_specs() {
     insta::assert_json_snapshot!(
         "buildkite_cluster_get_spec",
         spec_json(BuildkiteClusterGet::new(test_client()).spec())
+    );
+    insta::assert_json_snapshot!(
+        "buildkite_pipeline_bootstrap_gate_spec",
+        spec_json(BuildkitePipelineBootstrapGate::new(test_client()).spec())
     );
 }

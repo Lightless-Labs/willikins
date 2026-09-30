@@ -13,7 +13,8 @@
 //! `doppler.value.get`, `fake.secret_list`, (milestone 3a)
 //! `buildkite.cluster.get`, (milestone 3c) `appstore.certificate.get`,
 //! (milestone 3e task 2) `github.repo.get`, (G3) `operator.acknowledge`,
-//! and (task R3) `doppler.config.inheritable.gate`
+//! (task R3) `doppler.config.inheritable.gate`, and (milestone 3g task
+//! B1) `buildkite.pipeline.bootstrap.gate`
 //! from this crate — are checked here in one
 //! place, through the catalog, so a new pure tool registered later is a
 //! one-line addition rather than a test nobody writes.
@@ -33,14 +34,15 @@
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{Inputs, Observation, Outputs, PortName, SinkToken, ToolName, Value};
+use willikins_providers_fake::state::BuildkitePipelineRecord;
 use willikins_providers_fake::{FakeState, catalog};
 use willikins_types::{
     AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCapabilityType,
     AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId,
     AppleObservableCapabilityType, AppleSigningKey, BuildkiteClusterName, BuildkiteOrg,
-    BuildkiteToken, DomainType, DopplerConfig, DopplerSecretValue, GitHubOrg, GitHubRepo,
-    GitHubToken, OpaqueSecret, OperatorAcknowledgement, ProjectSlug, RepoPath, RepoVisibility,
-    SecretName, TemplateSource, TemplateValue, Text,
+    BuildkitePipelineSlug, BuildkiteToken, DomainType, DopplerConfig, DopplerSecretValue,
+    GitHubOrg, GitHubRepo, GitHubToken, OpaqueSecret, OperatorAcknowledgement, ProjectSlug,
+    RepoFile, RepoPath, RepoVisibility, SecretName, TemplateSource, TemplateValue, Text,
 };
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
@@ -68,6 +70,17 @@ fn value_name() -> SecretName {
 fn buildkite_org() -> BuildkiteOrg {
     BuildkiteOrg::parse("willikins-test").expect("a valid Buildkite org")
 }
+
+fn bootstrap_slug() -> BuildkitePipelineSlug {
+    BuildkitePipelineSlug::parse("third-thoughts").expect("a valid Buildkite pipeline slug")
+}
+
+/// The bootstrap `buildkite.pipeline.bootstrap.gate`'s own case below
+/// seeds the fake pipeline with, and binds as `expected` -- re-quoted
+/// between the two so the case also proves the comparison is structural,
+/// not byte equality.
+const BOOTSTRAP_SEEDED: &str = "steps:\n  - command: \"echo hi\"\n";
+const BOOTSTRAP_EXPECTED: &str = "steps:\n  - command: 'echo hi'\n";
 
 fn certificate_type() -> AppleCertificateType {
     AppleCertificateType::parse("DISTRIBUTION").expect("a valid certificate type")
@@ -135,6 +148,16 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
             .with_apple_bundle_id_capability(
                 &app_identifier(),
                 &AppleCapabilityType::parse("APP_GROUPS").expect("a valid capability"),
+            )
+            .with_buildkite_pipeline(
+                &buildkite_org(),
+                &bootstrap_slug(),
+                BuildkitePipelineRecord {
+                    repository: "git@github.com:lightless-labs/third-thoughts.git".to_string(),
+                    cluster_id: "018e5a22-d14c-7085-bb28-db0f83f43a1c".to_string(),
+                    ours: true,
+                    configuration: BOOTSTRAP_SEEDED.to_string(),
+                },
             ),
     ));
     let fake_catalog = catalog(state);
@@ -283,6 +306,21 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
     let mut config_inheritable_gate_inputs = Inputs::new();
     config_inheritable_gate_inputs.insert(port("config"), Value::known(config()));
 
+    let mut buildkite_pipeline_bootstrap_gate_inputs = Inputs::new();
+    buildkite_pipeline_bootstrap_gate_inputs.insert(port("org"), Value::known(buildkite_org()));
+    buildkite_pipeline_bootstrap_gate_inputs.insert(port("slug"), Value::known(bootstrap_slug()));
+    buildkite_pipeline_bootstrap_gate_inputs.insert(
+        port("expected"),
+        Value::known(
+            RepoFile::new(
+                RepoPath::parse("apps/example/.buildkite/bootstrap.yml")
+                    .expect("a valid repo path"),
+                BOOTSTRAP_EXPECTED,
+            )
+            .expect("a valid repo file"),
+        ),
+    );
+
     let mut repo_file_render_inputs = Inputs::new();
     repo_file_render_inputs.insert(
         port("path"),
@@ -323,6 +361,10 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
             config_inheritable_gate_inputs,
         ),
         ("repo.file.render", repo_file_render_inputs),
+        (
+            "buildkite.pipeline.bootstrap.gate",
+            buildkite_pipeline_bootstrap_gate_inputs,
+        ),
     ];
 
     let mut checked = 0;
