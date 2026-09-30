@@ -253,19 +253,21 @@ registry::domain_types! {
 /// `docs/plans/2026-09-23-milestone-3d-conversions.md`, decision (b).
 ///
 /// Milestone 3d adds the mechanism with no production row and its own task
-/// 3 adds the first; milestone 3e's task T3b adds two more, all three
-/// sharing `AppleBundleIdentifier` as their source.
+/// 3 adds the first (`=> AppleProfileName`); milestone 3e's task T3b added
+/// a second (`=> AppleBundleIdName`) and a third (`=> Text`), both sharing
+/// `AppleBundleIdentifier` as their source. Task T3f (2026-09-30) removed
+/// the `=> AppleBundleIdName` row again: it was never total against
+/// Apple's real rule for a bundle id's `name` (a live probe found a dot,
+/// an apostrophe, and an ampersand all refused, though every bundle
+/// identifier's grammar admits a dot) -- see `AppleBundleIdName`'s own doc
+/// in `appstore.rs`. `=> AppleProfileName` is untouched: Apple accepts
+/// dots in a profile's `name`.
 fn conversion_rows() -> Vec<registry::Conversion> {
     conversions![
         // Every bundle identifier is a valid profile name, byte for byte:
         // the containment proof is on the `From` impl in `appstore.rs`,
         // pinned by `every_bundle_identifier_is_a_valid_profile_name`.
         AppleBundleIdentifier => AppleProfileName,
-        // Every bundle identifier is a valid bundle-id name, byte for
-        // byte, by the identical grammar-containment fact: the proof is
-        // on the `From` impl in `appstore.rs`, pinned by
-        // `every_bundle_identifier_is_a_valid_bundle_id_name`.
-        AppleBundleIdentifier => AppleBundleIdName,
         // Every bundle identifier is valid free-form text, byte for
         // byte: the containment proof is on the `From` impl in
         // `text.rs`, pinned by `every_bundle_identifier_is_valid_text`.
