@@ -428,8 +428,18 @@ impl GitHubClient {
         tree_sha: &str,
     ) -> Result<Vec<TreeEntryBody>, ProviderError> {
         let path = format!("{}/git/trees/{tree_sha}", repo_path(repo));
-        self.retry_secondary_limit(|| self.http.get::<TreeBody>(&path))
-            .map(|body| body.tree)
+        let body = self.retry_secondary_limit(|| self.http.get::<TreeBody>(&path))?;
+        if body.truncated {
+            // A truncated listing may have dropped the very entry a
+            // declared path names, and reading that as absent would hand
+            // an existing file to `createCommitOnBranch` as a new one.
+            // Fail closed (adversarial pass, render and write).
+            return Err(ProviderError::new(
+                None,
+                "GitHub returned a truncated directory listing, so absence cannot be trusted",
+            ));
+        }
+        Ok(body.tree)
     }
 
     /// Resolve every one of `paths` against the tree rooted at
@@ -793,6 +803,10 @@ struct TreeRef {
 #[derive(Debug, Deserialize)]
 struct TreeBody {
     tree: Vec<TreeEntryBody>,
+    /// GitHub's required `truncated` flag; defaulted so a body that omits
+    /// it (every mock predating this field) reads as complete.
+    #[serde(default)]
+    truncated: bool,
 }
 
 /// One entry of a non-recursive git tree: a name relative to its parent
