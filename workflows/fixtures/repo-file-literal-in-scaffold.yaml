@@ -1,0 +1,23 @@
+# Milestone 3g, decision (e) and acceptance 4
+# (docs/plans/2026-09-30-milestone-3g-file-writing.md): a literal supplying
+# a whole repository file as an element of `github.scaffold.ensure`'s
+# `files` list. The only producer of a `RepoFile` is `repo.file.render`, so
+# a file's bytes are always a document template plus grammar-checked values.
+# Pinned by `repo_file_literal_in_scaffold_fails_check_with_exactly_one_error`
+# (crates/willikins-dsl/tests/acceptance.rs). `check` must return exactly one
+# error:
+#   RepoFileLiteral { node: scaffold, port: files }
+name: repo-file-literal-in-scaffold
+description: A literal repository file bound into a scaffold's files list.
+inputs:
+  repo: { type: GitHubRepo, description: "The repository to scaffold" }
+steps:
+  scaffold:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ inputs.repo }}
+      branch: main
+      marker: app/.willikins-scaffold
+      files:
+        - "app/BUILD.bazel\n# a literal file\n"
+      message: "feat(app): scaffold"

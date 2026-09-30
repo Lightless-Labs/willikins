@@ -1,0 +1,18 @@
+# Milestone 3g, decision (e) and acceptance 4
+# (docs/plans/2026-09-30-milestone-3g-file-writing.md): a caller-supplied
+# template. Templates are privileged, trusted-ref document content, never a
+# workflow input. Pinned by
+# `template_source_or_repo_file_inputs_and_defaults_each_fail_check_with_exactly_one_error`
+# (crates/willikins-dsl/tests/acceptance.rs). `check` must return exactly one
+# error:
+#   DisallowedInputType { input: template, ty: TemplateSource }
+name: template-source-input
+description: A template declared as a workflow input.
+inputs:
+  template: { type: TemplateSource, description: "A caller's template" }
+steps:
+  render:
+    tool: repo.file.render
+    with:
+      path: apps/walter/BUILD.bazel
+      template: ${{ inputs.template }}
