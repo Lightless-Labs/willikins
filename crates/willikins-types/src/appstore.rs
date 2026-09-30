@@ -451,9 +451,12 @@ const BUNDLE_ID_NAME_MAX_LEN: usize = 255;
 ///
 /// **The character rule, unlike the rest of this type, is not this
 /// crate's own guess.** Apple's `OpenAPI` description declares `name` as a
-/// bare `{"type": "string"}` with no `pattern` and no `maxLength` (fetched
-/// verbatim 2026-09-30:
-/// `https://developer.apple.com/documentation/appstoreconnectapi/bundleidcreaterequest/data-data.dictionary/attributes-data.dictionary.md`),
+/// bare `{"type": "string"}` with no `pattern` and no `maxLength` in both
+/// `BundleIdCreateRequest` and `BundleIdUpdateRequest` (specification
+/// version 4.5, fetched 2026-09-30:
+/// `https://developer.apple.com/sample-code/app-store-connect/app-store-connect-openapi-specification.zip`;
+/// the documentation page's Markdown twin renders only the object's title
+/// and states no type for `name` at all),
 /// and the portal help page says only "Enter a name or description for
 /// the App ID in the Description field" (fetched verbatim 2026-09-30:
 /// `https://developer.apple.com/help/account/identifiers/register-an-app-id/`)
@@ -939,7 +942,26 @@ crate::impl_domain_object_non_secret!(AppleProfileName);
 /// `every_bundle_identifier_is_a_valid_profile_name` below, over the
 /// bundle-identifier grammar, and by
 /// `every_string_a_bundle_identifier_accepts_a_profile_name_also_accepts`,
-/// stated as the implication directly over arbitrary strings.
+/// stated as the implication directly over arbitrary strings. (Arbitrary
+/// strings are rarely bundle identifiers, so the second test almost never
+/// exercises a dot: a mutant `AppleProfileName::parse` refusing `.` survived
+/// it and was caught only by the tests that generate from the identifier
+/// grammar, adversarial pass 6.)
+///
+/// **This proves totality against this crate's grammar, not Apple's.**
+/// `AppleProfileName`'s grammar is this crate's own choice, and Apple's
+/// `OpenAPI` description types `ProfileCreateRequest`'s `name` as a bare
+/// string. What is witnessed about Apple: the operator's account holds
+/// profiles named exactly after their dotted bundle identifiers (the
+/// monorepo's `BUILD.bazel` references them by those names), created
+/// outside willikins and outside the monorepo's fastlane, which only
+/// downloads them (`readonly: true`); and willikins' own
+/// live cycles have created profiles through `POST /v1/profiles` with
+/// names built from letters, digits and hyphens only. A dotted `name` on
+/// `POST /v1/profiles` has **not** been probed. The same inference, "the
+/// grammar admits it, so Apple does", failed for a bundle id's `name` on
+/// 2026-09-30 (see [`AppleBundleIdName`]), so a throwaway probe should
+/// settle it before a real apply relies on this row.
 ///
 /// The reverse is **not** a fact -- `"has space"` is a valid profile name
 /// and not a valid bundle identifier -- so no reverse row is registered;
