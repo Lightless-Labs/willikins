@@ -1,0 +1,791 @@
+# Milestone 3g: file-writing — Walter's files become something the document does
+
+**Created:** 2026-09-30
+**Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
+branch plus pull request on `Bande-a-Bonnot/monorepo`'s `main` (recommended: direct), and the write
+credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
+sandbox live cycle do not depend on either; task W1's `branch` literal and its token chain do.
+**Design:** `docs/plans/2026-09-11-willikins-design.md` (Templates: "The type system guarantees a secret can
+never be rendered into a committed file" and "Record template version and answers in the repo"; Trust
+model: "Workflow definitions and templates are privileged content"; the 2026-09-21 addendum "Credentials
+are ports, resolvers are nodes"; "Policy lives in the workflow, never in the tool").
+**Research:** `docs/research/2026-09-20-project-survey-and-workflow-library.md` (rank 1, rank 2, Walter's
+entry), `docs/research/2026-09-16-m3a-buildkite.md` (the `configuration` string), and this plan's own
+pre-flight, fetched verbatim 2026-09-30 and quoted below with its sources.
+**Depends on:** milestone 3e (gates, `Tool::replaces`, `github.repo.get`, the GitHub token port, the Walter
+document), Completed; milestone 3a's frozen bootstrap decision (a), which this plan keeps.
+**Todo:** `todos/2026-09-29-file-writing.md`. Related: `todos/2026-09-20-ios-scaffolding-step-and-entitlements-as-inputs.md`.
+**Next:** milestone 2b (composition: a document calls another with `uses:`, typed outputs), which splits
+Walter into a Bande-a-Bonnot organisation document and an ios-app document. Decision (k) records what this
+milestone does so nothing here fights that split.
+
+## Goal
+
+The operator's decision, 2026-09-30, verbatim: "Nope. We'll add file capabilities, update the document
+with them, and use willikins' idempotency to run that." Walter's manual step M3 — "Add Walter's files
+under apps/walter/ in the monorepo: BUILD.bazel (ios_application embedding two ios_extensions), three
+entitlements files, Info.plist with both HealthKit usage strings and the two extension points, and
+.buildkite/ with provider triggers disabled" — stops being an `operator.acknowledge` leaf and becomes a
+node of `workflows/walter-ios-app.yaml` that writes those files as **one commit** and converges on
+re-runs. M7 (the stored Buildkite bootstrap) stops being an acknowledgement and becomes an **observed**
+gate (decision (h)).
+
+The milestone is done when tasks E1 through W1 are green under scoped gates, the attacker has run the
+live scaffold cycle (task L1) once against a **throwaway repository in the sandbox org `Willikins-Test`**
+with every count equal before and after, and each piece has had an independent attack. The first write
+into `Bande-a-Bonnot/monorepo` is **not** part of this milestone: it is the operator's real apply, after
+the two pending decisions and the pre-real-apply verify items (6, 7, 8) are settled.
+
+## Out of scope
+
+- **Rank 2, structured edits to files other projects own** (a TOML `members` array, a `package_group`
+  row). The survey below finds that adding Walter needs **none** today (see "The monorepo, surveyed").
+  When Walter later depends on `//platform/ios` or `//platform/ffi`, or adds a Rust crate, the edit is
+  the developer's code change in the same commit as the code that needs it, not provisioning.
+- **Managed files and `Replace`.** Re-rendering an already-landed file when a template changes (the design
+  doc's "re-render, three-way merge, and open a PR per repo when an org convention changes") is a later
+  milestone. This one only seeds (decision (c)); the marker it writes records the base that milestone
+  needs.
+- **Deleting, renaming or moving files; binary files; the executable bit** (mode `100644` only: the
+  monorepo's own Danksworth `upload-pipeline.sh` is `100644` and is run as `bash …`).
+- **`.github/workflows/`**: refused by the path type (decision (g)), so the write token never needs the
+  Workflows permission.
+- **Writing Buildkite's stored `configuration`**: milestone 3a decision (a) stands (decision (h)).
+- **Branch creation and pull requests**, unless the operator chooses the PR route (tasks P1–P3 are then
+  added; decision (f)).
+- **A real template engine** (loops, conditionals, filters): decision (d).
+- **SigNoz.** The key expired on 2026-09-23; nothing in this milestone calls it.
+- **Railway.** No Railway command.
+
+## Trust boundaries (normative)
+
+They extend milestone 3e's nine, which still hold.
+
+1. **Live GitHub writes only in the sandbox org `Willikins-Test`**, only on a throwaway repository named
+   `willikins-files-<unix-seconds>` created and deleted by the same guarded test. Nothing is ever written
+   to `Bande-a-Bonnot/*` or `Lightless-Labs/*` by an agent in this milestone.
+2. **The operator's own `gh` credential is never used**; the sandbox PAT (`WILLIKINS_GITHUB_TOKEN` in
+   `~/.config/willikins/sandbox.env`) is resolved in the same command that uses it, on stdin, never argv.
+3. **Delete only the repository the same run created**, by the exact name it recorded before any
+   assertion, through a drop guard (milestone 2's `DeleteGuard` in
+   `crates/willikins-providers-github/tests/live_write_cycle.rs`).
+4. **No committed byte comes from a caller.** File content is a document-literal `TemplateSource` plus
+   substitutions of `TemplateValue`s, whose grammar admits no whitespace, quote, `$`, backtick, `;`,
+   `|`, `&`, `<`, `>`, `{`, `}` or newline (decision (e)). A `TemplateSource` or a `RepoFile` can never be
+   a workflow input or an input default.
+5. **No secret reaches a committed file**, by type (decision (e)); nothing a test prints, records or
+   commits contains a credential-shaped string (`secret_literal_guard` covers docs and fixtures).
+6. **Buildkite's stored `configuration` is compared, never written, echoed, logged or output** (decision (h)).
+7. **Nothing under `/Users/thomas/Projects/bande-a-bonnot` is written.** It is read for its pattern.
+8. **Reproduce nothing identifying from the monorepo that this workspace does not already hold:** no Apple
+   team id (decision (j) drops `team_id` from the template), no host path from its stored bootstraps in
+   this plan (the template's copy of that override is decision (i)'s open item).
+
+## SHARED VALUES
+
+Implementers read this table, never their prompts, for these values.
+
+| What | Value |
+| --- | --- |
+| Engine change (E1) | a YAML sequence under `with:` parses to `Binding::List(Vec<Binding>)`; elements are references or scalar literals, never nested |
+| New types (E2), all public | `RepoPath`, `GitBranchName`, `CommitHeadline`, `TemplateValue`, `RepoFile` (grammars in decision (g) and (e)) |
+| New conversion (E2) | `AppleBundleIdentifier => TemplateValue` (total by grammar containment); **no** row from `Text`, ever |
+| Check refusals (E2) | `TemplateSource` or `RepoFile` as a workflow input type; a default of either; a literal bound to a `RepoFile` port |
+| New pure tool (T1) | `repo.file.render` in `willikins-tools`: inputs `path: RepoPath` (required), `template: TemplateSource` (required), `values: list<TemplateValue>` (optional); output `file: RepoFile`; `Reversible`, pure, no key |
+| Placeholder syntax (T1) | exactly `{{ N }}`, one space inside each brace, `N` a decimal index `0`…`15`; at most 16 values |
+| New tool (G2) | `github.scaffold.ensure`: inputs `repo: GitHubRepo`, `branch: GitBranchName`, `marker: RepoPath` (the key, in that order), `files: list<RepoFile>` (required, 1–64 entries), `message: CommitHeadline` (required), `token: GitHubToken` (optional credential port); outputs `repo`, `branch`, `marker` (pass-through only); **`Irreversible`**; not pure |
+| Marker content | first line exactly `managed-by: willikins`, then one line per seeded file, `<40-hex blob sha> <path>`, sorted by path, trailing newline |
+| New gate (B1) | `buildkite.pipeline.bootstrap.gate`: inputs `org: BuildkiteOrg`, `slug: BuildkitePipelineSlug`, `expected: RepoFile`, `token: BuildkiteToken` (optional); output `slug`; pure; a gate; `subject` = `org`, `slug` |
+| `LIVE_TOOL_NAMES` | 34 → 37 (`crates/willikins-server/src/catalog.rs` line 62), and every site that pins the count |
+| GitHub write endpoint | `POST https://api.github.com/graphql`, one fixed mutation text (`createCommitOnBranch`), variables only |
+| GitHub read endpoints | `GET /repos/{owner}/{repo}/git/ref/heads/{branch}`, `GET …/git/commits/{sha}`, `GET …/git/trees/{sha}` (non-recursive), `GET …/git/blobs/{sha}` (the marker only) |
+| Walter scaffold node | `walter_files`, `repo: Bande-a-Bonnot/monorepo`, `branch: main` (**pending operator decision 1**), `marker: apps/walter/.willikins-scaffold` |
+| Walter commit headline | `feat(walter): scaffold the iOS app, NSE, widgets and Buildkite files` (the monorepo's own conventional style) |
+| Walter write token (pending decision 2) | real Doppler workplace, project `github`, branch config `bande-a-bonnot_willikins` (not inheritable), secret `GH_CONTENTS_WRITE_TOKEN` |
+| Sandbox throwaway repository | `Willikins-Test/willikins-files-<unix-seconds>` (26 characters; `ProjectSlug` allows 32) |
+| Live cycle harness (L1) | `crates/willikins-providers-github/tests/live_scaffold_cycle.rs`, its own `[[test]]` with `required-features = ["live-tests"]`, `#[ignore]`, `WILLIKINS_LIVE_TESTS=1` |
+| Characterization snapshot | every existing entry byte-identical **except** `workflows/walter-ios-app.yaml`'s own, which the operator's 2026-09-30 decision changes (acceptance 14) |
+
+## Pre-flight: sources, verbatim
+
+Fetched 2026-09-30, read-only. GitHub's OpenAPI description `github/rest-api-description`
+`descriptions/api.github.com/api.github.com.json` (version 1.1.4); `github/docs` markdown under `content/`;
+`github/docs` `src/github-apps/data/fpt-2022-11-28/fine-grained-pat-permissions.json`; `github/docs`
+`src/graphql/data/fpt/schema.docs.graphql`; `buildkite/docs` `pages/apis/rest_api/pipelines.md`.
+
+### Contents API versus the Git database API
+
+- **Contents API: one commit per file.** `PUT /repos/{owner}/{repo}/contents/{path}`, "Creates a new file or
+  replaces an existing file in a repository", and: "If you use this endpoint and the 'Delete a file'
+  endpoint in parallel, the concurrent requests will conflict and you will receive errors. You must use
+  these endpoints serially instead." Answers `200, 201, 404, 409, 422`. Walter's seventeen files would be
+  seventeen commits, and a failure part-way leaves a half-scaffold on `main`. **Rejected for writing.**
+  `GET …/contents/{path}` also has a trap for reading: "If the content is a symlink and the symlink's
+  target is a normal file in the repository, then the API responds with the content of the file" — a
+  symlink at a seeded path would read as a file. Reads therefore use trees (below).
+- **Git database: several files as one commit.** The guide
+  (`content/rest/guides/using-the-rest-api-to-interact-with-your-git-database.md`): "Get the current commit
+  object · Retrieve the tree it points to · … post a new blob object … Post a new tree object … Create a new
+  commit object with the current commit SHA as the parent and the new tree SHA … Update the reference of
+  your branch to point to the new commit SHA." And: "The REST API will return a `409 Conflict` if the Git
+  repository is empty … For an empty repository, you can use the `PUT /repos/{owner}/{repo}/contents/{path}`
+  REST API endpoint to create content and initialize the repository." `POST …/git/trees`' `base_tree`:
+  "If not provided, GitHub will create a new Git tree object from only the entries defined in the `tree`
+  parameter. If you create a new commit pointing to such a tree, then all files which were a part of the
+  parent commit's tree and were not defined in the `tree` parameter will be listed as deleted by the new
+  commit." Tree entry `mode`: "one of `100644` for file (blob), `100755` for executable (blob), `040000` for
+  subdirectory (tree), `160000` for submodule (commit), or `120000` for a blob that specifies the path of a
+  symlink."
+- **A ref update can refuse rather than clobber.** `PATCH /repos/{owner}/{repo}/git/refs/{ref}` body:
+  `force` — "Indicates whether to force the update or to make sure the update is a fast-forward update.
+  Leaving this out or setting it to `false` will make sure you're not overwriting work." Answers `200, 409,
+  422`. A commit whose only parent is the head read earlier is a fast-forward only while the branch has not
+  moved, so `force: false` is a compare-and-swap in effect.
+- **GraphQL `createCommitOnBranch`: one call, exact compare-and-swap, signed.** `schema.docs.graphql`:
+  "Appends a commit to the given branch as the authenticated user. This mutation creates a commit whose
+  parent is the HEAD of the provided branch and also updates that branch to point to the new commit." Input
+  `expectedHeadOid: GitObjectID!` — "The git commit oid expected at the head of the branch prior to the
+  commit". `FileAddition { contents: Base64String!, path: String! }`. "A commit created by a successful
+  execution of this mutation will be authored by the owner of the credential which authenticates the API
+  request. The committer will be identical to that of commits authored using the web interface." And:
+  "Commits made using this mutation are automatically signed by GitHub if supported and will be marked as
+  verified in the user interface."
+
+### Branch protection, rulesets, and an API commit
+
+- `about-protected-branches.md`, "Require signed commits": "contributors and bots can only push commits that
+  have been signed and verified to the branch." "Restrict who can push to matching branches": "only users,
+  teams, or apps that have been given permission can push to the protected branch … People, teams, and apps
+  that have permission to push to a protected branch will still need to create a pull request when pull
+  requests are required." "By default, the restrictions of a branch protection rule don't apply to people
+  with admin permissions to the repository or custom roles with the 'bypass branch protections' permission."
+- `available-rules-for-rulesets.md`: "Require a pull request before merging — You can require that all
+  changes to the target branch be associated with a pull request." "Restrict updates — If selected, only
+  users with bypass permissions can push to branches or tags whose name matches the pattern you specify."
+  "Require signed commits — … With both methods, we use the `verified_signature?` to confirm if a commit has
+  a valid signature. If not, the update is not accepted."
+- `data/reusables/repositories/required-signed-commits.md`: "unsigned commits on the head branch can block a
+  squash merge, even though GitHub would sign the final squash commit."
+- `about-commit-signature-verification.md`: GitHub signs web-interface commits; "Signature verification for
+  bots will only work if the request is verified and authenticated as the GitHub App or bot and contains no
+  custom author information, custom committer information, and no custom signature information, such as
+  Commits API." So a Git database commit made with a personal token is **unsigned**, and a
+  `createCommitOnBranch` commit is signed.
+- The rules actually in force on a branch are readable with Metadata read only:
+  `GET /repos/{owner}/{repo}/rules/branches/{branch}` (fine-grained permission `metadata: read`, from
+  `fine-grained-pat-permissions.json`).
+
+### What a fine-grained token needs
+
+From `fine-grained-pat-permissions.json`, verbatim fields `{permission, verb, requestPath, access,
+additional-permissions}`:
+
+| Endpoint | Permission | Access |
+| --- | --- | --- |
+| `GET /repos/{owner}/{repo}/git/ref/{ref}` | contents | read |
+| `GET …/git/commits/{commit_sha}`, `GET …/git/trees/{tree_sha}`, `GET …/git/blobs/{file_sha}` | contents | read |
+| `POST …/git/blobs`, `POST …/git/trees`, `POST …/git/commits` | contents | write |
+| `PATCH …/git/refs/{ref}`, `POST …/git/refs` | contents **and** workflows | write, `additional-permissions: true` |
+| `PUT …/contents/{path}` | contents **and** workflows | write, `additional-permissions: true` |
+| `POST /repos/{owner}/{repo}/pulls` | pull_requests | write |
+| `GET …/rules/branches/{branch}` | metadata | read |
+
+The Workflows entries are the additional permission the OpenAPI text states for the contents endpoint:
+"The `workflow` scope is also required in order to modify files in the `.github/workflows` directory." A
+token that never touches `.github/workflows/` needs **Contents: read and write** only (Metadata: read is
+granted to every fine-grained token). GraphQL, `content/graphql/guides/forming-calls-with-graphql.md`: "The
+data that you are requesting will dictate which scopes or permissions you will need"; the same Contents
+permission governs `createCommitOnBranch` (verify item 3).
+
+### Buildkite's stored configuration
+
+`buildkite/docs` `pages/apis/rest_api/pipelines.md`: the create request's example sends
+`"configuration": "env:\n \"FOO\": \"bar\"\nsteps:\n - command: …"` and the create **response** example
+returns `"configuration": "env:\n \"FOO\": \"bar\"\n\"steps\":\n - command: …"` — the key came back
+re-quoted, so the stored string is **not** guaranteed byte-identical to what was sent. The "Get a pipeline"
+response example shows no `configuration` field at all. Both facts shape decision (h) and verify item 9.
+
+## The monorepo, surveyed read-only
+
+`/Users/thomas/Projects/bande-a-bonnot` (remote `Bande-a-Bonnot/monorepo`), 2026-09-30, `main` at `9ac10a8b`.
+
+- **How it lands changes: directly on `main`.** `CLAUDE.md` (and `AGENTS.md`), "Monorepo & Trunk-Based
+  Development (owner ruling 2026-07-09)": "Trunk-based development. Simple, reliable. Work on `main`, commit
+  directly to `main`, push to `main`. Do **not** create feature branches. Do not leave work unmerged on a
+  branch." History agrees: 494 commits since 2026-09-01, **none** merged through a pull request, every one
+  unsigned (`%G?` = `N`). So `main` accepts unsigned direct pushes from the operator's own identity today.
+  Whether a ruleset exists that the operator bypasses as an administrator is not observable from files
+  (verify item 6).
+- **No CODEOWNERS** anywhere. `.github/workflows/` holds `ci.yml` and two Danksworth audits.
+- **`ci.yml` builds everything on every push to `main`:** `bazel build --config=ci -- //...
+  -//apps/danksworth/ios/...` and `bazel test` the same, on `getmac-tahoe`. Pocket Companion's iOS app is
+  built by that line. **A committed `apps/walter/ios/BUILD.bazel` whose targets do not build turns `main`
+  red on the first push**, so the scaffold must build under `--config=ci` (entitlements `None`, profiles
+  `None`), which requires minimal Swift entry points and the two extensions' `Info.plist`s (decision (j);
+  verify item 8).
+- **Layout of an iOS app.** `apps/<app>/BUILD.bazel` is a two-line name reservation (every sibling has one;
+  Walter's directory is empty and, being empty, **does not exist on GitHub at all**). The app lives in
+  `apps/<app>/ios/BUILD.bazel` with `config_setting`s scoped to `//apps/<app>:__subpackages__` (`ci_build`,
+  `internal_build`, `ios_simulator_build`, `beta_build`, …), `apple_bundle_version`,
+  `local_provisioning_profile`s (one local wildcard, one distribution profile per identifier named exactly
+  after it), `swift_library` per module, and `ios_application` / `ios_extension` with entitlements and
+  profiles chosen by `select()`. Resources in `ios/Resources/`: `Info.plist`, `<Target>.entitlements`,
+  `PrivacyInfo.xcprivacy`, extension `…-Info.plist`s. Pocket Companion (`apps/pocket-claw`) is the
+  single-target shape; Danksworth is the multi-extension shape (its `extensions = []` is deliberate;
+  Walter's host embeds both).
+- **`.buildkite/`** per app: `pipeline.yml`, `upload-pipeline.sh` (`exec buildkite-agent pipeline upload
+  --no-interpolation <file>`), `bootstrap.yml` (the stored bootstrap, checked in "because Buildkite runs it
+  before the repository exists and nothing else records it"; JSON text: a `GIT_CONFIG_*` override selecting
+  the Mac host's credential helper, one step on queue `ci-macos-apple-silicon` running `bash
+  apps/<app>/.buildkite/upload-pipeline.sh`), `provider-settings.json` (every provider trigger `false`),
+  `README.md`. Phil Connors in this monorepo is a name reservation only.
+- **Does adding `apps/walter/` need an edit outside it? No**, file by file:
+  - `build/visibility/BUILD.bazel`'s `ios` `package_group` lists `//apps/danksworth/...`,
+    `//apps/phil-connors/...`, `//apps/kumbaya/...`, `//apps/ten-a-day/...`. It gates only targets that
+    declare `visibility = ["//build/visibility:ios"]`, i.e. `//platform/ios` and an app's own targets.
+    Pocket Companion is **not** in the group and builds, because neither it nor Danksworth depends on any
+    `//platform` target. A SwiftUI-only scaffold needs no row. A row becomes necessary only when Walter
+    depends on `//platform/ios` or `//platform/ffi` (the Rust core through UniFFI) — a rank 2 edit that
+    stays the developer's, in the commit that adds the dependency.
+  - Root `Cargo.toml` `members`: only when Walter adds a Rust crate. Same answer.
+  - `MODULE.bazel` already carries `rules_apple` 4.3.3, `rules_swift` 3.4.1, `apple_support`,
+    `bazel_skylib`; `.bazelrc`'s `ci`/`ios_sim` configs are global. No edit.
+  - No Buildkite pipeline list in the repository (pipelines live in Buildkite; the document creates it).
+  - Root `BUILD.bazel` exports four files; no app list.
+
+## Decisions
+
+### (a) Many files, one node: a list binding in `with:` (engine change E1)
+
+A commit node needs N (path, content) pairs, and `Binding` is `Input | Step | Keyed | Literal`; the D1
+addendum of milestone 3e already records the gap ("the document format has no syntax to bind a list literal
+to a `with:` port"). Three ways out:
+
+1. **`Binding::List`** — a YAML sequence under `with:` whose elements are references or scalar literals.
+   **Chosen.** It is the general primitive, it closes D1's `base_configs` gap for free, and it keeps one
+   file per node in the document, which reads the way the operator reads the monorepo.
+2. Chained accumulator nodes (`files.add { into, path, content } -> { into }`), no engine change: a
+   17-link chain whose order is load-bearing and whose intermediate type exists only to work around the
+   DSL. Thrown away the day (1) lands. Rejected.
+3. One multi-file bundle template in an invented container format: still needs (1) for its values, and
+   invents a format willikins would own forever. Rejected.
+
+Rules for (1), all in `willikins-dsl` and `willikins-core`:
+
+- **Parse.** A `with:` value that is a YAML sequence becomes `Binding::List(Vec<Binding>)`; each element
+  is parsed by the existing `parse_with_value` (`${{ … }}` reference, else literal). A nested sequence or a
+  mapping element is a parse error naming the node and port. `outputs:` and `for_each:` do not accept
+  sequences.
+- **Check.** The port must be `PortType::Exact` of a **list** type `list<T>` (`AnySecret` refuses lists
+  already). Each element is checked as a scalar binding against `T`, with the one-hop conversion rule of
+  milestone 3d recorded per element edge. A list-typed reference as an element is a type mismatch (no
+  flattening). **Taint per element**: a secret element bound into a non-secret `T` is
+  `SecretToNonSecretSink` (reported before any type mismatch, as today). The error `Site` gains an element
+  index (`Site::Port` plus `index`, or a new `Site::ListElement`; E1's choice, rendered `node.port[i]`).
+  An input referenced only inside a list counts as consumed.
+- **Edges.** Every `Step`/`Keyed` element is a data edge (ordering, cycle detection).
+- **Plan and apply.** Elements resolve in order; if any element is `Unknown`, the whole value is
+  `Value::unknown(list<T>)`; otherwise a known list. **The skip scan of decision (j) (3e) must include list
+  elements**: a node any of whose list elements names a blocked or skipped node plans `Skip` and is never
+  read. `apply`'s input resolution resolves list bindings the same way.
+- **Byte-identity.** No shipped document uses a sequence under `with:` (they fail to load today), so every
+  characterization entry is unchanged; `Binding`'s serde form for the existing variants is unchanged.
+
+### (b) The tool: `github.scaffold.ensure`, one commit
+
+Name and shape in SHARED VALUES. The resource it ensures is **"this scaffold has landed on this branch"**,
+keyed by `(repo, branch, marker)`. `files` is the content, not the key.
+
+**Write API: GraphQL `createCommitOnBranch`.** Both candidates land several files as one commit and both
+can refuse when the branch moved (REST `PATCH` with `force: false` is fast-forward-only;
+`expectedHeadOid` is an exact compare-and-swap). Three facts decide it: it is **one** call where the Git
+database needs four kinds (`blobs`, `trees`, `commits`, `PATCH refs`) and 20-odd requests; its commits are
+**signed by GitHub**, so a "Require signed commits" rule on `main` does not refuse it, where a Git database
+commit made with a personal token is unsigned and would be; and its compare-and-swap is exact. The costs,
+accepted: a new transport in the client (a `POST /graphql` with one fixed mutation text and variables — the
+no-arbitrary-API-path invariant holds, as it does for every fixed REST path), and GraphQL's
+**200-with-`errors`** failure shape. The client parses `data.createCommitOnBranch.commit.oid` and treats
+any non-empty `errors`, any missing `data`, or any non-200 as a failure; it **never echoes `errors[].message`
+or any response body** (the 3c lesson on bodies) and never interprets it: every failure is resolved by
+re-reading, below. Author: the token's owner; committer: GitHub's web-flow identity (quoted above).
+
+**Reads: the REST tree, pinned to one commit.** `GET …/git/ref/heads/{branch}` → head commit sha `H`
+(404 → `NotFound`: the tool never creates a branch); `GET …/git/commits/{H}` → root tree; then walk
+**non-recursive** trees only along the directories of the declared paths, memoised per directory (the
+monorepo's recursive tree could hit the "100,000 entries … 7 MB" truncation; Walter's paths touch about
+eight directories). Each path yields: absent; a blob entry with mode and blob sha; or a non-blob entry
+(tree, symlink `120000`, submodule `160000`). A file's content is compared by **git blob sha**, computed
+locally as SHA-1 over `blob <byte length>\0<bytes>`, so content is never downloaded. The marker is the only
+blob ever fetched (`GET …/git/blobs/{sha}`, base64), to check its first line.
+
+**`read`:**
+
+| State at head `H` | Observation |
+| --- | --- |
+| marker present, first line exactly `managed-by: willikins` | `Present` (the scaffold has landed; no seeded path is read) |
+| marker present, any other first line, or the marker path is not a `100644` blob | `Foreign` → `PlanError::NameTaken` |
+| marker absent; every seed path absent, or present as a `100644` blob with the rendered blob sha | `Absent` (predicted outputs `repo`, `branch`, `marker`) |
+| marker absent; any seed path present with a **different** blob sha, a different mode, or as a non-blob | **refused**: `ToolErrorKind::Conflict` naming each such path (never its content) and saying the scaffold would overwrite it |
+| a declared path appears twice, the marker is one of `files`, or `files` is empty or over 64 | `Invalid`, before any request |
+
+**`ensure`:** re-read at the current head `H'`. `Present` → `changed: false`. `Absent` → one
+`createCommitOnBranch` with `expectedHeadOid: H'`, `additions` = every seed file not already byte-equal at
+`H'` plus the marker, headline `message`, body `Seeded by willikins. Marker: <marker>.` Success →
+`changed: true`. **Any** failure → re-read: `Present` → `changed: false` (someone landed it);
+`Absent` with a head different from `H'` → the branch moved under us and nothing of ours landed, so
+commit again against the new head, at most **three** attempts in all (safe because the decision is made from
+the re-read, never from the error body, and the compare-and-swap forbids a duplicate); `Absent` at the same
+head, or a conflict → the original failure as `Provider` (or the `Conflict` above), "re-run this document".
+A busy trunk (494 commits in September) is why the bounded retry exists.
+
+**Outputs are pass-through only** (`repo`, `branch`, `marker`). The characterization snapshot shows the
+plan fingerprint includes every node's **outputs**; an output carrying the head sha or the new commit's
+oid would make every plan-to-apply window on a busy `main` drift. The commit oid is not an output.
+
+**Class: `Irreversible`.** A commit on a shared branch cannot be undone without a force push, but the tool
+never overwrites or deletes anything (decision (c)), so not `Destructive`. `Irreversible` requires
+approval (`Class::requires_approval`), which is right for writing to someone's `main`; Walter already
+requires approval on every run (`appstore.profile.ensure` is `Destructive`).
+
+### (c) What Present, Absent and "different content" mean: a seed, owned by the repository once landed
+
+The decisive fact: Walter's document is **re-run as its resume** (milestone 3e decision (j)), and the
+developer — and the operator's agents — start editing `BUILD.bazel`, `Info.plist` and the rest the day the
+scaffold lands. Every candidate that compares the seeded files on later runs makes the document un-re-runnable
+after the first edit:
+
+- **Refusal** on a differing file: every later plan fails at this node. Stuck.
+- **A gate**: every later run ends `Blocked` (exit 3) forever. Stuck.
+- **`Replace` shown in the plan** (the replace-when-INVALID precedent, `Tool::replaces`, `Plan::replacing`):
+  every later plan offers to destroy the developer's work, and approval is all-or-nothing, so the operator
+  can neither approve it nor apply the rest. Stuck, and one mis-click from data loss.
+
+So a scaffold is a **seed**: willikins writes it once and it then belongs to the repository. The "landed"
+signal must survive edits, moves and deletions of individual files, so it is a **marker file** willikins
+writes in the same atomic commit — the codebase's ownership-marker precedent (`managed-by-willikins` topic on
+repositories, `managed-by: willikins` pipeline description) and the design doc's own "Record template
+version and answers in the repo so a later run can re-render, three-way merge". Its per-file blob shas are
+exactly the merge base that later milestone needs. Its path is a port: the document chooses it (Walter:
+`apps/walter/.willikins-scaffold`), so the tool imposes no location.
+
+**Overwriting is never silent, because it never happens**: once landed, seeded files are never read or
+written again; before landing, a path that already holds other content is a **refusal** naming the path —
+willikins has never owned that file, so only a human can decide whether to delete it or change the template.
+Byte-equal files already present are skipped, so a scaffold that someone half-applied by hand from the same
+templates still converges. Deleting the marker is the deliberate way to ask for a re-seed, and it then
+refuses on every file that differs — loudly, never destructively.
+
+`Replace` and managed files wait for the re-render milestone, which will have the marker's base to merge
+against and a pull request to put the result in front of a human.
+
+### (d) Templates: where they live and how values substitute
+
+**Where: inline in the document, as YAML block scalars bound to `repo.file.render.template`.** Workflow
+documents are already the privileged, trusted-ref content (design doc, Trust model); a template inside one
+is reviewed in the same diff, run from the same ref, characterised by the same snapshot, and moves with its
+document when 2b splits Walter (the ios-app document takes its templates with it). The alternative — template
+files beside the document, loaded by a DSL include — adds a loader, path confinement and a second privileged
+artifact for readability alone; it is the right move when several documents share one template, which
+nothing does yet. Rejected for now, recorded as the follow-up.
+
+**How: a small multi-value extension, not a template engine.** `template.render` replaces exactly one
+fixed placeholder with a `Text`; it stays as it is (it renders report text, not files). The new pure tool
+`repo.file.render` takes `values: list<TemplateValue>` (bound with decision (a)'s list syntax) and
+positional placeholders `{{ 0 }}` … `{{ 15 }}`. It refuses, at plan time since it is pure: an index with no
+value; a value no placeholder uses; any other `{{` in the template (so a stray or mistyped placeholder can
+never reach a file; escaping is out of scope, and no Walter file needs a literal `{{`); a rendered file over
+65,536 characters (checked by arithmetic before allocating, as `template.render` does since adversarial pass
+2). Output `file: RepoFile`. Named placeholders would read better but need a record type in the port
+system; the document states each node's value order in a comment beside it. A real engine (loops,
+conditionals) is rejected: the DSL is deliberately non-Turing-complete, and logic inside privileged
+templates is logic nobody type-checks.
+
+### (e) A secret can never reach a committed file, and neither can a caller's command
+
+**By construction, through types.** The only producer of `RepoFile` is `repo.file.render`; its inputs are a
+`TemplateSource` (a document literal) and `TemplateValue`s. Both new types are public, and conversions are
+secrecy-monotone and compile-time checked (milestone 3d), so no secret type can ever convert into
+`TemplateValue`; a secret bound to a `TemplateValue` port or element is `SecretToNonSecretSink` at `check`.
+The existing tests that prove the rule for a non-secret sink are
+`secret_into_template_fails_check_with_exactly_one_taint_error` (`crates/willikins-dsl/tests/acceptance.rs`)
+and `acceptance_1_taint_rejection_reports_exactly_the_secret_to_non_secret_sink`
+(`crates/willikins-core/tests/check.rs`), with the `for_each` variants in
+`crates/willikins-core/tests/check_adversarial.rs`. E2 adds `workflows/fixtures/secret-into-repo-file.yaml`
+(a `doppler.secret.get` value as an element of `repo.file.render.values`: exactly one
+`SecretToNonSecretSink` at `node.values[i]`) and a check that a `RepoFile` literal is refused.
+
+**The `doppler.value.get` wall.** That tool returns *public* `Text` from Doppler ("wall two"), so a value
+an author declared public could reach `template.render`. It cannot reach a committed file: there is **no
+`Text => TemplateValue` row**, and a test pins that none may be registered. The only route into a file is a
+reviewed conversion row from a grammar-constrained identifier type (this milestone:
+`AppleBundleIdentifier` only). Secrecy inference (`todos/2026-09-22-secrecy-inference.md`) is where the
+remaining `Text` question closes; file-writing does not depend on it.
+
+**No caller-controlled command in an executed file.** The scaffold writes `upload-pipeline.sh`,
+`bootstrap.yml` and `pipeline.yml`, which CI executes. `TemplateValue`'s grammar is exactly
+`[A-Za-z0-9_][A-Za-z0-9._/-]*`, at most 255 characters: no whitespace, quote, `$`, backtick, `;`, `|`, `&`,
+`<`, `>`, `{`, `}`, `*`, `?`, `[` or newline, and no leading `-`. A substituted value therefore cannot end
+a quoted string, start a command or a flag, or inject a placeholder. Every command in a committed file is
+document-literal — exactly the route milestone 3a decision (a) reserved: "A workflow that wants different CI
+behaviour changes the repository's own `.buildkite/pipeline.yml`, which the template half of milestone 3
+renders." `check` refuses `TemplateSource` and `RepoFile` as workflow input types and as input defaults (by
+the registry entry's `TypeId`, never by name, the 3d rule), and a literal bound to a `RepoFile` port. No
+shipped document declares either, so nothing moves.
+
+### (f) Direct commit or branch plus pull request: a document choice; direct recommended — **OPEN, operator**
+
+Policy lives in the workflow. The tool writes to whatever `branch` the document names and never creates
+one, so both routes are documents:
+
+- **Direct**: `github.scaffold.ensure { branch: main }`. Matches the monorepo's own owner ruling
+  (trunk-based, "commit directly to `main`", "Do not create feature branches") and its history (494 of 494
+  commits since 2026-09-01 direct). The operator's plan approval is the diff review (decision (l)); CI
+  runs on the push.
+- **Pull request**: `github.branch.ensure` (create a ref from the base head if absent, never move one),
+  `github.scaffold.ensure { branch: <that branch> }`, `github.pull_request.ensure { head, base }`. Needs
+  Pull requests: write, leaves an unmerged branch the monorepo's ruling forbids, and complicates
+  idempotence: after the merge the branch is deleted, so the scaffold's read must also look for the marker
+  on the base. Tasks P1–P3, added only if chosen.
+
+**Recommendation: direct**, `branch: main`. Implementation does not wait: E1–B1 and L1 are identical under
+both; only W1's literal and the optional P tasks depend on the answer.
+
+### (g) Paths and branches are types
+
+- `RepoPath`: `/`-separated segments, each `[A-Za-z0-9._@+-]+` and neither `.` nor `..`; no leading or
+  trailing `/`, no empty segment, at most 32 segments and 1,024 characters. Refused: any segment `.git`
+  (any case), and any path whose first two segments are `.github/workflows` (any case). So the write token
+  never needs the Workflows permission, and GitHub Actions workflow files — executed on push, with no stored
+  configuration to compare — stay out of reach for the same reason the Buildkite configuration does.
+- `GitBranchName`: `[A-Za-z0-9._/-]+`, at most 100 characters, a subset of `git check-ref-format`: no
+  `..`, no `//`, no leading `/`, `-` or `.`, no trailing `/`, `.` or `.lock`, no `@{`.
+- `CommitHeadline`: one line, 1–72 characters, no control character.
+- `RepoFile`: canonical form `<RepoPath>\n<content>`; content is at most 65,536 characters (`Text`'s
+  bound) and contains no NUL. Rendering a `RepoFile` prints the whole file, which is what an approver
+  should see in the plan's JSON; it is public by type.
+
+### (h) M7: the stored bootstrap becomes an observed gate; writing it stays out
+
+**Writing it is not automatable without breaking 3a decision (a).** A stored bootstrap is YAML whose steps
+carry commands; the tool has no configuration port by design, and the reasoning stands unchanged: a
+pipeline configuration "becomes something an agent machine executes … the moment a build is triggered,
+with no diff in between", and CLAUDE.md forbids a tool that takes a shell command as input. A second
+frozen form parameterised by typed values (queue, selector path, credential helper path) was considered in
+3e decision (f) and rejected there: the helper path is a program `git` runs.
+
+**What becomes automatable is the check.** The operator's own cookbook step is "Read back stored
+configuration and compare it with the checked-in copy before dispatching". `buildkite.pipeline.bootstrap.gate`
+(SHARED VALUES) reads the pipeline and compares its stored `configuration` with the bootstrap `RepoFile`
+the document renders: equal → `Present` (`Compute`); pipeline absent, or configuration different →
+`Absent` (`Blocked`), need "the walter pipeline's stored bootstrap equals the bootstrap this document
+commits", how "In the pipeline's Settings → Steps, replace the YAML with apps/walter/.buildkite/bootstrap.yml
+from the monorepo, save, then re-run this document". The paste stays manual; the `m7_bootstrap_done`
+acknowledgement input goes away.
+
+- **Compared structurally**: both strings parsed as YAML into a JSON value and compared for equality,
+  because Buildkite's own documentation shows a stored configuration coming back re-quoted. A stored
+  configuration that does not parse is "different".
+- **Against the document's rendering, not the repository's current file.** The bootstrap is Walter's CI
+  policy, and policy lives in the document; if the developer changes `bootstrap.yml` and reseeds Buildkite,
+  the gate says so and the template is updated in the document. The alternative — read the file at the
+  head of `main` — needs a GitHub content read into the graph and on the first run has no file to read.
+  Recorded as the operator's to prefer.
+- **First run**: the pipeline does not exist at plan time (or holds the frozen bootstrap) → `Blocked`,
+  which is true: the paste is still owed. It is a leaf (its `slug` output is bound by nothing).
+- **Trust boundary 7 of milestone 3a widens, narrowly.** `PipelineBody` keeps its six fields and
+  `buildkite.pipeline.ensure` still never deserialises `configuration`. The gate uses its own
+  `PipelineConfigurationBody { configuration: Option<String> }`, compares, and drops it: the value never
+  reaches an output, an error, the journal, `tracing` or `Debug` (a stored bootstrap may carry an operator's
+  `env`). Tests seed a secret-shaped value into the mocked configuration and assert it appears nowhere.
+- **Conditional on verify item 9.** If Buildkite's REST `GET` does not return `configuration` for a YAML
+  pipeline, B1 stops after its sandbox probe, M7 stays an acknowledgement, and the attacker records the
+  finding (Buildkite's GraphQL `pipeline.steps.yaml` is the fallback to research, not to build here).
+
+### (i) Walter's files
+
+Seventeen seeded files plus the marker, all under `apps/walter/`; value order `0` = app, `1` = NSE,
+`2` = widgets identifier, each through `AppleBundleIdentifier => TemplateValue`:
+
+| Path | Values | Content, from the survey's pattern |
+| --- | --- | --- |
+| `BUILD.bazel` | — | the two-line name reservation every sibling carries |
+| `ios/BUILD.bazel` | 0, 1, 2 | `config_setting`s scoped to `//apps/walter:__subpackages__`; `apple_bundle_version`; `local_provisioning_profile` local wildcard plus three distribution profiles named exactly `{{ 0 }}`, `{{ 1 }}`, `{{ 2 }}` (no `team_id`, decision (j)); `swift_library` per target; `ios_extension` `WalterNotificationService` and `WalterWidgets`; `ios_application` `Walter` with `extensions` both; entitlements and profiles by `select()`, `None` for `ci_build` and simulator builds; `minimum_os_version` and `families` as Danksworth's |
+| `ios/Walter/Sources/WalterApp.swift` | — | a SwiftUI `@main` app with one placeholder view |
+| `ios/WalterNotificationService/Sources/NotificationService.swift` | — | a `UNNotificationServiceExtension` that delivers the content unchanged |
+| `ios/WalterWidgets/Sources/WalterWidgets.swift` | — | a `@main` `WidgetBundle` with one static placeholder widget |
+| `ios/Resources/Info.plist` | — | `NSHealthShareUsageDescription`, `NSHealthUpdateUsageDescription` (App Store requirement, 3e pre-flight) |
+| `ios/Resources/WalterNotificationService-Info.plist` | — | `NSExtensionPointIdentifier` `com.apple.usernotifications.service`, principal class |
+| `ios/Resources/WalterWidgets-Info.plist` | — | `NSExtensionPointIdentifier` `com.apple.widgetkit-extension` |
+| `ios/Resources/Walter.entitlements` | 0 | `com.apple.developer.healthkit`; `aps-environment` `production`; `com.apple.security.application-groups` `group.{{ 0 }}`; `com.apple.developer.default-data-protection` `NSFileProtectionCompleteUntilFirstUserAuthentication` (3e decision (e)); `com.apple.developer.devicecheck.appattest-environment` `production` (the App Attest gate, host only) |
+| `ios/Resources/WalterNotificationService.entitlements` | 0 | app group `group.{{ 0 }}` |
+| `ios/Resources/WalterWidgets.entitlements` | 0 | app group `group.{{ 0 }}` |
+| `ios/Resources/PrivacyInfo.xcprivacy` | — | privacy manifest, tracking false, health data declared (App Review 5.1.3) |
+| `.buildkite/pipeline.yml` | — | one credential-free validation step shaped as Danksworth's (queue, `tart-ci` plugin pin and image copied from it), building `//apps/walter/...` under `--config=ci` |
+| `.buildkite/upload-pipeline.sh` | — | `exec buildkite-agent pipeline upload --no-interpolation apps/walter/.buildkite/pipeline.yml` |
+| `.buildkite/bootstrap.yml` | — | Danksworth's shape with key `walter-bootstrap`, queue `ci-macos-apple-silicon`, `bash apps/walter/.buildkite/upload-pipeline.sh`; the same `GIT_CONFIG_*` host override (**operator item**: it would put that host path into willikins' public repository; the alternative is omitting it if 3e verify item 10 answers that the helper works without it) |
+| `.buildkite/provider-settings.json` | — | Danksworth's: every provider trigger `false` |
+| `.buildkite/README.md` | — | what the files are, triggers disabled, how to reseed the stored bootstrap |
+
+`data_protection` becomes a **literal** on the `data_protection` node (the operator's "Just update the doc"),
+and a Walter document test pins that the literal and the entitlement's value name the same class, so the
+two can no longer drift through a caller's input. `healthkit.access` and `healthkit.background-delivery`
+are omitted (3e rows 4 and 5: only if used).
+
+### (j) The scaffold must build on `main`, and carries no team id
+
+`ci.yml` builds `//...` on every push to `main`, so W1's rendered set is **snapshot-tested** (`insta`, one
+file per snapshot) — the reviewable artefact — and verify item 8 is building that rendered set under
+`bazel build --config=ci //apps/walter/...` on a Mac before the real apply (this workspace may not write
+into the monorepo, and the host cannot build it). The monorepo's `local_provisioning_profile` rules carry a
+`team_id`; 3e trust boundary 7 keeps the Apple team id out of this workspace, and `rules_apple` documents
+`team_id` as a disambiguator only when profiles of the same name exist on different teams (verify item 10).
+The template omits it. If the operator wants it, the honest source is App Store Connect's `seedId`
+attribute on the bundle identifier (a new output and type), not a literal.
+
+### (k) Composition-ready (milestone 2b)
+
+Every scaffold input is a value an ios-app document can receive: `repo: GitHubRepo` and the branch from
+the organisation document, the identifiers as its own inputs, the token from its own Doppler chain
+(recommended for 2b: pass a public `DopplerConfig` across `uses:` and resolve the credential inside, rather
+than a secret output crossing a document boundary). Templates are inline, so they move with the ios-app
+document. The marker path derives from the app directory. Nothing in this milestone assumes one document.
+
+### (l) Credentials: a new, narrow write token, from Doppler
+
+The operator's rule: every provider credential is resolved from Doppler through the document; only the
+Doppler token is outside it. Walter's GitHub chain today reads `GH_CLONE_TOKEN` from
+`github/bande-a-bonnot` (a fine-grained token of unknown scopes). **Do not widen it**: `github/bande-a-bonnot`
+is one of Walter's `base_configs`, inherited by `walter/prd_deployment_ios` and by every other app's
+deployment config, so anything in it reaches CI jobs; giving that token Contents write hands every such job
+write access to the monorepo. The write token is new:
+
+- **Fine-grained personal access token**, resource owner `Bande-a-Bonnot`, repository access **only**
+  `monorepo`, permissions **Contents: Read and write** (Metadata: Read is automatic). No Workflows (paths
+  refuse `.github/workflows/`), no Administration, no Pull requests unless decision (f) goes PR (then Pull
+  requests: Read and write). An expiry the operator chooses. It authenticates as the operator, so commits
+  are authored by them and signed by GitHub.
+- **Stored** in the real workplace at project `github`, a branch config **no app config inherits**:
+  recommended `bande-a-bonnot_willikins` under environment `bande-a-bonnot`, not marked inheritable, secret
+  `GH_CONTENTS_WRITE_TOKEN`; the willikins Doppler service account needs read on it.
+- **Resolved in the document** exactly as R4 did: `gh_write_token_secret` (`doppler.secret.get`) →
+  `gh_write_token` (`github.token.parse`) → `walter_files.token`. `monorepo_ref` keeps the clone token.
+- **Sandbox, for tests**: the `Willikins-Test` PAT already in `~/.config/willikins/sandbox.env` can create
+  and delete repositories there (milestone 2); the live cycle uses it as the tool's default credential and
+  once through the `token` port.
+
+## The Walter document, after this milestone
+
+Changes to `workflows/walter-ios-app.yaml`, edited in place (task W1), in one contiguous, commented block so
+2b can lift it:
+
+- **Removed:** inputs `m3_repo_files_done`, `m7_bootstrap_done`, `data_protection`; nodes `m3_repo_files`,
+  `m7_bootstrap`.
+- **Added:** `gh_write_token_secret`, `gh_write_token`; one `repo.file.render` node per file of decision (i)
+  (`values` bound as a list of `${{ inputs.*_identifier }}` references); `walter_files`
+  (`github.scaffold.ensure`, `repo: ${{ steps.monorepo_ref.repo }}`, `branch: main` pending decision (f),
+  `marker: apps/walter/.willikins-scaffold`, `files: [ …all render outputs… ]`, the headline, `token:
+  ${{ steps.gh_write_token.value }}`); `bootstrap_gate` (`buildkite.pipeline.bootstrap.gate`, `slug:
+  ${{ steps.pipeline.slug }}`, `expected: ${{ steps.bootstrap_yml.file }}`, `token: ${{ steps.bk_token.value }}`).
+- **Rebound:** `pipeline.repo: ${{ steps.walter_files.repo }}`, so the pipeline is created only after its
+  `.buildkite/` files exist (the survey's rank 1 complaint: "The graph today provisions a pipeline that
+  cannot run"). On a first run `walter_files` plans `Create` with `repo` predicted, so the pipeline still
+  plans.
+- **The header comment** gains the M3/M7 story and loses the acknowledgement lines. The remaining manual
+  steps: M1 app record (gate), M2 app groups (gates), M2b App Attest (gate), M5 APNs key and M6 CI Doppler
+  grant (acknowledgements), M7 (observed gate; the paste is manual).
+
+## Acceptance tests
+
+1. **List binding, parse and check** (E1): a sequence of references and literals binds a `list<T>` port;
+   a nested sequence, a mapping element, a list-typed element, a sequence on a scalar port and a sequence
+   under `outputs:`/`for_each:` each fail with the named error; a secret element into a public list is
+   exactly one `SecretToNonSecretSink` at `node.port[i]`; a conversion is recorded per element; an input
+   used only inside a list raises no unused-input warning; every existing characterization entry is
+   byte-identical.
+2. **List binding, plan and apply** (E1): known elements give a known list in order; one `Unknown` element
+   makes the value `Unknown`; a node whose list element names a blocked gate plans `Skip` and its `read` is
+   never called (a panicking in-test tool proves it); `apply` resolves the same list.
+3. **Types** (E2): each new type's accepts and refusals — `RepoPath` refuses `..`, `.`, empty segment,
+   leading `/`, `.git/x`, `a/.GIT/b`, `.github/workflows/ci.yml`, `.GitHub/Workflows/x`, a backslash, a
+   control character; `GitBranchName` refuses `a..b`, `-x`, `x.lock`, `a//b`, `@{`; `TemplateValue`
+   refuses every metacharacter listed in decision (e) and a leading `-`; `RepoFile` round-trips and refuses
+   a NUL and an over-long content. Proptest: every `AppleBundleIdentifier` parses as a `TemplateValue`.
+   A test asserts no conversion row has source `Text` and target `TemplateValue`.
+4. **Check refusals** (E2): negative fixtures for a `TemplateSource` input, a `RepoFile` input, a default of
+   each, and a literal on a `RepoFile` port, each exactly one error; `secret-into-repo-file.yaml` exactly
+   one `SecretToNonSecretSink`.
+5. **`repo.file.render`** (T1): substitutes every occurrence of each index; refuses an index without a
+   value, an unused value, a stray `{{`, `{{0}}` without spaces, index 16, and an amplified render before
+   allocating; no error message echoes template or value text; pure; both catalogs validate;
+   `LIVE_TOOL_NAMES` pinned.
+6. **Client reads** (G1, mocks with exact paths and queries pinned, the 3e lesson): ref → commit → the
+   non-recursive trees along declared paths only, each directory fetched once; blob sha computed locally
+   matches git's for an empty file, an ASCII file and a UTF-8 file (known vectors); a symlink, a tree and a
+   submodule at a path are reported as non-blobs; only the marker blob is ever fetched.
+7. **Client write** (G1): the GraphQL request body is pinned by a JSON matcher (the fixed mutation text,
+   `expectedHeadOid`, base64 additions sorted by path); 200 with `data` → the oid; 200 with `errors`, 200
+   without `data`, 401, 403 and 502 → failures whose messages contain no body text (a seeded marker in the
+   mocked body never appears); never retried by the client.
+8. **`github.scaffold.ensure`** (G2), each row of decision (b)'s table against mocks: `Present` issues no
+   tree walk past the marker; `Foreign` is `NameTaken`; `Absent` predicts the three outputs; the refusal
+   names every differing path and never content; `Invalid` cases make no request; `ensure` commits only the
+   non-equal files plus the marker, whose content is exactly the SHARED VALUES format; a failed commit
+   whose re-read is `Present` is `changed: false`; a moved head retries against the new head at most three
+   times; a same-head failure is `Provider`; outputs never contain a sha; the fake twin agrees
+   (`fake_agrees_with_live`); `LIVE_TOOL_NAMES` pinned.
+9. **The bootstrap gate** (B1): equal (including a re-quoted but structurally equal stored string) →
+   `Compute`; different, unparsable, missing `configuration`, or pipeline `404` → `Blocked` with the static
+   need and how and subject `org`, `slug`; a seeded secret-shaped string in the mocked configuration
+   appears in no output, error, `Debug`, `BlockedGate` or journal line; `PipelineBody` still has exactly six
+   fields; only `GET` is ever recorded; fake twin agrees.
+10. **The Walter document** (W1, `crates/willikins-cli/tests/walter_document.rs`): checks clean against the
+    fake catalog; no `operator.acknowledge` node remains for M3 or M7; `walter_files` binds all seventeen
+    renders; a first fake run creates the scaffold and blocks on the bootstrap gate (plus the existing
+    gates); a second run with the marker present and every seeded file edited in the fake state plans
+    `walter_files` `NoOp`; a pre-landing fake state with a differing `apps/walter/ios/BUILD.bazel` fails
+    plan naming that path; `pipeline` is ordered after `walter_files`; the `data_protection` literal and
+    the entitlement agree.
+11. **Rendered files snapshot** (W1): one `insta` snapshot per rendered file for the real identifiers
+    `com.bande-a-bonnot.walter`, `.nse`, `.widgets` — the artefact the operator reviews and builds (verify
+    item 8).
+12. **Guards**: `secret_literal_guard`, `no_gh_writes_guard`, `no_certificate_writes_guard` green; the
+    rendered snapshot and every new fixture contain no Apple team id and no token-shaped literal.
+13. **The live scaffold cycle** (L1, run once by the attacker), below.
+14. **Characterization**: every existing entry byte-identical except `workflows/walter-ios-app.yaml`'s own,
+    which changes by the operator's 2026-09-30 decision to update the document; the new fixtures add
+    entries.
+
+## The live scaffold cycle (written by L1, run once by the attacker)
+
+`crates/willikins-providers-github/tests/live_scaffold_cycle.rs`, sandbox only:
+
+1. Count `Willikins-Test` repositories (read-only); refuse to start if any `willikins-files-*` exists.
+2. Create `Willikins-Test/willikins-files-<unix-seconds>`, private, with `auto_init: true` (a raw `POST`
+   in the harness, as the guard's `DELETE` is raw: the git database API answers `409` on an empty
+   repository). Record the name in the drop guard **before any assertion**.
+3. `github.scaffold.ensure` with three rendered files (one in a nested directory) and marker
+   `app/.willikins-scaffold`: `read` is `Absent`; `ensure` is `changed: true`; an independent `GET` shows
+   exactly one new commit whose parent is the init commit, whose `verification.verified` is recorded
+   (settles verify item 2), and whose tree holds every path as `100644` with the expected blob sha plus the
+   marker.
+4. `read` is `Present`; a second `ensure` is `changed: false`; the head is unchanged.
+5. The harness edits one seeded file with a raw `PUT …/contents/{path}` (a developer's edit): `read` stays
+   `Present`, `ensure` is `changed: false`, the edit survives (its blob sha unchanged afterwards).
+6. A second scaffold (marker `other/.willikins-scaffold`) whose file list includes the edited path with
+   the original content: `read` refuses naming that path; the head is unchanged.
+7. A client-level `createCommitOnBranch` with a deliberately stale `expectedHeadOid` fails and the head is
+   unchanged (settles verify item 4; the shape is recorded by key names only).
+8. Once through the `token` port with the same sandbox PAT resolved in-process, one read.
+9. Guard: `DELETE` the repository, a following `GET` is `404`, the repository count equals step 1.
+
+No credential, token-shaped string or response body is printed; the harness greps its own output at the end
+as the 3c harnesses do. B1's own sandbox probe (verify item 9) is separate: create a throwaway pipeline in
+`willikins-test` through `buildkite.pipeline.ensure`, read it with the gate (`Blocked`), set its
+configuration with a raw harness `PATCH` to the expected bootstrap, read again (`Compute`), delete the
+pipeline; counts equal.
+
+## Credentials
+
+**Needed now (L1 and B1's probe):** present — the sandbox GitHub PAT for `Willikins-Test` (can create and
+delete repositories, milestone 2) and the renewed sandbox Buildkite token (HANDOFF: "far broader than
+needed"). Nothing else.
+
+**For the real apply (the operator's):** the new write token of decision (l), stored where decision (l)
+says, readable by the willikins Doppler service account; everything Walter already needed.
+
+## Operator decisions pending
+
+1. **Direct commit to `main` or branch plus pull request** on `Bande-a-Bonnot/monorepo`. Recommended:
+   direct (decision (f)). If PR: tasks P1–P3 are added and W1 binds the branch they create.
+2. **The write token** (decision (l)): create it, store it, grant the service account read.
+3. Two smaller items, not blocking any task: whether Walter's `bootstrap.yml` copies Danksworth's host
+   credential-helper override into willikins' public repository (decision (i)); and whether the M7 gate
+   should compare against the repository's current file instead of the document's rendering (decision (h)).
+
+## Verify before relying on them
+
+1. **`createCommitOnBranch` accepts a fine-grained token with Contents: Read and write** and no other
+   permission (L1 uses a classic sandbox token if that is what `sandbox.env` holds; the real token settles
+   it on its first plan's read and apply).
+2. **The commit is signed and verified** for a personal-token author (schema: "automatically signed by
+   GitHub if supported"). L1 records `verification.verified`.
+3. **Which permission GraphQL checks for `createCommitOnBranch`** — assumed Contents write; not stated in the
+   permissions data, which covers REST only.
+4. **The shape of a stale-`expectedHeadOid` failure** (HTTP status, `errors[].type`). The tool never
+   depends on it (it re-reads), but the harness records it.
+5. **Request size limits** for `createCommitOnBranch` (Walter's set is about 20 KB of base64; unknown
+   ceiling). Recorded by L1 as observed-fine at that size.
+6. **The rules in force on `Bande-a-Bonnot/monorepo` `main`**: a read-only
+   `GET /repos/Bande-a-Bonnot/monorepo/rules/branches/main` (Metadata read) and the classic protection state,
+   before the real apply — whether a pull request is required, whether updates are restricted, whether the
+   operator's token-authored commit bypasses as an administrator.
+7. **The write token authenticates and sees the repository** (a read-only `plan --live` of Walter after it
+   is stored).
+8. **The rendered scaffold builds**: copy W1's snapshot into a scratch clone of the monorepo and run
+   `bazel build --config=ci //apps/walter/...` on a Mac with Xcode, before the real apply, because `ci.yml`
+   builds `//...` on the push.
+9. **Buildkite's `GET` pipeline returns `configuration` for a YAML pipeline**, and in what form. The docs'
+   GET example omits it; the create response shows it re-quoted. B1's sandbox probe settles it before B1's
+   tool is written.
+10. **`rules_apple` 4.3.3's `local_provisioning_profile` accepts no `team_id`** and resolves a uniquely named
+    profile (decision (j)).
+11. **Doppler accepts the branch config name `bande-a-bonnot_willikins`** (hyphenated environment,
+    underscore branch separator); R1 settled hyphens in root and branch names in the sandbox.
+
+## Gates
+
+Scoped, per the host rules: `pgrep -x cargo` and `pgrep -f cargo-sweep` print nothing before every cargo
+command; `-j 2`, `RUST_TEST_THREADS=2`; in the background with a 600,000 ms timeout; read the log body;
+never pipe through `tail` or `tee`; never edit tracked files while cargo builds.
+
+```
+cargo fmt --all --check
+cargo clippy -p <touched crate> --all-targets -j 2 -- -D warnings
+RUST_TEST_THREADS=2 cargo test -p <touched crate> -j 2 --no-fail-fast
+cargo check -p willikins-types -j 2
+```
+
+plus `RUST_TEST_THREADS=2 cargo test -p willikins-dsl --test acceptance -j 2` for the characterization
+snapshot. The full workspace gate is the coordinator's. A linker "missing .rcgu.o" or `E0463` is the host
+sweep: `cargo clean -p <crate>` and rebuild.
+
+## Tasks
+
+One lane at a time on `main` (one cargo at a time on this host), in order; each commits by path with
+`git commit --only`, test first, one behaviour per commit.
+
+| # | Task | Delegate to |
+| --- | --- | --- |
+| E1 | **List binding** (decision (a); acceptance 1, 2, 14). Commit 1, `willikins-dsl` + `willikins-core` check: parse, per-element typing, conversion and taint, edges, consumed inputs, the new site form. Commit 2, `willikins-core` plan/apply: resolution, `Unknown` propagation, list elements in the skip scan | sonnet implements, opus attacks |
+| E2 | **Types and refusals** (decisions (e), (g); acceptance 3, 4). Commit 1, `willikins-types`: `RepoPath`, `GitBranchName`, `CommitHeadline`, `TemplateValue`, `RepoFile`, the conversion row with its `From` impl and proptest, the no-`Text`-row test. Commit 2, `willikins-core`: the four check refusals by `TypeId`, their negative fixtures, `secret-into-repo-file.yaml` | sonnet implements, opus attacks |
+| T1 | **`repo.file.render`** (decision (d); acceptance 5). One commit, `willikins-tools` + catalog pins | sonnet implements, opus attacks |
+| G1 | **GitHub client** (decision (b); acceptance 6, 7). Commit 1: the pinned reads and local blob sha. Commit 2: the GraphQL transport and `createCommitOnBranch`, body never echoed | sonnet implements, opus attacks |
+| G2 | **`github.scaffold.ensure`** (decisions (b), (c); acceptance 8). Commit 1: the tool and mocks. Commit 2: the fake twin, parity, catalog registration, `LIVE_TOOL_NAMES` | sonnet implements, opus attacks |
+| B1 | **Bootstrap gate** (decision (h); acceptance 9). Step 0, before any code: the sandbox probe of verify item 9 (read-only except its own throwaway pipeline). Then commit 1: the tool, its compare-only body, mocks. Commit 2: fake twin, parity, registration | sonnet implements, opus attacks and runs the probe |
+| L1 | **Live scaffold cycle** (acceptance 13), written, not run | sonnet writes, opus runs once |
+| W1 | **The Walter document** (decisions (i), (j), (l); acceptance 10, 11, 12, 14). Commit 1: the templates, render nodes, `walter_files`, the rebinding, the removed inputs and nodes, the header. Commit 2: `walter_document.rs` tests, the rendered snapshots, fake-state fixtures under `workflows/fixtures/state/` | sonnet implements, opus attacks |
+| P1–P3 | **Only if decision (f) goes PR**: `github.branch.ensure`, `github.pull_request.ensure`, and the scaffold's read of the base branch's marker | sonnet implements, opus attacks |
+
+Then the attack: every piece gets an independent opus pass by an agent that did not write it, with at least
+four mutations each restored from saved copies (`cmp` confirming byte-identity), recorded under
+`docs/research/2026-09-30-m3g-adversarial-pass*.md`; the attacker runs L1 and B1's probe once each.
+Priority targets: a secret or a `Text` reaching a `RepoFile` by any route (list elements, conversions,
+`for_each`, defaults); a `TemplateValue` breaking out of a quoted string in any of the four file syntaxes;
+the scaffold overwriting anything; a moved head producing a duplicate or a lost commit; the configuration
+leaking from the gate; a plan-to-apply drift from a busy `main`.
+
+## Risks
+
+1. **The monorepo refuses a token commit to `main`** (a ruleset the operator bypasses as an admin, but a
+   token does not). Verify item 6 finds it before the real apply; the answer is the PR route (P1–P3), not a
+   broader token.
+2. **`main` goes red** if the scaffold does not build. Verify item 8 before the real apply; the fix is a
+   template edit in the document.
+3. **Buildkite does not return `configuration`.** B1 stops after its probe, M7 stays an acknowledgement
+   (decision (h)).
+4. **Positional placeholders are misnumbered.** Refused at plan time when an index or a value is unused;
+   a swapped pair of identifiers is caught only by the rendered snapshot review (acceptance 11).
+5. **The engine change (E1) is the widest piece.** Its attack targets the skip scan and taint per element;
+   every existing characterization entry must stay byte-identical.
+6. **Build time and disk.** Seven crates touched across the lanes, one at a time; never gate across the
+   04:00 sweep.
