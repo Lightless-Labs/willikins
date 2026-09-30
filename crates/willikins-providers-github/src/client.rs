@@ -126,6 +126,22 @@ pub fn http_client(credential: Credential) -> Http {
     Http::new(GITHUB_API_BASE_URL, default_headers(), credential)
 }
 
+/// Build an [`Http`] against GitHub's real API, carrying [`default_headers`]
+/// but no [`Credential`] at all: every request this crate's tools send
+/// through it refuses locally, naming [`CREDENTIAL_VAR`], unless
+/// [`willikins_providers_http::Http::with_credential`] first replaces it
+/// (which every tool's own `token`-port handling already does when a
+/// document binds one — see [`client_for_token`]).
+///
+/// For a caller that has already established, from the document being
+/// planned, that every `github.*` node binds its own `token` port (so
+/// [`CREDENTIAL_VAR`] is not needed at all): `willikins_server::catalog`'s
+/// per-document credential narrowing is the one caller today.
+#[must_use]
+pub fn http_client_without_credential() -> Http {
+    Http::without_credential(GITHUB_API_BASE_URL, default_headers(), CREDENTIAL_VAR)
+}
+
 /// Turn a [`ProviderError`] into a [`ToolError`], with one addition to
 /// the shared `From<ProviderError> for ToolError` mapping: a `403` that
 /// [`ProviderError::looks_rate_limited`] (this client's own

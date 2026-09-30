@@ -20,6 +20,7 @@ pub mod tools;
 pub use client::{
     BUILDKITE_API_BASE_URL, BuildkiteClient, BuildkiteCredentialError, CREDENTIAL_PATTERN,
     CREDENTIAL_VAR, MANAGED_DESCRIPTION, MAX_CLUSTER_PAGES, UPLOAD_CONFIGURATION,
-    credential_from_env, http_client, pipeline_web_url, ssh_repository_url,
+    credential_from_env, http_client, http_client_without_credential, pipeline_web_url,
+    ssh_repository_url,
 };
 pub use tools::{BuildkiteClusterGet, BuildkitePipelineEnsure};
