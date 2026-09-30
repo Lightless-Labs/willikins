@@ -167,6 +167,62 @@ impl Tool for CountingTool {
     }
 }
 
+/// Milestone 3g, decision (a): the same shape as [`CountingTool`], except
+/// its one input port is `list<EnvironmentSlug>` -- so a test can bind it
+/// with a [`Binding::List`] whose element names a blocked gate, and prove
+/// the skip scan (decision (j), point 3) covers list elements the same way
+/// it covers a plain `Step`/`Keyed` binding.
+struct CountingListTool {
+    spec: ToolSpec,
+    reads: Arc<Mutex<u32>>,
+}
+
+impl CountingListTool {
+    fn new(name: &str, reads: Arc<Mutex<u32>>) -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("values"),
+            PortSpec {
+                ty: PortType::Exact(willikins_core::TypeRef::list_of(
+                    willikins_core::TypeName::parse("EnvironmentSlug").unwrap(),
+                )),
+                required: true,
+                derived_only: false,
+            },
+        );
+        Self {
+            spec: ToolSpec {
+                name: tool_name(name),
+                description: "Test tool: counts its own `read` calls, one list<T> port."
+                    .to_string(),
+                inputs,
+                outputs: IndexMap::new(),
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+            reads,
+        }
+    }
+}
+
+impl Tool for CountingListTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        *self.reads.lock().unwrap() += 1;
+        Ok(Observation::Absent {
+            predicted: Outputs::new(),
+        })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        unreachable!("this test never applies a plan")
+    }
+}
+
 /// A normal, well-behaved non-pure tool: always `Absent`, passing its input
 /// straight through as its output. Used for a node a test expects to plan
 /// normally (not skipped) alongside a blocked gate elsewhere in the graph.
@@ -332,6 +388,25 @@ fn catalog_with(present: HashSet<&str>) -> (Catalog, Arc<Mutex<u32>>) {
     catalog
         .insert(Arc::new(PassthroughTool::new(
             "test.passthrough_independent",
+        )))
+        .unwrap();
+    (catalog, reads)
+}
+
+/// Like [`catalog_with`], but its counted tool (`test.counted_list`) takes
+/// one `list<EnvironmentSlug>` port instead of a scalar one, for the
+/// list-binding skip-scan test.
+fn catalog_with_list(present: HashSet<&str>) -> (Catalog, Arc<Mutex<u32>>) {
+    let mut catalog = Catalog::new(willikins_types::registry());
+    let present: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(
+        present.into_iter().map(str::to_string).collect(),
+    ));
+    catalog.insert(Arc::new(GateTool::new(present))).unwrap();
+    let reads = Arc::new(Mutex::new(0));
+    catalog
+        .insert(Arc::new(CountingListTool::new(
+            "test.counted_list",
+            reads.clone(),
         )))
         .unwrap();
     (catalog, reads)
@@ -523,6 +598,54 @@ fn a_step_binding_on_a_blocked_scalar_gate_is_skipped_and_never_read() {
     );
     assert_eq!(result.blocked.len(), 1);
     assert_eq!(result.blocked[0].instance, None);
+    assert_eq!(
+        result.blocked[0]
+            .holds_back
+            .iter()
+            .map(willikins_core::NodeName::as_str)
+            .collect::<Vec<_>>(),
+        vec!["dependent"]
+    );
+}
+
+/// Milestone 3g, decision (a): the skip scan covers a `Binding::List`
+/// element the same way it covers a plain `Step`/`Keyed` binding -- a node
+/// with a list-bound port naming a blocked gate anywhere among its
+/// elements plans `Action::Skip` as a whole and its `read` is never
+/// called, proven by the shared counter staying at zero.
+#[test]
+fn a_list_element_binding_on_a_blocked_gate_is_skipped_and_never_read() {
+    let (catalog, reads) = catalog_with_list(HashSet::new());
+    let workflow = Workflow::new(workflow_name("list-element-gate-test"))
+        .node(
+            node("gate"),
+            Node::new(tool_name("test.gate"))
+                .port(port("key"), Binding::Literal("dev".to_string())),
+        )
+        .node(
+            node("dependent"),
+            Node::new(tool_name("test.counted_list")).port(
+                port("values"),
+                Binding::List(vec![Binding::Step {
+                    node: node("gate"),
+                    port: port("key"),
+                }]),
+            ),
+        );
+    let checked = check(&workflow, &catalog).expect("the test graph checks cleanly");
+    let result = plan(&checked, &IndexMap::new(), &catalog).expect("a blocked gate never fails");
+
+    assert_eq!(by_name(&result.nodes, "gate", None).action, Action::Blocked);
+    assert_eq!(
+        by_name(&result.nodes, "dependent", None).action,
+        Action::Skip
+    );
+    assert_eq!(
+        *reads.lock().unwrap(),
+        0,
+        "a node skipped because of its list element is never read"
+    );
+    assert_eq!(result.blocked.len(), 1);
     assert_eq!(
         result.blocked[0]
             .holds_back

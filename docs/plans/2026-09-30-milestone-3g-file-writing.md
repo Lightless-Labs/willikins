@@ -2,6 +2,19 @@
 
 **Created:** 2026-09-30
 **Addendum:** 2026-09-30 (coordinator) — the operator settled the open choice: "Commit straight." Walter's document commits directly to `main` of Bande-a-Bonnot/monorepo, matching the monorepo's own ruling of 2026-07-09. Tasks P1–P3 (branch and pull-request tools) are dropped from this milestone; the tool still writes to whatever branch a document names, so another document may choose differently.
+**Addendum:** 2026-09-30 (E1) — decision (a)'s "`Site::Port` plus `index`, or a new `Site::ListElement`" choice
+is `Site::ListElement`, as expected, but boxed: `Site::ListElement(Box<ListElementSite>)`, built with a new
+`Site::list_element(node, port, index)` constructor, rather than an inline `{ node, port, index }` struct
+variant. An inline third field made `Site` — embedded in `CheckError`, `PlanError`, and, through
+`ApplyError::Plan`, every `apply()` call's `Result` — cross clippy's `result_large_err` default (128 bytes),
+which `cargo clippy -p willikins-cli -p willikins-server --all-targets` surfaced at a call site in
+`willikins-server/src/butler.rs` neither this task nor its own scoped gates touch; grepping `ApplyError`
+across the tree found about two dozen files in five other crates that could have needed the same allow.
+`willikins-core/src/apply.rs`'s own `ApplyError::Drift` already boxes its `DriftKind` for exactly this
+reason (its doc comment names the lint), so boxing here matches the codebase's own established answer rather
+than adding `#[allow(clippy::result_large_err)]` at every affected call site. Contained entirely within
+`willikins-core` (`site.rs`, `check.rs`, `plan.rs`); no other crate's files were touched. Verified with
+`cargo clippy -p willikins-cli -p willikins-server --all-targets -j 2 -- -D warnings`, green.
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Bande-a-Bonnot/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
