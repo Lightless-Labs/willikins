@@ -7,8 +7,9 @@
 //! binary, against a real file journal, which is the one surface that
 //! test cannot reach.
 //!
-//! One run, the two OBSERVED gates deliberately unmet (a fresh seed: no
-//! bundle id, no app record, `APP_GROUPS` not enabled): `apply` must exit
+//! One run, the three OBSERVED gates deliberately unmet (a fresh seed: no
+//! bundle id, no app record, `APP_GROUPS` not enabled, `APP_ATTEST` not
+//! enabled): `apply` must exit
 //! **3** (decision (j), point 7 -- `exit_for_run_state` maps
 //! `RunState::Blocked` to 3, distinct from a failure's 1), stdout must
 //! show the `blocked:` section and "re-run this document once done", and
@@ -19,7 +20,7 @@
 //! around here rather than fixed
 //!
 //! The four `operator.acknowledge` leaves are deliberately supplied
-//! `done` here, **not** left unmet like the two observed gates. Leaving
+//! `done` here, **not** left unmet like the three observed gates. Leaving
 //! any of them unsupplied hits a genuine, pre-existing defect this test
 //! uncovered: `willikins_server::butler::resolve_recorded_inputs`
 //! rebuilds a plan's inputs from the journal's own recorded
@@ -41,7 +42,7 @@
 //! end"). Out of this task's own scope (a `willikins-server` engine fix,
 //! not the Walter document); reported to the coordinator rather than
 //! patched here or quietly avoided by weakening what this test proves
-//! about the two observed gates.
+//! about the three observed gates.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -130,8 +131,6 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         "--input",
         "widgets_identifier=com.example.walter.widgets",
         "--input",
-        "platform=IOS",
-        "--input",
         "data_protection=DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
         "--input",
         "certificate_type=DISTRIBUTION",
@@ -178,6 +177,7 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         "app_app_groups",
         "nse_app_groups",
         "widgets_app_groups",
+        "app_app_attest",
     ] {
         assert!(
             stdout.contains(node),

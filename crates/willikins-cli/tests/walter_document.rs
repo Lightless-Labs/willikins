@@ -6,29 +6,40 @@
 //! (`Approval::Human`) -- the class is static, from the graph, unaffected
 //! by which gates are open (the milestone plan's decision (j), point 5).
 //!
-//! Three runs, one shared `FakeState`, exactly as the plan's task
-//! description asks:
+//! Three applied runs plus one plan-only interleaved check, one shared
+//! `FakeState`, exactly as the plan's task description asks:
 //!
 //! 1. **Gates unmet.** Nothing is seeded beyond the credential chain, the
 //!    monorepo, the Buildkite cluster, and the distribution certificate.
 //!    Every independent node (the three bundle identifiers, the three
 //!    capabilities, Doppler, the Buildkite pipeline, the monorepo
-//!    reference) plans and applies for real. `app_record` (a leaf) and
-//!    the three `app_*_app_groups` gates are `Blocked` -- the identifiers
-//!    they check do not exist yet, so their own `read` (which resolves the
-//!    parent through `list_bundle_ids`) finds nothing. The three profile
-//!    nodes and the three `doppler.secret.set` nodes that depend on them
-//!    are `Skip`, never read. So are the four `operator.acknowledge`
-//!    leaves (no `done` supplied).
-//! 2. **The fake state satisfies the two observed gates** (the app record
-//!    is seeded; `APP_GROUPS` is seeded as enabled on all three
-//!    identifiers -- standing in for the operator's own manual work in
-//!    the portal). Same inputs, same acknowledgements withheld. A fresh
-//!    `plan` shows every previously-blocked gate `Compute` and the three
-//!    profile nodes and their `doppler.secret.set` nodes `Create` --
-//!    **and nothing else changes**: every node that already ran in step 1
-//!    reads `Unchanged`/`Computed`. The four acknowledgement leaves are
-//!    still `Blocked`, since no API and no seeded state can satisfy them.
+//!    reference) plans and applies for real. `app_record` (a leaf), the
+//!    three `app_*_app_groups` gates, and `app_app_attest` (the App
+//!    Attest gate task's own addition, host identifier only) are
+//!    `Blocked` -- the identifiers they check do not exist yet, so their
+//!    own `read` (which resolves the parent through `list_bundle_ids`)
+//!    finds nothing. The three profile nodes and the three
+//!    `doppler.secret.set` nodes that depend on them are `Skip`, never
+//!    read. So are the four `operator.acknowledge` leaves (no `done`
+//!    supplied).
+//!    - **Plan-only, between run 1 and run 2: App Groups is on, App
+//!      Attest is still off.** The fake state gains the app record and
+//!      `APP_GROUPS` on all three identifiers, but not yet `APP_ATTEST`
+//!      on the host. A fresh `plan` (not applied) shows `app_app_attest`
+//!      still `Blocked`, holding back exactly `app_profile` and
+//!      `app_profile_to_doppler` -- while `nse_profile`/`widgets_profile`
+//!      and their own Doppler writes, gated only by their own (now open)
+//!      app-group gate, plan `Create`. This is the App Attest gate's own
+//!      acceptance case: the host profile alone is held back, the
+//!      extensions are unaffected.
+//! 2. **The fake state satisfies every observed gate** (App Attest is now
+//!    seeded on the host identifier too). Same inputs, same
+//!    acknowledgements withheld. A fresh `plan` shows every
+//!    previously-blocked gate `Compute` and the three profile nodes and
+//!    their `doppler.secret.set` nodes `Create` -- **and nothing else
+//!    changes**: every node that already ran in step 1 reads
+//!    `Unchanged`/`Computed`. The four acknowledgement leaves are still
+//!    `Blocked`, since no API and no seeded state can satisfy them.
 //! 3. **The four acknowledgements are supplied.** A third run, same fake
 //!    state, `done` on all four `*_done` inputs: every node reads
 //!    `Unchanged`/`Computed`/`Converged` -- a `NoOp` run end to end.
@@ -105,10 +116,6 @@ fn base_inputs() -> IndexMap<InputName, Value> {
     inputs.insert(
         InputName::parse("widgets_identifier").unwrap(),
         scalar("AppleBundleIdentifier", WIDGETS_IDENTIFIER),
-    );
-    inputs.insert(
-        InputName::parse("platform").unwrap(),
-        scalar("AppleBundleIdPlatform", "IOS"),
     );
     inputs.insert(
         InputName::parse("data_protection").unwrap(),
@@ -319,6 +326,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "app_app_groups",
             "nse_app_groups",
             "widgets_app_groups",
+            "app_app_attest",
             "m3_repo_files",
             "m5_apns_key",
             "m6_ci_doppler_access",
@@ -378,6 +386,10 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         status_of(&applied1, "app_app_groups", None),
         NodeStatus::Blocked
     ));
+    assert!(matches!(
+        status_of(&applied1, "app_app_attest", None),
+        NodeStatus::Blocked
+    ));
     for node in ["app_profile", "nse_profile", "widgets_profile"] {
         assert!(
             matches!(status_of(&applied1, node, None), NodeStatus::Skipped),
@@ -390,7 +402,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "run 1: `{node}` must be Created"
         );
     }
-    assert_eq!(applied1.blocked.len(), 8, "run 1's Applied.blocked");
+    assert_eq!(applied1.blocked.len(), 9, "run 1's Applied.blocked");
 
     let applied1_json = serde_json::to_string(&applied1).unwrap();
     assert_no_secret_leaked(&applied1_json);
@@ -424,7 +436,76 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     }
 
     // ------------------------------------------------------------------
-    // Run 2: the two observed gates open; the four acknowledgements are
+    // Interleaved plan: APP_GROUPS is on everywhere, but App Attest is
+    // still off on the host identifier -- the App Attest gate task's own
+    // acceptance case. `app_app_attest` alone must still be Blocked, and
+    // it must hold back exactly the host app's profile and that profile's
+    // Doppler write; the NSE and widgets profiles have no App Attest gate
+    // at all, so they proceed. Plan only, not applied -- the next block
+    // seeds App Attest and run 2 below is what actually applies this
+    // state.
+    // ------------------------------------------------------------------
+    let planned_attest_off =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("interleaved plan: {err}"));
+    assert_eq!(
+        action_of(&planned_attest_off, "app_app_attest", None),
+        Action::Blocked,
+        "App Attest is still off on the host identifier: app_app_attest must be Blocked"
+    );
+    for node in ["app_profile", "app_profile_to_doppler"] {
+        assert_eq!(
+            action_of(&planned_attest_off, node, None),
+            Action::Skip,
+            "`{node}` is held back by the still-unmet App Attest gate"
+        );
+    }
+    for node in [
+        "nse_profile",
+        "widgets_profile",
+        "nse_profile_to_doppler",
+        "widgets_profile_to_doppler",
+    ] {
+        assert_eq!(
+            action_of(&planned_attest_off, node, None),
+            Action::Create,
+            "`{node}` has no App Attest gate and must proceed once its own app-group gate is open"
+        );
+    }
+    let attest_blocked = planned_attest_off
+        .blocked
+        .iter()
+        .find(|b| b.node.as_str() == "app_app_attest")
+        .expect("app_app_attest is blocked");
+    assert_eq!(
+        attest_blocked.need, "the named capability enabled on this bundle identifier",
+        "app_app_attest's own need text"
+    );
+    let attest_holds_back: std::collections::BTreeSet<&str> = attest_blocked
+        .holds_back
+        .iter()
+        .map(willikins_core::NodeName::as_str)
+        .collect();
+    assert_eq!(
+        attest_holds_back,
+        std::collections::BTreeSet::from(["app_profile", "app_profile_to_doppler"]),
+        "app_app_attest must hold back exactly the host profile and its Doppler write"
+    );
+
+    // ------------------------------------------------------------------
+    // Between the interleaved plan and run 2: the operator finishes the
+    // portal-side work -- App Attest is enabled on the host identifier.
+    // ------------------------------------------------------------------
+    {
+        let mut locked = state.lock().unwrap();
+        locked
+            .apple_bundle_id_capabilities
+            .entry(APP_IDENTIFIER.to_string())
+            .or_default()
+            .insert("APP_ATTEST".to_string());
+    }
+
+    // ------------------------------------------------------------------
+    // Run 2: every observed gate opens; the four acknowledgements are
     // still withheld.
     // ------------------------------------------------------------------
     let planned2 =
@@ -448,6 +529,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         "app_app_groups",
         "nse_app_groups",
         "widgets_app_groups",
+        "app_app_attest",
     ] {
         assert_eq!(
             action_of(&planned2, node, None),
@@ -605,6 +687,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         "app_app_groups",
         "nse_app_groups",
         "widgets_app_groups",
+        "app_app_attest",
         "app_profile",
         "nse_profile",
         "widgets_profile",
@@ -721,6 +804,70 @@ fn the_document_reads_the_real_layout_by_name() {
             Some(Binding::Literal(text)) => text.clone(),
             other => panic!("`{name}.{port}` must be a literal, got {other:?}"),
         };
+    let from = |node: &str, port: &str| Binding::Step {
+        node: NodeName::parse(node).unwrap(),
+        port: PortName::parse(port).unwrap(),
+    };
+
+    // T4/fact 1: `platform` is the bare literal `UNIVERSAL` on all three
+    // bundle identifiers, not a declared input -- IOS was a permanent
+    // trap once the account's identifiers all read UNIVERSAL and the API
+    // refused to change platform back.
+    for name in ["app_id", "nse_id", "widgets_id"] {
+        assert_eq!(literal(name, "platform"), "UNIVERSAL", "`{name}.platform`");
+    }
+    assert!(
+        !workflow
+            .inputs
+            .contains_key(&InputName::parse("platform").unwrap()),
+        "`platform` must not be a declared input any more"
+    );
+
+    // T4: the App Attest gate -- host identifier only, reading from
+    // `app_id` directly (not chained through `app_app_groups`), and the
+    // host profile's `identifier` binds through it while `name` still
+    // binds through `app_app_groups` -- two independent ports of the same
+    // node, ordered after both gates.
+    assert_eq!(
+        node("app_app_attest").tool.as_str(),
+        "appstore.bundle_id_capability.gate"
+    );
+    assert_eq!(literal("app_app_attest", "capability"), "APP_ATTEST");
+    assert_eq!(
+        node("app_app_attest")
+            .with
+            .get(&PortName::parse("identifier").unwrap()),
+        Some(&from("app_id", "identifier")),
+        "app_app_attest must read from app_id directly, not chained through app_app_groups"
+    );
+    assert_eq!(
+        node("app_profile")
+            .with
+            .get(&PortName::parse("identifier").unwrap()),
+        Some(&from("app_app_attest", "identifier")),
+        "app_profile.identifier must bind through app_app_attest"
+    );
+    assert_eq!(
+        node("app_profile")
+            .with
+            .get(&PortName::parse("name").unwrap()),
+        Some(&from("app_app_groups", "identifier")),
+        "app_profile.name must still bind through app_app_groups"
+    );
+    // The NSE and widgets profiles are unaffected: no App Attest gate
+    // applies to either extension.
+    for (profile, gate) in [
+        ("nse_profile", "nse_app_groups"),
+        ("widgets_profile", "widgets_app_groups"),
+    ] {
+        assert_eq!(
+            node(profile)
+                .with
+                .get(&PortName::parse("identifier").unwrap()),
+            Some(&from(gate, "identifier")),
+            "`{profile}.identifier` must still bind through `{gate}` alone"
+        );
+    }
 
     // App Store Connect: the real base config, the real secret names.
     for (name, tool, secret) in [
@@ -754,10 +901,6 @@ fn the_document_reads_the_real_layout_by_name() {
     );
     assert_eq!(literal("gh_token_secret", "name"), "GH_CLONE_TOKEN");
     assert_eq!(node("gh_token").tool.as_str(), "github.token.parse");
-    let from = |node: &str, port: &str| Binding::Step {
-        node: NodeName::parse(node).unwrap(),
-        port: PortName::parse(port).unwrap(),
-    };
     assert_eq!(
         node("gh_token")
             .with

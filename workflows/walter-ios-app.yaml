@@ -14,6 +14,20 @@
 # `.stickers`). A dry run instead passes three throwaway identifiers under
 # `com.willikins.probe.delete-me.<unique>`.
 #
+# **Platform is the literal `UNIVERSAL` (2026-09-30 addendum, fact 1), not
+# a caller input.** The first real apply of this document created all
+# three identifiers as `IOS` (the document's own former default); after
+# the operator restored the app record and configured App Groups in the
+# portal, all three read `platform: UNIVERSAL` -- and so do all 21 of the
+# operator's other bundle ids on this account. A live re-run then refused
+# at plan time (`app_id.platform`: the resource is ours, but its current
+# value does not match what was requested, and this tool will not change
+# it -- `platform` is immutable through the API, per
+# `AppleBundleIdPlatform`'s own doc). So `IOS` was a permanent trap on
+# this account: every `*_id.platform` below is now the bare literal
+# `UNIVERSAL`, and `platform` is no longer a declared input at all --
+# there is nothing left for a caller to override.
+#
 # What this document CANNOT automate, per the pre-flight checklist, becomes
 # either an *observed gate* (this document reads the real state and blocks
 # until it is true) or an *acknowledgement gate* (no API exposes the state,
@@ -31,18 +45,32 @@
 #   - M2, `APP_GROUPS` enabled and the group assigned on all three
 #     identifiers: `app_app_groups` / `nse_app_groups` / `widgets_app_groups`,
 #     one `appstore.app_group.gate` per identifier. Each passes `identifier`
-#     through as its own output, and each profile node below binds
-#     `identifier` from *its own* gate's output, never from the
-#     registration node directly -- that data edge is what orders the
-#     profile after the gate. The API only shows the flag *enabled*, never
-#     the group actually *assigned* (pre-flight row 14), so this gate can
-#     pass before the operator finishes the portal-side assignment; a
-#     profile minted at that point is one Apple will invalidate, and the
-#     *next* run of this same document replaces it
-#     (`appstore.profile.ensure`'s replace-when-INVALID, operator decision
-#     1). So the flow is: run this document; assign the app group by hand
-#     (M2); run the SAME document again, which replaces the profiles Apple
-#     invalidated.
+#     through as its own output, and each profile node below binds `name`
+#     from *its own* gate's output, never from the registration node
+#     directly -- that data edge is what orders the profile after the
+#     gate. The API only shows the flag *enabled*, never the group
+#     actually *assigned* (pre-flight row 14), so this gate can pass
+#     before the operator finishes the portal-side assignment; a profile
+#     minted at that point is one Apple will invalidate, and the *next*
+#     run of this same document replaces it (`appstore.profile.ensure`'s
+#     replace-when-INVALID, operator decision 1). So the flow is: run
+#     this document; assign the app group by hand (M2); run the SAME
+#     document again, which replaces the profiles Apple invalidated.
+#   - M2b (2026-09-30 addendum, the App Attest gate task), the host
+#     identifier's App Attest capability: `app_app_attest`, one
+#     `appstore.bundle_id_capability.gate` over `APP_ATTEST`, host
+#     identifier only -- Apple's own docs say `generateKey` fails from an
+#     app extension regardless of `isSupported`, so the NSE and widgets
+#     extensions get no such gate. The API can only ever *read* this
+#     capability, never write it (a live `POST` on either
+#     `APP_ATTEST`/`APP_ATTEST_OPT_IN` answers `409
+#     ENTITY_ERROR.ATTRIBUTE.TYPE`) -- so, exactly like M2, this is a pure
+#     observed gate the operator satisfies by hand in the portal
+#     (Configure) or Xcode's Signing & Capabilities. `app_profile` (the
+#     host app's profile only) binds `identifier` from this gate's own
+#     output, so it is held back until App Attest is confirmed enabled,
+#     the same "gate passes through the key it checked" shape M2 uses,
+#     applied through a second, independent port of the same node.
 #   - M3 (repo files), M5 (an APNs key), M6 (the CI Doppler grant), M7
 #     (reseeding the Buildkite pipeline's stored bootstrap): four
 #     `operator.acknowledge` leaves, `m3_repo_files_done` /
@@ -153,13 +181,38 @@
 # `WILLIKINS_GITHUB_TOKEN` nor `WILLIKINS_BUILDKITE_TOKEN` -- only
 # `WILLIKINS_DOPPLER_TOKEN` (`serve` and `apply --plan-id --live` are
 # untouched by L1 and still require both unconditionally at startup).**
+#
+# **T4 (2026-09-30, the App Attest gate task): platform is now the literal
+# `UNIVERSAL` (fact 1, above), and the host app's profile is held back by
+# a second gate, `app_app_attest`.** The operator asked for App Attest
+# "enabled on apps by default"; the API can only read the capability, not
+# write it (fact 2 -- a live `POST` of `APP_ATTEST` or
+# `APP_ATTEST_OPT_IN` on a throwaway identifier answers `409
+# ENTITY_ERROR.ATTRIBUTE.TYPE`, and neither is in Apple's own 28-member
+# `CapabilityType` enum at all), so the honest answer is a gate exactly
+# like M2's own `app_group.gate`: this document requires App Attest on
+# the host identifier, observes it through the new, generalized
+# `appstore.bundle_id_capability.gate` (which admits any
+# `AppleObservableCapabilityType`, not only `APP_GROUPS`), and blocks with
+# a readable need and how when it is missing. Enabling a capability
+# changes the App ID and invalidates profiles minted before it
+# (`appstore.profile.ensure`'s own replace-when-INVALID heals this on the
+# next run, exactly as M2 already relies on), so the gate holds back the
+# host app's profile -- and so its Doppler write, `app_profile_to_doppler`
+# -- the same way M2's own gate does. The NSE and widgets extensions are
+# unaffected: Apple's own docs state `generateKey` fails when called from
+# an app extension regardless of `isSupported`, so App Attest is never
+# requested on either extension identifier, and their profiles keep
+# binding through their own `app_group.gate` alone, unchanged by this
+# task. `app_app_attest` reads from `app_id.identifier` directly (not
+# chained through `app_app_groups`), so a fresh run reports both gates'
+# needs together rather than one only after the other is already met.
 name: walter-ios-app
 description: Provision Walter (app, NSE, widgets) end to end -- bundle identifiers, capabilities, signing profiles, the monorepo reference, Doppler, and the Buildkite pipeline -- reporting every manual step as a gate.
 inputs:
   app_identifier: { type: AppleBundleIdentifier, description: "The app's bundle identifier, e.g. com.bande-a-bonnot.walter -- no default (trust boundary 2)" }
   nse_identifier: { type: AppleBundleIdentifier, description: "The notification service extension's bundle identifier, e.g. com.bande-a-bonnot.walter.nse" }
   widgets_identifier: { type: AppleBundleIdentifier, description: "The widgets extension's bundle identifier, e.g. com.bande-a-bonnot.walter.widgets" }
-  platform: { type: AppleBundleIdPlatform, default: IOS }
   data_protection: { type: AppleCapabilitySetting, default: "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH", description: "Decision (e): the NSE and HealthKit background delivery both run while the device may be locked, so anything stricter than iOS's own default needs code-level exceptions first." }
   certificate_type: { type: AppleCertificateType, description: "DISTRIBUTION or IOS_DISTRIBUTION" }
   serial_number: { type: AppleCertificateSerial, description: "The distribution certificate's serial number every profile below is signed with" }
@@ -224,7 +277,7 @@ steps:
       key: ${{ steps.key.value }}
       identifier: ${{ inputs.app_identifier }}
       name: "Walter"
-      platform: ${{ inputs.platform }}
+      platform: UNIVERSAL
   nse_id:
     tool: appstore.bundle_id.ensure
     with:
@@ -233,7 +286,7 @@ steps:
       key: ${{ steps.key.value }}
       identifier: ${{ inputs.nse_identifier }}
       name: "Walter - NSE"
-      platform: ${{ inputs.platform }}
+      platform: UNIVERSAL
   widgets_id:
     tool: appstore.bundle_id.ensure
     with:
@@ -242,7 +295,7 @@ steps:
       key: ${{ steps.key.value }}
       identifier: ${{ inputs.widgets_identifier }}
       name: "Walter - Widgets"
-      platform: ${{ inputs.platform }}
+      platform: UNIVERSAL
 
   # --- Host-identifier-only API capabilities (decision (c)): each binds
   # `identifier` from `steps.app_id.identifier`, never from the input, so
@@ -309,6 +362,31 @@ steps:
       key: ${{ steps.key.value }}
       identifier: ${{ steps.widgets_id.identifier }}
 
+  # --- The App Attest gate (2026-09-30 addendum, fact 2): App Attest
+  # works in the host app and in watchOS/action/SSO extensions only --
+  # Apple's own docs state `generateKey` fails when called from an app
+  # extension regardless of `isSupported` -- so this gate runs on the
+  # host identifier alone; the NSE and widgets extensions get no gate and
+  # no App Attest capability at all. The API can only ever show this
+  # capability *enabled* (fact 2: both a live `POST` attempt and a bare
+  # OpenAPI declaration refuse it), never turn it on, so this is a pure
+  # observed gate exactly like app_app_groups above -- willikins reports
+  # the need, the operator enables App Attest for the host identifier in
+  # the portal (Configure) or Xcode's Signing & Capabilities, and the
+  # next run of this same document proceeds. Reads from `app_id`
+  # directly (not chained through `app_app_groups`) so both gates are
+  # reported together on the very first run the operator sees, rather
+  # than the App Attest need surfacing only after App Groups is already
+  # done -- one portal visit covers both, not two runs apart. ---
+  app_app_attest:
+    tool: appstore.bundle_id_capability.gate
+    with:
+      issuer_id: ${{ steps.issuer_id.value }}
+      key_id: ${{ steps.key_id.value }}
+      key: ${{ steps.key.value }}
+      identifier: ${{ steps.app_id.identifier }}
+      capability: APP_ATTEST
+
   # --- The distribution certificate every profile below is signed with
   # (never a literal id -- milestone 3c's own convention) ---
   certificate:
@@ -324,14 +402,22 @@ steps:
   # (decision (h)'s "bundle id everywhere" convention, through the
   # AppleBundleIdentifier => AppleProfileName conversion), each behind its
   # own app-group gate above (operator decision 1: appstore.profile.ensure
-  # replaces a profile Apple invalidated). ---
+  # replaces a profile Apple invalidated). The host profile additionally
+  # binds `identifier` through `app_app_attest` rather than
+  # `app_app_groups` -- both gates pass the same identifier through
+  # unchanged (decision (j), point 2, "a gate passes through the key it
+  # checked"), so binding `identifier` from one and `name` from the other
+  # still names one value, but the data edge now orders `app_profile`
+  # after *both* gates: either one blocked holds the host profile (and
+  # its Doppler write below) back. The NSE and widgets profiles are
+  # unaffected -- no App Attest gate applies to an extension. ---
   app_profile:
     tool: appstore.profile.ensure
     with:
       issuer_id: ${{ steps.issuer_id.value }}
       key_id: ${{ steps.key_id.value }}
       key: ${{ steps.key.value }}
-      identifier: ${{ steps.app_app_groups.identifier }}
+      identifier: ${{ steps.app_app_attest.identifier }}
       name: ${{ steps.app_app_groups.identifier }}
       profile_type: IOS_APP_STORE
       certificate: ${{ steps.certificate.certificate }}
