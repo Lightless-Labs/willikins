@@ -208,9 +208,14 @@ steps:
     with:
       value: ${{ steps.key_decoded.value }}
 
-  # --- The three bundle identifiers (decision (h): names bound from the
-  # identifiers through the AppleBundleIdentifier => AppleBundleIdName
-  # conversion, "the operator's bundle-id-everywhere habit") ---
+  # --- The three bundle identifiers. `name` is a plain literal, never the
+  # identifier: milestone 3e task T3f found live that Apple refuses a dot,
+  # an apostrophe, or an ampersand in a bundle id's `name` attribute (409
+  # ENTITY_ERROR.ATTRIBUTE.INVALID), so the identifier => name conversion
+  # decision (h) registered is gone (it was never total against Apple's
+  # real rule) and every bundle id name in this document is now its own
+  # literal, following the account's existing "Foo - Bar" naming habit
+  # (the coordinator's proposal; the operator may still change these). ---
   app_id:
     tool: appstore.bundle_id.ensure
     with:
@@ -218,7 +223,7 @@ steps:
       key_id: ${{ steps.key_id.value }}
       key: ${{ steps.key.value }}
       identifier: ${{ inputs.app_identifier }}
-      name: ${{ inputs.app_identifier }}
+      name: "Walter"
       platform: ${{ inputs.platform }}
   nse_id:
     tool: appstore.bundle_id.ensure
@@ -227,7 +232,7 @@ steps:
       key_id: ${{ steps.key_id.value }}
       key: ${{ steps.key.value }}
       identifier: ${{ inputs.nse_identifier }}
-      name: ${{ inputs.nse_identifier }}
+      name: "Walter - NSE"
       platform: ${{ inputs.platform }}
   widgets_id:
     tool: appstore.bundle_id.ensure
@@ -236,7 +241,7 @@ steps:
       key_id: ${{ steps.key_id.value }}
       key: ${{ steps.key.value }}
       identifier: ${{ inputs.widgets_identifier }}
-      name: ${{ inputs.widgets_identifier }}
+      name: "Walter - Widgets"
       platform: ${{ inputs.platform }}
 
   # --- Host-identifier-only API capabilities (decision (c)): each binds
