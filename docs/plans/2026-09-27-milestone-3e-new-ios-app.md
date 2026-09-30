@@ -2804,3 +2804,85 @@ existing tests and one (M5) killed only by the new test.** Full record:
   `cargo test -p willikins-providers-buildkite --test cluster_get_mock --test pipeline_ensure_mock`;
   `cargo test -p willikins-dsl --test acceptance`; `cargo test -p willikins-core --test
   secret_literal_guard`. The full workspace gate was not run (host rule; the coordinator's).
+
+**Addendum:** 2026-09-30 (T3f, Apple's real bundle-id name rule) -- **`AppleBundleIdName` tightened
+to what a live probe actually witnessed; the `AppleBundleIdentifier => AppleBundleIdName` conversion
+T3b registered is removed as never total; Walter's three bundle ids now name themselves with plain
+literals.** Four commits (`f71e405`, `7a87b4a`, `0f15efd`, `4de0b09`).
+
+- **Trigger.** The first real apply of Walter (2026-09-30) found `POST /v1/bundleIds` for the app
+  identifier answering `409 ENTITY_ERROR.ATTRIBUTE.INVALID` when `name` was bound to the dotted
+  identifier through T3b's conversion -- nothing was created (bundle id count unchanged before and
+  after), and every later node in the graph read `NotRun`. Reproduced by the coordinator on
+  throwaway identifiers: a `name` identical to its own dotted identifier is refused; a plain
+  space-separated name is accepted. `AppleBundleIdName`'s grammar was this crate's own guess (any
+  non-control, non-invisible character), so `check` passed a value Apple's own API refuses, and the
+  conversion registered against `AppleBundleIdentifier`'s grammar (which admits a dot) was never
+  total against Apple's real rule -- exactly the shape CLAUDE.md's conversions invariant forbids.
+- **Apple's documentation, fetched verbatim 2026-09-30.** The ASC OpenAPI description still declares
+  `name` as a bare `{"type": "string"}` with no `pattern` and no `maxLength`
+  (`https://developer.apple.com/documentation/appstoreconnectapi/bundleidcreaterequest/data-data.dictionary/attributes-data.dictionary.md`),
+  matching `docs/research/2026-09-16-app-store-connect.md` section 2's earlier finding. The portal
+  help page for registering an App ID says only "Enter a name or description for the App ID in the
+  Description field" (`https://developer.apple.com/help/account/identifiers/register-an-app-id/`) --
+  no character rule at all. The documentation leaves this entirely open; only a live probe could
+  settle it.
+- **Six live probes, one run, on the operator's real account (never Apple's -- there is no
+  sandbox).** Each a raw `POST /v1/bundleIds` on its own throwaway
+  `com.willikins.probe.delete-me.<pid>-<time>-<n>` identifier, deleted by its own returned id before
+  the next probe ran. Bundle id count: 21 before, 21 after.
+
+  | case | name shape | result |
+  |------|------------|--------|
+  | dot (plain name, not equal to its identifier) | `Probe.Dot.Name` | 409 `ENTITY_ERROR.ATTRIBUTE.INVALID` "An attribute in the provided entity has invalid value" |
+  | hyphen surrounded by spaces | `Probe - Hyphen` | 201 |
+  | apostrophe | `Probe's Apostrophe` | 409 `ENTITY_ERROR.ATTRIBUTE.INVALID` (same title) |
+  | ampersand | `Probe & Ampersand` | 409 `ENTITY_ERROR.ATTRIBUTE.INVALID` (same title) |
+  | digit-leading | `1Probe Digit` | 201 |
+  | name equal to its own dotted identifier | `com.willikins.probe.delete-me.<n>` | 409 `ENTITY_ERROR.ATTRIBUTE.INVALID` (same title) |
+
+  The dot case was deliberately split from the "name equals identifier" case: both refuse
+  identically, which confirms the dot character itself is refused rather than only that specific
+  shape. No other punctuation, no non-ASCII letter, and no name over ~30 characters was probed;
+  `AppleBundleIdName`'s grammar admits only what was witnessed (ASCII letters, digits, space,
+  hyphen) and refuses everything else, per the witness asymmetry (admitting a character Apple
+  refuses is the live-breaking direction; refusing one Apple would have accepted is merely
+  conservative and can be loosened later on its own probe).
+- **Landed, test-first, in commit order** (each commit's tree checked or tested green before the
+  next): the probe test (`crates/willikins-providers-appstore/tests/live_write_cycle.rs`,
+  `appstore_live_bundle_id_name_probe`, gated exactly like its siblings: `live-tests` feature,
+  `#[ignore]`, `WILLIKINS_LIVE_TESTS=1`) and its live run above; Walter's three `name` ports
+  (`app_id`, `nse_id`, `widgets_id`) rebound from `${{ inputs.*_identifier }}` to the literals
+  `"Walter"` / `"Walter - NSE"` / `"Walter - Widgets"` (the coordinator's proposal, following the
+  account's existing "Foo - Bar" naming habit -- the operator may still change these; profile names
+  are untouched, since Apple accepts dots there); the conversion row, its `From` impl, its
+  containment-proof doc comment, and its proptest module removed from
+  `crates/willikins-types/src/appstore.rs` and `conversion_rows()`, with a new negative fixture
+  (`workflows/fixtures/appstore-bundle-id-identifier-into-name.yaml`) and acceptance test
+  (`appstore_bundle_id_identifier_into_name_is_rejected` in
+  `crates/willikins-providers-appstore/tests/bundle_id_documents.rs`) pinning that `check` refuses an
+  `AppleBundleIdentifier` bound to the `name` port exactly as before the row ever existed; then
+  `AppleBundleIdName::parse` tightened to the allow-list above (subsuming the old control- and
+  invisible/bidi-character checks, since every admitted character is already free of both), with one
+  unit test per probed case citing the probe date, a new unit test pinning that a dotted identifier
+  is no longer a valid name, and the published JSON schema gaining the matching `pattern`.
+- **Snapshots moved exactly as predicted.** `characterization_of_every_document`: the new fixture's
+  entry, plus Walter's three `app_id`/`nse_id`/`widgets_id` `.name` edges losing their `->
+  AppleBundleIdName` conversion arrow (no `PLAN` line moved -- the characterization's synthesized
+  inputs make Walter's `plan` fail at its very first Doppler read before reaching any bundle id node,
+  unaffected by this task). `willikins-types`' own catalog snapshot: `AppleBundleIdName`'s schema
+  entry gaining `"pattern"`. Nothing else moved in either snapshot.
+- **Scoped gates green throughout:** `cargo fmt --all --check`; `cargo clippy -p
+  willikins-providers-appstore --features live-tests --all-targets -j 2 -- -D warnings` and `-p
+  willikins-types --all-targets -j 2 -- -D warnings`; `cargo test -p willikins-types -p
+  willikins-providers-appstore -p willikins-providers-fake -p willikins-cli -p willikins-dsl -p
+  willikins-server -j 2` (every suite green, including `walter_document` and
+  `characterization_of_every_document` after accepting their snapshots); `cargo check -p
+  willikins-types`. The full workspace gate was not run (host rule; the coordinator's).
+- **Not done here, left for the coordinator/operator:** the three literal names
+  (`"Walter"`/`"Walter - NSE"`/`"Walter - Widgets"`) are a proposal, not a decision -- confirm with
+  the operator before a real apply. `AppleBundleIdName`'s allow-list is conservative by
+  construction: a future name the operator wants (e.g. a non-ASCII letter) needs its own probe
+  before the grammar admits it, not an inference from this addendum. No live test touched an
+  existing identifier, app, certificate, profile, or device; the six throwaway identifiers this
+  task's probe created are all deleted, and the account's bundle id count is unchanged (21).
