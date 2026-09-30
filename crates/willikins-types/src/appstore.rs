@@ -449,13 +449,46 @@ const BUNDLE_ID_NAME_MAX_LEN: usize = 255;
 /// undetectable" describes. `appstore.bundle_id.ensure`'s own module doc
 /// repeats this.
 ///
-/// Hand-written, mirroring [`crate::BuildkiteClusterName`] exactly: 1 to
-/// 255 characters (Apple states no bound; this is this crate's own
-/// conservative choice), no control character and none of the invisible
-/// or bidirectional characters [`is_invisible_or_bidi_control`] rejects
-/// -- a `name` reaches a `PATCH` body and a rendered output alike.
+/// **The character rule, unlike the rest of this type, is not this
+/// crate's own guess.** Apple's `OpenAPI` description declares `name` as a
+/// bare `{"type": "string"}` with no `pattern` and no `maxLength` (fetched
+/// verbatim 2026-09-30:
+/// `https://developer.apple.com/documentation/appstoreconnectapi/bundleidcreaterequest/data-data.dictionary/attributes-data.dictionary.md`),
+/// and the portal help page says only "Enter a name or description for
+/// the App ID in the Description field" (fetched verbatim 2026-09-30:
+/// `https://developer.apple.com/help/account/identifiers/register-an-app-id/`)
+/// -- no character rule at all. Milestone 3e task T3f (2026-09-30) settled
+/// it with six live writes against the operator's real account, each a
+/// throwaway `com.willikins.probe.delete-me.*` identifier created and
+/// deleted in the same guarded run (counts unchanged, 21 before and
+/// after): a dot, an apostrophe, and an ampersand each answered 409
+/// `ENTITY_ERROR.ATTRIBUTE.INVALID` ("An attribute in the provided entity
+/// has invalid value") -- including a name identical to its own dotted
+/// identifier, confirming the dot itself is refused, not merely that
+/// shape -- while a hyphen surrounded by spaces and a digit-leading name
+/// both answered 201. Per the witness asymmetry (admitting a character
+/// Apple refuses is the live-breaking direction; refusing one Apple would
+/// have accepted is merely conservative), the grammar below admits only
+/// what a probe witnessed: ASCII letters, digits, spaces, and hyphens
+/// (`is_bundle_id_name_char`) -- refusing a dot, an apostrophe, and an
+/// ampersand by the same probes, and any other unwitnessed character.
+/// Every character this admits is also control-character- and
+/// invisible/bidi-free, so those two checks
+/// ([`is_invisible_or_bidi_control`]) are subsumed rather than dropped.
+///
+/// Still hand-written, still 1 to 255 characters (Apple states no bound;
+/// this crate's own conservative choice, unchanged) -- a `name` reaches a
+/// `PATCH` body and a rendered output alike.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AppleBundleIdName(String);
+
+/// Whether `c` is one of the characters milestone 3e task T3f's live
+/// probe witnessed App Store Connect accept in a bundle id's `name`: an
+/// ASCII letter, an ASCII digit, a space, or a hyphen. See
+/// [`AppleBundleIdName`]'s own doc for the probe itself.
+fn is_bundle_id_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == ' ' || c == '-'
+}
 
 impl AppleBundleIdName {
     /// The name text.
@@ -501,17 +534,12 @@ impl DomainType for AppleBundleIdName {
                 format!("is {len} characters, the limit is {BUNDLE_ID_NAME_MAX_LEN}"),
             ));
         }
-        if let Some(c) = input.chars().find(|c| c.is_control()) {
-            return Err(ParseError::new(
-                Self::TYPE_NAME,
-                format!("must not contain control characters (found {c:?})"),
-            ));
-        }
-        if let Some(c) = input.chars().find(|&c| is_invisible_or_bidi_control(c)) {
+        if let Some(c) = input.chars().find(|&c| !is_bundle_id_name_char(c)) {
             return Err(ParseError::new(
                 Self::TYPE_NAME,
                 format!(
-                    "must not contain invisible or bidirectional control character (found {c:?})"
+                    "must contain only letters, digits, spaces, and hyphens -- Apple's API \
+                     refuses others, such as a dot, an apostrophe, or an ampersand (found {c:?})"
                 ),
             ));
         }
@@ -550,6 +578,7 @@ impl schemars::JsonSchema for AppleBundleIdName {
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
+            "pattern": "^(?:[A-Za-z0-9 -]+)$",
             "minLength": 1,
             "maxLength": BUNDLE_ID_NAME_MAX_LEN,
             "description": "A bundle id's human-written `name` attribute.",
@@ -1208,6 +1237,62 @@ mod tests {
     #[test]
     fn bundle_id_name_refuses_an_invisible_character() {
         assert!(AppleBundleIdName::parse("evil\u{200b}name").is_err());
+    }
+
+    // Milestone 3e task T3f, 2026-09-30: six live probes against the
+    // operator's real App Store Connect account, one raw `POST
+    // /v1/bundleIds` per case, each on a throwaway identifier created and
+    // deleted in the same guarded run (bundle id count unchanged, 21
+    // before and after). See `AppleBundleIdName`'s own doc for the
+    // sources and the full probe write-up.
+
+    /// Refused live: 409 `ENTITY_ERROR.ATTRIBUTE.INVALID`, on a name
+    /// identical to its own dotted identifier -- confirming the dot
+    /// character itself is refused, not merely a name shaped like an
+    /// identifier (a second live probe on a plain name containing a dot,
+    /// not equal to any identifier, answered the identical status/code).
+    #[test]
+    fn bundle_id_name_refuses_a_dot_probed_live_2026_09_30() {
+        assert!(AppleBundleIdName::parse("Probe.Dot.Name").is_err());
+    }
+
+    /// Refused live: 409 `ENTITY_ERROR.ATTRIBUTE.INVALID`.
+    #[test]
+    fn bundle_id_name_refuses_an_apostrophe_probed_live_2026_09_30() {
+        assert!(AppleBundleIdName::parse("Probe's Apostrophe").is_err());
+    }
+
+    /// Refused live: 409 `ENTITY_ERROR.ATTRIBUTE.INVALID`.
+    #[test]
+    fn bundle_id_name_refuses_an_ampersand_probed_live_2026_09_30() {
+        assert!(AppleBundleIdName::parse("Probe & Ampersand").is_err());
+    }
+
+    /// Accepted live: 201, following the account's own "Foo - Bar" naming
+    /// habit.
+    #[test]
+    fn bundle_id_name_accepts_a_hyphen_surrounded_by_spaces_probed_live_2026_09_30() {
+        let name = AppleBundleIdName::parse("Probe - Hyphen").unwrap();
+        assert_eq!(name.as_str(), "Probe - Hyphen");
+    }
+
+    /// Accepted live: 201.
+    #[test]
+    fn bundle_id_name_accepts_a_digit_leading_name_probed_live_2026_09_30() {
+        let name = AppleBundleIdName::parse("1Probe Digit").unwrap();
+        assert_eq!(name.as_str(), "1Probe Digit");
+    }
+
+    /// Not itself a live probe case, but the fact the whole tightening
+    /// rests on: a bundle identifier's own grammar admits a dot
+    /// (`AppleBundleIdentifier::parse` accepts `.` as a segment
+    /// separator), so the identifier-to-name conversion this milestone
+    /// removes was never total against Apple's real rule above.
+    #[test]
+    fn a_dotted_bundle_identifier_is_no_longer_a_valid_bundle_id_name() {
+        let identifier = AppleBundleIdentifier::parse("com.example.MyApp")
+            .expect("a dotted identifier is valid AppleBundleIdentifier grammar");
+        assert!(AppleBundleIdName::parse(identifier.as_str()).is_err());
     }
 
     #[test]

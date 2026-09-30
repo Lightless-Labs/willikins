@@ -601,7 +601,8 @@ expression: redacted
         "third-thoughts"
       ],
       "maxLength": 255,
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "^(?:[A-Za-z0-9 -]+)$"
     }
   },
   {
