@@ -46,6 +46,18 @@ secret-into-repo-file.yaml" under E2's task row:
    `cargo test -p willikins-cli --bin willikins`, `cargo test -p willikins-server --test mcp_server`, and
    `cargo test -p willikins-dsl --test acceptance` (characterization snapshot confirmed byte-identical, since
    no document yet declares either new type), all green.
+**Addendum:** 2026-09-30 (adversarial pass, engine and types) — an independent attack on E1 and E2,
+recorded in `docs/research/2026-09-30-m3g-adversarial-pass-engine-and-types.md`. Eight mutations: five
+were killed by existing tests (the skip scan, apply re-resolution and `Unknown` propagation of list
+elements, the list-element `RepoFile` literal refusal, list-element taint). Three survived, and each is
+now killed by a new test: `DisallowedInputType` narrowed to scalars (a caller-supplied `list<RepoFile>`
+then checked clean on `github.scaffold.ensure.files`), `TemplateValue`'s class widened by `#`, and a
+compiling, total `Text => TemplateSource` conversion row (now: no row may target `TemplateSource` or
+`RepoFile`). No defect in the shipped code; every existing document's characterization is
+byte-identical. For later tasks: `RepoFileLiteral` carries no element index; `mark_blocked`'s
+`awaiting_inputs` ignores inputs inside a list (unreachable today); the `TemplateValue` grammar protects
+quoting, not placement, so T1/W1 must keep every placeholder out of command, path and unquoted-YAML
+positions; W1 should pin that `walter_files.files` is known at plan, since approval is the diff review.
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Bande-a-Bonnot/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
