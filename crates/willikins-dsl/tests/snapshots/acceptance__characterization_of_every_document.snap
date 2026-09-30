@@ -201,6 +201,10 @@ fingerprint: [{"name":"independent","instance":null,"action":"compute","outputs"
 CHECK ERRORS:
 - kind=AcknowledgementLiteral display=node `m7_bootstrap`, port `acknowledged`: a literal cannot supply an operator acknowledgement json={"kind":"AcknowledgementLiteral","node":"m7_bootstrap","port":"acknowledged"}
 
+=== workflows/fixtures/appstore-bundle-id-identifier-into-name.yaml ===
+CHECK ERRORS:
+- kind=TypeMismatch display=node `bundle_id`, port `name`: expected AppleBundleIdName, found `AppleBundleIdentifier` json={"kind":"TypeMismatch","node":"bundle_id","port":"name","expected":{"kind":"exact","type":"AppleBundleIdName"},"found":"AppleBundleIdentifier"}
+
 === workflows/fixtures/appstore-bundle-id-text-into-identifier.yaml ===
 CHECK ERRORS:
 - kind=TypeMismatch display=node `bundle_id`, port `identifier`: expected AppleBundleIdentifier, found `Text` json={"kind":"TypeMismatch","node":"bundle_id","port":"identifier","expected":{"kind":"exact","type":"AppleBundleIdentifier"},"found":"Text"}
@@ -602,19 +606,19 @@ app_id.issuer_id: AppleIssuerId
 app_id.key_id: AppleKeyId
 app_id.key: AppleSigningKey
 app_id.identifier: AppleBundleIdentifier
-app_id.name: AppleBundleIdentifier -> AppleBundleIdName
+app_id.name: AppleBundleIdName
 app_id.platform: AppleBundleIdPlatform
 nse_id.issuer_id: AppleIssuerId
 nse_id.key_id: AppleKeyId
 nse_id.key: AppleSigningKey
 nse_id.identifier: AppleBundleIdentifier
-nse_id.name: AppleBundleIdentifier -> AppleBundleIdName
+nse_id.name: AppleBundleIdName
 nse_id.platform: AppleBundleIdPlatform
 widgets_id.issuer_id: AppleIssuerId
 widgets_id.key_id: AppleKeyId
 widgets_id.key: AppleSigningKey
 widgets_id.identifier: AppleBundleIdentifier
-widgets_id.name: AppleBundleIdentifier -> AppleBundleIdName
+widgets_id.name: AppleBundleIdName
 widgets_id.platform: AppleBundleIdPlatform
 healthkit.issuer_id: AppleIssuerId
 healthkit.key_id: AppleKeyId

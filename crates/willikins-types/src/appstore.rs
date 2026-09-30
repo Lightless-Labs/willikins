@@ -560,31 +560,6 @@ impl schemars::JsonSchema for AppleBundleIdName {
 
 crate::impl_domain_object_non_secret!(AppleBundleIdName);
 
-/// Every bundle identifier is a valid bundle-id `name`, byte for byte --
-/// `AppleBundleIdName::parse`'s four refusals (empty, over 255 characters,
-/// a control character, an invisible or bidirectional character) are
-/// exactly [`AppleProfileName::parse`]'s, and the proof on
-/// `From<AppleBundleIdentifier> for AppleProfileName` above applies
-/// unchanged with the target renamed. Milestone 3e
-/// (`docs/plans/2026-09-27-milestone-3e-new-ios-app.md`, task T3b)
-/// registers this as a conversion so a document may bind an
-/// [`AppleBundleIdentifier`] straight to a bundle id's own `name` port,
-/// or any other [`AppleBundleIdName`] port, with no parse step in
-/// between.
-///
-/// The reverse is not a fact, for the identical reason the profile-name
-/// reverse is not: a string with a space is a valid `AppleBundleIdName`
-/// and not a valid [`AppleBundleIdentifier`]. Pinned at unit level by
-/// `a_bundle_id_name_with_a_space_is_not_a_bundle_identifier` below; no
-/// document-level fixture for this one, since the milestone's acceptance
-/// test (acceptance 7) names only the `Text` reverse, pinned separately by
-/// `appstore-bundle-id-text-into-identifier.yaml`.
-impl From<AppleBundleIdentifier> for AppleBundleIdName {
-    fn from(identifier: AppleBundleIdentifier) -> Self {
-        Self(identifier.as_str().to_owned())
-    }
-}
-
 /// A bundle id's `platform`: a closed three-member enum
 /// (`BundleIdPlatform` in Apple's own schema — research note, section
 /// 2). `UNIVERSAL` is Apple's own guidance for a single App ID shared
@@ -1647,102 +1622,6 @@ mod tests {
         fn a_profile_name_with_a_space_is_not_a_bundle_identifier() {
             let name =
                 AppleProfileName::parse("has space").expect("a space is a valid profile name");
-            assert_eq!(name.as_str(), "has space");
-            assert!(AppleBundleIdentifier::parse("has space").is_err());
-        }
-    }
-
-    // -------------------------------------------------------------
-    // `AppleBundleIdentifier => AppleBundleIdName` (milestone 3e, task
-    // T3b): the same grammar-containment fact as the profile-name row
-    // above, proved the same three ways.
-    // -------------------------------------------------------------
-
-    mod bundle_identifier_to_bundle_id_name {
-        use proptest::prelude::*;
-
-        use super::*;
-
-        proptest! {
-            /// Strategy 1: generate directly from the bundle-identifier
-            /// grammar, discarding any candidate over 255 characters.
-            #[test]
-            fn every_bundle_identifier_is_a_valid_bundle_id_name(
-                raw in "[A-Za-z0-9]{1,8}([.-][A-Za-z0-9]{1,8}){0,40}"
-            ) {
-                prop_assume!(raw.chars().count() <= 255);
-                let identifier = AppleBundleIdentifier::parse(&raw)
-                    .unwrap_or_else(|err| panic!("{raw:?} must be a valid AppleBundleIdentifier: {err}"));
-                let bundle_id_name = AppleBundleIdName::parse(identifier.as_str())
-                    .unwrap_or_else(|err| panic!("{raw:?} must also be a valid AppleBundleIdName: {err}"));
-                let converted = AppleBundleIdName::from(identifier.clone());
-                prop_assert_eq!(&converted, &bundle_id_name);
-                prop_assert_eq!(converted.as_str(), identifier.as_str());
-            }
-
-            /// Strategy 2: the implication stated directly over arbitrary
-            /// strings, with no grammar-shaped generator to bias coverage.
-            #[test]
-            fn every_string_a_bundle_identifier_accepts_a_bundle_id_name_also_accepts(s in ".*") {
-                if let Ok(identifier) = AppleBundleIdentifier::parse(&s) {
-                    let bundle_id_name = AppleBundleIdName::parse(identifier.as_str())
-                        .unwrap_or_else(|err| panic!("{s:?} parsed as AppleBundleIdentifier but not AppleBundleIdName: {err}"));
-                    prop_assert_eq!(bundle_id_name.as_str(), identifier.as_str());
-                }
-            }
-        }
-
-        proptest! {
-            /// Strategy 3: the identifier's own alphabet with no
-            /// grammar-shaped structure and lengths from 1 to 300, so
-            /// candidates straddle the 255 bound and include every near
-            /// miss.
-            #[test]
-            fn over_the_identifier_alphabet_every_identifier_converts_byte_for_byte(
-                raw in "[A-Za-z0-9.-]{1,300}"
-            ) {
-                if let Ok(identifier) = AppleBundleIdentifier::parse(&raw) {
-                    prop_assert!(raw.chars().count() <= 255);
-                    let converted = AppleBundleIdName::from(identifier);
-                    prop_assert_eq!(converted.as_str(), raw.as_str());
-                    prop_assert_eq!(
-                        AppleBundleIdName::parse(&raw).expect("an identifier is a bundle id name"),
-                        converted
-                    );
-                }
-            }
-        }
-
-        /// The bound with separators in it: 127 `a.` pairs and a final `a`
-        /// is exactly 255 characters, an identifier, and converts byte for
-        /// byte; one more pair is not an identifier at all.
-        #[test]
-        fn a_255_character_identifier_with_separators_converts() {
-            let raw = format!("{}a", "a.".repeat(127));
-            assert_eq!(raw.chars().count(), 255);
-            let identifier = AppleBundleIdentifier::parse(&raw).expect("255 is the limit");
-            assert_eq!(AppleBundleIdName::from(identifier).as_str(), raw);
-            let over = format!("{}a", "a-".repeat(128));
-            assert_eq!(over.chars().count(), 257);
-            assert!(AppleBundleIdentifier::parse(&over).is_err());
-        }
-
-        #[test]
-        fn a_255_character_identifier_converts() {
-            let raw = "a".repeat(255);
-            let identifier = AppleBundleIdentifier::parse(&raw)
-                .expect("255 characters is the limit, not over it");
-            let bundle_id_name = AppleBundleIdName::from(identifier);
-            assert_eq!(bundle_id_name.as_str(), raw);
-        }
-
-        /// The reverse is not a fact: a string with a space is a valid
-        /// bundle id name and not a valid bundle identifier, so no
-        /// reverse row exists.
-        #[test]
-        fn a_bundle_id_name_with_a_space_is_not_a_bundle_identifier() {
-            let name =
-                AppleBundleIdName::parse("has space").expect("a space is a valid bundle id name");
             assert_eq!(name.as_str(), "has space");
             assert!(AppleBundleIdentifier::parse("has space").is_err());
         }

@@ -206,13 +206,12 @@ fn the_plain_inputs_document_checks_with_the_two_ids_as_workflow_inputs() {
         .unwrap_or_else(|errors| panic!("document must check cleanly: {errors:?}"));
 }
 
-/// Milestone 3e, task T3b, acceptance 7: the reverse direction of the two
-/// new conversion rows out of `AppleBundleIdentifier` (`=> Text`,
-/// `=> AppleBundleIdName`) is not a fact -- `Text` accepts the empty
-/// string and any character at all -- so binding a `Text` to
-/// `appstore.bundle_id.ensure`'s `identifier` port still fails `check`
-/// with exactly the same `TypeMismatch` it always did, unaffected by the
-/// new rows.
+/// Milestone 3e, task T3b, acceptance 7: the reverse direction of the
+/// `AppleBundleIdentifier => Text` conversion row is not a fact -- `Text`
+/// accepts the empty string and any character at all -- so binding a
+/// `Text` to `appstore.bundle_id.ensure`'s `identifier` port still fails
+/// `check` with exactly the same `TypeMismatch` it always did, unaffected
+/// by the row.
 #[test]
 fn appstore_bundle_id_text_into_identifier_is_rejected() {
     let workflow = fixture_document("appstore-bundle-id-text-into-identifier.yaml");
@@ -228,6 +227,33 @@ fn appstore_bundle_id_text_into_identifier_is_rejected() {
                 TypeName::parse("AppleBundleIdentifier").unwrap()
             )),
             found: TypeRef::scalar(TypeName::parse("Text").unwrap()),
+        }]
+    );
+}
+
+/// Milestone 3e task T3f: the `AppleBundleIdentifier => AppleBundleIdName`
+/// conversion milestone 3e task T3b (decision (h)) registered is removed
+/// -- a live probe found it was never total against Apple's real rule for
+/// a bundle id's `name` (a dot, an apostrophe, and an ampersand all
+/// refused, though every bundle identifier's own grammar admits a dot).
+/// Binding an `AppleBundleIdentifier` to `appstore.bundle_id.ensure`'s
+/// `name` port now fails `check` exactly as it did before that conversion
+/// ever existed.
+#[test]
+fn appstore_bundle_id_identifier_into_name_is_rejected() {
+    let workflow = fixture_document("appstore-bundle-id-identifier-into-name.yaml");
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let errors = willikins_core::check(&workflow, &catalog)
+        .expect_err("an AppleBundleIdentifier bound to the name port must fail check");
+    assert_eq!(
+        errors,
+        vec![willikins_core::CheckError::TypeMismatch {
+            node: willikins_core::NodeName::parse("bundle_id").unwrap(),
+            port: willikins_core::PortName::parse("name").unwrap(),
+            expected: willikins_core::PortType::Exact(TypeRef::scalar(
+                TypeName::parse("AppleBundleIdName").unwrap()
+            )),
+            found: TypeRef::scalar(TypeName::parse("AppleBundleIdentifier").unwrap()),
         }]
     );
 }
