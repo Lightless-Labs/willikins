@@ -2,8 +2,8 @@
 //! ownership marker on a branch, as `willikins-providers-github`'s live
 //! tool of the same name does against a real commit. Milestone 3g, task
 //! G2. Port table and behaviour must equal the live tool's field for
-//! field (`tests/catalog_parity.rs`, `tests/fake_agrees_with_live.rs` in
-//! `willikins-providers-github`).
+//! field (`tests/catalog_parity.rs`, `tests/scaffold_fake_agrees_with_live.rs`
+//! in `willikins-providers-github`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -157,7 +157,7 @@ impl GitHubScaffoldEnsure {
     /// (and `willikins_providers_github`'s own `git_blob_sha`) uses --
     /// duplicated here (`pub(crate)` there, a different crate here) so
     /// this fake's marker content is byte-identical to the live tool's,
-    /// which `tests/fake_agrees_with_live.rs` pins.
+    /// which `tests/scaffold_fake_agrees_with_live.rs` pins.
     fn blob_sha(content: &[u8]) -> String {
         use std::fmt::Write as _;
         let mut hasher = Sha1::new();
@@ -193,6 +193,18 @@ impl GitHubScaffoldEnsure {
             content.push('\n');
         }
         content
+    }
+
+    /// Build and validate the marker [`RepoFile`], exactly mirroring the
+    /// live tool's `validated_marker_file`: both inputs are fully known
+    /// from `files` and `marker` alone, so a marker over `RepoFile`'s own
+    /// length bound (64 files each near `RepoPath`'s own bound) is
+    /// refused here, before any state lookup, on both `read` and
+    /// `ensure` -- not only on the live side.
+    fn validated_marker_file(files: &[RepoFile], marker: &RepoPath) -> Result<RepoFile, ToolError> {
+        let content = Self::marker_content(files);
+        RepoFile::new(marker.clone(), content)
+            .map_err(|err| invalid(format!("marker file is invalid: {}", err.reason)))
     }
 
     /// The `Conflict` a foreign marker or an owned-but-differing seed path
@@ -257,6 +269,7 @@ impl Tool for GitHubScaffoldEnsure {
         let marker: RepoPath = get(inputs, "marker")?;
         let files = Self::read_files(inputs)?;
         Self::validate_shape(&files, &marker)?;
+        Self::validated_marker_file(&files, &marker)?;
         let mut state = self.state.lock().unwrap();
         let key = scaffold_key(&repo, &branch);
         state.record_read_call(Self::TOOL_NAME, &key);
@@ -278,6 +291,7 @@ impl Tool for GitHubScaffoldEnsure {
         let marker: RepoPath = get(inputs, "marker")?;
         let files = Self::read_files(inputs)?;
         Self::validate_shape(&files, &marker)?;
+        let marker_file = Self::validated_marker_file(&files, &marker)?;
         let _message: CommitHeadline = get(inputs, "message")?;
         let mut state = self.state.lock().unwrap();
         let key = scaffold_key(&repo, &branch);
@@ -293,14 +307,16 @@ impl Tool for GitHubScaffoldEnsure {
             }),
             ScaffoldState::Foreign => Err(Self::foreign_conflict(&repo, &branch, &marker)),
             ScaffoldState::Absent { already_equal } => {
-                let marker_content = Self::marker_content(&files);
                 let map = state.scaffolds.entry(key).or_default();
                 for file in &files {
                     if !already_equal.contains(file.path().as_str()) {
                         map.insert(file.path().as_str().to_string(), file.content().to_string());
                     }
                 }
-                map.insert(marker.as_str().to_string(), marker_content);
+                map.insert(
+                    marker_file.path().as_str().to_string(),
+                    marker_file.content().to_string(),
+                );
                 Ok(Ensured {
                     outputs,
                     changed: true,
