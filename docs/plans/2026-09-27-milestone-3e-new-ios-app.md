@@ -2728,10 +2728,18 @@ words) applied to the one pair of caller-overridable names D1 itself did not tou
 - **Buildkite scope sufficiency, asserted from the endpoint list, not live-tested.** The real
   token's three scopes are `read_pipelines`, `write_pipelines` and `read_clusters` --
   *deliberately* no `read_organizations` (task brief). Read directly against
-  `crates/willikins-providers-buildkite/src/client.rs`: every request either tool builds is
-  `/v2/organizations/{org}/pipelines...` or `/v2/organizations/{org}/clusters...` (nested resource
-  paths, covered by the three granted scopes); neither tool ever calls the bare `GET
-  /v2/organizations`/`GET /v2/organizations/{org}` that `read_organizations` alone would gate. Not
+  `crates/willikins-providers-buildkite/src/client.rs`: `buildkite.cluster.get`'s own `read`/`ensure`
+  only ever calls the client's `list_clusters_page` (`GET .../clusters`); `buildkite.pipeline.ensure`'s
+  own `observe`/`ensure` only ever call `get_pipeline` (`GET .../pipelines/{slug}`) and
+  `create_pipeline` (`POST .../pipelines`) -- confirmed by reading both tool files' own bodies, not
+  merely the client's method list. The client also carries a fourth method, `delete_pipeline`
+  (`DELETE .../pipelines/{slug}`), but its own module doc says it plainly: "used only by the opt-in
+  live write cycle to clean up after itself" -- neither tool calls it, confirmed by grepping for
+  the one call site in the whole crate. So every request either Buildkite tool this document uses
+  can build is `GET`/`POST` under `/v2/organizations/{org}/pipelines...` or
+  `/v2/organizations/{org}/clusters...` (nested resource paths, covered by the three granted
+  scopes); neither tool ever calls the bare `GET /v2/organizations`/`GET /v2/organizations/{org}`
+  that `read_organizations` alone would gate, and neither ever reaches `DELETE` at all. Not
   live-tested (this task made no provider call of any kind), so this is a static read of the
   client's own request-building code, not a settled fact about Buildkite's own scope enforcement.
 - **The fixture's placeholder has exactly one other consumer, checked rather than assumed.**
