@@ -2096,6 +2096,75 @@ expression: snapshot
                 "port"
               ],
               "type": "object"
+            },
+            {
+              "description": "A [`crate::workflow::Binding::List`] (a `with:` sequence) was bound\nto a port whose type is not `list<T>` for any `T` -- a scalar port,\nor a secret-accepting [`PortType::AnySecret`] port, which never\nnames a single element type to check a list against.\n\nNot one of the plan's variants; milestone 3g, decision (a).",
+              "properties": {
+                "expected": {
+                  "$ref": "#/$defs/PortType",
+                  "description": "The port's declared type."
+                },
+                "kind": {
+                  "const": "ListOnScalarPort",
+                  "type": "string"
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "The binding's own location."
+                }
+              },
+              "required": [
+                "kind",
+                "site",
+                "expected"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "One element of a [`crate::workflow::Binding::List`] did not\ntype-check against the port's declared element type: it resolved to\na list itself (no flattening — a list element is always a scalar),\nor its scalar type did not match and no one-hop conversion applies\neither.\n\nNot one of the plan's variants; milestone 3g, decision (a).",
+              "properties": {
+                "expected": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "The port's declared element type."
+                },
+                "found": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "The element's resolved type."
+                },
+                "kind": {
+                  "const": "ListElementTypeMismatch",
+                  "type": "string"
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "The offending element's own location\n([`Site::ListElement`])."
+                }
+              },
+              "required": [
+                "kind",
+                "site",
+                "expected",
+                "found"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A [`crate::workflow::Binding::List`] (a `with:` sequence) was found\nwhere only a reference or a literal is valid: a `for_each` source,\nor a workflow output. Never produced by `willikins-dsl`, whose\n`for_each:` and `outputs:` fields are plain strings and so cannot\nhold a sequence at all; exists so `check` still refuses one reaching\neither site through a hand-built [`Workflow`].\n\nNot one of the plan's variants; milestone 3g, decision (a).",
+              "properties": {
+                "kind": {
+                  "const": "SequenceNotAllowedHere",
+                  "type": "string"
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "The binding's own location."
+                }
+              },
+              "required": [
+                "kind",
+                "site"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -2125,6 +2194,31 @@ expression: snapshot
         "InputName": {
           "pattern": "^[a-z][a-z0-9_]*$",
           "type": "string"
+        },
+        "ListElementSite": {
+          "description": "The node, port, and element index a [`Site::ListElement`] names.",
+          "properties": {
+            "index": {
+              "description": "The zero-based index of the offending element.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "node": {
+              "$ref": "#/$defs/NodeName",
+              "description": "The node."
+            },
+            "port": {
+              "$ref": "#/$defs/PortName",
+              "description": "The port holding the list binding."
+            }
+          },
+          "required": [
+            "node",
+            "port",
+            "index"
+          ],
+          "type": "object"
         },
         "NodeName": {
           "pattern": "^[a-z][a-z0-9_]*$",
@@ -2250,6 +2344,20 @@ expression: snapshot
               "required": [
                 "kind",
                 "name"
+              ],
+              "type": "object"
+            },
+            {
+              "$ref": "#/$defs/ListElementSite",
+              "description": "One element of a node's `with`-bound list binding\n([`crate::workflow::Binding::List`], milestone 3g decision (a)).\nRendered `node.port[i]`, distinct from [`Self::ForEach`]'s\n`node[for_each]` (no real node/port pair can render either form:\n`port` is a real identifier, never literally `for_each`, and the\nbracketed suffix here always holds a decimal index, never the\nliteral text `for_each`).\n\nBoxed, unlike every other variant: an inline third field alongside\n`node` and `port` would make this `Site`'s largest variant, and\n`Site` is embedded in `CheckError`, `PlanError`, and -- through\n`ApplyError::Plan` -- every `apply()` call's `Result`. Crossing\nclippy's `result_large_err` default threshold there would ripple\ninto every crate that calls `check`, `plan`, or `apply` (about two\ndozen files across five other crates, none of which this task\ntouches); boxing keeps `Site` exactly as large as [`Self::Port`]\nalready was. Build one with [`Self::list_element`].",
+              "properties": {
+                "kind": {
+                  "const": "list_element",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
               ],
               "type": "object"
             }
