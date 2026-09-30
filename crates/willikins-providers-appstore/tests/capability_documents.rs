@@ -323,3 +323,67 @@ fn a_document_that_ensures_a_new_bundle_id_and_a_capability_on_it_applies_then_c
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// Adversarial pass 7 (the App Attest gate task): a capability App Store
+// Connect only ever *reports* can never be handed to the capability
+// *writer*, by literal or by typed binding
+// ---------------------------------------------------------------------
+
+/// `workflows/fixtures/appstore-capability-read-only-literal.yaml`:
+/// `APP_ATTEST` parses as `AppleObservableCapabilityType` (the gate's
+/// port) but not as `AppleCapabilityType` (the writer's), so `check`
+/// refuses the literal before anything is planned -- the writer can never
+/// be asked to `POST` a capability Apple answers `409` for.
+#[test]
+fn a_read_only_capability_literal_is_refused_by_check_on_capability_ensure() {
+    let workflow = fixture_document("appstore-capability-read-only-literal.yaml");
+    let catalog = willikins_providers_fake::catalog(seeded_state());
+    let errors = willikins_core::check(&workflow, &catalog)
+        .expect_err("APP_ATTEST must never check on the capability writer");
+    assert_eq!(errors.len(), 1, "exactly one error: {errors:?}");
+    match &errors[0] {
+        willikins_core::CheckError::InvalidLiteral { node, port, error } => {
+            assert_eq!(node.as_str(), "app_attest");
+            assert_eq!(port.as_str(), "capability");
+            assert_eq!(error.type_name, "AppleCapabilityType");
+        }
+        other => panic!("expected InvalidLiteral on app_attest.capability, got {other:?}"),
+    }
+}
+
+/// `workflows/fixtures/appstore-capability-observable-into-ensure.yaml`:
+/// the same refusal through a typed binding -- an
+/// `AppleObservableCapabilityType` input into the writer's
+/// `AppleCapabilityType` port is a type mismatch, since no conversion
+/// between the two is registered.
+#[test]
+fn an_observable_capability_input_is_refused_by_check_on_capability_ensure() {
+    let workflow = fixture_document("appstore-capability-observable-into-ensure.yaml");
+    let catalog = willikins_providers_fake::catalog(seeded_state());
+    let errors = willikins_core::check(&workflow, &catalog)
+        .expect_err("an observable-typed capability must never check on the capability writer");
+    assert_eq!(errors.len(), 1, "exactly one error: {errors:?}");
+    match &errors[0] {
+        willikins_core::CheckError::TypeMismatch {
+            node,
+            port,
+            expected,
+            found,
+        } => {
+            assert_eq!(node.as_str(), "capability");
+            assert_eq!(port.as_str(), "capability");
+            assert_eq!(
+                *expected,
+                willikins_core::PortType::Exact(TypeRef::scalar(
+                    TypeName::parse("AppleCapabilityType").unwrap()
+                ))
+            );
+            assert_eq!(
+                *found,
+                TypeRef::scalar(TypeName::parse("AppleObservableCapabilityType").unwrap())
+            );
+        }
+        other => panic!("expected TypeMismatch on capability.capability, got {other:?}"),
+    }
+}
