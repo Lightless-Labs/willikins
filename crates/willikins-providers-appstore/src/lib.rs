@@ -53,6 +53,7 @@ pub use client::{
     APPSTORE_API_BASE_URL, AppstoreClient, CAPABILITIES_NEEDING_PORTAL_CONFIGURATION,
 };
 pub use tools::{
-    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure,
-    AppstoreCertificateGet, AppstoreProfileEnsure,
+    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure,
+    AppstoreBundleIdCapabilityGate, AppstoreBundleIdEnsure, AppstoreCertificateGet,
+    AppstoreProfileEnsure,
 };
