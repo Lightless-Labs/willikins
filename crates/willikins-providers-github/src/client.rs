@@ -7,18 +7,24 @@
 //! whose grammars are alphanumeric-and-hyphen-or-underscore, so none of
 //! them can smuggle a `/` or a query string into the request line.
 //!
-//! # Reading a repository's files (milestone 3g, task G1, commit 1)
+//! # Reading and writing a repository's files (milestone 3g, task G1)
 //!
-//! `docs/plans/2026-09-30-milestone-3g-file-writing.md` decision (b): reads go through the
-//! REST git database, pinned to one commit ([`Self::get_branch_head`] →
-//! [`Self::get_commit_root_tree`] → [`Self::resolve_tree_paths`], which walks only the
+//! `docs/plans/2026-09-30-milestone-3g-file-writing.md` decision (b):
+//! reads go through the REST git database, pinned to one commit ([`Self::get_branch_head`]
+//! → [`Self::get_commit_root_tree`] → [`Self::resolve_tree_paths`], which walks only the
 //! non-recursive trees a declared [`RepoPath`] actually needs, memoised per directory, and
 //! never downloads a file's content — content is compared by [`git_blob_sha`], computed
 //! locally). The only blob this client ever downloads is a scaffold's marker
-//! ([`Self::get_blob`]). The write (GraphQL's `createCommitOnBranch`) is this task's second
-//! commit. Neither `github.scaffold.ensure` (task G2) nor its business rules for what
-//! `Present`/`Foreign`/`Absent`/a conflict mean live here — this module exposes only the
-//! typed calls.
+//! ([`Self::get_blob`]). The write is GraphQL's `createCommitOnBranch`
+//! ([`Self::create_commit_on_branch`]): one call, one exact compare-and-swap
+//! (`expectedHeadOid`), several files as one signed commit. Every failure this method
+//! reports — GraphQL's own 200-with-`errors` shape, a missing `data`, or any non-2xx —
+//! carries no response-body text, even where `willikins-providers-http`'s shared
+//! [`Http::post`] would otherwise have echoed a provider `message` field (the 3c lesson on
+//! bodies, applied one level stricter here because a GraphQL error can carry a file's own
+//! path or a fragment of what this workspace just tried to commit). Neither `github.scaffold.ensure`
+//! (task G2) nor its business rules for what `Present`/`Foreign`/`Absent`/a conflict mean
+//! live here — this module exposes only the typed calls.
 //!
 //! # GitHub's secondary rate limit
 //!
@@ -80,7 +86,8 @@ use willikins_providers_http::{
     Credential, Http, MAX_RETRY_AFTER, ProviderError, RealSleeper, Sleeper,
 };
 use willikins_types::{
-    ActionsSecretName, GitBranchName, GitHubRepo, GitHubToken, RepoPath, RepoVisibility,
+    ActionsSecretName, CommitHeadline, GitBranchName, GitHubRepo, GitHubToken, RepoFile, RepoPath,
+    RepoVisibility,
 };
 
 /// GitHub's REST API base URL.
@@ -546,6 +553,78 @@ impl GitHubClient {
             ProviderError::new(None, "GitHub returned a blob that was not valid base64")
         })
     }
+
+    /// `POST /graphql`, one fixed mutation text
+    /// (`createCommitOnBranch`), landing every file in `additions` plus
+    /// the marker as **one** signed commit on `branch`, compare-and-swapped
+    /// against `expected_head_oid`. `additions` is sorted by path before
+    /// it is sent, so the wire body is deterministic regardless of the
+    /// order the caller built it in (acceptance 7). Never retried, like
+    /// every other `POST` in this workspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns a statusless-message-free [`ProviderError`] (never carrying
+    /// GraphQL's own `errors[].message` or any other response-body text —
+    /// this method's own module doc explains why that is stricter than
+    /// `willikins-providers-http`'s shared, REST-shaped body handling) for:
+    /// a non-empty `errors` array, a missing or null `data`, a missing
+    /// `createCommitOnBranch` payload, and any non-2xx status other than
+    /// `401`/`403` (whose shared fixed messages already carry no body
+    /// text). A `401`/`403` and a transport failure are returned exactly
+    /// as [`Http::post`] produced them.
+    #[allow(dead_code)] // see get_branch_head's own note above
+    pub(crate) fn create_commit_on_branch(
+        &self,
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+        expected_head_oid: &str,
+        additions: &[RepoFile],
+        headline: &CommitHeadline,
+        body: Option<&str>,
+    ) -> Result<String, ProviderError> {
+        let mut sorted: Vec<&RepoFile> = additions.iter().collect();
+        sorted.sort_by(|a, b| a.path().as_str().cmp(b.path().as_str()));
+        let file_additions = sorted
+            .into_iter()
+            .map(|file| FileAdditionInput {
+                path: file.path().as_str().to_string(),
+                contents: STANDARD.encode(file.content().as_bytes()),
+            })
+            .collect();
+        let request = GraphQLRequest {
+            query: CREATE_COMMIT_ON_BRANCH_MUTATION,
+            variables: CreateCommitVariables {
+                input: CreateCommitInput {
+                    branch: CommittableBranchInput {
+                        repository_name_with_owner: format!("{}/{}", repo.owner(), repo.name()),
+                        branch_name: branch.as_str().to_string(),
+                    },
+                    file_changes: FileChangesInput {
+                        additions: file_additions,
+                    },
+                    message: CommitMessageInput {
+                        headline: headline.as_str().to_string(),
+                        body: body.map(str::to_string),
+                    },
+                    expected_head_oid: expected_head_oid.to_string(),
+                },
+            },
+        };
+        let response: GraphQLResponse<CreateCommitOnBranchData> = self
+            .http
+            .post("/graphql", &request)
+            .map_err(suppress_graphql_response_body)?;
+        let has_errors = response.errors.is_some_and(|errors| !errors.is_empty());
+        if has_errors {
+            return Err(ProviderError::new(Some(200), GRAPHQL_FAILURE_MESSAGE));
+        }
+        response
+            .data
+            .and_then(|data| data.create_commit_on_branch)
+            .map(|payload| payload.commit.oid)
+            .ok_or_else(|| ProviderError::new(Some(200), GRAPHQL_FAILURE_MESSAGE))
+    }
 }
 
 /// The label a bound `token` port's minted [`Credential`] carries in its
@@ -787,6 +866,136 @@ pub(crate) fn git_blob_sha(content: &[u8]) -> String {
         let _ = write!(hex, "{byte:02x}");
     }
     hex
+}
+
+/// The fixed mutation text `create_commit_on_branch` always sends: no
+/// tool or document ever supplies GraphQL text of its own (the
+/// no-arbitrary-API-path invariant, applied to GraphQL the same way it
+/// applies to every fixed REST path in this workspace).
+#[allow(dead_code)] // see get_branch_head's own note above
+const CREATE_COMMIT_ON_BRANCH_MUTATION: &str = "mutation($input: CreateCommitOnBranchInput!) { \
+     createCommitOnBranch(input: $input) { commit { oid } } }";
+
+/// What every GraphQL failure this client recognises says instead of
+/// GitHub's own `errors[].message` or any other response-body text — see
+/// this module's own doc section on why that bar is stricter here than
+/// `willikins-providers-http`'s shared REST error handling.
+#[allow(dead_code)] // see get_branch_head's own note above
+const GRAPHQL_FAILURE_MESSAGE: &str =
+    "GitHub's GraphQL API did not report the commit as successful";
+
+/// A `POST /graphql` request body: a fixed query text plus typed
+/// variables. Generic so [`create_commit_on_branch`](GitHubClient::create_commit_on_branch)
+/// is the only place that names the mutation's own variable shape.
+#[derive(Debug, Serialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct GraphQLRequest<'a, V> {
+    query: &'a str,
+    variables: V,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct CreateCommitVariables {
+    input: CreateCommitInput,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct CreateCommitInput {
+    branch: CommittableBranchInput,
+    file_changes: FileChangesInput,
+    message: CommitMessageInput,
+    expected_head_oid: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct CommittableBranchInput {
+    repository_name_with_owner: String,
+    branch_name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct FileChangesInput {
+    additions: Vec<FileAdditionInput>,
+}
+
+#[derive(Debug, Serialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct FileAdditionInput {
+    path: String,
+    contents: String,
+}
+
+#[derive(Debug, Serialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct CommitMessageInput {
+    headline: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+}
+
+/// A GraphQL response envelope. Both fields are optional by construction
+/// (a 200-with-`errors` response may carry a null or absent `data`, and a
+/// clean success carries no `errors` at all): [`GitHubClient::create_commit_on_branch`]
+/// inspects both, never assuming either is present. `errors` is left as
+/// opaque [`serde_json::Value`]s on purpose — this client checks only
+/// whether the array is non-empty and never reads a `message` field out of
+/// one, so GitHub's own words can never reach a [`ProviderError`] built
+/// from a GraphQL response.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct GraphQLResponse<T> {
+    data: Option<T>,
+    errors: Option<Vec<serde_json::Value>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct CreateCommitOnBranchData {
+    create_commit_on_branch: Option<CreateCommitOnBranchPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct CreateCommitOnBranchPayload {
+    commit: CommitOidBody,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // see get_branch_head's own note above
+struct CommitOidBody {
+    oid: String,
+}
+
+/// Replace a [`ProviderError`] this client did not build itself (one
+/// [`Http::post`] produced from a non-2xx GraphQL response) with a
+/// body-free message, keeping its status and header-derived facts intact.
+/// `401`/`403` and a transport failure (no status at all) are left exactly
+/// as `Http::post` returned them: both are already body-free (the shared
+/// fixed `UNAUTHENTICATED`/`MISSING_PERMISSION` constants, and
+/// [`willikins_providers_http`]'s own transport-message handling, which
+/// never repeats a body or URL). Every other status is a `POST /graphql`
+/// shape this client does not otherwise expect, and GitHub's own error
+/// body there could carry a fragment of the very file content this
+/// workspace just tried to commit — decision (b)'s "never echoes ...
+/// any response body" is read as covering that case too, not only
+/// GraphQL's own 200-with-`errors` shape.
+#[allow(dead_code)] // see get_branch_head's own note above
+fn suppress_graphql_response_body(err: ProviderError) -> ProviderError {
+    match err.status {
+        None | Some(401 | 403) => err,
+        Some(_) => ProviderError {
+            message: GRAPHQL_FAILURE_MESSAGE.to_string(),
+            ..err
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1090,5 +1299,205 @@ mod tests {
         let client = client_against(provider.url());
         let err = client.get_blob(&repo(), "marker-sha").unwrap_err();
         assert_eq!(err.status, None);
+    }
+
+    fn commit_test_fixture() -> (GitBranchName, CommitHeadline, RepoFile) {
+        (
+            GitBranchName::parse("main").unwrap(),
+            CommitHeadline::parse("feat: seed").unwrap(),
+            RepoFile::new(RepoPath::parse("a.txt").unwrap(), "A").unwrap(),
+        )
+    }
+
+    #[test]
+    fn create_commit_on_branch_sends_the_pinned_body_sorted_by_path_and_returns_the_oid() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let branch = GitBranchName::parse("main").unwrap();
+        let headline = CommitHeadline::parse("feat: seed").unwrap();
+        let file_b = RepoFile::new(RepoPath::parse("b.txt").unwrap(), "B").unwrap();
+        let file_a = RepoFile::new(RepoPath::parse("a.txt").unwrap(), "A").unwrap();
+
+        let expected_body = serde_json::json!({
+            "query": CREATE_COMMIT_ON_BRANCH_MUTATION,
+            "variables": {
+                "input": {
+                    "branch": {
+                        "repositoryNameWithOwner": "acme/widget",
+                        "branchName": "main",
+                    },
+                    "fileChanges": {
+                        "additions": [
+                            {"path": "a.txt", "contents": "QQ=="},
+                            {"path": "b.txt", "contents": "Qg=="},
+                        ],
+                    },
+                    "message": {
+                        "headline": "feat: seed",
+                        "body": "Seeded by willikins.",
+                    },
+                    "expectedHeadOid": "abc123",
+                },
+            },
+        });
+        let mock = provider
+            .mock("POST", "/graphql")
+            .match_body(willikins_providers_http::testing::json_body(expected_body))
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "data": {"createCommitOnBranch": {"commit": {"oid": "new-commit-sha"}}},
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+
+        let client = client_against(provider.url());
+        // Passed out of order on purpose: the method's own sort, not
+        // caller discipline, is what must make the wire body match.
+        let oid = client
+            .create_commit_on_branch(
+                &repo(),
+                &branch,
+                "abc123",
+                &[file_b, file_a],
+                &headline,
+                Some("Seeded by willikins."),
+            )
+            .unwrap();
+        assert_eq!(oid, "new-commit-sha");
+        mock.assert();
+    }
+
+    #[test]
+    fn create_commit_on_branch_with_a_nonempty_errors_array_fails_without_echoing_the_message() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let (branch, headline, file) = commit_test_fixture();
+        let marker = "wlkn-test-marker-graphql-error";
+        provider
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "data": null,
+                    "errors": [{"message": format!("path a.txt conflicts: {marker}")}],
+                })
+                .to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .create_commit_on_branch(&repo(), &branch, "abc123", &[file], &headline, None)
+            .unwrap_err();
+        assert_eq!(err.status, Some(200));
+        assert!(!err.message.contains(marker), "{}", err.message);
+    }
+
+    #[test]
+    fn create_commit_on_branch_with_no_data_and_no_errors_still_fails() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let (branch, headline, file) = commit_test_fixture();
+        provider
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(serde_json::json!({"data": null}).to_string())
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .create_commit_on_branch(&repo(), &branch, "abc123", &[file], &headline, None)
+            .unwrap_err();
+        assert_eq!(err.status, Some(200));
+    }
+
+    #[test]
+    fn create_commit_on_branch_with_a_null_payload_still_fails() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let (branch, headline, file) = commit_test_fixture();
+        provider
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(serde_json::json!({"data": {"createCommitOnBranch": null}}).to_string())
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .create_commit_on_branch(&repo(), &branch, "abc123", &[file], &headline, None)
+            .unwrap_err();
+        assert_eq!(err.status, Some(200));
+    }
+
+    #[test]
+    fn create_commit_on_branch_401_keeps_the_fixed_body_free_message() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let (branch, headline, file) = commit_test_fixture();
+        let marker = "wlkn-test-marker-401";
+        provider
+            .mock("POST", "/graphql")
+            .with_status(401)
+            .with_body(
+                serde_json::json!({"message": format!("bad credentials {marker}")}).to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .create_commit_on_branch(&repo(), &branch, "abc123", &[file], &headline, None)
+            .unwrap_err();
+        assert_eq!(err.message, willikins_providers_http::UNAUTHENTICATED);
+        assert!(!err.message.contains(marker));
+    }
+
+    #[test]
+    fn create_commit_on_branch_403_keeps_the_fixed_body_free_message() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let (branch, headline, file) = commit_test_fixture();
+        let marker = "wlkn-test-marker-403";
+        provider
+            .mock("POST", "/graphql")
+            .with_status(403)
+            .with_body(serde_json::json!({"message": format!("no access {marker}")}).to_string())
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .create_commit_on_branch(&repo(), &branch, "abc123", &[file], &headline, None)
+            .unwrap_err();
+        assert_eq!(err.message, willikins_providers_http::MISSING_PERMISSION);
+        assert!(!err.message.contains(marker));
+    }
+
+    #[test]
+    fn create_commit_on_branch_502_fails_without_echoing_the_body() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let (branch, headline, file) = commit_test_fixture();
+        let marker = "wlkn-test-marker-502";
+        provider
+            .mock("POST", "/graphql")
+            .with_status(502)
+            .with_body(
+                serde_json::json!({"message": format!("upstream failure {marker}")}).to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .create_commit_on_branch(&repo(), &branch, "abc123", &[file], &headline, None)
+            .unwrap_err();
+        assert_eq!(err.status, Some(502));
+        assert!(!err.message.contains(marker), "{}", err.message);
+    }
+
+    #[test]
+    fn create_commit_on_branch_is_never_retried() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let (branch, headline, file) = commit_test_fixture();
+        let mock = provider
+            .mock("POST", "/graphql")
+            .with_status(503)
+            .with_body("{}")
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .create_commit_on_branch(&repo(), &branch, "abc123", &[file], &headline, None)
+            .unwrap_err();
+        assert_eq!(err.status, Some(503));
+        mock.assert();
     }
 }
