@@ -2,8 +2,9 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the live catalog (thirty-five tools since
-//! milestone 3g task T1 added `repo.file.render`, after the App Attest
+//! `live_catalog` assembles the live catalog (thirty-six tools since
+//! milestone 3g task G2 added `github.scaffold.ensure`, after task T1
+//! added `repo.file.render`, after the App Attest
 //! gate task added `appstore.bundle_id_capability.gate`, after
 //! milestone 3e task K1 added `buildkite.token.parse`, after task R2
 //! added `github.token.parse`, after task B1 added
@@ -13,8 +14,9 @@
 //! `env.get`, `base64.decode`, `apple.signing_key.parse`,
 //! `apple.issuer_id.parse`, `apple.key_id.parse`, `github.token.parse`,
 //! `buildkite.token.parse`, `operator.acknowledge`, `repo.file.render`),
-//! `willikins-providers-github`'s three
-//! live tools (milestone 3e task 2 added `github.repo.get`),
+//! `willikins-providers-github`'s four
+//! live tools (milestone 3e task 2 added `github.repo.get`; milestone 3g
+//! task G2 added `github.scaffold.ensure`),
 //! `willikins-providers-doppler`'s ten (milestone 3 added
 //! `doppler.config.inheritable.ensure` and
 //! `doppler.config.inherits.ensure`; the `SigNoz` task added
@@ -52,7 +54,7 @@ use willikins_providers_doppler::{
     DopplerValueGet,
 };
 use willikins_providers_github::{
-    GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure, GitHubRepoGet,
+    GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure, GitHubRepoGet, GitHubScaffoldEnsure,
 };
 use willikins_providers_http::{Credential, Http};
 use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
@@ -60,7 +62,7 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 35] = [
+pub const LIVE_TOOL_NAMES: [&str; 36] = [
     "naming.v1",
     "template.render",
     "operator.acknowledge",
@@ -75,6 +77,7 @@ pub const LIVE_TOOL_NAMES: [&str; 35] = [
     "github.repo.ensure",
     "github.actions_secret.ensure",
     "github.repo.get",
+    "github.scaffold.ensure",
     "doppler.project.ensure",
     "doppler.config.ensure",
     "doppler.branch_config.ensure",
@@ -204,8 +207,8 @@ fn insert_appstore_tools(catalog: &mut Catalog) {
     );
 }
 
-/// Insert `willikins-providers-github`'s three live tools, built from
-/// `http`.
+/// Insert `willikins-providers-github`'s four live tools, built from
+/// `http` (milestone 3g task G2 added `github.scaffold.ensure`).
 fn insert_github_tools(catalog: &mut Catalog, http: Http) {
     let github = Arc::new(GitHubClient::new(http));
     insert(
@@ -216,7 +219,8 @@ fn insert_github_tools(catalog: &mut Catalog, http: Http) {
         catalog,
         Arc::new(GitHubActionsSecretEnsure::new(Arc::clone(&github))),
     );
-    insert(catalog, Arc::new(GitHubRepoGet::new(github)));
+    insert(catalog, Arc::new(GitHubRepoGet::new(Arc::clone(&github))));
+    insert(catalog, Arc::new(GitHubScaffoldEnsure::new(github)));
 }
 
 /// Insert `willikins-providers-doppler`'s eleven live tools, built from
@@ -525,10 +529,11 @@ enum Provider {
 /// pins that this array, [`DOPPLER_TOOL_NAMES`], [`BUILDKITE_TOOL_NAMES`],
 /// and the eleven pure tool names together are exactly [`LIVE_TOOL_NAMES`],
 /// so the two lists cannot silently drift apart.
-const GITHUB_TOOL_NAMES: [&str; 3] = [
+const GITHUB_TOOL_NAMES: [&str; 4] = [
     "github.repo.ensure",
     "github.actions_secret.ensure",
     "github.repo.get",
+    "github.scaffold.ensure",
 ];
 
 /// `willikins-providers-doppler`'s live tool names. See

@@ -31,6 +31,7 @@ pub mod fake_secret_list;
 pub mod github_actions_secret_ensure;
 pub mod github_repo_ensure;
 pub mod github_repo_get;
+pub mod github_scaffold_ensure;
 pub mod signoz_ingestion_key_ensure;
 
 pub use appstore_app_get::FakeAppstoreAppGet;
@@ -58,4 +59,5 @@ pub use fake_secret_list::FakeSecretList;
 pub use github_actions_secret_ensure::GitHubActionsSecretEnsure;
 pub use github_repo_ensure::GitHubRepoEnsure;
 pub use github_repo_get::FakeGitHubRepoGet;
+pub use github_scaffold_ensure::GitHubScaffoldEnsure;
 pub use signoz_ingestion_key_ensure::SigNozIngestionKeyEnsure;
