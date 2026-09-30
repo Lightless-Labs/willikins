@@ -82,6 +82,61 @@ touched crate (`willikins-tools`, `willikins-server`, `willikins-providers-fake`
 `willikins-providers-doppler`), plus `cargo check -p willikins-types` and
 `cargo test -p willikins-dsl --test acceptance` for the characterization snapshot (byte-identical: no
 shipped document binds `repo.file.render` yet) — all green.
+**Addendum:** 2026-09-30 (G1) — the GitHub client's reads and `createCommitOnBranch` write landed in
+`crates/willikins-providers-github/src/client.rs`, exactly the two commits the task row named: commit 1
+(`get_branch_head`, `get_commit_root_tree`, `resolve_tree_paths` — the non-recursive walk memoised per
+directory sha, returning `Absent`/`Blob { mode, sha }`/`NonBlob` per declared `RepoPath` — `get_blob`, and
+`git_blob_sha` pinned against three `git hash-object` vectors) and commit 2 (`create_commit_on_branch`,
+one fixed mutation text over `POST /graphql`, additions sorted by path before the request is built,
+every failure body-free including a `502` — stricter than `willikins-providers-http`'s shared REST
+handling, via a `suppress_graphql_response_body` step that leaves `401`/`403` and a transport failure
+untouched since both are already body-free). One "Fix commit" followed advisor review: the read test's
+tree-walk fixture had a symlink and a submodule as declared paths but no tree named as a path's own
+*last* segment, so a mutation collapsing that case into `Blob` would have survived; fixed by adding
+`apps/sample/ios/Resources` itself as a declared path, and the tree mocks now pin `Matcher::Missing` on
+the query string so a stray `?recursive=1` could not silently satisfy them (the exact mock-precision
+lesson milestone 3e already paid for once).
+
+Three deviations/notes, none changing decision (b)'s own three-state read table:
+
+1. **A new dependency, not named in this plan or its pre-flight**: `sha1 = "0.10"`, added directly to
+   `willikins-providers-github/Cargo.toml` (not `[workspace.dependencies]`), matching that crate's own
+   `rand_core` precedent for a dependency only it needs. `0.10.6` was already vendored in the local
+   registry cache and needed no network fetch; `0.11` (available) was not taken because nothing else in
+   the workspace pulls RustCrypto's `digest 0.11` line yet (`sha2` here is still `0.10`-family through its
+   own transitive deps) and there was no reason to be first.
+2. **`github.scaffold.ensure` (task G2) does not exist yet**, so every new item in this commit is
+   unreachable from the crate's own plain `lib` build and would fail `-D warnings`' `dead_code` lint on
+   its own. Each of the 31 new items carries `#[allow(dead_code)]` pointing back to `get_branch_head`'s own
+   explanation, the same shape `willikins-cli::render`'s `applied_node_line` already uses while awaiting
+   its own caller ("awaits task 11's caller"). This is temporary: when G2 lands and calls through these
+   methods, most or all of these `#[allow]`s stop being needed and should be removed in that task's own
+   commit, not carried forward as a permanent style.
+3. **Two things for G2 and L1 to settle, flagged rather than pre-decided here**, since G1's own task
+   boundary is "the client reads and the write, exactly as decision (b) describes" and both of these are
+   the tool's or the live harness's own concern:
+   - `resolve_one_path` folds "an intermediate path segment exists but is not a directory" (a file or a
+     symlink sitting where a declared path needs a subdirectory) into the same `PathEntry::Absent` a
+     genuinely-missing path gets. Decision (b)'s read table has no fourth state for this, and folding it
+     into `Absent` is the literal reading of "each path yields: absent; a blob entry …; or a non-blob
+     entry" — but `Absent` is exactly the state `github.scaffold.ensure`'s own read table (decision (b))
+     turns into a `createCommitOnBranch` attempt, and what GitHub's Git database does when a commit's
+     `additions` names a path underneath an existing *file* is one of this milestone's own open verify
+     items in spirit, not something G1 tested. G2 should decide, with a live-probed fact if needed,
+     whether this case needs its own `PathEntry` variant before it ships.
+   - The five read methods, `create_commit_on_branch`, `PathEntry`, and `git_blob_sha` are `pub(crate)`,
+     reachable only from within this crate. Task L1's own harness
+     (`crates/willikins-providers-github/tests/live_scaffold_cycle.rs`) is a separate integration-test
+     crate and cannot call a `pub(crate)` item at all; it will need either these made `pub` (and
+     re-exported from `lib.rs`, which would also delete every `#[allow(dead_code)]` from note 2 above) or
+     to drive them through `github.scaffold.ensure`'s own `Tool` instead. Left to whichever of G2/L1 lands
+     first to decide, since G1's own acceptance (6, 7) needed no more than crate-internal visibility.
+
+Verified with `cargo fmt --all --check`, `cargo clippy -p willikins-providers-github --all-targets -D
+warnings`, and `RUST_TEST_THREADS=2 cargo test -p willikins-providers-github`, all green; `cargo check -p
+willikins-types` green. `cargo test -p willikins-dsl --test acceptance` was not run: `willikins-dsl`
+carries no dependency on `willikins-providers-github` at all (checked directly in its `Cargo.toml`), so
+this task cannot have moved that snapshot.
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Example-Org/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
