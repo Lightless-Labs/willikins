@@ -27,8 +27,10 @@
 //! `doppler.config.inheritable.gate`; milestone 3e task K1 added
 //! `buildkite.token.parse`, the parse tool `buildkite.cluster.get`'s and
 //! `buildkite.pipeline.ensure`'s new optional `token` credential port
-//! binds to, mirroring R2 exactly),
-//! so the catalog this crate produces holds thirty-five tools, in the
+//! binds to, mirroring R2 exactly; the App Attest gate task added
+//! `appstore.bundle_id_capability.gate`, generalizing
+//! `appstore.app_group.gate` to any observable capability),
+//! so the catalog this crate produces holds thirty-six tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -111,6 +113,9 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::FakeAppstoreProfileEnsure::new(state.clone()));
     insert!(tools::FakeAppstoreAppGet::new(state.clone()));
     insert!(tools::FakeAppstoreAppGroupGate::new(state.clone()));
+    insert!(tools::FakeAppstoreBundleIdCapabilityGate::new(
+        state.clone()
+    ));
     insert!(tools::FakeSecretList::new());
     // The last use of `state`: moved rather than cloned, so this
     // function's own `state` parameter is genuinely consumed.
@@ -170,6 +175,7 @@ mod tests {
             "appstore.profile.ensure",
             "appstore.app.get",
             "appstore.app_group.gate",
+            "appstore.bundle_id_capability.gate",
             "fake.secret_list",
             "fake.irreversible.ensure",
             "template.render",
@@ -177,7 +183,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 35);
+        assert_eq!(names.len(), 36);
     }
 
     #[test]

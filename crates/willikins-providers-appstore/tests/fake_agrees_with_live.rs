@@ -12,19 +12,22 @@ use std::sync::{Arc, Mutex};
 
 use willikins_core::{Inputs, Observation, PortName, Tool, Value};
 use willikins_providers_appstore::{
-    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure,
-    AppstoreCertificateGet, AppstoreProfileEnsure,
+    AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure,
+    AppstoreBundleIdCapabilityGate, AppstoreBundleIdEnsure, AppstoreCertificateGet,
+    AppstoreProfileEnsure,
 };
 use willikins_providers_fake::FakeState;
 use willikins_providers_fake::tools::{
     FakeAppstoreAppGet, FakeAppstoreAppGroupGate, FakeAppstoreBundleIdCapabilityEnsure,
-    FakeAppstoreBundleIdEnsure, FakeAppstoreCertificateGet, FakeAppstoreProfileEnsure,
+    FakeAppstoreBundleIdCapabilityGate, FakeAppstoreBundleIdEnsure, FakeAppstoreCertificateGet,
+    FakeAppstoreProfileEnsure,
 };
 use willikins_providers_http::testing::MockProvider;
 use willikins_types::{
     AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier, AppleCapabilitySetting,
     AppleCapabilityType, AppleCertificateId, AppleCertificateSerial, AppleCertificateType,
-    AppleIssuerId, AppleKeyId, AppleProfileName, AppleProfileType, AppleSigningKey, DomainType,
+    AppleIssuerId, AppleKeyId, AppleObservableCapabilityType, AppleProfileName, AppleProfileType,
+    AppleSigningKey, DomainType,
 };
 
 fn issuer_id() -> AppleIssuerId {
@@ -1368,6 +1371,111 @@ fn app_group_gate_present_once_app_groups_is_enabled_agrees() {
         );
     let fake = FakeAppstoreAppGroupGate::new(Arc::new(Mutex::new(fake_state)))
         .read(&app_get_inputs())
+        .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+    assert_eq!(rendered(&live), rendered(&fake));
+}
+
+// ---------------------------------------------------------------------
+// `appstore.bundle_id_capability.gate` -- the App Attest gate task's
+// generalization of `appstore.app_group.gate` to any
+// `AppleObservableCapabilityType`, exercised here with `APP_ATTEST`, the
+// read-only member `AppleCapabilityType` itself refuses.
+// ---------------------------------------------------------------------
+
+fn capability_gate_inputs(capability: &str) -> Inputs {
+    let mut inputs = app_get_inputs();
+    inputs.insert(
+        port("capability"),
+        Value::known(AppleObservableCapabilityType::parse(capability).unwrap()),
+    );
+    inputs
+}
+
+#[test]
+fn capability_gate_absent_when_identifier_not_registered_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"data": []}).to_string())
+        .create();
+    let live = AppstoreBundleIdCapabilityGate::new(provider.url())
+        .read(&capability_gate_inputs("APP_ATTEST"))
+        .expect("the live tool reads");
+    let fake = FakeAppstoreBundleIdCapabilityGate::new(Arc::new(Mutex::new(FakeState::new())))
+        .read(&capability_gate_inputs("APP_ATTEST"))
+        .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn capability_gate_absent_when_registered_but_not_enabled_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(bundle_id_list_body(
+            "BID1",
+            name().as_str(),
+            platform().as_str(),
+        ))
+        .create();
+    provider
+        .mock("GET", "/v1/bundleIds/BID1/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"data": []}).to_string())
+        .create();
+    let live = AppstoreBundleIdCapabilityGate::new(provider.url())
+        .read(&capability_gate_inputs("APP_ATTEST"))
+        .expect("the live tool reads");
+    let fake_state = FakeState::new().with_apple_bundle_id(&identifier(), &name(), &platform());
+    let fake = FakeAppstoreBundleIdCapabilityGate::new(Arc::new(Mutex::new(fake_state)))
+        .read(&capability_gate_inputs("APP_ATTEST"))
+        .expect("the fake tool reads");
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn capability_gate_present_once_a_read_only_capability_is_enabled_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v1/bundleIds")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(bundle_id_list_body(
+            "BID1",
+            name().as_str(),
+            platform().as_str(),
+        ))
+        .create();
+    provider
+        .mock("GET", "/v1/bundleIds/BID1/bundleIdCapabilities")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": [{"attributes": {"capabilityType": "APP_ATTEST"}}]})
+                .to_string(),
+        )
+        .create();
+    let live = AppstoreBundleIdCapabilityGate::new(provider.url())
+        .read(&capability_gate_inputs("APP_ATTEST"))
+        .expect("the live tool reads");
+    let mut fake_state = FakeState::new().with_apple_bundle_id(&identifier(), &name(), &platform());
+    // `AppleCapabilityType` cannot express `APP_ATTEST` -- inserted
+    // directly, the same shape a real read-only row would leave in the
+    // fake's own state (`FakeAppstoreBundleIdCapabilityGate`'s own unit
+    // test does the same).
+    fake_state
+        .apple_bundle_id_capabilities
+        .entry(identifier().as_str().to_string())
+        .or_default()
+        .insert("APP_ATTEST".to_string());
+    let fake = FakeAppstoreBundleIdCapabilityGate::new(Arc::new(Mutex::new(fake_state)))
+        .read(&capability_gate_inputs("APP_ATTEST"))
         .expect("the fake tool reads");
     assert_eq!(shape(&live), shape(&fake));
     assert_eq!(rendered(&live), rendered(&fake));

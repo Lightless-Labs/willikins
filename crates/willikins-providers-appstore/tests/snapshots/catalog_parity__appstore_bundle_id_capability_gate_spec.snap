@@ -1,0 +1,52 @@
+---
+source: crates/willikins-providers-appstore/tests/catalog_parity.rs
+assertion_line: 121
+expression: "spec_json(AppstoreBundleIdCapabilityGate::new(NOWHERE).spec())"
+---
+{
+  "class": "reversible",
+  "description": "A gate: whether a named capability is enabled on a bundle identifier.",
+  "inputs": {
+    "capability": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleObservableCapabilityType"
+      }
+    },
+    "identifier": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleBundleIdentifier"
+      }
+    },
+    "issuer_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleIssuerId"
+      }
+    },
+    "key": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleSigningKey"
+      }
+    },
+    "key_id": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleKeyId"
+      }
+    }
+  },
+  "key": [],
+  "name": "appstore.bundle_id_capability.gate",
+  "outputs": {
+    "identifier": "AppleBundleIdentifier"
+  },
+  "pure": true
+}
