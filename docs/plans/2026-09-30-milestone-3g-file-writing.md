@@ -201,6 +201,63 @@ tests (`3e3d766`); the characterization snapshot changes only by their six added
 existing document plans byte-identically. No secret, `Text` or caller byte reaches a committed file; a
 moved head can neither duplicate nor lose a commit. B1's configuration leak is out of this group.
 
+**Addendum:** 2026-09-30 (B1) — `buildkite.pipeline.bootstrap.gate` landed in both crates, exactly the task
+row's two commits: commit 1, the live tool (`crates/willikins-providers-buildkite/src/tools/pipeline_bootstrap_gate.rs`),
+a new `BuildkiteClient::get_pipeline_configuration` and `PipelineConfigurationBody` (deserializing only
+`configuration`, no `Debug` impl), and redaction tests; commit 2, the fake twin, catalog registration
+(`LIVE_TOOL_NAMES` 36 → 37, `BUILDKITE_TOOL_NAMES` 2 → 3), and a `configuration` field added to
+`BuildkitePipelineRecord` (`#[serde(default)]`, so no existing fixture breaks). Step 0 (the sandbox probe of
+verify item 9) was skipped per the coordinator's own instructions: it was already settled read-only on
+2026-09-30 (`GET` on Walter's real pipeline answered `200` with a `configuration` field, currently the
+frozen upload bootstrap). A third, small "Fix commit" followed: `willikins-providers-fake/src/lib.rs`'s own
+whole-catalog JSON-listing snapshot (separate from `catalog_parity.rs`'s per-tool ones) needed regenerating
+too, missed in commit 2's own gate because the crate's scoped `cargo test` run before that gate had not yet
+included it in the failure surfaced; diff confirmed as exactly the new tool's entry, reviewed before
+accepting.
+
+Four deviations from a literal reading of this section's own text:
+
+1. **`structurally_equal` parses YAML into a `serde_json::Value`, not a `serde_yaml_ng::Value`** — a
+   literal reading of decision (h)'s "both strings parsed as YAML into a JSON value and compared for
+   equality". Both crates already depend on `serde_json`, so this added no further dependency.
+2. **The gate's `need`/`how` strings are generic, not Walter-specific.** This section's own prose quotes
+   Walter's own wording ("the walter pipeline's stored bootstrap...", "...apps/walter/.buildkite/bootstrap.yml
+   from the monorepo") to explain the gate in context, but the tool itself serves any document, and decision
+   (j)'s own rule ("a gate never authors a string from its inputs") means `need`/`how` cannot name a
+   document-specific path anyway. The landed strings describe the gate generically: "this pipeline's stored
+   configuration equals the bootstrap this document renders" / "in the pipeline's Settings, Steps page,
+   replace the YAML with the rendered bootstrap file this document committed, save, then re-run this
+   document" — "renders", not "committed", would have been more honest in the `need` text (nothing is
+   committed by a first run that blocks), but the shipped `how` already says "committed" in its second half;
+   left as a known wording nit rather than re-litigated here, since neither `need` nor `how` is otherwise
+   wrong and both are `&'static str` a later task can still tighten.
+3. **A new dependency, `serde_yaml_ng`, added directly to both `willikins-providers-buildkite` and
+   `willikins-providers-fake`'s `Cargo.toml`** (not named in this plan or its pre-flight) — already a
+   workspace dependency (`willikins-dsl`, `willikins-cli`), so `Cargo.lock` only gained two new
+   `dependencies` edges, no new `[[package]]` entries and no network fetch.
+4. **An `expected` that fails to parse as YAML reads `Absent` forever**, with the gate's own static `how`
+   telling the operator to paste YAML that can never make it equal — a document bug knowable from inputs
+   alone. `github.scaffold.ensure`'s own precedent (an over-long marker refused `Invalid` before any
+   request) would argue for the same here, but `expected` is a `RepoFile` already validated by
+   `repo.file.render`'s own bound, not a caller-controlled string this gate parses itself for shape; adding
+   a plan-time YAML-validity check was judged outside this task's own scope (the tool table names no
+   `Invalid` outcome for this gate) and is left as an open item for whichever task next touches this tool.
+
+One further note, not a deviation: `BuildkitePipelineRecord`'s new `configuration` field carries the
+struct's existing derived `Debug`/`Serialize`, where the live crate's `PipelineConfigurationBody`
+deliberately has neither. Acceptable: the fake's state is test-only synthetic data, never a real operator's
+bootstrap, and every other field on the same struct (`repository`, `cluster_id`) is already derived the
+same way.
+
+Verified with `cargo fmt --all --check`; `cargo clippy -p willikins-providers-buildkite --all-targets -j 2
+-- -D warnings` and `RUST_TEST_THREADS=2 cargo test -p willikins-providers-buildkite -j 2` both green in
+isolation (commit 1 alone, via `git stash`, before commit 2 landed) and again after; `cargo clippy -p
+willikins-providers-fake --all-targets` and its own test suite; `cargo clippy -p willikins-server
+--all-targets` and `cargo test -p willikins-server` (the mcp meta-tool schema snapshot unchanged); `cargo
+test -p willikins-providers-doppler --test live_catalog`; `cargo check -p willikins-types`; `cargo test -p
+willikins-dsl --test acceptance` (characterization snapshot byte-identical: no document binds this tool
+yet) — all green.
+
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Bande-a-Bonnot/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
