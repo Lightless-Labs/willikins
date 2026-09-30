@@ -2350,9 +2350,9 @@ catalog-construction time).**
   assertions and `image_contents.rs`'s exhaustive `COPY workflows/*.yaml` set both gained the new
   filename in sorted position (fifteen to sixteen positive documents); both green.
 - **A real, committed guard violation, found by the advisor, not by re-running the guard.** Four of
-  the bound-token-port mock/agreement tests wrote `concat!("Bearer ", "bkua_theboundtokenexampleexample")`
-  -- splitting at the wrong seam. The *second* literal alone spells `bkua_` immediately followed by 28
-  real alphanumeric characters, contiguously, in source: exactly what `secret_literal_guard.rs`'s
+  the bound-token-port mock/agreement tests split their `concat!("Bearer ", ...)` at the wrong seam,
+  leaving the whole test token in the *second* argument alone: `bkua_` immediately followed by a
+  contiguous 27-character alphanumeric run, exactly what `secret_literal_guard.rs`'s
   `BUILDKITE_TOKEN` pattern (`{20,}` after any of nine prefixes) exists to catch, and it does --
   `no_provider_token_shaped_literal_anywhere_in_the_tree` fails on the committed tree. `willikins-core`
   was re-run once after commit 1 (before any bound-token test existed) and not again before commit 2,
@@ -2487,16 +2487,20 @@ for GitHub and Buildkite exactly as it already did for App Store Connect.**
   (`new-rust-service.yaml`, whose `github.repo.ensure` node does *not* bind `token`) is the control,
   unchanged and still green, now also asserting `json["node"] == "repo"` -- proving the rule still
   refuses, naming the right node, exactly when it is needed.
-- **A pre-existing, unrelated gate failure found, not fixed.** `cargo test -p willikins-core --test
-  secret_literal_guard` currently fails `no_provider_token_shaped_literal_anywhere_in_the_tree` on
-  this plan file itself, line 2353 -- the K1 addendum's own illustrative quote of the *wrong*-seam
-  `concat!` split (`"bkua_theboundtokenexampleexample"` as one contiguous literal, prose describing
-  the mistake it fixed) is itself exactly the shape the guard scans the whole tree for, markdown
-  included. It is pre-existing (untouched by this task's diff -- `git status` shows this file clean
-  before this addendum's own edit) and is the only offending line the guard names; not fixed here,
-  since rewriting another task's already-recorded addendum prose is outside L1's scope. Recorded for
-  the coordinator, the same way earlier tasks recorded pre-existing failures they found rather than
-  swept in.
+- **A pre-existing, unrelated gate failure found and fixed: a second guard-tripping quote of the same
+  literal, in this very file.** `cargo test -p willikins-core --test secret_literal_guard` failed
+  `no_provider_token_shaped_literal_anywhere_in_the_tree` on this plan file itself before this
+  addendum: the K1 addendum's own illustrative quote of the *wrong*-seam `concat!` split spelled the
+  same `bkua_`-prefixed, 27-character contiguous run as one literal, prose describing the mistake it
+  fixed -- itself exactly the shape the guard scans the whole tree for, markdown included, and this
+  file was clean by `git status` before this addendum's own edit (so this was pre-existing, not
+  introduced by this task's code diff). Rewritten above to describe the shape (`bkua_` immediately
+  followed by a contiguous 27-character run) rather than spell it, the same fix this bullet almost
+  repeated: a first draft of *this very bullet* quoted that literal a second time to describe the
+  first violation, which the advisor caught before this addendum was committed -- proof, inside this
+  same task, of K1's own recorded lesson ("re-run the guard after every new text that spells a
+  credential shape, not only after code"). `cargo test -p willikins-core --test secret_literal_guard`
+  is green on this file after both rewrites, verified before this addendum was committed, not assumed.
 - **No provider call of any kind was made for this task** -- every check ran against a mock server
   that never leaves the process, an in-memory `Workflow`, or a subprocess with `env_clear` and no
   registered credential for the provider under test.
