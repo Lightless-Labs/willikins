@@ -431,6 +431,38 @@ fn read_conflicts_when_a_seed_path_is_a_symlink() {
     assert!(err.message.contains("BUILD.bazel"), "{}", err.message);
 }
 
+/// A tree listing GitHub marks `truncated: true` may have dropped the very
+/// entry a declared path names; reading its absence as `Absent` would
+/// hand an existing file to `createCommitOnBranch` as a new one, an
+/// overwrite. Adversarial pass (render and write): refused as `Provider`,
+/// and nothing is committed.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_truncated_tree_is_a_provider_failure_never_absent() {
+    let mut provider = MockProvider::start();
+    mock_ref_and_commit(&mut provider, "head-1", "root-tree");
+    provider
+        .mock("GET", "/repos/acme/widget/git/trees/root-tree")
+        .match_query(mockito::Matcher::Missing)
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"sha": "root-tree", "tree": [], "truncated": true}).to_string(),
+        )
+        .create();
+    let commit = provider.mock("POST", "/graphql").expect(0).create();
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider, "{}", err.message);
+
+    let token = SinkToken::new();
+    let err = tool
+        .ensure(&scaffold_inputs(seed_files()), &token)
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider, "{}", err.message);
+    commit.assert();
+}
+
 #[test]
 fn read_reports_not_found_when_the_branch_does_not_exist() {
     let mut provider = MockProvider::start();
