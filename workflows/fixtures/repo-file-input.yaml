@@ -1,0 +1,23 @@
+# Milestone 3g, decision (e) and acceptance 4
+# (docs/plans/2026-09-30-milestone-3g-file-writing.md): a caller-supplied
+# repository file bound into a scaffold. No committed byte comes from a
+# caller. Pinned by
+# `template_source_or_repo_file_inputs_and_defaults_each_fail_check_with_exactly_one_error`
+# (crates/willikins-dsl/tests/acceptance.rs). `check` must return exactly one
+# error:
+#   DisallowedInputType { input: file, ty: RepoFile }
+name: repo-file-input
+description: A repository file declared as a workflow input.
+inputs:
+  repo: { type: GitHubRepo, description: "The repository to scaffold" }
+  file: { type: RepoFile, description: "A caller's file" }
+steps:
+  scaffold:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ inputs.repo }}
+      branch: main
+      marker: app/.willikins-scaffold
+      files:
+        - ${{ inputs.file }}
+      message: "feat(app): scaffold"

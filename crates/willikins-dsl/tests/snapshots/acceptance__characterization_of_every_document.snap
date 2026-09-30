@@ -420,6 +420,18 @@ PLAN:
 plan_json: {"workflow":"redaction-marker-default","nodes":[{"name":"readme","instance":null,"tool":"template.render","action":"compute","inputs":{"template":{"type":"TemplateSource","list":false,"state":"known","value":"Note: {{ value }}"},"value":{"type":"Text","list":false,"state":"known","value":"[REDACTED DopplerServiceToken]"}},"outputs":{"rendered":{"type":"Text","list":false,"state":"known","value":"Note: [REDACTED DopplerServiceToken]"}}}],"outputs":{"rendered":{"type":"Text","list":false,"state":"known","value":"Note: [REDACTED DopplerServiceToken]"}},"class":"reversible","requires_approval":false}
 fingerprint: [{"name":"readme","instance":null,"action":"compute","outputs":[["rendered","Note: [REDACTED DopplerServiceToken]"]]}]
 
+=== workflows/fixtures/repo-file-default.yaml ===
+CHECK ERRORS:
+- kind=DisallowedInputType display=input `file`: declared type `RepoFile` may never be a workflow input or a default; it is privileged, trusted-ref document content json={"kind":"DisallowedInputType","input":"file","ty":"RepoFile"}
+
+=== workflows/fixtures/repo-file-input.yaml ===
+CHECK ERRORS:
+- kind=DisallowedInputType display=input `file`: declared type `RepoFile` may never be a workflow input or a default; it is privileged, trusted-ref document content json={"kind":"DisallowedInputType","input":"file","ty":"RepoFile"}
+
+=== workflows/fixtures/repo-file-literal-in-scaffold.yaml ===
+CHECK ERRORS:
+- kind=RepoFileLiteral display=node `scaffold`, port `files`: a literal cannot supply a repository file json={"kind":"RepoFileLiteral","node":"scaffold","port":"files"}
+
 === workflows/fixtures/secret-for-each.yaml ===
 CHECK ERRORS:
 - kind=SecretForEachSource display=node `loop`: for_each source is secret json={"kind":"SecretForEachSource","node":"loop"}
@@ -457,6 +469,10 @@ PLAN ERROR: node `secret`: NotFound: no secret at `third-thoughts/prd#DATABASE_U
 CHECK ERRORS:
 - kind=SecretWorkflowInput display=input `token` has secret type `DopplerServiceToken`; a workflow input may not be secret json={"kind":"SecretWorkflowInput","input":"token","ty":"DopplerServiceToken"}
 
+=== workflows/fixtures/secret-into-repo-file.yaml ===
+CHECK ERRORS:
+- kind=SecretToNonSecretSink display=secret value from node `secret`, port `value` flows into non-secret sink at `render.values[0]` json={"kind":"SecretToNonSecretSink","from":["secret","value"],"to":{"kind":"list_element","node":"render","port":"values","index":0}}
+
 === workflows/fixtures/secret-into-template.yaml ===
 CHECK ERRORS:
 - kind=SecretToNonSecretSink display=secret value from node `token`, port `token` flows into non-secret sink at `readme.value` json={"kind":"SecretToNonSecretSink","from":["token","token"],"to":{"kind":"port","node":"readme","port":"value"}}
@@ -486,6 +502,14 @@ CHECK ERRORS:
 === workflows/fixtures/secret-set-literal-config.yaml ===
 CHECK ERRORS:
 - kind=UnderivedBinding display=node `sink`, port `config`: this port may only be bound to the output of an earlier, non-pure node — never a literal, a workflow input, a for_each item, or a pure node's output json={"kind":"UnderivedBinding","node":"sink","port":"config"}
+
+=== workflows/fixtures/template-source-default.yaml ===
+CHECK ERRORS:
+- kind=DisallowedInputType display=input `template`: declared type `TemplateSource` may never be a workflow input or a default; it is privileged, trusted-ref document content json={"kind":"DisallowedInputType","input":"template","ty":"TemplateSource"}
+
+=== workflows/fixtures/template-source-input.yaml ===
+CHECK ERRORS:
+- kind=DisallowedInputType display=input `template`: declared type `TemplateSource` may never be a workflow input or a default; it is privileged, trusted-ref document content json={"kind":"DisallowedInputType","input":"template","ty":"TemplateSource"}
 
 === workflows/fixtures/type-mismatch.yaml ===
 CHECK ERRORS:

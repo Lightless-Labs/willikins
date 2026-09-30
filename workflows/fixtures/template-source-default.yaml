@@ -1,0 +1,18 @@
+# Milestone 3g, decision (e) and acceptance 4
+# (docs/plans/2026-09-30-milestone-3g-file-writing.md): a template declared
+# as a workflow input with a default. A default does not make an input
+# document content: a caller can still override it. Pinned by
+# `template_source_or_repo_file_inputs_and_defaults_each_fail_check_with_exactly_one_error`
+# (crates/willikins-dsl/tests/acceptance.rs). `check` must return exactly one
+# error:
+#   DisallowedInputType { input: template, ty: TemplateSource }
+name: template-source-default
+description: A template declared as a workflow input with a default.
+inputs:
+  template: { type: TemplateSource, default: "# reserved\n", description: "A defaulted template" }
+steps:
+  render:
+    tool: repo.file.render
+    with:
+      path: apps/sample/BUILD.bazel
+      template: ${{ inputs.template }}

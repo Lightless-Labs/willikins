@@ -116,6 +116,75 @@ fn acknowledgement_literal_fails_check_with_exactly_one_error() {
     );
 }
 
+/// Load `fixture` and check it against the fake catalog, expecting it to
+/// fail with errors.
+fn check_errors(fixture: &str) -> Vec<willikins_core::CheckError> {
+    let path = fixture_path(fixture);
+    let workflow = load_document(Path::new(&path)).expect("the negative fixture loads and parses");
+    let (_state, catalog) = willikins_providers_fake::empty();
+    willikins_core::check(&workflow, &catalog).expect_err("the negative fixture must fail check")
+}
+
+/// Acceptance 4 of milestone 3g (decision (e)): a Doppler secret as an
+/// element of `repo.file.render`'s `values` is exactly one taint error at
+/// `render.values[0]`. Deferred by E2 to the task landing the tool (T1),
+/// added by the render-and-write adversarial pass.
+#[test]
+fn secret_into_repo_file_fails_check_with_exactly_one_taint_error() {
+    let errors = check_errors("workflows/fixtures/secret-into-repo-file.yaml");
+    assert_eq!(
+        errors,
+        vec![willikins_core::CheckError::SecretToNonSecretSink {
+            from: (
+                node("secret"),
+                willikins_core::PortName::parse("value").unwrap()
+            ),
+            to: willikins_core::Site::list_element(
+                node("render"),
+                willikins_core::PortName::parse("values").unwrap(),
+                0
+            ),
+        }]
+    );
+}
+
+/// Acceptance 4 of milestone 3g: a literal repository file as an element
+/// of `github.scaffold.ensure`'s `files` is exactly one `RepoFileLiteral`.
+#[test]
+fn repo_file_literal_in_scaffold_fails_check_with_exactly_one_error() {
+    let errors = check_errors("workflows/fixtures/repo-file-literal-in-scaffold.yaml");
+    assert_eq!(
+        errors,
+        vec![willikins_core::CheckError::RepoFileLiteral {
+            node: node("scaffold"),
+            port: willikins_core::PortName::parse("files").unwrap(),
+        }]
+    );
+}
+
+/// Acceptance 4 of milestone 3g: a `TemplateSource` or a `RepoFile` as a
+/// workflow input, with or without a default, is exactly one
+/// `DisallowedInputType` each.
+#[test]
+fn template_source_or_repo_file_inputs_and_defaults_each_fail_check_with_exactly_one_error() {
+    for (fixture, input, ty) in [
+        ("template-source-input.yaml", "template", "TemplateSource"),
+        ("template-source-default.yaml", "template", "TemplateSource"),
+        ("repo-file-input.yaml", "file", "RepoFile"),
+        ("repo-file-default.yaml", "file", "RepoFile"),
+    ] {
+        let errors = check_errors(&format!("workflows/fixtures/{fixture}"));
+        assert_eq!(
+            errors,
+            vec![willikins_core::CheckError::DisallowedInputType {
+                input: InputName::parse(input).unwrap(),
+                ty: willikins_core::TypeRef::scalar(willikins_core::TypeName::parse(ty).unwrap()),
+            }],
+            "{fixture}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------
 // Milestone 3d, equivalence item 1: a characterization snapshot of every
 // shipped document, committed before any production change (C1). After
