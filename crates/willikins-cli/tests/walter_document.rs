@@ -1317,3 +1317,196 @@ fn a_missing_base_config_blocks_its_gate_and_skips_inherit() {
     let applied_json = serde_json::to_string(&applied).unwrap();
     assert_no_secret_leaked(&applied_json);
 }
+
+/// Decision (i): `data_protection`'s literal setting and
+/// `Walter.entitlements`' own `com.apple.developer.default-data-protection`
+/// value must name the same Apple data-protection class, so the two
+/// cannot drift apart now that `data_protection` is no longer a
+/// caller-supplied input.
+#[test]
+fn data_protection_literal_and_entitlement_name_the_same_class() {
+    fn normalized(text: &str) -> String {
+        text.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_uppercase())
+            .collect()
+    }
+
+    use willikins_core::{Binding, NodeName, PortName};
+    let workflow = document();
+    let data_protection_setting = match workflow.nodes[&NodeName::parse("data_protection").unwrap()]
+        .with
+        .get(&PortName::parse("setting").unwrap())
+    {
+        Some(Binding::Literal(text)) => text.clone(),
+        other => panic!("data_protection.setting must be a literal, got {other:?}"),
+    };
+    let entitlements_template = match workflow.nodes
+        [&NodeName::parse("walter_entitlements").unwrap()]
+        .with
+        .get(&PortName::parse("template").unwrap())
+    {
+        Some(Binding::Literal(text)) => text.clone(),
+        other => panic!("walter_entitlements.template must be a literal, got {other:?}"),
+    };
+    let class_token = "FIRSTUSERAUTH";
+    assert!(
+        normalized(&data_protection_setting).contains(class_token),
+        "data_protection.setting must name the FirstUserAuth class: {data_protection_setting}"
+    );
+    assert!(
+        normalized(&entitlements_template).contains(class_token),
+        "Walter.entitlements must name the FirstUserAuth class"
+    );
+}
+
+/// Decision (b)/(c): a scaffold conflict at plan time. Pre-landing fake
+/// state (no marker seeded) with the exact path
+/// `apps/walter/ios/BUILD.bazel` holding different content than what this
+/// document would render: `plan` fails, naming that path -- never an
+/// overwrite.
+#[test]
+fn a_preexisting_differing_file_fails_plan_naming_the_path() {
+    let workflow = document();
+    let state = seeded_state();
+    {
+        let mut locked = state.lock().unwrap();
+        *locked = std::mem::take(&mut *locked).with_scaffold_files(
+            &GitHubRepo::parse(MONOREPO).unwrap(),
+            &willikins_types::GitBranchName::parse("main").unwrap(),
+            &[("apps/walter/ios/BUILD.bazel", "# someone else's file\n")],
+        );
+    }
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks: {errors:?}"));
+    let inputs = with_acknowledgements(base_inputs());
+    let err = plan(&checked, &inputs, &catalog)
+        .expect_err("plan must fail: a differing file already exists at that path");
+    let message = err.to_string();
+    assert!(
+        message.contains("apps/walter/ios/BUILD.bazel"),
+        "plan error must name the differing path: {message}"
+    );
+}
+
+/// Decision (i)/the survey: the Buildkite pipeline is created only after
+/// its own `.buildkite/` files exist on the branch -- `pipeline.repo`
+/// binds from `walter_files.repo`, never `monorepo_ref.repo` directly.
+#[test]
+fn pipeline_is_ordered_after_the_scaffold() {
+    use willikins_core::{Binding, NodeName, PortName};
+    let workflow = document();
+    let pipeline = &workflow.nodes[&NodeName::parse("pipeline").unwrap()];
+    assert_eq!(
+        pipeline.with.get(&PortName::parse("repo").unwrap()),
+        Some(&Binding::Step {
+            node: NodeName::parse("walter_files").unwrap(),
+            port: PortName::parse("repo").unwrap(),
+        }),
+        "pipeline.repo must bind from walter_files.repo, so the pipeline is ordered after the \
+         scaffold"
+    );
+}
+
+/// Acceptance 10: `walter_files` binds all seventeen renders, and no
+/// `operator.acknowledge` node remains for M3 or M7.
+#[test]
+fn walter_files_binds_all_seventeen_renders_and_m3_m7_acknowledgements_are_gone() {
+    use willikins_core::{Binding, NodeName, PortName};
+    let workflow = document();
+    let walter_files = &workflow.nodes[&NodeName::parse("walter_files").unwrap()];
+    let files = match walter_files.with.get(&PortName::parse("files").unwrap()) {
+        Some(Binding::List(elements)) => elements,
+        other => panic!("walter_files.files must be a list binding, got {other:?}"),
+    };
+    assert_eq!(
+        files.len(),
+        17,
+        "walter_files.files must bind all 17 renders"
+    );
+
+    for name in ["m3_repo_files", "m7_bootstrap"] {
+        assert!(
+            !workflow.nodes.contains_key(&NodeName::parse(name).unwrap()),
+            "`{name}` must not exist as a node any more"
+        );
+    }
+    for input in ["m3_repo_files_done", "m7_bootstrap_done", "data_protection"] {
+        assert!(
+            !workflow
+                .inputs
+                .contains_key(&InputName::parse(input).unwrap()),
+            "`{input}` must not be a declared input any more"
+        );
+    }
+}
+
+/// Acceptance 11: one `insta` snapshot per rendered file, for the real
+/// identifiers `com.bande-a-bonnot.walter`, `.nse`, `.widgets` -- the
+/// artefact the operator reviews and builds (verify item 8). Read at plan
+/// time: `repo.file.render` is pure, so `plan` itself computes and
+/// carries every render's known `file` output (no apply needed).
+#[test]
+fn rendered_files_snapshot_for_the_real_identifiers() {
+    const RENDER_NODES: [&str; 17] = [
+        "build_bazel_app",
+        "build_bazel_ios",
+        "walter_app_swift",
+        "nse_swift",
+        "widgets_swift",
+        "info_plist",
+        "nse_info_plist",
+        "widgets_info_plist",
+        "walter_entitlements",
+        "nse_entitlements",
+        "widgets_entitlements",
+        "privacy_manifest",
+        "pipeline_yml",
+        "upload_pipeline_sh",
+        "bootstrap_yml",
+        "provider_settings",
+        "buildkite_readme",
+    ];
+
+    let workflow = document();
+    let state = seeded_state();
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+
+    let mut inputs = base_inputs();
+    inputs.insert(
+        InputName::parse("app_identifier").unwrap(),
+        scalar("AppleBundleIdentifier", "com.bande-a-bonnot.walter"),
+    );
+    inputs.insert(
+        InputName::parse("nse_identifier").unwrap(),
+        scalar("AppleBundleIdentifier", "com.bande-a-bonnot.walter.nse"),
+    );
+    inputs.insert(
+        InputName::parse("widgets_identifier").unwrap(),
+        scalar("AppleBundleIdentifier", "com.bande-a-bonnot.walter.widgets"),
+    );
+    let inputs = with_acknowledgements(inputs);
+
+    let planned = plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("{err}"));
+
+    for node in RENDER_NODES {
+        let planned_node = planned
+            .nodes
+            .iter()
+            .find(|n| n.name.as_str() == node && n.instance.is_none())
+            .unwrap_or_else(|| panic!("node `{node}` was planned"));
+        let file = planned_node
+            .outputs
+            .get(&PortName::parse("file").unwrap())
+            .unwrap_or_else(|| panic!("`{node}.file` was planned"))
+            .downcast::<RepoFile>()
+            .unwrap_or_else(|| panic!("`{node}.file` is a RepoFile"));
+        insta::assert_snapshot!(
+            format!("walter_render_{node}"),
+            format!("{}\n---\n{}", file.path(), file.content())
+        );
+    }
+}

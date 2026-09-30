@@ -1,0 +1,10 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/.buildkite/upload-pipeline.sh
+---
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec buildkite-agent pipeline upload --no-interpolation apps/walter/.buildkite/pipeline.yml

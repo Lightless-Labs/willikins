@@ -1,0 +1,36 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/ios/Resources/Info.plist
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleName</key>
+    <string>Walter</string>
+    <key>CFBundleDisplayName</key>
+    <string>Walter</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+    <key>NSHealthShareUsageDescription</key>
+    <string>Walter reads Health data you choose to share so it can help you track your health.</string>
+    <key>NSHealthUpdateUsageDescription</key>
+    <string>Walter writes Health data only when you explicitly approve an action that records it.</string>
+    <key>UILaunchScreen</key>
+    <dict/>
+</dict>
+</plist>

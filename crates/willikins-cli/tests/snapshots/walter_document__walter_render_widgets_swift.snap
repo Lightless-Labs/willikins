@@ -1,0 +1,45 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/ios/WalterWidgets/Sources/WalterWidgets.swift
+---
+import SwiftUI
+import WidgetKit
+
+struct WalterPlaceholderEntry: TimelineEntry {
+    let date: Date
+}
+
+struct WalterPlaceholderProvider: TimelineProvider {
+    func placeholder(in context: Context) -> WalterPlaceholderEntry {
+        WalterPlaceholderEntry(date: Date())
+    }
+
+    func getSnapshot(in context: Context, completion: @escaping (WalterPlaceholderEntry) -> Void) {
+        completion(WalterPlaceholderEntry(date: Date()))
+    }
+
+    func getTimeline(in context: Context, completion: @escaping (Timeline<WalterPlaceholderEntry>) -> Void) {
+        completion(Timeline(entries: [WalterPlaceholderEntry(date: Date())], policy: .never))
+    }
+}
+
+struct WalterPlaceholderWidget: Widget {
+    let kind: String = "WalterPlaceholderWidget"
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: WalterPlaceholderProvider()) { _ in
+            Text("Walter")
+        }
+        .configurationDisplayName("Walter")
+        .description("A placeholder widget.")
+    }
+}
+
+@main
+struct WalterWidgets: WidgetBundle {
+    var body: some Widget {
+        WalterPlaceholderWidget()
+    }
+}

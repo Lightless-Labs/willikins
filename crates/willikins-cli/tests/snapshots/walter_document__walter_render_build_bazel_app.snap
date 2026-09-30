@@ -1,0 +1,7 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/BUILD.bazel
+---
+# Walter app package.

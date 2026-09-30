@@ -1,0 +1,15 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/.buildkite/provider-settings.json
+---
+{
+  "default_branch": "main",
+  "provider_settings": {
+    "build_branches": false,
+    "build_pull_requests": false,
+    "build_pull_request_forks": false,
+    "build_tags": false
+  }
+}

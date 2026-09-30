@@ -1,0 +1,206 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/ios/BUILD.bazel
+---
+load("@rules_apple//apple:apple.bzl", "local_provisioning_profile")
+load("@rules_apple//apple:ios.bzl", "ios_application", "ios_extension")
+load("@rules_apple//apple:versioning.bzl", "apple_bundle_version")
+load("@rules_swift//swift:swift.bzl", "swift_library")
+
+config_setting(
+    name = "ci_build",
+    define_values = {"ci": "true"},
+    visibility = ["//apps/walter:__subpackages__"],
+)
+
+config_setting(
+    name = "internal_build",
+    define_values = {"variant": "internal"},
+    visibility = ["//apps/walter:__subpackages__"],
+)
+
+config_setting(
+    name = "ios_simulator_build",
+    define_values = {"ios_simulator": "true"},
+    visibility = ["//apps/walter:__subpackages__"],
+)
+
+config_setting(
+    name = "internal_simulator_build",
+    define_values = {
+        "ios_simulator": "true",
+        "variant": "internal",
+    },
+    visibility = ["//apps/walter:__subpackages__"],
+)
+
+config_setting(
+    name = "beta_simulator_build",
+    define_values = {
+        "ios_simulator": "true",
+        "variant": "beta",
+    },
+    visibility = ["//apps/walter:__subpackages__"],
+)
+
+config_setting(
+    name = "beta_build",
+    define_values = {"variant": "beta"},
+    visibility = ["//apps/walter:__subpackages__"],
+)
+
+apple_bundle_version(
+    name = "app_version",
+    build_label_pattern = "{version}.{build}",
+    build_version = "{version}.{build}",
+    capture_groups = {
+        "version": "\d+\.\d+\.\d+",
+        "build": "\d+",
+    },
+    fallback_build_label = "0.1.0.0",
+    short_version_string = "{version}",
+)
+
+local_provisioning_profile(
+    name = "local_profile",
+    profile_name = "iOS Team Provisioning Profile: *",
+    tags = ["manual"],
+)
+
+local_provisioning_profile(
+    name = "distribution_profile",
+    profile_name = "com.bande-a-bonnot.walter",
+    tags = ["manual"],
+)
+
+local_provisioning_profile(
+    name = "nse_distribution_profile",
+    profile_name = "com.bande-a-bonnot.walter.nse",
+    tags = ["manual"],
+)
+
+local_provisioning_profile(
+    name = "widgets_distribution_profile",
+    profile_name = "com.bande-a-bonnot.walter.widgets",
+    tags = ["manual"],
+)
+
+swift_library(
+    name = "WalterAppLib",
+    srcs = glob(["Walter/Sources/**/*.swift"]),
+    module_name = "Walter",
+    target_compatible_with = ["@platforms//os:ios"],
+    visibility = ["//build/visibility:ios"],
+)
+
+swift_library(
+    name = "WalterNotificationServiceLib",
+    srcs = glob(["WalterNotificationService/Sources/**/*.swift"]),
+    module_name = "WalterNotificationService",
+    target_compatible_with = ["@platforms//os:ios"],
+)
+
+swift_library(
+    name = "WalterWidgetsLib",
+    srcs = glob(["WalterWidgets/Sources/**/*.swift"]),
+    module_name = "WalterWidgets",
+    target_compatible_with = ["@platforms//os:ios"],
+)
+
+ios_extension(
+    name = "WalterNotificationServiceExtension",
+    bundle_id = "com.bande-a-bonnot.walter.nse",
+    bundle_name = "WalterNotificationService",
+    entitlements = select({
+        ":ci_build": None,
+        ":ios_simulator_build": None,
+        ":internal_simulator_build": None,
+        ":beta_simulator_build": None,
+        "//conditions:default": "Resources/WalterNotificationService.entitlements",
+    }),
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["Resources/WalterNotificationService-Info.plist"],
+    minimum_os_version = "17.0",
+    provisioning_profile = select({
+        ":internal_simulator_build": None,
+        ":beta_simulator_build": None,
+        ":ios_simulator_build": None,
+        ":internal_build": ":nse_distribution_profile",
+        ":beta_build": ":nse_distribution_profile",
+        ":ci_build": None,
+        "//conditions:default": ":local_profile",
+    }),
+    version = ":app_version",
+    deps = [":WalterNotificationServiceLib"],
+)
+
+ios_extension(
+    name = "WalterWidgetsExtension",
+    bundle_id = "com.bande-a-bonnot.walter.widgets",
+    bundle_name = "WalterWidgets",
+    entitlements = select({
+        ":ci_build": None,
+        ":ios_simulator_build": None,
+        ":internal_simulator_build": None,
+        ":beta_simulator_build": None,
+        "//conditions:default": "Resources/WalterWidgets.entitlements",
+    }),
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["Resources/WalterWidgets-Info.plist"],
+    minimum_os_version = "17.0",
+    provisioning_profile = select({
+        ":internal_simulator_build": None,
+        ":beta_simulator_build": None,
+        ":ios_simulator_build": None,
+        ":internal_build": ":widgets_distribution_profile",
+        ":beta_build": ":widgets_distribution_profile",
+        ":ci_build": None,
+        "//conditions:default": ":local_profile",
+    }),
+    version = ":app_version",
+    deps = [":WalterWidgetsLib"],
+)
+
+ios_application(
+    name = "Walter",
+    bundle_id = "com.bande-a-bonnot.walter",
+    bundle_name = "Walter",
+    entitlements = select({
+        ":ci_build": None,
+        ":ios_simulator_build": None,
+        ":internal_simulator_build": None,
+        ":beta_simulator_build": None,
+        "//conditions:default": "Resources/Walter.entitlements",
+    }),
+    extensions = [
+        ":WalterNotificationServiceExtension",
+        ":WalterWidgetsExtension",
+    ],
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["Resources/Info.plist"],
+    minimum_os_version = "17.0",
+    provisioning_profile = select({
+        ":internal_simulator_build": None,
+        ":beta_simulator_build": None,
+        ":ios_simulator_build": None,
+        ":internal_build": ":distribution_profile",
+        ":beta_build": ":distribution_profile",
+        ":ci_build": None,
+        "//conditions:default": ":local_profile",
+    }),
+    resources = ["Resources/PrivacyInfo.xcprivacy"],
+    version = ":app_version",
+    visibility = ["//build/visibility:ios"],
+    deps = [":WalterAppLib"],
+)

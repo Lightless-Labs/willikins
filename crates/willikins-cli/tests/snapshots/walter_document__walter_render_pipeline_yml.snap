@@ -1,0 +1,41 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/.buildkite/pipeline.yml
+---
+{
+  "steps": [
+    {
+      "key": "walter-validation",
+      "label": "Walter: credential-free validation",
+      "timeout_in_minutes": 180,
+      "concurrency": 1,
+      "concurrency_group": "big-cabbage/tart-ci-macos",
+      "agents": {"queue": "ci-macos-apple-silicon"},
+      "env": {"CI": "true", "TART_NO_AUTO_PRUNE": "1"},
+      "plugins": [
+        {
+          "github.com/Lightless-Labs/tart-ci#11fc336384a3c2a88209dfba3c429bbf61c1dac7": {
+            "image": "ci-macos-rust-bazel-ios-20260910-v2",
+            "os": "macos",
+            "headless": true,
+            "always_pull": false,
+            "shell": "/bin/bash",
+            "checkout_mount": "checkout",
+            "env": [
+              "BUILDKITE_COMMIT",
+              "BUILDKITE_JOB_ID",
+              "BUILDKITE_BUILD_ID",
+              "BUILDKITE_BUILD_NUMBER",
+              "BUILDKITE_PIPELINE_SLUG",
+              "BUILDKITE_BUILD_URL",
+              "CI"
+            ]
+          }
+        }
+      ],
+      "command": "bazel build --config=ci -- //apps/walter/..."
+    }
+  ]
+}

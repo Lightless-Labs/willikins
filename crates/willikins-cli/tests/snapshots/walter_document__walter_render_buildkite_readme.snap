@@ -1,0 +1,22 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/.buildkite/README.md
+---
+# Walter Buildkite files
+
+These files describe Walter's Buildkite pipeline: `pipeline.yml` (the real,
+credential-free validation graph, building `//apps/walter/...` under
+`--config=ci`), `upload-pipeline.sh` (how the pipeline's stored bootstrap gets
+to `pipeline.yml`), and `provider-settings.json` (every automatic provider
+trigger disabled until this scaffold is reviewed).
+
+`bootstrap.yml` is this document's own copy of the pipeline's intended stored
+bootstrap (`buildkite.pipeline.bootstrap.gate` compares the two structurally,
+as YAML, not byte for byte). Paste it into the pipeline's Settings -> Steps
+page by hand to replace the frozen upload bootstrap the pipeline was created
+with, then re-run this document -- the gate reads `Compute` once they agree.
+
+Triggers stay disabled until this scaffold has been reviewed and the pipeline
+has run at least once with real content.

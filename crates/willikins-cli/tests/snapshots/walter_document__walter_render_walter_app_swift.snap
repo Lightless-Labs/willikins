@@ -1,0 +1,16 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/ios/Walter/Sources/WalterApp.swift
+---
+import SwiftUI
+
+@main
+struct WalterApp: App {
+    var body: some Scene {
+        WindowGroup {
+            Text("Walter")
+        }
+    }
+}
