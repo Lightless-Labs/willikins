@@ -2395,3 +2395,118 @@ catalog-construction time).**
   `buildkite.*` tool, even when every such node already binds `token` from Doppler (the same
   `insert_*_tools`-credential-lazy follow-up R2 named would need to cover both providers at once).
 
+**Addendum:** 2026-09-30 (L1, provider credentials required only where a port is unbound) --
+**closes the gap R2 and K1 both recorded: `live_catalog_for_document` now demands
+`WILLIKINS_GITHUB_TOKEN`/`WILLIKINS_BUILDKITE_TOKEN` only when at least one `github.*`/`buildkite.*`
+node in the document being planned actually leaves its own `token` port unbound. A document whose
+every such node binds it (`workflows/github-repo-token-from-doppler.yaml`,
+`workflows/buildkite-cluster-token-from-doppler.yaml`) needs neither -- the operator's own rule,
+"every provider credential a document needs is resolved from Doppler through the document", now holds
+for GitHub and Buildkite exactly as it already did for App Store Connect.**
+
+- **The rule, precisely.** `willikins_server::catalog` gains `credential_port(Provider) ->
+  Option<PortName>`: `Some(port("token"))` for `Provider::GitHub` and `Provider::Buildkite` (the port
+  R2 and K1 gave their tools), `None` for `Provider::Doppler` (its token is the root of the whole
+  credential chain -- no document can ever bind it, by design) and `Provider::SigNoz` (never grew
+  one). `first_unbound_node_for(&Workflow, Provider)` walks a document's nodes in declaration order
+  and returns the first one belonging to `provider` that still needs the *environment* credential: for
+  `None` ports, that is simply the first node using that provider at all (`first_tool_for`'s own old
+  meaning, so Doppler and `SigNoz` are completely unchanged); for `Some(port)`, it is the first node
+  whose `with` does not contain that key -- exactly the same "the node did not bind it, so the key is
+  simply absent" fact `plan`'s own `bind_ports` already keys off, not a new analysis invented here.
+  `first_tool_for` itself is untouched and keeps its original job (gating *insertion*: "does this
+  document call this provider's tools at all"); `first_unbound_node_for` is the new, narrower gate on
+  the *credential*. `DocumentCredentialError` gained a `node: NodeName` field (Display: "... (needed
+  because `<document>`'s node `<node>` uses `<tool>`)"), so a refusal now names the exact node that
+  still needs the credential, not merely the first node of that provider in the document.
+- **Extends, not replaces, the existing "live needs only what it uses" mechanism** (`willikins-cli`'s
+  operator-reported wart, closed earlier this milestone): `live_catalog_for_document` is still the one
+  and only per-document catalog builder, still reached from the same two CLI call sites
+  (`build_catalog_for_document`, used by `plan <file>`/`apply <file> --live`), and the fake/live
+  catalog split is untouched.
+- **When a provider's tools are used but its credential is not required**, they must still be
+  inserted into the catalog (a document's own nodes must resolve at `check`/`plan`), built against a
+  client that holds *no* environment credential at all. That is new production surface in
+  `willikins-providers-http`, not a placeholder value: `Http` gained `credential: Option<Credential>`
+  and a new constructor, `Http::without_credential(base_url, headers, missing_var)`. The one choke
+  point every public request method (`get`/`put`/`patch`/`put_empty`/`post`/`delete`/
+  `delete_with_body`) routes through, `run_retrying`, refuses locally -- a `ProviderError` naming
+  `missing_var`, `status: None` -- **before building a URL, opening a connection, or sending
+  anything**, whenever `credential` is `None`; `apply_credential` then only ever runs once that has
+  already been ruled out, so its `.expect()` is genuinely unreachable, not defensive-by-hope. This was
+  the deliberate design choice over a placeholder/empty credential (considered and rejected): if the
+  "every node binds its own port" analysis above were ever wrong, a placeholder would send an
+  unauthenticated request to the real provider API -- a live network call as the side effect of an
+  analysis bug, which this workspace's own boundaries never allow. Refusing locally is the only safe
+  default, and it is proven, not assumed:
+  `without_credential_refuses_get_before_touching_the_network`/`..._refuses_post_before_touching_the_network`
+  build a mock server with `.expect(0)` on the only registered mock and assert it *stays* at zero
+  hits. `Http::with_credential` on a credential-less client still works exactly as before (`Some`
+  replaces `None`), proven by `with_credential_on_a_credentialless_client_reaches_the_network_normally`
+  -- the same swap a bound `token` port's `ScopedClient::Bound` (`client_for_token` in both provider
+  crates) already performs, so the R2/K1 mechanism composes with this change for free; no tool-level
+  code in either provider crate changed at all.
+  `willikins_providers_github::http_client_without_credential()` and
+  `willikins_providers_buildkite::http_client_without_credential()` are the two new, narrow entry
+  points `live_catalog_for_document` calls instead of `credential_from_env()` + `http_client()` when
+  `first_unbound_node_for` says the credential is not required.
+- **What the server now requires at startup, and why it is unchanged.** `willikins-server serve`
+  (`run_serve` -> `live_catalog_from_env`) and `willikins apply --plan-id --live`
+  (`commands::build_catalog` -> the same function) still unconditionally require
+  `WILLIKINS_GITHUB_TOKEN`, `WILLIKINS_DOPPLER_TOKEN`, `WILLIKINS_BUILDKITE_TOKEN`, and the `SigNoz`
+  credential plus host, exactly as before this task. Neither reads one document up front to narrow
+  against -- a long-lived server resolves whichever document a caller names next, and `apply
+  --plan-id` resolves against a whole trusted `--workflows-dir` -- so "refuse before any of them" is
+  still the only sound posture there, unrelated to whether any one document in that directory happens
+  to bind every port. This task's rule lives entirely in `live_catalog_for_document`, reached only
+  from `plan <file> --live` / `apply <file> --live`'s single-document path
+  (`build_catalog_for_document`); the trust boundary at startup is untouched by construction, not
+  merely by omission -- `live_catalog_from_env` and `run_serve` were not edited.
+- **Tests, test-first.** `willikins-providers-http/src/http.rs`: the two `without_credential`
+  refusal tests and the one `with_credential`-recovers test above (mockito). `willikins-server/src/
+  catalog.rs`: six new unit tests on the pure decision logic --
+  `credential_port_is_the_token_port_for_github_and_buildkite_only`;
+  `first_unbound_node_for_is_none_when_every_{github,buildkite}_node_binds_token`;
+  `first_unbound_node_for_names_the_first_node_that_actually_leaves_it_unbound` (a bound node before an
+  unbound one -- the refusal must name the second, not the first);
+  `first_unbound_node_for_is_none_for_a_provider_the_document_never_uses`;
+  `first_unbound_node_for_still_requires_doppler_regardless_of_any_token_like_binding` (Doppler has no
+  credential port at all, so even a node that happens to bind a same-named `token` port is still
+  "required" -- proving the rule cannot accidentally exempt a provider that never opted in);
+  `first_unbound_node_for_matches_first_tool_for_when_no_node_binds_anything` (the pre-L1 shape is
+  unchanged). `willikins-cli/tests/serve_and_live.rs`, subprocess, `env_clear`, no network (the file's
+  own standing rule): `plan`/`apply <file> --live` on `workflows/github-repo-token-from-doppler.yaml`
+  and `plan <file> --live` on `workflows/buildkite-cluster-token-from-doppler.yaml`, each with only
+  `WILLIKINS_DOPPLER_TOKEN` set (never `WILLIKINS_GITHUB_TOKEN`/`WILLIKINS_BUILDKITE_TOKEN`) and no
+  `--input`, reach the ordinary missing-input refusal (exit 1, on stdout, before
+  `willikins_core::plan` ever calls a tool's `read()`) rather than a config refusal naming GitHub or
+  Buildkite (exit 2) -- proving the catalog was built without demanding the now-unnecessary
+  credential, the same no-network technique
+  `plan_live_on_a_doppler_only_document_needs_only_the_doppler_token` already established. The
+  existing `plan_live_on_a_document_using_github_still_refuses_with_only_a_doppler_token_set`
+  (`new-rust-service.yaml`, whose `github.repo.ensure` node does *not* bind `token`) is the control,
+  unchanged and still green, now also asserting `json["node"] == "repo"` -- proving the rule still
+  refuses, naming the right node, exactly when it is needed.
+- **A pre-existing, unrelated gate failure found, not fixed.** `cargo test -p willikins-core --test
+  secret_literal_guard` currently fails `no_provider_token_shaped_literal_anywhere_in_the_tree` on
+  this plan file itself, line 2353 -- the K1 addendum's own illustrative quote of the *wrong*-seam
+  `concat!` split (`"bkua_theboundtokenexampleexample"` as one contiguous literal, prose describing
+  the mistake it fixed) is itself exactly the shape the guard scans the whole tree for, markdown
+  included. It is pre-existing (untouched by this task's diff -- `git status` shows this file clean
+  before this addendum's own edit) and is the only offending line the guard names; not fixed here,
+  since rewriting another task's already-recorded addendum prose is outside L1's scope. Recorded for
+  the coordinator, the same way earlier tasks recorded pre-existing failures they found rather than
+  swept in.
+- **No provider call of any kind was made for this task** -- every check ran against a mock server
+  that never leaves the process, an in-memory `Workflow`, or a subprocess with `env_clear` and no
+  registered credential for the provider under test.
+- **Scoped gates green, two commits:** `cargo fmt --all --check`; `cargo clippy` on every touched
+  crate (`willikins-providers-http`, `willikins-providers-github`, `willikins-providers-buildkite`,
+  `willikins-server`, `willikins-cli`) `--all-targets -D warnings`; `cargo test` over
+  `willikins-providers-http` (including the trybuild `compile_fail` suite -- `Http` still has no
+  `Debug`), `willikins-providers-github`, `willikins-providers-buildkite`, `willikins-server` (full
+  crate, all suites), `willikins-cli` (full crate, all suites), `willikins-providers-doppler --test
+  live_catalog` (regression check: `LIVE_TOOL_NAMES`'s count is unchanged by this task, still green);
+  `cargo check -p willikins-types -j 2`. The full workspace gate was not run (host rule; the
+  coordinator's).
+

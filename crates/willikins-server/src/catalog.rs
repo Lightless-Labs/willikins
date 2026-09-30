@@ -33,7 +33,7 @@
 
 use std::sync::Arc;
 
-use willikins_core::{Catalog, Tool, ToolName, Workflow};
+use willikins_core::{Catalog, Tool, ToolName, Workflow, helpers};
 use willikins_providers_appstore::{
     AppstoreAppGet, AppstoreAppGroupGate, AppstoreBundleIdCapabilityEnsure, AppstoreBundleIdEnsure,
     AppstoreCertificateGet, AppstoreProfileEnsure,
@@ -570,6 +570,57 @@ fn first_tool_for(document: &Workflow, provider: Provider) -> Option<&ToolName> 
         .find(|tool| provider_of(tool) == Some(provider))
 }
 
+/// The name of the port through which one of `provider`'s own tools can
+/// bind its own credential, bypassing that provider's environment
+/// variable entirely -- `Some(port("token"))` for GitHub and Buildkite
+/// (milestone 3e tasks R2 and K1, `willikins_types::GitHubToken` and
+/// `BuildkiteToken`), `None` for Doppler (whose token is the root of the
+/// whole credential chain -- nothing resolves *it*, so no document can
+/// ever bind it) and `SigNoz` (which never grew one). `None` here is
+/// what makes [`first_unbound_node_for`] fall back to "any node using
+/// this provider needs it", unchanged from before this function existed.
+fn credential_port(provider: Provider) -> Option<willikins_core::PortName> {
+    match provider {
+        Provider::GitHub | Provider::Buildkite => Some(helpers::port("token")),
+        Provider::Doppler | Provider::SigNoz => None,
+    }
+}
+
+/// The first node in `document`, in declaration order, whose tool
+/// belongs to `provider` and which still needs that provider's
+/// *environment* credential: a node whose tool has no credential port at
+/// all ([`credential_port`] is `None` -- Doppler, `SigNoz`), or one whose
+/// tool does have one but this node does not bind it. `None` when every
+/// node of that provider binds its own credential port, or when
+/// `document` calls no node from that provider at all.
+///
+/// This -- not "does `document` call this provider at all"
+/// ([`first_tool_for`], still used unchanged to decide whether to
+/// *insert* that provider's tools) -- is what
+/// [`live_catalog_for_document`] gates each environment credential on:
+/// a document whose every `github.*`/`buildkite.*` node binds `token`
+/// (typically resolved from Doppler through `github.token.parse` /
+/// `buildkite.token.parse`, `workflows/github-repo-token-from-doppler.yaml`
+/// and `workflows/buildkite-cluster-token-from-doppler.yaml`'s own
+/// shape) needs `WILLIKINS_GITHUB_TOKEN` / `WILLIKINS_BUILDKITE_TOKEN`
+/// not at all.
+fn first_unbound_node_for(
+    document: &Workflow,
+    provider: Provider,
+) -> Option<(&willikins_core::NodeName, &ToolName)> {
+    let port = credential_port(provider);
+    document.nodes.iter().find_map(|(name, node)| {
+        if provider_of(&node.tool) != Some(provider) {
+            return None;
+        }
+        let leaves_it_unbound = match &port {
+            Some(port) => !node.with.contains_key(port),
+            None => true,
+        };
+        leaves_it_unbound.then_some((name, &node.tool))
+    })
+}
+
 /// [`live_catalog_for_document`]'s own refusal: [`LiveCredentialError`]
 /// naming the missing or malformed variable, plus which document and
 /// which of its tools needed it -- so an operator reading the refusal
@@ -587,8 +638,13 @@ pub struct DocumentCredentialError {
     pub source: LiveCredentialError,
     /// The document being planned or applied.
     pub document: willikins_types::WorkflowName,
-    /// The first node in `document` (declaration order) whose tool needs
-    /// this credential's provider.
+    /// The first node in `document` (declaration order) that still
+    /// needs this credential's provider -- one that leaves the
+    /// provider's own credential port unbound, or (for Doppler and
+    /// `SigNoz`, which have no such port) simply the first node using
+    /// that provider at all. See [`first_unbound_node_for`].
+    pub node: willikins_core::NodeName,
+    /// That node's tool.
     pub tool: ToolName,
 }
 
@@ -596,8 +652,8 @@ impl std::fmt::Display for DocumentCredentialError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} (needed because `{}` uses `{}`)",
-            self.source, self.document, self.tool
+            "{} (needed because `{}`'s node `{}` uses `{}`)",
+            self.source, self.document, self.node, self.tool
         )
     }
 }
@@ -611,14 +667,30 @@ impl std::error::Error for DocumentCredentialError {}
 /// is known exactly, so the requirement is computed from `document.nodes`
 /// here rather than guessed or demanded wholesale.
 ///
-/// `willikins-tools`' five pure tools are always inserted (no provider,
-/// no credential). Each of GitHub/Doppler/Buildkite is inserted -- with its
-/// credential read and validated from the environment -- only when
-/// `document` has at least one node calling one of that provider's
-/// tools. A provider `document` never calls needs no credential at all,
-/// valid or otherwise, and none of its tools are present in the returned
-/// catalog (which is fine: `check` only ever resolves the tools a
-/// document's own nodes name).
+/// `willikins-tools`' pure tools are always inserted (no provider, no
+/// credential). Each of GitHub/Doppler/Buildkite/`SigNoz` is inserted
+/// whenever `document` has at least one node calling one of that
+/// provider's tools ([`first_tool_for`]) -- a provider `document` never
+/// calls needs no credential at all, valid or otherwise, and none of its
+/// tools are present in the returned catalog (which is fine: `check`
+/// only ever resolves the tools a document's own nodes name).
+///
+/// Inserting a provider's tools no longer always means reading and
+/// validating its environment credential, though. GitHub and Buildkite's
+/// tools each carry an optional, secret-typed `token` port
+/// (`willikins_types::GitHubToken`/`BuildkiteToken`, milestone 3e tasks
+/// R2, K1): when every node of that provider in `document` binds it
+/// (typically resolved from Doppler, `github.token.parse`/
+/// `buildkite.token.parse`'s own reason to exist), the environment
+/// variable is not needed at all, and this function does not read it --
+/// [`first_unbound_node_for`] is `None`, and the provider's tools are
+/// built against `willikins_providers_github::http_client_without_credential`/
+/// the Buildkite sibling instead, which never make a request without a
+/// bound credential (see that constructor's own doc). Doppler and
+/// `SigNoz` have no such port at all (Doppler's token is the root of
+/// the whole credential chain; `SigNoz` never grew one), so any node
+/// using either still needs that provider's environment variable exactly
+/// as before this distinction existed.
 ///
 /// This is `plan <file> --live` and `apply <file> --live`'s own catalog.
 /// [`live_catalog_from_env`] (every credential, unconditionally) remains
@@ -631,40 +703,47 @@ impl std::error::Error for DocumentCredentialError {}
 /// # Errors
 ///
 /// [`DocumentCredentialError`] naming the missing or malformed variable,
-/// `document`, and the first tool that needed it -- checking GitHub, then
-/// Doppler, then Buildkite (the same order [`live_catalog_from_env`]
-/// checks), so a document missing more than one needed credential always
-/// reports the same one first. No network call is made either way.
+/// `document`, and the first node (and its tool) that still needs it --
+/// checking GitHub, then Doppler, then Buildkite, then `SigNoz` (the same
+/// order [`live_catalog_from_env`] checks its first three), so a
+/// document missing more than one needed credential always reports the
+/// same one first. No network call is made either way.
 pub fn live_catalog_for_document(document: &Workflow) -> Result<Catalog, DocumentCredentialError> {
     let mut catalog = Catalog::new(willikins_types::registry());
     insert_pure_tools(&mut catalog);
     insert_appstore_tools(&mut catalog);
 
-    if let Some(tool) = first_tool_for(document, Provider::GitHub) {
-        let tool = tool.clone();
-        let credential = willikins_providers_github::credential_from_env().map_err(|error| {
-            DocumentCredentialError {
-                source: LiveCredentialError::GitHub {
-                    error: error.to_string(),
-                },
-                document: document.name.clone(),
-                tool: tool.clone(),
+    if first_tool_for(document, Provider::GitHub).is_some() {
+        let http = match first_unbound_node_for(document, Provider::GitHub) {
+            Some((node, tool)) => {
+                let (node, tool) = (node.clone(), tool.clone());
+                let credential =
+                    willikins_providers_github::credential_from_env().map_err(|error| {
+                        DocumentCredentialError {
+                            source: LiveCredentialError::GitHub {
+                                error: error.to_string(),
+                            },
+                            document: document.name.clone(),
+                            node,
+                            tool,
+                        }
+                    })?;
+                willikins_providers_github::http_client(credential)
             }
-        })?;
-        insert_github_tools(
-            &mut catalog,
-            willikins_providers_github::http_client(credential),
-        );
+            None => willikins_providers_github::http_client_without_credential(),
+        };
+        insert_github_tools(&mut catalog, http);
     }
-    if let Some(tool) = first_tool_for(document, Provider::Doppler) {
-        let tool = tool.clone();
+    if let Some((node, tool)) = first_unbound_node_for(document, Provider::Doppler) {
+        let (node, tool) = (node.clone(), tool.clone());
         let credential = willikins_providers_doppler::credential_from_env().map_err(|error| {
             DocumentCredentialError {
                 source: LiveCredentialError::Doppler {
                     error: error.to_string(),
                 },
                 document: document.name.clone(),
-                tool: tool.clone(),
+                node,
+                tool,
             }
         })?;
         insert_doppler_tools(
@@ -672,28 +751,34 @@ pub fn live_catalog_for_document(document: &Workflow) -> Result<Catalog, Documen
             willikins_providers_doppler::http_client(credential),
         );
     }
-    if let Some(tool) = first_tool_for(document, Provider::Buildkite) {
-        let tool = tool.clone();
-        let credential = willikins_providers_buildkite::credential_from_env().map_err(|error| {
-            DocumentCredentialError {
-                source: LiveCredentialError::Buildkite {
-                    error: error.to_string(),
-                },
-                document: document.name.clone(),
-                tool: tool.clone(),
+    if first_tool_for(document, Provider::Buildkite).is_some() {
+        let http = match first_unbound_node_for(document, Provider::Buildkite) {
+            Some((node, tool)) => {
+                let (node, tool) = (node.clone(), tool.clone());
+                let credential =
+                    willikins_providers_buildkite::credential_from_env().map_err(|error| {
+                        DocumentCredentialError {
+                            source: LiveCredentialError::Buildkite {
+                                error: error.to_string(),
+                            },
+                            document: document.name.clone(),
+                            node,
+                            tool,
+                        }
+                    })?;
+                willikins_providers_buildkite::http_client(credential)
             }
-        })?;
-        insert_buildkite_tools(
-            &mut catalog,
-            willikins_providers_buildkite::http_client(credential),
-        );
+            None => willikins_providers_buildkite::http_client_without_credential(),
+        };
+        insert_buildkite_tools(&mut catalog, http);
     }
-    if let Some(tool) = first_tool_for(document, Provider::SigNoz) {
-        let tool = tool.clone();
+    if let Some((node, tool)) = first_unbound_node_for(document, Provider::SigNoz) {
+        let (node, tool) = (node.clone(), tool.clone());
         let signoz_http = signoz_http_from_env().map_err(|source| DocumentCredentialError {
             source,
             document: document.name.clone(),
-            tool: tool.clone(),
+            node,
+            tool,
         })?;
         insert_signoz_tools(&mut catalog, signoz_http);
     }
@@ -923,5 +1008,140 @@ mod tests {
         let tool =
             first_tool_for(&workflow, Provider::GitHub).expect("the document has a github node");
         assert_eq!(tool.as_str(), "github.repo.ensure");
+    }
+
+    // -------------------------------------------------------------
+    // L1: `credential_port`, `first_unbound_node_for`, and the rule they
+    // give `live_catalog_for_document` -- a provider's environment
+    // credential is required only if at least one of that provider's
+    // nodes leaves its own credential port unbound.
+    // -------------------------------------------------------------
+
+    /// [`node`], but with the tool's own optional `token` port bound to a
+    /// workflow input -- the shape
+    /// `workflows/github-repo-token-from-doppler.yaml` and
+    /// `workflows/buildkite-cluster-token-from-doppler.yaml` both use
+    /// (there, resolved from Doppler through `github.token.parse`/
+    /// `buildkite.token.parse`; the binding's *source* does not matter
+    /// here, only that the port is bound at all -- exactly what `plan`'s
+    /// own `bind_ports` already treats as the deciding fact).
+    fn node_with_token_bound(tool_name: &str) -> willikins_core::Node {
+        node(tool_name).port(
+            helpers::port("token"),
+            willikins_core::Binding::Input(willikins_core::InputName::parse("token").unwrap()),
+        )
+    }
+
+    /// [`workflow_using`]'s sibling for tests that need to control which
+    /// nodes bind `token`: nodes named `step_0`, `step_1`, ... in order,
+    /// each `(tool_name, token_bound)`.
+    fn workflow_with_bindings(nodes: &[(&str, bool)]) -> Workflow {
+        let mut workflow = Workflow::new(willikins_types::WorkflowName::parse("demo").unwrap());
+        for (index, (tool_name, token_bound)) in nodes.iter().enumerate() {
+            let node_name = willikins_core::NodeName::parse(&format!("step_{index}")).unwrap();
+            let built = if *token_bound {
+                node_with_token_bound(tool_name)
+            } else {
+                node(tool_name)
+            };
+            workflow = workflow.node(node_name, built);
+        }
+        workflow
+    }
+
+    #[test]
+    fn credential_port_is_the_token_port_for_github_and_buildkite_only() {
+        assert_eq!(
+            credential_port(Provider::GitHub),
+            Some(helpers::port("token"))
+        );
+        assert_eq!(
+            credential_port(Provider::Buildkite),
+            Some(helpers::port("token"))
+        );
+        assert_eq!(credential_port(Provider::Doppler), None);
+        assert_eq!(credential_port(Provider::SigNoz), None);
+    }
+
+    #[test]
+    fn first_unbound_node_for_is_none_when_every_github_node_binds_token() {
+        let workflow = workflow_with_bindings(&[
+            ("naming.v1", false),
+            ("github.repo.ensure", true),
+            ("github.repo.get", true),
+        ]);
+        assert!(first_unbound_node_for(&workflow, Provider::GitHub).is_none());
+    }
+
+    #[test]
+    fn first_unbound_node_for_is_none_when_every_buildkite_node_binds_token() {
+        let workflow = workflow_with_bindings(&[
+            ("buildkite.cluster.get", true),
+            ("buildkite.pipeline.ensure", true),
+        ]);
+        assert!(first_unbound_node_for(&workflow, Provider::Buildkite).is_none());
+    }
+
+    #[test]
+    fn first_unbound_node_for_names_the_first_node_that_actually_leaves_it_unbound() {
+        // The first github node binds `token`; the second does not --
+        // the credential is still required, and the refusal must name
+        // the second node (the one that actually needs it), not the
+        // first (whose own binding means it never would).
+        let workflow =
+            workflow_with_bindings(&[("github.repo.ensure", true), ("github.repo.get", false)]);
+        let (node_name, tool) = first_unbound_node_for(&workflow, Provider::GitHub)
+            .expect("one node leaves `token` unbound");
+        assert_eq!(node_name.as_str(), "step_1");
+        assert_eq!(tool.as_str(), "github.repo.get");
+    }
+
+    #[test]
+    fn first_unbound_node_for_is_none_for_a_provider_the_document_never_uses() {
+        let workflow = workflow_with_bindings(&[("naming.v1", false)]);
+        for provider in [
+            Provider::GitHub,
+            Provider::Doppler,
+            Provider::Buildkite,
+            Provider::SigNoz,
+        ] {
+            assert!(first_unbound_node_for(&workflow, provider).is_none());
+        }
+    }
+
+    /// Doppler has no credential port at all
+    /// ([`credential_port`] is `None`), so its environment credential is
+    /// required whenever any node uses it, regardless of anything the
+    /// node happens to bind under a port literally named `token` -- there
+    /// is no real Doppler tool with such a port, but this proves the
+    /// *rule* does not accidentally exempt one that might exist later,
+    /// or one a document binds a same-named, unrelated port on.
+    #[test]
+    fn first_unbound_node_for_still_requires_doppler_regardless_of_any_token_like_binding() {
+        let workflow = workflow_with_bindings(&[("doppler.project.ensure", true)]);
+        let (node_name, tool) = first_unbound_node_for(&workflow, Provider::Doppler)
+            .expect("doppler has no credential port to bind at all");
+        assert_eq!(node_name.as_str(), "step_0");
+        assert_eq!(tool.as_str(), "doppler.project.ensure");
+    }
+
+    #[test]
+    fn first_unbound_node_for_matches_first_tool_for_when_no_node_binds_anything() {
+        // The pre-L1 shape, still the common case: no node binds
+        // `token`, so `first_unbound_node_for` finds exactly the same
+        // node `first_tool_for` always did.
+        let workflow = workflow_using(&[
+            "naming.v1",
+            "github.repo.ensure",
+            "doppler.project.ensure",
+            "github.actions_secret.ensure",
+        ]);
+        for provider in [Provider::GitHub, Provider::Doppler] {
+            let expected = first_tool_for(&workflow, provider).map(ToolName::as_str);
+            let actual = first_unbound_node_for(&workflow, provider)
+                .map(|(_, tool)| tool)
+                .map(ToolName::as_str);
+            assert_eq!(actual, expected, "{provider:?}");
+        }
     }
 }
