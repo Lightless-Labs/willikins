@@ -1246,11 +1246,11 @@ mod tests {
     // before and after). See `AppleBundleIdName`'s own doc for the
     // sources and the full probe write-up.
 
-    /// Refused live: 409 `ENTITY_ERROR.ATTRIBUTE.INVALID`, on a name
-    /// identical to its own dotted identifier -- confirming the dot
-    /// character itself is refused, not merely a name shaped like an
-    /// identifier (a second live probe on a plain name containing a dot,
-    /// not equal to any identifier, answered the identical status/code).
+    /// Refused live: 409 `ENTITY_ERROR.ATTRIBUTE.INVALID`, on this plain
+    /// name containing a dot, not equal to any identifier -- and a second
+    /// probe on a name identical to its own dotted identifier answered
+    /// the identical status/code, so the dot character itself is
+    /// refused, not merely a name shaped like an identifier.
     #[test]
     fn bundle_id_name_refuses_a_dot_probed_live_2026_09_30() {
         assert!(AppleBundleIdName::parse("Probe.Dot.Name").is_err());
