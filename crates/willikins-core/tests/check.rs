@@ -605,6 +605,62 @@ fn e2_a_secret_value_as_a_repo_file_render_values_element_is_exactly_one_taint_e
     );
 }
 
+// Adversarial pass over E1 and E2 (docs/research/2026-09-30-m3g-adversarial-pass-engine-and-types.md):
+// a `list<…>` of either disallowed type is still a workflow input a caller
+// supplies, and `list<RepoFile>` is exactly `github.scaffold.ensure.files`'
+// own type, so a caller could hand the scaffold whole files. Refused exactly
+// like the scalar; these pin that the refusal never narrows to scalars only.
+
+#[test]
+fn e2_a_list_of_template_source_workflow_input_is_rejected() {
+    let workflow = Workflow::new(workflow_name("bad"))
+        .input(input("tmpls"), InputSpec::new(list_ty("TemplateSource")));
+    let catalog = test_catalog();
+    let errors =
+        check(&workflow, &catalog).expect_err("a list<TemplateSource> input must be rejected");
+    assert_eq!(
+        errors,
+        vec![CheckError::DisallowedInputType {
+            input: input("tmpls"),
+            ty: list_ty("TemplateSource"),
+        }]
+    );
+}
+
+#[test]
+fn e2_a_list_of_repo_file_workflow_input_bound_to_the_scaffold_is_rejected() {
+    let workflow = Workflow::new(workflow_name("bad"))
+        .input(input("files"), InputSpec::new(list_ty("RepoFile")))
+        .node(
+            node("scaffold"),
+            Node::new(tool_name("github.scaffold.ensure"))
+                .port(
+                    port("repo"),
+                    Binding::Literal("lightless-labs/monorepo".to_string()),
+                )
+                .port(port("branch"), Binding::Literal("main".to_string()))
+                .port(
+                    port("marker"),
+                    Binding::Literal("apps/walter/.willikins-scaffold".to_string()),
+                )
+                .port(port("files"), Binding::Input(input("files")))
+                .port(
+                    port("message"),
+                    Binding::Literal("feat: scaffold".to_string()),
+                ),
+        );
+    let catalog = test_catalog();
+    let errors = check(&workflow, &catalog)
+        .expect_err("a caller-supplied list<RepoFile> must never reach the scaffold");
+    assert_eq!(
+        errors,
+        vec![CheckError::DisallowedInputType {
+            input: input("files"),
+            ty: list_ty("RepoFile"),
+        }]
+    );
+}
+
 #[test]
 fn acceptance_3_the_registry_refuses_a_secret_literal_input_value() {
     let ty = ty("DopplerServiceToken");
