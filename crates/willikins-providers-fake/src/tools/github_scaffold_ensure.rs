@@ -150,6 +150,26 @@ impl GitHubScaffoldEnsure {
                 "marker path `{marker}` must not also be one of `files`"
             )));
         }
+        // A declared path that is a directory of another (two files, or a
+        // file and the marker, either way round) cannot coexist in one
+        // tree. Adversarial pass (render and write).
+        // Walked in declaration order, so the message is deterministic.
+        seen.insert(marker.as_str());
+        let declared = files
+            .iter()
+            .map(|file| file.path().as_str())
+            .chain(std::iter::once(marker.as_str()));
+        for path in declared {
+            if let Some((index, _)) = path
+                .match_indices('/')
+                .find(|(index, _)| seen.contains(&path[..*index]))
+            {
+                return Err(invalid(format!(
+                    "path `{}` is declared as a file and also as a directory of `{path}`",
+                    &path[..index]
+                )));
+            }
+        }
         Ok(())
     }
 
