@@ -1,6 +1,6 @@
 //! The *whole* live catalog — `willikins-tools`' eleven pure tools
 //! (milestone 3g task T1 added `repo.file.render`),
-//! `willikins-providers-github`'s three live tools (milestone 3e task 2
+//! `willikins-providers-github`'s four live tools (milestone 3g task G2 added `github.scaffold.ensure`; milestone 3e task 2
 //! added `github.repo.get`), this crate's ten live
 //! Doppler tools (milestone 3 added `doppler.config.inheritable.ensure`
 //! and `doppler.config.inherits.ensure`; the `SigNoz` task added
@@ -12,7 +12,7 @@
 //! `willikins-providers-appstore`'s six live tools (milestone 3c task 2
 //! added `appstore.profile.ensure`; milestone 3e task 3 added the two
 //! Sample gates, `appstore.app.get` and `appstore.app_group.gate`).
-//! Thirty-five tools since milestone 3g task T1 added `repo.file.render`
+//! Thirty-six tools since milestone 3g task G2 added `github.scaffold.ensure`, after task T1 added `repo.file.render`
 //! (after milestone 3e task K1 added `buildkite.token.parse`, itself
 //! after task R2 added `github.token.parse`), no fake among them.
 //!
@@ -66,7 +66,7 @@ const POSITIVE_FIXTURES: [&str; 7] = [
 ];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 35] = willikins_server::LIVE_TOOL_NAMES;
+const LIVE_TOOL_NAMES: [&str; 36] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -1,0 +1,65 @@
+---
+source: crates/willikins-providers-github/tests/catalog_parity.rs
+assertion_line: 95
+expression: scaffold
+---
+{
+  "class": "irreversible",
+  "description": "Ensure a set of files, plus an ownership marker, has landed on a branch as one commit.",
+  "inputs": {
+    "branch": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "GitBranchName"
+      }
+    },
+    "files": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "list<RepoFile>"
+      }
+    },
+    "marker": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "RepoPath"
+      }
+    },
+    "message": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "CommitHeadline"
+      }
+    },
+    "repo": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "GitHubRepo"
+      }
+    },
+    "token": {
+      "required": false,
+      "ty": {
+        "kind": "exact",
+        "type": "GitHubToken"
+      }
+    }
+  },
+  "key": [
+    "repo",
+    "branch",
+    "marker"
+  ],
+  "name": "github.scaffold.ensure",
+  "outputs": {
+    "branch": "GitBranchName",
+    "marker": "RepoPath",
+    "repo": "GitHubRepo"
+  },
+  "pure": false
+}

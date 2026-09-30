@@ -31,8 +31,9 @@
 //! `appstore.bundle_id_capability.gate`, generalizing
 //! `appstore.app_group.gate` to any observable capability; milestone 3g
 //! task T1 added `repo.file.render`, the first pure tool with a `list<T>`
-//! input port),
-//! so the catalog this crate produces holds thirty-seven tools, in the
+//! input port; milestone 3g task G2 added `github.scaffold.ensure`, the
+//! first non-pure tool with a `list<T>` input port),
+//! so the catalog this crate produces holds thirty-eight tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -93,6 +94,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::GitHubRepoEnsure::new(state.clone()));
     insert!(tools::GitHubActionsSecretEnsure::new(state.clone()));
     insert!(tools::FakeGitHubRepoGet::new(state.clone()));
+    insert!(tools::GitHubScaffoldEnsure::new(state.clone()));
     insert!(tools::DopplerProjectEnsure::new(state.clone()));
     insert!(tools::DopplerConfigEnsure::new(state.clone()));
     insert!(tools::DopplerBranchConfigEnsure::new(state.clone()));
@@ -158,6 +160,7 @@ mod tests {
             "github.repo.ensure",
             "github.actions_secret.ensure",
             "github.repo.get",
+            "github.scaffold.ensure",
             "doppler.project.ensure",
             "doppler.config.ensure",
             "doppler.branch_config.ensure",
@@ -187,7 +190,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 37);
+        assert_eq!(names.len(), 38);
     }
 
     #[test]

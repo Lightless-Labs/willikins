@@ -17,7 +17,7 @@ use willikins_types::{
     AppleCapabilitySetting, AppleCapabilityType, AppleCertificateSerial, AppleCertificateType,
     AppleProfileName, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
     DopplerConfig, DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName,
-    GitHubRepo, ProjectSlug, RepoVisibility, SecretName, SigNozIngestionKeyName,
+    GitBranchName, GitHubRepo, ProjectSlug, RepoVisibility, SecretName, SigNozIngestionKeyName,
     SigNozIngestionKeyValue, Text,
 };
 
@@ -529,6 +529,14 @@ pub struct FakeState {
     /// other attribute of an app record (`name`, `sku`, ...) is ever
     /// read.
     pub apple_apps: HashSet<String>,
+    /// `github.scaffold.ensure`'s landed files, keyed by
+    /// [`scaffold_key`] (`"<repo>#<branch>"`) to a map of path (each
+    /// path's own canonical string) to content, string-for-string. The
+    /// marker path is an ordinary entry here like any other -- this
+    /// crate's own truth for "byte-equal" is string equality, standing in
+    /// for the live tool's git blob sha comparison. Milestone 3g, task
+    /// G2.
+    pub scaffolds: HashMap<String, HashMap<String, String>>,
     /// The [`ProjectSlug`] canonical strings `fake.irreversible.ensure`
     /// has created.
     pub irreversible: HashSet<String>,
@@ -670,6 +678,16 @@ pub fn fake_apple_bundle_id_id(identifier: &str) -> String {
 #[must_use]
 pub fn irreversible_key(slug: &ProjectSlug) -> String {
     slug.to_string()
+}
+
+/// The key `github.scaffold.ensure` looks its resource up by:
+/// `"<repo>#<branch>"` -- the marker is part of the map's own content,
+/// not the key, exactly as the live tool's own natural key
+/// (`docs/plans/2026-09-30-milestone-3g-file-writing.md`, decision (b))
+/// is `(repo, branch, marker)` but `files` is content, not the key.
+#[must_use]
+pub fn scaffold_key(repo: &GitHubRepo, branch: &GitBranchName) -> String {
+    format!("{repo}#{branch}")
 }
 
 impl FakeState {
@@ -966,6 +984,26 @@ impl FakeState {
     #[must_use]
     pub fn with_irreversible(mut self, slug: &ProjectSlug) -> Self {
         self.irreversible.insert(irreversible_key(slug));
+        self
+    }
+
+    /// Seed a scaffold's landed files (including its marker) at
+    /// `repo`@`branch`: `files` is `(path, content)` pairs, each path a
+    /// canonical [`RepoPath`](willikins_types::RepoPath) string.
+    #[must_use]
+    pub fn with_scaffold_files(
+        mut self,
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+        files: &[(&str, &str)],
+    ) -> Self {
+        let entry = self
+            .scaffolds
+            .entry(scaffold_key(repo, branch))
+            .or_default();
+        for (path, content) in files {
+            entry.insert((*path).to_string(), (*content).to_string());
+        }
         self
     }
 

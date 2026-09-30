@@ -5,13 +5,14 @@
 //! `pure` fields aside, comparing it structurally means comparing its
 //! `Serialize` form), so equality here is JSON equality; an insta snapshot
 //! of both specs pins the exact shape besides. Milestone 3e task 2 adds
-//! `github.repo.get` alongside them, same method.
+//! `github.repo.get` alongside them, same method. Milestone 3g task G2
+//! adds `github.scaffold.ensure`, same method again.
 
 use std::sync::{Arc, Mutex};
 
 use willikins_core::{Tool, ToolSpec};
 use willikins_providers_github::{
-    GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure, GitHubRepoGet,
+    GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure, GitHubRepoGet, GitHubScaffoldEnsure,
 };
 use willikins_providers_http::{Credential, Http};
 
@@ -53,6 +54,15 @@ fn github_repo_get_spec_equals_the_fake_tool() {
 }
 
 #[test]
+fn github_scaffold_ensure_spec_equals_the_fake_tool() {
+    let live = GitHubScaffoldEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::GitHubScaffoldEnsure::new(Arc::new(Mutex::new(
+        willikins_providers_fake::FakeState::new(),
+    )));
+    assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
+}
+
+#[test]
 fn both_specs_validate_against_the_type_registry() {
     GitHubRepoEnsure::new(test_client())
         .spec()
@@ -66,6 +76,10 @@ fn both_specs_validate_against_the_type_registry() {
         .spec()
         .validate(willikins_types::registry())
         .expect("valid spec");
+    GitHubScaffoldEnsure::new(test_client())
+        .spec()
+        .validate(willikins_types::registry())
+        .expect("valid spec");
 }
 
 #[test]
@@ -73,7 +87,9 @@ fn snapshot_both_live_tool_specs() {
     let repo = spec_json(GitHubRepoEnsure::new(test_client()).spec());
     let secret = spec_json(GitHubActionsSecretEnsure::new(test_client()).spec());
     let repo_get = spec_json(GitHubRepoGet::new(test_client()).spec());
+    let scaffold = spec_json(GitHubScaffoldEnsure::new(test_client()).spec());
     insta::assert_json_snapshot!("github_repo_ensure_spec", repo);
     insta::assert_json_snapshot!("github_actions_secret_ensure_spec", secret);
     insta::assert_json_snapshot!("github_repo_get_spec", repo_get);
+    insta::assert_json_snapshot!("github_scaffold_ensure_spec", scaffold);
 }
