@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-dsl/tests/acceptance.rs
-assertion_line: 353
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
@@ -726,15 +725,6 @@ prd_config.branch: DopplerConfigName
 base_config_gate.config: DopplerConfig
 inherit.config: DopplerConfig
 inherit.inherits: list<DopplerConfig>
-app_profile_to_doppler.config: DopplerConfig
-app_profile_to_doppler.name: SecretName
-app_profile_to_doppler.value: AppleProfileContent
-nse_profile_to_doppler.config: DopplerConfig
-nse_profile_to_doppler.name: SecretName
-nse_profile_to_doppler.value: AppleProfileContent
-widgets_profile_to_doppler.config: DopplerConfig
-widgets_profile_to_doppler.name: SecretName
-widgets_profile_to_doppler.value: AppleProfileContent
 gh_token_secret.config: DopplerConfig
 gh_token_secret.name: SecretName
 gh_token.value: DopplerSecretValue

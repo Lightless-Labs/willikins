@@ -392,6 +392,21 @@ secret_literal_guard -j 2` — all green. Not done by this task, per its own bou
 operator's real write token (decision (l)'s own "does not exist yet"), the live scaffold cycle
 run (L1, the coordinator's), and marking this plan Completed.
 
+**Addendum:** 2026-10-01 — Sample no longer copies its three App Store profiles into Doppler (the
+operator's decision, asked "what's the point of storing the profiles in doppler?"). The monorepo's
+CI fetches each profile from Apple by name at build time — the root `fastlane/Fastfile`'s
+`get_provisioning_profile(provisioning_name: ..., readonly: true)`, authenticated by the App Store
+Connect key `appstore-connect/deploy_ios` already holds; AppTwo names every profile after its
+bundle identifier, as Sample does — so the copies were redundant, went stale whenever Apple
+invalidated a profile, and kept a converged run from ever reading NoOp: `doppler.secret.set` is a
+write-only sink and reports `Created` on every apply. `app_profile_to_doppler`,
+`nse_profile_to_doppler` and `widgets_profile_to_doppler` are removed; the three
+`appstore.profile.ensure` nodes stay. `sample_document.rs`'s run 3 now asserts nothing at all is
+`Created`, with no exclusion list. The three stored secrets in `sample/prd_deployment_ios` are to
+be deleted by hand once the real Doppler token authenticates again (it answered 401 on
+2026-10-01). `AppleProfileContent` stays secret-typed for now; whether it still needs to be is
+its own reviewed change.
+
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Example-Org/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
