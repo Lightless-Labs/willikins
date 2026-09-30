@@ -56,11 +56,15 @@ use std::sync::{Arc, Mutex};
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Action, Approval, InputName, NodeStatus, PrincipalId, RecordingObserver, Timestamp, TypeName,
-    TypeRef, Value, apply, check, plan,
+    Action, Applied, Approval, InputName, NodeStatus, PortName, PrincipalId, RecordingObserver,
+    Timestamp, TypeName, TypeRef, Value, apply, check, plan,
 };
 use willikins_providers_fake::FakeState;
-use willikins_types::{BuildkiteClusterName, DomainType, GitHubRepo, RepoVisibility};
+use willikins_providers_fake::state::buildkite_pipeline_key;
+use willikins_types::{
+    BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType, GitHubRepo, RepoFile,
+    RepoVisibility,
+};
 
 fn workspace_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -90,6 +94,8 @@ const MONOREPO: &str = "Bande-a-Bonnot/monorepo";
 // D2: the document's own literal cluster name (`buildkite_cluster.name`),
 // the real org's only cluster, probed read-only 2026-09-29.
 const CLUSTER: &str = "Default cluster";
+// D2: the document's own literal Buildkite org slug.
+const BUILDKITE_ORG: &str = "la-bande-a-bonnot";
 /// A valid [`willikins_types::BuildkiteToken`], `concat!`-assembled so no
 /// single literal in this file spells a real-shaped Buildkite token
 /// contiguously (the same technique
@@ -117,13 +123,9 @@ fn base_inputs() -> IndexMap<InputName, Value> {
         InputName::parse("widgets_identifier").unwrap(),
         scalar("AppleBundleIdentifier", WIDGETS_IDENTIFIER),
     );
-    inputs.insert(
-        InputName::parse("data_protection").unwrap(),
-        scalar(
-            "AppleCapabilitySetting",
-            "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
-        ),
-    );
+    // W1: `data_protection` is gone as a declared input -- the document's
+    // `data_protection` node now binds a bare literal instead. See
+    // `walter_entitlements_and_data_protection_name_the_same_class` below.
     inputs.insert(
         InputName::parse("certificate_type").unwrap(),
         scalar("AppleCertificateType", "DISTRIBUTION"),
@@ -151,12 +153,9 @@ fn base_inputs() -> IndexMap<InputName, Value> {
 }
 
 fn with_acknowledgements(mut inputs: IndexMap<InputName, Value>) -> IndexMap<InputName, Value> {
-    for name in [
-        "m3_repo_files_done",
-        "m5_apns_key_done",
-        "m6_ci_doppler_access_done",
-        "m7_bootstrap_done",
-    ] {
+    // W1: M3 and M7 are gone as acknowledgements -- only M5 and M6 are
+    // still bare `operator.acknowledge` leaves.
+    for name in ["m5_apns_key_done", "m6_ci_doppler_access_done"] {
         inputs.insert(
             InputName::parse(name).unwrap(),
             Value::known(willikins_types::OperatorAcknowledgement::parse("done").unwrap()),
@@ -197,6 +196,11 @@ fn seeded_state() -> Arc<Mutex<FakeState>> {
 fn seeded_state_with_base_configs(present: &[&str]) -> Arc<Mutex<FakeState>> {
     let config = willikins_types::DopplerConfig::parse("appstore-connect/deploy_ios").unwrap();
     let github_config = willikins_types::DopplerConfig::parse("github/bande-a-bonnot").unwrap();
+    // W1: the new, narrower write credential -- a Doppler config no app
+    // config inherits (decision (l)), never the older, wider
+    // `GH_CLONE_TOKEN` above.
+    let write_config =
+        willikins_types::DopplerConfig::parse("github/bande-a-bonnot_willikins").unwrap();
     let json = serde_json::json!({
         "doppler_values": {
             format!("{config}#APP_STORE_CONNECT_API_KEY_ISSUER_ID"): "57246542-96fe-1a63-e053-0824d011072a",
@@ -205,6 +209,7 @@ fn seeded_state_with_base_configs(present: &[&str]) -> Arc<Mutex<FakeState>> {
         "doppler_secrets": {
             format!("{config}#APP_STORE_CONNECT_API_KEY_BASE64"): "VGhpcyBpcyBhbiBleGFtcGxlIGtleSBmb3IgdGVzdHMgb25seS4KLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3ZMNTJyZWtFcWdHcW9XbjkKK1lCa0lRdVFXRU9UaEtxcUlYYnZvbmVuY0FXaFJBTkNBQVRkdC9YZDRjL0NMT0thMmpvRDlHMXBCOTh1d0tOKwpMR0p2SzNoS1RyeFRXbkowR3lRaVAzUm1DdWJ6bCtHUVIvL2g5Y2lGYW1qeU5jSE1qVlUyY0tiQQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==",
             format!("{github_config}#GH_CLONE_TOKEN"): "ghp_example",
+            format!("{write_config}#GH_CONTENTS_WRITE_TOKEN"): "ghp_write_example",
             "buildkite/prd#PIPELINE_CREATION_TOKEN": SEEDED_BUILDKITE_TOKEN,
         },
     })
@@ -260,6 +265,29 @@ fn action_of(planned: &willikins_core::Plan, node: &str, instance: Option<&str>)
         .action
 }
 
+/// An applied node's own outputs, by name -- W1's way of extracting what a
+/// `repo.file.render` node actually produced, or what a pipeline's own
+/// `slug` output resolved to, without re-typing either by hand and
+/// risking drift from the document.
+fn output_of<'a>(applied: &'a Applied, node: &str) -> &'a willikins_core::Outputs {
+    &applied
+        .nodes
+        .iter()
+        .find(|n| n.name.as_str() == node && n.instance.is_none())
+        .unwrap_or_else(|| panic!("node `{node}` was applied"))
+        .outputs
+}
+
+/// The [`RepoFile`] a `repo.file.render` node (`node`) produced on its
+/// `file` output.
+fn rendered_file<'a>(applied: &'a Applied, node: &str) -> &'a RepoFile {
+    output_of(applied, node)
+        .get(&PortName::parse("file").unwrap())
+        .unwrap_or_else(|| panic!("`{node}.file` was applied"))
+        .downcast::<RepoFile>()
+        .unwrap_or_else(|| panic!("`{node}.file` is a RepoFile"))
+}
+
 fn approval() -> Approval {
     Approval::Human {
         approver: PrincipalId::parse("operator").unwrap(),
@@ -279,6 +307,10 @@ fn assert_no_secret_leaked(json: &str) {
     assert!(
         !json.contains("ghp_example"),
         "the seeded GitHub token's raw value leaked into JSON output"
+    );
+    assert!(
+        !json.contains("ghp_write_example"),
+        "the seeded write token's raw value leaked into JSON output"
     );
     assert!(
         !json.contains(SEEDED_BUILDKITE_TOKEN),
@@ -315,8 +347,11 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     let planned1 =
         plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
 
-    // Exactly the two observed gates plus the four acknowledgement leaves
-    // are blocked; nothing else.
+    // Exactly the App Store Connect gates, the new bootstrap gate (W1: the
+    // pipeline does not exist yet, so its stored configuration cannot
+    // equal anything), plus the two remaining acknowledgement leaves are
+    // blocked; nothing else. M3 is gone entirely (it is real work now,
+    // below), and M7 is `bootstrap_gate`, not an acknowledgement.
     let blocked_nodes: std::collections::BTreeSet<&str> =
         planned1.blocked.iter().map(|b| b.node.as_str()).collect();
     assert_eq!(
@@ -327,10 +362,9 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "nse_app_groups",
             "widgets_app_groups",
             "app_app_attest",
-            "m3_repo_files",
+            "bootstrap_gate",
             "m5_apns_key",
             "m6_ci_doppler_access",
-            "m7_bootstrap",
         ]),
         "run 1's blocked set"
     );
@@ -362,6 +396,17 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     }
     assert_eq!(action_of(&planned1, "monorepo_ref", None), Action::Compute);
     assert_eq!(action_of(&planned1, "doppler", None), Action::Create);
+    // W1: the scaffold and every render node it depends on plan for real
+    // on a first run, and the pipeline -- now rebound to `walter_files.repo`
+    // rather than `monorepo_ref.repo` -- still plans, ordered after it.
+    for node in ["build_bazel_app", "build_bazel_ios", "walter_entitlements"] {
+        assert_eq!(
+            action_of(&planned1, node, None),
+            Action::Compute,
+            "run 1: pure render node `{node}` must be Compute"
+        );
+    }
+    assert_eq!(action_of(&planned1, "walter_files", None), Action::Create);
     assert_eq!(action_of(&planned1, "pipeline", None), Action::Create);
 
     let plan1_json = serde_json::to_string(&planned1).unwrap();
@@ -402,7 +447,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "run 1: `{node}` must be Created"
         );
     }
-    assert_eq!(applied1.blocked.len(), 9, "run 1's Applied.blocked");
+    assert_eq!(applied1.blocked.len(), 8, "run 1's Applied.blocked");
 
     let applied1_json = serde_json::to_string(&applied1).unwrap();
     assert_no_secret_leaked(&applied1_json);
@@ -503,8 +548,12 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         vec![("identifier", APP_IDENTIFIER), ("capability", "APP_ATTEST")],
         "app_app_attest's blocked report must name the host identifier and APP_ATTEST"
     );
-    // And nothing but App Attest and the four acknowledgements is still
-    // blocked: the three app-group gates and the app record are open.
+    // And nothing but App Attest, the bootstrap gate and the two
+    // acknowledgements is still blocked: the three app-group gates and
+    // the app record are open. W1: `bootstrap_gate` remains blocked here
+    // too -- the pipeline's stored configuration is not touched by
+    // seeding App Groups, and nothing has yet stood in for the
+    // operator's own paste (that happens between run 2 and run 3, below).
     let blocked_attest_off: std::collections::BTreeSet<&str> = planned_attest_off
         .blocked
         .iter()
@@ -514,12 +563,12 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         blocked_attest_off,
         std::collections::BTreeSet::from([
             "app_app_attest",
-            "m3_repo_files",
+            "bootstrap_gate",
             "m5_apns_key",
             "m6_ci_doppler_access",
-            "m7_bootstrap",
         ]),
-        "with App Groups on and App Attest off, only App Attest and the acknowledgements block"
+        "with App Groups on and App Attest off, only App Attest, the bootstrap gate and the \
+         acknowledgements block"
     );
 
     // ------------------------------------------------------------------
@@ -536,8 +585,8 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     }
 
     // ------------------------------------------------------------------
-    // Run 2: every observed gate opens; the four acknowledgements are
-    // still withheld.
+    // Run 2: every App Store Connect gate opens; the bootstrap gate and
+    // the two acknowledgements are still withheld.
     // ------------------------------------------------------------------
     let planned2 =
         plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
@@ -546,13 +595,8 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         planned2.blocked.iter().map(|b| b.node.as_str()).collect();
     assert_eq!(
         blocked_nodes2,
-        std::collections::BTreeSet::from([
-            "m3_repo_files",
-            "m5_apns_key",
-            "m6_ci_doppler_access",
-            "m7_bootstrap",
-        ]),
-        "run 2's blocked set: only the four acknowledgement leaves remain"
+        std::collections::BTreeSet::from(["bootstrap_gate", "m5_apns_key", "m6_ci_doppler_access"]),
+        "run 2's blocked set: the bootstrap gate and the two acknowledgement leaves remain"
     );
 
     for node in [
@@ -626,7 +670,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "run 2: `{node}` must be Unchanged"
         );
     }
-    assert_eq!(applied2.blocked.len(), 4, "run 2's Applied.blocked");
+    assert_eq!(applied2.blocked.len(), 3, "run 2's Applied.blocked");
 
     // The universal claim, not a spot check: run 2's `Created` set is
     // EXACTLY the six nodes the app-group gates just unblocked -- nothing
@@ -673,11 +717,10 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
 
     // Each acknowledgement gate names exactly its own input in
     // `awaiting_inputs` -- the data the CLI's `supply:` line renders from.
+    // W1: only M5 and M6 are acknowledgements any more.
     for (node, input) in [
-        ("m3_repo_files", "m3_repo_files_done"),
         ("m5_apns_key", "m5_apns_key_done"),
         ("m6_ci_doppler_access", "m6_ci_doppler_access_done"),
-        ("m7_bootstrap", "m7_bootstrap_done"),
     ] {
         let entry = planned1
             .blocked
@@ -699,7 +742,35 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     assert_no_secret_leaked(&applied2_json);
 
     // ------------------------------------------------------------------
-    // Run 3: the four acknowledgements are supplied. Everything converges.
+    // Between run 2 and run 3: the operator's own paste, standing in --
+    // the pipeline's stored `configuration` is set to exactly the
+    // bootstrap this document rendered (`bootstrap_yml`'s own output,
+    // extracted from `applied2` rather than re-typed here, so this test
+    // cannot silently drift from what the document actually wrote).
+    // ------------------------------------------------------------------
+    let bootstrap_content = rendered_file(&applied2, "bootstrap_yml")
+        .content()
+        .to_string();
+    let pipeline_slug = output_of(&applied2, "pipeline")
+        .get(&PortName::parse("slug").unwrap())
+        .expect("pipeline.slug was applied")
+        .downcast::<BuildkitePipelineSlug>()
+        .expect("pipeline.slug is a BuildkitePipelineSlug")
+        .clone();
+    {
+        let mut locked = state.lock().unwrap();
+        let key =
+            buildkite_pipeline_key(&BuildkiteOrg::parse(BUILDKITE_ORG).unwrap(), &pipeline_slug);
+        locked
+            .buildkite_pipelines
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("pipeline `{key}` was seeded by run 1's apply"))
+            .configuration = bootstrap_content;
+    }
+
+    // ------------------------------------------------------------------
+    // Run 3: the two acknowledgements are supplied, and the bootstrap
+    // gate now reads the paste above as equal. Everything converges.
     // ------------------------------------------------------------------
     let inputs3 = with_acknowledgements(inputs.clone());
     let planned3 =
@@ -726,11 +797,11 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         "nse_profile_to_doppler",
         "widgets_profile_to_doppler",
         "doppler",
+        "walter_files",
         "pipeline",
-        "m3_repo_files",
+        "bootstrap_gate",
         "m5_apns_key",
         "m6_ci_doppler_access",
-        "m7_bootstrap",
     ] {
         assert_ne!(
             action_of(&planned3, node, None),
@@ -923,8 +994,8 @@ fn the_document_reads_the_real_layout_by_name() {
         assert_eq!(literal(name, "name"), secret);
     }
 
-    // GitHub: the token comes from github/bande-a-bonnot, through the
-    // parse tool, into every GitHub provider node's `token` port.
+    // GitHub: the read-only clone token comes from github/bande-a-bonnot,
+    // through the parse tool, into `monorepo_ref`'s own `token` port.
     assert_eq!(node("gh_token_secret").tool.as_str(), "doppler.secret.get");
     assert_eq!(
         literal("gh_token_secret", "config"),
@@ -938,6 +1009,53 @@ fn the_document_reads_the_real_layout_by_name() {
             .get(&PortName::parse("value").unwrap()),
         Some(&from("gh_token_secret", "value"))
     );
+    assert_eq!(
+        node("monorepo_ref")
+            .with
+            .get(&PortName::parse("token").unwrap()),
+        Some(&from("gh_token", "value")),
+        "monorepo_ref must authenticate with the Doppler-resolved clone token"
+    );
+
+    // W1: the write token is new and narrower, from a Doppler config no
+    // app config inherits, and binds only `walter_files.token` -- never
+    // `monorepo_ref`'s own, older, wider `gh_token`.
+    assert_eq!(
+        node("gh_write_token_secret").tool.as_str(),
+        "doppler.secret.get"
+    );
+    assert_eq!(
+        literal("gh_write_token_secret", "config"),
+        "github/bande-a-bonnot_willikins"
+    );
+    assert_eq!(
+        literal("gh_write_token_secret", "name"),
+        "GH_CONTENTS_WRITE_TOKEN"
+    );
+    assert_eq!(node("gh_write_token").tool.as_str(), "github.token.parse");
+    assert_eq!(
+        node("gh_write_token")
+            .with
+            .get(&PortName::parse("value").unwrap()),
+        Some(&from("gh_write_token_secret", "value"))
+    );
+    assert_eq!(
+        node("walter_files")
+            .with
+            .get(&PortName::parse("token").unwrap()),
+        Some(&from("gh_write_token", "value")),
+        "walter_files must authenticate with its own, narrower write token"
+    );
+    assert_eq!(node("walter_files").tool.as_str(), "github.scaffold.ensure");
+    assert_eq!(literal("walter_files", "branch"), "main");
+    assert_eq!(
+        literal("walter_files", "marker"),
+        "apps/walter/.willikins-scaffold"
+    );
+
+    // Every `github.*` node (other than the parse tool, which has no
+    // `token` port at all) is accounted for above -- `monorepo_ref` and
+    // `walter_files`, nothing else.
     let github_nodes: Vec<&str> = workflow
         .nodes
         .iter()
@@ -946,14 +1064,7 @@ fn the_document_reads_the_real_layout_by_name() {
         })
         .map(|(name, _)| name.as_str())
         .collect();
-    assert_eq!(github_nodes, ["monorepo_ref"]);
-    for name in github_nodes {
-        assert_eq!(
-            node(name).with.get(&PortName::parse("token").unwrap()),
-            Some(&from("gh_token", "value")),
-            "`{name}` must authenticate with the Doppler-resolved token, never the environment"
-        );
-    }
+    assert_eq!(github_nodes, ["monorepo_ref", "walter_files"]);
 
     // D2: Buildkite, the same shape -- the token comes from buildkite/prd,
     // through the parse tool, into every Buildkite provider node's `token`
@@ -979,7 +1090,13 @@ fn the_document_reads_the_real_layout_by_name() {
         })
         .map(|(name, _)| name.as_str())
         .collect();
-    assert_eq!(buildkite_nodes, ["buildkite_cluster", "pipeline"]);
+    // W1: `bootstrap_gate` (`buildkite.pipeline.bootstrap.gate`) joins
+    // the set -- it authenticates and references the org exactly like
+    // `buildkite_cluster`/`pipeline`.
+    assert_eq!(
+        buildkite_nodes,
+        ["buildkite_cluster", "pipeline", "bootstrap_gate"]
+    );
     for name in &buildkite_nodes {
         assert_eq!(
             node(name).with.get(&PortName::parse("token").unwrap()),
@@ -993,6 +1110,20 @@ fn the_document_reads_the_real_layout_by_name() {
         );
     }
     assert_eq!(literal("buildkite_cluster", "name"), "Default cluster");
+    assert_eq!(
+        node("bootstrap_gate")
+            .with
+            .get(&PortName::parse("slug").unwrap()),
+        Some(&from("pipeline", "slug")),
+        "bootstrap_gate.slug must bind from pipeline.slug"
+    );
+    assert_eq!(
+        node("bootstrap_gate")
+            .with
+            .get(&PortName::parse("expected").unwrap()),
+        Some(&from("bootstrap_yml", "file")),
+        "bootstrap_gate.expected must bind from bootstrap_yml.file"
+    );
     for removed in ["buildkite_org", "cluster"] {
         assert!(
             !workflow

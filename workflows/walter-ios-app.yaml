@@ -71,13 +71,12 @@
 #     output, so it is held back until App Attest is confirmed enabled,
 #     the same "gate passes through the key it checked" shape M2 uses,
 #     applied through a second, independent port of the same node.
-#   - M3 (repo files), M5 (an APNs key), M6 (the CI Doppler grant), M7
-#     (reseeding the Buildkite pipeline's stored bootstrap): four
-#     `operator.acknowledge` leaves, `m3_repo_files_done` /
-#     `m5_apns_key_done` / `m6_ci_doppler_access_done` / `m7_bootstrap_done`.
-#     None of these has a typed pass-through (decision (j), point 6's own
-#     honest limit), so each is a leaf: it blocks the run's outcome and is
-#     reported, but orders nothing else in this graph.
+#   - M5 (an APNs key), M6 (the CI Doppler grant): two `operator.acknowledge`
+#     leaves, `m5_apns_key_done` / `m6_ci_doppler_access_done`. Neither has
+#     a typed pass-through (decision (j), point 6's own honest limit), so
+#     each is a leaf: it blocks the run's outcome and is reported, but
+#     orders nothing else in this graph. M3 and M7 used to be two more
+#     leaves here -- see milestone 3g, below, for why they are gone.
 #   - M4 (minting the three profiles) is no longer manual: operator
 #     decision 1 put the profiles in this document, behind M2's gates.
 #   - M0 (confirming the shared base config names) is gone: operator
@@ -152,11 +151,13 @@
 # (`Bande-a-Bonnot/monorepo`) are no longer caller-overridable inputs --
 # the operator's own words, "Just update the doc": each is now a bare
 # literal at its one use site (`names.org`/`names.slug`,
-# `monorepo_ref.repo`). `base_configs` itself stays a defaulted input,
-# not a literal -- the document format has no syntax to bind a list
-# literal to a `with:` port, and `for_each` must always be a reference
-# (`doppler-ios.yaml`'s own header makes the identical point); its
-# `default:` is this document's actual policy regardless.
+# `monorepo_ref.repo`). `base_configs` itself stays a defaulted input, not
+# a literal -- milestone 3g's list-binding syntax (`Binding::List`) could
+# bind it to the `with:` port directly, but `for_each` must always be a
+# reference, never a literal sequence (`doppler-ios.yaml`'s own header
+# makes the identical point), so `base_configs` stays an ordinary,
+# defaulted input regardless; its `default:` is this document's actual
+# policy.
 #
 # **D2 (2026-09-30): the Buildkite credential is resolved from Doppler,
 # and `buildkite_org`/`cluster` become literals.** Mirrors R4's own
@@ -207,21 +208,77 @@
 # task. `app_app_attest` reads from `app_id.identifier` directly (not
 # chained through `app_app_groups`), so a fresh run reports both gates'
 # needs together rather than one only after the other is already met.
+#
+# **W1 (2026-09-30, milestone 3g): M3 and M7 stop being acknowledgements.**
+# The operator's own decision: "We'll add file capabilities, update the
+# document with them, and use willikins' idempotency to run that."
+#   - **M3 (repo files) is now real writes.** Seventeen `repo.file.render`
+#     nodes (task T1) render Walter's files -- `BUILD.bazel` (an
+#     `ios_application` embedding two `ios_extension`s, `local_provisioning_profile`s
+#     named after the three bundle identifiers, no `team_id` -- decision
+#     (j), the account's own permanent-trap lesson from fact 1 above
+#     applies equally to a Bazel rule this workspace cannot observe),
+#     three entitlements files, both extensions' `Info.plist`s, the host
+#     `Info.plist` (HealthKit usage strings), a privacy manifest, and
+#     `.buildkite/` (the real pipeline graph, the upload script, provider
+#     triggers disabled, and this document's own copy of the pipeline's
+#     intended stored bootstrap). Every placeholder is `{{ N }}`, and the
+#     only values ever substituted are the three bundle identifiers,
+#     converted from `AppleBundleIdentifier` -- never a `Text`, never a
+#     caller-controlled string (decision (e)). `walter_files`
+#     (`github.scaffold.ensure`, task G2) lands all seventeen renders plus
+#     an ownership marker (`apps/walter/.willikins-scaffold`) as **one
+#     commit** on `main` (decision (f): the monorepo's own owner ruling is
+#     trunk-based, "commit directly to `main`"), keyed by
+#     `(repo, branch, marker)` so a re-run converges without re-reading or
+#     re-writing a single seeded file (decision (c)). Its write
+#     credential is new and narrow (decision (l)): `gh_write_token_secret`
+#     (`doppler.secret.get` against `github/bande-a-bonnot_willikins`, a
+#     branch config no other app config inherits, `GH_CONTENTS_WRITE_TOKEN`)
+#     into `gh_write_token` (`github.token.parse`), bound to
+#     `walter_files.token` alone -- `monorepo_ref` keeps reading with the
+#     older, narrower `gh_token` (Contents: read only), so the read-only
+#     reference to the repository and the write into it authenticate as
+#     two different credentials on purpose.
+#   - **`pipeline.repo` is rebound from `monorepo_ref.repo` to
+#     `walter_files.repo`**, so the Buildkite pipeline is created only
+#     after its own `.buildkite/` files exist on the branch (the
+#     milestone's own survey: "The graph today provisions a pipeline that
+#     cannot run"). On a first run `walter_files` plans `Create` with
+#     `repo` predicted, so the pipeline still plans the same run.
+#   - **M7 (the stored bootstrap) is now an observed gate**, not an
+#     acknowledgement: `bootstrap_gate` (`buildkite.pipeline.bootstrap.gate`,
+#     task B1) reads the pipeline's stored `configuration` and compares it,
+#     structurally as YAML, against the bootstrap this document renders
+#     (`bootstrap_yml.file`) -- equal is `Compute`, anything else
+#     (different, unparsable, missing, or the pipeline itself absent) is
+#     `Blocked` with a need/how telling the operator to paste the rendered
+#     file into the pipeline's Settings -> Steps page by hand (decision
+#     (h): writing a pipeline's executed configuration is not automatable
+#     without breaking milestone 3a decision (a), so only the *check*
+#     becomes a gate). `m3_repo_files_done` and `m7_bootstrap_done` are
+#     gone from `inputs:` entirely -- there is nothing left for either to
+#     acknowledge.
+#   - **`data_protection` is now a bare literal**, not a caller-overridable
+#     input -- the same "Just update the doc" D1/D2 already applied
+#     elsewhere. Its value and `Walter.entitlements`' own
+#     `com.apple.developer.default-data-protection` entry name the same
+#     Apple data-protection class (`PROTECTED_UNTIL_FIRST_USER_AUTH` /
+#     `NSFileProtectionCompleteUntilFirstUserAuthentication`); a Walter
+#     document test pins both together so they cannot drift apart through
+#     a caller's input that no longer exists.
 name: walter-ios-app
-description: Provision Walter (app, NSE, widgets) end to end -- bundle identifiers, capabilities, signing profiles, the monorepo reference, Doppler, and the Buildkite pipeline -- reporting every manual step as a gate.
+description: Provision Walter (app, NSE, widgets) end to end -- bundle identifiers, capabilities, signing profiles, the monorepo reference, Doppler, the Buildkite pipeline, and its scaffold files -- reporting every manual step as a gate.
 inputs:
   app_identifier: { type: AppleBundleIdentifier, description: "The app's bundle identifier, e.g. com.bande-a-bonnot.walter -- no default (trust boundary 2)" }
   nse_identifier: { type: AppleBundleIdentifier, description: "The notification service extension's bundle identifier, e.g. com.bande-a-bonnot.walter.nse" }
   widgets_identifier: { type: AppleBundleIdentifier, description: "The widgets extension's bundle identifier, e.g. com.bande-a-bonnot.walter.widgets" }
-  data_protection: { type: AppleCapabilitySetting, default: "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH", description: "Decision (e): the NSE and HealthKit background delivery both run while the device may be locked, so anything stricter than iOS's own default needs code-level exceptions first." }
   certificate_type: { type: AppleCertificateType, description: "DISTRIBUTION or IOS_DISTRIBUTION" }
   serial_number: { type: AppleCertificateSerial, description: "The distribution certificate's serial number every profile below is signed with" }
   environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
-  base_configs: { type: list<DopplerConfig>, default: [appstore-connect/deploy_ios, github/bande-a-bonnot, open-telemetry/prd_signoz], description: "Operator decision 2's real shared base configs, inherited by prd_config alone (task B1). This default IS the document's policy (D1) -- edited here, never threaded through per run; it stays an ordinary overridable input only because the document format has no syntax to bind a list literal directly to a with: port (doppler-ios.yaml's own header explains the same gap). Each entry is gated by base_config_gate below before inherit ever names it." }
-  m3_repo_files_done: { type: OperatorAcknowledgement, description: "M3: Walter's files (BUILD.bazel, entitlements, Info.plist, .buildkite/) added under apps/walter/ in the monorepo, following the survey in the milestone plan." }
+  base_configs: { type: list<DopplerConfig>, default: [appstore-connect/deploy_ios, github/bande-a-bonnot, open-telemetry/prd_signoz], description: "Operator decision 2's real shared base configs, inherited by prd_config alone (task B1). This default IS the document's policy (D1) -- edited here, never threaded through per run; it stays an ordinary overridable input only because for_each must always bind a reference, never a literal sequence (milestone 3g's Binding::List could bind the with: port directly, but not for_each). Each entry is gated by base_config_gate below before inherit ever names it." }
   m5_apns_key_done: { type: OperatorAcknowledgement, description: "M5: the team's APNs auth key (.p8) is confirmed in a shared base config Walter inherits, or freshly created if none exists." }
   m6_ci_doppler_access_done: { type: OperatorAcknowledgement, description: "M6: the Buildkite CI Doppler service account has been granted read access to project walter." }
-  m7_bootstrap_done: { type: OperatorAcknowledgement, description: "M7: the walter pipeline's stored bootstrap has been replaced with apps/walter/.buildkite/bootstrap.yml, read back and compared." }
 steps:
   # --- The App Store Connect credential, resolved from Doppler (the same
   # seven-node chain as appstore-bundle-id-from-doppler.yaml). `config` is
@@ -324,7 +381,11 @@ steps:
       key: ${{ steps.key.value }}
       identifier: ${{ steps.app_id.identifier }}
       capability: DATA_PROTECTION
-      setting: ${{ inputs.data_protection }}
+      # W1: a bare literal, not a caller-overridable input any more --
+      # "Just update the doc". Names the same Apple data-protection class
+      # as `Walter.entitlements`' own `com.apple.developer.default-data-protection`
+      # value below; `walter_document.rs` pins both together.
+      setting: "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH"
 
   # --- M1: the app record gate, a leaf. Bound from app_id's own output, so
   # it is read after the identifier that names it is known, but nothing
@@ -394,9 +455,9 @@ steps:
     with:
       issuer_id: ${{ steps.issuer_id.value }}
       key_id: ${{ steps.key_id.value }}
-      key: ${{ steps.key.value }}
       certificate_type: ${{ inputs.certificate_type }}
       serial_number: ${{ inputs.serial_number }}
+      key: ${{ steps.key.value }}
 
   # --- The three App Store profiles, named after their identifiers
   # (decision (h)'s "bundle id everywhere" convention, through the
@@ -509,11 +570,10 @@ steps:
       name: APP_STORE_PROFILE_WIDGETS
       value: ${{ steps.widgets_profile.content }}
 
-  # --- The monorepo, referenced, and the Buildkite pipeline (decisions (f)
-  # and (g)). The GitHub token is resolved from Doppler (R4), mirroring
-  # R2's workflows/github-repo-token-from-doppler.yaml exactly:
-  # gh_token_secret into gh_token, bound to monorepo_ref's own optional
-  # `token` port. ---
+  # --- The monorepo, referenced (decisions (f) and (g)). The GitHub
+  # read-only token is resolved from Doppler (R4), mirroring R2's
+  # workflows/github-repo-token-from-doppler.yaml exactly: gh_token_secret
+  # into gh_token, bound to monorepo_ref's own optional `token` port. ---
   gh_token_secret:
     tool: doppler.secret.get
     with:
@@ -528,6 +588,659 @@ steps:
     with:
       repo: Bande-a-Bonnot/monorepo
       token: ${{ steps.gh_token.value }}
+
+  # ------------------------------------------------------------------
+  # W1 (milestone 3g): Walter's files, rendered and scaffolded.
+  #
+  # Seventeen `repo.file.render` nodes (task T1, decision (i)), one per
+  # file the survey found; every placeholder is exactly `{{ N }}`, and the
+  # only values ever substituted are the three bundle identifiers --
+  # converted from `AppleBundleIdentifier` to `TemplateValue`, never a
+  # caller-controlled `Text` (decision (e)). `values` order is fixed:
+  # `0` = the host app's identifier, `1` = the NSE's, `2` = the widgets
+  # extension's, matching `ios/BUILD.bazel`'s own three
+  # `local_provisioning_profile`s; every entitlements file binds only `0`
+  # (the host app's identifier), since `com.apple.security.application-groups`
+  # names one shared app group keyed by the host identifier, not each
+  # target's own. No `team_id` anywhere (decision (j)): the account's own
+  # permanent-platform-trap lesson (fact 1, this file's own header)
+  # applies equally to a Bazel attribute this workspace cannot read back.
+  # ------------------------------------------------------------------
+  build_bazel_app:
+    tool: repo.file.render
+    with:
+      path: apps/walter/BUILD.bazel
+      template: |
+        # Walter app package.
+  build_bazel_ios:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/BUILD.bazel
+      values: ['${{ inputs.app_identifier }}', '${{ inputs.nse_identifier }}', '${{ inputs.widgets_identifier }}']
+      template: |
+        load("@rules_apple//apple:apple.bzl", "local_provisioning_profile")
+        load("@rules_apple//apple:ios.bzl", "ios_application", "ios_extension")
+        load("@rules_apple//apple:versioning.bzl", "apple_bundle_version")
+        load("@rules_swift//swift:swift.bzl", "swift_library")
+
+        config_setting(
+            name = "ci_build",
+            define_values = {"ci": "true"},
+            visibility = ["//apps/walter:__subpackages__"],
+        )
+
+        config_setting(
+            name = "internal_build",
+            define_values = {"variant": "internal"},
+            visibility = ["//apps/walter:__subpackages__"],
+        )
+
+        config_setting(
+            name = "ios_simulator_build",
+            define_values = {"ios_simulator": "true"},
+            visibility = ["//apps/walter:__subpackages__"],
+        )
+
+        config_setting(
+            name = "internal_simulator_build",
+            define_values = {
+                "ios_simulator": "true",
+                "variant": "internal",
+            },
+            visibility = ["//apps/walter:__subpackages__"],
+        )
+
+        config_setting(
+            name = "beta_simulator_build",
+            define_values = {
+                "ios_simulator": "true",
+                "variant": "beta",
+            },
+            visibility = ["//apps/walter:__subpackages__"],
+        )
+
+        config_setting(
+            name = "beta_build",
+            define_values = {"variant": "beta"},
+            visibility = ["//apps/walter:__subpackages__"],
+        )
+
+        apple_bundle_version(
+            name = "app_version",
+            build_label_pattern = "{version}.{build}",
+            build_version = "{version}.{build}",
+            capture_groups = {
+                "version": "\d+\.\d+\.\d+",
+                "build": "\d+",
+            },
+            fallback_build_label = "0.1.0.0",
+            short_version_string = "{version}",
+        )
+
+        local_provisioning_profile(
+            name = "local_profile",
+            profile_name = "iOS Team Provisioning Profile: *",
+            tags = ["manual"],
+        )
+
+        local_provisioning_profile(
+            name = "distribution_profile",
+            profile_name = "{{ 0 }}",
+            tags = ["manual"],
+        )
+
+        local_provisioning_profile(
+            name = "nse_distribution_profile",
+            profile_name = "{{ 1 }}",
+            tags = ["manual"],
+        )
+
+        local_provisioning_profile(
+            name = "widgets_distribution_profile",
+            profile_name = "{{ 2 }}",
+            tags = ["manual"],
+        )
+
+        swift_library(
+            name = "WalterAppLib",
+            srcs = glob(["Walter/Sources/**/*.swift"]),
+            module_name = "Walter",
+            target_compatible_with = ["@platforms//os:ios"],
+            visibility = ["//build/visibility:ios"],
+        )
+
+        swift_library(
+            name = "WalterNotificationServiceLib",
+            srcs = glob(["WalterNotificationService/Sources/**/*.swift"]),
+            module_name = "WalterNotificationService",
+            target_compatible_with = ["@platforms//os:ios"],
+        )
+
+        swift_library(
+            name = "WalterWidgetsLib",
+            srcs = glob(["WalterWidgets/Sources/**/*.swift"]),
+            module_name = "WalterWidgets",
+            target_compatible_with = ["@platforms//os:ios"],
+        )
+
+        ios_extension(
+            name = "WalterNotificationServiceExtension",
+            bundle_id = "{{ 1 }}",
+            bundle_name = "WalterNotificationService",
+            entitlements = select({
+                ":ci_build": None,
+                ":ios_simulator_build": None,
+                ":internal_simulator_build": None,
+                ":beta_simulator_build": None,
+                "//conditions:default": "Resources/WalterNotificationService.entitlements",
+            }),
+            families = [
+                "iphone",
+                "ipad",
+            ],
+            infoplists = ["Resources/WalterNotificationService-Info.plist"],
+            minimum_os_version = "17.0",
+            provisioning_profile = select({
+                ":internal_simulator_build": None,
+                ":beta_simulator_build": None,
+                ":ios_simulator_build": None,
+                ":internal_build": ":nse_distribution_profile",
+                ":beta_build": ":nse_distribution_profile",
+                ":ci_build": None,
+                "//conditions:default": ":local_profile",
+            }),
+            version = ":app_version",
+            deps = [":WalterNotificationServiceLib"],
+        )
+
+        ios_extension(
+            name = "WalterWidgetsExtension",
+            bundle_id = "{{ 2 }}",
+            bundle_name = "WalterWidgets",
+            entitlements = select({
+                ":ci_build": None,
+                ":ios_simulator_build": None,
+                ":internal_simulator_build": None,
+                ":beta_simulator_build": None,
+                "//conditions:default": "Resources/WalterWidgets.entitlements",
+            }),
+            families = [
+                "iphone",
+                "ipad",
+            ],
+            infoplists = ["Resources/WalterWidgets-Info.plist"],
+            minimum_os_version = "17.0",
+            provisioning_profile = select({
+                ":internal_simulator_build": None,
+                ":beta_simulator_build": None,
+                ":ios_simulator_build": None,
+                ":internal_build": ":widgets_distribution_profile",
+                ":beta_build": ":widgets_distribution_profile",
+                ":ci_build": None,
+                "//conditions:default": ":local_profile",
+            }),
+            version = ":app_version",
+            deps = [":WalterWidgetsLib"],
+        )
+
+        ios_application(
+            name = "Walter",
+            bundle_id = "{{ 0 }}",
+            bundle_name = "Walter",
+            entitlements = select({
+                ":ci_build": None,
+                ":ios_simulator_build": None,
+                ":internal_simulator_build": None,
+                ":beta_simulator_build": None,
+                "//conditions:default": "Resources/Walter.entitlements",
+            }),
+            extensions = [
+                ":WalterNotificationServiceExtension",
+                ":WalterWidgetsExtension",
+            ],
+            families = [
+                "iphone",
+                "ipad",
+            ],
+            infoplists = ["Resources/Info.plist"],
+            minimum_os_version = "17.0",
+            provisioning_profile = select({
+                ":internal_simulator_build": None,
+                ":beta_simulator_build": None,
+                ":ios_simulator_build": None,
+                ":internal_build": ":distribution_profile",
+                ":beta_build": ":distribution_profile",
+                ":ci_build": None,
+                "//conditions:default": ":local_profile",
+            }),
+            resources = ["Resources/PrivacyInfo.xcprivacy"],
+            version = ":app_version",
+            visibility = ["//build/visibility:ios"],
+            deps = [":WalterAppLib"],
+        )
+  walter_app_swift:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/Walter/Sources/WalterApp.swift
+      template: |
+        import SwiftUI
+
+        @main
+        struct WalterApp: App {
+            var body: some Scene {
+                WindowGroup {
+                    Text("Walter")
+                }
+            }
+        }
+  nse_swift:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/WalterNotificationService/Sources/NotificationService.swift
+      template: |
+        import UserNotifications
+
+        final class NotificationService: UNNotificationServiceExtension {
+            private var contentHandler: ((UNNotificationContent) -> Void)?
+            private var bestAttemptContent: UNMutableNotificationContent?
+
+            override func didReceive(
+                _ request: UNNotificationRequest,
+                withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void
+            ) {
+                self.contentHandler = contentHandler
+                bestAttemptContent = request.content.mutableCopy() as? UNMutableNotificationContent
+                if let bestAttemptContent {
+                    contentHandler(bestAttemptContent)
+                }
+            }
+
+            override func serviceExtensionTimeWillExpire() {
+                if let contentHandler, let bestAttemptContent {
+                    contentHandler(bestAttemptContent)
+                }
+            }
+        }
+  widgets_swift:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/WalterWidgets/Sources/WalterWidgets.swift
+      template: |
+        import SwiftUI
+        import WidgetKit
+
+        struct WalterPlaceholderEntry: TimelineEntry {
+            let date: Date
+        }
+
+        struct WalterPlaceholderProvider: TimelineProvider {
+            func placeholder(in context: Context) -> WalterPlaceholderEntry {
+                WalterPlaceholderEntry(date: Date())
+            }
+
+            func getSnapshot(in context: Context, completion: @escaping (WalterPlaceholderEntry) -> Void) {
+                completion(WalterPlaceholderEntry(date: Date()))
+            }
+
+            func getTimeline(in context: Context, completion: @escaping (Timeline<WalterPlaceholderEntry>) -> Void) {
+                completion(Timeline(entries: [WalterPlaceholderEntry(date: Date())], policy: .never))
+            }
+        }
+
+        struct WalterPlaceholderWidget: Widget {
+            let kind: String = "WalterPlaceholderWidget"
+
+            var body: some WidgetConfiguration {
+                StaticConfiguration(kind: kind, provider: WalterPlaceholderProvider()) { _ in
+                    Text("Walter")
+                }
+                .configurationDisplayName("Walter")
+                .description("A placeholder widget.")
+            }
+        }
+
+        @main
+        struct WalterWidgets: WidgetBundle {
+            var body: some Widget {
+                WalterPlaceholderWidget()
+            }
+        }
+  info_plist:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/Resources/Info.plist
+      template: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+            <key>CFBundleName</key>
+            <string>Walter</string>
+            <key>CFBundleDisplayName</key>
+            <string>Walter</string>
+            <key>CFBundleShortVersionString</key>
+            <string>0.1.0</string>
+            <key>CFBundleVersion</key>
+            <string>1</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>UIRequiredDeviceCapabilities</key>
+            <array>
+                <string>arm64</string>
+            </array>
+            <key>ITSAppUsesNonExemptEncryption</key>
+            <false/>
+            <key>NSHealthShareUsageDescription</key>
+            <string>Walter reads Health data you choose to share so it can help you track your health.</string>
+            <key>NSHealthUpdateUsageDescription</key>
+            <string>Walter writes Health data only when you explicitly approve an action that records it.</string>
+            <key>UILaunchScreen</key>
+            <dict/>
+        </dict>
+        </plist>
+  nse_info_plist:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/Resources/WalterNotificationService-Info.plist
+      template: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+            <key>CFBundleName</key>
+            <string>WalterNotificationService</string>
+            <key>CFBundleDisplayName</key>
+            <string>WalterNotificationService</string>
+            <key>CFBundleShortVersionString</key>
+            <string>0.1.0</string>
+            <key>CFBundleVersion</key>
+            <string>1</string>
+            <key>CFBundlePackageType</key>
+            <string>XPC!</string>
+            <key>ITSAppUsesNonExemptEncryption</key>
+            <false/>
+            <key>UIRequiredDeviceCapabilities</key>
+            <array>
+                <string>arm64</string>
+            </array>
+            <key>NSExtension</key>
+            <dict>
+                <key>NSExtensionPrincipalClass</key>
+                <string>WalterNotificationService.NotificationService</string>
+                <key>NSExtensionPointIdentifier</key>
+                <string>com.apple.usernotifications.service</string>
+            </dict>
+        </dict>
+        </plist>
+  widgets_info_plist:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/Resources/WalterWidgets-Info.plist
+      template: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+            <key>CFBundleName</key>
+            <string>WalterWidgets</string>
+            <key>CFBundleDisplayName</key>
+            <string>WalterWidgets</string>
+            <key>CFBundleShortVersionString</key>
+            <string>0.1.0</string>
+            <key>CFBundleVersion</key>
+            <string>1</string>
+            <key>CFBundlePackageType</key>
+            <string>XPC!</string>
+            <key>ITSAppUsesNonExemptEncryption</key>
+            <false/>
+            <key>UIRequiredDeviceCapabilities</key>
+            <array>
+                <string>arm64</string>
+            </array>
+            <key>NSExtension</key>
+            <dict>
+                <key>NSExtensionPointIdentifier</key>
+                <string>com.apple.widgetkit-extension</string>
+            </dict>
+        </dict>
+        </plist>
+  walter_entitlements:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/Resources/Walter.entitlements
+      values: ['${{ inputs.app_identifier }}']
+      template: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>com.apple.developer.healthkit</key>
+            <true/>
+            <key>aps-environment</key>
+            <string>production</string>
+            <key>com.apple.security.application-groups</key>
+            <array>
+                <string>group.{{ 0 }}</string>
+            </array>
+            <key>com.apple.developer.default-data-protection</key>
+            <string>NSFileProtectionCompleteUntilFirstUserAuthentication</string>
+            <key>com.apple.developer.devicecheck.appattest-environment</key>
+            <string>production</string>
+        </dict>
+        </plist>
+  nse_entitlements:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/Resources/WalterNotificationService.entitlements
+      values: ['${{ inputs.app_identifier }}']
+      template: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>com.apple.security.application-groups</key>
+            <array>
+                <string>group.{{ 0 }}</string>
+            </array>
+        </dict>
+        </plist>
+  widgets_entitlements:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/Resources/WalterWidgets.entitlements
+      values: ['${{ inputs.app_identifier }}']
+      template: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>com.apple.security.application-groups</key>
+            <array>
+                <string>group.{{ 0 }}</string>
+            </array>
+        </dict>
+        </plist>
+  privacy_manifest:
+    tool: repo.file.render
+    with:
+      path: apps/walter/ios/Resources/PrivacyInfo.xcprivacy
+      template: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>NSPrivacyTracking</key>
+            <false/>
+            <key>NSPrivacyTrackingDomains</key>
+            <array/>
+            <key>NSPrivacyCollectedDataTypes</key>
+            <array>
+                <dict>
+                    <key>NSPrivacyCollectedDataType</key>
+                    <string>NSPrivacyCollectedDataTypeHealth</string>
+                    <key>NSPrivacyCollectedDataTypeLinked</key>
+                    <true/>
+                    <key>NSPrivacyCollectedDataTypeTracking</key>
+                    <false/>
+                    <key>NSPrivacyCollectedDataTypePurposes</key>
+                    <array>
+                        <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+                    </array>
+                </dict>
+            </array>
+            <key>NSPrivacyAccessedAPITypes</key>
+            <array/>
+        </dict>
+        </plist>
+  pipeline_yml:
+    tool: repo.file.render
+    with:
+      path: apps/walter/.buildkite/pipeline.yml
+      template: |
+        {
+          "steps": [
+            {
+              "key": "walter-validation",
+              "label": "Walter: credential-free validation",
+              "timeout_in_minutes": 180,
+              "concurrency": 1,
+              "concurrency_group": "big-cabbage/tart-ci-macos",
+              "agents": {"queue": "ci-macos-apple-silicon"},
+              "env": {"CI": "true", "TART_NO_AUTO_PRUNE": "1"},
+              "plugins": [
+                {
+                  "github.com/Lightless-Labs/tart-ci#11fc336384a3c2a88209dfba3c429bbf61c1dac7": {
+                    "image": "ci-macos-rust-bazel-ios-20260910-v2",
+                    "os": "macos",
+                    "headless": true,
+                    "always_pull": false,
+                    "shell": "/bin/bash",
+                    "checkout_mount": "checkout",
+                    "env": [
+                      "BUILDKITE_COMMIT",
+                      "BUILDKITE_JOB_ID",
+                      "BUILDKITE_BUILD_ID",
+                      "BUILDKITE_BUILD_NUMBER",
+                      "BUILDKITE_PIPELINE_SLUG",
+                      "BUILDKITE_BUILD_URL",
+                      "CI"
+                    ]
+                  }
+                }
+              ],
+              "command": "bazel build --config=ci -- //apps/walter/..."
+            }
+          ]
+        }
+  upload_pipeline_sh:
+    tool: repo.file.render
+    with:
+      path: apps/walter/.buildkite/upload-pipeline.sh
+      template: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        exec buildkite-agent pipeline upload --no-interpolation apps/walter/.buildkite/pipeline.yml
+  bootstrap_yml:
+    tool: repo.file.render
+    with:
+      path: apps/walter/.buildkite/bootstrap.yml
+      template: |
+        {
+          "steps": [
+            {
+              "key": "walter-bootstrap",
+              "label": "Walter: select pipeline",
+              "agents": {"queue": "ci-macos-apple-silicon"},
+              "command": "bash apps/walter/.buildkite/upload-pipeline.sh",
+              "timeout_in_minutes": 5
+            }
+          ]
+        }
+  provider_settings:
+    tool: repo.file.render
+    with:
+      path: apps/walter/.buildkite/provider-settings.json
+      template: |
+        {
+          "default_branch": "main",
+          "provider_settings": {
+            "build_branches": false,
+            "build_pull_requests": false,
+            "build_pull_request_forks": false,
+            "build_tags": false
+          }
+        }
+  buildkite_readme:
+    tool: repo.file.render
+    with:
+      path: apps/walter/.buildkite/README.md
+      template: |
+        # Walter Buildkite files
+
+        These files describe Walter's Buildkite pipeline: `pipeline.yml` (the real,
+        credential-free validation graph, building `//apps/walter/...` under
+        `--config=ci`), `upload-pipeline.sh` (how the pipeline's stored bootstrap gets
+        to `pipeline.yml`), and `provider-settings.json` (every automatic provider
+        trigger disabled until this scaffold is reviewed).
+
+        `bootstrap.yml` is this document's own copy of the pipeline's intended stored
+        bootstrap (`buildkite.pipeline.bootstrap.gate` compares the two structurally,
+        as YAML, not byte for byte). Paste it into the pipeline's Settings -> Steps
+        page by hand to replace the frozen upload bootstrap the pipeline was created
+        with, then re-run this document -- the gate reads `Compute` once they agree.
+
+        Triggers stay disabled until this scaffold has been reviewed and the pipeline
+        has run at least once with real content.
+
+  # W1: the write credential (decision (l)) -- new and narrow (Contents:
+  # read and write only, never the older, wider gh_token above), from a
+  # Doppler branch config no app config inherits.
+  gh_write_token_secret:
+    tool: doppler.secret.get
+    with:
+      config: github/bande-a-bonnot_willikins
+      name: GH_CONTENTS_WRITE_TOKEN
+  gh_write_token:
+    tool: github.token.parse
+    with:
+      value: ${{ steps.gh_write_token_secret.value }}
+
+  # W1: the scaffold itself -- one commit, all seventeen renders plus the
+  # ownership marker, direct to `main` (decision (f)).
+  walter_files:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ steps.monorepo_ref.repo }}
+      branch: main
+      marker: apps/walter/.willikins-scaffold
+      files:
+        - ${{ steps.build_bazel_app.file }}
+        - ${{ steps.build_bazel_ios.file }}
+        - ${{ steps.walter_app_swift.file }}
+        - ${{ steps.nse_swift.file }}
+        - ${{ steps.widgets_swift.file }}
+        - ${{ steps.info_plist.file }}
+        - ${{ steps.nse_info_plist.file }}
+        - ${{ steps.widgets_info_plist.file }}
+        - ${{ steps.walter_entitlements.file }}
+        - ${{ steps.nse_entitlements.file }}
+        - ${{ steps.widgets_entitlements.file }}
+        - ${{ steps.privacy_manifest.file }}
+        - ${{ steps.pipeline_yml.file }}
+        - ${{ steps.upload_pipeline_sh.file }}
+        - ${{ steps.bootstrap_yml.file }}
+        - ${{ steps.provider_settings.file }}
+        - ${{ steps.buildkite_readme.file }}
+      message: "feat(walter): scaffold the iOS app, NSE, widgets and Buildkite files"
+      token: ${{ steps.gh_write_token.value }}
+
   # --- D2: the Buildkite token, resolved from Doppler the same way, and
   # `buildkite_org`/`cluster` as bare literals (this document's header). ---
   bk_token_secret:
@@ -545,22 +1258,35 @@ steps:
       org: la-bande-a-bonnot
       name: Default cluster
       token: ${{ steps.bk_token.value }}
+  # W1: `repo` is rebound from `monorepo_ref.repo` to `walter_files.repo`,
+  # so the pipeline is created only after its own `.buildkite/` files
+  # exist on the branch.
   pipeline:
     tool: buildkite.pipeline.ensure
     with:
       org: la-bande-a-bonnot
       slug: ${{ steps.names.buildkite_pipeline_slug }}
-      repo: ${{ steps.monorepo_ref.repo }}
+      repo: ${{ steps.walter_files.repo }}
       cluster: ${{ steps.buildkite_cluster.cluster }}
       token: ${{ steps.bk_token.value }}
 
-  # --- The four steps that stay reported only: no API exposes their
-  # state, so each waits for the operator's own acknowledgement ---
-  m3_repo_files:
-    tool: operator.acknowledge
+  # W1: M7 is now an observed gate, not an acknowledgement (decision (h)).
+  # No typed pass-through beyond `slug`: `expected`'s content never
+  # reaches this gate's own report (a gate's `need`/`how` are `&'static
+  # str`), so `subject` (`org`, `slug`) is the only place the operator
+  # learns which pipeline to paste into.
+  bootstrap_gate:
+    tool: buildkite.pipeline.bootstrap.gate
     with:
-      step: "Add Walter's files under apps/walter/ in the monorepo: BUILD.bazel (ios_application embedding two ios_extensions), three entitlements files, Info.plist with both HealthKit usage strings and the two extension points, and .buildkite/ with provider triggers disabled."
-      acknowledged: ${{ inputs.m3_repo_files_done }}
+      org: la-bande-a-bonnot
+      slug: ${{ steps.pipeline.slug }}
+      expected: ${{ steps.bootstrap_yml.file }}
+      token: ${{ steps.bk_token.value }}
+
+  # --- The two steps that stay reported only: no API exposes their
+  # state, so each waits for the operator's own acknowledgement. M3 and
+  # M7 used to be two more leaves here; see this file's own header,
+  # milestone 3g, for why they are gone. ---
   m5_apns_key:
     tool: operator.acknowledge
     with:
@@ -571,11 +1297,6 @@ steps:
     with:
       step: "Grant the Buildkite CI Doppler service account read access to project walter."
       acknowledged: ${{ inputs.m6_ci_doppler_access_done }}
-  m7_bootstrap:
-    tool: operator.acknowledge
-    with:
-      step: "Replace the walter pipeline's stored bootstrap with apps/walter/.buildkite/bootstrap.yml, read it back and compare; keep provider triggers disabled until validated."
-      acknowledged: ${{ inputs.m7_bootstrap_done }}
 outputs:
   app_id: ${{ steps.app_id.id }}
   nse_id: ${{ steps.nse_id.id }}

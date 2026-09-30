@@ -7,9 +7,12 @@
 //! binary, against a real file journal, which is the one surface that
 //! test cannot reach.
 //!
-//! One run, the three OBSERVED gates deliberately unmet (a fresh seed: no
+//! One run, the four OBSERVED gates deliberately unmet (a fresh seed: no
 //! bundle id, no app record, `APP_GROUPS` not enabled, `APP_ATTEST` not
-//! enabled): `apply` must exit
+//! enabled, and the pipeline's stored configuration never seeded to equal
+//! the rendered bootstrap -- `bootstrap_gate`, milestone 3g's own
+//! replacement for the old `m7_bootstrap` acknowledgement): `apply` must
+//! exit
 //! **3** (decision (j), point 7 -- `exit_for_run_state` maps
 //! `RunState::Blocked` to 3, distinct from a failure's 1), stdout must
 //! show the `blocked:` section and "re-run this document once done", and
@@ -19,10 +22,10 @@
 //! # A real bug found while writing this test, and why it is worked
 //! around here rather than fixed
 //!
-//! The four `operator.acknowledge` leaves are deliberately supplied
-//! `done` here, **not** left unmet like the three observed gates. Leaving
-//! any of them unsupplied hits a genuine, pre-existing defect this test
-//! uncovered: `willikins_server::butler::resolve_recorded_inputs`
+//! The two remaining `operator.acknowledge` leaves (M5, M6) are
+//! deliberately supplied `done` here, **not** left unmet like the four
+//! observed gates. Leaving either of them unsupplied hits a genuine,
+//! pre-existing defect this test uncovered: `willikins_server::butler::resolve_recorded_inputs`
 //! rebuilds a plan's inputs from the journal's own recorded
 //! `PlanRecorded.inputs` by requiring **every** declared workflow input to
 //! have an entry there -- but G3's own design
@@ -42,7 +45,7 @@
 //! end"). Out of this task's own scope (a `willikins-server` engine fix,
 //! not the Walter document); reported to the coordinator rather than
 //! patched here or quietly avoided by weakening what this test proves
-//! about the three observed gates.
+//! about the four observed gates.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -131,8 +134,6 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         "--input",
         "widgets_identifier=com.example.walter.widgets",
         "--input",
-        "data_protection=DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
-        "--input",
         "certificate_type=DISTRIBUTION",
         "--input",
         "serial_number=7B3F2A9C1D4E5F607182930A1B2C3D4E",
@@ -141,17 +142,17 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         "--input",
         "base_configs=appstore-connect/deploy_ios,github/bande-a-bonnot,open-telemetry/prd_signoz",
         // Supplied, not left awaited -- see this file's own module doc for
-        // why: leaving any of these unmet trips a separate, pre-existing
-        // defect in the journal-replay path, not the gate mechanism this
-        // test means to prove.
-        "--input",
-        "m3_repo_files_done=done",
+        // why: leaving either unmet trips a separate, pre-existing defect
+        // in the journal-replay path, not the gate mechanism this test
+        // means to prove. M3 and M7 are gone as acknowledgements
+        // (milestone 3g, W1): M3 is real writes now, and M7 is
+        // `bootstrap_gate`, an *observed* gate this run cannot satisfy
+        // (nothing seeds the pipeline's stored configuration), so it is
+        // deliberately left blocked below alongside the others.
         "--input",
         "m5_apns_key_done=done",
         "--input",
         "m6_ci_doppler_access_done=done",
-        "--input",
-        "m7_bootstrap_done=done",
     ]);
 
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -170,28 +171,26 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         stdout.contains("re-run this document once done"),
         "stdout must tell the operator to re-run -- stdout: {stdout}"
     );
-    // The leaf app-record gate and the three per-identifier app-group
-    // gates -- this milestone's plan calls these M1 and M2.
+    // The leaf app-record gate, the three per-identifier app-group gates
+    // (M1, M2), and the bootstrap gate (M7, milestone 3g: an observed
+    // gate now, never satisfied by this run since nothing seeds the
+    // pipeline's stored configuration).
     for node in [
         "app_record",
         "app_app_groups",
         "nse_app_groups",
         "widgets_app_groups",
         "app_app_attest",
+        "bootstrap_gate",
     ] {
         assert!(
             stdout.contains(node),
             "stdout must name the blocked node `{node}` -- stdout: {stdout}"
         );
     }
-    // The four acknowledgement leaves were supplied, so they must NOT
+    // The two acknowledgement leaves were supplied, so they must NOT
     // appear in the blocked section.
-    for node in [
-        "m3_repo_files",
-        "m5_apns_key",
-        "m6_ci_doppler_access",
-        "m7_bootstrap",
-    ] {
+    for node in ["m5_apns_key", "m6_ci_doppler_access"] {
         assert!(
             !stdout.contains(&format!("{node} (operator.acknowledge): Blocked")),
             "`{node}` was supplied `done` and must not be blocked -- stdout: {stdout}"
@@ -215,6 +214,10 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         assert!(
             !text.contains("ghp_example"),
             "{label} carries the seeded GitHub token's raw value: {text}"
+        );
+        assert!(
+            !text.contains("ghp_write_example"),
+            "{label} carries the seeded write token's raw value: {text}"
         );
         assert!(
             !text.contains(SEEDED_BUILDKITE_TOKEN),
