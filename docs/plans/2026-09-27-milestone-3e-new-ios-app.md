@@ -2886,3 +2886,41 @@ literals.** Four commits (`f71e405`, `7a87b4a`, `0f15efd`, `4de0b09`).
   before the grammar admits it, not an inference from this addendum. No live test touched an
   existing identifier, app, certificate, profile, or device; the six throwaway identifiers this
   task's probe created are all deleted, and the account's bundle id count is unchanged (21).
+
+**Addendum:** 2026-09-30 (attacker, pass 6 over T3f) -- **T3f holds: the grammar matches every probe
+in both directions, the removed row stays removed, and Walter checks and plans with its literal names.
+One doc defect fixed (`9fa6512`). One evidence gap recorded that changes what happens before the next
+real apply.** Full record: `docs/research/2026-09-30-m3e-adversarial-pass-6.md`. No live test, no
+provider call.
+
+- **Confirmed by mutation (all restored, `cmp` 0):** re-admitting `.` in `AppleBundleIdName` (M1)
+  and dropping `' '` (M1b) are each killed by T3f's probe-cited unit tests. Re-adding the
+  `AppleBundleIdentifier => AppleBundleIdName` row and its `From` (M3) is killed by
+  `appstore_bundle_id_identifier_into_name_is_rejected` alone, and `willikins-types`' own suites stay
+  green. Walter's `"Walter - NSE"` → `"Walter.NSE"` (M4a) fails `check` with `InvalidLiteral`, and →
+  `${{ inputs.nse_identifier }}` (M4b) fails it with `TypeMismatch`. `"Walter"` → `"Barnum"` (M5)
+  survives: the literals are an unconfirmed proposal. Pin them in
+  `the_document_reads_the_real_layout_by_name` once the operator confirms them.
+- **F1, fixed (`9fa6512`):** the `.md` twin that `AppleBundleIdName`'s doc and the T3f addendum cite
+  states no type for `name`. The source is the OpenAPI specification zip (version 4.5, re-fetched:
+  `name` is a bare string on bundle-id create and update, and on profile create).
+- **F2, recorded (doc corrected in `9fa6512`):** `AppleBundleIdentifier => AppleProfileName` is total
+  against willikins' `AppleProfileName` grammar (M2, a parse refusing `.`, is killed by the
+  grammar-generated proptests). Against Apple, the only dotted profile names seen were created outside
+  willikins and outside the monorepo's fastlane, which runs `readonly: true`. Every
+  `POST /v1/profiles` willikins made used a name without a dot, and the real Walter apply never
+  reached a profile node. **Before the next real Walter apply** (coordinator, live): one throwaway
+  `POST /v1/profiles` whose `name` equals its own dotted `com.willikins.probe.delete-me.*` identifier,
+  deleted by returned id (`raw_post_profile` already has the shape).
+- **F3-F5, recorded:** the `.*` implication proptest survived M2 (it rarely produces an identifier).
+  Nothing in `willikins-types` ties a row's `From` to its target's `parse`, so an
+  example-round-trip guard over every row is suggested. `AppleBundleIdName` admits unprobed shapes:
+  all-space, hyphen-only, leading/trailing/doubled spaces, and lengths over about 32. These are verify
+  items for the next probe run.
+- **Checked non-issues:** `read` compares Apple's `name` raw and never parses it, so the tightening
+  cannot break reading an existing identifier. `=> Text` feeds only willikins' pure tools, so no
+  provider rule applies. No document, fixture or fake state binds a dotted value to a bundle-id name.
+- **Scoped gates green after `9fa6512`:** `cargo fmt --all --check`; `cargo clippy -p willikins-types
+  --all-targets -j 2 -- -D warnings`; `cargo test -p willikins-types`; `cargo check -p
+  willikins-types`; `cargo test -p willikins-cli --test walter_document` (4 passed). Both snapshots are
+  unmoved. The full workspace gate was not run (host rule; it is the coordinator's).
