@@ -1165,4 +1165,23 @@ mod tests {
             );
         }
     }
+
+    /// Milestone 3g decision (e): `Text` is public Doppler-sourced text
+    /// (wall two) and must never reach a committed file. The only route
+    /// into a [`crate::RepoFile`] is `TemplateValue`, whose grammar refuses
+    /// characters `Text` accepts, so a `Text => TemplateValue` row would
+    /// let a document convert an ordinary public value into one that could
+    /// reach a file. No such row may ever be registered.
+    #[test]
+    fn the_production_registry_has_no_text_to_template_value_conversion_row() {
+        let registry = crate::registry();
+        let text = TypeName::parse("Text").unwrap();
+        let template_value = TypeName::parse("TemplateValue").unwrap();
+        assert!(
+            registry
+                .conversion_pairs()
+                .all(|(from, to)| !(from == &text && to == &template_value)),
+            "a Text => TemplateValue conversion row exists; decision (e) forbids it"
+        );
+    }
 }

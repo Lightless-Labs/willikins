@@ -121,6 +121,87 @@ expression: redacted
     }
   },
   {
+    "name": "TemplateValue",
+    "secret": false,
+    "description": "A substitution value for a rendered template placeholder. Refuses shell and quoting metacharacters.",
+    "example": "com.bande-a-bonnot.walter",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "TemplateValue",
+      "description": "A substitution value for a rendered template placeholder. Refuses shell and quoting metacharacters.",
+      "type": "string",
+      "examples": [
+        "com.bande-a-bonnot.walter"
+      ],
+      "maxLength": 255,
+      "pattern": "^(?:[A-Za-z0-9_][A-Za-z0-9._/-]*)$"
+    }
+  },
+  {
+    "name": "RepoPath",
+    "secret": false,
+    "description": "A `/`-separated path inside a repository. Refuses `.git` segments and `.github/workflows/`.",
+    "example": "apps/walter/ios/BUILD.bazel",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "RepoPath",
+      "description": "A `/`-separated path inside a repository. Refuses `.git` segments and `.github/workflows/`.",
+      "type": "string",
+      "examples": [
+        "apps/walter/ios/BUILD.bazel"
+      ],
+      "maxLength": 1024
+    }
+  },
+  {
+    "name": "GitBranchName",
+    "secret": false,
+    "description": "A git branch name, a subset of git's own check-ref-format rules.",
+    "example": "main",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GitBranchName",
+      "description": "A git branch name, a subset of git's own check-ref-format rules.",
+      "type": "string",
+      "examples": [
+        "main"
+      ],
+      "maxLength": 100
+    }
+  },
+  {
+    "name": "CommitHeadline",
+    "secret": false,
+    "description": "A commit message's first line: 1 to 72 characters, one line, no control character.",
+    "example": "feat(walter): scaffold the iOS app, NSE, widgets and Buildkite files",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CommitHeadline",
+      "description": "A commit message's first line: 1 to 72 characters, one line, no control character.",
+      "type": "string",
+      "examples": [
+        "feat(walter): scaffold the iOS app, NSE, widgets and Buildkite files"
+      ],
+      "maxLength": 72,
+      "minLength": 1
+    }
+  },
+  {
+    "name": "RepoFile",
+    "secret": false,
+    "description": "A file to write into a repository: `<path>\\n<content>`.",
+    "example": "apps/walter/BUILD.bazel\n# Reserve the app name.\n",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "RepoFile",
+      "description": "A file to write into a repository: `<path>\\n<content>`.",
+      "type": "string",
+      "examples": [
+        "apps/walter/BUILD.bazel\n# Reserve the app name.\n"
+      ]
+    }
+  },
+  {
     "name": "GitHubOrg",
     "secret": false,
     "description": "A GitHub organisation or user login.",
