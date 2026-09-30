@@ -1234,3 +1234,54 @@ fn an_input_used_only_inside_a_list_is_not_reported_unused() {
     let checked = check(&workflow, &chain_catalog()).expect("a converting element checks cleanly");
     assert!(checked.warnings.is_empty(), "{:?}", checked.warnings);
 }
+
+/// A `Binding::List` is never valid as a `for_each` source -- `check`
+/// refuses it with `SequenceNotAllowedHere`, attributed to the node's own
+/// `Site::ForEach`. Never produced by `willikins-dsl` (`for_each:` is a
+/// plain string field, so a YAML sequence there fails to parse before
+/// `check` ever runs), so this exercises a hand-built `Workflow` --
+/// exactly the defensive path `Resolver::resolve`'s `Binding::List` arm
+/// exists for. `environment`'s own `Binding::Item` binding raises no
+/// second error: `ItemContext::ForEachBroken` cascade-suppresses it,
+/// exactly as an already-broken `for_each` source already does for a
+/// plain bad reference.
+#[test]
+fn a_list_bound_for_each_source_is_sequence_not_allowed_here() {
+    let workflow = Workflow::new(workflow_name("list-for-each")).node(
+        node("configs"),
+        Node::new(tool_name("doppler.config.ensure"))
+            .for_each(Binding::List(vec![Binding::Literal("dev".to_string())]))
+            .port(port("project"), Binding::Literal("test-proj".to_string()))
+            .port(port("environment"), Binding::Item),
+    );
+    let errors =
+        check(&workflow, &test_catalog()).expect_err("a list can never be a for_each source");
+    assert_eq!(
+        errors,
+        vec![CheckError::SequenceNotAllowedHere {
+            site: Site::ForEach {
+                node: node("configs"),
+            },
+        }]
+    );
+}
+
+/// A `Binding::List` is never valid as a workflow output binding either --
+/// same refusal, attributed to `Site::Output`. Also unreachable through
+/// `willikins-dsl` (`outputs:` is a plain string map), so this too is the
+/// defensive hand-built-`Workflow` path.
+#[test]
+fn a_list_bound_workflow_output_is_sequence_not_allowed_here() {
+    let workflow = Workflow::new(workflow_name("list-output")).output(
+        output("x"),
+        Binding::List(vec![Binding::Literal("a".to_string())]),
+    );
+    let errors = check(&workflow, &test_catalog())
+        .expect_err("a list can never be a workflow output binding");
+    assert_eq!(
+        errors,
+        vec![CheckError::SequenceNotAllowedHere {
+            site: Site::Output { name: output("x") },
+        }]
+    );
+}
