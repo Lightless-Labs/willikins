@@ -162,6 +162,7 @@ fn check_error_line(error: &CheckError) -> String {
     format!("{}: {}", error.kind(), check_error_detail(error))
 }
 
+#[allow(clippy::too_many_lines)] // one arm per CheckError variant; splitting it would only move the count, not reduce it
 fn check_error_detail(error: &CheckError) -> String {
     match error {
         CheckError::UnknownTool { node, tool } => {
@@ -262,6 +263,12 @@ fn check_error_detail(error: &CheckError) -> String {
         } => format!("{site}: expected {expected}, found `{found}`"),
         CheckError::SequenceNotAllowedHere { site } => {
             format!("{site}: a list binding is not valid here")
+        }
+        CheckError::DisallowedInputType { input, ty } => {
+            format!("input `{input}`: declared type `{ty}` may never be a workflow input")
+        }
+        CheckError::RepoFileLiteral { node, port } => {
+            format!("{node}.{port}: a literal cannot supply a repository file")
         }
     }
 }

@@ -84,6 +84,50 @@ pub fn is_operator_acknowledgement(registry: &TypeRegistry, name: &TypeName) -> 
     registry.type_matches(name, &*OPERATOR_ACKNOWLEDGEMENT_EXAMPLE) == Some(true)
 }
 
+/// A known value of [`willikins_types::TemplateSource`], built once from
+/// the type's own example, reused by [`is_template_source`].
+static TEMPLATE_SOURCE_EXAMPLE: std::sync::LazyLock<willikins_types::TemplateSource> =
+    std::sync::LazyLock::new(|| {
+        willikins_types::TemplateSource::parse(
+            <willikins_types::TemplateSource as DomainType>::example(),
+        )
+        .unwrap_or_else(|err| unreachable!("TemplateSource's own example parses: {err}"))
+    });
+
+/// Whether `name` is registered, in `registry`, as the Rust type
+/// [`willikins_types::TemplateSource`] -- decided by the registry entry's
+/// own `TypeId` test, never by comparing [`TypeName`] strings, exactly like
+/// [`is_operator_acknowledgement`]. `check` uses this to refuse the type as
+/// a workflow input or an input default (milestone 3g decision (e)):
+/// templates are privileged, trusted-ref document content, never something
+/// a caller supplies.
+#[must_use]
+pub fn is_template_source(registry: &TypeRegistry, name: &TypeName) -> bool {
+    registry.type_matches(name, &*TEMPLATE_SOURCE_EXAMPLE) == Some(true)
+}
+
+/// A known value of [`willikins_types::RepoFile`], built once from the
+/// type's own example, reused by [`is_repo_file`].
+static REPO_FILE_EXAMPLE: std::sync::LazyLock<willikins_types::RepoFile> =
+    std::sync::LazyLock::new(|| {
+        willikins_types::RepoFile::parse(<willikins_types::RepoFile as DomainType>::example())
+            .unwrap_or_else(|err| unreachable!("RepoFile's own example parses: {err}"))
+    });
+
+/// Whether `name` is registered, in `registry`, as the Rust type
+/// [`willikins_types::RepoFile`] -- decided by the registry entry's own
+/// `TypeId` test, never by comparing [`TypeName`] strings, exactly like
+/// [`is_operator_acknowledgement`]. `check` uses this to refuse the type as
+/// a workflow input, an input default, and (in `check_literal` and
+/// `check_list_literal`) a literal bound to a port of this type
+/// (milestone 3g decision (e)): the only producer of a `RepoFile` is
+/// `repo.file.render`, so a document-authored literal that merely parses
+/// as one must never reach a sink that writes it.
+#[must_use]
+pub fn is_repo_file(registry: &TypeRegistry, name: &TypeName) -> bool {
+    registry.type_matches(name, &*REPO_FILE_EXAMPLE) == Some(true)
+}
+
 /// The type a tool port accepts.
 ///
 /// `AnySecret` exists only for sinks such as
@@ -688,6 +732,45 @@ mod tests {
             &TypeName::parse("GitHubOrg").unwrap()
         ));
         assert!(!is_operator_acknowledgement(
+            registry,
+            &TypeName::parse("NoSuchType").unwrap()
+        ));
+    }
+
+    #[test]
+    fn is_template_source_recognises_only_its_own_type() {
+        let registry = willikins_types::registry();
+        assert!(is_template_source(
+            registry,
+            &TypeName::parse("TemplateSource").unwrap()
+        ));
+        assert!(!is_template_source(
+            registry,
+            &TypeName::parse("Text").unwrap()
+        ));
+        assert!(!is_template_source(
+            registry,
+            &TypeName::parse("RepoFile").unwrap()
+        ));
+        assert!(!is_template_source(
+            registry,
+            &TypeName::parse("NoSuchType").unwrap()
+        ));
+    }
+
+    #[test]
+    fn is_repo_file_recognises_only_its_own_type() {
+        let registry = willikins_types::registry();
+        assert!(is_repo_file(
+            registry,
+            &TypeName::parse("RepoFile").unwrap()
+        ));
+        assert!(!is_repo_file(registry, &TypeName::parse("Text").unwrap()));
+        assert!(!is_repo_file(
+            registry,
+            &TypeName::parse("TemplateSource").unwrap()
+        ));
+        assert!(!is_repo_file(
             registry,
             &TypeName::parse("NoSuchType").unwrap()
         ));
