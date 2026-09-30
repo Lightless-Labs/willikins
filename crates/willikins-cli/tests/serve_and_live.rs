@@ -284,6 +284,10 @@ fn plan_live_on_a_document_using_github_still_refuses_with_only_a_doppler_token_
     assert_eq!(json["kind"], "GitHub", "{json}");
     assert_eq!(json["document"], "new-rust-service", "{json}");
     assert_eq!(json["tool"], "github.repo.ensure", "{json}");
+    // The node that actually needs it, not merely "a document using
+    // GitHub" -- this document's `github.repo.ensure` node does not bind
+    // `token`, so the refusal names it by node, too.
+    assert_eq!(json["node"], "repo", "{json}");
 }
 
 /// A `dp.st.` service token: correctly shaped for Doppler, and refused
@@ -365,6 +369,123 @@ fn plan_live_ignores_a_malformed_credential_for_a_provider_the_document_never_us
     );
     assert!(
         stdout(&output).contains("missing `project`"),
+        "stdout: {}",
+        stdout(&output)
+    );
+    assert!(stderr(&output).is_empty(), "stderr: {}", stderr(&output));
+}
+
+// ---------------------------------------------------------------------
+// L1: a provider's environment credential is required only if at least
+// one of that provider's own nodes leaves its credential port unbound.
+// `workflows/github-repo-token-from-doppler.yaml` and
+// `workflows/buildkite-cluster-token-from-doppler.yaml` (tasks R2, K1)
+// each have exactly one github.*/buildkite.* node, and it binds `token`
+// -- so, unlike `new-rust-service.yaml` above, neither document needs
+// `WILLIKINS_GITHUB_TOKEN`/`WILLIKINS_BUILDKITE_TOKEN` at all. Proven the
+// same no-network way every other case in this file is: omitting every
+// `--input` makes `describe` refuse on the first missing one before
+// `willikins_core::plan` ever calls a tool's `read()`, so a pass here
+// means the catalog itself was built (and `check`ed) without demanding
+// the provider credential this task narrows away -- not that a document
+// actually ran end to end.
+// ---------------------------------------------------------------------
+
+/// The positive half of the R2/K1 pair: no `WILLIKINS_GITHUB_TOKEN` at
+/// all, only `WILLIKINS_DOPPLER_TOKEN` (still required -- Doppler has no
+/// credential port to bind, and this document's own `token_secret` node
+/// uses it). If this task's rule were not in effect, building the live
+/// catalog would refuse here naming `WILLIKINS_GITHUB_TOKEN` (exit 2,
+/// `kind: "GitHub"`) before `check` ever ran; instead it reaches the
+/// ordinary missing-input refusal (exit 1, on stdout), the same shape
+/// [`plan_live_on_a_doppler_only_document_needs_only_the_doppler_token`]
+/// already proves for a document with no github/buildkite node at all.
+#[test]
+fn plan_live_on_a_document_whose_github_node_binds_its_own_token_needs_no_github_credential() {
+    let token = doppler_test_token();
+    let output = run(
+        &[
+            "plan",
+            workflow("workflows/github-repo-token-from-doppler.yaml")
+                .to_str()
+                .unwrap(),
+            "--live",
+        ],
+        &[("WILLIKINS_DOPPLER_TOKEN", token.as_str())],
+    );
+    assert_eq!(
+        exit_code(&output),
+        1,
+        "expected a domain refusal (missing input), not a config refusal naming GitHub -- \
+         stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("missing `config`"),
+        "stdout: {}",
+        stdout(&output)
+    );
+    assert!(stderr(&output).is_empty(), "stderr: {}", stderr(&output));
+}
+
+/// The same document and the same missing input, through `apply <file>
+/// --live` -- mirrors
+/// [`apply_live_on_a_doppler_only_document_needs_only_the_doppler_token`]'s
+/// own shape for the sibling `plan` case above.
+#[test]
+fn apply_live_on_a_document_whose_github_node_binds_its_own_token_needs_no_github_credential() {
+    let token = doppler_test_token();
+    let output = run(
+        &[
+            "apply",
+            workflow("workflows/github-repo-token-from-doppler.yaml")
+                .to_str()
+                .unwrap(),
+            "--live",
+        ],
+        &[("WILLIKINS_DOPPLER_TOKEN", token.as_str())],
+    );
+    assert_eq!(
+        exit_code(&output),
+        1,
+        "expected a domain refusal (missing input), not a config refusal naming GitHub -- \
+         stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(stderr(&output).is_empty(), "stderr: {}", stderr(&output));
+}
+
+/// Buildkite's sibling of the GitHub case above:
+/// `workflows/buildkite-cluster-token-from-doppler.yaml`'s one
+/// `buildkite.cluster.get` node binds `token`, so
+/// `WILLIKINS_BUILDKITE_TOKEN` is never read even though the document
+/// names a `buildkite.*` tool.
+#[test]
+fn plan_live_on_a_document_whose_buildkite_node_binds_its_own_token_needs_no_buildkite_credential()
+{
+    let token = doppler_test_token();
+    let output = run(
+        &[
+            "plan",
+            workflow("workflows/buildkite-cluster-token-from-doppler.yaml")
+                .to_str()
+                .unwrap(),
+            "--live",
+        ],
+        &[("WILLIKINS_DOPPLER_TOKEN", token.as_str())],
+    );
+    assert_eq!(
+        exit_code(&output),
+        1,
+        "expected a domain refusal (missing input), not a config refusal naming Buildkite -- \
+         stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("missing `config`"),
         "stdout: {}",
         stdout(&output)
     );
