@@ -144,9 +144,8 @@
 # directly, so a base config that is missing or not yet marked inheritable
 # blocks its own gate instance at plan time and `inherit` itself plans
 # `Skip` -- never a mid-apply failure after `doppler`/`configs`/`prd_config`
-# have already written (closing R3's own carried-forward "remaining"). The
-# three `doppler.secret.set` nodes below bind `config` from `prd_config`,
-# never from `inherit`, so a blocked base config holds back `inherit` alone.
+# have already written (closing R3's own carried-forward "remaining").
+# Nothing binds from `inherit`, so a blocked base config holds it back alone.
 # `org` (`Bande-a-Bonnot`), `slug` (`walter`) and `monorepo`
 # (`Bande-a-Bonnot/monorepo`) are no longer caller-overridable inputs --
 # the operator's own words, "Just update the doc": each is now a bare
@@ -199,8 +198,7 @@
 # changes the App ID and invalidates profiles minted before it
 # (`appstore.profile.ensure`'s own replace-when-INVALID heals this on the
 # next run, exactly as M2 already relies on), so the gate holds back the
-# host app's profile -- and so its Doppler write, `app_profile_to_doppler`
-# -- the same way M2's own gate does. The NSE and widgets extensions are
+# host app's profile the same way M2's own gate does. The NSE and widgets extensions are
 # unaffected: Apple's own docs state `generateKey` fails when called from
 # an app extension regardless of `isSupported`, so App Attest is never
 # requested on either extension identifier, and their profiles keep
@@ -469,8 +467,7 @@ steps:
   # unchanged (decision (j), point 2, "a gate passes through the key it
   # checked"), so binding `identifier` from one and `name` from the other
   # still names one value, but the data edge now orders `app_profile`
-  # after *both* gates: either one blocked holds the host profile (and
-  # its Doppler write below) back. The NSE and widgets profiles are
+  # after *both* gates: either one blocked holds the host profile back. The NSE and widgets profiles are
   # unaffected -- no App Attest gate applies to an extension. ---
   app_profile:
     tool: appstore.profile.ensure
@@ -507,9 +504,7 @@ steps:
   # inheritance), plus prd_config: the operator's real layout (decision 2,
   # task B1) -- a single named branch config, prd_deployment_ios, under
   # environment prd, created by doppler.branch_config.ensure and inheriting
-  # the three base configs below. The three doppler.secret.set nodes bind
-  # their own `config` from prd_config's own output, since that port only
-  # ever binds a derived, non-pure node's output. ---
+  # the three base configs below. ---
   names:
     tool: naming.v1
     with:
@@ -550,25 +545,14 @@ steps:
       config: ${{ steps.prd_config.config }}
       inherits: ${{ steps.base_config_gate.config }}
 
-  # --- The three profiles' content, into Doppler ---
-  app_profile_to_doppler:
-    tool: doppler.secret.set
-    with:
-      config: ${{ steps.prd_config.config }}
-      name: APP_STORE_PROFILE_APP
-      value: ${{ steps.app_profile.content }}
-  nse_profile_to_doppler:
-    tool: doppler.secret.set
-    with:
-      config: ${{ steps.prd_config.config }}
-      name: APP_STORE_PROFILE_NSE
-      value: ${{ steps.nse_profile.content }}
-  widgets_profile_to_doppler:
-    tool: doppler.secret.set
-    with:
-      config: ${{ steps.prd_config.config }}
-      name: APP_STORE_PROFILE_WIDGETS
-      value: ${{ steps.widgets_profile.content }}
+  # --- No copy of the three profiles goes into Doppler: the monorepo's
+  # CI fetches each profile from Apple by name at build time (fastlane's
+  # get_provisioning_profile, readonly, with the App Store Connect key
+  # deploy_ios already holds), and a profile's name here is its bundle
+  # identifier, so the profile nodes above are all CI needs. A stored copy
+  # would go stale whenever Apple invalidates a profile, and a write-only
+  # doppler.secret.set reports Created on every run, so a converged run
+  # could never read NoOp end to end. ---
 
   # --- The monorepo, referenced (decisions (f) and (g)). The GitHub
   # read-only token is resolved from Doppler (R4), mirroring R2's

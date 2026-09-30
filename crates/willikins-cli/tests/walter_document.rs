@@ -18,25 +18,22 @@
 //!    Attest gate task's own addition, host identifier only) are
 //!    `Blocked` -- the identifiers they check do not exist yet, so their
 //!    own `read` (which resolves the parent through `list_bundle_ids`)
-//!    finds nothing. The three profile nodes and the three
-//!    `doppler.secret.set` nodes that depend on them are `Skip`, never
-//!    read. So are the four `operator.acknowledge` leaves (no `done`
+//!    finds nothing. The three profile nodes are `Skip`, never read. So are the four `operator.acknowledge` leaves (no `done`
 //!    supplied).
 //!    - **Plan-only, between run 1 and run 2: App Groups is on, App
 //!      Attest is still off.** The fake state gains the app record and
 //!      `APP_GROUPS` on all three identifiers, but not yet `APP_ATTEST`
 //!      on the host. A fresh `plan` (not applied) shows `app_app_attest`
-//!      still `Blocked`, holding back exactly `app_profile` and
-//!      `app_profile_to_doppler` -- while `nse_profile`/`widgets_profile`
-//!      and their own Doppler writes, gated only by their own (now open)
-//!      app-group gate, plan `Create`. This is the App Attest gate's own
+//!      still `Blocked`, holding back exactly `app_profile` -- while
+//!      `nse_profile`/`widgets_profile`, gated only by their own (now
+//!      open) app-group gate, plan `Create`. This is the App Attest gate's own
 //!      acceptance case: the host profile alone is held back, the
 //!      extensions are unaffected.
 //! 2. **The fake state satisfies every observed gate** (App Attest is now
 //!    seeded on the host identifier too). Same inputs, same
 //!    acknowledgements withheld. A fresh `plan` shows every
-//!    previously-blocked gate `Compute` and the three profile nodes and
-//!    their `doppler.secret.set` nodes `Create` -- **and nothing else
+//!    previously-blocked gate `Compute` and the three profile nodes
+//!    `Create` -- **and nothing else
 //!    changes**: every node that already ran in step 1 reads
 //!    `Unchanged`/`Computed`. The four acknowledgement leaves are still
 //!    `Blocked`, since no API and no seeded state can satisfy them.
@@ -369,16 +366,9 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         "run 1's blocked set"
     );
 
-    // The three profiles and their Doppler writes are skipped, never
-    // planned as Create -- they are held back by their own app-group gate.
-    for node in [
-        "app_profile",
-        "nse_profile",
-        "widgets_profile",
-        "app_profile_to_doppler",
-        "nse_profile_to_doppler",
-        "widgets_profile_to_doppler",
-    ] {
+    // The three profiles are skipped, never planned as Create -- they are
+    // held back by their own app-group gate.
+    for node in ["app_profile", "nse_profile", "widgets_profile"] {
         assert_eq!(
             action_of(&planned1, node, None),
             Action::Skip,
@@ -484,8 +474,8 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     // Interleaved plan: APP_GROUPS is on everywhere, but App Attest is
     // still off on the host identifier -- the App Attest gate task's own
     // acceptance case. `app_app_attest` alone must still be Blocked, and
-    // it must hold back exactly the host app's profile and that profile's
-    // Doppler write; the NSE and widgets profiles have no App Attest gate
+    // it must hold back exactly the host app's profile; the NSE and
+    // widgets profiles have no App Attest gate
     // at all, so they proceed. Plan only, not applied -- the next block
     // seeds App Attest and run 2 below is what actually applies this
     // state.
@@ -497,19 +487,12 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         Action::Blocked,
         "App Attest is still off on the host identifier: app_app_attest must be Blocked"
     );
-    for node in ["app_profile", "app_profile_to_doppler"] {
-        assert_eq!(
-            action_of(&planned_attest_off, node, None),
-            Action::Skip,
-            "`{node}` is held back by the still-unmet App Attest gate"
-        );
-    }
-    for node in [
-        "nse_profile",
-        "widgets_profile",
-        "nse_profile_to_doppler",
-        "widgets_profile_to_doppler",
-    ] {
+    assert_eq!(
+        action_of(&planned_attest_off, "app_profile", None),
+        Action::Skip,
+        "`app_profile` is held back by the still-unmet App Attest gate"
+    );
+    for node in ["nse_profile", "widgets_profile"] {
         assert_eq!(
             action_of(&planned_attest_off, node, None),
             Action::Create,
@@ -532,8 +515,8 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         .collect();
     assert_eq!(
         attest_holds_back,
-        std::collections::BTreeSet::from(["app_profile", "app_profile_to_doppler"]),
-        "app_app_attest must hold back exactly the host profile and its Doppler write"
+        std::collections::BTreeSet::from(["app_profile"]),
+        "app_app_attest must hold back exactly the host profile"
     );
     // Adversarial pass 7: `need`/`how` are `&'static` and cannot name the
     // capability, so the rendered `subject` is the only place the operator
@@ -612,14 +595,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "run 2: `{node}` must be Compute"
         );
     }
-    for node in [
-        "app_profile",
-        "nse_profile",
-        "widgets_profile",
-        "app_profile_to_doppler",
-        "nse_profile_to_doppler",
-        "widgets_profile_to_doppler",
-    ] {
+    for node in ["app_profile", "nse_profile", "widgets_profile"] {
         assert_eq!(
             action_of(&planned2, node, None),
             Action::Create,
@@ -654,16 +630,6 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "run 2: `{node}` must be Created"
         );
     }
-    for node in [
-        "app_profile_to_doppler",
-        "nse_profile_to_doppler",
-        "widgets_profile_to_doppler",
-    ] {
-        assert!(
-            matches!(status_of(&applied2, node, None), NodeStatus::Created),
-            "run 2: `{node}` must be Created"
-        );
-    }
     for node in ["app_id", "nse_id", "widgets_id"] {
         assert!(
             matches!(status_of(&applied2, node, None), NodeStatus::Unchanged),
@@ -673,7 +639,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     assert_eq!(applied2.blocked.len(), 3, "run 2's Applied.blocked");
 
     // The universal claim, not a spot check: run 2's `Created` set is
-    // EXACTLY the six nodes the app-group gates just unblocked -- nothing
+    // EXACTLY the three nodes the app-group gates just unblocked -- nothing
     // else moved.
     let created2: std::collections::BTreeSet<&str> = applied2
         .nodes
@@ -683,20 +649,13 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         .collect();
     assert_eq!(
         created2,
-        std::collections::BTreeSet::from([
-            "app_profile",
-            "nse_profile",
-            "widgets_profile",
-            "app_profile_to_doppler",
-            "nse_profile_to_doppler",
-            "widgets_profile_to_doppler",
-        ]),
-        "run 2 must create the three profiles and their Doppler writes, and nothing else"
+        std::collections::BTreeSet::from(["app_profile", "nse_profile", "widgets_profile"]),
+        "run 2 must create the three profiles, and nothing else"
     );
 
     // The ordering claim the whole design rests on (decision (j), point 2):
-    // the host app-group gate holds back exactly its own profile and that
-    // profile's Doppler write, never anything else's. `planned2` has no
+    // the host app-group gate holds back exactly its own profile, never
+    // anything else. `planned2` has no
     // blocked entries any more (run 2 is past both observed gates), so this
     // is asserted against run 1's plan, where the gate really was blocked.
     let app_gate_blocked1 = planned1
@@ -711,8 +670,8 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         .collect();
     assert_eq!(
         holds_back,
-        std::collections::BTreeSet::from(["app_profile", "app_profile_to_doppler"]),
-        "app_app_groups must hold back exactly its own profile and that profile's Doppler write"
+        std::collections::BTreeSet::from(["app_profile"]),
+        "app_app_groups must hold back exactly its own profile"
     );
 
     // Each acknowledgement gate names exactly its own input in
@@ -793,9 +752,6 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         "app_profile",
         "nse_profile",
         "widgets_profile",
-        "app_profile_to_doppler",
-        "nse_profile_to_doppler",
-        "widgets_profile_to_doppler",
         "doppler",
         "walter_files",
         "pipeline",
@@ -828,38 +784,19 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
 
     // The universal claim, not a spot check: nothing is freshly `Created` on
     // a converged run -- a stray `Created` here would mean something
-    // silently re-ran instead of reading its already-converged state.
-    //
-    // Exactly three nodes are excluded, by design, not by omission:
-    // `doppler.secret.set` is a write-only sink that can never compare its
-    // `value` against what is already stored (`willikins_providers_doppler::tools::secret_set`'s
-    // own module doc; the fake mirrors it), so its own `ensure` reports
-    // `changed: true` -- `NodeStatus::Created` -- on *every* call, run 3
-    // included. That is this tool's documented behaviour everywhere it is
-    // used in this workspace, not a defect this document introduces.
-    let always_created: std::collections::BTreeSet<&str> = std::collections::BTreeSet::from([
-        "app_profile_to_doppler",
-        "nse_profile_to_doppler",
-        "widgets_profile_to_doppler",
-    ]);
-    let unexpectedly_created: Vec<&str> = applied3
+    // silently re-ran instead of reading its already-converged state. No
+    // exclusions: the document holds no write-only `doppler.secret.set`
+    // sink, which would report `Created` on every apply.
+    let created3: Vec<&str> = applied3
         .nodes
         .iter()
-        .filter(|n| {
-            matches!(n.status, NodeStatus::Created) && !always_created.contains(n.name.as_str())
-        })
+        .filter(|n| matches!(n.status, NodeStatus::Created))
         .map(|n| n.name.as_str())
         .collect();
     assert!(
-        unexpectedly_created.is_empty(),
-        "run 3 must create nothing outside the three write-only Doppler sinks: {unexpectedly_created:?}"
+        created3.is_empty(),
+        "run 3 must create nothing: {created3:?}"
     );
-    for node in &always_created {
-        assert!(
-            matches!(status_of(&applied3, node, None), NodeStatus::Created),
-            "`{node}` is a write-only sink and must report Created on every apply, run 3 included"
-        );
-    }
 
     for node in &applied3.nodes {
         assert!(
@@ -1215,8 +1152,7 @@ fn the_document_checks_cleanly_against_the_fake_catalog() {
 /// `inherit` itself -- a `Step` binding aggregating a `for_each` gate --
 /// plans `Skip` rather than reaching Doppler with an incomplete list at
 /// apply time. Nothing else in the graph is held back: `inherit`'s own
-/// output feeds no other node (the three `doppler.secret.set` nodes bind
-/// `config` from `prd_config`, never from `inherit`), so every
+/// output feeds no other node, so every
 /// independent node -- the three bundle identifiers, `doppler`, the
 /// Buildkite pipeline -- still plans and applies for real.
 #[test]
