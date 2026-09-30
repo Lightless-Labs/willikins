@@ -220,6 +220,35 @@ mod tests {
         assert!(TemplateValue::parse(&at_limit).is_ok());
     }
 
+    /// Adversarial pass over E2: the metacharacter test above samples
+    /// decision (e)'s list only, so widening the class by a character that
+    /// list does not name -- `\` (starts a JSON or Starlark escape),
+    /// `#` (starts a YAML or shell comment), `:` (a YAML mapping), `%`,
+    /// `!`, `=`, `,`, `(`, `\r`, a Unicode line separator -- would pass it
+    /// unnoticed. This pins the whole class, character by character: every
+    /// ASCII character and a sample of non-ASCII ones, in a later position
+    /// and in the first.
+    #[test]
+    fn template_value_admits_exactly_its_grammar_character_by_character() {
+        let later = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-');
+        let first = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        let candidates = (0u8..=127).map(char::from).chain([
+            '\u{85}', '\u{a0}', '\u{e9}', '\u{2028}', '\u{2029}', '\u{ff04}', '\u{ff1b}',
+        ]);
+        for c in candidates {
+            assert_eq!(
+                TemplateValue::parse(&format!("a{c}b")).is_ok(),
+                later(c),
+                "{c:?} inside a TemplateValue"
+            );
+            assert_eq!(
+                TemplateValue::parse(&format!("{c}b")).is_ok(),
+                first(c),
+                "{c:?} as a TemplateValue's first character"
+            );
+        }
+    }
+
     #[test]
     fn schema_shape_is_string_with_max_length_and_no_pattern() {
         let schema = serde_json::to_value(Text::json_schema()).unwrap();
