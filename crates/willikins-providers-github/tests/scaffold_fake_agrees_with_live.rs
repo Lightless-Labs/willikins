@@ -222,6 +222,42 @@ fn agrees_on_invalid_shape() {
     assert_eq!(fake.kind, ToolErrorKind::Invalid);
 }
 
+/// The marker-too-long shape refusal (64 files each with a long path,
+/// producing a marker over `RepoFile`'s bound) agrees between both sides
+/// too, on both `read` and `ensure` -- the fix commit that added this
+/// check to the live tool must add it to the fake as well, or a document
+/// would plan `Create` against the fake catalog and fail `Invalid` only
+/// once it reached the live one.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn agrees_on_an_over_long_marker() {
+    let long_path_files: Vec<RepoFile> = (0..64)
+        .map(|i| {
+            let path = format!("{}{i}.txt", "a".repeat(990));
+            RepoFile::new(RepoPath::parse(&path).unwrap(), "x").unwrap()
+        })
+        .collect();
+    let token = mint();
+
+    let live_read = live_against("http://127.0.0.1:1".to_string())
+        .read(&inputs(long_path_files.clone()))
+        .unwrap_err();
+    let fake_read = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(FakeState::new())))
+        .read(&inputs(long_path_files.clone()))
+        .unwrap_err();
+    assert_eq!(live_read.kind, ToolErrorKind::Invalid);
+    assert_eq!(fake_read.kind, ToolErrorKind::Invalid);
+
+    let live_ensure = live_against("http://127.0.0.1:1".to_string())
+        .ensure(&inputs(long_path_files.clone()), &token)
+        .unwrap_err();
+    let fake_ensure = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(FakeState::new())))
+        .ensure(&inputs(long_path_files), &token)
+        .unwrap_err();
+    assert_eq!(live_ensure.kind, ToolErrorKind::Invalid);
+    assert_eq!(fake_ensure.kind, ToolErrorKind::Invalid);
+}
+
 /// The marker this crate's live tool sends is byte-identical to what the
 /// fake tool stores for the same files -- both compute the SHARED VALUES
 /// format (header, then `<sha> <path>` sorted by path) the same way, so a
