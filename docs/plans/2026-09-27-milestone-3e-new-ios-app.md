@@ -2514,3 +2514,87 @@ for GitHub and Buildkite exactly as it already did for App Store Connect.**
   `cargo check -p willikins-types -j 2`. The full workspace gate was not run (host rule; the
   coordinator's).
 
+**Addendum:** 2026-09-30 (D1, the base-config gate wired in; `org`/`slug`/`monorepo` become
+literals) -- **closes pass 4's own carried-forward finding 1 ("Sample still does not stop on a
+missing base config") and three of its finding 3's four caller-overridable names ("`base_configs`,
+`org`, `slug` and `monorepo` are still caller-overridable inputs, against 'the names are the
+policy'").**
+
+- **The gate, wired exactly as R3's own "remaining" note prescribed.** `workflows/sample-ios-app.yaml`
+  gains `base_config_gate` (`doppler.config.inheritable.gate`, `for_each: ${{ inputs.base_configs }}`,
+  `config: ${{ item }}`) between `prd_config` and `inherit`; `inherit.inherits` is rebound from
+  `${{ inputs.base_configs }}` to the aggregate `${{ steps.base_config_gate.config }}` -- a `Step`
+  binding over a `for_each` gate node (decision (j), point 3), the one shape R3's own addendum
+  recorded as designed but not yet exercised by any shipped document. A base config that is missing
+  or not yet marked inheritable now blocks its own gate instance at plan time; `inherit` itself, since
+  it binds the *aggregate* of all three instances, plans `Action::Skip` rather than ever reaching
+  Doppler with an incomplete `inherits` list mid-apply. Nothing else in the graph is held back: the
+  three `doppler.secret.set` nodes bind `config` from `prd_config`, never from `inherit`, so a
+  blocked base config's own `BlockedGate.holds_back` names exactly `["inherit"]`, and every
+  independent node -- the three bundle identifiers, `doppler`, the Buildkite pipeline -- still plans
+  and applies for real.
+- **`org`, `slug` and `monorepo` are bare literals now, not inputs.** The operator's own words, "Just
+  update the doc": each was a scalar `with:` port used at exactly one site (`names.org`, `names.slug`,
+  `monorepo_ref.repo`), so each is now the literal value directly (`Example-Org`, `sample`,
+  `Example-Org/monorepo`) and the three input declarations are gone. `check`'s own `Checked::types`
+  records a literal-bound port's type exactly the same way it records a referenced one (proven by the
+  characterization snapshot: `names.org: GitHubOrg` and `monorepo_ref.repo: GitHubRepo` did not move),
+  so removing the input changes nothing downstream of those two ports.
+- **`base_configs` stays a defaulted input, not a literal -- a document-format limit, not an
+  oversight.** Verified directly against the DSL rather than assumed: a step's `with:` value is
+  `IndexMap<String, String>` (`crates/willikins-dsl/src/document.rs`), so a YAML sequence is refused
+  outright ("with values must be strings or references"), and `for_each` must always be a reference,
+  never a literal (`parse_for_each_value`, `crates/willikins-dsl/src/reference.rs`) -- there is no way
+  to bind a list literal to a `with:` port at all, and `base_config_gate`'s own `for_each` source must
+  be something. `doppler-ios.yaml`'s own header already carries this exact reasoning for its own
+  `base_configs`; this document's own input description now says the same thing and cites it. So of
+  pass 4's four caller-overridable names, three (`org`, `slug`, `monorepo`) are closed; `base_configs`
+  is not closable in this document format and is reported that way, not silently left to look fixed.
+- **Test-first, both fixtures and tests updated to match.**
+  `crates/willikins-cli/tests/sample_document.rs`: `base_inputs()` no longer supplies `org`/`slug`/
+  `monorepo`; `seeded_state()` is now `seeded_state_with_base_configs(present)` seeding
+  `doppler_configs`/`doppler_config_inheritable` for whichever base configs are asked present (all
+  three for the existing three-run scenario, so the new gate does not change any of its existing
+  blocked-set assertions), and a new test,
+  `a_missing_base_config_blocks_its_gate_and_skips_inherit`, seeds two of three, plans and applies:
+  the missing config's own `base_config_gate` instance is `Blocked`, the other two are `Compute`,
+  `inherit` is `Skip` (never `NodeStatus::Blocked` -- it is not itself a gate, only downstream of
+  one), its `BlockedGate.holds_back` is exactly `["inherit"]`, and every independent node (`app_id`,
+  `nse_id`, `widgets_id`, `doppler`, `pipeline`) still plans `Create` and applies `Created`; a
+  `Blocked` run is still `Ok`, not an error, and no secret leaks into either the plan or applied JSON.
+  `the_document_reads_the_real_layout_by_name` (pass 4's own literal-pinning test) gained assertions
+  that `org`/`slug`/`monorepo` are no longer declared inputs, that `names.org`/`names.slug`/
+  `monorepo_ref.repo` are the exact literals above, that `base_config_gate` calls
+  `doppler.config.inheritable.gate` and expands over `${{ inputs.base_configs }}` with `config: ${{
+  item }}`, and that `inherit.inherits` binds `base_config_gate`'s own aggregate, never
+  `inputs.base_configs` directly. `crates/willikins-cli/tests/sample_apply_blocked_redaction.rs`
+  dropped its now-invalid `--input org=…`/`slug=…`/`monorepo=…` lines (an undeclared `--input` would
+  otherwise be silently ignored rather than fail loudly, so removing them is correctness, not
+  cleanup). `workflows/fixtures/state/sample-ios-app.json` gained `doppler_configs`/
+  `doppler_config_inheritable` entries for all three base configs, so the CLI-level test's own run
+  clears the new gate exactly as it did before this task.
+- **The characterization snapshot moved by exactly one line, in this document's own entry, diffed
+  byte for byte against the pre-change snapshot**: `base_config_gate.config: DopplerConfig`, inserted
+  between `prd_config.branch: DopplerConfigName` and `inherit.config: DopplerConfig` (declaration
+  order). `inherit.inherits: list<DopplerConfig>` is unchanged -- its recorded type is the port's
+  resolved type, not which binding kind produced it. The PLAN section is unaffected: the
+  characterization's own `synthesized_inputs` plans against the empty fake catalog, which still fails
+  at the very first node, `issuer_id_text` (`NotFound`), before the graph ever reaches
+  `base_config_gate`.
+- **No provider call of any kind was made for this task** -- every check ran against the fake catalog
+  or the empty catalog, never a live account, never the sandbox.
+- **Scoped gates green:** `cargo fmt --all --check`; `cargo clippy -p willikins-dsl -p willikins-cli
+  -p willikins-core --all-targets -j 2 -- -D warnings`; `cargo test -p willikins-dsl -j 2` (one insta
+  snapshot accepted and diffed line-by-line, reviewed above); `cargo test -p willikins-cli -j 2` (17
+  suites, 0 failed, including both `sample_document.rs`'s four tests and
+  `sample_apply_blocked_redaction.rs`); `cargo test -p willikins-server -j 2` (full crate, all suites,
+  regression check: this task touches no `willikins-server` source, run because the crate's own
+  document-list tests name `sample-ios-app.yaml`); `cargo test -p willikins-core --test
+  secret_literal_guard` and `--test expose_secret_guard` (this addendum's own text scanned clean, per
+  K1/L1's own recorded lesson); `cargo check -p willikins-types -j 2`. All green
+  (`RUST_TEST_THREADS=2`). The full workspace gate was not run (host rule; the coordinator's).
+- **Remaining, carried forward:** `base_configs` itself is still a caller-overridable input by
+  mechanical necessity (above) -- not a gap this task can close, only document honestly; R2's own
+  server-side gap (`WILLIKINS_GITHUB_TOKEN` read unconditionally at `serve`/`apply --plan-id`
+  startup) is untouched, unrelated to this task; the sandbox-versus-real Doppler naming split R4
+  recorded is untouched.
