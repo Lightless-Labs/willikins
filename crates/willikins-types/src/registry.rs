@@ -1184,4 +1184,27 @@ mod tests {
             "a Text => TemplateValue conversion row exists; decision (e) forbids it"
         );
     }
+
+    /// Adversarial pass over E2 (milestone 3g decision (e)): a committed
+    /// file's bytes are a document-literal `TemplateSource` plus
+    /// `TemplateValue` substitutions, and a `RepoFile` is produced only by
+    /// `repo.file.render`. So no conversion row may ever *target* either:
+    /// `Text => TemplateSource` would even be total (both are bounded at
+    /// 65,536 characters) and would turn `doppler.value.get`'s public
+    /// `Text` into a template; a row into `RepoFile` would let a value
+    /// become a whole file. The row above pins only `Text => TemplateValue`.
+    #[test]
+    fn the_production_registry_has_no_conversion_row_into_template_source_or_repo_file() {
+        let registry = crate::registry();
+        let template_source = TypeName::parse("TemplateSource").unwrap();
+        let repo_file = TypeName::parse("RepoFile").unwrap();
+        let offending: Vec<_> = registry
+            .conversion_pairs()
+            .filter(|(_, to)| *to == &template_source || *to == &repo_file)
+            .collect();
+        assert!(
+            offending.is_empty(),
+            "decision (e) forbids a conversion into TemplateSource or RepoFile: {offending:?}"
+        );
+    }
 }
