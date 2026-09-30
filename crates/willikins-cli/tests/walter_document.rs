@@ -119,18 +119,6 @@ fn base_inputs() -> IndexMap<InputName, Value> {
         scalar("AppleCertificateSerial", "7B3F2A9C1D4E5F607182930A1B2C3D4E"),
     );
     inputs.insert(
-        InputName::parse("org").unwrap(),
-        scalar("GitHubOrg", "Bande-a-Bonnot"),
-    );
-    inputs.insert(
-        InputName::parse("slug").unwrap(),
-        scalar("ProjectSlug", "walter"),
-    );
-    inputs.insert(
-        InputName::parse("monorepo").unwrap(),
-        scalar("GitHubRepo", MONOREPO),
-    );
-    inputs.insert(
         InputName::parse("buildkite_org").unwrap(),
         scalar("BuildkiteOrg", BUILDKITE_ORG),
     );
@@ -181,7 +169,23 @@ fn with_acknowledgements(mut inputs: IndexMap<InputName, Value>) -> IndexMap<Inp
 /// and the distribution certificate (for `appstore.certificate.get`). No
 /// bundle id, no app record, no capability is seeded -- those are exactly
 /// what run 1 must create or find blocked.
+/// D1: the three base configs `base_config_gate` checks, ahead of
+/// `inherit` (the document's own `base_configs` default, in declared
+/// order).
+const BASE_CONFIGS: [&str; 3] = [
+    "appstore-connect/deploy_ios",
+    "github/bande-a-bonnot",
+    "open-telemetry/prd_signoz",
+];
+
 fn seeded_state() -> Arc<Mutex<FakeState>> {
+    seeded_state_with_base_configs(&BASE_CONFIGS)
+}
+
+/// Like [`seeded_state`], but only `present` of the three base configs
+/// are seeded as existing and marked inheritable -- D1's own negative
+/// case, where `base_config_gate` finds one of them missing.
+fn seeded_state_with_base_configs(present: &[&str]) -> Arc<Mutex<FakeState>> {
     let config = willikins_types::DopplerConfig::parse("appstore-connect/deploy_ios").unwrap();
     let github_config = willikins_types::DopplerConfig::parse("github/bande-a-bonnot").unwrap();
     let json = serde_json::json!({
@@ -214,6 +218,13 @@ fn seeded_state() -> Arc<Mutex<FakeState>> {
             false,
             Some(true),
         );
+    for name in present {
+        let base_config = willikins_types::DopplerConfig::parse(name)
+            .unwrap_or_else(|err| panic!("`{name}` parses as a DopplerConfig: {err}"));
+        state = state
+            .with_doppler_config(&base_config)
+            .with_doppler_config_inheritable(&base_config);
+    }
     Arc::new(Mutex::new(state))
 }
 
@@ -684,6 +695,10 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
 /// silently fell back to `WILLIKINS_GITHUB_TOKEN`) would pass unnoticed
 /// there.
 #[test]
+// D1 grew this test with its own literal/gate pinning assertions, one
+// long linear scenario against the same document, same as this file's
+// other over-100-line test.
+#[allow(clippy::too_many_lines)]
 fn the_document_reads_the_real_layout_by_name() {
     use willikins_core::{Binding, NodeName, PortName};
 
@@ -759,6 +774,52 @@ fn the_document_reads_the_real_layout_by_name() {
         );
     }
 
+    // D1: `org`, `slug` and `monorepo` are bare literals, not inputs --
+    // "Just update the doc". `base_configs` alone stays a defaulted
+    // input: the document format has no syntax to bind a list literal to
+    // a `with:` port, and `for_each` must always be a reference.
+    for removed in ["org", "slug", "monorepo"] {
+        assert!(
+            !workflow
+                .inputs
+                .contains_key(&InputName::parse(removed).unwrap()),
+            "`{removed}` must not be a declared input any more"
+        );
+    }
+    assert_eq!(literal("names", "org"), "Bande-a-Bonnot");
+    assert_eq!(literal("names", "slug"), "walter");
+    assert_eq!(literal("monorepo_ref", "repo"), "Bande-a-Bonnot/monorepo");
+
+    // D1: `base_config_gate` sits ahead of `inherit`, one instance per
+    // base config, and `inherit.inherits` binds the *aggregate* of all
+    // three instances -- never `${{ inputs.base_configs }}` directly, so
+    // a missing or non-inheritable base config blocks its own gate
+    // instance rather than reaching `inherit` at all.
+    assert_eq!(
+        node("base_config_gate").tool.as_str(),
+        "doppler.config.inheritable.gate"
+    );
+    assert_eq!(
+        node("base_config_gate").for_each.as_ref(),
+        Some(&Binding::Input(InputName::parse("base_configs").unwrap())),
+        "base_config_gate must expand over the base_configs input"
+    );
+    assert_eq!(
+        node("base_config_gate")
+            .with
+            .get(&PortName::parse("config").unwrap()),
+        Some(&Binding::Item),
+        "each instance's own config port must bind ${{{{ item }}}}"
+    );
+    assert_eq!(
+        node("inherit")
+            .with
+            .get(&PortName::parse("inherits").unwrap()),
+        Some(&from("base_config_gate", "config")),
+        "inherit.inherits must bind the aggregate of base_config_gate's own instances, \
+         never inputs.base_configs directly"
+    );
+
     // The three shared base configs prd_config inherits, by default.
     let default = workflow
         .inputs
@@ -785,4 +846,115 @@ fn the_document_reads_the_real_layout_by_name() {
 fn the_document_checks_cleanly_against_the_fake_catalog() {
     let (_state, catalog) = willikins_providers_fake::empty();
     check(&document(), &catalog).expect("the document checks cleanly");
+}
+
+/// D1: `base_config_gate` sits ahead of `inherit` -- one gate per base
+/// config, `inherit.inherits` bound to the aggregate of all three
+/// instances. One base config missing (`github/bande-a-bonnot`, seeded
+/// as neither existing nor inheritable) blocks exactly that instance;
+/// the other two, seeded present and inheritable, still `Compute`.
+/// `inherit` itself -- a `Step` binding aggregating a `for_each` gate --
+/// plans `Skip` rather than reaching Doppler with an incomplete list at
+/// apply time. Nothing else in the graph is held back: `inherit`'s own
+/// output feeds no other node (the three `doppler.secret.set` nodes bind
+/// `config` from `prd_config`, never from `inherit`), so every
+/// independent node -- the three bundle identifiers, `doppler`, the
+/// Buildkite pipeline -- still plans and applies for real.
+#[test]
+fn a_missing_base_config_blocks_its_gate_and_skips_inherit() {
+    const MISSING: &str = "github/bande-a-bonnot";
+    const PRESENT: [&str; 2] = ["appstore-connect/deploy_ios", "open-telemetry/prd_signoz"];
+
+    let workflow = document();
+    let state = seeded_state_with_base_configs(&PRESENT);
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+
+    let inputs = with_acknowledgements(base_inputs());
+    let planned =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("the document plans: {err}"));
+
+    assert_eq!(
+        action_of(&planned, "base_config_gate", Some(MISSING)),
+        Action::Blocked,
+        "the missing base config's own gate instance must be Blocked"
+    );
+    for present in PRESENT {
+        assert_eq!(
+            action_of(&planned, "base_config_gate", Some(present)),
+            Action::Compute,
+            "`{present}` is seeded present and inheritable, so its gate instance must be Compute"
+        );
+    }
+    assert_eq!(
+        action_of(&planned, "inherit", None),
+        Action::Skip,
+        "inherit aggregates all three base_config_gate instances, so one Blocked instance skips it"
+    );
+
+    let entry = planned
+        .blocked
+        .iter()
+        .find(|b| b.node.as_str() == "base_config_gate" && b.instance.as_deref() == Some(MISSING))
+        .unwrap_or_else(|| {
+            panic!(
+                "`base_config_gate[{MISSING}]` is blocked: {:?}",
+                planned.blocked
+            )
+        });
+    let holds_back: std::collections::BTreeSet<&str> = entry
+        .holds_back
+        .iter()
+        .map(willikins_core::NodeName::as_str)
+        .collect();
+    assert_eq!(
+        holds_back,
+        std::collections::BTreeSet::from(["inherit"]),
+        "the missing base config must hold back exactly `inherit`, nothing else"
+    );
+
+    // Independent nodes -- nothing downstream of `inherit` exists in this
+    // graph, so no *other* node is skipped by this gate.
+    for node in ["app_id", "nse_id", "widgets_id"] {
+        assert_eq!(
+            action_of(&planned, node, None),
+            Action::Create,
+            "`{node}` does not depend on `inherit` and must still plan for real"
+        );
+    }
+    assert_eq!(action_of(&planned, "doppler", None), Action::Create);
+    assert_eq!(action_of(&planned, "pipeline", None), Action::Create);
+
+    let plan_json = serde_json::to_string(&planned).unwrap();
+    assert_no_secret_leaked(&plan_json);
+
+    let mut observer = RecordingObserver::new();
+    let applied = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &planned,
+        &approval(),
+        &mut observer,
+    )
+    .expect("a blocked run is Ok, not an error");
+
+    assert!(
+        matches!(status_of(&applied, "inherit", None), NodeStatus::Skipped),
+        "`inherit` must be Skipped, never attempted, when one of its own base configs is missing"
+    );
+    for node in ["app_id", "nse_id", "widgets_id"] {
+        assert!(
+            matches!(status_of(&applied, node, None), NodeStatus::Created),
+            "`{node}` must still run and be Created"
+        );
+    }
+    assert!(
+        !applied.blocked.is_empty(),
+        "the missing base config must still be reported blocked"
+    );
+
+    let applied_json = serde_json::to_string(&applied).unwrap();
+    assert_no_secret_leaked(&applied_json);
 }

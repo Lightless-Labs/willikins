@@ -108,6 +108,27 @@
 # will fail with `NotFound` at `issuer_id_text` unless the sandbox
 # workplace is reseeded under the real names first. This document is
 # written for the real workplace's own naming now, not the sandbox's.
+#
+# **D1 (2026-09-30): the base-config gate is wired in, and `org`/`slug`/
+# `monorepo` are true literals.** `base_config_gate` (`doppler.config.inheritable.gate`,
+# `for_each: ${{ inputs.base_configs }}`) now sits ahead of `inherit`:
+# `inherit.inherits` binds the aggregate of all three instances
+# (`${{ steps.base_config_gate.config }}`), not `${{ inputs.base_configs }}`
+# directly, so a base config that is missing or not yet marked inheritable
+# blocks its own gate instance at plan time and `inherit` itself plans
+# `Skip` -- never a mid-apply failure after `doppler`/`configs`/`prd_config`
+# have already written (closing R3's own carried-forward "remaining"). The
+# three `doppler.secret.set` nodes below bind `config` from `prd_config`,
+# never from `inherit`, so a blocked base config holds back `inherit` alone.
+# `org` (`Bande-a-Bonnot`), `slug` (`walter`) and `monorepo`
+# (`Bande-a-Bonnot/monorepo`) are no longer caller-overridable inputs --
+# the operator's own words, "Just update the doc": each is now a bare
+# literal at its one use site (`names.org`/`names.slug`,
+# `monorepo_ref.repo`). `base_configs` itself stays a defaulted input,
+# not a literal -- the document format has no syntax to bind a list
+# literal to a `with:` port, and `for_each` must always be a reference
+# (`doppler-ios.yaml`'s own header makes the identical point); its
+# `default:` is this document's actual policy regardless.
 name: walter-ios-app
 description: Provision Walter (app, NSE, widgets) end to end -- bundle identifiers, capabilities, signing profiles, the monorepo reference, Doppler, and the Buildkite pipeline -- reporting every manual step as a gate.
 inputs:
@@ -118,13 +139,10 @@ inputs:
   data_protection: { type: AppleCapabilitySetting, default: "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH", description: "Decision (e): the NSE and HealthKit background delivery both run while the device may be locked, so anything stricter than iOS's own default needs code-level exceptions first." }
   certificate_type: { type: AppleCertificateType, description: "DISTRIBUTION or IOS_DISTRIBUTION" }
   serial_number: { type: AppleCertificateSerial, description: "The distribution certificate's serial number every profile below is signed with" }
-  org: { type: GitHubOrg, default: Bande-a-Bonnot }
-  slug: { type: ProjectSlug, default: walter }
-  monorepo: { type: GitHubRepo, default: Bande-a-Bonnot/monorepo, description: "Referenced through github.repo.get, never created (decision (g))." }
   buildkite_org: { type: BuildkiteOrg, description: "Buildkite organization the pipeline is created in" }
   cluster: { type: BuildkiteClusterName, description: "The Buildkite cluster the pipeline runs in" }
   environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
-  base_configs: { type: list<DopplerConfig>, default: [appstore-connect/deploy_ios, github/bande-a-bonnot, open-telemetry/prd_signoz], description: "Operator decision 2's real shared base configs, inherited by prd_config alone (task B1)." }
+  base_configs: { type: list<DopplerConfig>, default: [appstore-connect/deploy_ios, github/bande-a-bonnot, open-telemetry/prd_signoz], description: "Operator decision 2's real shared base configs, inherited by prd_config alone (task B1). This default IS the document's policy (D1) -- edited here, never threaded through per run; it stays an ordinary overridable input only because the document format has no syntax to bind a list literal directly to a with: port (doppler-ios.yaml's own header explains the same gap). Each entry is gated by base_config_gate below before inherit ever names it." }
   m3_repo_files_done: { type: OperatorAcknowledgement, description: "M3: Walter's files (BUILD.bazel, entitlements, Info.plist, .buildkite/) added under apps/walter/ in the monorepo, following the survey in the milestone plan." }
   m5_apns_key_done: { type: OperatorAcknowledgement, description: "M5: the team's APNs auth key (.p8) is confirmed in a shared base config Walter inherits, or freshly created if none exists." }
   m6_ci_doppler_access_done: { type: OperatorAcknowledgement, description: "M6: the Buildkite CI Doppler service account has been granted read access to project walter." }
@@ -321,8 +339,8 @@ steps:
   names:
     tool: naming.v1
     with:
-      org: ${{ inputs.org }}
-      slug: ${{ inputs.slug }}
+      org: Bande-a-Bonnot
+      slug: walter
   doppler:
     tool: doppler.project.ensure
     with:
@@ -339,11 +357,24 @@ steps:
       project: ${{ steps.doppler.project }}
       environment: prd
       branch: deployment_ios
+  # --- D1: one gate per base config, ahead of the inheritance. Missing
+  # or non-inheritable blocks at plan time instead of `inherit` failing
+  # mid-apply (R3's own carried-forward "remaining", now wired in). Each
+  # instance passes `config` through as its own output; `inherit.inherits`
+  # binds the *aggregate* of all three instances (a `Step` binding over a
+  # `for_each` gate node -- decision (j), point 3), which is itself
+  # skipped when any one instance is blocked, so `inherit` is Skip
+  # whenever any base config is missing or not inheritable. ---
+  base_config_gate:
+    tool: doppler.config.inheritable.gate
+    for_each: ${{ inputs.base_configs }}
+    with:
+      config: ${{ item }}
   inherit:
     tool: doppler.config.inherits.ensure
     with:
       config: ${{ steps.prd_config.config }}
-      inherits: ${{ inputs.base_configs }}
+      inherits: ${{ steps.base_config_gate.config }}
 
   # --- The three profiles' content, into Doppler ---
   app_profile_to_doppler:
@@ -382,7 +413,7 @@ steps:
   monorepo_ref:
     tool: github.repo.get
     with:
-      repo: ${{ inputs.monorepo }}
+      repo: Bande-a-Bonnot/monorepo
       token: ${{ steps.gh_token.value }}
   buildkite_cluster:
     tool: buildkite.cluster.get

@@ -682,6 +682,7 @@ configs.environment: EnvironmentSlug
 prd_config.project: DopplerProject
 prd_config.environment: EnvironmentSlug
 prd_config.branch: DopplerConfigName
+base_config_gate.config: DopplerConfig
 inherit.config: DopplerConfig
 inherit.inherits: list<DopplerConfig>
 app_profile_to_doppler.config: DopplerConfig

@@ -20,5 +20,15 @@
     "DISTRIBUTION#7B3F2A9C1D4E5F607182930A1B2C3D4E": [
       {"id": "C3RT1F1CATE1", "expired": false, "activated": true}
     ]
-  }
+  },
+  "doppler_configs": [
+    "appstore-connect/deploy_ios",
+    "github/bande-a-bonnot",
+    "open-telemetry/prd_signoz"
+  ],
+  "doppler_config_inheritable": [
+    "appstore-connect/deploy_ios",
+    "github/bande-a-bonnot",
+    "open-telemetry/prd_signoz"
+  ]
 }
