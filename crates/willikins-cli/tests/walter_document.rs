@@ -1464,10 +1464,7 @@ fn no_rendered_python_uses_a_shell_or_identifying_text() {
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("py"))
     };
-    let expected_py_files = WALTER_FILES
-        .iter()
-        .filter(|(_, path)| is_py(path))
-        .count();
+    let expected_py_files = WALTER_FILES.iter().filter(|(_, path)| is_py(path)).count();
     let mut py_files = 0;
     for (node, file) in rendered_files_for_the_real_identifiers() {
         if !is_py(file.path().as_str()) {
@@ -1740,6 +1737,16 @@ const WALTER_FILES: &[(&str, &str)] = &[
     (
         "test_walter_asc_py",
         "apps/walter/tools/tests/test_walter_asc.py",
+    ),
+    ("walter_signing_py", "apps/walter/tools/walter_signing.py"),
+    ("walter_ipa_py", "apps/walter/tools/walter_ipa.py"),
+    (
+        "test_walter_signing_py",
+        "apps/walter/tools/tests/test_walter_signing.py",
+    ),
+    (
+        "test_walter_ipa_py",
+        "apps/walter/tools/tests/test_walter_ipa.py",
     ),
 ];
 

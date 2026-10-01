@@ -1,0 +1,183 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/tools/tests/test_walter_signing.py
+---
+"""Offline tests for walter_signing.py."""
+import contextlib
+import datetime
+import hashlib
+import os
+import plistlib
+import signal
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import walter_signing as signing
+
+SEC = signing.SECURITY
+FAR = datetime.datetime(2099, 1, 1)
+UUID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+
+@contextlib.contextmanager
+def _home_env():
+    with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}):
+        yield home
+
+def fake_runner(ok=True, stdout=b""):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return {"returncode": 0 if ok else 1, "stdout": stdout}
+
+    run.calls = calls
+    return run
+
+class FakeOpener:
+    def __init__(self, body):
+        self._body = body
+
+    def open(self, request, *, timeout):
+        self.getcode, self.geturl, self.close = lambda: 200, lambda: request.full_url, lambda: None
+        self.read = lambda _n: self._body
+        return self
+
+def _profile(name, expiry, groups=("group.com.example",), team="TEAM1", cert=b"certificate-der-bytes"):
+    document = {
+        "Name": name,
+        "UUID": UUID,
+        "TeamIdentifier": [team],
+        "Entitlements": {
+            "application-identifier": team + "." + name,
+            "com.apple.security.application-groups": list(groups),
+        },
+        "ExpirationDate": expiry,
+        "DeveloperCertificates": [cert],
+    }
+    return plistlib.dumps(document), hashlib.sha1(cert).hexdigest().upper()
+
+def _facts(raw):
+    return signing.profile_facts(b"x", runner=fake_runner(stdout=raw))
+
+class SigningTests(unittest.TestCase):
+    def test_parse_search_list_reads_only_quoted_entries(self):
+        output = '    "/h/Library/Keychains/login.keychain-db"\n    "/h/Library/Keychains/x.keychain-db"\n'
+        self.assertEqual(
+            signing.parse_search_list(output),
+            ("/h/Library/Keychains/login.keychain-db", "/h/Library/Keychains/x.keychain-db"),
+        )
+
+    def test_keychain_lifecycle_order_and_restore(self):
+        with _home_env() as home:
+            empty_runner = fake_runner(stdout=b"")
+            self.assertRaises(signing.SigningError, signing.SigningKeychain(b"p12", "pw", runner=empty_runner).__enter__)
+            self.assertEqual([c[0][1] for c in empty_runner.calls], ["list-keychains"])
+
+            runner = fake_runner()
+            with mock.patch("walter_signing.parse_search_list", return_value=("captured-entry",)):
+                with signing.SigningKeychain(b"p12-bytes", "pw", runner=runner, opener=FakeOpener(b"wwdr")) as kc:
+                    self.assertEqual(kc.captured_search_list, ("captured-entry",))
+            names = [c[0][1] for c in runner.calls]
+            self.assertEqual(names, [
+                "list-keychains", "delete-keychain", "create-keychain", "set-keychain-settings",
+                "list-keychains", "unlock-keychain", "import", "import", "set-key-partition-list",
+                "list-keychains", "delete-keychain",
+            ])
+            self.assertNotIn("default-keychain", [a for c in runner.calls for a in c[0]])
+            new_list = runner.calls[4][0]
+            self.assertEqual(new_list[-1], signing.keychain_path(home))
+            self.assertEqual(new_list[5:-1], ["captured-entry"])
+            self.assertEqual(runner.calls[9][0], [SEC, "list-keychains", "-d", "user", "-s", "captured-entry"])
+            self.assertIn("-P", runner.calls[6][0])
+            self.assertIn("pw", runner.calls[6][0])
+
+    def test_keychain_restores_on_exception(self):
+        with _home_env() as home:
+            runner = fake_runner()
+            with mock.patch("walter_signing.parse_search_list", return_value=("x",)):
+                with self.assertRaises(RuntimeError):
+                    with signing.SigningKeychain(b"p12", "pw", runner=runner, opener=FakeOpener(b"w")):
+                        raise RuntimeError("boom")
+            names = [c[0][1] for c in runner.calls]
+            self.assertEqual(names[-2:], ["list-keychains", "delete-keychain"])
+
+    def test_sigterm_handler_raises_and_restores(self):
+        runner = fake_runner()
+        previous = signal.getsignal(signal.SIGTERM)
+        with _home_env() as home:
+            with mock.patch("walter_signing.parse_search_list", return_value=("x",)):
+                with signing.SigningKeychain(b"p12", "pw", runner=runner, opener=FakeOpener(b"w")):
+                    handler = signal.getsignal(signal.SIGTERM)
+                    self.assertIsNot(handler, previous)
+                    self.assertRaises(signing._Sigterm, handler, signal.SIGTERM, None)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
+
+    def test_assert_clean_checks_list_and_leftover(self):
+        with tempfile.TemporaryDirectory() as home:
+            os.makedirs(os.path.join(home, "Library", "Keychains"))
+            runner = fake_runner(stdout=b'    "a"\n    "b"\n')
+
+            def refuse(before):
+                self.assertRaises(signing.SigningError, signing.assert_clean, before, runner=runner, home=home)
+
+            self.assertTrue(signing.assert_clean(("a", "b"), runner=runner, home=home)["restored"])
+            refuse(("a",))
+            stray = os.path.join(home, "Library", "Keychains", "walter-signing-stray")
+            open(stray, "w").close()
+            refuse(("a", "b"))
+            os.remove(stray)
+            open(signing.keychain_path(home), "w").close()
+            refuse(("a", "b"))
+
+    def test_identities_parses_sha1(self):
+        output = '1) 24583EF1D58CEAEE35ABF2023C529D8184D25BA7 "Apple Distribution: X"\n  1 valid identities found\n'
+        found = signing.identities("/path", runner=fake_runner(stdout=output.encode()))
+        self.assertEqual(found, {"24583EF1D58CEAEE35ABF2023C529D8184D25BA7"})
+
+    def test_profile_facts_cms_d(self):
+        raw, sha1 = _profile("com.example.app", FAR)
+        runner = fake_runner(stdout=raw)
+        facts = signing.profile_facts(b"der-bytes", runner=runner)
+        self.assertEqual(facts["Name"], "com.example.app")
+        self.assertEqual(set(facts["Certificates"]), {sha1})
+        self.assertEqual(runner.calls[0][0], [SEC, "cms", "-D"])
+        self.assertEqual(runner.calls[0][1]["input"], b"der-bytes")
+
+    def test_check_signing_refusals(self):
+        raw, sha1 = _profile("com.example.app", FAR, groups=("group.a", "group.b"))
+        facts = _facts(raw)
+        self.assertRaisesRegex(
+            signing.SigningError, "NO MATCH for com.example.app",
+            signing.check_signing, set(), {"com.example.app": facts}, {},
+        )
+        self.assertTrue(signing.check_signing(
+            {sha1}, {"com.example.app": facts},
+            {"com.example.app": {"com.apple.security.application-groups": ["group.a"]}},
+        ))
+        self.assertRaises(
+            signing.SigningError, signing.check_signing, {sha1}, {"com.example.app": facts},
+            {"com.example.app": {"com.apple.security.application-groups": ["group.missing"]}},
+        )
+        nse, nse_sha1 = _profile("com.example.app.nse", FAR, team="TEAM2")
+        profiles = {"com.example.app": facts, "com.example.app.nse": _facts(nse)}
+        self.assertRaises(signing.SigningError, signing.check_signing, {sha1, nse_sha1}, profiles, {})
+        other, other_sha1 = _profile("com.example.app.nse", FAR, cert=b"other-cert")
+        profiles["com.example.app.nse"] = _facts(other)
+        self.assertRaises(signing.SigningError, signing.check_signing, {sha1, other_sha1}, profiles, {})
+
+    def test_install_profile_writes_both_directories(self):
+        raw, _sha1 = _profile("com.example.app", FAR)
+        with tempfile.TemporaryDirectory() as home:
+            uuid = signing.install_profile(raw, runner=fake_runner(stdout=raw), home=home)
+            self.assertEqual(uuid, UUID)
+            for relative in signing.INSTALL_DIRECTORIES:
+                with open(os.path.join(home, *relative, uuid + ".mobileprovision"), "rb") as handle:
+                    self.assertEqual(handle.read(), raw)
+
+if __name__ == "__main__":
+    unittest.main()

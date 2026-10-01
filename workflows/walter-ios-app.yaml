@@ -2149,6 +2149,797 @@ steps:
         if __name__ == "__main__":
             unittest.main()
 
+  # W4 (milestone 3h, decision (i), verify item 8): the CI scripts'
+  # second part -- walter_signing.py (the keychain lifecycle, cookbook
+  # section 6.1, and the identity/profile intersection, section 6.3) and
+  # walter_ipa.py (IPA inspection). Both Python 3.9 standard library
+  # only, offline testable: every subprocess is an argv list behind an
+  # injectable runner, never a shell; the keychain is created in
+  # ~/Library/Keychains, never made default, and its search list is
+  # restored verbatim in __exit__ on success, on an exception and on
+  # SIGTERM; install_profile writes under both directories
+  # rules_apple 4.3.3's local_provisioning_profile searches (verify
+  # item 8, dated addendum in the 3h plan).
+  walter_signing_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/walter_signing.py
+      template: |
+        """Walter CI: the signing keychain lifecycle (cookbook section 6.1) and
+        identity checks (section 6.3).
+
+        A disposable keychain is created on the ephemeral guest, used, and removed; the
+        user's own search list is captured first and restored verbatim. Every
+        `security` call runs as one argv list behind an injectable runner; a SIGTERM
+        during the lifecycle still restores and removes. No certificate fingerprint,
+        team identifier, or Doppler value is ever printed.
+        """
+        import datetime
+        import hashlib
+        import os
+        import plistlib
+        import re
+        import signal
+        import tempfile
+        import urllib.request
+
+        from walter_ci_common import WalterCiError, build_opener, default_runner, read_bounded
+
+        SECURITY = "/usr/bin/security"
+        WWDR_URL = "https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer"
+        KEYCHAIN_NAME = "walter-signing.keychain-db"
+        PARTITION_LIST = "apple-tool:,apple:,codesign:"
+        LIFECYCLE_TIMEOUT = 60
+
+
+        class SigningError(WalterCiError):
+            """A bounded signing-lifecycle or identity-check failure."""
+
+
+        def _home():
+            home = os.environ.get("HOME")
+            if type(home) is not str or not home:
+                raise SigningError("HOME is not set")
+            return home
+
+
+        def keychain_path(home=None):
+            return os.path.join(home or _home(), "Library", "Keychains", KEYCHAIN_NAME)
+
+
+        def parse_search_list(output):
+            """Parse `security list-keychains`' quoted, indented lines, never by concatenation."""
+            if type(output) is not str:
+                raise SigningError("the keychain search list is unreadable")
+            return tuple(re.findall(r'"([^"]*)"', output))
+
+
+        def _run(runner, argv, *, timeout=LIFECYCLE_TIMEOUT, input=None):
+            try:
+                result = runner([SECURITY] + list(argv), timeout=timeout, input=input)
+            except Exception:
+                raise SigningError("a security command failed") from None
+            if type(result) is not dict or result.get("returncode") != 0:
+                raise SigningError("a security command failed")
+            return (result.get("stdout") or b"").decode("utf-8", "replace")
+
+
+        def _run_ignore(runner, argv):
+            """A best-effort `security` call for a step whose failure (e.g. "no such
+            keychain") is expected and must not stop the lifecycle."""
+            try:
+                runner([SECURITY] + list(argv), timeout=LIFECYCLE_TIMEOUT)
+            except Exception:
+                pass
+
+
+        class _Sigterm(BaseException):
+            """Raised by the SIGTERM handler so `with` unwinds through `__exit__`."""
+
+
+        def _raise_sigterm(_signum, _frame):
+            raise _Sigterm()
+
+
+        class SigningKeychain:
+            """Create, use and remove one disposable keychain, in cookbook section 6.1's order."""
+
+            def __init__(self, p12, password, *, runner=default_runner, opener=None):
+                if type(p12) is not bytes or not p12 or type(password) is not str or not password:
+                    raise SigningError("a signing certificate and password are required")
+                self._p12 = p12
+                self._password = password
+                self._runner = runner
+                self._opener = opener or build_opener()
+                self._path = keychain_path()
+                self._tmp = None
+                self._previous_handler = None
+                self.captured_search_list = None
+
+            def __enter__(self):
+                self.captured_search_list = parse_search_list(_run(self._runner, ["list-keychains", "-d", "user"]))
+                if not self.captured_search_list:
+                    raise SigningError("the keychain search list is empty")
+                _run_ignore(self._runner, ["delete-keychain", self._path])
+                self._previous_handler = signal.signal(signal.SIGTERM, _raise_sigterm)
+                try:
+                    _run(self._runner, ["create-keychain", "-p", self._password, self._path])
+                    _run(self._runner, ["set-keychain-settings", "-lut", "7200", self._path])
+                    _run(self._runner, ["list-keychains", "-d", "user", "-s"] + list(self.captured_search_list) + [self._path])
+                    _run(self._runner, ["unlock-keychain", "-p", self._password, self._path])
+                    self._tmp = tempfile.mkdtemp(prefix="walter-signing-")
+                    os.chmod(self._tmp, 0o700)
+                    p12_path = os.path.join(self._tmp, "distribution.p12")
+                    _write_private(p12_path, self._p12)
+                    _run(
+                        self._runner,
+                        ["import", p12_path, "-k", self._path, "-P", self._password, "-T", "/usr/bin/codesign", "-T", SECURITY],
+                    )
+                    wwdr_path = os.path.join(self._tmp, "wwdr.cer")
+                    _write_private(wwdr_path, _fetch_wwdr(self._opener))
+                    _run(self._runner, ["import", wwdr_path, "-k", self._path, "-T", "/usr/bin/codesign", "-T", SECURITY])
+                    _run(
+                        self._runner,
+                        ["set-key-partition-list", "-S", PARTITION_LIST, "-s", "-k", self._password, self._path],
+                    )
+                except BaseException:
+                    self.__exit__(None, None, None)
+                    raise
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                if self._previous_handler is not None:
+                    signal.signal(signal.SIGTERM, self._previous_handler)
+                    self._previous_handler = None
+                if self._tmp is not None:
+                    _remove_private(self._tmp)
+                    self._tmp = None
+                try:
+                    _run(self._runner, ["list-keychains", "-d", "user", "-s"] + list(self.captured_search_list or ()))
+                finally:
+                    _run_ignore(self._runner, ["delete-keychain", self._path])
+                return False
+
+
+        def _write_private(path, data):
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(data)
+
+
+        def _remove_private(directory):
+            for name in os.listdir(directory):
+                path = os.path.join(directory, name)
+                try:
+                    if not os.path.islink(path):
+                        os.remove(path)
+                except OSError:
+                    pass
+            try:
+                os.rmdir(directory)
+            except OSError:
+                pass
+
+
+        def _fetch_wwdr(opener):
+            request = urllib.request.Request(WWDR_URL, method="GET")
+            return read_bounded(opener, request, WWDR_URL, max_bytes=1024 * 1024)
+
+
+        def assert_clean(before, *, runner=default_runner, home=None):
+            """Require a byte-identical search list, the keychain gone, and no `walter-signing*` leftover."""
+            home = home or _home()
+            after = parse_search_list(_run(runner, ["list-keychains", "-d", "user"]))
+            if after != tuple(before):
+                raise SigningError("the keychain search list was not restored")
+            if os.path.lexists(keychain_path(home)):
+                raise SigningError("the signing keychain was not removed")
+            directory = os.path.join(home, "Library", "Keychains")
+            try:
+                leftover = [name for name in os.listdir(directory) if name.startswith("walter-signing")]
+            except OSError:
+                leftover = []
+            if leftover:
+                raise SigningError("a walter-signing keychain file remains")
+            return {"restored": True, "missing_entries": tuple(entry for entry in before if not os.path.exists(entry))}
+
+
+        _IDENTITY_LINE = re.compile(r'^\d+\) ([0-9A-Fa-f]{40}) "')
+
+
+        def identities(path, *, runner=default_runner):
+            """The SHA-1 set `find-identity -v -p codesigning <keychain>` reports."""
+            output = _run(runner, ["find-identity", "-v", "-p", "codesigning", path])
+            return {match.group(1).upper() for line in output.splitlines() if (match := _IDENTITY_LINE.match(line.strip()))}
+
+
+        class _UniqueDict(dict):
+            def __setitem__(self, key, value):
+                if key in self:
+                    raise SigningError("the profile plist has a duplicate key")
+                super().__setitem__(key, value)
+
+
+        def profile_facts(profile_bytes, *, runner=default_runner):
+            """`security cms -D` the profile to a plist: Name, UUID, TeamIdentifier, Entitlements,
+            ExpirationDate, and each DeveloperCertificates entry's SHA-1 (never its subject)."""
+            if type(profile_bytes) is not bytes or not profile_bytes:
+                raise SigningError("the profile is empty")
+            decoded = _run(runner, ["cms", "-D"], input=profile_bytes)
+            try:
+                document = plistlib.loads(decoded.encode("utf-8"), dict_type=_UniqueDict)
+            except Exception:
+                raise SigningError("the decoded profile is not a valid plist") from None
+            if not isinstance(document, dict):
+                raise SigningError("the decoded profile is not a valid plist")
+            certificates = document.get("DeveloperCertificates")
+            if type(certificates) is not list or not certificates or any(type(c) is not bytes for c in certificates):
+                raise SigningError("the profile has no usable certificates")
+            return {
+                "Name": document.get("Name"),
+                "UUID": document.get("UUID"),
+                "TeamIdentifier": document.get("TeamIdentifier"),
+                "Entitlements": document.get("Entitlements") or {},
+                "ExpirationDate": document.get("ExpirationDate"),
+                "Certificates": {hashlib.sha1(cert).hexdigest().upper(): cert for cert in certificates},
+            }
+
+
+        _UUID_RE = re.compile(r"^[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
+
+        INSTALL_DIRECTORIES = (
+            ("Library", "MobileDevice", "Provisioning Profiles"),
+            ("Library", "Developer", "Xcode", "UserData", "Provisioning Profiles"),
+        )
+
+
+        def install_profile(profile_bytes, *, runner=default_runner, home=None):
+            """Decode the profile's UUID and write it under both directories
+            rules_apple 4.3.3's `local_provisioning_profile` searches (verify item 8:
+            `~/Library/MobileDevice/Provisioning Profiles` and, since Xcode 16,
+            `~/Library/Developer/Xcode/UserData/Provisioning Profiles`)."""
+            uuid = profile_facts(profile_bytes, runner=runner)["UUID"]
+            if type(uuid) is not str or _UUID_RE.match(uuid) is None:
+                raise SigningError("the profile UUID has an unexpected shape")
+            home = home or _home()
+            for relative in INSTALL_DIRECTORIES:
+                directory = os.path.join(home, *relative)
+                os.makedirs(directory, mode=0o700, exist_ok=True)
+                path = os.path.join(directory, uuid + ".mobileprovision")
+                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(profile_bytes)
+            return uuid
+
+
+        def check_signing(identity_set, profiles, entitlements_files, *, now=None):
+            """Section 6.3's intersection plus entitlement coverage. Prints counts and booleans only."""
+            now = now or datetime.datetime.utcnow()
+            print("identities visible:", len(identity_set))
+            signing_teams = set()
+            per_profile_common = []
+            for name, facts in profiles.items():
+                certificates = facts["Certificates"]
+                common = identity_set & set(certificates)
+                print("profile", repr(name), "accepts", len(certificates), "certificate(s), intersection:", len(common))
+                if not common:
+                    raise SigningError("NO MATCH for " + name)
+                per_profile_common.append(common)
+                signing_teams.add(tuple(facts["TeamIdentifier"] or ()))
+                expiry = facts["ExpirationDate"]
+                if type(expiry) is not datetime.datetime or expiry - now < datetime.timedelta(days=7):
+                    raise SigningError("the profile for " + name + " is expired or expiring soon")
+                if facts["Name"] != name:
+                    raise SigningError("the profile name does not match " + name)
+                wanted = entitlements_files.get(name) or {}
+                actual = facts["Entitlements"]
+                for key, value in wanted.items():
+                    if key == "com.apple.security.application-groups":
+                        if type(value) is not list or type(actual.get(key)) is not list or not set(value) <= set(actual[key]):
+                            raise SigningError("application-groups is not covered by the profile for " + name)
+                    elif actual.get(key) != value:
+                        raise SigningError("the entitlement " + key + " does not match the profile for " + name)
+            if len(signing_teams) != 1:
+                raise SigningError("the profiles do not share one team identifier")
+            shared = set.intersection(*per_profile_common) if per_profile_common else set()
+            print("one identity signs every profile:", bool(shared))
+            if not shared:
+                raise SigningError("no single certificate signs every profile")
+            return True
+  walter_ipa_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/walter_ipa.py
+      template: |
+        """Walter CI: inspect a packaged IPA before it is uploaded.
+
+        Every zip entry is checked before anything is read or extracted: a regular
+        file under 2 GiB, no absolute, `..` or symlink entry, no duplicate name. The
+        report holds only booleans, ids and a hash -- never certificate data.
+        """
+        import os
+        import plistlib
+        import stat
+        import tempfile
+        import zipfile
+
+        from walter_ci_common import WalterCiError, default_runner, sha256_file
+        from walter_signing import profile_facts
+
+        MAX_IPA_BYTES = 2 * 1024 * 1024 * 1024
+        REQUIRED_ORIENTATIONS = (
+            "UIInterfaceOrientationPortrait",
+            "UIInterfaceOrientationPortraitUpsideDown",
+            "UIInterfaceOrientationLandscapeLeft",
+            "UIInterfaceOrientationLandscapeRight",
+        )
+        APP_ROOT = "Payload/Walter.app/"
+
+
+        class IpaError(WalterCiError):
+            """A bounded IPA-inspection failure."""
+
+
+        def _regular_entry(info):
+            mode = (info.external_attr >> 16) & 0xFFFF
+            file_type = stat.S_IFMT(mode)
+            if info.is_dir():
+                return file_type in (0, stat.S_IFDIR)
+            return file_type in (0, stat.S_IFREG)
+
+
+        def _safe_name(name):
+            if type(name) is not str or not name or "\x00" in name or name.startswith("/"):
+                raise IpaError("the IPA archive has an unsafe path")
+            parts = name.split("/")
+            if any(part in ("", ".", "..") for part in parts[:-1]) or parts[-1] in (".", ".."):
+                raise IpaError("the IPA archive has an unsafe path")
+            return parts
+
+
+        def _checked_entries(archive):
+            seen = set()
+            for info in archive.infolist():
+                if info.filename in seen:
+                    raise IpaError("the IPA archive has a duplicate entry")
+                seen.add(info.filename)
+                _safe_name(info.filename)
+                if not _regular_entry(info):
+                    raise IpaError("the IPA archive contains a symlink or special entry")
+                if not info.is_dir() and (info.file_size < 0 or info.file_size > MAX_IPA_BYTES):
+                    raise IpaError("the IPA archive has an invalid entry size")
+            return seen
+
+
+        def _plist_at(archive, path):
+            try:
+                raw = archive.read(path)
+            except KeyError:
+                raise IpaError("the IPA archive is missing " + path) from None
+            try:
+                value = plistlib.loads(raw)
+            except Exception:
+                raise IpaError("the IPA archive has an invalid plist at " + path) from None
+            if type(value) is not dict:
+                raise IpaError("the IPA archive has an invalid plist at " + path)
+            return value
+
+
+        def _appex_names(entries):
+            names = set()
+            for name in entries:
+                parts = name.split("/")
+                if len(parts) >= 4 and parts[0] == "Payload" and parts[2] == "PlugIns" and parts[3].endswith(".appex"):
+                    names.add(parts[3])
+            return names
+
+
+        def _check_profile(archive, bundle_root, expected_id, *, runner):
+            try:
+                raw = archive.read(bundle_root + "embedded.mobileprovision")
+            except KeyError:
+                raise IpaError("the IPA archive is missing a provisioning profile") from None
+            facts = profile_facts(raw, runner=runner)
+            if facts["Name"] != expected_id:
+                raise IpaError("the embedded profile does not match " + expected_id)
+
+
+        def inspect(ipa_path, config, build_version, *, runner=default_runner):
+            """Check `ipa_path` against `config`'s bundle ids and `build_version`. Returns a report."""
+            try:
+                descriptor = os.open(ipa_path, os.O_RDONLY | os.O_NOFOLLOW)
+            except OSError:
+                raise IpaError("the IPA is not a regular file") from None
+            with os.fdopen(descriptor, "rb") as handle:
+                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                    raise IpaError("the IPA is not a regular file")
+                size = os.fstat(handle.fileno()).st_size
+            if size <= 0 or size > MAX_IPA_BYTES:
+                raise IpaError("the IPA exceeds the size limit")
+
+            bundle_ids = config["bundle_ids"]
+            try:
+                archive = zipfile.ZipFile(ipa_path, "r")
+            except (OSError, zipfile.BadZipFile):
+                raise IpaError("the IPA is not a valid archive") from None
+            with archive:
+                entries = _checked_entries(archive)
+                if (APP_ROOT + "Info.plist") not in entries:
+                    raise IpaError("the IPA archive has no app bundle")
+
+                app_plist = _plist_at(archive, APP_ROOT + "Info.plist")
+                if app_plist.get("CFBundleIdentifier") != bundle_ids["app"]:
+                    raise IpaError("the app bundle identifier does not match")
+                if str(app_plist.get("CFBundleVersion")) != str(build_version):
+                    raise IpaError("the app build version does not match")
+                if "CFBundleIconName" not in app_plist:
+                    raise IpaError("the app bundle has no CFBundleIconName")
+                orientations = app_plist.get("UISupportedInterfaceOrientations") or []
+                if not all(value in orientations for value in REQUIRED_ORIENTATIONS):
+                    raise IpaError("the app bundle is missing a required orientation")
+                if "arm64" not in (app_plist.get("UIRequiredDeviceCapabilities") or []):
+                    raise IpaError("the app bundle does not require arm64")
+
+                appex_names = _appex_names(entries)
+                appex_ids = {}
+                executables = [(APP_ROOT, app_plist.get("CFBundleExecutable"))]
+                for name in appex_names:
+                    root = APP_ROOT + "PlugIns/" + name + "/"
+                    plist = _plist_at(archive, root + "Info.plist")
+                    appex_ids[name] = plist.get("CFBundleIdentifier")
+                    executables.append((root, plist.get("CFBundleExecutable")))
+                if set(appex_ids.values()) != {bundle_ids["nse"], bundle_ids["widgets"]} or len(appex_ids) != 2:
+                    raise IpaError("the IPA's extensions do not match the expected NSE and widgets ids")
+
+                _check_profile(archive, APP_ROOT, bundle_ids["app"], runner=runner)
+                for name, bundle_id in appex_ids.items():
+                    _check_profile(archive, APP_ROOT + "PlugIns/" + name + "/", bundle_id, runner=runner)
+
+                _assert_codesign_and_arm64(archive, entries, executables, runner=runner)
+
+            return {
+                "app_identifier": bundle_ids["app"],
+                "nse_identifier": bundle_ids["nse"],
+                "widgets_identifier": bundle_ids["widgets"],
+                "build_version": str(build_version),
+                "sha256": sha256_file(ipa_path),
+                "size": size,
+            }
+
+
+        def _assert_codesign_and_arm64(archive, entries, executables, *, runner):
+            """Extract the whole app bundle, `codesign --verify` it once, then `lipo -archs`
+            every main executable (the app and each `.appex`)."""
+            for _root, executable in executables:
+                if type(executable) is not str or not executable or "/" in executable or executable in (".", ".."):
+                    raise IpaError("a bundle has an unsafe CFBundleExecutable")
+            with tempfile.TemporaryDirectory(prefix="walter-ipa-") as scratch:
+                for name in entries:
+                    if name.startswith(APP_ROOT) and not archive.getinfo(name).is_dir():
+                        archive.extract(name, scratch)
+                app_dir = os.path.join(scratch, *APP_ROOT.rstrip("/").split("/"))
+                result = runner(["/usr/bin/codesign", "--verify", "--strict", "--deep", app_dir])
+                if type(result) is not dict or result.get("returncode") != 0:
+                    raise IpaError("codesign did not verify the app bundle")
+                for root, executable in executables:
+                    path = os.path.join(scratch, *root.rstrip("/").split("/"), executable)
+                    result = runner(["/usr/bin/lipo", "-archs", path])
+                    archs = (result.get("stdout") or b"").decode("utf-8", "replace").strip()
+                    if archs != "arm64":
+                        raise IpaError("a main executable is not arm64-only")
+  test_walter_signing_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/tests/test_walter_signing.py
+      template: |
+        """Offline tests for walter_signing.py."""
+        import contextlib
+        import datetime
+        import hashlib
+        import os
+        import plistlib
+        import signal
+        import sys
+        import tempfile
+        import unittest
+        from unittest import mock
+
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        import walter_signing as signing
+
+        SEC = signing.SECURITY
+        FAR = datetime.datetime(2099, 1, 1)
+        UUID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+
+        @contextlib.contextmanager
+        def _home_env():
+            with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}):
+                yield home
+
+        def fake_runner(ok=True, stdout=b""):
+            calls = []
+
+            def run(argv, **kwargs):
+                calls.append((list(argv), kwargs))
+                return {"returncode": 0 if ok else 1, "stdout": stdout}
+
+            run.calls = calls
+            return run
+
+        class FakeOpener:
+            def __init__(self, body):
+                self._body = body
+
+            def open(self, request, *, timeout):
+                self.getcode, self.geturl, self.close = lambda: 200, lambda: request.full_url, lambda: None
+                self.read = lambda _n: self._body
+                return self
+
+        def _profile(name, expiry, groups=("group.com.example",), team="TEAM1", cert=b"certificate-der-bytes"):
+            document = {
+                "Name": name,
+                "UUID": UUID,
+                "TeamIdentifier": [team],
+                "Entitlements": {
+                    "application-identifier": team + "." + name,
+                    "com.apple.security.application-groups": list(groups),
+                },
+                "ExpirationDate": expiry,
+                "DeveloperCertificates": [cert],
+            }
+            return plistlib.dumps(document), hashlib.sha1(cert).hexdigest().upper()
+
+        def _facts(raw):
+            return signing.profile_facts(b"x", runner=fake_runner(stdout=raw))
+
+        class SigningTests(unittest.TestCase):
+            def test_parse_search_list_reads_only_quoted_entries(self):
+                output = '    "/h/Library/Keychains/login.keychain-db"\n    "/h/Library/Keychains/x.keychain-db"\n'
+                self.assertEqual(
+                    signing.parse_search_list(output),
+                    ("/h/Library/Keychains/login.keychain-db", "/h/Library/Keychains/x.keychain-db"),
+                )
+
+            def test_keychain_lifecycle_order_and_restore(self):
+                with _home_env() as home:
+                    empty_runner = fake_runner(stdout=b"")
+                    self.assertRaises(signing.SigningError, signing.SigningKeychain(b"p12", "pw", runner=empty_runner).__enter__)
+                    self.assertEqual([c[0][1] for c in empty_runner.calls], ["list-keychains"])
+
+                    runner = fake_runner()
+                    with mock.patch("walter_signing.parse_search_list", return_value=("captured-entry",)):
+                        with signing.SigningKeychain(b"p12-bytes", "pw", runner=runner, opener=FakeOpener(b"wwdr")) as kc:
+                            self.assertEqual(kc.captured_search_list, ("captured-entry",))
+                    names = [c[0][1] for c in runner.calls]
+                    self.assertEqual(names, [
+                        "list-keychains", "delete-keychain", "create-keychain", "set-keychain-settings",
+                        "list-keychains", "unlock-keychain", "import", "import", "set-key-partition-list",
+                        "list-keychains", "delete-keychain",
+                    ])
+                    self.assertNotIn("default-keychain", [a for c in runner.calls for a in c[0]])
+                    new_list = runner.calls[4][0]
+                    self.assertEqual(new_list[-1], signing.keychain_path(home))
+                    self.assertEqual(new_list[5:-1], ["captured-entry"])
+                    self.assertEqual(runner.calls[9][0], [SEC, "list-keychains", "-d", "user", "-s", "captured-entry"])
+                    self.assertIn("-P", runner.calls[6][0])
+                    self.assertIn("pw", runner.calls[6][0])
+
+            def test_keychain_restores_on_exception(self):
+                with _home_env() as home:
+                    runner = fake_runner()
+                    with mock.patch("walter_signing.parse_search_list", return_value=("x",)):
+                        with self.assertRaises(RuntimeError):
+                            with signing.SigningKeychain(b"p12", "pw", runner=runner, opener=FakeOpener(b"w")):
+                                raise RuntimeError("boom")
+                    names = [c[0][1] for c in runner.calls]
+                    self.assertEqual(names[-2:], ["list-keychains", "delete-keychain"])
+
+            def test_sigterm_handler_raises_and_restores(self):
+                runner = fake_runner()
+                previous = signal.getsignal(signal.SIGTERM)
+                with _home_env() as home:
+                    with mock.patch("walter_signing.parse_search_list", return_value=("x",)):
+                        with signing.SigningKeychain(b"p12", "pw", runner=runner, opener=FakeOpener(b"w")):
+                            handler = signal.getsignal(signal.SIGTERM)
+                            self.assertIsNot(handler, previous)
+                            self.assertRaises(signing._Sigterm, handler, signal.SIGTERM, None)
+                self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
+
+            def test_assert_clean_checks_list_and_leftover(self):
+                with tempfile.TemporaryDirectory() as home:
+                    os.makedirs(os.path.join(home, "Library", "Keychains"))
+                    runner = fake_runner(stdout=b'    "a"\n    "b"\n')
+
+                    def refuse(before):
+                        self.assertRaises(signing.SigningError, signing.assert_clean, before, runner=runner, home=home)
+
+                    self.assertTrue(signing.assert_clean(("a", "b"), runner=runner, home=home)["restored"])
+                    refuse(("a",))
+                    stray = os.path.join(home, "Library", "Keychains", "walter-signing-stray")
+                    open(stray, "w").close()
+                    refuse(("a", "b"))
+                    os.remove(stray)
+                    open(signing.keychain_path(home), "w").close()
+                    refuse(("a", "b"))
+
+            def test_identities_parses_sha1(self):
+                output = '1) 24583EF1D58CEAEE35ABF2023C529D8184D25BA7 "Apple Distribution: X"\n  1 valid identities found\n'
+                found = signing.identities("/path", runner=fake_runner(stdout=output.encode()))
+                self.assertEqual(found, {"24583EF1D58CEAEE35ABF2023C529D8184D25BA7"})
+
+            def test_profile_facts_cms_d(self):
+                raw, sha1 = _profile("com.example.app", FAR)
+                runner = fake_runner(stdout=raw)
+                facts = signing.profile_facts(b"der-bytes", runner=runner)
+                self.assertEqual(facts["Name"], "com.example.app")
+                self.assertEqual(set(facts["Certificates"]), {sha1})
+                self.assertEqual(runner.calls[0][0], [SEC, "cms", "-D"])
+                self.assertEqual(runner.calls[0][1]["input"], b"der-bytes")
+
+            def test_check_signing_refusals(self):
+                raw, sha1 = _profile("com.example.app", FAR, groups=("group.a", "group.b"))
+                facts = _facts(raw)
+                self.assertRaisesRegex(
+                    signing.SigningError, "NO MATCH for com.example.app",
+                    signing.check_signing, set(), {"com.example.app": facts}, {},
+                )
+                self.assertTrue(signing.check_signing(
+                    {sha1}, {"com.example.app": facts},
+                    {"com.example.app": {"com.apple.security.application-groups": ["group.a"]}},
+                ))
+                self.assertRaises(
+                    signing.SigningError, signing.check_signing, {sha1}, {"com.example.app": facts},
+                    {"com.example.app": {"com.apple.security.application-groups": ["group.missing"]}},
+                )
+                nse, nse_sha1 = _profile("com.example.app.nse", FAR, team="TEAM2")
+                profiles = {"com.example.app": facts, "com.example.app.nse": _facts(nse)}
+                self.assertRaises(signing.SigningError, signing.check_signing, {sha1, nse_sha1}, profiles, {})
+                other, other_sha1 = _profile("com.example.app.nse", FAR, cert=b"other-cert")
+                profiles["com.example.app.nse"] = _facts(other)
+                self.assertRaises(signing.SigningError, signing.check_signing, {sha1, other_sha1}, profiles, {})
+
+            def test_install_profile_writes_both_directories(self):
+                raw, _sha1 = _profile("com.example.app", FAR)
+                with tempfile.TemporaryDirectory() as home:
+                    uuid = signing.install_profile(raw, runner=fake_runner(stdout=raw), home=home)
+                    self.assertEqual(uuid, UUID)
+                    for relative in signing.INSTALL_DIRECTORIES:
+                        with open(os.path.join(home, *relative, uuid + ".mobileprovision"), "rb") as handle:
+                            self.assertEqual(handle.read(), raw)
+
+        if __name__ == "__main__":
+            unittest.main()
+  test_walter_ipa_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/tests/test_walter_ipa.py
+      template: |
+        """Offline tests for walter_ipa.py: no real codesign, lipo, or security."""
+        import datetime
+        import hashlib
+        import os
+        import plistlib
+        import sys
+        import tempfile
+        import unittest
+        import zipfile
+
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        import walter_ipa as ipa
+
+        CONFIG = {"bundle_ids": {"app": "com.example.app", "nse": "com.example.app.nse", "widgets": "com.example.app.widgets"}}
+
+
+        def fake_runner(codesign_ok=True):
+            """`cms -D` echoes its input (already a plist here); codesign/lipo answer fixed results."""
+            calls = []
+
+            def run(argv, **kwargs):
+                calls.append(list(argv))
+                if "cms" in argv:
+                    return {"returncode": 0, "stdout": kwargs.get("input") or b""}
+                if "codesign" in argv[0]:
+                    return {"returncode": 0 if codesign_ok else 1, "stdout": b""}
+                return {"returncode": 0, "stdout": b"arm64"}
+
+            run.calls = calls
+            return run
+
+
+        def _profile(name):
+            return plistlib.dumps({
+                "Name": name, "UUID": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "TeamIdentifier": ["T"],
+                "Entitlements": {}, "ExpirationDate": datetime.datetime(2099, 1, 1), "DeveloperCertificates": [b"cert"],
+            })
+
+
+        def _write_ipa(path, *, extra=(), skip_nse=False, symlink=False, dotdot=False):
+            with zipfile.ZipFile(path, "w") as zf:
+                app_plist = {
+                    "CFBundleIdentifier": CONFIG["bundle_ids"]["app"], "CFBundleVersion": "7", "CFBundleIconName": "AppIcon",
+                    "UISupportedInterfaceOrientations": list(ipa.REQUIRED_ORIENTATIONS), "UIRequiredDeviceCapabilities": ["arm64"],
+                    "CFBundleExecutable": "Walter",
+                }
+                zf.writestr("Payload/Walter.app/Info.plist", plistlib.dumps(app_plist))
+                zf.writestr("Payload/Walter.app/Walter", b"binary")
+                zf.writestr("Payload/Walter.app/embedded.mobileprovision", _profile(CONFIG["bundle_ids"]["app"]))
+                for key, appex in (("nse", "NSE.appex"), ("widgets", "Widgets.appex")):
+                    if key == "nse" and skip_nse:
+                        continue
+                    root = "Payload/Walter.app/PlugIns/" + appex + "/"
+                    plist = {"CFBundleIdentifier": CONFIG["bundle_ids"][key], "CFBundleExecutable": appex[:-6]}
+                    zf.writestr(root + "Info.plist", plistlib.dumps(plist))
+                    zf.writestr(root + appex[:-6], b"binary")
+                    zf.writestr(root + "embedded.mobileprovision", _profile(CONFIG["bundle_ids"][key]))
+                for name, data in extra:
+                    zf.writestr(name, data)
+                if dotdot:
+                    zf.writestr("Payload/../evil", b"x")
+                if symlink:
+                    info = zipfile.ZipInfo("Payload/Walter.app/evil-link")
+                    info.external_attr = (0xA000 << 16)
+                    zf.writestr(info, "/etc/passwd")
+
+
+        class IpaTests(unittest.TestCase):
+            def test_inspect_accepts_a_well_formed_ipa_and_returns_a_bounded_report(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = os.path.join(tmp, "Walter.ipa")
+                    _write_ipa(path)
+                    runner = fake_runner()
+                    report = ipa.inspect(path, CONFIG, "7", runner=runner)
+                    self.assertEqual(report["app_identifier"], CONFIG["bundle_ids"]["app"])
+                    self.assertEqual(report["build_version"], "7")
+                    with open(path, "rb") as handle:
+                        self.assertEqual(report["sha256"], hashlib.sha256(handle.read()).hexdigest())
+                    self.assertNotIn("certificate", str(report).lower())
+                    codesign = next(c for c in runner.calls if c[1] == "--verify")
+                    self.assertTrue(codesign[0].endswith("codesign"))
+                    lipo_calls = [c for c in runner.calls if c[0].endswith("lipo")]
+                    self.assertEqual(len(lipo_calls), 3)
+
+            def test_inspect_refuses_a_dotdot_entry_and_a_symlink_entry(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    for kwargs in ({"dotdot": True}, {"symlink": True}):
+                        path = os.path.join(tmp, "Walter.ipa")
+                        _write_ipa(path, **kwargs)
+                        self.assertRaises(ipa.IpaError, ipa.inspect, path, CONFIG, "7", runner=fake_runner())
+
+            def test_inspect_refuses_a_wrong_appex_id(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = os.path.join(tmp, "Walter.ipa")
+                    _write_ipa(path, skip_nse=True, extra=[(
+                        "Payload/Walter.app/PlugIns/Wrong.appex/Info.plist",
+                        plistlib.dumps({"CFBundleIdentifier": "com.example.app.wrong", "CFBundleExecutable": "Wrong"}),
+                    )])
+                    self.assertRaises(ipa.IpaError, ipa.inspect, path, CONFIG, "7", runner=fake_runner())
+
+            def test_inspect_refuses_a_duplicate_entry_name(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = os.path.join(tmp, "Walter.ipa")
+                    _write_ipa(path)
+                    with zipfile.ZipFile(path, "a") as zf:
+                        zf.writestr("Payload/Walter.app/Info.plist", b"second")
+                    self.assertRaises(ipa.IpaError, ipa.inspect, path, CONFIG, "7", runner=fake_runner())
+
+            def test_inspect_refuses_a_mismatched_build_version_and_a_failing_codesign(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = os.path.join(tmp, "Walter.ipa")
+                    _write_ipa(path)
+                    self.assertRaises(ipa.IpaError, ipa.inspect, path, CONFIG, "9", runner=fake_runner())
+                    self.assertRaises(ipa.IpaError, ipa.inspect, path, CONFIG, "7", runner=fake_runner(codesign_ok=False))
+
+            def test_inspect_refuses_a_non_regular_file(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    target = os.path.join(tmp, "Walter.ipa")
+                    _write_ipa(target)
+                    link = os.path.join(tmp, "link.ipa")
+                    os.symlink(target, link)
+                    self.assertRaises(ipa.IpaError, ipa.inspect, link, CONFIG, "7", runner=fake_runner())
+
+
+        if __name__ == "__main__":
+            unittest.main()
   # W1: the write credential (decision (l)) -- new and narrow (Contents:
   # read and write only, never the older, wider gh_token above), from a
   # Doppler branch config no app config inherits.
@@ -2196,6 +2987,10 @@ steps:
         - ${{ steps.walter_ci_tests_init_py.file }}
         - ${{ steps.test_walter_ci_common_py.file }}
         - ${{ steps.test_walter_asc_py.file }}
+        - ${{ steps.walter_signing_py.file }}
+        - ${{ steps.walter_ipa_py.file }}
+        - ${{ steps.test_walter_signing_py.file }}
+        - ${{ steps.test_walter_ipa_py.file }}
       message: "feat(walter): scaffold the iOS app, NSE, widgets and Buildkite files"
       token: ${{ steps.gh_write_token.value }}
 

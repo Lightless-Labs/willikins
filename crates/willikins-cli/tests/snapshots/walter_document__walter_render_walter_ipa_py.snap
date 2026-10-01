@@ -1,0 +1,182 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/tools/walter_ipa.py
+---
+"""Walter CI: inspect a packaged IPA before it is uploaded.
+
+Every zip entry is checked before anything is read or extracted: a regular
+file under 2 GiB, no absolute, `..` or symlink entry, no duplicate name. The
+report holds only booleans, ids and a hash -- never certificate data.
+"""
+import os
+import plistlib
+import stat
+import tempfile
+import zipfile
+
+from walter_ci_common import WalterCiError, default_runner, sha256_file
+from walter_signing import profile_facts
+
+MAX_IPA_BYTES = 2 * 1024 * 1024 * 1024
+REQUIRED_ORIENTATIONS = (
+    "UIInterfaceOrientationPortrait",
+    "UIInterfaceOrientationPortraitUpsideDown",
+    "UIInterfaceOrientationLandscapeLeft",
+    "UIInterfaceOrientationLandscapeRight",
+)
+APP_ROOT = "Payload/Walter.app/"
+
+
+class IpaError(WalterCiError):
+    """A bounded IPA-inspection failure."""
+
+
+def _regular_entry(info):
+    mode = (info.external_attr >> 16) & 0xFFFF
+    file_type = stat.S_IFMT(mode)
+    if info.is_dir():
+        return file_type in (0, stat.S_IFDIR)
+    return file_type in (0, stat.S_IFREG)
+
+
+def _safe_name(name):
+    if type(name) is not str or not name or "\x00" in name or name.startswith("/"):
+        raise IpaError("the IPA archive has an unsafe path")
+    parts = name.split("/")
+    if any(part in ("", ".", "..") for part in parts[:-1]) or parts[-1] in (".", ".."):
+        raise IpaError("the IPA archive has an unsafe path")
+    return parts
+
+
+def _checked_entries(archive):
+    seen = set()
+    for info in archive.infolist():
+        if info.filename in seen:
+            raise IpaError("the IPA archive has a duplicate entry")
+        seen.add(info.filename)
+        _safe_name(info.filename)
+        if not _regular_entry(info):
+            raise IpaError("the IPA archive contains a symlink or special entry")
+        if not info.is_dir() and (info.file_size < 0 or info.file_size > MAX_IPA_BYTES):
+            raise IpaError("the IPA archive has an invalid entry size")
+    return seen
+
+
+def _plist_at(archive, path):
+    try:
+        raw = archive.read(path)
+    except KeyError:
+        raise IpaError("the IPA archive is missing " + path) from None
+    try:
+        value = plistlib.loads(raw)
+    except Exception:
+        raise IpaError("the IPA archive has an invalid plist at " + path) from None
+    if type(value) is not dict:
+        raise IpaError("the IPA archive has an invalid plist at " + path)
+    return value
+
+
+def _appex_names(entries):
+    names = set()
+    for name in entries:
+        parts = name.split("/")
+        if len(parts) >= 4 and parts[0] == "Payload" and parts[2] == "PlugIns" and parts[3].endswith(".appex"):
+            names.add(parts[3])
+    return names
+
+
+def _check_profile(archive, bundle_root, expected_id, *, runner):
+    try:
+        raw = archive.read(bundle_root + "embedded.mobileprovision")
+    except KeyError:
+        raise IpaError("the IPA archive is missing a provisioning profile") from None
+    facts = profile_facts(raw, runner=runner)
+    if facts["Name"] != expected_id:
+        raise IpaError("the embedded profile does not match " + expected_id)
+
+
+def inspect(ipa_path, config, build_version, *, runner=default_runner):
+    """Check `ipa_path` against `config`'s bundle ids and `build_version`. Returns a report."""
+    try:
+        descriptor = os.open(ipa_path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        raise IpaError("the IPA is not a regular file") from None
+    with os.fdopen(descriptor, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise IpaError("the IPA is not a regular file")
+        size = os.fstat(handle.fileno()).st_size
+    if size <= 0 or size > MAX_IPA_BYTES:
+        raise IpaError("the IPA exceeds the size limit")
+
+    bundle_ids = config["bundle_ids"]
+    try:
+        archive = zipfile.ZipFile(ipa_path, "r")
+    except (OSError, zipfile.BadZipFile):
+        raise IpaError("the IPA is not a valid archive") from None
+    with archive:
+        entries = _checked_entries(archive)
+        if (APP_ROOT + "Info.plist") not in entries:
+            raise IpaError("the IPA archive has no app bundle")
+
+        app_plist = _plist_at(archive, APP_ROOT + "Info.plist")
+        if app_plist.get("CFBundleIdentifier") != bundle_ids["app"]:
+            raise IpaError("the app bundle identifier does not match")
+        if str(app_plist.get("CFBundleVersion")) != str(build_version):
+            raise IpaError("the app build version does not match")
+        if "CFBundleIconName" not in app_plist:
+            raise IpaError("the app bundle has no CFBundleIconName")
+        orientations = app_plist.get("UISupportedInterfaceOrientations") or []
+        if not all(value in orientations for value in REQUIRED_ORIENTATIONS):
+            raise IpaError("the app bundle is missing a required orientation")
+        if "arm64" not in (app_plist.get("UIRequiredDeviceCapabilities") or []):
+            raise IpaError("the app bundle does not require arm64")
+
+        appex_names = _appex_names(entries)
+        appex_ids = {}
+        executables = [(APP_ROOT, app_plist.get("CFBundleExecutable"))]
+        for name in appex_names:
+            root = APP_ROOT + "PlugIns/" + name + "/"
+            plist = _plist_at(archive, root + "Info.plist")
+            appex_ids[name] = plist.get("CFBundleIdentifier")
+            executables.append((root, plist.get("CFBundleExecutable")))
+        if set(appex_ids.values()) != {bundle_ids["nse"], bundle_ids["widgets"]} or len(appex_ids) != 2:
+            raise IpaError("the IPA's extensions do not match the expected NSE and widgets ids")
+
+        _check_profile(archive, APP_ROOT, bundle_ids["app"], runner=runner)
+        for name, bundle_id in appex_ids.items():
+            _check_profile(archive, APP_ROOT + "PlugIns/" + name + "/", bundle_id, runner=runner)
+
+        _assert_codesign_and_arm64(archive, entries, executables, runner=runner)
+
+    return {
+        "app_identifier": bundle_ids["app"],
+        "nse_identifier": bundle_ids["nse"],
+        "widgets_identifier": bundle_ids["widgets"],
+        "build_version": str(build_version),
+        "sha256": sha256_file(ipa_path),
+        "size": size,
+    }
+
+
+def _assert_codesign_and_arm64(archive, entries, executables, *, runner):
+    """Extract the whole app bundle, `codesign --verify` it once, then `lipo -archs`
+    every main executable (the app and each `.appex`)."""
+    for _root, executable in executables:
+        if type(executable) is not str or not executable or "/" in executable or executable in (".", ".."):
+            raise IpaError("a bundle has an unsafe CFBundleExecutable")
+    with tempfile.TemporaryDirectory(prefix="walter-ipa-") as scratch:
+        for name in entries:
+            if name.startswith(APP_ROOT) and not archive.getinfo(name).is_dir():
+                archive.extract(name, scratch)
+        app_dir = os.path.join(scratch, *APP_ROOT.rstrip("/").split("/"))
+        result = runner(["/usr/bin/codesign", "--verify", "--strict", "--deep", app_dir])
+        if type(result) is not dict or result.get("returncode") != 0:
+            raise IpaError("codesign did not verify the app bundle")
+        for root, executable in executables:
+            path = os.path.join(scratch, *root.rstrip("/").split("/"), executable)
+            result = runner(["/usr/bin/lipo", "-archs", path])
+            archs = (result.get("stdout") or b"").decode("utf-8", "replace").strip()
+            if archs != "arm64":
+                raise IpaError("a main executable is not arm64-only")

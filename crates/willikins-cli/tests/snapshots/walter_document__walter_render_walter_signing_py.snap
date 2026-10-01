@@ -1,0 +1,287 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/tools/walter_signing.py
+---
+"""Walter CI: the signing keychain lifecycle (cookbook section 6.1) and
+identity checks (section 6.3).
+
+A disposable keychain is created on the ephemeral guest, used, and removed; the
+user's own search list is captured first and restored verbatim. Every
+`security` call runs as one argv list behind an injectable runner; a SIGTERM
+during the lifecycle still restores and removes. No certificate fingerprint,
+team identifier, or Doppler value is ever printed.
+"""
+import datetime
+import hashlib
+import os
+import plistlib
+import re
+import signal
+import tempfile
+import urllib.request
+
+from walter_ci_common import WalterCiError, build_opener, default_runner, read_bounded
+
+SECURITY = "/usr/bin/security"
+WWDR_URL = "https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer"
+KEYCHAIN_NAME = "walter-signing.keychain-db"
+PARTITION_LIST = "apple-tool:,apple:,codesign:"
+LIFECYCLE_TIMEOUT = 60
+
+
+class SigningError(WalterCiError):
+    """A bounded signing-lifecycle or identity-check failure."""
+
+
+def _home():
+    home = os.environ.get("HOME")
+    if type(home) is not str or not home:
+        raise SigningError("HOME is not set")
+    return home
+
+
+def keychain_path(home=None):
+    return os.path.join(home or _home(), "Library", "Keychains", KEYCHAIN_NAME)
+
+
+def parse_search_list(output):
+    """Parse `security list-keychains`' quoted, indented lines, never by concatenation."""
+    if type(output) is not str:
+        raise SigningError("the keychain search list is unreadable")
+    return tuple(re.findall(r'"([^"]*)"', output))
+
+
+def _run(runner, argv, *, timeout=LIFECYCLE_TIMEOUT, input=None):
+    try:
+        result = runner([SECURITY] + list(argv), timeout=timeout, input=input)
+    except Exception:
+        raise SigningError("a security command failed") from None
+    if type(result) is not dict or result.get("returncode") != 0:
+        raise SigningError("a security command failed")
+    return (result.get("stdout") or b"").decode("utf-8", "replace")
+
+
+def _run_ignore(runner, argv):
+    """A best-effort `security` call for a step whose failure (e.g. "no such
+    keychain") is expected and must not stop the lifecycle."""
+    try:
+        runner([SECURITY] + list(argv), timeout=LIFECYCLE_TIMEOUT)
+    except Exception:
+        pass
+
+
+class _Sigterm(BaseException):
+    """Raised by the SIGTERM handler so `with` unwinds through `__exit__`."""
+
+
+def _raise_sigterm(_signum, _frame):
+    raise _Sigterm()
+
+
+class SigningKeychain:
+    """Create, use and remove one disposable keychain, in cookbook section 6.1's order."""
+
+    def __init__(self, p12, password, *, runner=default_runner, opener=None):
+        if type(p12) is not bytes or not p12 or type(password) is not str or not password:
+            raise SigningError("a signing certificate and password are required")
+        self._p12 = p12
+        self._password = password
+        self._runner = runner
+        self._opener = opener or build_opener()
+        self._path = keychain_path()
+        self._tmp = None
+        self._previous_handler = None
+        self.captured_search_list = None
+
+    def __enter__(self):
+        self.captured_search_list = parse_search_list(_run(self._runner, ["list-keychains", "-d", "user"]))
+        if not self.captured_search_list:
+            raise SigningError("the keychain search list is empty")
+        _run_ignore(self._runner, ["delete-keychain", self._path])
+        self._previous_handler = signal.signal(signal.SIGTERM, _raise_sigterm)
+        try:
+            _run(self._runner, ["create-keychain", "-p", self._password, self._path])
+            _run(self._runner, ["set-keychain-settings", "-lut", "7200", self._path])
+            _run(self._runner, ["list-keychains", "-d", "user", "-s"] + list(self.captured_search_list) + [self._path])
+            _run(self._runner, ["unlock-keychain", "-p", self._password, self._path])
+            self._tmp = tempfile.mkdtemp(prefix="walter-signing-")
+            os.chmod(self._tmp, 0o700)
+            p12_path = os.path.join(self._tmp, "distribution.p12")
+            _write_private(p12_path, self._p12)
+            _run(
+                self._runner,
+                ["import", p12_path, "-k", self._path, "-P", self._password, "-T", "/usr/bin/codesign", "-T", SECURITY],
+            )
+            wwdr_path = os.path.join(self._tmp, "wwdr.cer")
+            _write_private(wwdr_path, _fetch_wwdr(self._opener))
+            _run(self._runner, ["import", wwdr_path, "-k", self._path, "-T", "/usr/bin/codesign", "-T", SECURITY])
+            _run(
+                self._runner,
+                ["set-key-partition-list", "-S", PARTITION_LIST, "-s", "-k", self._password, self._path],
+            )
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        if self._previous_handler is not None:
+            signal.signal(signal.SIGTERM, self._previous_handler)
+            self._previous_handler = None
+        if self._tmp is not None:
+            _remove_private(self._tmp)
+            self._tmp = None
+        try:
+            _run(self._runner, ["list-keychains", "-d", "user", "-s"] + list(self.captured_search_list or ()))
+        finally:
+            _run_ignore(self._runner, ["delete-keychain", self._path])
+        return False
+
+
+def _write_private(path, data):
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(data)
+
+
+def _remove_private(directory):
+    for name in os.listdir(directory):
+        path = os.path.join(directory, name)
+        try:
+            if not os.path.islink(path):
+                os.remove(path)
+        except OSError:
+            pass
+    try:
+        os.rmdir(directory)
+    except OSError:
+        pass
+
+
+def _fetch_wwdr(opener):
+    request = urllib.request.Request(WWDR_URL, method="GET")
+    return read_bounded(opener, request, WWDR_URL, max_bytes=1024 * 1024)
+
+
+def assert_clean(before, *, runner=default_runner, home=None):
+    """Require a byte-identical search list, the keychain gone, and no `walter-signing*` leftover."""
+    home = home or _home()
+    after = parse_search_list(_run(runner, ["list-keychains", "-d", "user"]))
+    if after != tuple(before):
+        raise SigningError("the keychain search list was not restored")
+    if os.path.lexists(keychain_path(home)):
+        raise SigningError("the signing keychain was not removed")
+    directory = os.path.join(home, "Library", "Keychains")
+    try:
+        leftover = [name for name in os.listdir(directory) if name.startswith("walter-signing")]
+    except OSError:
+        leftover = []
+    if leftover:
+        raise SigningError("a walter-signing keychain file remains")
+    return {"restored": True, "missing_entries": tuple(entry for entry in before if not os.path.exists(entry))}
+
+
+_IDENTITY_LINE = re.compile(r'^\d+\) ([0-9A-Fa-f]{40}) "')
+
+
+def identities(path, *, runner=default_runner):
+    """The SHA-1 set `find-identity -v -p codesigning <keychain>` reports."""
+    output = _run(runner, ["find-identity", "-v", "-p", "codesigning", path])
+    return {match.group(1).upper() for line in output.splitlines() if (match := _IDENTITY_LINE.match(line.strip()))}
+
+
+class _UniqueDict(dict):
+    def __setitem__(self, key, value):
+        if key in self:
+            raise SigningError("the profile plist has a duplicate key")
+        super().__setitem__(key, value)
+
+
+def profile_facts(profile_bytes, *, runner=default_runner):
+    """`security cms -D` the profile to a plist: Name, UUID, TeamIdentifier, Entitlements,
+    ExpirationDate, and each DeveloperCertificates entry's SHA-1 (never its subject)."""
+    if type(profile_bytes) is not bytes or not profile_bytes:
+        raise SigningError("the profile is empty")
+    decoded = _run(runner, ["cms", "-D"], input=profile_bytes)
+    try:
+        document = plistlib.loads(decoded.encode("utf-8"), dict_type=_UniqueDict)
+    except Exception:
+        raise SigningError("the decoded profile is not a valid plist") from None
+    if not isinstance(document, dict):
+        raise SigningError("the decoded profile is not a valid plist")
+    certificates = document.get("DeveloperCertificates")
+    if type(certificates) is not list or not certificates or any(type(c) is not bytes for c in certificates):
+        raise SigningError("the profile has no usable certificates")
+    return {
+        "Name": document.get("Name"),
+        "UUID": document.get("UUID"),
+        "TeamIdentifier": document.get("TeamIdentifier"),
+        "Entitlements": document.get("Entitlements") or {},
+        "ExpirationDate": document.get("ExpirationDate"),
+        "Certificates": {hashlib.sha1(cert).hexdigest().upper(): cert for cert in certificates},
+    }
+
+
+_UUID_RE = re.compile(r"^[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
+
+INSTALL_DIRECTORIES = (
+    ("Library", "MobileDevice", "Provisioning Profiles"),
+    ("Library", "Developer", "Xcode", "UserData", "Provisioning Profiles"),
+)
+
+
+def install_profile(profile_bytes, *, runner=default_runner, home=None):
+    """Decode the profile's UUID and write it under both directories
+    rules_apple 4.3.3's `local_provisioning_profile` searches (verify item 8:
+    `~/Library/MobileDevice/Provisioning Profiles` and, since Xcode 16,
+    `~/Library/Developer/Xcode/UserData/Provisioning Profiles`)."""
+    uuid = profile_facts(profile_bytes, runner=runner)["UUID"]
+    if type(uuid) is not str or _UUID_RE.match(uuid) is None:
+        raise SigningError("the profile UUID has an unexpected shape")
+    home = home or _home()
+    for relative in INSTALL_DIRECTORIES:
+        directory = os.path.join(home, *relative)
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        path = os.path.join(directory, uuid + ".mobileprovision")
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(profile_bytes)
+    return uuid
+
+
+def check_signing(identity_set, profiles, entitlements_files, *, now=None):
+    """Section 6.3's intersection plus entitlement coverage. Prints counts and booleans only."""
+    now = now or datetime.datetime.utcnow()
+    print("identities visible:", len(identity_set))
+    signing_teams = set()
+    per_profile_common = []
+    for name, facts in profiles.items():
+        certificates = facts["Certificates"]
+        common = identity_set & set(certificates)
+        print("profile", repr(name), "accepts", len(certificates), "certificate(s), intersection:", len(common))
+        if not common:
+            raise SigningError("NO MATCH for " + name)
+        per_profile_common.append(common)
+        signing_teams.add(tuple(facts["TeamIdentifier"] or ()))
+        expiry = facts["ExpirationDate"]
+        if type(expiry) is not datetime.datetime or expiry - now < datetime.timedelta(days=7):
+            raise SigningError("the profile for " + name + " is expired or expiring soon")
+        if facts["Name"] != name:
+            raise SigningError("the profile name does not match " + name)
+        wanted = entitlements_files.get(name) or {}
+        actual = facts["Entitlements"]
+        for key, value in wanted.items():
+            if key == "com.apple.security.application-groups":
+                if type(value) is not list or type(actual.get(key)) is not list or not set(value) <= set(actual[key]):
+                    raise SigningError("application-groups is not covered by the profile for " + name)
+            elif actual.get(key) != value:
+                raise SigningError("the entitlement " + key + " does not match the profile for " + name)
+    if len(signing_teams) != 1:
+        raise SigningError("the profiles do not share one team identifier")
+    shared = set.intersection(*per_profile_common) if per_profile_common else set()
+    print("one identity signs every profile:", bool(shared))
+    if not shared:
+        raise SigningError("no single certificate signs every profile")
+    return True

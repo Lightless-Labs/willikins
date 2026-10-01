@@ -87,6 +87,39 @@ start directory distinct from its top-level directory must be an importable pack
 `repo.file.render` node, `walter_ci_tests_init_py` -> `apps/walter/tools/tests/__init__.py` (a one-line docstring,
 not empty), and the file count becomes 33. `WALTER_FILES` and `walter_files.files` both carry it.
 
+**Addendum (2026-10-01, W4 -- verify item 8):** fetched `apple/internal/local_provisioning_profiles.bzl` verbatim
+from `bazelbuild/rules_apple` tag `4.3.3` (`curl`, read-only, no provider call). `_provisioning_profile_repository`
+`mkdir -p`s and symlinks **both** directories into the external repository it builds, with `allow_empty = True`
+globs over both: `~/Library/MobileDevice/Provisioning Profiles` (line 14, the old path) and, since Xcode 16,
+`~/Library/Developer/Xcode/UserData/Provisioning Profiles` (line 20, a comment says so explicitly: "Since Xcode 16
+there is a new location for the provisioning profiles. We need to keep the both old and new path for quite some
+time"). Both globs feed the same `--local_profiles` argv to `tools/local_provisioning_profile_finder` (not fetched;
+out of scope for this verify item), which rule comments say picks the newest match by name -- immaterial here since
+`install_profile` writes identical bytes to both directories, so there is never a genuine duplicate to rank. Per the
+plan's own rule ("if it searches the Xcode 16 UserData path too or instead, install there as well"), `walter_signing.install_profile`
+writes the profile to both, named by the profile's own `UUID` (matched on the profile's `Name` field, per cookbook
+§6.2, never the filename) as `<UUID>.mobileprovision`, `0600` in a `0700`-or-better parent it creates with
+`os.makedirs`. Two further W4 decisions, neither stated by decision (i)'s prose: the `.p12` passphrase reaches
+`security import`'s argv as `-P <password>` (there is no stdin form for `security import`; `apps/danksworth/fastlane/Fastfile`
+does the same), tolerable because the guest is single-user and ephemeral and the password is generated or carried
+only through the SigningKeychain instance, never logged; and the leftover-keychain delete at the start of the
+lifecycle, and the delete at `__exit__`, are both best-effort (`_run_ignore`, swallowing a "no such keychain"
+failure) rather than gated on `os.path.lexists`, since a fully offline-testable lifecycle cannot make an injected
+runner also create or remove a real file -- `assert_clean` is the strict check that the keychain is actually gone.
+Two further strengthenings beyond decision (i)'s prose, both added on advisor review before the first cargo cycle:
+`__enter__`
+refuses an empty captured search list before any mutation (a corrupted or misread `security list-keychains` must
+never be "restored" by setting the user's list to nothing); and `check_signing` additionally requires exactly one
+`TeamIdentifier` across every profile and a non-empty intersection of the per-profile certificate matches (the
+same single Distribution identity signs the app, NSE and widgets profiles), not only a per-profile non-empty
+match. Checked against the actual rendered `.entitlements` templates (`walter_entitlements`, `nse_entitlements`,
+`widgets_entitlements`, decision (g)/W1): none uses a `$(AppIdentifierPrefix)`-style build variable or an
+environment-valued key whose template literal could read `development` against a `production` App Store profile
+-- `aps-environment` and `com.apple.developer.devicecheck.appattest-environment` are already the literal string
+`production` in the templates. So `check_signing`'s per-key equality rule (application-groups as the one subset
+exception) is sufficient for Walter's actual three files; a future fourth target with a variable-valued entitlement
+would need its own case, not a silent pass.
+
 ## Goal
 
 The operator, 2026-10-01, verbatim: "Walter is meant to get its fucking pipeline. It should already have it. And I

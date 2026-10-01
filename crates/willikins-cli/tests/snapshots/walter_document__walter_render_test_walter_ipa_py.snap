@@ -1,0 +1,132 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/tools/tests/test_walter_ipa.py
+---
+"""Offline tests for walter_ipa.py: no real codesign, lipo, or security."""
+import datetime
+import hashlib
+import os
+import plistlib
+import sys
+import tempfile
+import unittest
+import zipfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import walter_ipa as ipa
+
+CONFIG = {"bundle_ids": {"app": "com.example.app", "nse": "com.example.app.nse", "widgets": "com.example.app.widgets"}}
+
+
+def fake_runner(codesign_ok=True):
+    """`cms -D` echoes its input (already a plist here); codesign/lipo answer fixed results."""
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if "cms" in argv:
+            return {"returncode": 0, "stdout": kwargs.get("input") or b""}
+        if "codesign" in argv[0]:
+            return {"returncode": 0 if codesign_ok else 1, "stdout": b""}
+        return {"returncode": 0, "stdout": b"arm64"}
+
+    run.calls = calls
+    return run
+
+
+def _profile(name):
+    return plistlib.dumps({
+        "Name": name, "UUID": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "TeamIdentifier": ["T"],
+        "Entitlements": {}, "ExpirationDate": datetime.datetime(2099, 1, 1), "DeveloperCertificates": [b"cert"],
+    })
+
+
+def _write_ipa(path, *, extra=(), skip_nse=False, symlink=False, dotdot=False):
+    with zipfile.ZipFile(path, "w") as zf:
+        app_plist = {
+            "CFBundleIdentifier": CONFIG["bundle_ids"]["app"], "CFBundleVersion": "7", "CFBundleIconName": "AppIcon",
+            "UISupportedInterfaceOrientations": list(ipa.REQUIRED_ORIENTATIONS), "UIRequiredDeviceCapabilities": ["arm64"],
+            "CFBundleExecutable": "Walter",
+        }
+        zf.writestr("Payload/Walter.app/Info.plist", plistlib.dumps(app_plist))
+        zf.writestr("Payload/Walter.app/Walter", b"binary")
+        zf.writestr("Payload/Walter.app/embedded.mobileprovision", _profile(CONFIG["bundle_ids"]["app"]))
+        for key, appex in (("nse", "NSE.appex"), ("widgets", "Widgets.appex")):
+            if key == "nse" and skip_nse:
+                continue
+            root = "Payload/Walter.app/PlugIns/" + appex + "/"
+            plist = {"CFBundleIdentifier": CONFIG["bundle_ids"][key], "CFBundleExecutable": appex[:-6]}
+            zf.writestr(root + "Info.plist", plistlib.dumps(plist))
+            zf.writestr(root + appex[:-6], b"binary")
+            zf.writestr(root + "embedded.mobileprovision", _profile(CONFIG["bundle_ids"][key]))
+        for name, data in extra:
+            zf.writestr(name, data)
+        if dotdot:
+            zf.writestr("Payload/../evil", b"x")
+        if symlink:
+            info = zipfile.ZipInfo("Payload/Walter.app/evil-link")
+            info.external_attr = (0xA000 << 16)
+            zf.writestr(info, "/etc/passwd")
+
+
+class IpaTests(unittest.TestCase):
+    def test_inspect_accepts_a_well_formed_ipa_and_returns_a_bounded_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "Walter.ipa")
+            _write_ipa(path)
+            runner = fake_runner()
+            report = ipa.inspect(path, CONFIG, "7", runner=runner)
+            self.assertEqual(report["app_identifier"], CONFIG["bundle_ids"]["app"])
+            self.assertEqual(report["build_version"], "7")
+            with open(path, "rb") as handle:
+                self.assertEqual(report["sha256"], hashlib.sha256(handle.read()).hexdigest())
+            self.assertNotIn("certificate", str(report).lower())
+            codesign = next(c for c in runner.calls if c[1] == "--verify")
+            self.assertTrue(codesign[0].endswith("codesign"))
+            lipo_calls = [c for c in runner.calls if c[0].endswith("lipo")]
+            self.assertEqual(len(lipo_calls), 3)
+
+    def test_inspect_refuses_a_dotdot_entry_and_a_symlink_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for kwargs in ({"dotdot": True}, {"symlink": True}):
+                path = os.path.join(tmp, "Walter.ipa")
+                _write_ipa(path, **kwargs)
+                self.assertRaises(ipa.IpaError, ipa.inspect, path, CONFIG, "7", runner=fake_runner())
+
+    def test_inspect_refuses_a_wrong_appex_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "Walter.ipa")
+            _write_ipa(path, skip_nse=True, extra=[(
+                "Payload/Walter.app/PlugIns/Wrong.appex/Info.plist",
+                plistlib.dumps({"CFBundleIdentifier": "com.example.app.wrong", "CFBundleExecutable": "Wrong"}),
+            )])
+            self.assertRaises(ipa.IpaError, ipa.inspect, path, CONFIG, "7", runner=fake_runner())
+
+    def test_inspect_refuses_a_duplicate_entry_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "Walter.ipa")
+            _write_ipa(path)
+            with zipfile.ZipFile(path, "a") as zf:
+                zf.writestr("Payload/Walter.app/Info.plist", b"second")
+            self.assertRaises(ipa.IpaError, ipa.inspect, path, CONFIG, "7", runner=fake_runner())
+
+    def test_inspect_refuses_a_mismatched_build_version_and_a_failing_codesign(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "Walter.ipa")
+            _write_ipa(path)
+            self.assertRaises(ipa.IpaError, ipa.inspect, path, CONFIG, "9", runner=fake_runner())
+            self.assertRaises(ipa.IpaError, ipa.inspect, path, CONFIG, "7", runner=fake_runner(codesign_ok=False))
+
+    def test_inspect_refuses_a_non_regular_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "Walter.ipa")
+            _write_ipa(target)
+            link = os.path.join(tmp, "link.ipa")
+            os.symlink(target, link)
+            self.assertRaises(ipa.IpaError, ipa.inspect, link, CONFIG, "7", runner=fake_runner())
+
+
+if __name__ == "__main__":
+    unittest.main()
