@@ -372,3 +372,174 @@ impl Tool for DopplerProjectMemberEnsure {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use willikins_core::{PortName, ToolErrorKind};
+    use willikins_types::DomainType;
+
+    fn project() -> DopplerProject {
+        DopplerProject::parse("sample").unwrap()
+    }
+
+    fn service_account() -> DopplerServiceAccountName {
+        DopplerServiceAccountName::parse("buildkite-ci").unwrap()
+    }
+
+    fn viewer() -> DopplerProjectRole {
+        DopplerProjectRole::parse("viewer").unwrap()
+    }
+
+    fn collaborator() -> DopplerProjectRole {
+        DopplerProjectRole::parse("collaborator").unwrap()
+    }
+
+    fn prd() -> EnvironmentSlug {
+        EnvironmentSlug::parse("prd").unwrap()
+    }
+
+    fn stg() -> EnvironmentSlug {
+        EnvironmentSlug::parse("stg").unwrap()
+    }
+
+    fn inputs(role: &DopplerProjectRole, environments: &[EnvironmentSlug]) -> Inputs {
+        let mut inputs = Inputs::new();
+        inputs.insert(PortName::parse("project").unwrap(), Value::known(project()));
+        inputs.insert(
+            PortName::parse("service_account").unwrap(),
+            Value::known(service_account()),
+        );
+        inputs.insert(PortName::parse("role").unwrap(), Value::known(role.clone()));
+        inputs.insert(
+            PortName::parse("environments").unwrap(),
+            Value::known_list(environments.to_vec()),
+        );
+        inputs
+    }
+
+    fn tool(state: FakeState) -> DopplerProjectMemberEnsure {
+        DopplerProjectMemberEnsure::new(Arc::new(Mutex::new(state)))
+    }
+
+    #[test]
+    fn spec_validates_against_the_registry() {
+        tool(FakeState::new())
+            .spec()
+            .validate(willikins_types::registry())
+            .unwrap();
+    }
+
+    #[test]
+    fn read_reports_absent_when_the_service_account_is_unknown() {
+        let err = tool(FakeState::new())
+            .read(&inputs(&viewer(), &[prd()]))
+            .unwrap_err();
+        assert_eq!(err.kind, ToolErrorKind::NotFound);
+    }
+
+    #[test]
+    fn read_reports_absent_when_the_service_account_is_known_but_not_a_member() {
+        let state = FakeState::new().with_doppler_service_account(&service_account());
+        let observation = tool(state).read(&inputs(&viewer(), &[prd()])).unwrap();
+        assert!(matches!(observation, Observation::Absent { .. }));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_on_absent_creates_and_a_second_call_reports_unchanged() {
+        let state = FakeState::new().with_doppler_service_account(&service_account());
+        let tool = tool(state);
+        let token = SinkToken::new();
+        let first = tool.ensure(&inputs(&viewer(), &[prd()]), &token).unwrap();
+        assert!(first.changed);
+        let observation = tool.read(&inputs(&viewer(), &[prd()])).unwrap();
+        assert!(matches!(observation, Observation::Present(_)));
+        let second = tool.ensure(&inputs(&viewer(), &[prd()]), &token).unwrap();
+        assert!(!second.changed);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_raises_a_lower_role_and_widens_environments() {
+        let state = FakeState::new()
+            .with_doppler_service_account(&service_account())
+            .with_doppler_project_member(&project(), &service_account(), "viewer", false, &["prd"]);
+        let tool = tool(state);
+        let token = SinkToken::new();
+        let ensured = tool
+            .ensure(&inputs(&collaborator(), &[prd(), stg()]), &token)
+            .unwrap();
+        assert!(ensured.changed);
+        let state = tool.state.lock().unwrap();
+        let members = &state.doppler_project_members[&doppler_project_key(&project())];
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].role, "collaborator");
+        let mut environments = members[0].environments.clone();
+        environments.sort();
+        assert_eq!(environments, vec!["prd".to_string(), "stg".to_string()]);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_refuses_to_lower_a_role_and_leaves_the_record_unchanged() {
+        let state = FakeState::new()
+            .with_doppler_service_account(&service_account())
+            .with_doppler_project_member(
+                &project(),
+                &service_account(),
+                "collaborator",
+                false,
+                &["prd"],
+            );
+        let tool = tool(state);
+        let token = SinkToken::new();
+        let err = tool
+            .ensure(&inputs(&viewer(), &[prd()]), &token)
+            .unwrap_err();
+        assert_eq!(err.kind, ToolErrorKind::Conflict);
+        let state = tool.state.lock().unwrap();
+        let members = &state.doppler_project_members[&doppler_project_key(&project())];
+        assert_eq!(members[0].role, "collaborator");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_raises_role_without_touching_environments_when_access_all_is_set() {
+        let state = FakeState::new()
+            .with_doppler_service_account(&service_account())
+            .with_doppler_project_member(&project(), &service_account(), "viewer", true, &[]);
+        let tool = tool(state);
+        let token = SinkToken::new();
+        let ensured = tool
+            .ensure(&inputs(&collaborator(), &[prd()]), &token)
+            .unwrap();
+        assert!(ensured.changed);
+        let state = tool.state.lock().unwrap();
+        let members = &state.doppler_project_members[&doppler_project_key(&project())];
+        assert_eq!(members[0].role, "collaborator");
+        assert!(members[0].access_all_environments);
+        assert!(members[0].environments.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn an_injected_failure_fires_exactly_once_and_writes_nothing() {
+        let state = FakeState::new()
+            .with_doppler_service_account(&service_account())
+            .with_fail_ensure_once(
+                DopplerProjectMemberEnsure::TOOL_NAME,
+                &doppler_project_member_key(&project(), &service_account()),
+            );
+        let tool = tool(state);
+        let token = SinkToken::new();
+        let err = tool
+            .ensure(&inputs(&viewer(), &[prd()]), &token)
+            .unwrap_err();
+        assert_eq!(err.kind, ToolErrorKind::Provider);
+        let observation = tool.read(&inputs(&viewer(), &[prd()])).unwrap();
+        assert!(matches!(observation, Observation::Absent { .. }));
+        let second = tool.ensure(&inputs(&viewer(), &[prd()]), &token).unwrap();
+        assert!(second.changed);
+    }
+}

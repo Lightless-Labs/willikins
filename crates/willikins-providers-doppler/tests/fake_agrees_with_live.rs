@@ -346,6 +346,10 @@ fn member_viewer() -> willikins_types::DopplerProjectRole {
     willikins_types::DopplerProjectRole::parse("viewer").unwrap()
 }
 
+fn member_collaborator() -> willikins_types::DopplerProjectRole {
+    willikins_types::DopplerProjectRole::parse("collaborator").unwrap()
+}
+
 fn member_prd() -> EnvironmentSlug {
     EnvironmentSlug::parse("prd").unwrap()
 }
@@ -457,6 +461,48 @@ fn project_member_present_agrees() {
     assert_eq!(shape(&live), shape(&fake));
 }
 
+/// `access_all_environments` is `Present` regardless of the requested
+/// list, on both sides.
+#[test]
+fn project_member_present_with_access_all_environments_agrees() {
+    let mut provider = MockProvider::start();
+    mock_member_accounts(&mut provider, MEMBER_SLUG);
+    mock_member_members(
+        &mut provider,
+        &serde_json::json!([{
+            "type": "service_account",
+            "slug": MEMBER_SLUG,
+            "role": {"identifier": "viewer"},
+            "access_all_environments": true,
+            "environments": [],
+        }]),
+    );
+    let live = live_project_member_tool(provider.url())
+        .read(&member_inputs(
+            &member_viewer(),
+            &[member_prd(), member_stg()],
+        ))
+        .unwrap();
+    let state = FakeState::new()
+        .with_doppler_service_account(&member_service_account())
+        .with_doppler_project_member(
+            &member_project(),
+            &member_service_account(),
+            "viewer",
+            true,
+            &[],
+        );
+    let fake = willikins_providers_fake::tools::DopplerProjectMemberEnsure::new(Arc::new(
+        Mutex::new(state),
+    ))
+    .read(&member_inputs(
+        &member_viewer(),
+        &[member_prd(), member_stg()],
+    ))
+    .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
 /// The case a mutation could hide: a role that matches but is missing a
 /// requested environment is `Absent` (with `updates() == true`) on both
 /// sides, never silently `Present`.
@@ -514,6 +560,89 @@ fn project_member_needs_update_on_a_missing_environment_agrees() {
     assert_eq!(shape(&live), shape(&fake));
     assert_eq!(live_updates, fake_updates);
     assert!(fake_updates);
+}
+
+/// A role that ranks below what is requested (`no_access` -> `viewer`,
+/// `viewer` -> `collaborator`) is `Absent` with `updates() == true` on
+/// both sides, never silently `Present`.
+#[test]
+fn project_member_needs_update_on_a_lower_role_agrees() {
+    let mut provider = MockProvider::start();
+    mock_member_accounts(&mut provider, MEMBER_SLUG);
+    mock_member_members(
+        &mut provider,
+        &serde_json::json!([{
+            "type": "service_account",
+            "slug": MEMBER_SLUG,
+            "role": {"identifier": "viewer"},
+            "access_all_environments": false,
+            "environments": ["prd"],
+        }]),
+    );
+    let live_tool = live_project_member_tool(provider.url());
+    let live = live_tool
+        .read(&member_inputs(&member_collaborator(), &[member_prd()]))
+        .unwrap();
+    let live_updates = live_tool
+        .updates(&member_inputs(&member_collaborator(), &[member_prd()]))
+        .unwrap();
+    let state = FakeState::new()
+        .with_doppler_service_account(&member_service_account())
+        .with_doppler_project_member(
+            &member_project(),
+            &member_service_account(),
+            "viewer",
+            false,
+            &["prd"],
+        );
+    let fake_tool = willikins_providers_fake::tools::DopplerProjectMemberEnsure::new(Arc::new(
+        Mutex::new(state),
+    ));
+    let fake = fake_tool
+        .read(&member_inputs(&member_collaborator(), &[member_prd()]))
+        .unwrap();
+    let fake_updates = fake_tool
+        .updates(&member_inputs(&member_collaborator(), &[member_prd()]))
+        .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+    assert_eq!(live_updates, fake_updates);
+    assert!(fake_updates);
+}
+
+/// An unrankable role (`admin`) is `Mismatch` on both sides, never
+/// silently `Present` or silently lowered.
+#[test]
+fn project_member_mismatch_on_an_unrankable_role_agrees() {
+    let mut provider = MockProvider::start();
+    mock_member_accounts(&mut provider, MEMBER_SLUG);
+    mock_member_members(
+        &mut provider,
+        &serde_json::json!([{
+            "type": "service_account",
+            "slug": MEMBER_SLUG,
+            "role": {"identifier": "admin"},
+            "access_all_environments": false,
+            "environments": ["prd"],
+        }]),
+    );
+    let live = live_project_member_tool(provider.url())
+        .read(&member_inputs(&member_viewer(), &[member_prd()]))
+        .unwrap();
+    let state = FakeState::new()
+        .with_doppler_service_account(&member_service_account())
+        .with_doppler_project_member(
+            &member_project(),
+            &member_service_account(),
+            "admin",
+            false,
+            &["prd"],
+        );
+    let fake = willikins_providers_fake::tools::DopplerProjectMemberEnsure::new(Arc::new(
+        Mutex::new(state),
+    ))
+    .read(&member_inputs(&member_viewer(), &[member_prd()]))
+    .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
 }
 
 /// A role this tool would have to lower is `Mismatch` on both sides,
