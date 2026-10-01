@@ -19,10 +19,13 @@
 //!    `Blocked` -- the identifiers they check do not exist yet, so their
 //!    own `read` (which resolves the parent through `list_bundle_ids`)
 //!    finds nothing. The three profile nodes are `Skip`, never read.
-//!    The two `operator.acknowledge` leaves (M5, M6) are `Blocked` (no
+//!    The one remaining `operator.acknowledge` leaf (M5) is `Blocked` (no
 //!    `done` supplied), and so is `bootstrap_gate` (M7, milestone 3g):
 //!    the pipeline's stored configuration is still the frozen upload
-//!    bootstrap. `walter_files` lands the scaffold.
+//!    bootstrap. `walter_files` lands the scaffold. `ci_doppler_access`
+//!    (M6, milestone 3h: a real node now, not an acknowledgement) plans
+//!    and applies `Create` here too, the project it grants access to
+//!    being predicted from `doppler`'s own output.
 //!    - **Plan-only, between run 1 and run 2: App Groups is on, App
 //!      Attest is still off.** The fake state gains the app record and
 //!      `APP_GROUPS` on all three identifiers, but not yet `APP_ATTEST`
@@ -34,16 +37,16 @@
 //!      extensions are unaffected.
 //! 2. **The fake state satisfies every observed gate** (App Attest is now
 //!    seeded on the host identifier too). Same inputs, same
-//!    acknowledgements withheld. A fresh `plan` shows every
+//!    acknowledgement withheld. A fresh `plan` shows every
 //!    previously-blocked gate `Compute` and the three profile nodes
 //!    `Create` -- **and nothing else
 //!    changes**: every node that already ran in step 1 reads
-//!    `Unchanged`/`Computed`. The two acknowledgement leaves and
-//!    `bootstrap_gate` are still `Blocked`.
-//! 3. **The two acknowledgements are supplied** and the operator's paste
+//!    `Unchanged`/`Computed`/`NoOp` (`ci_doppler_access` included). The
+//!    one acknowledgement leaf and `bootstrap_gate` are still `Blocked`.
+//! 3. **The acknowledgement is supplied** and the operator's paste
 //!    is stood in for (the pipeline's stored configuration becomes the
-//!    rendered bootstrap). A third run, same fake state, `done` on both
-//!    `*_done` inputs: nothing is `Created`, nothing is blocked -- a
+//!    rendered bootstrap). A third run, same fake state, `done` on the
+//!    one `*_done` input: nothing is `Created`, nothing is blocked -- a
 //!    converged run end to end.
 //!
 //! Throughout: `check` succeeds (the type system's own proof that no
@@ -155,14 +158,14 @@ fn base_inputs() -> IndexMap<InputName, Value> {
 }
 
 fn with_acknowledgements(mut inputs: IndexMap<InputName, Value>) -> IndexMap<InputName, Value> {
-    // W1: M3 and M7 are gone as acknowledgements -- only M5 and M6 are
-    // still bare `operator.acknowledge` leaves.
-    for name in ["m5_apns_key_done", "m6_ci_doppler_access_done"] {
-        inputs.insert(
-            InputName::parse(name).unwrap(),
-            Value::known(willikins_types::OperatorAcknowledgement::parse("done").unwrap()),
-        );
-    }
+    // W1: M3 and M7 are gone as acknowledgements. W7 (milestone 3h): M6 is
+    // gone too -- it is the real node `ci_doppler_access` now. Only M5 is
+    // still a bare `operator.acknowledge` leaf.
+    let name = "m5_apns_key_done";
+    inputs.insert(
+        InputName::parse(name).unwrap(),
+        Value::known(willikins_types::OperatorAcknowledgement::parse("done").unwrap()),
+    );
     inputs
 }
 
@@ -190,6 +193,28 @@ const BASE_CONFIGS: [&str; 3] = [
 
 fn seeded_state() -> Arc<Mutex<FakeState>> {
     seeded_state_with_base_configs(&BASE_CONFIGS)
+}
+
+/// W7: `ci_doppler_access.service_account`'s own literal, read from the
+/// document rather than hard-coded here (acceptance 11) -- so the
+/// coordinator's own edit of the placeholder, `REPLACE-WITH-CI-SERVICE-ACCOUNT`,
+/// to the real CI Doppler service account's name needs no matching test
+/// edit: the fake state is always seeded under whatever name the document
+/// itself names.
+fn ci_doppler_access_service_account_name() -> willikins_types::DopplerServiceAccountName {
+    use willikins_core::{Binding, NodeName, PortName};
+    let workflow = document();
+    let node = workflow
+        .nodes
+        .get(&NodeName::parse("ci_doppler_access").unwrap())
+        .expect("node `ci_doppler_access` exists");
+    match node.with.get(&PortName::parse("service_account").unwrap()) {
+        Some(Binding::Literal(text)) => willikins_types::DopplerServiceAccountName::parse(text)
+            .unwrap_or_else(|err| {
+                panic!("`ci_doppler_access.service_account` (`{text}`) parses: {err}")
+            }),
+        other => panic!("`ci_doppler_access.service_account` must be a literal, got {other:?}"),
+    }
 }
 
 /// Like [`seeded_state`], but only `present` of the three base configs
@@ -234,7 +259,8 @@ fn seeded_state_with_base_configs(present: &[&str]) -> Arc<Mutex<FakeState>> {
             "C3RT1F1CATE1",
             false,
             Some(true),
-        );
+        )
+        .with_doppler_service_account(&ci_doppler_access_service_account_name());
     for name in present {
         let base_config = willikins_types::DopplerConfig::parse(name)
             .unwrap_or_else(|err| panic!("`{name}` parses as a DopplerConfig: {err}"));
@@ -351,9 +377,11 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
 
     // Exactly the App Store Connect gates, the new bootstrap gate (W1: the
     // pipeline does not exist yet, so its stored configuration cannot
-    // equal anything), plus the two remaining acknowledgement leaves are
+    // equal anything), plus the one remaining acknowledgement leaf, are
     // blocked; nothing else. M3 is gone entirely (it is real work now,
-    // below), and M7 is `bootstrap_gate`, not an acknowledgement.
+    // below), M7 is `bootstrap_gate`, not an acknowledgement, and W7
+    // (milestone 3h): M6 is `ci_doppler_access`, a real node -- it plans
+    // for real below, never blocked.
     let blocked_nodes: std::collections::BTreeSet<&str> =
         planned1.blocked.iter().map(|b| b.node.as_str()).collect();
     assert_eq!(
@@ -366,7 +394,6 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "app_app_attest",
             "bootstrap_gate",
             "m5_apns_key",
-            "m6_ci_doppler_access",
         ]),
         "run 1's blocked set"
     );
@@ -403,6 +430,13 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     }
     assert_eq!(action_of(&planned1, "walter_files", None), Action::Create);
     assert_eq!(action_of(&planned1, "pipeline", None), Action::Create);
+    // W7 (acceptance 11): a first run plans `ci_doppler_access` `Create`
+    // -- the project it grants access to (`doppler.project`, predicted)
+    // does not exist yet in this fake state, so `read` finds it `Absent`.
+    assert_eq!(
+        action_of(&planned1, "ci_doppler_access", None),
+        Action::Create
+    );
 
     let plan1_json = serde_json::to_string(&planned1).unwrap();
     assert_no_secret_leaked(&plan1_json);
@@ -442,7 +476,15 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "run 1: `{node}` must be Created"
         );
     }
-    assert_eq!(applied1.blocked.len(), 8, "run 1's Applied.blocked");
+    // W7 (acceptance 11): run 1 also grants `ci_doppler_access` for real.
+    assert!(
+        matches!(
+            status_of(&applied1, "ci_doppler_access", None),
+            NodeStatus::Created
+        ),
+        "run 1: `ci_doppler_access` must be Created"
+    );
+    assert_eq!(applied1.blocked.len(), 7, "run 1's Applied.blocked");
 
     let applied1_json = serde_json::to_string(&applied1).unwrap();
     assert_no_secret_leaked(&applied1_json);
@@ -536,12 +578,14 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         vec![("identifier", APP_IDENTIFIER), ("capability", "APP_ATTEST")],
         "app_app_attest's blocked report must name the host identifier and APP_ATTEST"
     );
-    // And nothing but App Attest, the bootstrap gate and the two
-    // acknowledgements is still blocked: the three app-group gates and
+    // And nothing but App Attest, the bootstrap gate and the one
+    // acknowledgement is still blocked: the three app-group gates and
     // the app record are open. W1: `bootstrap_gate` remains blocked here
     // too -- the pipeline's stored configuration is not touched by
     // seeding App Groups, and nothing has yet stood in for the
     // operator's own paste (that happens between run 2 and run 3, below).
+    // W7: `ci_doppler_access` is never in this set -- it is a real node,
+    // already `Created` by run 1's apply above.
     let blocked_attest_off: std::collections::BTreeSet<&str> = planned_attest_off
         .blocked
         .iter()
@@ -549,14 +593,9 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         .collect();
     assert_eq!(
         blocked_attest_off,
-        std::collections::BTreeSet::from([
-            "app_app_attest",
-            "bootstrap_gate",
-            "m5_apns_key",
-            "m6_ci_doppler_access",
-        ]),
+        std::collections::BTreeSet::from(["app_app_attest", "bootstrap_gate", "m5_apns_key"]),
         "with App Groups on and App Attest off, only App Attest, the bootstrap gate and the \
-         acknowledgements block"
+         acknowledgement block"
     );
 
     // ------------------------------------------------------------------
@@ -574,7 +613,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
 
     // ------------------------------------------------------------------
     // Run 2: every App Store Connect gate opens; the bootstrap gate and
-    // the two acknowledgements are still withheld.
+    // the one acknowledgement are still withheld.
     // ------------------------------------------------------------------
     let planned2 =
         plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
@@ -583,8 +622,8 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         planned2.blocked.iter().map(|b| b.node.as_str()).collect();
     assert_eq!(
         blocked_nodes2,
-        std::collections::BTreeSet::from(["bootstrap_gate", "m5_apns_key", "m6_ci_doppler_access"]),
-        "run 2's blocked set: the bootstrap gate and the two acknowledgement leaves remain"
+        std::collections::BTreeSet::from(["bootstrap_gate", "m5_apns_key"]),
+        "run 2's blocked set: the bootstrap gate and the one acknowledgement leaf remain"
     );
 
     for node in [
@@ -617,6 +656,12 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     }
     assert_eq!(action_of(&planned2, "doppler", None), Action::NoOp);
     assert_eq!(action_of(&planned2, "pipeline", None), Action::NoOp);
+    // W7 (acceptance 11): a re-run plans `ci_doppler_access` `NoOp` --
+    // run 1's apply already granted it.
+    assert_eq!(
+        action_of(&planned2, "ci_doppler_access", None),
+        Action::NoOp
+    );
 
     let mut observer2 = RecordingObserver::new();
     let applied2 = apply(
@@ -641,7 +686,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "run 2: `{node}` must be Unchanged"
         );
     }
-    assert_eq!(applied2.blocked.len(), 3, "run 2's Applied.blocked");
+    assert_eq!(applied2.blocked.len(), 2, "run 2's Applied.blocked");
 
     // The universal claim, not a spot check: run 2's `Created` set is
     // EXACTLY the three nodes the app-group gates just unblocked -- nothing
@@ -681,11 +726,9 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
 
     // Each acknowledgement gate names exactly its own input in
     // `awaiting_inputs` -- the data the CLI's `supply:` line renders from.
-    // W1: only M5 and M6 are acknowledgements any more.
-    for (node, input) in [
-        ("m5_apns_key", "m5_apns_key_done"),
-        ("m6_ci_doppler_access", "m6_ci_doppler_access_done"),
-    ] {
+    // W1/W7: only M5 is an acknowledgement any more.
+    {
+        let (node, input) = ("m5_apns_key", "m5_apns_key_done");
         let entry = planned1
             .blocked
             .iter()
@@ -762,7 +805,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         "pipeline",
         "bootstrap_gate",
         "m5_apns_key",
-        "m6_ci_doppler_access",
+        "ci_doppler_access",
     ] {
         assert_ne!(
             action_of(&planned3, node, None),
@@ -1381,6 +1424,133 @@ fn walter_files_binds_every_render_and_m3_m7_acknowledgements_are_gone() {
             "`{input}` must not be a declared input any more"
         );
     }
+}
+
+/// Milestone 3h, task W7, acceptance 11: `ci_doppler_access`
+/// (`doppler.project_member.ensure`) replaces the `m6_ci_doppler_access`
+/// acknowledgement leaf and its input. `m5_apns_key`/`m5_apns_key_done`
+/// are untouched (pinned by exact text, since nothing in the engine
+/// proves a subtree didn't change). A first fake run plans and grants
+/// `ci_doppler_access` (`Create`); a re-run reads it converged (`NoOp`).
+/// The fake state is seeded with the service-account name read from the
+/// document's own literal, never hard-coded, so the coordinator's future
+/// edit of the placeholder needs no matching test edit.
+#[test]
+#[allow(clippy::too_many_lines)] // one linear scenario: bindings, then the Create/NoOp cycle
+fn w7_ci_doppler_access_replaces_the_m6_acknowledgement() {
+    use willikins_core::{Binding, NodeName, PortName};
+
+    let workflow = document();
+
+    assert!(
+        !workflow
+            .nodes
+            .contains_key(&NodeName::parse("m6_ci_doppler_access").unwrap()),
+        "`m6_ci_doppler_access` must not exist as a node any more"
+    );
+    assert!(
+        !workflow
+            .inputs
+            .contains_key(&InputName::parse("m6_ci_doppler_access_done").unwrap()),
+        "`m6_ci_doppler_access_done` must not be a declared input any more"
+    );
+
+    // `m5_apns_key`/`m5_apns_key_done` are byte-identical to before this
+    // task.
+    let raw = std::fs::read_to_string(workspace_root().join("workflows/walter-ios-app.yaml"))
+        .expect("read workflows/walter-ios-app.yaml");
+    assert!(
+        raw.contains(
+            "  m5_apns_key_done: { type: OperatorAcknowledgement, description: \"M5: the \
+             team's APNs auth key (.p8) is confirmed in a shared base config Walter inherits, \
+             or freshly created if none exists.\" }"
+        ),
+        "`m5_apns_key_done`'s input declaration must be byte-identical to before this task"
+    );
+    assert!(
+        raw.contains(
+            "  m5_apns_key:\n    tool: operator.acknowledge\n    with:\n      step: \"Confirm \
+             the team's APNs auth key (.p8) is in a shared base config Walter inherits; if \
+             none exists, create one in the portal (Account Holder or Admin; downloadable \
+             once).\"\n      acknowledged: ${{ inputs.m5_apns_key_done }}"
+        ),
+        "`m5_apns_key`'s node must be byte-identical to before this task"
+    );
+
+    // `ci_doppler_access`'s own bindings.
+    let node = &workflow.nodes[&NodeName::parse("ci_doppler_access").unwrap()];
+    assert_eq!(node.tool.as_str(), "doppler.project_member.ensure");
+    assert_eq!(
+        node.with.get(&PortName::parse("project").unwrap()),
+        Some(&Binding::Step {
+            node: NodeName::parse("doppler").unwrap(),
+            port: PortName::parse("project").unwrap(),
+        }),
+        "`ci_doppler_access.project` must bind from `steps.doppler.project`"
+    );
+    match node.with.get(&PortName::parse("role").unwrap()) {
+        Some(Binding::Literal(text)) => assert_eq!(text, "viewer", "`ci_doppler_access.role`"),
+        other => panic!("`ci_doppler_access.role` must be a literal, got {other:?}"),
+    }
+    match node.with.get(&PortName::parse("environments").unwrap()) {
+        Some(Binding::List(elements)) => {
+            assert_eq!(
+                elements.len(),
+                1,
+                "`ci_doppler_access.environments` must hold exactly one entry"
+            );
+            match &elements[0] {
+                Binding::Literal(text) => {
+                    assert_eq!(text, "prd", "`ci_doppler_access.environments[0]`");
+                }
+                other => {
+                    panic!("`ci_doppler_access.environments[0]` must be a literal, got {other:?}")
+                }
+            }
+        }
+        other => panic!("`ci_doppler_access.environments` must be a list binding, got {other:?}"),
+    }
+
+    // The create-then-converge cycle (acceptance 11's own last clause).
+    let state = seeded_state();
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+    let inputs = with_acknowledgements(base_inputs());
+
+    let planned1 =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    assert_eq!(
+        action_of(&planned1, "ci_doppler_access", None),
+        Action::Create,
+        "a first run must plan `ci_doppler_access` as `Create`"
+    );
+
+    let mut observer1 = RecordingObserver::new();
+    let applied1 = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &planned1,
+        &approval(),
+        &mut observer1,
+    )
+    .expect("run 1 applies");
+    assert!(
+        matches!(
+            status_of(&applied1, "ci_doppler_access", None),
+            NodeStatus::Created
+        ),
+        "a first run must grant `ci_doppler_access`"
+    );
+
+    let planned2 =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    assert_eq!(
+        action_of(&planned2, "ci_doppler_access", None),
+        Action::NoOp,
+        "a re-run must plan `ci_doppler_access` as `NoOp`, already converged"
+    );
 }
 
 /// Acceptance 11: one `insta` snapshot per rendered file, for the real

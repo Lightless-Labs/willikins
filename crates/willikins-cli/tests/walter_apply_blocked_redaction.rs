@@ -22,9 +22,11 @@
 //! # A real bug found while writing this test, and why it is worked
 //! around here rather than fixed
 //!
-//! The two remaining `operator.acknowledge` leaves (M5, M6) are
-//! deliberately supplied `done` here, **not** left unmet like the four
-//! observed gates. Leaving either of them unsupplied hits a genuine,
+//! The one remaining `operator.acknowledge` leaf (M5) is deliberately
+//! supplied `done` here, **not** left unmet like the four observed gates
+//! (milestone 3h, W7: M6 is `ci_doppler_access`, a real node now, never an
+//! acknowledgement -- it plans and applies for real in this run, alongside
+//! `doppler`). Leaving M5 unsupplied hits a genuine,
 //! pre-existing defect this test uncovered: `willikins_server::butler::resolve_recorded_inputs`
 //! rebuilds a plan's inputs from the journal's own recorded
 //! `PlanRecorded.inputs` by requiring **every** declared workflow input to
@@ -103,7 +105,6 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
     let dir = TempDir::new("blocked");
     let journal = dir.join("journal.jsonl");
     let document = workspace_root().join("workflows/walter-ios-app.yaml");
-    let seed_source = workspace_root().join("workflows/fixtures/state/walter-ios-app.json");
 
     // The committed fixture carries only the placeholder
     // `BUILDKITE_TOKEN_PLACEHOLDER` (D2), never a real-shaped Buildkite
@@ -113,6 +114,15 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
     // against a file path, so the substitution has to happen here rather
     // than in a Rust reader: write a substituted copy into this test's
     // own `TempDir` and point `--fake-state` at that instead.
+    //
+    // (Milestone 3h, W7.) The same fixture also seeds a Doppler service
+    // account named `REPLACE-WITH-CI-SERVICE-ACCOUNT`, so
+    // `ci_doppler_access` (`doppler.project_member.ensure`) resolves it
+    // rather than failing `NotFound`. Unlike `walter_document.rs`'s own
+    // tests, a static JSON fixture file cannot read the document's
+    // literal at run time: if the coordinator ever edits that placeholder
+    // in the document, this fixture's own name must be edited to match.
+    let seed_source = workspace_root().join("workflows/fixtures/state/walter-ios-app.json");
     let seed_json = std::fs::read_to_string(&seed_source)
         .unwrap_or_else(|err| panic!("{}: {err}", seed_source.display()));
     let seed_json = seed_json.replace("BUILDKITE_TOKEN_PLACEHOLDER", SEEDED_BUILDKITE_TOKEN);
@@ -142,17 +152,17 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         "--input",
         "base_configs=appstore-connect/deploy_ios,github/bande-a-bonnot,open-telemetry/prd_signoz",
         // Supplied, not left awaited -- see this file's own module doc for
-        // why: leaving either unmet trips a separate, pre-existing defect
-        // in the journal-replay path, not the gate mechanism this test
-        // means to prove. M3 and M7 are gone as acknowledgements
-        // (milestone 3g, W1): M3 is real writes now, and M7 is
-        // `bootstrap_gate`, an *observed* gate this run cannot satisfy
-        // (nothing seeds the pipeline's stored configuration), so it is
-        // deliberately left blocked below alongside the others.
+        // why: leaving it unmet trips a separate, pre-existing defect in
+        // the journal-replay path, not the gate mechanism this test means
+        // to prove. M3 and M7 are gone as acknowledgements (milestone 3g,
+        // W1): M3 is real writes now, and M7 is `bootstrap_gate`, an
+        // *observed* gate this run cannot satisfy (nothing seeds the
+        // pipeline's stored configuration), so it is deliberately left
+        // blocked below alongside the others. M6 is gone too (milestone
+        // 3h, W7): it is `ci_doppler_access`, a real node, no longer an
+        // input this run needs to supply at all.
         "--input",
         "m5_apns_key_done=done",
-        "--input",
-        "m6_ci_doppler_access_done=done",
     ]);
 
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -188,9 +198,12 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
             "stdout must name the blocked node `{node}` -- stdout: {stdout}"
         );
     }
-    // The two acknowledgement leaves were supplied, so they must NOT
-    // appear in the blocked section.
-    for node in ["m5_apns_key", "m6_ci_doppler_access"] {
+    // The one acknowledgement leaf was supplied, so it must NOT appear in
+    // the blocked section. `ci_doppler_access` (M6) is never an
+    // acknowledgement any more (milestone 3h, W7), so it has no
+    // equivalent check here -- it plans and applies for real.
+    {
+        let node = "m5_apns_key";
         assert!(
             !stdout.contains(&format!("{node} (operator.acknowledge): Blocked")),
             "`{node}` was supplied `done` and must not be blocked -- stdout: {stdout}"

@@ -32,5 +32,8 @@
     "appstore-connect/deploy_ios",
     "github/bande-a-bonnot",
     "open-telemetry/prd_signoz"
-  ]
+  ],
+  "doppler_service_accounts": {
+    "REPLACE-WITH-CI-SERVICE-ACCOUNT": ["fake-sa-ci-placeholder"]
+  }
 }
