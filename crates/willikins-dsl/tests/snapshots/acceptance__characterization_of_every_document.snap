@@ -797,6 +797,14 @@ sample_ci_py.path: RepoPath
 sample_ci_py.template: TemplateSource
 test_sample_ci_py.path: RepoPath
 test_sample_ci_py.template: TemplateSource
+signing_preflight_yml.path: RepoPath
+signing_preflight_yml.template: TemplateSource
+release_yml.path: RepoPath
+release_yml.template: TemplateSource
+stage_input_plugin_yml.path: RepoPath
+stage_input_plugin_yml.template: TemplateSource
+stage_input_pre_command.path: RepoPath
+stage_input_pre_command.template: TemplateSource
 gh_write_token_secret.config: DopplerConfig
 gh_write_token_secret.name: SecretName
 gh_write_token.value: DopplerSecretValue
