@@ -49,12 +49,17 @@
 //! exists but `plan` refuses to proceed rather than silently reconciling
 //! it. The first user is `github.repo.ensure`'s `visibility`: turning a
 //! private repository public is not a reversible act, and the tool
-//! refuses the reverse direction too, on purpose — this milestone has no
-//! `Action::Update`, so a plan cannot yet show an attribute change
-//! honestly, and a rule whose behaviour depends on the current value is
-//! exactly the run-time non-determinism a plan is meant to rule out. A
-//! directional reconcile can arrive with `Action::Update`, if a real
-//! workflow ever needs one.
+//! refuses the reverse direction too, on purpose. [`Action::Update`]
+//! (milestone 3h) does not change this: it is reached only from
+//! [`Tool::updates`], asked only when `read` already reported
+//! [`Observation::Absent`] (and [`Tool::replaces`] said `false`) — a tool
+//! that itself decides a resource at this key counts as "not yet what
+//! `inputs` describes, but reconcilable without deleting it", such as a
+//! Doppler project member present at a lower role than the one requested.
+//! A tool whose `read` reports `Present` with a mismatching non-key input
+//! still hits `AttributeMismatch` exactly as before; `Mismatch` and
+//! `Update` are disjoint paths through two different `Observation` arms,
+//! not two ways to reach the same one.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -87,6 +92,16 @@ pub enum Action {
     /// tools never replace anything never produces this value, so its
     /// plan is unaffected. See [`Plan::replacing`].
     Replace,
+    /// [`Tool::replaces`] reported `false` and [`Tool::updates`] reports
+    /// `true`: `read` found [`Observation::Absent`] at this key, but
+    /// `ensure` would reconcile the existing resource toward `inputs`
+    /// without deleting it first -- milestone 3h's engine change. An
+    /// additive sibling of `Create` and `Replace`: a document whose tools
+    /// never update anything (`Tool::updates`'s default `Ok(false)`)
+    /// never produces this value, so its plan is unaffected. No report
+    /// mirrors [`Plan::replacing`] for this variant: the node's own line
+    /// and inputs already say what changes, and nothing is deleted.
+    Update,
     /// The resource already exists and is ours: `ensure` would be a no-op.
     NoOp,
     /// A [`crate::tool::Gate`]'s `read` reported [`Observation::Absent`]:
@@ -1452,6 +1467,15 @@ fn plan_one(
             error,
         })? {
             Action::Replace
+        } else if tool.updates(&inputs).map_err(|error| PlanError::Tool {
+            node: name.clone(),
+            error,
+        })? {
+            // Milestone 3h: asked only once `replaces` has already said
+            // `false`, so a tool that would delete-then-create is never
+            // also asked whether it would merely update -- `replaces`
+            // wins, exactly as `Tool::updates`' own doc says.
+            Action::Update
         } else {
             Action::Create
         }

@@ -537,6 +537,49 @@ pub trait Tool: Send + Sync {
         let _ = inputs;
         Ok(false)
     }
+
+    /// Whether `ensure`, called with `inputs` right now, would reconcile
+    /// an existing resource at this node's key toward `inputs` *without*
+    /// deleting it first -- milestone 3h's engine change
+    /// (`docs/plans/2026-10-01-milestone-3h-walter-release-pipeline.md`,
+    /// decision (b)). A tool-declared hook in the manner of
+    /// [`Tool::replaces`] itself: `false` by default, so every existing
+    /// tool, catalog entry and plan is unaffected. [`crate::plan::plan_one`]
+    /// calls it only for a non-pure, non-gate tool whose `read` has
+    /// already reported [`Observation::Absent`] *and* whose `replaces`
+    /// has already reported `false` -- exactly the case that would
+    /// otherwise plan [`crate::plan::Action::Create`] -- so `replaces`
+    /// always wins when both would be `true`, and a tool that never
+    /// updates anything pays no extra cost and needs no change. The
+    /// motivating case is a resource whose natural key exists but at a
+    /// lower setting than `inputs` asks for -- a Doppler project member
+    /// present as `viewer` when `inputs` asks for `collaborator` -- where
+    /// `read` reports `Absent` (nothing exists *at the role `inputs`
+    /// describes*) rather than [`Observation::Present`] or
+    /// [`Observation::Mismatch`], because the key alone does not
+    /// determine the resource's identity the way a repository's or a
+    /// bundle identifier's does.
+    ///
+    /// No call to `apply` needs a matching mid-run guard the way
+    /// [`Tool::replaces`] earned one (`refuse_unplanned_replacement`):
+    /// that guard exists because an unplanned replacement deletes
+    /// something the approved plan never showed going away. An update
+    /// deletes nothing, and `apply`'s own pre-run re-plan already
+    /// compares the approved and fresh plans' [`crate::plan::Action`]s
+    /// and fails with [`crate::apply::DriftKind::Action`] the moment an
+    /// approved `Create` would now plan `Update` (or vice versa) -- the
+    /// same mechanism that already covers every other action change.
+    ///
+    /// Preferred over a new [`Observation`] variant for the same reasons
+    /// [`Tool::replaces`] itself gives.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolError`] on the same terms as `read`.
+    fn updates(&self, inputs: &Inputs) -> Result<bool, ToolError> {
+        let _ = inputs;
+        Ok(false)
+    }
 }
 
 #[cfg(test)]
