@@ -440,6 +440,39 @@ expression: redacted
     }
   },
   {
+    "name": "DopplerServiceAccountName",
+    "secret": false,
+    "description": "A Doppler service account's display name.",
+    "example": "buildkite-ci",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DopplerServiceAccountName",
+      "description": "A Doppler service account's display name.",
+      "type": "string",
+      "examples": [
+        "buildkite-ci"
+      ],
+      "maxLength": 64,
+      "pattern": "^(?:[A-Za-z0-9]+(?:[ ._-][A-Za-z0-9]+)*)$"
+    }
+  },
+  {
+    "name": "DopplerProjectRole",
+    "secret": false,
+    "description": "A Doppler project role: viewer or collaborator (admin and owner are refused by grammar, because granting either hands another identity the project).",
+    "example": "viewer",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DopplerProjectRole",
+      "description": "A Doppler project role: viewer or collaborator (admin and owner are refused by grammar, because granting either hands another identity the project).",
+      "type": "string",
+      "examples": [
+        "viewer"
+      ],
+      "pattern": "^(?:(?:viewer|collaborator))$"
+    }
+  },
+  {
     "name": "BuildkiteOrg",
     "secret": false,
     "description": "A Buildkite organisation slug.",

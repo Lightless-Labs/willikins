@@ -135,6 +135,63 @@ pub struct DopplerServiceToken(secrecy::SecretString);
 )]
 pub struct DopplerSecretValue(secrecy::SecretString);
 
+/// A Doppler service account's display `name`, as it appears in
+/// `GET /v3/workplace/service_accounts` and as the operator spells it when
+/// naming the CI account `doppler.project_member.ensure` should resolve.
+///
+/// Grammar source: `docs.doppler.com/reference/service_accounts-list.md`
+/// (fetched 2026-10-01) gives `name` as a bare `"type": "string"`, with no
+/// pattern and no documented length bound. This type's grammar is
+/// therefore willikins' own convention, not a Doppler requirement -- one
+/// or more runs of alphanumerics, separated by a single space, dot,
+/// underscore or hyphen, no leading, trailing or doubled separator. It is
+/// deliberately permissive (Doppler's own UI lets an operator type a
+/// display name like "Buildkite CI" with a space in it), but it still
+/// bounds which operator-written names the tool can compare byte for byte
+/// against what the API returns, and it refuses the control characters and
+/// slash a query string or path segment would read specially.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "[A-Za-z0-9]+(?:[ ._-][A-Za-z0-9]+)*",
+    max_len = 64,
+    description = "A Doppler service account's display name.",
+    example = "buildkite-ci"
+)]
+pub struct DopplerServiceAccountName(String);
+
+/// A Doppler project role identifier, as `doppler.project_member.ensure`
+/// may request it.
+///
+/// Grammar source: `docs.doppler.com/docs/project-permissions.md` lists
+/// three project-based access levels -- Viewer, Collaborator, Admin -- plus
+/// None (slug `no_access`). This type's grammar admits exactly `viewer`
+/// and `collaborator`: **`admin` and `owner` are refused by the grammar
+/// itself**, the same "refusal is the grammar" shape as
+/// [`crate::AppleProfileType`] and [`crate::AppleCertificateType`].
+/// Granting `admin` would hand another identity the project -- it could
+/// manage members, delete configs, and grant itself more -- which this
+/// tool must never do (milestone 3h decision (a)); `owner` is a workplace
+/// role, not a project one; and granting `no_access` is meaningless as an
+/// *ensure*, which only ever adds or raises access.
+///
+/// The pattern is written with an explicit non-capturing group,
+/// `(?:viewer|collaborator)`, rather than a bare `viewer|collaborator`.
+/// `willikins_derive`'s own anchoring (`attrs::anchored_pattern`) already
+/// wraps any unanchored pattern in a group before anchoring it, so a bare
+/// alternation would in fact be anchored correctly either way -- but
+/// spelling the group here makes that visible at the call site instead of
+/// relying on the derive's wrapping to be the only thing standing between
+/// this pattern and an unwrapped `^viewer|collaborator$`, which would read
+/// as `^viewer` OR `collaborator$` and admit a trailing-space `"viewer "`
+/// through the first branch.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    pattern = "(?:viewer|collaborator)",
+    description = "A Doppler project role: viewer or collaborator (admin and owner are refused by grammar, because granting either hands another identity the project).",
+    example = "viewer"
+)]
+pub struct DopplerProjectRole(String);
+
 impl DopplerSecretValue {
     /// Apply `f` to this secret's raw bytes, exactly like
     /// [`crate::OpaqueSecret::reveal_for_transform`] — see that method's
@@ -700,6 +757,150 @@ mod tests {
     }
 
     // -------------------------------------------------------------
+    // DopplerServiceAccountName
+    // -------------------------------------------------------------
+
+    #[test]
+    fn doppler_service_account_name_accepts_a_plain_slug() {
+        assert_eq!(
+            DopplerServiceAccountName::parse("buildkite-ci")
+                .unwrap()
+                .as_str(),
+            "buildkite-ci"
+        );
+    }
+
+    #[test]
+    fn doppler_service_account_name_accepts_a_display_name_with_a_space() {
+        assert_eq!(
+            DopplerServiceAccountName::parse("Buildkite CI")
+                .unwrap()
+                .as_str(),
+            "Buildkite CI"
+        );
+    }
+
+    #[test]
+    fn doppler_service_account_name_accepts_mixed_separators() {
+        assert_eq!(
+            DopplerServiceAccountName::parse("ci.service_account-2")
+                .unwrap()
+                .as_str(),
+            "ci.service_account-2"
+        );
+    }
+
+    /// The coordinator's literal placeholder (plan milestone 3h, W7),
+    /// before it is edited to the real service account's name.
+    #[test]
+    fn doppler_service_account_name_accepts_the_coordinators_placeholder() {
+        assert_eq!(
+            DopplerServiceAccountName::parse("REPLACE-WITH-CI-SERVICE-ACCOUNT")
+                .unwrap()
+                .as_str(),
+            "REPLACE-WITH-CI-SERVICE-ACCOUNT"
+        );
+    }
+
+    #[test]
+    fn doppler_service_account_name_accepts_exactly_max_len() {
+        let at_limit = "a".repeat(64);
+        assert!(DopplerServiceAccountName::parse(&at_limit).is_ok());
+    }
+
+    #[test]
+    fn doppler_service_account_name_refuses_empty_boundary_and_malformed_shapes() {
+        for bad in [
+            "",
+            " x",
+            "x ",
+            "-x",
+            "x-",
+            ".x",
+            "x.",
+            "_x",
+            "x_",
+            "a--b",
+            "a  b",
+            "a._b",
+            "a\tb",
+            "a\nb",
+            "a/b",
+            &"a".repeat(65),
+        ] {
+            assert!(
+                DopplerServiceAccountName::parse(bad).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn doppler_service_account_name_is_not_secret() {
+        const { assert!(!DopplerServiceAccountName::IS_SECRET) };
+    }
+
+    #[test]
+    fn doppler_service_account_name_serde_round_trips() {
+        let value = DopplerServiceAccountName::parse("buildkite-ci").unwrap();
+        let json = serde_json::to_string(&value).unwrap();
+        assert_eq!(json, "\"buildkite-ci\"");
+        assert_eq!(
+            serde_json::from_str::<DopplerServiceAccountName>(&json).unwrap(),
+            value
+        );
+    }
+
+    // -------------------------------------------------------------
+    // DopplerProjectRole
+    // -------------------------------------------------------------
+
+    #[test]
+    fn doppler_project_role_accepts_viewer() {
+        assert_eq!(
+            DopplerProjectRole::parse("viewer").unwrap().as_str(),
+            "viewer"
+        );
+    }
+
+    #[test]
+    fn doppler_project_role_accepts_collaborator() {
+        assert_eq!(
+            DopplerProjectRole::parse("collaborator").unwrap().as_str(),
+            "collaborator"
+        );
+    }
+
+    /// `admin` and `owner` are refused by the grammar itself: granting
+    /// either would hand another identity the project. See the type's own
+    /// doc.
+    #[test]
+    fn doppler_project_role_refuses_every_other_identifier() {
+        for bad in ["admin", "owner", "no_access", "Viewer", "viewer ", ""] {
+            assert!(
+                DopplerProjectRole::parse(bad).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn doppler_project_role_is_not_secret() {
+        const { assert!(!DopplerProjectRole::IS_SECRET) };
+    }
+
+    #[test]
+    fn doppler_project_role_serde_round_trips() {
+        let value = DopplerProjectRole::parse("viewer").unwrap();
+        let json = serde_json::to_string(&value).unwrap();
+        assert_eq!(json, "\"viewer\"");
+        assert_eq!(
+            serde_json::from_str::<DopplerProjectRole>(&json).unwrap(),
+            value
+        );
+    }
+
+    // -------------------------------------------------------------
     // DopplerConfig
     // -------------------------------------------------------------
 
@@ -797,6 +998,8 @@ mod tests {
         crate::assert_example_parses::<SecretName>();
         crate::assert_example_parses::<DopplerServiceToken>();
         crate::assert_example_parses::<DopplerSecretValue>();
+        crate::assert_example_parses::<DopplerServiceAccountName>();
+        crate::assert_example_parses::<DopplerProjectRole>();
         crate::assert_example_parses::<DopplerConfig>();
     }
 }

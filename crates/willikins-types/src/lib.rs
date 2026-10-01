@@ -170,8 +170,8 @@ pub use buildkite::{
 };
 pub use description::Description;
 pub use doppler::{
-    DopplerConfig, DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken,
-    DopplerTokenName, SecretName,
+    DopplerConfig, DopplerConfigName, DopplerProject, DopplerProjectRole, DopplerSecretValue,
+    DopplerServiceAccountName, DopplerServiceToken, DopplerTokenName, SecretName,
 };
 pub use env::EnvVarName;
 pub use github::{ActionsSecretName, GitHubOrg, GitHubRepo, GitHubToken, HttpsUrl, RepoVisibility};
@@ -219,6 +219,8 @@ registry::domain_types! {
     SecretName,
     DopplerServiceToken,
     DopplerSecretValue,
+    DopplerServiceAccountName,
+    DopplerProjectRole,
     BuildkiteOrg,
     BuildkitePipelineSlug,
     BuildkiteClusterId,
