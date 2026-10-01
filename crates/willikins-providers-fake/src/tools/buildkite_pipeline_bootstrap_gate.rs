@@ -34,6 +34,16 @@ static GATE: Gate = Gate {
 /// structural equality -- the fake's own copy of
 /// `willikins_providers_buildkite::tools::pipeline_bootstrap_gate::structurally_equal`.
 fn structurally_equal(a: &str, b: &str) -> bool {
+    // A JSON map keeps a duplicate key's last value silently; YAML's own
+    // value refuses a duplicate key outright. A side that repeats a key
+    // is "different": which of its values Buildkite runs is Buildkite's
+    // call, not this gate's (adversarial pass, Sample group, 2026-10-01).
+    if [a, b]
+        .iter()
+        .any(|side| serde_yaml_ng::from_str::<serde_yaml_ng::Value>(side).is_err())
+    {
+        return false;
+    }
     let parsed_a = serde_yaml_ng::from_str::<serde_json::Value>(a);
     let parsed_b = serde_yaml_ng::from_str::<serde_json::Value>(b);
     matches!((parsed_a, parsed_b), (Ok(a), Ok(b)) if a == b)
@@ -246,6 +256,16 @@ mod tests {
             t.read(&inputs()).unwrap(),
             Observation::Present(_)
         ));
+    }
+
+    /// Mirrors the live tool's own duplicate-key test: a stored
+    /// configuration repeating a key is "different", never `Present`.
+    #[test]
+    fn structurally_equal_is_false_when_either_side_repeats_a_key() {
+        let rendered = "steps:\n  - command: \"bash upload.sh\"\n";
+        let repeated = "steps:\n  - command: \"echo other\"\n    command: \"bash upload.sh\"\n";
+        assert!(!structurally_equal(repeated, rendered));
+        assert!(!structurally_equal(rendered, repeated));
     }
 
     #[test]
