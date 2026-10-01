@@ -407,6 +407,13 @@ be deleted by hand once the real Doppler token authenticates again (it answered 
 2026-10-01). `AppleProfileContent` stays secret-typed for now; whether it still needs to be is
 its own reviewed change.
 
+**Addendum:** 2026-10-01 (coordinator) — L1's live scaffold cycle ran once in the sandbox org `Willikins-Test`
+(`cargo test -p willikins-providers-github --features live-tests --test live_scaffold_cycle -- --ignored`): all
+nine steps pass, the redaction sweep over 17 strings passes, and the org's repository count returned to 0. Verify
+item 2 is settled: the scaffold commit reads `verification.verified: true`. Verify item 4 is settled: a stale
+`expectedHeadOid` answers with `data` and `errors`, `errors[0].type` `STALE_DATA`. Items 1, 3, 5 (at Walter's size),
+6, 7, 8 and 11 remain for the real apply; item 8 was not run on this host (disk at 97%) pending the operator.
+
 **Addendum:** 2026-10-01 (adversarial pass, Walter) — an independent attack on B1, L1, W1 and `2b36422`,
 recorded in `docs/research/2026-10-01-m3g-adversarial-pass-walter.md`. Nine mutations, all killed; one
 (the fake scaffold re-checking seeds once the marker is present) survived every existing test and is
