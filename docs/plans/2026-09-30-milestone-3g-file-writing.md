@@ -414,6 +414,20 @@ item 2 is settled: the scaffold commit reads `verification.verified: true`. Veri
 `expectedHeadOid` answers with `data` and `errors`, `errors[0].type` `STALE_DATA`. Items 1, 3, 5 (at Sample's size),
 6, 7, 8 and 11 remain for the real apply; item 8 was not run on this host (disk at 97%) pending the operator.
 
+**Addendum:** 2026-10-01 (coordinator, later) — four more verify items settled before the real apply.
+Item 8: W1's 17 rendered files, written into a local clone of the monorepo at `9ac10a8b`, failed
+`bazel build --config=ci //apps/sample/...` at loading: `apps/sample/ios/BUILD.bazel` carried `"\d+"` in
+`apple_bundle_version`'s capture groups, an escape Starlark rejects, because the template's YAML literal block
+keeps a backslash as written (AppTwo and App Three write `\\d`). With the escape doubled the build
+completed: 7 targets (the app, both extensions, their three Swift libraries, the bundle version), 112
+actions. Fixed in `498e8d4`, with a test that every backslash in a rendered Starlark file starts an escape
+Starlark accepts. Item 11: the operator created `github/example-org_willikins` (environment
+`example-org`, not inheritable) holding `GH_CONTENTS_WRITE_TOKEN`; Doppler accepted the name. Item 7: that
+token, read from Doppler, sees `Example-Org/monorepo` (expires 2027-10-02). Item 6: `main` is not
+protected (`GET .../branches/main` reads `protected: false`); `GET .../rules/branches/main` answers that rulesets
+need GitHub Pro or a public repository, so no ruleset applies; classic protection reads 403 for this token.
+A direct commit to `main` is therefore allowed. Items 1, 3 and 5 settle on the real apply's first write.
+
 **Addendum:** 2026-10-01 (adversarial pass, Sample) — an independent attack on B1, L1, W1 and `2b36422`,
 recorded in `docs/research/2026-10-01-m3g-adversarial-pass-sample.md`. Nine mutations, all killed; one
 (the fake scaffold re-checking seeds once the marker is present) survived every existing test and is
