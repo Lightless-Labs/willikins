@@ -86,6 +86,16 @@ static GATE: Gate = Gate {
 /// never a hard error: a stored configuration this gate cannot even
 /// parse is not equal to anything, the same way a wrong value would be.
 fn structurally_equal(a: &str, b: &str) -> bool {
+    // A JSON map keeps a duplicate key's last value silently; YAML's own
+    // value refuses a duplicate key outright. A side that repeats a key
+    // is "different": which of its values Buildkite runs is Buildkite's
+    // call, not this gate's (adversarial pass, Walter group, 2026-10-01).
+    if [a, b]
+        .iter()
+        .any(|side| serde_yaml_ng::from_str::<serde_yaml_ng::Value>(side).is_err())
+    {
+        return false;
+    }
     let parsed_a = serde_yaml_ng::from_str::<serde_json::Value>(a);
     let parsed_b = serde_yaml_ng::from_str::<serde_json::Value>(b);
     matches!((parsed_a, parsed_b), (Ok(a), Ok(b)) if a == b)
@@ -451,6 +461,24 @@ mod tests {
         assert!(structurally_equal(
             "steps:\n  - command: \"echo hi\"\n",
             "steps:\n  - command: 'echo hi'\n"
+        ));
+    }
+
+    /// Adversarial pass (Walter group, 2026-10-01): parsed straight into
+    /// a JSON map, a duplicate key silently keeps its last value, so a
+    /// stored configuration naming `command` twice compared equal to the
+    /// document's single `command` -- although Buildkite, not this gate,
+    /// decides which one runs. A configuration with a duplicate key is
+    /// "different", never `Present`, on either side.
+    #[test]
+    fn structurally_equal_is_false_when_either_side_repeats_a_key() {
+        let rendered = "steps:\n  - command: \"bash upload.sh\"\n";
+        let repeated = "steps:\n  - command: \"echo other\"\n    command: \"bash upload.sh\"\n";
+        assert!(!structurally_equal(repeated, rendered));
+        assert!(!structurally_equal(rendered, repeated));
+        assert!(!structurally_equal(
+            "{\"steps\": [], \"steps\": []}",
+            "{\"steps\": []}"
         ));
     }
 
