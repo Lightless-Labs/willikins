@@ -1446,3 +1446,92 @@ fn rendered_files_snapshot_for_the_real_identifiers() {
         );
     }
 }
+
+/// Adversarial pass (Walter group, 2026-10-01): every `{{ N }}`
+/// placeholder in every `repo.file.render` template sits in a quoted or
+/// identifier-only position -- never a command, a path, or an unquoted
+/// YAML/JSON scalar. `TemplateValue`'s grammar protects *quoting* (no
+/// `"`, `\`, `<`, `&`, whitespace, `$`, backtick, `;`, `|`, newline, no
+/// leading `-`), not *placement*: a value is inert inside a Starlark
+/// double-quoted string (it can hold neither `"` nor `\`) and inside an
+/// XML `<string>` element (it can hold neither `<` nor `&`), but the same
+/// value spliced into `upload-pipeline.sh`'s command line or a
+/// `.buildkite/` step would be an argument CI executes. Both earlier
+/// passes carried this forward to W1.
+///
+/// A strict allowlist on purpose: a template change that adds a
+/// placeholder anywhere else must change this test, which is the review
+/// that change needs.
+#[test]
+fn every_placeholder_sits_in_a_quoted_or_identifier_only_position() {
+    use willikins_core::{Binding, PortName};
+
+    /// `bundle_id = "{{ N }}",` or `profile_name = "{{ N }}",` -- a whole
+    /// Starlark string literal holding exactly one placeholder.
+    fn is_quoted_starlark_attribute(line: &str) -> bool {
+        let line = line.trim();
+        ["bundle_id = \"", "profile_name = \""]
+            .iter()
+            .any(|prefix| {
+                line.strip_prefix(prefix)
+                    .and_then(|rest| rest.strip_suffix("\","))
+                    .is_some_and(is_exact_placeholder)
+            })
+    }
+
+    /// `<string>group.{{ N }}</string>` -- an app group identifier in an
+    /// XML text node.
+    fn is_app_group_string(line: &str) -> bool {
+        line.trim()
+            .strip_prefix("<string>group.")
+            .and_then(|rest| rest.strip_suffix("</string>"))
+            .is_some_and(is_exact_placeholder)
+    }
+
+    fn is_exact_placeholder(text: &str) -> bool {
+        text.strip_prefix("{{ ")
+            .and_then(|rest| rest.strip_suffix(" }}"))
+            .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+    }
+
+    let workflow = document();
+    let literal = |node: &willikins_core::Node, port: &str| match node
+        .with
+        .get(&PortName::parse(port).unwrap())
+    {
+        Some(Binding::Literal(text)) => text.clone(),
+        other => panic!("`{port}` must be a literal, got {other:?}"),
+    };
+
+    let mut render_nodes = 0;
+    let mut placeholders = 0;
+    for (name, node) in &workflow.nodes {
+        if node.tool.as_str() != "repo.file.render" {
+            continue;
+        }
+        render_nodes += 1;
+        let path = literal(node, "path");
+        let template = literal(node, "template");
+        let templated_file = path == "apps/walter/ios/BUILD.bazel"
+            || std::path::Path::new(&path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("entitlements"));
+        for line in template.lines().filter(|line| line.contains("{{")) {
+            assert!(
+                templated_file,
+                "`{name}` ({path}) holds a placeholder, but only ios/BUILD.bazel and the \
+                 entitlements files may: {line}"
+            );
+            assert!(
+                is_quoted_starlark_attribute(line) || is_app_group_string(line),
+                "`{name}` ({path}): a placeholder outside a quoted or identifier-only \
+                 position: {line}"
+            );
+            placeholders += 1;
+        }
+    }
+    assert_eq!(render_nodes, 17, "every render node was inspected");
+    // Six in ios/BUILD.bazel (three profile names, three bundle ids) and
+    // one app group per entitlements file.
+    assert_eq!(placeholders, 9, "every placeholder was inspected");
+}
