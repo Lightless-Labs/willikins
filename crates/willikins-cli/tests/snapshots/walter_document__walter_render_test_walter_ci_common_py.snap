@@ -1,0 +1,172 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/tools/tests/test_walter_ci_common.py
+---
+"""Offline tests for walter_ci_common.py: no network, no real git, no keychain."""
+import json
+import os
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import walter_ci_common as common
+
+JOB_ID = "0198f1a2-0000"
+
+
+def fake_runner(script):
+    """`script`: a git subcommand -> {"returncode", "stdout"}. Records every call."""
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        key = next((a for a in argv if a in script), None)
+        return dict(script.get(key, {"returncode": 0, "stdout": b""}))
+
+    run.calls = calls
+    return run
+
+
+class FakeOpener:
+    """A minimal `opener.open(request, timeout=...)` returning a fixed body/status/url."""
+
+    def __init__(self, body, status=200, url=None):
+        self._body, self._status, self._url = body, status, url
+
+    def open(self, request, *, timeout):
+        response = self
+
+        def read(_n):
+            return self._body
+
+        response.getcode, response.geturl, response.read, response.close = (
+            lambda: self._status, lambda: self._url, read, lambda: None,
+        )
+        return response
+
+
+class CommonTests(unittest.TestCase):
+    def test_child_env_never_carries_doppler_token(self):
+        with mock.patch.dict(os.environ, {"DOPPLER_TOKEN": "secret", "HOME": "/h", "CI": "true"}):
+            env = common.child_env()
+        self.assertNotIn("DOPPLER_TOKEN", env)
+        self.assertTrue(set(env) <= {"PATH", "DEVELOPER_DIR", "LANG", "LC_ALL", "HOME", "TMPDIR", "CI"})
+        self.assertEqual(env["PATH"], common.GUEST_PATH)
+
+    def test_verify_source_clones_checks_out_and_refuses_bad_input(self):
+        commit = "a" * 40
+        clean = {"rev-parse": {"returncode": 0, "stdout": (commit + "\n").encode()}, "status": {"returncode": 0, "stdout": b""}}
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = fake_runner(clean)
+            with mock.patch.dict(os.environ, {"BUILDKITE_COMMIT": commit, "BUILDKITE_JOB_ID": JOB_ID, "TMPDIR": tmp}):
+                clone = common.verify_source(tmp, runner=runner)
+            self.assertEqual(clone, os.path.join(tmp, "walter-src-" + JOB_ID))
+            argvs = [c[0] for c in runner.calls]
+            self.assertIn(["git", "clone", "--no-hardlinks", "--", tmp, clone], argvs)
+            self.assertIn(["git", "-C", clone, "checkout", "--detach", commit], argvs)
+        with tempfile.TemporaryDirectory() as tmp:
+            # An existing private-clone path (the fake runner never actually creates one) refuses.
+            os.mkdir(os.path.join(tmp, "walter-src-" + JOB_ID))
+            with mock.patch.dict(os.environ, {"BUILDKITE_COMMIT": commit, "BUILDKITE_JOB_ID": JOB_ID, "TMPDIR": tmp}):
+                self.assertRaises(common.WalterCiError, common.verify_source, tmp, runner=fake_runner(clean))
+        with mock.patch.dict(os.environ, {"BUILDKITE_COMMIT": "not-hex", "BUILDKITE_JOB_ID": JOB_ID}):
+            self.assertRaises(common.WalterCiError, common.verify_source, "/mount", runner=fake_runner({}))
+        dirty = {"rev-parse": clean["rev-parse"], "status": {"returncode": 0, "stdout": b"?? dirty\n"}}
+        with mock.patch.dict(os.environ, {"BUILDKITE_COMMIT": commit, "BUILDKITE_JOB_ID": JOB_ID}):
+            self.assertRaises(common.WalterCiError, common.verify_source, "/mount", runner=fake_runner(dirty))
+
+    def test_artifact_dir_creates_the_stage_directory_and_refuses_a_symlinked_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = common.artifact_dir(tmp, "validation")
+            self.assertEqual(path, os.path.join(tmp, "apps", "walter", ".ci-artifacts", "validation"))
+            self.assertTrue(os.path.isdir(path))
+            self.assertRaises(common.WalterCiError, common.artifact_dir, tmp, "not-a-stage")
+        with tempfile.TemporaryDirectory() as tmp:
+            real = os.path.join(tmp, "real", "apps")
+            os.makedirs(real)
+            os.symlink(real, os.path.join(tmp, "apps"))
+            self.assertRaises(common.WalterCiError, common.artifact_dir, tmp, "package")
+
+    def test_sha256_and_exclusive_json_round_trip_and_refuse_a_second_write(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "receipt.json")
+            common.write_json_exclusive(path, {"b": 1, "a": 2})
+            with open(path, "rb") as handle:
+                raw = handle.read()
+            self.assertEqual(raw, b'{"a":2,"b":1}\n')
+            self.assertEqual(common.read_json_strict(path), {"a": 2, "b": 1})
+            self.assertEqual(common.sha256_file(path), hashlib.sha256(raw).hexdigest())
+            self.assertRaises(common.WalterCiError, common.write_json_exclusive, path, {})
+
+    def test_read_json_strict_refuses_duplicate_keys_and_non_finite_constants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "f.json")
+            for text in ('{"x": 1, "x": 2}', "NaN", "Infinity"):
+                with open(path, "w") as handle:
+                    handle.write(text)
+                self.assertRaises(common.WalterCiError, common.read_json_strict, path)
+                os.remove(path)
+
+    def _config(self, **overrides):
+        body = {
+            "schema": 1,
+            "bundle_ids": {"app": "com.example.app", "nse": "com.example.app.nse", "widgets": "com.example.app.widgets"},
+            "marketing_version": "0.1.0",
+            "build_number_offset": 0,
+            "doppler": {"project": common.DOPPLER_PROJECT, "config": common.DOPPLER_CONFIG},
+            "bazel_target": "//apps/walter/ios:Walter",
+        }
+        body.update(overrides)
+        return body
+
+    def test_load_release_config_accepts_the_real_shape_and_refuses_each_broken_one(self):
+        with tempfile.TemporaryDirectory() as repo:
+            directory = os.path.join(repo, "apps", "walter", "tools")
+            os.makedirs(directory)
+            path = os.path.join(directory, "release-config.json")
+
+            def write(body):
+                with open(path, "w") as handle:
+                    json.dump(body, handle)
+
+            write(self._config())
+            self.assertEqual(common.load_release_config(repo)["bundle_ids"]["app"], "com.example.app")
+            for broken in (
+                self._config(schema=2),
+                self._config(marketing_version="0.1"),
+                self._config(doppler={"project": "other", "config": common.DOPPLER_CONFIG}),
+            ):
+                write(broken)
+                self.assertRaises(common.WalterCiError, common.load_release_config, repo)
+
+    def test_fetch_doppler_pops_the_token_returns_only_the_allowlist_and_names_missing_keys(self):
+        secret = "do-not-leak"
+        body = {name: "v" for name in common.SIGNING_SECRET_NAMES}
+        body["UNRELATED"] = secret
+        opener = FakeOpener(json.dumps(body).encode(), url=common.DOPPLER_URL)
+        with mock.patch.dict(os.environ, {"DOPPLER_TOKEN": "tok"}):
+            result = common.fetch_doppler("signing", opener=opener)
+        self.assertEqual(set(result), set(common.SIGNING_SECRET_NAMES))
+        self.assertNotIn("DOPPLER_TOKEN", os.environ)
+
+        short = FakeOpener(json.dumps({"APP_STORE_CONNECT_API_KEY_ID": "x"}).encode(), url=common.DOPPLER_URL)
+        with mock.patch.dict(os.environ, {"DOPPLER_TOKEN": "tok"}):
+            try:
+                common.fetch_doppler("upload", opener=short)
+                self.fail("expected a WalterCiError naming the missing names")
+            except common.WalterCiError as error:
+                self.assertIn("APP_STORE_CONNECT_API_KEY_ISSUER_ID", str(error))
+                self.assertNotIn(secret, str(error))
+
+    def test_build_opener_refuses_a_redirect_without_following_it(self):
+        redirect = next(h for h in common.build_opener().handlers if isinstance(h, common._NoRedirect))
+        self.assertRaises(common.WalterCiError, redirect.redirect_request, None, None, 302, "", {}, "https://other.invalid/")
+
+
+if __name__ == "__main__":
+    unittest.main()

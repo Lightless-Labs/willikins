@@ -1,0 +1,149 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/tools/walter_asc.py
+---
+"""A read-only App Store Connect client: ES256 JWTs signed by `openssl`, no SDK.
+
+Every network call goes through an injected opener; every `GET` targets a
+fixed path and param set, never `limit`. Only a bounded, non-secret message
+ever crosses this boundary.
+"""
+import base64
+import json
+import time
+import urllib.parse
+import urllib.request
+
+from walter_ci_common import WalterCiError, build_opener, default_runner, parse_strict_json, read_bounded
+
+ASC_BASE_URL = "https://api.appstoreconnect.apple.com"
+JWT_LIFETIME_SECONDS = 1140  # Apple caps the `exp` claim at 20 minutes.
+POLL_SECONDS = 30
+POLL_TIMEOUT_SECONDS = 60 * 60
+
+
+class AscError(WalterCiError):
+    """A bounded App Store Connect failure."""
+
+
+def der_to_raw_signature(der):
+    """ECDSA P-256: DER SEQUENCE{INTEGER r, INTEGER s} -> the 64-byte r||s JOSE wants."""
+    if len(der) < 8 or der[0] != 0x30:
+        raise AscError("the signature is not a DER SEQUENCE")
+    index = 2 if der[1] < 0x80 else 2 + (der[1] & 0x7F)
+
+    def read_integer(pos):
+        if pos + 2 > len(der) or der[pos] != 0x02:
+            raise AscError("the signature is not a well-formed DER integer pair")
+        length = der[pos + 1]
+        value = der[pos + 2 : pos + 2 + length]
+        if len(value) != length:
+            raise AscError("the signature is truncated")
+        return value.lstrip(b"\x00").rjust(32, b"\x00"), pos + 2 + length
+
+    r, index = read_integer(index)
+    s, _ = read_integer(index)
+    return r + s
+
+
+def _b64url(data):
+    if type(data) is str:
+        data = data.encode("utf-8")
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def make_jwt(issuer, key_id, key_path, now, *, runner=default_runner):
+    """Sign a one-shot ES256 App Store Connect JWT with the `.p8` key at `key_path`."""
+    header = {"alg": "ES256", "kid": key_id, "typ": "JWT"}
+    claims = {"iss": issuer, "iat": int(now), "exp": int(now) + JWT_LIFETIME_SECONDS, "aud": "appstoreconnect-v1"}
+    signing_input = (
+        _b64url(json.dumps(header, separators=(",", ":"), sort_keys=True))
+        + "."
+        + _b64url(json.dumps(claims, separators=(",", ":"), sort_keys=True))
+    )
+    try:
+        result = runner(
+            ["openssl", "dgst", "-sha256", "-sign", key_path], input=signing_input.encode("ascii"), timeout=30
+        )
+    except Exception:
+        raise AscError("signing the App Store Connect JWT failed") from None
+    if type(result) is not dict or result.get("returncode") != 0:
+        raise AscError("signing the App Store Connect JWT failed")
+    der = result.get("stdout")
+    if type(der) is not bytes or not der:
+        raise AscError("signing produced no signature")
+    return signing_input + "." + _b64url(der_to_raw_signature(der))
+
+
+class AscClient:
+    """`GET`-only, on a fixed path set: profiles, apps and builds by name or id."""
+
+    def __init__(self, token, *, opener=None):
+        self._token = token
+        self._opener = opener or build_opener()
+
+    def _get(self, path, params):
+        url = ASC_BASE_URL + path
+        if params:
+            url += "?" + urllib.parse.urlencode(params)
+        request = urllib.request.Request(
+            url, headers={"Authorization": "Bearer " + self._token, "Accept": "application/json"}, method="GET"
+        )
+        try:
+            body = read_bounded(self._opener, request, url)
+            return parse_strict_json(body)
+        except WalterCiError:
+            raise
+        except Exception:
+            raise AscError("calling App Store Connect failed") from None
+
+    def profile_content(self, name):
+        payload = self._get(
+            "/v1/profiles",
+            {"filter[name]": name, "filter[profileType]": "IOS_APP_STORE", "filter[profileState]": "ACTIVE"},
+        )
+        data = payload.get("data") if type(payload) is dict else None
+        if type(data) is not list or len(data) != 1:
+            raise AscError("expected exactly one active profile named " + str(name))
+        detail = self._get("/v1/profiles/" + str(data[0].get("id")), {})
+        try:
+            encoded = detail["data"]["attributes"]["profileContent"]
+            return base64.b64decode(encoded, validate=True)
+        except Exception:
+            raise AscError("the profile response has an unexpected shape") from None
+
+    def app_id(self, bundle_id):
+        payload = self._get("/v1/apps", {"filter[bundleId]": bundle_id})
+        data = payload.get("data") if type(payload) is dict else None
+        if type(data) is not list or len(data) != 1:
+            raise AscError("expected exactly one app for that bundle id")
+        return data[0].get("id")
+
+    def builds(self, app_id, marketing, build_version):
+        payload = self._get(
+            "/v1/builds",
+            {"filter[app]": app_id, "filter[preReleaseVersion.version]": marketing, "filter[version]": build_version},
+        )
+        data = payload.get("data") if type(payload) is dict else None
+        if type(data) is not list:
+            raise AscError("the builds response has an unexpected shape")
+        return data
+
+    def wait_valid(self, app_id, marketing, build_version, *, sleep=time.sleep, clock=time.monotonic):
+        """Poll every 30 seconds for up to an hour. `VALID` passes; `INVALID`/`FAILED` fails."""
+        deadline = clock() + POLL_TIMEOUT_SECONDS
+        while True:
+            builds = self.builds(app_id, marketing, build_version)
+            if len(builds) > 1:
+                raise AscError("more than one build matches that version")
+            if len(builds) == 1:
+                state = (builds[0].get("attributes") or {}).get("processingState")
+                if state == "VALID":
+                    return
+                if state in ("INVALID", "FAILED"):
+                    raise AscError("the build was rejected during processing")
+            if clock() >= deadline:
+                raise AscError("outcome unknown; reconcile in App Store Connect before another release")
+            sleep(POLL_SECONDS)

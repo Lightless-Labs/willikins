@@ -1436,6 +1436,66 @@ fn every_rendered_starlark_file_uses_only_valid_escapes() {
     assert_eq!(starlark_files, 2, "Walter renders two BUILD.bazel files");
 }
 
+/// Acceptance 9 (W3-W5, trust boundary 4): every rendered `.py` holds none
+/// of a fixed, shell-shaped or identifying set of substrings -- never a
+/// shell invocation (`shell=True`, `os.system`, `os.popen`,
+/// `subprocess.getoutput`, `getstatusoutput`), never a `match` statement
+/// (which this workspace's Python 3.9 target cannot even parse, but a
+/// line starting with `match ` is refused on principle, not by waiting for
+/// a `py_compile` failure to say so), and never a host path, a team
+/// identifier, or a stray template placeholder (`/Users/`, `team_id`,
+/// `{{`). The count of `.py` files is derived from [`WALTER_FILES`]
+/// itself, never hardcoded, so a later task's new script is covered
+/// automatically.
+#[test]
+fn no_rendered_python_uses_a_shell_or_identifying_text() {
+    const FORBIDDEN: &[&str] = &[
+        "shell=True",
+        "os.system",
+        "os.popen",
+        "subprocess.getoutput",
+        "getstatusoutput",
+        "/Users/",
+        "team_id",
+        "{{",
+    ];
+    let is_py = |path: &str| {
+        std::path::Path::new(path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("py"))
+    };
+    let expected_py_files = WALTER_FILES
+        .iter()
+        .filter(|(_, path)| is_py(path))
+        .count();
+    let mut py_files = 0;
+    for (node, file) in rendered_files_for_the_real_identifiers() {
+        if !is_py(file.path().as_str()) {
+            continue;
+        }
+        py_files += 1;
+        let content = file.content();
+        for needle in FORBIDDEN {
+            assert!(
+                !content.contains(needle),
+                "`{node}` ({}) contains the forbidden text {needle:?}",
+                file.path()
+            );
+        }
+        for line in content.lines() {
+            assert!(
+                !line.trim_start().starts_with("match "),
+                "`{node}` ({}) has a line starting with `match `: {line}",
+                file.path()
+            );
+        }
+    }
+    assert_eq!(
+        py_files, expected_py_files,
+        "every `.py` row in WALTER_FILES was inspected"
+    );
+}
+
 /// Acceptance 7 (W1, decision (g)): the rendered `ios/BUILD.bazel` has the
 /// `app_icon` `genrule` with exactly three `outs`, in this order, and
 /// `ios_application` `Walter` wires it in through `app_icons`.
@@ -1663,6 +1723,23 @@ const WALTER_FILES: &[(&str, &str)] = &[
     (
         "release_config_json",
         "apps/walter/tools/release-config.json",
+    ),
+    (
+        "walter_ci_common_py",
+        "apps/walter/tools/walter_ci_common.py",
+    ),
+    ("walter_asc_py", "apps/walter/tools/walter_asc.py"),
+    (
+        "walter_ci_tests_init_py",
+        "apps/walter/tools/tests/__init__.py",
+    ),
+    (
+        "test_walter_ci_common_py",
+        "apps/walter/tools/tests/test_walter_ci_common.py",
+    ),
+    (
+        "test_walter_asc_py",
+        "apps/walter/tools/tests/test_walter_asc.py",
     ),
 ];
 

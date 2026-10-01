@@ -775,6 +775,16 @@ walter_gitignore.template: TemplateSource
 release_config_json.path: RepoPath
 release_config_json.template: TemplateSource
 release_config_json.values: TemplateValue
+walter_ci_common_py.path: RepoPath
+walter_ci_common_py.template: TemplateSource
+walter_asc_py.path: RepoPath
+walter_asc_py.template: TemplateSource
+walter_ci_tests_init_py.path: RepoPath
+walter_ci_tests_init_py.template: TemplateSource
+test_walter_ci_common_py.path: RepoPath
+test_walter_ci_common_py.template: TemplateSource
+test_walter_asc_py.path: RepoPath
+test_walter_asc_py.template: TemplateSource
 gh_write_token_secret.config: DopplerConfig
 gh_write_token_secret.name: SecretName
 gh_write_token.value: DopplerSecretValue

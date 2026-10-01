@@ -1,0 +1,168 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/tools/tests/test_walter_asc.py
+---
+"""Offline tests for walter_asc.py: no network, openssl only for the JWT signature."""
+import base64
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import walter_asc as asc
+
+OPENSSL = shutil.which("openssl")
+
+
+def _der_int(value):
+    value = value.lstrip(b"\x00")
+    if value and value[0] & 0x80:
+        value = b"\x00" + value
+    return bytes([0x02, len(value)]) + value
+
+
+def _rebuild_der(raw):
+    body = _der_int(raw[:32]) + _der_int(raw[32:])
+    return bytes([0x30, len(body)]) + body
+
+
+class FakeOpener:
+    def __init__(self, bodies):
+        self._bodies = list(bodies)
+        self.urls = []
+
+    def open(self, request, *, timeout):
+        self.urls.append(request.full_url)
+        body = self._bodies.pop(0)
+        response = self
+        response.getcode, response.geturl, response.close = lambda: 200, lambda: request.full_url, lambda: None
+        response.read = lambda _n: body
+        return response
+
+
+class AscTests(unittest.TestCase):
+    def test_der_to_raw_signature_refuses_malformed_input(self):
+        self.assertRaises(asc.AscError, asc.der_to_raw_signature, b"")
+        self.assertRaises(asc.AscError, asc.der_to_raw_signature, b"\x31\x00")
+
+    @unittest.skipUnless(OPENSSL, "openssl is not installed")
+    def test_der_to_raw_signature_round_trips_through_a_real_ecdsa_p256_signature(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key = os.path.join(tmp, "key.pem")
+            subprocess.run(
+                ["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", key],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            pub = os.path.join(tmp, "pub.pem")
+            subprocess.run(["openssl", "pkey", "-in", key, "-pubout", "-out", pub], check=True, stdout=subprocess.DEVNULL)
+            signing_input = b"walter-signing-input"
+            signed = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key], input=signing_input, capture_output=True)
+            raw = asc.der_to_raw_signature(signed.stdout)
+            self.assertEqual(len(raw), 64)
+            sig_path = os.path.join(tmp, "sig.der")
+            with open(sig_path, "wb") as handle:
+                handle.write(_rebuild_der(raw))
+            verified = subprocess.run(
+                ["openssl", "dgst", "-sha256", "-verify", pub, "-signature", sig_path],
+                input=signing_input, capture_output=True,
+            )
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    @unittest.skipUnless(OPENSSL, "openssl is not installed")
+    def test_make_jwt_builds_header_claims_and_a_verifiable_signature(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key = os.path.join(tmp, "key.pem")
+            subprocess.run(
+                ["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", key],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            pub = os.path.join(tmp, "pub.pem")
+            subprocess.run(["openssl", "pkey", "-in", key, "-pubout", "-out", pub], check=True, stdout=subprocess.DEVNULL)
+
+            def runner(argv, *, input=None, timeout=None):
+                result = subprocess.run(argv, input=input, capture_output=True, timeout=timeout)
+                return {"returncode": result.returncode, "stdout": result.stdout}
+
+            token = asc.make_jwt("issuer-id", "key-id", key, 1_000_000, runner=runner)
+            header_b64, claims_b64, sig_b64 = token.split(".")
+
+            def decode(segment):
+                return json.loads(base64.urlsafe_b64decode(segment + "=="))
+
+            self.assertEqual(decode(header_b64), {"alg": "ES256", "kid": "key-id", "typ": "JWT"})
+            claims = decode(claims_b64)
+            self.assertEqual(claims["iss"], "issuer-id")
+            self.assertEqual(claims["aud"], "appstoreconnect-v1")
+            self.assertEqual(claims["exp"] - claims["iat"], asc.JWT_LIFETIME_SECONDS)
+
+            raw_sig = base64.urlsafe_b64decode(sig_b64 + "==")
+            with tempfile.NamedTemporaryFile(suffix=".der") as sig_file:
+                sig_file.write(_rebuild_der(raw_sig))
+                sig_file.flush()
+                verified = subprocess.run(
+                    ["openssl", "dgst", "-sha256", "-verify", pub, "-signature", sig_file.name],
+                    input=(header_b64 + "." + claims_b64).encode("ascii"), capture_output=True,
+                )
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_make_jwt_refuses_when_signing_fails(self):
+        self.assertRaises(
+            asc.AscError, asc.make_jwt, "iss", "kid", "/no/such/key", 0,
+            runner=lambda argv, **kw: {"returncode": 1, "stdout": b""},
+        )
+
+    def test_asc_client_profile_app_and_build_lookups_use_the_fixed_paths_and_filters(self):
+        profile_list = json.dumps({"data": [{"id": "p1"}]}).encode()
+        profile_detail = json.dumps({"data": {"attributes": {"profileContent": base64.b64encode(b"profile-bytes").decode()}}}).encode()
+        opener = FakeOpener([profile_list, profile_detail])
+        client = asc.AscClient("tok", opener=opener)
+        self.assertEqual(client.profile_content("com.example.app"), b"profile-bytes")
+        self.assertTrue(opener.urls[0].startswith(asc.ASC_BASE_URL + "/v1/profiles?"))
+        self.assertIn("filter%5Bname%5D=com.example.app", opener.urls[0])
+        self.assertIn("filter%5BprofileType%5D=IOS_APP_STORE", opener.urls[0])
+        self.assertIn("filter%5BprofileState%5D=ACTIVE", opener.urls[0])
+        self.assertEqual(opener.urls[1], asc.ASC_BASE_URL + "/v1/profiles/p1")
+
+        opener = FakeOpener([json.dumps({"data": [{"id": "a1"}]}).encode()])
+        client = asc.AscClient("tok", opener=opener)
+        self.assertEqual(client.app_id("com.example.app"), "a1")
+        self.assertEqual(opener.urls[0], asc.ASC_BASE_URL + "/v1/apps?filter%5BbundleId%5D=com.example.app")
+
+        opener = FakeOpener([json.dumps({"data": [{"attributes": {}}]}).encode()])
+        client = asc.AscClient("tok", opener=opener)
+        client.builds("a1", "1.0.0", "7")
+        self.assertIn("filter%5Bapp%5D=a1", opener.urls[0])
+        self.assertIn("filter%5BpreReleaseVersion.version%5D=1.0.0", opener.urls[0])
+        self.assertIn("filter%5Bversion%5D=7", opener.urls[0])
+        self.assertNotIn("limit", opener.urls[0])
+
+        client = asc.AscClient("tok", opener=FakeOpener([json.dumps({"data": []}).encode()]))
+        self.assertRaises(asc.AscError, client.app_id, "com.example.missing")
+
+    def test_wait_valid_polls_until_valid_and_fails_closed_on_invalid_or_timeout(self):
+        processing = json.dumps({"data": [{"attributes": {"processingState": "PROCESSING"}}]}).encode()
+        valid = json.dumps({"data": [{"attributes": {"processingState": "VALID"}}]}).encode()
+        client = asc.AscClient("tok", opener=FakeOpener([processing, valid]))
+        clock = iter([0, 1, 2])
+        client.wait_valid("a1", "1.0.0", "7", sleep=lambda _s: None, clock=lambda: next(clock))
+
+        invalid = json.dumps({"data": [{"attributes": {"processingState": "INVALID"}}]}).encode()
+        client = asc.AscClient("tok", opener=FakeOpener([invalid]))
+        self.assertRaises(asc.AscError, client.wait_valid, "a1", "1.0.0", "7", sleep=lambda _s: None, clock=lambda: 0)
+
+        empty = json.dumps({"data": []}).encode()
+        client = asc.AscClient("tok", opener=FakeOpener([empty, empty]))
+        clock = iter([0, 1_000_000])
+        self.assertRaises(
+            asc.AscError, client.wait_valid, "a1", "1.0.0", "7", sleep=lambda _s: None, clock=lambda: next(clock)
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

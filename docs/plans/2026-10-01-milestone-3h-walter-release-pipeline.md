@@ -79,6 +79,12 @@ adds the arm, which is why commit 2 exists at all.
    `#[cfg(test)]` module plus three more `fake_agrees_with_live` table rows (`access_all_environments` under
    `Present`, the role-ranks-below-requested `NeedsUpdate` row with `updates()` checked on both sides, and the
    unrankable-role `Mismatch` row). No production code changed in that third commit.
+**Addendum (2026-10-01, W3):** decision (e)'s file table lists four new W3 files ("17 existing + 15 new = 32"), but
+the gate's own fixed command, `unittest discover -s apps/walter/tools/tests -t .`, raises `Start directory is not
+importable` under Python 3.9 when that directory has no package marker (verified empirically on this host: a
+start directory distinct from its top-level directory must be an importable package). So W3 adds a fifth
+`repo.file.render` node, `walter_ci_tests_init_py` -> `apps/walter/tools/tests/__init__.py` (a one-line docstring,
+not empty), and the file count becomes 33. `WALTER_FILES` and `walter_files.files` both carry it.
 
 ## Goal
 

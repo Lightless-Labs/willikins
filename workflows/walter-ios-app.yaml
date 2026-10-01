@@ -1348,6 +1348,807 @@ steps:
           "bazel_target": "//apps/walter/ios:Walter"
         }
 
+  # W3 (milestone 3h, decision (i)): the CI scripts' first part --
+  # walter_ci_common.py (guest identity, private clone, artifacts,
+  # strict JSON, the Doppler fetch) and walter_asc.py (a read-only App
+  # Store Connect client, ES256 JWTs signed by openssl). Both are
+  # Python 3.9 standard library only: every subprocess is an argv list
+  # behind an injectable runner, never a shell; every network call goes
+  # through an injectable opener; no Doppler or Apple value is ever
+  # printed, logged or written to a file. tests/__init__.py is the one
+  # deviation from decision (e)'s file list: `unittest discover -s
+  # apps/walter/tools/tests -t .` (the gate's own fixed command) needs
+  # its start directory to be an importable package.
+  walter_ci_common_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/walter_ci_common.py
+      template: |
+        """Walter CI: guest identity, private clone, artifacts, strict JSON, Doppler fetch.
+
+        Every subprocess runs as one argv list behind an injectable runner; the shell
+        is never invoked. Every network call goes through an injectable opener. No
+        Doppler value is ever printed, logged or written to a file.
+        """
+        import hashlib
+        import json
+        import os
+        import re
+        import ssl
+        import stat
+        import subprocess
+        import urllib.parse
+        import urllib.request
+
+        GUEST_PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        DEVELOPER_DIR = "/Applications/Xcode_26.3.app/Contents/Developer"
+        IDENTITY_NAMES = (
+            "BUILDKITE_COMMIT", "BUILDKITE_JOB_ID", "BUILDKITE_BUILD_ID",
+            "BUILDKITE_BUILD_NUMBER", "BUILDKITE_PIPELINE_SLUG", "BUILDKITE_BUILD_URL", "CI",
+        )
+
+        DOPPLER_PROJECT = "walter"
+        DOPPLER_CONFIG = "prd_deployment_ios"
+        DOPPLER_URL = "https://api.doppler.com/v3/configs/config/secrets/download?" + urllib.parse.urlencode(
+            {"project": DOPPLER_PROJECT, "config": DOPPLER_CONFIG, "format": "json"}
+        )
+        ASC_SECRET_NAMES = (
+            "APP_STORE_CONNECT_API_KEY_ISSUER_ID", "APP_STORE_CONNECT_API_KEY_ID", "APP_STORE_CONNECT_API_KEY_BASE64",
+        )
+        SIGNING_SECRET_NAMES = ASC_SECRET_NAMES + (
+            "APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64", "APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD",
+        )
+        DOPPLER_STAGE_NAMES = {"signing": SIGNING_SECRET_NAMES, "package": SIGNING_SECRET_NAMES, "upload": ASC_SECRET_NAMES}
+
+        ARTIFACT_ROOT = ("apps", "walter", ".ci-artifacts")
+        ARTIFACT_STAGES = ("validation", "signing-preflight", "package", "upload-input", "upload")
+
+        MAX_JSON_BYTES = 65536
+        MAX_RESPONSE_BYTES = 1024 * 1024
+        MAX_TOKEN_LENGTH = 8192
+        TIMEOUT_SECONDS = 30
+
+
+        class WalterCiError(RuntimeError):
+            """A bounded, input-free failure: only a fixed, non-secret message crosses this boundary."""
+
+
+        def child_env():
+            """A fresh guest env: only PATH, DEVELOPER_DIR, LANG, LC_ALL, HOME, TMPDIR, CI -- never DOPPLER_TOKEN."""
+            env = {"PATH": GUEST_PATH, "DEVELOPER_DIR": DEVELOPER_DIR, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"}
+            for name in ("HOME", "TMPDIR", "CI"):
+                value = os.environ.get(name)
+                if value is not None:
+                    env[name] = value
+            return env
+
+
+        def default_runner(argv, *, cwd=None, env=None, timeout=None, input=None):
+            """The production runner: one argv list, never a shell, never the ambient env."""
+            completed = subprocess.run(
+                list(argv), cwd=cwd, env=env if env is not None else child_env(), timeout=timeout, input=input,
+                stdin=subprocess.DEVNULL if input is None else None,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            return {"returncode": completed.returncode, "stdout": completed.stdout, "stderr": completed.stderr}
+
+
+        def _run_checked(runner, argv, error, **kwargs):
+            try:
+                result = runner(argv, **kwargs)
+            except Exception:
+                raise WalterCiError(error) from None
+            if type(result) is not dict or result.get("returncode") != 0:
+                raise WalterCiError(error)
+            return result.get("stdout") or b""
+
+
+        def verify_source(mount, *, runner=default_runner):
+            """Verify the mount is the pinned commit, clean, then clone it privately and verify again."""
+            env = child_env()
+            commit = os.environ.get("BUILDKITE_COMMIT") or ""
+            if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+                raise WalterCiError("BUILDKITE_COMMIT must be exactly 40 hex characters")
+            job_id = os.environ.get("BUILDKITE_JOB_ID") or ""
+            if re.fullmatch(r"[0-9a-f-]{1,128}", job_id) is None:
+                raise WalterCiError("BUILDKITE_JOB_ID has an unexpected shape")
+
+            def verify(path):
+                head = _run_checked(runner, ["git", "-C", path, "rev-parse", "HEAD"], "reading HEAD failed", env=env, timeout=30)
+                if head.decode("utf-8", "strict").strip() != commit:
+                    raise WalterCiError("HEAD does not match the pinned commit")
+                status = _run_checked(runner, ["git", "-C", path, "status", "--porcelain"], "git status failed", env=env, timeout=60)
+                if status.strip():
+                    raise WalterCiError("the checkout is not clean")
+
+            verify(mount)
+            tmpdir = os.environ.get("TMPDIR") or "/tmp"
+            clone = os.path.join(tmpdir, "walter-src-" + job_id)
+            if os.path.lexists(clone):
+                raise WalterCiError("the private clone path already exists")
+            _run_checked(runner, ["git", "clone", "--no-hardlinks", "--", mount, clone], "the private clone failed", env=env, timeout=600)
+            _run_checked(
+                runner, ["git", "-C", clone, "checkout", "--detach", commit], "checking out the pinned commit failed", env=env, timeout=120
+            )
+            verify(clone)
+            return clone
+
+
+        def artifact_dir(mount, stage):
+            """`apps/walter/.ci-artifacts/<stage>/` under `mount`, refusing any symlinked parent."""
+            if type(mount) is not str or type(stage) is not str or stage not in ARTIFACT_STAGES:
+                raise WalterCiError("unknown artifact stage")
+            path = mount
+            for part in ARTIFACT_ROOT + (stage,):
+                path = os.path.join(path, part)
+                if os.path.islink(path):
+                    raise WalterCiError("the artifact path has a symlinked component")
+            os.makedirs(path, exist_ok=True)
+            return path
+
+
+        def sha256_file(path):
+            try:
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            except OSError:
+                raise WalterCiError("could not open the expected file") from None
+            digest = hashlib.sha256()
+            with os.fdopen(descriptor, "rb") as handle:
+                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                    raise WalterCiError("refusing a non-regular file")
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+
+
+        def write_json_exclusive(path, obj):
+            """Write `obj` as compact, sorted JSON to a file that must not already exist."""
+            raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
+            try:
+                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            except OSError:
+                raise WalterCiError("the receipt already exists or its directory is missing") from None
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+
+
+        def _unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise WalterCiError("duplicate JSON key")
+                result[key] = value
+            return result
+
+
+        def _reject_constant(_value):
+            raise WalterCiError("JSON used a non-finite constant")
+
+
+        def parse_strict_json(raw):
+            try:
+                return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+            except WalterCiError:
+                raise
+            except Exception:
+                raise WalterCiError("invalid JSON") from None
+
+
+        def _read_file(path, limit):
+            try:
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            except OSError:
+                raise WalterCiError("could not open the expected file") from None
+            with os.fdopen(descriptor, "rb") as handle:
+                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                    raise WalterCiError("refusing a non-regular file")
+                data = handle.read(limit + 1)
+            if len(data) > limit:
+                raise WalterCiError("file exceeds the size limit")
+            return data
+
+
+        def read_json_strict(path, *, max_bytes=MAX_JSON_BYTES):
+            return parse_strict_json(_read_file(path, max_bytes))
+
+
+        _BUNDLE_ID_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-")
+
+
+        def _is_bundle_id(value):
+            return type(value) is str and len(value) > 0 and all(c in _BUNDLE_ID_CHARS for c in value)
+
+
+        def _is_semver(value):
+            if type(value) is not str:
+                return False
+            parts = value.split(".")
+            return len(parts) == 3 and all(part.isdigit() for part in parts)
+
+
+        def load_release_config(repo):
+            """Strict-JSON load of `apps/walter/tools/release-config.json`, validated against decision (h)'s schema."""
+            path = os.path.join(repo, "apps", "walter", "tools", "release-config.json")
+            parsed = read_json_strict(path)
+            if type(parsed) is not dict or set(parsed) != {
+                "schema", "bundle_ids", "marketing_version", "build_number_offset", "doppler", "bazel_target",
+            }:
+                raise WalterCiError("release-config.json has an unexpected shape")
+            if parsed.get("schema") != 1:
+                raise WalterCiError("release-config.json has an unsupported schema")
+            bundle_ids = parsed["bundle_ids"]
+            if type(bundle_ids) is not dict or set(bundle_ids) != {"app", "nse", "widgets"}:
+                raise WalterCiError("release-config.json's bundle_ids has an unexpected shape")
+            for key, value in bundle_ids.items():
+                if not _is_bundle_id(value):
+                    raise WalterCiError("release-config.json's bundle_ids." + key + " is invalid")
+            if not _is_semver(parsed["marketing_version"]):
+                raise WalterCiError("release-config.json's marketing_version is not semver")
+            offset = parsed["build_number_offset"]
+            if type(offset) is not int or type(offset) is bool or offset < 0:
+                raise WalterCiError("release-config.json's build_number_offset must be a non-negative integer")
+            doppler = parsed["doppler"]
+            if (
+                type(doppler) is not dict
+                or set(doppler) != {"project", "config"}
+                or doppler.get("project") != DOPPLER_PROJECT
+                or doppler.get("config") != DOPPLER_CONFIG
+            ):
+                raise WalterCiError("release-config.json's doppler block does not match the pinned project/config")
+            bazel_target = parsed["bazel_target"]
+            if type(bazel_target) is not str or not bazel_target.startswith("//"):
+                raise WalterCiError("release-config.json's bazel_target is invalid")
+            return parsed
+
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, fp, code, msg, headers, newurl):
+                raise WalterCiError("the response attempted a redirect") from None
+
+
+        def build_opener():
+            """A fresh, proxy-free, non-redirecting opener with verified TLS."""
+            return urllib.request.build_opener(
+                urllib.request.ProxyHandler({}), _NoRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context())
+            )
+
+
+        def read_bounded(opener, request, expected_url, *, max_bytes=MAX_RESPONSE_BYTES, timeout=TIMEOUT_SECONDS):
+            """Open `request`, requiring status 200, the expected final URL, and a bounded body."""
+            response = None
+            try:
+                response = opener.open(request, timeout=timeout)
+                status = response.getcode()
+                if type(status) is not int or status != 200 or response.geturl() != expected_url:
+                    raise WalterCiError("the server responded unexpectedly")
+                body = response.read(max_bytes + 1)
+                if type(body) is not bytes or len(body) > max_bytes:
+                    raise WalterCiError("the response exceeded the size limit")
+                return body
+            finally:
+                if response is not None:
+                    response.close()
+
+
+        def fetch_doppler(stage, *, opener=None):
+            """Fetch Walter's deployment config and return only `stage`'s allowlisted names."""
+            token = os.environ.pop("DOPPLER_TOKEN", None)
+            if stage not in DOPPLER_STAGE_NAMES:
+                raise WalterCiError("unknown Doppler stage")
+            if type(token) is not str or not 1 <= len(token) <= MAX_TOKEN_LENGTH:
+                raise WalterCiError("DOPPLER_TOKEN is missing or malformed")
+            try:
+                request = urllib.request.Request(
+                    DOPPLER_URL, headers={"Authorization": "Bearer " + token, "Accept": "application/json"}, method="GET"
+                )
+                body = read_bounded(opener or build_opener(), request, DOPPLER_URL)
+                parsed = parse_strict_json(body)
+            except WalterCiError:
+                raise
+            except Exception:
+                raise WalterCiError("fetching Doppler secrets failed") from None
+            if type(parsed) is not dict or any(type(k) is not str or type(v) is not str for k, v in parsed.items()):
+                raise WalterCiError("the Doppler response has an unexpected shape")
+            names = DOPPLER_STAGE_NAMES[stage]
+            missing = sorted(name for name in names if name not in parsed)
+            if missing:
+                raise WalterCiError("Doppler config is missing: " + ", ".join(missing))
+            return {name: parsed[name] for name in names}
+  walter_asc_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/walter_asc.py
+      template: |
+        """A read-only App Store Connect client: ES256 JWTs signed by `openssl`, no SDK.
+
+        Every network call goes through an injected opener; every `GET` targets a
+        fixed path and param set, never `limit`. Only a bounded, non-secret message
+        ever crosses this boundary.
+        """
+        import base64
+        import json
+        import time
+        import urllib.parse
+        import urllib.request
+
+        from walter_ci_common import WalterCiError, build_opener, default_runner, parse_strict_json, read_bounded
+
+        ASC_BASE_URL = "https://api.appstoreconnect.apple.com"
+        JWT_LIFETIME_SECONDS = 1140  # Apple caps the `exp` claim at 20 minutes.
+        POLL_SECONDS = 30
+        POLL_TIMEOUT_SECONDS = 60 * 60
+
+
+        class AscError(WalterCiError):
+            """A bounded App Store Connect failure."""
+
+
+        def der_to_raw_signature(der):
+            """ECDSA P-256: DER SEQUENCE{INTEGER r, INTEGER s} -> the 64-byte r||s JOSE wants."""
+            if len(der) < 8 or der[0] != 0x30:
+                raise AscError("the signature is not a DER SEQUENCE")
+            index = 2 if der[1] < 0x80 else 2 + (der[1] & 0x7F)
+
+            def read_integer(pos):
+                if pos + 2 > len(der) or der[pos] != 0x02:
+                    raise AscError("the signature is not a well-formed DER integer pair")
+                length = der[pos + 1]
+                value = der[pos + 2 : pos + 2 + length]
+                if len(value) != length:
+                    raise AscError("the signature is truncated")
+                return value.lstrip(b"\x00").rjust(32, b"\x00"), pos + 2 + length
+
+            r, index = read_integer(index)
+            s, _ = read_integer(index)
+            return r + s
+
+
+        def _b64url(data):
+            if type(data) is str:
+                data = data.encode("utf-8")
+            return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+        def make_jwt(issuer, key_id, key_path, now, *, runner=default_runner):
+            """Sign a one-shot ES256 App Store Connect JWT with the `.p8` key at `key_path`."""
+            header = {"alg": "ES256", "kid": key_id, "typ": "JWT"}
+            claims = {"iss": issuer, "iat": int(now), "exp": int(now) + JWT_LIFETIME_SECONDS, "aud": "appstoreconnect-v1"}
+            signing_input = (
+                _b64url(json.dumps(header, separators=(",", ":"), sort_keys=True))
+                + "."
+                + _b64url(json.dumps(claims, separators=(",", ":"), sort_keys=True))
+            )
+            try:
+                result = runner(
+                    ["openssl", "dgst", "-sha256", "-sign", key_path], input=signing_input.encode("ascii"), timeout=30
+                )
+            except Exception:
+                raise AscError("signing the App Store Connect JWT failed") from None
+            if type(result) is not dict or result.get("returncode") != 0:
+                raise AscError("signing the App Store Connect JWT failed")
+            der = result.get("stdout")
+            if type(der) is not bytes or not der:
+                raise AscError("signing produced no signature")
+            return signing_input + "." + _b64url(der_to_raw_signature(der))
+
+
+        class AscClient:
+            """`GET`-only, on a fixed path set: profiles, apps and builds by name or id."""
+
+            def __init__(self, token, *, opener=None):
+                self._token = token
+                self._opener = opener or build_opener()
+
+            def _get(self, path, params):
+                url = ASC_BASE_URL + path
+                if params:
+                    url += "?" + urllib.parse.urlencode(params)
+                request = urllib.request.Request(
+                    url, headers={"Authorization": "Bearer " + self._token, "Accept": "application/json"}, method="GET"
+                )
+                try:
+                    body = read_bounded(self._opener, request, url)
+                    return parse_strict_json(body)
+                except WalterCiError:
+                    raise
+                except Exception:
+                    raise AscError("calling App Store Connect failed") from None
+
+            def profile_content(self, name):
+                payload = self._get(
+                    "/v1/profiles",
+                    {"filter[name]": name, "filter[profileType]": "IOS_APP_STORE", "filter[profileState]": "ACTIVE"},
+                )
+                data = payload.get("data") if type(payload) is dict else None
+                if type(data) is not list or len(data) != 1:
+                    raise AscError("expected exactly one active profile named " + str(name))
+                detail = self._get("/v1/profiles/" + str(data[0].get("id")), {})
+                try:
+                    encoded = detail["data"]["attributes"]["profileContent"]
+                    return base64.b64decode(encoded, validate=True)
+                except Exception:
+                    raise AscError("the profile response has an unexpected shape") from None
+
+            def app_id(self, bundle_id):
+                payload = self._get("/v1/apps", {"filter[bundleId]": bundle_id})
+                data = payload.get("data") if type(payload) is dict else None
+                if type(data) is not list or len(data) != 1:
+                    raise AscError("expected exactly one app for that bundle id")
+                return data[0].get("id")
+
+            def builds(self, app_id, marketing, build_version):
+                payload = self._get(
+                    "/v1/builds",
+                    {"filter[app]": app_id, "filter[preReleaseVersion.version]": marketing, "filter[version]": build_version},
+                )
+                data = payload.get("data") if type(payload) is dict else None
+                if type(data) is not list:
+                    raise AscError("the builds response has an unexpected shape")
+                return data
+
+            def wait_valid(self, app_id, marketing, build_version, *, sleep=time.sleep, clock=time.monotonic):
+                """Poll every 30 seconds for up to an hour. `VALID` passes; `INVALID`/`FAILED` fails."""
+                deadline = clock() + POLL_TIMEOUT_SECONDS
+                while True:
+                    builds = self.builds(app_id, marketing, build_version)
+                    if len(builds) > 1:
+                        raise AscError("more than one build matches that version")
+                    if len(builds) == 1:
+                        state = (builds[0].get("attributes") or {}).get("processingState")
+                        if state == "VALID":
+                            return
+                        if state in ("INVALID", "FAILED"):
+                            raise AscError("the build was rejected during processing")
+                    if clock() >= deadline:
+                        raise AscError("outcome unknown; reconcile in App Store Connect before another release")
+                    sleep(POLL_SECONDS)
+  walter_ci_tests_init_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/tests/__init__.py
+      template: |
+        """Package marker: lets `unittest discover -s ... -t .` import this directory."""
+  test_walter_ci_common_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/tests/test_walter_ci_common.py
+      template: |
+        """Offline tests for walter_ci_common.py: no network, no real git, no keychain."""
+        import json
+        import os
+        import sys
+        import tempfile
+        import unittest
+        from unittest import mock
+
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        import walter_ci_common as common
+
+        JOB_ID = "0198f1a2-0000"
+
+
+        def fake_runner(script):
+            """`script`: a git subcommand -> {"returncode", "stdout"}. Records every call."""
+            calls = []
+
+            def run(argv, **kwargs):
+                calls.append((list(argv), kwargs))
+                key = next((a for a in argv if a in script), None)
+                return dict(script.get(key, {"returncode": 0, "stdout": b""}))
+
+            run.calls = calls
+            return run
+
+
+        class FakeOpener:
+            """A minimal `opener.open(request, timeout=...)` returning a fixed body/status/url."""
+
+            def __init__(self, body, status=200, url=None):
+                self._body, self._status, self._url = body, status, url
+
+            def open(self, request, *, timeout):
+                response = self
+
+                def read(_n):
+                    return self._body
+
+                response.getcode, response.geturl, response.read, response.close = (
+                    lambda: self._status, lambda: self._url, read, lambda: None,
+                )
+                return response
+
+
+        class CommonTests(unittest.TestCase):
+            def test_child_env_never_carries_doppler_token(self):
+                with mock.patch.dict(os.environ, {"DOPPLER_TOKEN": "secret", "HOME": "/h", "CI": "true"}):
+                    env = common.child_env()
+                self.assertNotIn("DOPPLER_TOKEN", env)
+                self.assertTrue(set(env) <= {"PATH", "DEVELOPER_DIR", "LANG", "LC_ALL", "HOME", "TMPDIR", "CI"})
+                self.assertEqual(env["PATH"], common.GUEST_PATH)
+
+            def test_verify_source_clones_checks_out_and_refuses_bad_input(self):
+                commit = "a" * 40
+                clean = {"rev-parse": {"returncode": 0, "stdout": (commit + "\n").encode()}, "status": {"returncode": 0, "stdout": b""}}
+                with tempfile.TemporaryDirectory() as tmp:
+                    runner = fake_runner(clean)
+                    with mock.patch.dict(os.environ, {"BUILDKITE_COMMIT": commit, "BUILDKITE_JOB_ID": JOB_ID, "TMPDIR": tmp}):
+                        clone = common.verify_source(tmp, runner=runner)
+                    self.assertEqual(clone, os.path.join(tmp, "walter-src-" + JOB_ID))
+                    argvs = [c[0] for c in runner.calls]
+                    self.assertIn(["git", "clone", "--no-hardlinks", "--", tmp, clone], argvs)
+                    self.assertIn(["git", "-C", clone, "checkout", "--detach", commit], argvs)
+                with tempfile.TemporaryDirectory() as tmp:
+                    # An existing private-clone path (the fake runner never actually creates one) refuses.
+                    os.mkdir(os.path.join(tmp, "walter-src-" + JOB_ID))
+                    with mock.patch.dict(os.environ, {"BUILDKITE_COMMIT": commit, "BUILDKITE_JOB_ID": JOB_ID, "TMPDIR": tmp}):
+                        self.assertRaises(common.WalterCiError, common.verify_source, tmp, runner=fake_runner(clean))
+                with mock.patch.dict(os.environ, {"BUILDKITE_COMMIT": "not-hex", "BUILDKITE_JOB_ID": JOB_ID}):
+                    self.assertRaises(common.WalterCiError, common.verify_source, "/mount", runner=fake_runner({}))
+                dirty = {"rev-parse": clean["rev-parse"], "status": {"returncode": 0, "stdout": b"?? dirty\n"}}
+                with mock.patch.dict(os.environ, {"BUILDKITE_COMMIT": commit, "BUILDKITE_JOB_ID": JOB_ID}):
+                    self.assertRaises(common.WalterCiError, common.verify_source, "/mount", runner=fake_runner(dirty))
+
+            def test_artifact_dir_creates_the_stage_directory_and_refuses_a_symlinked_parent(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = common.artifact_dir(tmp, "validation")
+                    self.assertEqual(path, os.path.join(tmp, "apps", "walter", ".ci-artifacts", "validation"))
+                    self.assertTrue(os.path.isdir(path))
+                    self.assertRaises(common.WalterCiError, common.artifact_dir, tmp, "not-a-stage")
+                with tempfile.TemporaryDirectory() as tmp:
+                    real = os.path.join(tmp, "real", "apps")
+                    os.makedirs(real)
+                    os.symlink(real, os.path.join(tmp, "apps"))
+                    self.assertRaises(common.WalterCiError, common.artifact_dir, tmp, "package")
+
+            def test_sha256_and_exclusive_json_round_trip_and_refuse_a_second_write(self):
+                import hashlib
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = os.path.join(tmp, "receipt.json")
+                    common.write_json_exclusive(path, {"b": 1, "a": 2})
+                    with open(path, "rb") as handle:
+                        raw = handle.read()
+                    self.assertEqual(raw, b'{"a":2,"b":1}\n')
+                    self.assertEqual(common.read_json_strict(path), {"a": 2, "b": 1})
+                    self.assertEqual(common.sha256_file(path), hashlib.sha256(raw).hexdigest())
+                    self.assertRaises(common.WalterCiError, common.write_json_exclusive, path, {})
+
+            def test_read_json_strict_refuses_duplicate_keys_and_non_finite_constants(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = os.path.join(tmp, "f.json")
+                    for text in ('{"x": 1, "x": 2}', "NaN", "Infinity"):
+                        with open(path, "w") as handle:
+                            handle.write(text)
+                        self.assertRaises(common.WalterCiError, common.read_json_strict, path)
+                        os.remove(path)
+
+            def _config(self, **overrides):
+                body = {
+                    "schema": 1,
+                    "bundle_ids": {"app": "com.example.app", "nse": "com.example.app.nse", "widgets": "com.example.app.widgets"},
+                    "marketing_version": "0.1.0",
+                    "build_number_offset": 0,
+                    "doppler": {"project": common.DOPPLER_PROJECT, "config": common.DOPPLER_CONFIG},
+                    "bazel_target": "//apps/walter/ios:Walter",
+                }
+                body.update(overrides)
+                return body
+
+            def test_load_release_config_accepts_the_real_shape_and_refuses_each_broken_one(self):
+                with tempfile.TemporaryDirectory() as repo:
+                    directory = os.path.join(repo, "apps", "walter", "tools")
+                    os.makedirs(directory)
+                    path = os.path.join(directory, "release-config.json")
+
+                    def write(body):
+                        with open(path, "w") as handle:
+                            json.dump(body, handle)
+
+                    write(self._config())
+                    self.assertEqual(common.load_release_config(repo)["bundle_ids"]["app"], "com.example.app")
+                    for broken in (
+                        self._config(schema=2),
+                        self._config(marketing_version="0.1"),
+                        self._config(doppler={"project": "other", "config": common.DOPPLER_CONFIG}),
+                    ):
+                        write(broken)
+                        self.assertRaises(common.WalterCiError, common.load_release_config, repo)
+
+            def test_fetch_doppler_pops_the_token_returns_only_the_allowlist_and_names_missing_keys(self):
+                secret = "do-not-leak"
+                body = {name: "v" for name in common.SIGNING_SECRET_NAMES}
+                body["UNRELATED"] = secret
+                opener = FakeOpener(json.dumps(body).encode(), url=common.DOPPLER_URL)
+                with mock.patch.dict(os.environ, {"DOPPLER_TOKEN": "tok"}):
+                    result = common.fetch_doppler("signing", opener=opener)
+                self.assertEqual(set(result), set(common.SIGNING_SECRET_NAMES))
+                self.assertNotIn("DOPPLER_TOKEN", os.environ)
+
+                short = FakeOpener(json.dumps({"APP_STORE_CONNECT_API_KEY_ID": "x"}).encode(), url=common.DOPPLER_URL)
+                with mock.patch.dict(os.environ, {"DOPPLER_TOKEN": "tok"}):
+                    try:
+                        common.fetch_doppler("upload", opener=short)
+                        self.fail("expected a WalterCiError naming the missing names")
+                    except common.WalterCiError as error:
+                        self.assertIn("APP_STORE_CONNECT_API_KEY_ISSUER_ID", str(error))
+                        self.assertNotIn(secret, str(error))
+
+            def test_build_opener_refuses_a_redirect_without_following_it(self):
+                redirect = next(h for h in common.build_opener().handlers if isinstance(h, common._NoRedirect))
+                self.assertRaises(common.WalterCiError, redirect.redirect_request, None, None, 302, "", {}, "https://other.invalid/")
+
+
+        if __name__ == "__main__":
+            unittest.main()
+  test_walter_asc_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/tests/test_walter_asc.py
+      template: |
+        """Offline tests for walter_asc.py: no network, openssl only for the JWT signature."""
+        import base64
+        import json
+        import os
+        import shutil
+        import subprocess
+        import sys
+        import tempfile
+        import unittest
+
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        import walter_asc as asc
+
+        OPENSSL = shutil.which("openssl")
+
+
+        def _der_int(value):
+            value = value.lstrip(b"\x00")
+            if value and value[0] & 0x80:
+                value = b"\x00" + value
+            return bytes([0x02, len(value)]) + value
+
+
+        def _rebuild_der(raw):
+            body = _der_int(raw[:32]) + _der_int(raw[32:])
+            return bytes([0x30, len(body)]) + body
+
+
+        class FakeOpener:
+            def __init__(self, bodies):
+                self._bodies = list(bodies)
+                self.urls = []
+
+            def open(self, request, *, timeout):
+                self.urls.append(request.full_url)
+                body = self._bodies.pop(0)
+                response = self
+                response.getcode, response.geturl, response.close = lambda: 200, lambda: request.full_url, lambda: None
+                response.read = lambda _n: body
+                return response
+
+
+        class AscTests(unittest.TestCase):
+            def test_der_to_raw_signature_refuses_malformed_input(self):
+                self.assertRaises(asc.AscError, asc.der_to_raw_signature, b"")
+                self.assertRaises(asc.AscError, asc.der_to_raw_signature, b"\x31\x00")
+
+            @unittest.skipUnless(OPENSSL, "openssl is not installed")
+            def test_der_to_raw_signature_round_trips_through_a_real_ecdsa_p256_signature(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    key = os.path.join(tmp, "key.pem")
+                    subprocess.run(
+                        ["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", key],
+                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+                    pub = os.path.join(tmp, "pub.pem")
+                    subprocess.run(["openssl", "pkey", "-in", key, "-pubout", "-out", pub], check=True, stdout=subprocess.DEVNULL)
+                    signing_input = b"walter-signing-input"
+                    signed = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key], input=signing_input, capture_output=True)
+                    raw = asc.der_to_raw_signature(signed.stdout)
+                    self.assertEqual(len(raw), 64)
+                    sig_path = os.path.join(tmp, "sig.der")
+                    with open(sig_path, "wb") as handle:
+                        handle.write(_rebuild_der(raw))
+                    verified = subprocess.run(
+                        ["openssl", "dgst", "-sha256", "-verify", pub, "-signature", sig_path],
+                        input=signing_input, capture_output=True,
+                    )
+                    self.assertEqual(verified.returncode, 0, verified.stderr)
+
+            @unittest.skipUnless(OPENSSL, "openssl is not installed")
+            def test_make_jwt_builds_header_claims_and_a_verifiable_signature(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    key = os.path.join(tmp, "key.pem")
+                    subprocess.run(
+                        ["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", key],
+                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+                    pub = os.path.join(tmp, "pub.pem")
+                    subprocess.run(["openssl", "pkey", "-in", key, "-pubout", "-out", pub], check=True, stdout=subprocess.DEVNULL)
+
+                    def runner(argv, *, input=None, timeout=None):
+                        result = subprocess.run(argv, input=input, capture_output=True, timeout=timeout)
+                        return {"returncode": result.returncode, "stdout": result.stdout}
+
+                    token = asc.make_jwt("issuer-id", "key-id", key, 1_000_000, runner=runner)
+                    header_b64, claims_b64, sig_b64 = token.split(".")
+
+                    def decode(segment):
+                        return json.loads(base64.urlsafe_b64decode(segment + "=="))
+
+                    self.assertEqual(decode(header_b64), {"alg": "ES256", "kid": "key-id", "typ": "JWT"})
+                    claims = decode(claims_b64)
+                    self.assertEqual(claims["iss"], "issuer-id")
+                    self.assertEqual(claims["aud"], "appstoreconnect-v1")
+                    self.assertEqual(claims["exp"] - claims["iat"], asc.JWT_LIFETIME_SECONDS)
+
+                    raw_sig = base64.urlsafe_b64decode(sig_b64 + "==")
+                    with tempfile.NamedTemporaryFile(suffix=".der") as sig_file:
+                        sig_file.write(_rebuild_der(raw_sig))
+                        sig_file.flush()
+                        verified = subprocess.run(
+                            ["openssl", "dgst", "-sha256", "-verify", pub, "-signature", sig_file.name],
+                            input=(header_b64 + "." + claims_b64).encode("ascii"), capture_output=True,
+                        )
+                    self.assertEqual(verified.returncode, 0, verified.stderr)
+
+            def test_make_jwt_refuses_when_signing_fails(self):
+                self.assertRaises(
+                    asc.AscError, asc.make_jwt, "iss", "kid", "/no/such/key", 0,
+                    runner=lambda argv, **kw: {"returncode": 1, "stdout": b""},
+                )
+
+            def test_asc_client_profile_app_and_build_lookups_use_the_fixed_paths_and_filters(self):
+                profile_list = json.dumps({"data": [{"id": "p1"}]}).encode()
+                profile_detail = json.dumps({"data": {"attributes": {"profileContent": base64.b64encode(b"profile-bytes").decode()}}}).encode()
+                opener = FakeOpener([profile_list, profile_detail])
+                client = asc.AscClient("tok", opener=opener)
+                self.assertEqual(client.profile_content("com.example.app"), b"profile-bytes")
+                self.assertTrue(opener.urls[0].startswith(asc.ASC_BASE_URL + "/v1/profiles?"))
+                self.assertIn("filter%5Bname%5D=com.example.app", opener.urls[0])
+                self.assertIn("filter%5BprofileType%5D=IOS_APP_STORE", opener.urls[0])
+                self.assertIn("filter%5BprofileState%5D=ACTIVE", opener.urls[0])
+                self.assertEqual(opener.urls[1], asc.ASC_BASE_URL + "/v1/profiles/p1")
+
+                opener = FakeOpener([json.dumps({"data": [{"id": "a1"}]}).encode()])
+                client = asc.AscClient("tok", opener=opener)
+                self.assertEqual(client.app_id("com.example.app"), "a1")
+                self.assertEqual(opener.urls[0], asc.ASC_BASE_URL + "/v1/apps?filter%5BbundleId%5D=com.example.app")
+
+                opener = FakeOpener([json.dumps({"data": [{"attributes": {}}]}).encode()])
+                client = asc.AscClient("tok", opener=opener)
+                client.builds("a1", "1.0.0", "7")
+                self.assertIn("filter%5Bapp%5D=a1", opener.urls[0])
+                self.assertIn("filter%5BpreReleaseVersion.version%5D=1.0.0", opener.urls[0])
+                self.assertIn("filter%5Bversion%5D=7", opener.urls[0])
+                self.assertNotIn("limit", opener.urls[0])
+
+                client = asc.AscClient("tok", opener=FakeOpener([json.dumps({"data": []}).encode()]))
+                self.assertRaises(asc.AscError, client.app_id, "com.example.missing")
+
+            def test_wait_valid_polls_until_valid_and_fails_closed_on_invalid_or_timeout(self):
+                processing = json.dumps({"data": [{"attributes": {"processingState": "PROCESSING"}}]}).encode()
+                valid = json.dumps({"data": [{"attributes": {"processingState": "VALID"}}]}).encode()
+                client = asc.AscClient("tok", opener=FakeOpener([processing, valid]))
+                clock = iter([0, 1, 2])
+                client.wait_valid("a1", "1.0.0", "7", sleep=lambda _s: None, clock=lambda: next(clock))
+
+                invalid = json.dumps({"data": [{"attributes": {"processingState": "INVALID"}}]}).encode()
+                client = asc.AscClient("tok", opener=FakeOpener([invalid]))
+                self.assertRaises(asc.AscError, client.wait_valid, "a1", "1.0.0", "7", sleep=lambda _s: None, clock=lambda: 0)
+
+                empty = json.dumps({"data": []}).encode()
+                client = asc.AscClient("tok", opener=FakeOpener([empty, empty]))
+                clock = iter([0, 1_000_000])
+                self.assertRaises(
+                    asc.AscError, client.wait_valid, "a1", "1.0.0", "7", sleep=lambda _s: None, clock=lambda: next(clock)
+                )
+
+
+        if __name__ == "__main__":
+            unittest.main()
+
   # W1: the write credential (decision (l)) -- new and narrow (Contents:
   # read and write only, never the older, wider gh_token above), from a
   # Doppler branch config no app config inherits.
@@ -1390,6 +2191,11 @@ steps:
         - ${{ steps.generate_app_icon_py.file }}
         - ${{ steps.walter_gitignore.file }}
         - ${{ steps.release_config_json.file }}
+        - ${{ steps.walter_ci_common_py.file }}
+        - ${{ steps.walter_asc_py.file }}
+        - ${{ steps.walter_ci_tests_init_py.file }}
+        - ${{ steps.test_walter_ci_common_py.file }}
+        - ${{ steps.test_walter_asc_py.file }}
       message: "feat(walter): scaffold the iOS app, NSE, widgets and Buildkite files"
       token: ${{ steps.gh_write_token.value }}
 
