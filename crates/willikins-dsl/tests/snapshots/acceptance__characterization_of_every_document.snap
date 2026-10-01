@@ -831,8 +831,10 @@ bootstrap_gate.expected: RepoFile
 bootstrap_gate.token: BuildkiteToken
 m5_apns_key.step: Text
 m5_apns_key.acknowledged: OperatorAcknowledgement
-m6_ci_doppler_access.step: Text
-m6_ci_doppler_access.acknowledged: OperatorAcknowledgement
+ci_doppler_access.project: DopplerProject
+ci_doppler_access.service_account: DopplerServiceAccountName
+ci_doppler_access.role: DopplerProjectRole
+ci_doppler_access.environments: EnvironmentSlug
 OUTPUTS:
 app_id: AppleBundleIdId
 nse_id: AppleBundleIdId

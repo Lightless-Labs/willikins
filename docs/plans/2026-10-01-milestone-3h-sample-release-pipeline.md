@@ -120,6 +120,19 @@ environment-valued key whose template literal could read `development` against a
 exception) is sufficient for Sample's actual three files; a future fourth target with a variable-valued entitlement
 would need its own case, not a silent pass.
 
+**Addendum (2026-10-01, W7):** the task text names `crates/willikins-cli/tests/sample_apply_blocked_redaction.rs`
+as needing an update for the removed input, but does not mention the fixture state it drives,
+`workflows/fixtures/state/sample-ios-app.json`. That fixture is a static JSON file the built binary reads through
+`--fake-state`, not Rust test code -- unlike `sample_document.rs`'s own fake state (seeded in-process with the
+service-account name read from the document's own literal, acceptance 11's own requirement), a static file cannot
+read the document at run time. So the fixture also gains `"doppler_service_accounts": {"REPLACE-WITH-CI-SERVICE-ACCOUNT":
+["fake-sa-ci-placeholder"]}`, hard-coded to match today's placeholder literal, with a comment at its one read site
+flagging that a future edit of the document's literal (the coordinator's own task) must edit this fixture to match.
+Without it, `ci_doppler_access` would fail name resolution (`NotFound`) during that test's real end-to-end apply,
+rather than converging alongside `doppler`/`pipeline`/`sample_files` as every other independent node in that run
+already does. No acceptance criterion changes; this is the one place in the whole task where "read from the
+document" (acceptance 11's own words) cannot literally hold.
+
 ## Goal
 
 The operator, 2026-10-01, verbatim: "Sample is meant to get its fucking pipeline. It should already have it. And I
