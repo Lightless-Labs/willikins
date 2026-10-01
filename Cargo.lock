@@ -3385,6 +3385,7 @@ dependencies = [
 name = "willikins-providers-doppler"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "indexmap",
  "insta",
  "mockito",
