@@ -7,4 +7,26 @@ apps/walter/.buildkite/upload-pipeline.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
-exec buildkite-agent pipeline upload --no-interpolation apps/walter/.buildkite/pipeline.yml
+action="${WALTER_CI_ACTION:-validation}"
+
+case "$action" in
+  validation)
+    pipeline="apps/walter/.buildkite/pipeline.yml"
+    ;;
+  signing-preflight)
+    pipeline="apps/walter/.buildkite/signing-preflight.yml"
+    ;;
+  release)
+    if [[ "${BUILDKITE_BRANCH:-}" != "main" || "${BUILDKITE_PULL_REQUEST:-}" != "false" ]]; then
+      echo "release is refused outside a main build with no pull request" >&2
+      exit 1
+    fi
+    pipeline="apps/walter/.buildkite/release.yml"
+    ;;
+  *)
+    echo "unsupported WALTER_CI_ACTION" >&2
+    exit 2
+    ;;
+esac
+
+exec buildkite-agent pipeline upload --no-interpolation "$pipeline"

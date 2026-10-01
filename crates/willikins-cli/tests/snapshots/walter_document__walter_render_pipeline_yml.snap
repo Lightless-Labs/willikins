@@ -5,6 +5,15 @@ expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
 apps/walter/.buildkite/pipeline.yml
 ---
 {
+  "env": {
+    "GIT_CONFIG_COUNT": "3",
+    "GIT_CONFIG_KEY_0": "credential.https://github.com/Bande-a-Bonnot/monorepo.git.helper",
+    "GIT_CONFIG_VALUE_0": "",
+    "GIT_CONFIG_KEY_1": "credential.https://github.com/Bande-a-Bonnot/monorepo.git.helper",
+    "GIT_CONFIG_VALUE_1": "!buildkite-agent secret get DOPPLER_SERVICE_ACCOUNT_TOKEN | sed 's/^/Authorization: Bearer /' | curl -fsS --max-time 20 -H @- 'https://api.doppler.com/v3/configs/config/secret?project=walter&config=prd_deployment_ios&name=GH_CLONE_TOKEN' | python3 -c 'import json, sys; print(\"username=x-access-token\"); print(\"password=\" + json.load(sys.stdin)[\"value\"][\"computed\"])'",
+    "GIT_CONFIG_KEY_2": "url.https://github.com/Bande-a-Bonnot/monorepo.git.insteadOf",
+    "GIT_CONFIG_VALUE_2": "git@github.com:Bande-a-Bonnot/monorepo.git"
+  },
   "steps": [
     {
       "key": "walter-validation",
@@ -35,7 +44,8 @@ apps/walter/.buildkite/pipeline.yml
           }
         }
       ],
-      "command": "bazel build --config=ci -- //apps/walter/..."
+      "command": "python3 apps/walter/tools/walter_ci.py validate",
+      "artifact_paths": "apps/walter/.ci-artifacts/validation/**/*"
     }
   ]
 }

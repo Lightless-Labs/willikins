@@ -1605,6 +1605,106 @@ fn rendered_release_config_json_parses_and_holds_the_real_identifiers() {
     );
 }
 
+/// Milestone 3h decision (d), spelled once so every acceptance-10 test
+/// compares against the same literal rather than against another
+/// rendered file (which would make the test circular).
+fn decision_d_git_config_env() -> serde_json::Value {
+    serde_json::json!({
+        "GIT_CONFIG_COUNT": "3",
+        "GIT_CONFIG_KEY_0": "credential.https://github.com/Bande-a-Bonnot/monorepo.git.helper",
+        "GIT_CONFIG_VALUE_0": "",
+        "GIT_CONFIG_KEY_1": "credential.https://github.com/Bande-a-Bonnot/monorepo.git.helper",
+        "GIT_CONFIG_VALUE_1": "!buildkite-agent secret get DOPPLER_SERVICE_ACCOUNT_TOKEN | sed 's/^/Authorization: Bearer /' | curl -fsS --max-time 20 -H @- 'https://api.doppler.com/v3/configs/config/secret?project=walter&config=prd_deployment_ios&name=GH_CLONE_TOKEN' | python3 -c 'import json, sys; print(\"username=x-access-token\"); print(\"password=\" + json.load(sys.stdin)[\"value\"][\"computed\"])'",
+        "GIT_CONFIG_KEY_2": "url.https://github.com/Bande-a-Bonnot/monorepo.git.insteadOf",
+        "GIT_CONFIG_VALUE_2": "git@github.com:Bande-a-Bonnot/monorepo.git"
+    })
+}
+
+/// Acceptance 10 (W6, decision (d)): `bootstrap.yml` and `pipeline.yml`
+/// both parse as JSON and both carry exactly decision (d)'s `env` block
+/// at the top level.
+#[test]
+fn bootstrap_and_pipeline_share_decision_d_env_block() {
+    let rendered = rendered_files_for_the_real_identifiers();
+    let expected = decision_d_git_config_env();
+    for node in ["bootstrap_yml", "pipeline_yml"] {
+        let (_, file) = rendered
+            .iter()
+            .find(|(n, _)| *n == node)
+            .unwrap_or_else(|| panic!("`{node}` was rendered"));
+        let parsed: serde_json::Value = serde_json::from_str(file.content())
+            .unwrap_or_else(|err| panic!("`{node}` must parse as JSON: {err}"));
+        assert_eq!(
+            parsed.get("env"),
+            Some(&expected),
+            "`{node}`'s top-level env must equal decision (d)'s block exactly"
+        );
+    }
+}
+
+/// Acceptance 10 (W6, decision (d)): `GIT_CONFIG_VALUE_1` starts with `!`
+/// (so git treats it as a credential helper *command*, not a path),
+/// holds no `$` (so it survives both the stored step and the uploaded
+/// file unchanged), and names both the Buildkite secret and the Doppler
+/// secret query decision (d) specifies.
+#[test]
+fn value_1_is_the_bang_prefixed_credential_helper_with_no_dollar_sign() {
+    let expected = decision_d_git_config_env();
+    let value1 = expected["GIT_CONFIG_VALUE_1"]
+        .as_str()
+        .expect("GIT_CONFIG_VALUE_1 is a string");
+    assert!(
+        value1.starts_with('!'),
+        "GIT_CONFIG_VALUE_1 must start with `!`: {value1}"
+    );
+    assert!(
+        !value1.contains('$'),
+        "GIT_CONFIG_VALUE_1 must hold no `$`: {value1}"
+    );
+    assert!(
+        value1.contains("DOPPLER_SERVICE_ACCOUNT_TOKEN"),
+        "GIT_CONFIG_VALUE_1 must name the Buildkite secret: {value1}"
+    );
+    assert!(
+        value1.contains("project=walter&config=prd_deployment_ios&name=GH_CLONE_TOKEN"),
+        "GIT_CONFIG_VALUE_1 must name the Doppler secret query: {value1}"
+    );
+}
+
+/// Acceptance 10 (W6, decision (e)): `bootstrap.yml`'s one step is
+/// otherwise unchanged by this milestone -- exactly the prior
+/// `walter-bootstrap` step, with the env block added around it, never
+/// edited.
+#[test]
+fn bootstrap_yml_step_is_otherwise_unchanged() {
+    let rendered = rendered_files_for_the_real_identifiers();
+    let (_, file) = rendered
+        .iter()
+        .find(|(n, _)| *n == "bootstrap_yml")
+        .expect("bootstrap_yml was rendered");
+    let parsed: serde_json::Value =
+        serde_json::from_str(file.content()).expect("bootstrap.yml must parse as JSON");
+    let steps = parsed["steps"]
+        .as_array()
+        .expect("bootstrap.yml's steps must be an array");
+    assert_eq!(
+        steps.len(),
+        1,
+        "bootstrap.yml must still have exactly one step"
+    );
+    assert_eq!(
+        steps[0],
+        serde_json::json!({
+            "key": "walter-bootstrap",
+            "label": "Walter: select pipeline",
+            "agents": {"queue": "ci-macos-apple-silicon"},
+            "command": "bash apps/walter/.buildkite/upload-pipeline.sh",
+            "timeout_in_minutes": 5
+        }),
+        "bootstrap.yml's one step must be byte-for-byte the same step this milestone found"
+    );
+}
+
 /// Every render node's planned `file`, for the real identifiers
 /// `com.bande-a-bonnot.walter`, `.nse`, `.widgets`. Read at plan time:
 /// `repo.file.render` is pure, so `plan` itself computes and carries every
