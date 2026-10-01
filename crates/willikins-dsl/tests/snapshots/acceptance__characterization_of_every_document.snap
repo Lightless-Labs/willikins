@@ -775,6 +775,16 @@ sample_gitignore.template: TemplateSource
 release_config_json.path: RepoPath
 release_config_json.template: TemplateSource
 release_config_json.values: TemplateValue
+sample_ci_common_py.path: RepoPath
+sample_ci_common_py.template: TemplateSource
+sample_asc_py.path: RepoPath
+sample_asc_py.template: TemplateSource
+sample_ci_tests_init_py.path: RepoPath
+sample_ci_tests_init_py.template: TemplateSource
+test_sample_ci_common_py.path: RepoPath
+test_sample_ci_common_py.template: TemplateSource
+test_sample_asc_py.path: RepoPath
+test_sample_asc_py.template: TemplateSource
 gh_write_token_secret.config: DopplerConfig
 gh_write_token_secret.name: SecretName
 gh_write_token.value: DopplerSecretValue
