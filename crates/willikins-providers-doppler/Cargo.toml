@@ -20,6 +20,14 @@ live-tests = []
 name = "live_write_cycle"
 required-features = ["live-tests"]
 
+# `tests/live_project_member_cycle.rs` (milestone 3h task D4): the one test
+# target that exercises `doppler.project_member.ensure` against the real
+# sandbox workplace, creating and deleting two throwaway projects and two
+# throwaway service accounts. Same gating shape as `live_write_cycle` above.
+[[test]]
+name = "live_project_member_cycle"
+required-features = ["live-tests"]
+
 [dependencies]
 willikins-core.workspace = true
 willikins-types.workspace = true
@@ -31,6 +39,11 @@ regex.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+# `tests/live_project_member_cycle.rs` only, for its `expires_at` token
+# formatter (`%Y-%m-%dT%H:%M:%SZ`, an hour from now) -- already a
+# workspace dependency elsewhere (`willikins-core`, `willikins-server`,
+# `willikins-providers-appstore`), so this adds no new crate to the tree.
+chrono.workspace = true
 willikins-providers-http = { workspace = true, features = ["test-support"] }
 willikins-providers-fake.workspace = true
 willikins-providers-github.workspace = true
