@@ -1436,6 +1436,94 @@ fn every_rendered_starlark_file_uses_only_valid_escapes() {
     assert_eq!(starlark_files, 2, "Walter renders two BUILD.bazel files");
 }
 
+/// Acceptance 7 (W1, decision (g)): the rendered `ios/BUILD.bazel` has the
+/// `app_icon` `genrule` with exactly three `outs`, in this order, and
+/// `ios_application` `Walter` wires it in through `app_icons`.
+#[test]
+fn app_icon_genrule_declares_exactly_three_outs_and_is_wired_to_the_application() {
+    let (_, file) = rendered_files_for_the_real_identifiers()
+        .into_iter()
+        .find(|(node, _)| *node == "build_bazel_ios")
+        .expect("build_bazel_ios was rendered");
+    let content = file.content();
+
+    let start = content
+        .find("genrule(\n    name = \"app_icon\",")
+        .expect("the app_icon genrule is present, with exactly this attribute order");
+    let close = content[start..]
+        .find("\n)\n")
+        .expect("the genrule block is closed");
+    let block = &content[start..start + close];
+
+    assert!(
+        block.contains("srcs = [\"tools/generate_app_icon.py\"],"),
+        "the genrule's srcs: {block}"
+    );
+    assert!(
+        block.contains("cmd = \"python3 $(location tools/generate_app_icon.py) $(OUTS)\","),
+        "the genrule's cmd: {block}"
+    );
+
+    let outs_start = block.find("outs = [").expect("outs is present") + "outs = [".len();
+    let outs_end = block[outs_start..].find(']').expect("outs is closed") + outs_start;
+    let outs: Vec<&str> = block[outs_start..outs_end]
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.trim_end_matches(',').trim_matches('"'))
+        .collect();
+    assert_eq!(
+        outs,
+        vec![
+            "Resources/AppIcon.xcassets/Contents.json",
+            "Resources/AppIcon.xcassets/AppIcon.appiconset/Contents.json",
+            "Resources/AppIcon.xcassets/AppIcon.appiconset/AppIcon-1024.png",
+        ],
+        "the genrule must declare exactly these three outs, in this order, and no other"
+    );
+
+    let app_index = content
+        .find("name = \"Walter\",")
+        .expect("ios_application Walter is present");
+    let icons_index = content
+        .find("app_icons = [\":app_icon\"],")
+        .expect("app_icons = [\":app_icon\"] is present");
+    assert!(
+        icons_index > app_index,
+        "app_icons must sit inside the Walter ios_application block, after its name"
+    );
+}
+
+/// Acceptance 7 (W1, decision (g)): the rendered `Info.plist` declares all
+/// four `UISupportedInterfaceOrientations`, in Danksworth's exact order,
+/// and sets no `CFBundleIconName` -- `actool`'s partial plist supplies it.
+#[test]
+fn info_plist_declares_all_four_interface_orientations_in_danksworths_order() {
+    let (_, file) = rendered_files_for_the_real_identifiers()
+        .into_iter()
+        .find(|(node, _)| *node == "info_plist")
+        .expect("info_plist was rendered");
+    let content = file.content();
+
+    assert!(
+        !content.contains("CFBundleIconName"),
+        "actool's partial Info.plist supplies CFBundleIconName; the template must not set it"
+    );
+
+    let expected = "    <key>UISupportedInterfaceOrientations</key>\n\
+         \x20   <array>\n\
+         \x20       <string>UIInterfaceOrientationPortrait</string>\n\
+         \x20       <string>UIInterfaceOrientationPortraitUpsideDown</string>\n\
+         \x20       <string>UIInterfaceOrientationLandscapeLeft</string>\n\
+         \x20       <string>UIInterfaceOrientationLandscapeRight</string>\n\
+         \x20   </array>\n";
+    assert!(
+        content.contains(expected),
+        "the four orientations, in Danksworth's order, must appear exactly like this: \
+         {content}"
+    );
+}
+
 /// Every render node's planned `file`, for the real identifiers
 /// `com.bande-a-bonnot.walter`, `.nse`, `.widgets`. Read at plan time:
 /// `repo.file.render` is pure, so `plan` itself computes and carries every
@@ -1543,6 +1631,10 @@ const WALTER_FILES: &[(&str, &str)] = &[
         "apps/walter/.buildkite/provider-settings.json",
     ),
     ("buildkite_readme", "apps/walter/.buildkite/README.md"),
+    (
+        "generate_app_icon_py",
+        "apps/walter/ios/tools/generate_app_icon.py",
+    ),
 ];
 
 /// W0: the number of `{{ N }}` placeholders `every_placeholder_sits_in_a_quoted_or_identifier_only_position`

@@ -1,0 +1,113 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/ios/tools/generate_app_icon.py
+---
+"""Generate Walter's placeholder app-icon catalog.
+
+Invoked by the `app_icon` genrule as
+`python3 $(location tools/generate_app_icon.py) $(OUTS)`. `sys.argv[1:]`
+are the genrule's three declared `outs`, in whatever order Bazel passes
+them -- this script does not rely on that order. Each path is routed to
+its content by its basename and its immediate parent directory's name;
+any other set of paths -- missing, duplicate, or extra -- is refused
+before anything is written.
+"""
+
+import json
+import os
+import struct
+import sys
+import zlib
+
+ICON_SIZE = 1024
+# One flat, opaque colour: RGB, no alpha -- App Store Connect rejects
+# an alpha-channel 1024 marketing icon.
+ICON_COLOR = (30, 111, 184)
+
+
+def _catalog_contents_json():
+    document = {"info": {"author": "xcode", "version": 1}}
+    text = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    return text.encode("utf-8")
+
+
+def _appiconset_contents_json():
+    document = {
+        "images": [
+            {
+                "filename": "AppIcon-1024.png",
+                "idiom": "universal",
+                "platform": "ios",
+                "size": "1024x1024",
+            }
+        ],
+        "info": {"author": "xcode", "version": 1},
+    }
+    text = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    return text.encode("utf-8")
+
+
+def _png_chunk(kind, data):
+    chunk = struct.pack(">I", len(data)) + kind + data
+    checksum = zlib.crc32(kind + data) & 0xFFFFFFFF
+    return chunk + struct.pack(">I", checksum)
+
+
+def _app_icon_png():
+    width = height = ICON_SIZE
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    row = bytes([0]) + bytes(ICON_COLOR) * width
+    raw = row * height
+    idat = zlib.compress(raw, 9)
+    signature = b"\x89PNG\r\n\x1a\n"
+    return (
+        signature
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", idat)
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+# Every output this generator may write, keyed by its immediate
+# parent directory's name and its own basename -- never by its
+# position in `argv`, which Bazel's own `$(OUTS)` order is not a
+# contract this script relies on.
+TARGETS = {
+    ("AppIcon.xcassets", "Contents.json"): _catalog_contents_json,
+    ("AppIcon.appiconset", "Contents.json"): _appiconset_contents_json,
+    ("AppIcon.appiconset", "AppIcon-1024.png"): _app_icon_png,
+}
+
+
+def main(argv):
+    paths = argv[1:]
+    keys = [
+        (os.path.basename(os.path.dirname(p)), os.path.basename(p))
+        for p in paths
+    ]
+    if (
+        len(paths) != len(TARGETS)
+        or len(set(keys)) != len(keys)
+        or set(keys) != set(TARGETS)
+    ):
+        sys.stderr.write(
+            "generate_app_icon.py: expected exactly the app icon "
+            "catalog's three outputs (xcassets Contents.json, "
+            "appiconset Contents.json, appiconset AppIcon-1024.png), "
+            "got %d path(s)\n" % len(paths)
+        )
+        return 2
+    for path, key in zip(paths, keys):
+        content = TARGETS[key]()
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(content)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
