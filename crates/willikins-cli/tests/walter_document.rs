@@ -18,8 +18,11 @@
 //!    Attest gate task's own addition, host identifier only) are
 //!    `Blocked` -- the identifiers they check do not exist yet, so their
 //!    own `read` (which resolves the parent through `list_bundle_ids`)
-//!    finds nothing. The three profile nodes are `Skip`, never read. So are the four `operator.acknowledge` leaves (no `done`
-//!    supplied).
+//!    finds nothing. The three profile nodes are `Skip`, never read.
+//!    The two `operator.acknowledge` leaves (M5, M6) are `Blocked` (no
+//!    `done` supplied), and so is `bootstrap_gate` (M7, milestone 3g):
+//!    the pipeline's stored configuration is still the frozen upload
+//!    bootstrap. `walter_files` lands the scaffold.
 //!    - **Plan-only, between run 1 and run 2: App Groups is on, App
 //!      Attest is still off.** The fake state gains the app record and
 //!      `APP_GROUPS` on all three identifiers, but not yet `APP_ATTEST`
@@ -35,11 +38,13 @@
 //!    previously-blocked gate `Compute` and the three profile nodes
 //!    `Create` -- **and nothing else
 //!    changes**: every node that already ran in step 1 reads
-//!    `Unchanged`/`Computed`. The four acknowledgement leaves are still
-//!    `Blocked`, since no API and no seeded state can satisfy them.
-//! 3. **The four acknowledgements are supplied.** A third run, same fake
-//!    state, `done` on all four `*_done` inputs: every node reads
-//!    `Unchanged`/`Computed`/`Converged` -- a `NoOp` run end to end.
+//!    `Unchanged`/`Computed`. The two acknowledgement leaves and
+//!    `bootstrap_gate` are still `Blocked`.
+//! 3. **The two acknowledgements are supplied** and the operator's paste
+//!    is stood in for (the pipeline's stored configuration becomes the
+//!    rendered bootstrap). A third run, same fake state, `done` on both
+//!    `*_done` inputs: nothing is `Created`, nothing is blocked -- a
+//!    converged run end to end.
 //!
 //! Throughout: `check` succeeds (the type system's own proof that no
 //! secret reaches a non-secret port -- `willikins-design`'s "no bypass"
@@ -104,7 +109,7 @@ const SEEDED_BUILDKITE_TOKEN: &str = concat!("bkua_", "wlknFixtureTokenNotARealC
 /// backfills a default itself (`Binding::Input` fails `MissingInput` on an
 /// absent, non-`OperatorAcknowledgement` input; `crates/willikins-dsl/tests/acceptance.rs`'s
 /// own `synthesized_inputs` makes exactly this same choice for the
-/// characterization suite). The four acknowledgement inputs are the one
+/// characterization suite). The two acknowledgement inputs are the one
 /// exception the caller may leave out (they resolve `Value::unknown`).
 fn base_inputs() -> IndexMap<InputName, Value> {
     let mut inputs = IndexMap::new();
