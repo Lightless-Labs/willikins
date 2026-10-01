@@ -23,6 +23,21 @@ it exists today; a bare alternation would in fact anchor correctly either way. T
 second, visible guard rather than relying solely on the derive's own wrapping, and `"viewer "` is pinned by test
 either way. No code or acceptance criterion changes; this is a note for the next reader (and the adversarial pass)
 so the two don't have to reconcile it themselves.
+**Addendum (2026-10-01, D2):** the task text asked for `pub(crate)` client methods
+(`list_service_accounts`, `list_project_members`, `add_project_member`, `update_project_member`),
+but D2's own mock tests (`tests/project_member_client_mock.rs`) must call them directly, since the
+tool that will (task D3) does not exist yet in this task. A `tests/*.rs` target links this crate as
+an external dependency and cannot see a `pub(crate)` item at all, so all four are `pub` instead,
+each documented with the same visibility-override rationale
+`willikins_providers_buildkite::BuildkiteClient::delete_pipeline` already uses for the identical
+reason. `DopplerSlug` (the response-side identifier `add_project_member`/`update_project_member`
+address a member by) and `ServiceAccountEntry`/`ProjectMemberEntry` (what the two list methods
+return) are `pub` for the same reason, and are re-exported from `lib.rs`. `LIST_PER_PAGE` and `LIST_MAX_PAGES`
+(the per-page size and page bound both list methods share) are `pub` and re-exported too, so the
+two "refuses past the bound" tests pin `.expect(LIST_MAX_PAGES as usize)` and the product
+`LIST_MAX_PAGES * LIST_PER_PAGE` by name rather than repeating the literals `50`/`5000`. No code or
+acceptance criterion changes; `pub` costs nothing a `pub(crate)` method with a real second caller
+(D3) would not also expose by then.
 **Addendum (2026-10-01, E1):** the Tasks table's split ("Commit 1 ... Commit 2: ... regenerate ... both schema
 snapshots") does not hold: `schema_generation__action_schema_generates.snap` and
 `schema_generation__planned_node_schema_generates.snap` live in `crates/willikins-core/tests/`, alongside

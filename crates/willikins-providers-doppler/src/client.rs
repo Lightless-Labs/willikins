@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use willikins_providers_http::{Credential, CredentialError, Http, ProviderError};
 use willikins_types::{
-    DopplerConfig, DopplerConfigName, DopplerProject, DopplerSecretValue, DopplerServiceToken,
-    DopplerTokenName, EnvironmentSlug, SecretName, Text,
+    DopplerConfig, DopplerConfigName, DopplerProject, DopplerProjectRole, DopplerSecretValue,
+    DopplerServiceToken, DopplerTokenName, EnvironmentSlug, SecretName, Text,
 };
 
 /// Doppler's REST API base URL.
@@ -529,6 +529,413 @@ impl DopplerClient {
             .post::<serde_json::Value>("/v3/configs/config/secrets", &body)?;
         Ok(())
     }
+
+    /// `GET /v3/workplace/service_accounts?page=N&per_page=100`, paged
+    /// until a page shorter than [`LIST_PER_PAGE`] is seen, collecting
+    /// every listed service account's `name` and `slug` (milestone 3h
+    /// task D2, `doppler.project_member.ensure`'s name-resolution step).
+    ///
+    /// **`pub`, not `pub(crate)`, and so for its three siblings below
+    /// ([`Self::list_project_members`], [`Self::add_project_member`],
+    /// [`Self::update_project_member`]).** `doppler.project_member.ensure`
+    /// (the tool that will call these) is task D3, not yet written, so
+    /// this task's own mock tests (`tests/project_member_client_mock.rs`)
+    /// call these methods directly -- and a `tests/*.rs` target links this
+    /// crate as an external dependency, which cannot see a `pub(crate)`
+    /// item at all. The same reasoning, and the same visibility override,
+    /// as `willikins_providers_buildkite::BuildkiteClient::delete_pipeline`:
+    /// the restriction to callers inside this crate is enforced by this
+    /// doc comment and by there being no second caller once D3 lands, not
+    /// by visibility.
+    ///
+    /// Refuses past [`LIST_MAX_PAGES`] pages with a bounded
+    /// [`ProviderError`] rather than looping forever against a workplace
+    /// this tool was never meant to serve -- the same posture
+    /// `willikins_providers_buildkite::BuildkiteClient::list_clusters_page`'s
+    /// caller takes, except the loop lives in this client rather than in
+    /// the tool: nothing about *which* page a caller wants varies here,
+    /// unlike Buildkite's org-scoped listing, so there is only ever one
+    /// sensible caller for the whole set.
+    ///
+    /// A `403` is remapped to a fixed message naming the missing
+    /// workplace permission ([`SERVICE_ACCOUNTS_403_MESSAGE`]) rather than
+    /// whatever Doppler's own body said -- trust boundary 5. Every other
+    /// status or a transport failure is returned unchanged.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`], plus the two cases above.
+    pub fn list_service_accounts(&self) -> Result<Vec<ServiceAccountEntry>, ProviderError> {
+        let mut accounts = Vec::new();
+        for page in 1..=LIST_MAX_PAGES {
+            let path =
+                format!("/v3/workplace/service_accounts?page={page}&per_page={LIST_PER_PAGE}");
+            let envelope: ServiceAccountsEnvelope = self
+                .http
+                .get(&path)
+                .map_err(|err| remap_403(err, SERVICE_ACCOUNTS_403_MESSAGE))?;
+            let len = envelope.service_accounts.len();
+            accounts.extend(envelope.service_accounts);
+            if len < LIST_PER_PAGE as usize {
+                return Ok(accounts);
+            }
+        }
+        Err(ProviderError::new(
+            None,
+            format!(
+                "this workplace has more service accounts than this client will page through \
+                 (more than {} at {LIST_PER_PAGE} per page)",
+                LIST_MAX_PAGES * LIST_PER_PAGE
+            ),
+        ))
+    }
+
+    /// `GET /v3/projects/project/members?project=<project>&page=N&per_page=100`,
+    /// paged the same way as [`Self::list_service_accounts`], collecting
+    /// every listed member.
+    ///
+    /// A `403` is remapped to a fixed message naming the missing
+    /// workplace permission and the project-admin requirement
+    /// ([`PROJECT_MEMBERS_403_MESSAGE`]). A missing project's `404` (or
+    /// the `400` [`looks_like_a_missing_project`] already recognises) is
+    /// returned unchanged -- the caller (`doppler.project_member.ensure`'s
+    /// `read`) treats that as `Absent`, exactly as every other `read` in
+    /// this crate does.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`], plus the `403` remapping above.
+    pub fn list_project_members(
+        &self,
+        project: &DopplerProject,
+    ) -> Result<Vec<ProjectMemberEntry>, ProviderError> {
+        let mut members = Vec::new();
+        for page in 1..=LIST_MAX_PAGES {
+            let path = format!(
+                "/v3/projects/project/members?project={project}&page={page}&per_page={LIST_PER_PAGE}"
+            );
+            let envelope: ProjectMembersEnvelope = self
+                .http
+                .get(&path)
+                .map_err(|err| remap_403(err, PROJECT_MEMBERS_403_MESSAGE))?;
+            let len = envelope.members.len();
+            members.extend(envelope.members.into_iter().map(ProjectMemberEntry::from));
+            if len < LIST_PER_PAGE as usize {
+                return Ok(members);
+            }
+        }
+        Err(ProviderError::new(
+            None,
+            format!(
+                "project `{project}` has more members than this client will page through (more \
+                 than {} at {LIST_PER_PAGE} per page)",
+                LIST_MAX_PAGES * LIST_PER_PAGE
+            ),
+        ))
+    }
+
+    /// `POST /v3/projects/project/members?project=<project>` with body
+    /// `{"type": "service_account", "slug": <slug>, "role": <role>,
+    /// "environments": [...]}` -- Doppler's project-member add endpoint
+    /// (`docs.doppler.com/reference/project_members-add.md`, fetched
+    /// verbatim 2026-10-01). `slug` is [`DopplerSlug`], resolved by the
+    /// caller from [`Self::list_service_accounts`]; this client never
+    /// resolves a name itself. Never retried, for the same reason as
+    /// [`Self::create_project`]: `doppler.project_member.ensure::ensure`
+    /// re-reads after a failed write rather than trusting this call's own
+    /// ambiguous failure.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub fn add_project_member(
+        &self,
+        project: &DopplerProject,
+        slug: &DopplerSlug,
+        role: &DopplerProjectRole,
+        environments: &[EnvironmentSlug],
+    ) -> Result<(), ProviderError> {
+        let path = format!("/v3/projects/project/members?project={project}");
+        let body = AddProjectMemberBody {
+            member_type: "service_account",
+            slug: slug.to_string(),
+            role: role.to_string(),
+            environments: environments.iter().map(ToString::to_string).collect(),
+        };
+        self.http.post::<serde_json::Value>(&path, &body)?;
+        Ok(())
+    }
+
+    /// `PATCH /v3/projects/project/members/member/service_account/{slug}?project=<project>`
+    /// with body `{"role": <role>}`, plus `"environments": [...]` only
+    /// when `environments` is `Some` -- Doppler's project-member update
+    /// endpoint (`docs.doppler.com/reference/project_members-update.md`,
+    /// fetched verbatim 2026-10-01). `environments: None` omits the field
+    /// entirely from the request body (never sends `null`), so a `PATCH`
+    /// that only raises `role` cannot narrow the member's existing
+    /// environment grant (decision (a): "when the member already has
+    /// `access_all_environments`, omit `environments`"); the caller
+    /// decides when to pass `None` versus `Some(&sorted_union)`.
+    ///
+    /// **Retried like every other `PATCH`** in this crate
+    /// ([`Http::patch`]'s own doc: idempotent, the same reasoning
+    /// `willikins-providers-appstore`'s bundle-id update uses). This body
+    /// is the full desired state (`role` plus the whole environment set
+    /// to grant), so a transport-level retry of an already-applied write
+    /// repeats the same convergent `PATCH`, not a second distinct change
+    /// -- unlike [`Self::add_project_member`]'s `POST`, which creates.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub fn update_project_member(
+        &self,
+        project: &DopplerProject,
+        slug: &DopplerSlug,
+        role: &DopplerProjectRole,
+        environments: Option<&[EnvironmentSlug]>,
+    ) -> Result<(), ProviderError> {
+        let path =
+            format!("/v3/projects/project/members/member/service_account/{slug}?project={project}");
+        let body = UpdateProjectMemberBody {
+            role: role.to_string(),
+            environments: environments.map(|envs| envs.iter().map(ToString::to_string).collect()),
+        };
+        self.http.patch::<serde_json::Value>(&path, &body)?;
+        Ok(())
+    }
+}
+
+/// Pages [`DopplerClient::list_service_accounts`] and
+/// [`DopplerClient::list_project_members`] request at a time -- Doppler's
+/// documented maximum (research note section 3, "Pagination"; the same
+/// value `willikins_providers_buildkite`'s `CLUSTERS_PER_PAGE` uses for
+/// its own listing). `pub` (not `pub(crate)`) for the same reason
+/// [`DopplerClient::list_service_accounts`]'s own doc gives: this task's
+/// mock tests, in `tests/project_member_client_mock.rs`, pin the exact
+/// bound by name rather than repeating the literal.
+pub const LIST_PER_PAGE: u32 = 100;
+
+/// The greatest number of pages [`DopplerClient::list_service_accounts`]
+/// and [`DopplerClient::list_project_members`] will fetch before giving
+/// up: 50 pages at `LIST_PER_PAGE` is 5,000 entries, comfortably past
+/// what any workplace or project `doppler.project_member.ensure` was
+/// built for would hold. Past this bound each method reports a
+/// [`ProviderError`] naming the bound, mirroring
+/// `willikins_providers_buildkite::MAX_CLUSTER_PAGES`'s own reasoning.
+/// `pub` for the same reason as [`LIST_PER_PAGE`].
+pub const LIST_MAX_PAGES: u32 = 50;
+
+/// What a `403` on [`DopplerClient::list_service_accounts`] says instead
+/// of Doppler's own response body (trust boundary 5) -- the exact
+/// permission `doppler.project_member.ensure`'s own `read` names
+/// (milestone 3h plan, decision (a), step 2).
+const SERVICE_ACCOUNTS_403_MESSAGE: &str = "the willikins Doppler service account cannot list \
+     service accounts: its workplace role needs View Service Accounts (`service_accounts`)";
+
+/// What a `403` on [`DopplerClient::list_project_members`] says instead
+/// of Doppler's own response body -- the exact permission
+/// `doppler.project_member.ensure`'s own `read` names (milestone 3h plan,
+/// decision (a), step 3).
+const PROJECT_MEMBERS_403_MESSAGE: &str = "cannot list this project's members: the workplace \
+     role needs View Team (`team`) and the account must be admin of the project";
+
+/// If `err` is a `403`, replace it with a fresh [`ProviderError`] carrying
+/// `message` instead -- never Doppler's own body (trust boundary 5: "a
+/// message is never built from the raw body"). Any other status, or a
+/// transport failure (`status: None`), is returned unchanged: in
+/// particular a `404`/`400` on `list_project_members` passes through so
+/// [`looks_like_a_missing_project`] still sees it.
+fn remap_403(err: ProviderError, message: &'static str) -> ProviderError {
+    if err.status == Some(403) {
+        ProviderError::new(Some(403), message)
+    } else {
+        err
+    }
+}
+
+/// A Doppler internal slug -- the identifier
+/// [`DopplerClient::add_project_member`] and
+/// [`DopplerClient::update_project_member`] address a service account by,
+/// distinct from the operator-facing [`willikins_types::DopplerServiceAccountName`]
+/// a workflow names. Validated only enough to use safely in a URL path
+/// segment ([`DopplerClient::update_project_member`]'s `{slug}`) or a
+/// request body value this client builds itself: one or more of
+/// `[A-Za-z0-9_-]`, which Doppler's own UUID-shaped slugs already satisfy
+/// and which refuses `/`, `?`, `&`, and `#` the way every other domain
+/// type's grammar in this crate does.
+///
+/// Deliberately **not** a `willikins_types` domain type registered in
+/// `domain_types!`: Doppler documents no committed shape for this field
+/// (its examples are UUIDs, but nothing says that is permanent), and this
+/// crate never surfaces it to a document or an output --
+/// `doppler.project_member.ensure`'s outputs are pass-through only
+/// (SHARED VALUES), so a slug is resolved, used, and discarded entirely
+/// inside this crate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct DopplerSlug(String);
+
+impl TryFrom<String> for DopplerSlug {
+    type Error = DopplerSlugError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let valid = !value.is_empty()
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        if valid {
+            Ok(Self(value))
+        } else {
+            Err(DopplerSlugError)
+        }
+    }
+}
+
+impl From<DopplerSlug> for String {
+    fn from(value: DopplerSlug) -> String {
+        value.0
+    }
+}
+
+impl std::fmt::Display for DopplerSlug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Why [`DopplerSlug::try_from`] refused a value. Carries nothing from
+/// the rejected string -- only `Debug`/`Display` of the fixed message
+/// below, matching every other domain type's refusal in this workspace.
+/// Never surfaced past a parse failure anyway: `Http`'s own response
+/// parsing builds its message from the error's line and column alone,
+/// never this type's `Display` (trust boundary 5).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("not a valid Doppler slug: expected one or more ASCII letters, digits, `-`, or `_`")]
+pub struct DopplerSlugError;
+
+/// Doppler's service-accounts-list envelope: `{"service_accounts": [...]}`.
+#[derive(Debug, Deserialize)]
+struct ServiceAccountsEnvelope {
+    service_accounts: Vec<ServiceAccountEntry>,
+}
+
+/// One listed workplace service account: `name` (compared against
+/// [`willikins_types::DopplerServiceAccountName`] byte for byte by the
+/// caller) and `slug` (used to address it in a later call). `name` is a
+/// bare `String`, never validated against any willikins grammar on the
+/// way in: an unrelated service account's display name may be any string
+/// Doppler accepts, and a listing must not fail to parse merely because
+/// one entry nobody asked for does not look like a well-formed
+/// `DopplerServiceAccountName` -- unlike a document's own declared
+/// values, nothing here asked for this entry to exist. `created_at` and
+/// `workplace_role` are in Doppler's response but never deserialized:
+/// `doppler.project_member.ensure` needs neither.
+#[derive(Debug, Deserialize)]
+pub struct ServiceAccountEntry {
+    /// This account's display name, as an operator spelled it (or as
+    /// Doppler's UI let them type it) -- compared byte for byte against
+    /// a [`willikins_types::DopplerServiceAccountName`] by the caller.
+    pub name: String,
+    /// This account's internal slug, used to address it in a later
+    /// `add_project_member`/`update_project_member` call.
+    pub slug: DopplerSlug,
+}
+
+/// Doppler's project-members-list envelope: `{"members": [...]}`. Also
+/// `POST`'s and `PATCH`'s own response shape
+/// (`{"member": {...}}`'s plural sibling), though neither write method
+/// parses its response body past discarding it as an opaque
+/// [`serde_json::Value`] -- `doppler.project_member.ensure::ensure`
+/// re-reads instead, exactly as [`DopplerClient::set_secret`]'s own doc
+/// explains for the same shape of call.
+#[derive(Debug, Deserialize)]
+struct ProjectMembersEnvelope {
+    members: Vec<ProjectMemberWire>,
+}
+
+/// The wire shape of one listed project member, before
+/// [`ProjectMemberEntry::from`] flattens its nested `role` object.
+#[derive(Debug, Deserialize)]
+struct ProjectMemberWire {
+    #[serde(rename = "type")]
+    member_type: String,
+    slug: DopplerSlug,
+    role: ProjectMemberRoleBody,
+    access_all_environments: bool,
+    environments: Vec<String>,
+}
+
+/// `{"identifier": "..."}` -- Doppler's nested role shape on a listed
+/// member (`docs.doppler.com/reference/project_members-list.md`, fetched
+/// verbatim 2026-10-01).
+#[derive(Debug, Deserialize)]
+struct ProjectMemberRoleBody {
+    identifier: String,
+}
+
+/// One listed project member: enough fields for
+/// `doppler.project_member.ensure`'s `read` to classify every row of the
+/// milestone 3h plan's decision (a) table. `role` and `environments` are
+/// bare `String`/`Vec<String>`, never [`DopplerProjectRole`] or
+/// [`EnvironmentSlug`]: the table has rows for exactly the values those
+/// grammars refuse by construction -- an "unrankable role" (`admin`,
+/// `owner`, a custom identifier) and an environment this tool was never
+/// asked about ("extra environments the member already has are never a
+/// mismatch") -- so parsing a listing into either grammar would fail
+/// closed on the very members `read` must still classify. `slug` is
+/// [`DopplerSlug`], the one field this client later places in a URL path
+/// segment, so it alone is validated on the way in.
+#[derive(Debug)]
+pub struct ProjectMemberEntry {
+    /// Doppler's `type` for this member: `"service_account"`,
+    /// `"workplace_user"`, `"group"`, or `"invite"`. The caller filters
+    /// to `"service_account"`; every other value is a member this tool
+    /// was never asked about.
+    pub member_type: String,
+    /// This member's internal slug, compared against the resolved
+    /// service account slug and, on a write, placed in
+    /// `update_project_member`'s URL path segment.
+    pub slug: DopplerSlug,
+    /// This member's project role identifier: `"viewer"`,
+    /// `"collaborator"`, `"admin"`, `"owner"`, or a custom role's own
+    /// identifier.
+    pub role: String,
+    /// Whether this member's access spans every environment, including
+    /// ones added after the grant.
+    pub access_all_environments: bool,
+    /// The environment slugs this member was explicitly granted, as
+    /// Doppler spelled them. Empty when `access_all_environments` is
+    /// `true`.
+    pub environments: Vec<String>,
+}
+
+impl From<ProjectMemberWire> for ProjectMemberEntry {
+    fn from(wire: ProjectMemberWire) -> Self {
+        Self {
+            member_type: wire.member_type,
+            slug: wire.slug,
+            role: wire.role.identifier,
+            access_all_environments: wire.access_all_environments,
+            environments: wire.environments,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AddProjectMemberBody {
+    #[serde(rename = "type")]
+    member_type: &'static str,
+    slug: String,
+    role: String,
+    environments: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateProjectMemberBody {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environments: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
