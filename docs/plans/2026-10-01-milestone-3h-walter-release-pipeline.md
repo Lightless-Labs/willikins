@@ -23,6 +23,17 @@ it exists today; a bare alternation would in fact anchor correctly either way. T
 second, visible guard rather than relying solely on the derive's own wrapping, and `"viewer "` is pinned by test
 either way. No code or acceptance criterion changes; this is a note for the next reader (and the adversarial pass)
 so the two don't have to reconcile it themselves.
+**Addendum (2026-10-01, E1):** the Tasks table's split ("Commit 1 ... Commit 2: ... regenerate ... both schema
+snapshots") does not hold: `schema_generation__action_schema_generates.snap` and
+`schema_generation__planned_node_schema_generates.snap` live in `crates/willikins-core/tests/`, alongside
+`plan_schema_generates.snap`, and all three embed `Action`'s own schema -- adding the variant changes all three,
+not one, and commit 1's own scoped gate (`cargo test -p willikins-core`) is red until they are regenerated, since
+nothing in commit 2 (`willikins-cli`, `willikins-server`) touches them. Commit 1 therefore carries all three
+`willikins-core` schema snapshots, each diff-reviewed to confirm the one new `"update"` enum entry is the only
+change; commit 2 is unchanged (the `willikins-cli` `render.rs` arm plus the `willikins-server` MCP tool-list
+snapshot). `cargo clippy -p willikins-core --all-targets` on commit 1 alone still compiles cleanly, because the one
+exhaustive match on `Action` (`willikins-cli`'s `render.rs`) is outside this crate; it goes red only once commit 2
+adds the arm, which is why commit 2 exists at all.
 
 ## Goal
 

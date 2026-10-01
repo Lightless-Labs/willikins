@@ -584,6 +584,11 @@ expression: snapshot
               "type": "string"
             },
             {
+              "const": "update",
+              "description": "[`Tool::replaces`] reported `false` and [`Tool::updates`] reports\n`true`: `read` found [`Observation::Absent`] at this key, but\n`ensure` would reconcile the existing resource toward `inputs`\nwithout deleting it first -- milestone 3h's engine change. An\nadditive sibling of `Create` and `Replace`: a document whose tools\nnever update anything (`Tool::updates`'s default `Ok(false)`)\nnever produces this value, so its plan is unaffected. No report\nmirrors [`Plan::replacing`] for this variant: the node's own line\nand inputs already say what changes, and nothing is deleted.",
+              "type": "string"
+            },
+            {
               "const": "noop",
               "description": "The resource already exists and is ours: `ensure` would be a no-op.",
               "type": "string"
