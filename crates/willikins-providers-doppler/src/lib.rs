@@ -55,7 +55,8 @@ pub mod tools;
 
 pub use client::{
     CREDENTIAL_PATTERN, CREDENTIAL_VAR, DOPPLER_API_BASE_URL, DopplerClient,
-    DopplerCredentialError, MANAGED_DESCRIPTION, credential_from_env, http_client,
+    DopplerCredentialError, DopplerSlug, DopplerSlugError, LIST_MAX_PAGES, LIST_PER_PAGE,
+    MANAGED_DESCRIPTION, ProjectMemberEntry, ServiceAccountEntry, credential_from_env, http_client,
     looks_like_a_missing_project,
 };
 pub use tools::{
