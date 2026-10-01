@@ -14,6 +14,15 @@ seventeen templates. Milestone 3e's replace-when-INVALID (`Tool::replaces`, `Act
 `/Users/operator/Projects/example-org/docs/solutions/ci-cd-patterns/2026-09-10-buildkite-self-hosted-ios-cicd-cookbook.md`
 (cited below as "cookbook §N"), and the two apps that already ship through it, `apps/app-three` and
 `apps/app-two` (read-only, `main` at `9ac10a8b`).
+**Addendum (2026-10-01, D1):** `DopplerProjectRole` is implemented exactly as SHARED VALUES specifies, with the
+pattern spelled as the explicit group `(?:viewer|collaborator)`. But `willikins_derive::attrs::anchored_pattern`
+already wraps *any* unanchored pattern (including a bare `viewer|collaborator`) in its own `(?:...)` before
+anchoring it with `^...$` -- so the premise in SHARED VALUES' D1 row ("an unwrapped alternation under the derive's
+`^…$` anchors would read as `^viewer` or `collaborator$` and admit `viewer '`) does not hold against the derive as
+it exists today; a bare alternation would in fact anchor correctly either way. The explicit group is kept as a
+second, visible guard rather than relying solely on the derive's own wrapping, and `"viewer "` is pinned by test
+either way. No code or acceptance criterion changes; this is a note for the next reader (and the adversarial pass)
+so the two don't have to reconcile it themselves.
 
 ## Goal
 
