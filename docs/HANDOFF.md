@@ -7,7 +7,42 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-09-29) — milestone 3e is complete: one document plans a whole new iOS app (Sample), manual steps are gates that block instead of fail, and re-running the document resumes
+### RESUME HERE (2026-10-01) — Sample is live on the real accounts; milestone 3g (file-writing) is built, attacked and live-proven in the sandbox; the real re-apply waits on the operator
+
+- **Live state:** `main` pushed at the handoff commit on top of `70fa218`. Full gate by the coordinator on `70fa218`:
+  188 suites / 2919 tests / 0 failed. Active goal and its rules: `goal.txt` at the repo root (untracked, never commit).
+- **Sample on the real accounts** (`workflows/sample-ios-app.yaml`, journal `~/.local/share/willikins/sample.journal`):
+  three UNIVERSAL bundle ids (Sample / Sample - NSE / Sample - Widgets), host capabilities, App Attest and App Groups
+  (operator-enabled), the app record "Sample - Sample App", three App Store profiles, Doppler project `sample`
+  (`prd_deployment_ios` inheriting the three base configs), Buildkite pipeline `example-bk-org/sample`. Milestones
+  3f (names, UNIVERSAL platform, App Attest gate) are recorded as addenda on the 3e plan.
+- **Milestone 3g** (`docs/plans/2026-09-30-milestone-3g-file-writing.md`): list bindings in `with:`, file and template
+  types, `repo.file.render`, GitHub `createCommitOnBranch` with `expectedHeadOid`, `github.scaffold.ensure` (a seed:
+  marker file, never overwrites), `buildkite.pipeline.bootstrap.gate` (compare-only), and Sample writing
+  `apps/sample/` straight to `main` of the monorepo (17 templates). Three attack passes
+  (`docs/research/2026-09-30-m3g-*`, `2026-10-01-m3g-adversarial-pass-sample.md`). L1's live scaffold cycle ran once
+  in `Willikins-Test`: all nine steps pass; the commit is signed (`verified: true`); a stale head fails `STALE_DATA`.
+- **Profiles are no longer copied into Doppler** (`2b36422`, operator's decision): CI fetches them from Apple by name
+  (fastlane `get_provisioning_profile`, readonly). `doppler.secret.set` reports Created on every apply, so those
+  nodes made an all-NoOp run impossible. The three stored secrets `APP_STORE_PROFILE_{APP,NSE,WIDGETS}` in
+  `sample/prd_deployment_ios` still exist and are to be deleted once the real Doppler token works again.
+- **Blocked on the operator (2026-10-01):** (1) `WILLIKINS_REAL_DOPPLER_TOKEN` in `~/.config/willikins/real.env`
+  answers 401 "Invalid Auth token": revoked or rotated, ask where the replacement lives; (2) the write PAT at
+  `github/example-org_willikins` `GH_CONTENTS_WRITE_TOKEN` (fine-grained, monorepo only, Contents read and write)
+  granted to the service account; (3) whether Sample's `.buildkite` files need AppTwo's `GIT_CONFIG_*` host
+  credential-helper override (W1 left it out); (4) m5 (APNs `.p8` in a base config) and m6 (Buildkite CI's Doppler
+  service account reading project `sample`).
+- **Before the real re-apply:** verify items 1, 3, 5, 6, 7, 8 and 11 of the 3g plan. Item 6 (the rules on monorepo
+  `main`) needs a token that can read the monorepo, i.e. the real Doppler token. Item 8 (`bazel build --config=ci
+  //apps/sample/...` over W1's rendered files in a scratch clone) was not run: the disk was at 97% (15 GB free) and
+  needs the operator's go-ahead on this host.
+- **Then:** the real re-apply (plan shown to the operator first), the final all-NoOp run with `--input m5_done=done
+  --input m6_done=done`, plan Completed, closing reminders (ASC secret names real `APP_STORE_CONNECT_API_KEY_*` vs
+  sandbox `ASC_API_KEY_*`; the five todos; the service account can still see `github/lightless-labs`). After that:
+  composition (milestone 2b, `uses:`), splitting Sample into a example-org organisation document and an ios-app
+  document; `AppleProfileContent` may no longer need to be secret-typed (its own reviewed change).
+
+### Earlier (2026-09-29) — milestone 3e is complete: one document plans a whole new iOS app (Sample), manual steps are gates that block instead of fail, and re-running the document resumes
 
 - **Live state:** `main` pushed at the handoff commit on top of `a6cbef2`. Full gate by the coordinator on `a6cbef2`:
   183 suites / 2559 tests / 0 failed / 18 ignored; all three guards passed. Plan
