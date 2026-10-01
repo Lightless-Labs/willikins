@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
-assertion_line: 224
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -472,6 +471,50 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     ],
     "name": "doppler.config.inherits.ensure",
     "outputs": {},
+    "pure": false
+  },
+  {
+    "class": "reversible",
+    "description": "Ensure a Doppler service account is a member of a project with at least a given role on given environments.",
+    "inputs": {
+      "environments": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "list<EnvironmentSlug>"
+        }
+      },
+      "project": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerProject"
+        }
+      },
+      "role": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerProjectRole"
+        }
+      },
+      "service_account": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "DopplerServiceAccountName"
+        }
+      }
+    },
+    "key": [
+      "project",
+      "service_account"
+    ],
+    "name": "doppler.project_member.ensure",
+    "outputs": {
+      "project": "DopplerProject",
+      "service_account": "DopplerServiceAccountName"
+    },
     "pure": false
   },
   {

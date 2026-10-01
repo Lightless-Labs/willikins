@@ -16,9 +16,9 @@ use willikins_types::{
     ActionsSecretName, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
     AppleCapabilitySetting, AppleCapabilityType, AppleCertificateSerial, AppleCertificateType,
     AppleProfileName, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
-    DopplerConfig, DopplerProject, DopplerSecretValue, DopplerServiceToken, DopplerTokenName,
-    GitBranchName, GitHubRepo, ProjectSlug, RepoVisibility, SecretName, SigNozIngestionKeyName,
-    SigNozIngestionKeyValue, Text,
+    DopplerConfig, DopplerProject, DopplerSecretValue, DopplerServiceAccountName,
+    DopplerServiceToken, DopplerTokenName, GitBranchName, GitHubRepo, ProjectSlug, RepoVisibility,
+    SecretName, SigNozIngestionKeyName, SigNozIngestionKeyValue, Text,
 };
 
 /// A GitHub repository record: enough to answer `github.repo.ensure`'s
@@ -201,6 +201,62 @@ impl std::fmt::Debug for AppleProfileRecord {
 
 fn default_profile_state() -> String {
     "ACTIVE".to_string()
+}
+
+/// A Doppler project member record: enough to answer
+/// `doppler.project_member.ensure`'s `read` (milestone 3h task D3). No
+/// `Foreign` concept: a member is always "ours" once seeded or created,
+/// the same reasoning [`AppleBundleIdRecord`]'s own doc gives, since this
+/// tool's own key is `(project, service_account)`, not a resource with
+/// an independent ownership marker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DopplerProjectMemberRecord {
+    /// The member's fake slug -- [`fake_doppler_service_account_slug`]'s
+    /// own output, never a real Doppler UUID.
+    pub slug: String,
+    /// The member's project role identifier, a bare `String` for the
+    /// same reason `willikins_providers_doppler::ProjectMemberEntry::role`
+    /// is: a seed file must be able to express an unrankable role
+    /// (`admin`, `owner`, a custom identifier) the live tool's own read
+    /// still has to classify.
+    pub role: String,
+    /// Whether this member's access spans every environment.
+    #[serde(default)]
+    pub access_all_environments: bool,
+    /// The environment slugs this member was explicitly granted, as
+    /// bare strings for the same reason as [`Self::role`] -- an entry
+    /// outside this crate's own `EnvironmentSlug` grammar must still
+    /// round-trip through a seed file.
+    #[serde(default)]
+    pub environments: Vec<String>,
+}
+
+/// Deterministically derive the slug a fake Doppler service account
+/// named `name` gets, mirroring [`fake_apple_bundle_id_id`]'s own
+/// reasoning: a live slug carries no derivable relationship to its
+/// account's display name at all, but this fake must still hand out
+/// *some* stable slug, so a seeded `doppler.project_member.ensure`
+/// record can address the same account a seeded service account
+/// resolves to.
+#[must_use]
+pub fn fake_doppler_service_account_slug(name: &str) -> String {
+    let mut hash: u32 = 5381;
+    for byte in name.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(u32::from(byte));
+    }
+    format!("fake-sa-{hash:08x}")
+}
+
+/// The key `doppler.project_member.ensure` records calls and injected
+/// failures by: the pair's own join, mirroring [`buildkite_pipeline_key`]'s
+/// shape.
+#[must_use]
+pub fn doppler_project_member_key(
+    project: &DopplerProject,
+    service_account: &DopplerServiceAccountName,
+) -> String {
+    format!("{project}#{service_account}")
 }
 
 /// A map from a Doppler secret's key (`project/config#SECRET`) to its
@@ -481,6 +537,15 @@ pub struct FakeState {
     /// the same key must see the same "no free read" shape the live
     /// providers give it.
     pub doppler_secret_writes: HashSet<String>,
+    /// Doppler service accounts, keyed by their display name to a list of
+    /// fake slugs sharing that name -- mirrors [`Self::buildkite_clusters`]'s
+    /// own shape, so a seed file can express the ambiguous case (two or
+    /// more accounts under one name) the same way the live provider's own
+    /// listing scan would find it. Milestone 3h task D3.
+    pub doppler_service_accounts: HashMap<String, Vec<String>>,
+    /// Doppler project members, keyed by [`doppler_project_key`] to the
+    /// list of members on that project. Milestone 3h task D3.
+    pub doppler_project_members: HashMap<String, Vec<DopplerProjectMemberRecord>>,
     /// Buildkite clusters, keyed by their human-written name
     /// ([`BuildkiteClusterName::as_str`]) to a list of ids sharing that
     /// name -- a name is not a unique natural key (research note section
@@ -833,6 +898,50 @@ impl FakeState {
     ) -> Self {
         self.doppler_values
             .insert(doppler_secret_key(config, name), value);
+        self
+    }
+
+    /// Seed a Doppler service account's existence: `name` resolves to a
+    /// deterministic fake slug ([`fake_doppler_service_account_slug`]),
+    /// appended to any other slug already seeded under the same name (so
+    /// a second call with the same name seeds the ambiguous case,
+    /// mirroring [`Self::with_buildkite_cluster`]).
+    #[must_use]
+    pub fn with_doppler_service_account(mut self, name: &DopplerServiceAccountName) -> Self {
+        self.doppler_service_accounts
+            .entry(name.as_str().to_string())
+            .or_default()
+            .push(fake_doppler_service_account_slug(name.as_str()));
+        self
+    }
+
+    /// Seed a Doppler project member: `service_account` resolves to its
+    /// own deterministic fake slug, recorded as a member of `project`
+    /// with `role`, `access_all_environments`, and `environments` exactly
+    /// as given. `role` and `environments` are bare strings -- see
+    /// [`DopplerProjectMemberRecord`]'s own doc for why -- so a test may
+    /// seed an unrankable role or a foreign environment the same way a
+    /// live listing could answer. Does not seed the service account
+    /// itself; pair with [`Self::with_doppler_service_account`] when the
+    /// test also needs name resolution to succeed.
+    #[must_use]
+    pub fn with_doppler_project_member(
+        mut self,
+        project: &DopplerProject,
+        service_account: &DopplerServiceAccountName,
+        role: &str,
+        access_all_environments: bool,
+        environments: &[&str],
+    ) -> Self {
+        self.doppler_project_members
+            .entry(doppler_project_key(project))
+            .or_default()
+            .push(DopplerProjectMemberRecord {
+                slug: fake_doppler_service_account_slug(service_account.as_str()),
+                role: role.to_string(),
+                access_all_environments,
+                environments: environments.iter().map(|env| (*env).to_string()).collect(),
+            });
         self
     }
 
