@@ -1390,6 +1390,57 @@ fn walter_files_binds_all_seventeen_renders_and_m3_m7_acknowledgements_are_gone(
 /// carries every render's known `file` output (no apply needed).
 #[test]
 fn rendered_files_snapshot_for_the_real_identifiers() {
+    for (node, file) in rendered_files_for_the_real_identifiers() {
+        insta::assert_snapshot!(
+            format!("walter_render_{node}"),
+            format!("{}\n---\n{}", file.path(), file.content())
+        );
+    }
+}
+
+/// Verify item 8 (2026-10-01): `bazel build --config=ci //apps/walter/...`
+/// over the rendered files refused `apps/walter/ios/BUILD.bazel` with
+/// "invalid escape sequence: \d" -- the template's YAML literal block keeps
+/// a backslash as written, so `"\d+"` in the template is `\d` in Starlark,
+/// which Bazel rejects (Danksworth and Pocket Claw write `\\d`). The
+/// snapshot above recorded the broken file faithfully; this pins the rule
+/// the build enforces: every backslash in a rendered Starlark file starts
+/// an escape Starlark accepts.
+#[test]
+fn every_rendered_starlark_file_uses_only_valid_escapes() {
+    const STARLARK_ESCAPES: &[u8] = b"abfnrtv\\'\"\n01234567xuU";
+    let mut starlark_files = 0;
+    for (node, file) in rendered_files_for_the_real_identifiers() {
+        let extension = std::path::Path::new(file.path().as_str()).extension();
+        if extension.is_none_or(|ext| ext != "bazel") {
+            continue;
+        }
+        starlark_files += 1;
+        let bytes = file.content().as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                let next = bytes.get(i + 1).copied();
+                assert!(
+                    next.is_some_and(|b| STARLARK_ESCAPES.contains(&b)),
+                    "`{node}` ({}) has an escape Starlark rejects at byte {i}: {:?}",
+                    file.path(),
+                    next.map(char::from)
+                );
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    assert_eq!(starlark_files, 2, "Walter renders two BUILD.bazel files");
+}
+
+/// Every render node's planned `file`, for the real identifiers
+/// `com.bande-a-bonnot.walter`, `.nse`, `.widgets`. Read at plan time:
+/// `repo.file.render` is pure, so `plan` itself computes and carries every
+/// render's known `file` output (no apply needed).
+fn rendered_files_for_the_real_identifiers() -> Vec<(&'static str, RepoFile)> {
     const RENDER_NODES: [&str; 17] = [
         "build_bazel_app",
         "build_bazel_ios",
@@ -1433,23 +1484,23 @@ fn rendered_files_snapshot_for_the_real_identifiers() {
 
     let planned = plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("{err}"));
 
-    for node in RENDER_NODES {
-        let planned_node = planned
-            .nodes
-            .iter()
-            .find(|n| n.name.as_str() == node && n.instance.is_none())
-            .unwrap_or_else(|| panic!("node `{node}` was planned"));
-        let file = planned_node
-            .outputs
-            .get(&PortName::parse("file").unwrap())
-            .unwrap_or_else(|| panic!("`{node}.file` was planned"))
-            .downcast::<RepoFile>()
-            .unwrap_or_else(|| panic!("`{node}.file` is a RepoFile"));
-        insta::assert_snapshot!(
-            format!("walter_render_{node}"),
-            format!("{}\n---\n{}", file.path(), file.content())
-        );
-    }
+    RENDER_NODES
+        .into_iter()
+        .map(|node| {
+            let planned_node = planned
+                .nodes
+                .iter()
+                .find(|n| n.name.as_str() == node && n.instance.is_none())
+                .unwrap_or_else(|| panic!("node `{node}` was planned"));
+            let file = planned_node
+                .outputs
+                .get(&PortName::parse("file").unwrap())
+                .unwrap_or_else(|| panic!("`{node}.file` was planned"))
+                .downcast::<RepoFile>()
+                .unwrap_or_else(|| panic!("`{node}.file` is a RepoFile"));
+            (node, file.clone())
+        })
+        .collect()
 }
 
 /// The seventeen render nodes `walter_files.files` binds, in the order it
