@@ -511,12 +511,29 @@ fn step_1_refuse_if_leftover(raw: &Http, org: &GitHubOrg) -> Vec<String> {
     names
 }
 
+/// Whether the delete guard must stay armed after the create `POST`
+/// failed with `status`. It is armed *before* the call because a
+/// transport failure or a `5xx` may still have created the repository;
+/// but a `4xx` is GitHub answering that it created nothing -- a `422` is
+/// the name already belonging to a repository this run did not create --
+/// and the guard must then stand down rather than delete a stranger's
+/// repository (trust boundary 3: "Delete only the repository the same run
+/// created"). Adversarial pass (Sample group, 2026-10-01).
+fn create_failure_keeps_guard_armed(status: Option<u16>) -> bool {
+    !matches!(status, Some(400..=499))
+}
+
 /// Step 2: `POST /orgs/{org}/repos` with `auto_init: true`, raw (never
 /// through `github.repo.ensure`'s own `create_repo`, which never sets
 /// `auto_init` and so never gives `createCommitOnBranch` a branch to
 /// land on). Returns the repository's default branch and its init
-/// commit's sha.
-fn step_2_create(raw: &Http, repo: &GitHubRepo) -> (GitBranchName, String) {
+/// commit's sha. On a failure GitHub answered with a `4xx`, `guard` is
+/// disarmed before the panic (see [`create_failure_keeps_guard_armed`]).
+fn step_2_create(
+    raw: &Http,
+    repo: &GitHubRepo,
+    guard: &mut DeleteGuard,
+) -> (GitBranchName, String) {
     let body = serde_json::json!({
         "name": repo.name().to_string(),
         "visibility": "private",
@@ -524,7 +541,12 @@ fn step_2_create(raw: &Http, repo: &GitHubRepo) -> (GitBranchName, String) {
     });
     let response: Json = raw
         .post(&format!("/orgs/{}/repos", repo.owner()), &body)
-        .unwrap_or_else(|err| panic!("step 2: creating `{repo}` failed (status {:?})", err.status));
+        .unwrap_or_else(|err| {
+            if !create_failure_keeps_guard_armed(err.status) {
+                guard.disarm();
+            }
+            panic!("step 2: creating `{repo}` failed (status {:?})", err.status)
+        });
     let branch_name = response
         .get("default_branch")
         .and_then(Json::as_str)
@@ -1028,7 +1050,7 @@ fn github_live_scaffold_cycle() {
     guard.arm();
     println!("step 2 (the delete guard is armed before the create POST): pass");
 
-    let (branch, init_head) = step_2_create(&raw, &repo);
+    let (branch, init_head) = step_2_create(&raw, &repo, &mut guard);
 
     let client = Arc::new(GitHubClient::new(http_client(credential)));
     let mut cycle = Cycle {
@@ -1124,6 +1146,28 @@ fn sandbox_org_from_refuses_every_org_but_the_sandbox() {
         assert!(
             sandbox_org_from(sandbox).is_ok(),
             "`{sandbox}` is the sandbox org"
+        );
+    }
+}
+
+/// Trust boundary 3: delete only the repository this run created. The
+/// guard is armed before the create `POST` because a transport failure or
+/// a `5xx` may still have created it; but a `4xx` answer is GitHub saying
+/// it did not (a `422` is the name already being taken by a repository
+/// this run did not create), so the guard must stand down rather than
+/// delete a stranger's repository.
+#[test]
+fn a_4xx_create_answer_disarms_the_guard_and_anything_else_keeps_it() {
+    for status in [400, 401, 403, 404, 409, 422, 499] {
+        assert!(
+            !create_failure_keeps_guard_armed(Some(status)),
+            "a {status} means GitHub created nothing: the guard must disarm"
+        );
+    }
+    for status in [None, Some(500), Some(502), Some(503), Some(302)] {
+        assert!(
+            create_failure_keeps_guard_armed(status),
+            "{status:?} may have created the repository: the guard must stay armed"
         );
     }
 }
