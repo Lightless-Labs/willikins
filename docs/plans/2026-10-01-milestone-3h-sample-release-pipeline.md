@@ -732,10 +732,11 @@ has no standing to read the base project it never created) rather than the admin
 slug parsed from the creation response rather than by name, against this section's own "arm the guard with every
 name" and "by recorded name" — a surprising create-response shape could otherwise leave an unregistered
 leftover, and step 9's intentional duplicate needed registering twice under the slug-based scheme, which would
-have doubled teardown's delete attempts. The second pass fixed two narrower live-only edges the first pass's own
-re-read introduced: `Guard::drop`'s service-account half skipped a needless listing `GET` when nothing was
-registered (so a transient failure on that call can never turn an already-completed, clean teardown red), and
-step 9's 2xx branch stopped assuming a 2xx `POST` means a second account was actually created — Doppler's create
+have doubled teardown's delete attempts. The second pass fixed two narrower live-only edges: one the first pass's
+own re-read introduced (`Guard::drop`'s service-account half now skips a needless listing `GET` when nothing is
+registered, so a transient failure on that call can never turn an already-completed, clean teardown red), and one
+present since the original commit (step 9's 2xx branch stopped assuming a 2xx `POST` means a second account was
+actually created — Doppler's create
 can idempotently name the *existing* account instead (the same shape `tests/live_write_cycle.rs`'s own duplicate-
 project step already anticipates), so the branch now re-lists and counts before deciding between the `Conflict`
 and `NotFound` outcomes.

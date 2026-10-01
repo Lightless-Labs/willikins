@@ -36,8 +36,9 @@
 //!    `create_enclave_project`, `team`, `service_accounts`) and the CI
 //!    service account (role `no_access`, falling back to no explicit role
 //!    at all if Doppler refuses the inline identifier), minting a one-hour
-//!    token for each. Each slug is registered with [`Guard`] the moment its
-//!    creation succeeds -- before anything is asserted about it. Confirms
+//!    token for each. Each **name** is registered with [`Guard`] before the
+//!    request that may create it -- before anything is asserted about it,
+//!    and before the account itself necessarily exists. Confirms
 //!    the creator's workplace role is exactly its three permissions.
 //! 3. As the creator, creates the cycle's project and a `prd_ci` branch
 //!    config under `prd`. As the admin, creates a base project with an
