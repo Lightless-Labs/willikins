@@ -710,6 +710,13 @@ impl Guard {
     /// and treats a failure to list as a failure to confirm every name is
     /// gone.
     fn drop_service_accounts(&self, already_panicking: bool) {
+        if self.service_accounts.is_empty() {
+            // `teardown()` already disarmed this, the common case. Skip
+            // the listing `GET` entirely: a transient failure on *that*
+            // call must never turn a clean, already-completed teardown
+            // into a red test.
+            return;
+        }
         let listing = self
             .admin
             .get::<Json>("/v3/workplace/service_accounts?per_page=100")
@@ -1112,52 +1119,95 @@ fn step_9(admin: &Http, tool: &DopplerProjectMemberEnsure, harness: &mut Harness
         "/v3/workplace/service_accounts",
         &serde_json::json!({"name": ctx.ci_account.to_string()}),
     );
+    // No `guard.register_service_account` call anywhere here: the CI
+    // account's name was already registered in step 2, and the guard
+    // deletes every account currently listed under a registered name, so
+    // a same-named duplicate is covered without being told about it
+    // twice (which would double the delete attempts and trip teardown's
+    // own no-404-tolerance on the second pass).
     match attempt {
-        // No extra `guard.register_service_account` call here: the CI
-        // account's name was already registered in step 2, and the guard
-        // deletes every account currently listed under a registered
-        // name, so a same-named duplicate is covered without being told
-        // about it twice (which would double the delete attempts and
-        // trip teardown's own no-404-tolerance on the second pass).
-        Ok(_body) => {
-            let err = tool
-                .read(&ctx.inputs())
-                .expect_err("step 9: a duplicated name must make read refuse");
-            assert_eq!(
-                err.kind,
-                ToolErrorKind::Conflict,
-                "step 9: two same-named service accounts must read Conflict"
-            );
-            harness.say(
-                "step 9 (duplicate service-account name accepted=true, read=Conflict): pass"
-                    .to_string(),
-            );
-        }
+        Ok(_body) => step_9_after_2xx(admin, tool, harness, ctx),
         Err(err) => {
-            let status = err.status;
-            let bogus_name = format!("{}-does-not-exist", ctx.ci_account);
-            let bogus = DopplerServiceAccountName::parse(&bogus_name)
-                .expect("step 9: the bogus name parses");
-            let inputs = member_inputs(
-                &ctx.project,
-                &bogus,
-                &ctx.role,
-                std::slice::from_ref(&ctx.prd),
+            step_9_notfound_branch(
+                tool,
+                harness,
+                ctx,
+                &format!("accepted=false status={:?}", err.status),
             );
-            let err = tool
-                .read(&inputs)
-                .expect_err("step 9: a name with zero matches must refuse");
-            assert_eq!(
-                err.kind,
-                ToolErrorKind::NotFound,
-                "step 9: a name with no match must be NotFound"
-            );
-            harness.say(format!(
-                "step 9 (duplicate service-account name accepted=false status={status:?}, \
-                 read=NotFound for a zero-match name): pass"
-            ));
         }
     }
+}
+
+/// The `POST` answered 2xx. Doppler's create can be idempotent --
+/// answering 2xx while naming the *existing* account rather than making a
+/// second one (the same shape `live_write_cycle.rs`'s own step 9b
+/// anticipates for a duplicate project) -- so a 2xx alone does not prove
+/// a duplicate now exists. Re-lists and counts before deciding which of
+/// the two live branches this run actually reached.
+fn step_9_after_2xx(
+    admin: &Http,
+    tool: &DopplerProjectMemberEnsure,
+    harness: &mut Harness,
+    ctx: &MemberCtx,
+) {
+    let ci_name = ctx.ci_account.to_string();
+    let listing = list_service_accounts(admin);
+    let duplicates = Guard::slugs_named(&listing, &ci_name).len();
+    if duplicates >= 2 {
+        let err = tool
+            .read(&ctx.inputs())
+            .expect_err("step 9: a duplicated name must make read refuse");
+        assert_eq!(
+            err.kind,
+            ToolErrorKind::Conflict,
+            "step 9: two same-named service accounts must read Conflict"
+        );
+        harness.say(
+            "step 9 (duplicate service-account name accepted=true, created=true, \
+             read=Conflict): pass"
+                .to_string(),
+        );
+    } else {
+        step_9_notfound_branch(
+            tool,
+            harness,
+            ctx,
+            "accepted=true but created=false (an idempotent create named the existing account)",
+        );
+    }
+}
+
+/// The duplicate was never actually created (either the `POST` itself was
+/// refused, or it answered 2xx idempotently without making a second
+/// account): a name with zero matches must read `NotFound` instead,
+/// since the `Conflict` branch could not be exercised this run.
+fn step_9_notfound_branch(
+    tool: &DopplerProjectMemberEnsure,
+    harness: &mut Harness,
+    ctx: &MemberCtx,
+    reason: &str,
+) {
+    let bogus_name = format!("{}-does-not-exist", ctx.ci_account);
+    let bogus =
+        DopplerServiceAccountName::parse(&bogus_name).expect("step 9: the bogus name parses");
+    let inputs = member_inputs(
+        &ctx.project,
+        &bogus,
+        &ctx.role,
+        std::slice::from_ref(&ctx.prd),
+    );
+    let err = tool
+        .read(&inputs)
+        .expect_err("step 9: a name with zero matches must refuse");
+    assert_eq!(
+        err.kind,
+        ToolErrorKind::NotFound,
+        "step 9: a name with no match must be NotFound"
+    );
+    harness.say(format!(
+        "step 9 (duplicate service-account name {reason}, read=NotFound for a zero-match \
+         name): pass"
+    ));
 }
 
 #[test]

@@ -724,6 +724,22 @@ cycle needs from it. All calls go to `https://api.doppler.com` with `Authorizati
 10. The guard deletes both projects and every service account by recorded name. Confirm `404`s, and confirm the
     counts equal step 1's.
 
+**Addendum (2026-10-01, D4):** landed in three commits, not one or two. The harness itself (step-for-step as
+above) landed first; two review passes followed, neither changing production code. The first corrected two
+deviations found before the harness is ever run live: step 3's `set_inherits` call had run as the creator (which
+has no standing to read the base project it never created) rather than the admin the step's own prose names
+("As the admin ... make `prd_ci` inherit it"), and the guard had registered and deleted service accounts by a
+slug parsed from the creation response rather than by name, against this section's own "arm the guard with every
+name" and "by recorded name" — a surprising create-response shape could otherwise leave an unregistered
+leftover, and step 9's intentional duplicate needed registering twice under the slug-based scheme, which would
+have doubled teardown's delete attempts. The second pass fixed two narrower live-only edges the first pass's own
+re-read introduced: `Guard::drop`'s service-account half skipped a needless listing `GET` when nothing was
+registered (so a transient failure on that call can never turn an already-completed, clean teardown red), and
+step 9's 2xx branch stopped assuming a 2xx `POST` means a second account was actually created — Doppler's create
+can idempotently name the *existing* account instead (the same shape `tests/live_write_cycle.rs`'s own duplicate-
+project step already anticipates), so the branch now re-lists and counts before deciding between the `Conflict`
+and `NotFound` outcomes.
+
 ## Verify before relying on them
 
 1. **The checkout override works for an SSH-URL pipeline** (decision (d)). On this host, with a fake helper that
