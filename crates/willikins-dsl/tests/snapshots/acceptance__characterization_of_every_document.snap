@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-dsl/tests/acceptance.rs
-assertion_line: 353
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
