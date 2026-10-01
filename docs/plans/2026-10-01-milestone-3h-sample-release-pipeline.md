@@ -49,6 +49,22 @@ change; commit 2 is unchanged (the `willikins-cli` `render.rs` arm plus the `wil
 snapshot). `cargo clippy -p willikins-core --all-targets` on commit 1 alone still compiles cleanly, because the one
 exhaustive match on `Action` (`willikins-cli`'s `render.rs`) is outside this crate; it goes red only once commit 2
 adds the arm, which is why commit 2 exists at all.
+**Addendum (2026-10-01, D3):** two deviations from the task text, neither changing acceptance 4.
+1. "Remove D2's dead_code allows" names nothing that exists: D2's own addendum already made the four client methods,
+   `DopplerSlug`, and the two list-return types `pub` (not `pub(crate)`) specifically so no `#[allow(dead_code)]`
+   would ever be needed once D3 existed, and a search of both crates for `dead_code` before this commit finds no
+   hits. Nothing was removed because there was nothing to remove.
+2. `ensure`'s `PATCH` union (decision (a): "`environments` = existing ∪ requested, sorted") assumed every existing
+   environment string re-parses as an `EnvironmentSlug` on the way back out to `DopplerClient::update_project_member`,
+   whose signature is typed `&[EnvironmentSlug]` (D2). D2's own `ProjectMemberEntry` doc already flags that a listed
+   member's `environments` may hold a string outside this crate's grammar (too long, or shaped unlike a slug) --
+   exactly the case the decision table's "extra environments ... are never a mismatch" row exists for. Silently
+   dropping such an entry from the union to make it parse would be a narrowing `PATCH`, which trust boundary 2
+   forbids outright. `DopplerProjectMemberEnsure::union_environments` instead refuses with `Conflict`, naming the
+   one environment it cannot safely re-express, rather than sending a `PATCH` that would drop it. No acceptance-4 test
+   exercises this path (none of the specified cases name a foreign existing environment on a `NeedsUpdate` row), so
+   it is recorded here rather than claimed as tested; the live member cycle (D4) and a future adversarial pass are
+   the next places this could be probed for real.
 
 ## Goal
 
