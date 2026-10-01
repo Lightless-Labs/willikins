@@ -2940,6 +2940,562 @@ steps:
 
         if __name__ == "__main__":
             unittest.main()
+
+  # W5 (milestone 3h, decision (i)): the CI scripts' entry point --
+  # walter_ci.py, argparse subcommands validate/signing-preflight/
+  # package/stage-ipa/upload, each writing an exclusive receipt. Only
+  # stage-ipa runs on the host, with no Doppler and no Apple.
+  walter_ci_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/walter_ci.py
+      template: |
+        """Walter CI: the entry point. One argparse subcommand per release stage --
+        `validate`, `signing-preflight`, `package`, `stage-ipa` (host) and `upload` --
+        chained by `.buildkite/release.yml`. Every subprocess runs through an
+        injectable runner; stage-ipa touches neither Doppler nor Apple. Each stage
+        writes an exclusive receipt before it can be blindly re-run.
+        """
+        import argparse
+        import base64
+        import os
+        import re
+        import shutil
+        import stat
+        import sys
+        import tempfile
+        import time
+
+        from walter_asc import AscClient, make_jwt
+        from walter_ci_common import (
+            WalterCiError,
+            artifact_dir,
+            child_env,
+            default_runner,
+            fetch_doppler,
+            load_release_config,
+            read_json_strict,
+            sha256_file,
+            verify_source,
+            write_json_exclusive,
+        )
+        from walter_ipa import inspect
+        from walter_signing import (
+            SigningKeychain,
+            assert_clean,
+            check_signing,
+            identities,
+            install_profile,
+            keychain_path,
+            profile_facts,
+        )
+
+        SCHEMA = 1
+        DEVICE_SDKS = ("iphoneos", "iphonesimulator")
+        HOST_MACOS_FLAGS = ("--host_macos_minimum_os=15.0", "--macos_minimum_os=15.0")
+
+        _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+        _ID_RE = re.compile(r"^[0-9A-Za-z-]{1,128}$")
+        _BUILD_NUMBER_RE = re.compile(r"^[0-9]{1,10}$")
+        _KEY_ID_RE = re.compile(r"^[A-Za-z0-9]{1,32}$")
+
+        ENTITLEMENTS_FILES = {
+            "app": ("ios", "Resources", "Walter.entitlements"),
+            "nse": ("ios", "Resources", "WalterNotificationService.entitlements"),
+            "widgets": ("ios", "Resources", "WalterWidgets.entitlements"),
+        }
+
+
+        def identity():
+            """The Buildkite identifiers every receipt and host check needs, validated."""
+            commit = os.environ.get("BUILDKITE_COMMIT") or ""
+            if _COMMIT_RE.match(commit) is None:
+                raise WalterCiError("BUILDKITE_COMMIT must be exactly 40 hex characters")
+            build_id = os.environ.get("BUILDKITE_BUILD_ID") or ""
+            job_id = os.environ.get("BUILDKITE_JOB_ID") or ""
+            if _ID_RE.match(build_id) is None or _ID_RE.match(job_id) is None:
+                raise WalterCiError("a Buildkite identifier has an unexpected shape")
+            raw_number = os.environ.get("BUILDKITE_BUILD_NUMBER") or ""
+            if _BUILD_NUMBER_RE.match(raw_number) is None:
+                raise WalterCiError("BUILDKITE_BUILD_NUMBER must be a positive integer")
+            return {"commit": commit, "build_id": build_id, "job_id": job_id, "build_number": int(raw_number)}
+
+
+        def build_version(ident, config):
+            """`BUILDKITE_BUILD_NUMBER + offset`; `CFBundleVersion` is `<marketing>.<build>`."""
+            number = ident["build_number"] + config["build_number_offset"]
+            return number, config["marketing_version"] + "." + str(number)
+
+
+        def _run(runner, argv, *, cwd=None, env=None, timeout, error):
+            try:
+                result = runner(argv, cwd=cwd, env=env, timeout=timeout)
+            except Exception:
+                raise WalterCiError(error) from None
+            if type(result) is not dict or result.get("returncode") != 0:
+                raise WalterCiError(error)
+            return result.get("stdout") or b""
+
+
+        def _write_receipt(mount, stage, ident, ok, checks, *, name=None):
+            receipt = {
+                "schema": SCHEMA, "stage": stage, "commit": ident["commit"], "build_id": ident["build_id"],
+                "job_id": ident["job_id"], "build_number": ident["build_number"], "ok": ok, "checks": checks,
+            }
+            write_json_exclusive(os.path.join(artifact_dir(mount, stage), name or (stage + "-receipt.json")), receipt)
+            return receipt
+
+
+        def _require_regular_file(path):
+            try:
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            except OSError:
+                raise WalterCiError("an expected artifact is missing or not a regular file") from None
+            with os.fdopen(descriptor, "rb") as handle:
+                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                    raise WalterCiError("an expected artifact is not a regular file")
+
+
+        def _verify_receipt(receipt_path, artifact_path, *, commit):
+            """Check a package receipt's commit, size and SHA-256 against the artifact beside it."""
+            receipt = read_json_strict(receipt_path)
+            if receipt.get("commit") != commit:
+                raise WalterCiError("the receipt's commit does not match this build")
+            checks = receipt.get("checks") if type(receipt.get("checks")) is dict else {}
+            size = os.stat(artifact_path).st_size
+            if checks.get("size") != size:
+                raise WalterCiError("the receipt's size does not match the artifact")
+            digest = sha256_file(artifact_path)
+            if checks.get("sha256") != digest:
+                raise WalterCiError("the receipt's hash does not match the artifact")
+            return digest
+
+
+        def _move_into(src, dest):
+            if os.path.lexists(dest):
+                raise WalterCiError("the destination already has a file")
+            shutil.move(src, dest)
+
+
+        def _preflight(runner):
+            env = child_env()
+            _run(runner, ["xcodebuild", "-version"], env=env, timeout=60, error="xcodebuild -version failed")
+            for sdk in DEVICE_SDKS:
+                _run(runner, ["xcrun", "--sdk", sdk, "--show-sdk-path"], env=env, timeout=30, error="the " + sdk + " SDK path is unavailable")
+
+
+        def _check_bazel_version(runner, repo):
+            try:
+                with open(os.path.join(repo, ".bazelversion"), "r", encoding="utf-8") as handle:
+                    pinned = handle.read().strip()
+            except OSError:
+                raise WalterCiError(".bazelversion is missing") from None
+            if not pinned:
+                raise WalterCiError(".bazelversion is empty")
+            output = _run(runner, ["bazel", "--version"], env=child_env(), timeout=60, error="bazel --version failed")
+            if pinned not in output.decode("utf-8", "replace"):
+                raise WalterCiError("bazel --version does not match .bazelversion")
+
+
+        class _ApiKey:
+            """Writes the App Store Connect `.p8` as `AuthKey_<id>.p8` in a fresh 0700 directory."""
+
+            def __init__(self, secrets):
+                key_id = secrets["APP_STORE_CONNECT_API_KEY_ID"]
+                if _KEY_ID_RE.match(key_id) is None:
+                    raise WalterCiError("the App Store Connect key id has an unexpected shape")
+                self._b64 = secrets["APP_STORE_CONNECT_API_KEY_BASE64"]
+                self.issuer = secrets["APP_STORE_CONNECT_API_KEY_ISSUER_ID"]
+                self.key_id = key_id
+                self.directory = None
+                self.path = None
+
+            def __enter__(self):
+                self.directory = tempfile.mkdtemp(prefix="walter-asc-key-")
+                os.chmod(self.directory, 0o700)
+                self.path = os.path.join(self.directory, "AuthKey_" + self.key_id + ".p8")
+                try:
+                    data = base64.b64decode(self._b64, validate=True)
+                except Exception:
+                    raise WalterCiError("the App Store Connect key is not valid base64") from None
+                descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(data)
+                return self
+
+            def __exit__(self, *_exc):
+                if self.directory is not None:
+                    shutil.rmtree(self.directory, ignore_errors=True)
+                    self.directory = None
+                return False
+
+
+        def _asc_client(api_key, runner):
+            token = make_jwt(api_key.issuer, api_key.key_id, api_key.path, time.time(), runner=runner)
+            return AscClient(token)
+
+
+        def _altool_env(api_key):
+            env = child_env()
+            env["API_PRIVATE_KEYS_DIR"] = api_key.directory
+            return env
+
+
+        def _load_entitlements(repo, bundle_ids):
+            import plistlib
+            result = {}
+            for key, relative in ENTITLEMENTS_FILES.items():
+                path = os.path.join(repo, "apps", "walter", *relative)
+                try:
+                    with open(path, "rb") as handle:
+                        result[bundle_ids[key]] = plistlib.load(handle)
+                except Exception:
+                    raise WalterCiError("reading " + relative[-1] + " failed") from None
+            return result
+
+
+        def _signing_checks(runner, secrets, config, repo, *, inner=None):
+            """Cookbook section 6.3: fetch, install, intersect, and cover every entitlement.
+            `inner`, if given, runs inside the keychain after the checks pass."""
+            bundle_ids = config["bundle_ids"]
+            with _ApiKey(secrets) as api_key:
+                client = _asc_client(api_key, runner)
+                profiles_raw = {bundle_id: client.profile_content(bundle_id) for bundle_id in bundle_ids.values()}
+            entitlements = _load_entitlements(repo, bundle_ids)
+            p12 = base64.b64decode(secrets["APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64"], validate=True)
+            password = secrets["APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD"]
+            keychain = SigningKeychain(p12, password, runner=runner)
+            with keychain:
+                profiles = {}
+                for bundle_id, raw in profiles_raw.items():
+                    install_profile(raw, runner=runner)
+                    profiles[bundle_id] = profile_facts(raw, runner=runner)
+                identity_set = identities(keychain_path(), runner=runner)
+                check_signing(identity_set, profiles, entitlements)
+                if inner is not None:
+                    inner()
+            assert_clean(keychain.captured_search_list, runner=runner)
+
+
+        def _resolve_ipa(runner, repo, target):
+            output = _run(
+                runner, ["bazel", "cquery", "--output=files", target], cwd=repo, env=child_env(), timeout=120,
+                error="resolving the IPA output failed",
+            ).decode("utf-8", "replace")
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            if len(lines) != 1:
+                raise WalterCiError("bazel cquery did not resolve to exactly one output")
+            path = lines[0] if os.path.isabs(lines[0]) else os.path.join(repo, lines[0])
+            _require_regular_file(path)
+            return path
+
+
+        def _copy_regular(src, dest):
+            _require_regular_file(src)
+            with open(src, "rb") as handle:
+                data = handle.read()
+            descriptor = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(data)
+
+
+        def cmd_validate(args, *, runner=default_runner):
+            if os.environ.get("DOPPLER_TOKEN") is not None:
+                raise WalterCiError("validate must run without a Doppler token")
+            ident = identity()
+            _preflight(runner)
+            _check_bazel_version(runner, args.checkout)
+            clone = verify_source(args.checkout, runner=runner)
+            env = child_env()
+            _run(
+                runner, ["bazel", "build", "--config=ci"] + list(HOST_MACOS_FLAGS) + ["--", "//apps/walter/..."],
+                cwd=clone, env=env, timeout=1800, error="the device build failed",
+            )
+            _run(
+                runner,
+                ["bazel", "build", "--config=ci", "--config=ios_sim"] + list(HOST_MACOS_FLAGS) + ["--", "//apps/walter/ios:Walter"],
+                cwd=clone, env=env, timeout=1800, error="the simulator build failed",
+            )
+            _run(
+                runner, ["python3", "-m", "unittest", "discover", "-s", "apps/walter/tools/tests", "-t", "."],
+                cwd=clone, env=env, timeout=600, error="the tools' own unit tests failed",
+            )
+            _write_receipt(args.checkout, "validation", ident, True, {
+                "preflight": True, "bazel_version_pinned": True, "device_build": True, "simulator_build": True, "tool_tests": True,
+            })
+
+
+        def cmd_signing_preflight(args, *, runner=default_runner):
+            ident = identity()
+            clone = verify_source(args.checkout, runner=runner)
+            secrets = fetch_doppler("signing")
+            config = load_release_config(clone)
+            _signing_checks(runner, secrets, config, clone)
+            _write_receipt(args.checkout, "signing-preflight", ident, True, {"signing": True})
+
+
+        def cmd_package(args, *, runner=default_runner):
+            ident = identity()
+            clone = verify_source(args.checkout, runner=runner)
+            config = load_release_config(clone)
+            number, version = build_version(ident, config)
+            secrets = fetch_doppler("package")
+
+            with _ApiKey(secrets) as pre_key:
+                client = _asc_client(pre_key, runner)
+                app_id = client.app_id(config["bundle_ids"]["app"])
+                if client.builds(app_id, config["marketing_version"], str(number)):
+                    raise WalterCiError("a build already exists for " + version)
+
+            ipa_holder = {}
+
+            def _build():
+                _run(
+                    runner,
+                    [
+                        "bazel", "build", config["bazel_target"], "--config=beta", "--config=ios_device",
+                        "--ios_multi_cpus=arm64", "--embed_label=" + version, "--host_macos_minimum_os=15.0",
+                    ],
+                    cwd=clone, env=child_env(), timeout=3600, error="the package build failed",
+                )
+                ipa_holder["path"] = _resolve_ipa(runner, clone, config["bazel_target"])
+
+            _signing_checks(runner, secrets, config, clone, inner=_build)
+
+            report = inspect(ipa_holder["path"], config, str(number), runner=runner)
+            dest_dir = artifact_dir(args.checkout, "package")
+            dest = os.path.join(dest_dir, "Walter.ipa")
+            _copy_regular(ipa_holder["path"], dest)
+            size = os.stat(dest).st_size
+            digest = sha256_file(dest)
+            write_json_exclusive(os.path.join(dest_dir, "inspection-report.json"), report)
+            _write_receipt(
+                args.checkout, "package", ident, True, {"version": version, "size": size, "sha256": digest},
+                name="package-receipt.json",
+            )
+
+
+        def cmd_stage_ipa(args, *, runner=default_runner):
+            """The one stage that runs on the host: no Doppler, no Apple."""
+            host_env = dict(os.environ)
+            outcome = _run(
+                runner, ["buildkite-agent", "step", "get", "outcome", "--step", "walter-package"],
+                env=host_env, timeout=30, error="reading the package step's outcome failed",
+            ).decode("utf-8", "replace").strip()
+            if outcome != "passed":
+                raise WalterCiError("the package step did not pass")
+            commit = os.environ.get("BUILDKITE_COMMIT") or ""
+            build_id = os.environ.get("BUILDKITE_BUILD_ID") or ""
+            if _COMMIT_RE.match(commit) is None or _ID_RE.match(build_id) is None:
+                raise WalterCiError("a Buildkite identifier has an unexpected shape")
+            scratch = tempfile.mkdtemp(prefix="walter-stage-")
+            try:
+                _run(
+                    runner,
+                    [
+                        "buildkite-agent", "artifact", "download", "apps/walter/.ci-artifacts/package/*", scratch,
+                        "--step", "walter-package", "--build", build_id,
+                    ],
+                    env=host_env, timeout=600, error="downloading the package artifacts failed",
+                )
+                package_dir = os.path.join(scratch, "apps", "walter", ".ci-artifacts", "package")
+                ipa_src = os.path.join(package_dir, "Walter.ipa")
+                receipt_src = os.path.join(package_dir, "package-receipt.json")
+                _require_regular_file(ipa_src)
+                _require_regular_file(receipt_src)
+                digest = _verify_receipt(receipt_src, ipa_src, commit=commit)
+                dest_dir = artifact_dir(args.checkout, "upload-input")
+                _move_into(ipa_src, os.path.join(dest_dir, "Walter.ipa"))
+                _move_into(receipt_src, os.path.join(dest_dir, "package-receipt.json"))
+                print("staged IPA sha256:", digest)
+            finally:
+                shutil.rmtree(scratch, ignore_errors=True)
+
+
+        def _upload_ipa(runner, mount, ipa_path, api_key, ident):
+            """Write `upload-attempt.json` before invoking `altool`. Never retried."""
+            attempt = {
+                "schema": SCHEMA, "stage": "upload", "commit": ident["commit"], "build_id": ident["build_id"],
+                "job_id": ident["job_id"], "build_number": ident["build_number"],
+            }
+            write_json_exclusive(os.path.join(artifact_dir(mount, "upload"), "upload-attempt.json"), attempt)
+            _run(
+                runner,
+                ["xcrun", "altool", "--upload-app", "-f", ipa_path, "-t", "ios", "--apiKey", api_key.key_id, "--apiIssuer", api_key.issuer],
+                env=_altool_env(api_key), timeout=1800, error="xcrun altool --upload-app failed",
+            )
+
+
+        def cmd_upload(args, *, runner=default_runner):
+            ident = identity()
+            clone = verify_source(args.checkout, runner=runner)
+            config = load_release_config(clone)
+            number, version = build_version(ident, config)
+
+            input_dir = os.path.join(args.checkout, "apps", "walter", ".ci-artifacts", "upload-input")
+            ipa_path = os.path.join(input_dir, "Walter.ipa")
+            receipt_path = os.path.join(input_dir, "package-receipt.json")
+            _require_regular_file(ipa_path)
+            _require_regular_file(receipt_path)
+            digest = _verify_receipt(receipt_path, ipa_path, commit=ident["commit"])
+            inspect(ipa_path, config, str(number), runner=runner)
+
+            secrets = fetch_doppler("upload")
+            with _ApiKey(secrets) as api_key:
+                client = _asc_client(api_key, runner)
+                app_id = client.app_id(config["bundle_ids"]["app"])
+                if client.builds(app_id, config["marketing_version"], str(number)):
+                    raise WalterCiError("a build already exists for " + version)
+                _upload_ipa(runner, args.checkout, ipa_path, api_key, ident)
+                client.wait_valid(app_id, config["marketing_version"], str(number))
+
+            _write_receipt(args.checkout, "upload", ident, True, {"version": version, "sha256": digest}, name="upload-receipt.json")
+
+
+        _HANDLERS = {
+            "validate": cmd_validate,
+            "signing-preflight": cmd_signing_preflight,
+            "package": cmd_package,
+            "stage-ipa": cmd_stage_ipa,
+            "upload": cmd_upload,
+        }
+
+
+        def _build_parser():
+            parser = argparse.ArgumentParser(prog="walter_ci.py")
+            sub = parser.add_subparsers(dest="stage", required=True)
+            for name in _HANDLERS:
+                stage_parser = sub.add_parser(name)
+                stage_parser.add_argument("--checkout", required=True)
+            return parser
+
+
+        def main(argv=None):
+            args = _build_parser().parse_args(argv)
+            try:
+                _HANDLERS[args.stage](args)
+            except WalterCiError as error:
+                print(str(error), file=sys.stderr)
+                return 1
+            return 0
+
+
+        if __name__ == "__main__":
+            sys.exit(main())
+
+  test_walter_ci_py:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/tests/test_walter_ci.py
+      template: |
+        """Offline tests for walter_ci.py: no network, no real git, no keychain, no bazel."""
+        import argparse
+        import hashlib
+        import json
+        import os
+        import sys
+        import tempfile
+        import unittest
+        from unittest import mock
+
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        import walter_ci as ci
+        import walter_ci_common as common
+
+        COMMIT = "a" * 40
+        IDENTITY_ENV = {
+            "BUILDKITE_COMMIT": COMMIT, "BUILDKITE_BUILD_ID": "build-1", "BUILDKITE_JOB_ID": "job-1",
+            "BUILDKITE_BUILD_NUMBER": "42",
+        }
+
+
+        def scripted_runner(script):
+            """`argv[0]` or a matched keyword -> {"returncode", "stdout"}. Records every call."""
+            calls = []
+
+            def run(argv, **kwargs):
+                calls.append(list(argv))
+                for key, result in script.items():
+                    if key in argv:
+                        return dict(result)
+                return {"returncode": 0, "stdout": b""}
+
+            run.calls = calls
+            return run
+
+
+        class EntryPointTests(unittest.TestCase):
+            def test_validate_refuses_a_set_doppler_token_before_anything_else(self):
+                with mock.patch.dict(os.environ, {"DOPPLER_TOKEN": "tok"}):
+                    args = argparse.Namespace(checkout="/mount")
+
+                    def never(*_a, **_k):
+                        raise AssertionError("no subprocess may run")
+
+                    self.assertRaises(common.WalterCiError, ci.cmd_validate, args, runner=never)
+
+            def test_build_version_applies_the_offset_and_formats_cfbundleversion(self):
+                ident = {"build_number": 42}
+                config = {"build_number_offset": 7, "marketing_version": "0.1.0"}
+                number, version = ci.build_version(ident, config)
+                self.assertEqual(number, 49)
+                self.assertEqual(version, "0.1.0.49")
+
+            def _receipt(self, directory, data, *, size, digest, commit=COMMIT):
+                with open(os.path.join(directory, "x.bin"), "wb") as handle:
+                    handle.write(data)
+                receipt = {"commit": commit, "checks": {"size": size, "sha256": digest}}
+                path = os.path.join(directory, "receipt.json")
+                with open(path, "w") as handle:
+                    json.dump(receipt, handle)
+                return path, os.path.join(directory, "x.bin")
+
+            def test_verify_receipt_accepts_a_match_and_refuses_each_mismatch(self):
+                data = b"the-ipa-bytes"
+                digest = hashlib.sha256(data).hexdigest()
+                with tempfile.TemporaryDirectory() as tmp:
+                    receipt_path, artifact_path = self._receipt(tmp, data, size=len(data), digest=digest)
+                    self.assertEqual(ci._verify_receipt(receipt_path, artifact_path, commit=COMMIT), digest)
+                with tempfile.TemporaryDirectory() as tmp:
+                    receipt_path, artifact_path = self._receipt(tmp, data, size=len(data), digest=digest, commit="b" * 40)
+                    self.assertRaises(common.WalterCiError, ci._verify_receipt, receipt_path, artifact_path, commit=COMMIT)
+                with tempfile.TemporaryDirectory() as tmp:
+                    receipt_path, artifact_path = self._receipt(tmp, data, size=len(data) + 1, digest=digest)
+                    self.assertRaises(common.WalterCiError, ci._verify_receipt, receipt_path, artifact_path, commit=COMMIT)
+                with tempfile.TemporaryDirectory() as tmp:
+                    receipt_path, artifact_path = self._receipt(tmp, data, size=len(data), digest="0" * 64)
+                    self.assertRaises(common.WalterCiError, ci._verify_receipt, receipt_path, artifact_path, commit=COMMIT)
+
+            def test_stage_ipa_refuses_unless_the_package_step_passed(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    runner = scripted_runner({"outcome": {"returncode": 0, "stdout": b"failed\n"}})
+                    with mock.patch.dict(os.environ, IDENTITY_ENV):
+                        args = argparse.Namespace(checkout=tmp)
+                        self.assertRaises(common.WalterCiError, ci.cmd_stage_ipa, args, runner=runner)
+                    self.assertEqual(len(runner.calls), 1, "a failed outcome must stop before any download")
+
+            def test_upload_ipa_writes_the_attempt_file_before_invoking_altool(self):
+                with tempfile.TemporaryDirectory() as tmp:
+                    attempt_path = os.path.join(tmp, "apps", "walter", ".ci-artifacts", "upload", "upload-attempt.json")
+                    seen = {}
+
+                    def runner(argv, **kwargs):
+                        seen["attempt_existed"] = os.path.exists(attempt_path)
+                        seen["argv"] = list(argv)
+                        return {"returncode": 0, "stdout": b""}
+
+                    api_key = mock.Mock(key_id="KEY123", issuer="ISSUER", directory=tmp)
+                    ident = {"commit": COMMIT, "build_id": "b", "job_id": "j", "build_number": 1}
+                    ci._upload_ipa(runner, tmp, os.path.join(tmp, "Walter.ipa"), api_key, ident)
+                    self.assertTrue(seen["attempt_existed"], "altool must run after the attempt file is written")
+                    self.assertEqual(seen["argv"][:2], ["xcrun", "altool"])
+                    with open(attempt_path) as handle:
+                        self.assertEqual(json.load(handle)["commit"], COMMIT)
+
+
+        if __name__ == "__main__":
+            unittest.main()
+
   # W1: the write credential (decision (l)) -- new and narrow (Contents:
   # read and write only, never the older, wider gh_token above), from a
   # Doppler branch config no app config inherits.
@@ -2991,6 +3547,8 @@ steps:
         - ${{ steps.walter_ipa_py.file }}
         - ${{ steps.test_walter_signing_py.file }}
         - ${{ steps.test_walter_ipa_py.file }}
+        - ${{ steps.walter_ci_py.file }}
+        - ${{ steps.test_walter_ci_py.file }}
       message: "feat(walter): scaffold the iOS app, NSE, widgets and Buildkite files"
       token: ${{ steps.gh_write_token.value }}
 

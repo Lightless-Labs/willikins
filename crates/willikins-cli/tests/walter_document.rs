@@ -1748,6 +1748,11 @@ const WALTER_FILES: &[(&str, &str)] = &[
         "test_walter_ipa_py",
         "apps/walter/tools/tests/test_walter_ipa.py",
     ),
+    ("walter_ci_py", "apps/walter/tools/walter_ci.py"),
+    (
+        "test_walter_ci_py",
+        "apps/walter/tools/tests/test_walter_ci.py",
+    ),
 ];
 
 /// W0: the number of `{{ N }}` placeholders `every_placeholder_sits_in_a_quoted_or_identifier_only_position`

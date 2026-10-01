@@ -793,6 +793,10 @@ test_walter_signing_py.path: RepoPath
 test_walter_signing_py.template: TemplateSource
 test_walter_ipa_py.path: RepoPath
 test_walter_ipa_py.template: TemplateSource
+walter_ci_py.path: RepoPath
+walter_ci_py.template: TemplateSource
+test_walter_ci_py.path: RepoPath
+test_walter_ci_py.template: TemplateSource
 gh_write_token_secret.config: DopplerConfig
 gh_write_token_secret.name: SecretName
 gh_write_token.value: DopplerSecretValue
