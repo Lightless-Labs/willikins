@@ -502,6 +502,7 @@ fn action_text(action: Action) -> &'static str {
         Action::Compute => "Compute",
         Action::Create => "Create",
         Action::Replace => "Replace",
+        Action::Update => "Update",
         Action::NoOp => "NoOp",
         Action::Blocked => "Blocked",
         Action::Skip => "Skip",
@@ -1036,6 +1037,45 @@ mod tests {
             replacing: Vec::new(),
         };
         let text = plan_text(&plan);
+        assert!(!text.contains("replacing:"), "text: {text}");
+    }
+
+    /// Milestone 3h, task E1: an `Action::Update` node's line reads
+    /// `Update`, never `Create`, and no `replacing:`-style section is
+    /// added for it — an update deletes nothing, so the node's own line
+    /// and inputs already say what changes, exactly as decision (b)
+    /// specifies.
+    #[test]
+    fn plan_text_shows_an_update() {
+        let mut inputs = willikins_core::Inputs::new();
+        inputs.insert(
+            PortName::parse("role").unwrap(),
+            Value::known(willikins_types::EnvironmentSlug::parse("prd").unwrap()),
+        );
+        let member = PlannedNode {
+            name: NodeName::parse("ci_doppler_access").unwrap(),
+            instance: None,
+            tool: ToolName::parse("doppler.project_member.ensure").unwrap(),
+            action: Action::Update,
+            inputs,
+            outputs: Outputs::new(),
+        };
+        let plan = Plan {
+            workflow: willikins_types::WorkflowName::parse("test").unwrap(),
+            nodes: vec![member],
+            outputs: IndexMap::new(),
+            class: Class::Reversible,
+            requires_approval: false,
+            blocked: Vec::new(),
+            replacing: Vec::new(),
+        };
+
+        let text = plan_text(&plan);
+        assert!(
+            text.contains("ci_doppler_access (doppler.project_member.ensure): Update"),
+            "text: {text}"
+        );
+        assert!(!text.contains(": Create"), "text: {text}");
         assert!(!text.contains("replacing:"), "text: {text}");
     }
 
