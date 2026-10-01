@@ -1,0 +1,11 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/.buildkite/plugins/stage-input/hooks/pre-command
+---
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${BUILDKITE_BUILD_CHECKOUT_PATH:?missing Buildkite checkout path}"
+python3 "$BUILDKITE_BUILD_CHECKOUT_PATH/apps/walter/tools/walter_ci.py" stage-ipa --checkout "$BUILDKITE_BUILD_CHECKOUT_PATH"

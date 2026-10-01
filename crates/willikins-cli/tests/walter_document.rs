@@ -1620,14 +1620,19 @@ fn decision_d_git_config_env() -> serde_json::Value {
     })
 }
 
-/// Acceptance 10 (W6, decision (d)): `bootstrap.yml` and `pipeline.yml`
-/// both parse as JSON and both carry exactly decision (d)'s `env` block
-/// at the top level.
+/// Acceptance 10 (W6, decision (d)): `bootstrap.yml`, `pipeline.yml`,
+/// `signing-preflight.yml` and `release.yml` all parse as JSON and all
+/// carry exactly decision (d)'s `env` block at the top level.
 #[test]
-fn bootstrap_and_pipeline_share_decision_d_env_block() {
+fn all_four_pipeline_definitions_share_decision_d_env_block() {
     let rendered = rendered_files_for_the_real_identifiers();
     let expected = decision_d_git_config_env();
-    for node in ["bootstrap_yml", "pipeline_yml"] {
+    for node in [
+        "bootstrap_yml",
+        "pipeline_yml",
+        "signing_preflight_yml",
+        "release_yml",
+    ] {
         let (_, file) = rendered
             .iter()
             .find(|(n, _)| *n == node)
@@ -1852,6 +1857,19 @@ const WALTER_FILES: &[(&str, &str)] = &[
     (
         "test_walter_ci_py",
         "apps/walter/tools/tests/test_walter_ci.py",
+    ),
+    (
+        "signing_preflight_yml",
+        "apps/walter/.buildkite/signing-preflight.yml",
+    ),
+    ("release_yml", "apps/walter/.buildkite/release.yml"),
+    (
+        "stage_input_plugin_yml",
+        "apps/walter/.buildkite/plugins/stage-input/plugin.yml",
+    ),
+    (
+        "stage_input_pre_command",
+        "apps/walter/.buildkite/plugins/stage-input/hooks/pre-command",
     ),
 ];
 
@@ -2281,4 +2299,364 @@ fn render_walter_files_to_dir() {
     }
     assert_eq!(written, WALTER_FILES.len(), "every render node was written");
     println!("wrote {written} files under {}", dir.display());
+}
+
+// --- W6 (milestone 3h, decisions (c), (d), (e), (f); acceptance 10): the
+// new Buildkite release pipeline (signing-preflight.yml, release.yml, the
+// local stage-input plugin and its host hook). ---
+
+const TART_CI_PLUGIN_KEY: &str =
+    "github.com/Lightless-Labs/tart-ci#11fc336384a3c2a88209dfba3c429bbf61c1dac7";
+const GUEST_IDENTITY_ENV: &[&str] = &[
+    "BUILDKITE_COMMIT",
+    "BUILDKITE_JOB_ID",
+    "BUILDKITE_BUILD_ID",
+    "BUILDKITE_BUILD_NUMBER",
+    "BUILDKITE_PIPELINE_SLUG",
+    "BUILDKITE_BUILD_URL",
+    "CI",
+];
+
+/// Acceptance 10: every rendered `.yml` and `.json` file parses with
+/// `serde_json` (all of Walter's `.yml` files are JSON text, like W1's).
+#[test]
+fn every_rendered_yml_and_json_file_parses_as_json() {
+    let rendered = rendered_files_for_the_real_identifiers();
+    let mut checked = 0;
+    for (node, file) in &rendered {
+        let path = file.path();
+        let ext = std::path::Path::new(path.as_str())
+            .extension()
+            .and_then(|e| e.to_str());
+        if !matches!(ext, Some("yml" | "json")) {
+            continue;
+        }
+        serde_json::from_str::<serde_json::Value>(file.content())
+            .unwrap_or_else(|err| panic!("`{node}` ({path}) must parse as JSON: {err}"));
+        checked += 1;
+    }
+    let expected = WALTER_FILES
+        .iter()
+        .filter(|(_, path)| {
+            let ext = std::path::Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str());
+            matches!(ext, Some("yml" | "json"))
+        })
+        .count();
+    assert_eq!(checked, expected, "every .yml/.json render was inspected");
+}
+
+/// Every `tart-ci` step across `pipeline.yml`, `signing-preflight.yml` and
+/// `release.yml` pins SHARED VALUES' plugin revision, image, queue and
+/// concurrency group, and its guest `env` allowlist is exactly the seven
+/// identity names -- never a credential.
+#[test]
+fn every_tart_ci_step_pins_shared_values_and_the_guest_allowlist() {
+    let rendered = rendered_files_for_the_real_identifiers();
+    let mut tart_ci_steps = 0;
+    for node in ["pipeline_yml", "signing_preflight_yml", "release_yml"] {
+        let (_, file) = rendered
+            .iter()
+            .find(|(n, _)| *n == node)
+            .unwrap_or_else(|| panic!("`{node}` was rendered"));
+        let parsed: serde_json::Value = serde_json::from_str(file.content())
+            .unwrap_or_else(|err| panic!("`{node}` must parse as JSON: {err}"));
+        let steps = parsed["steps"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`{node}`.steps must be an array"));
+        for step in steps {
+            let Some(plugins) = step.get("plugins").and_then(|p| p.as_array()) else {
+                continue;
+            };
+            for plugin in plugins {
+                let Some(config) = plugin.get(TART_CI_PLUGIN_KEY) else {
+                    continue;
+                };
+                tart_ci_steps += 1;
+                assert_eq!(
+                    config["image"], "ci-macos-rust-bazel-ios-20260910-v2",
+                    "`{node}`'s tart-ci image"
+                );
+                assert_eq!(
+                    step["agents"]["queue"], "ci-macos-apple-silicon",
+                    "`{node}`'s queue"
+                );
+                assert_eq!(step["concurrency"], 1, "`{node}`'s concurrency");
+                assert_eq!(
+                    step["concurrency_group"], "big-cabbage/tart-ci-macos",
+                    "`{node}`'s concurrency_group"
+                );
+                let env = config["env"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("`{node}`'s tart-ci env must be an array"));
+                let names: Vec<&str> = env.iter().map(|v| v.as_str().unwrap()).collect();
+                assert_eq!(
+                    names, GUEST_IDENTITY_ENV,
+                    "`{node}`'s guest env allowlist must be exactly the seven identity names"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        tart_ci_steps, 5,
+        "pipeline.yml(1) + signing-preflight.yml(1) + release.yml(3) tart-ci steps"
+    );
+}
+
+/// `doppler_token_secret` appears only on the signing-preflight, package
+/// and upload steps, always naming `DOPPLER_SERVICE_ACCOUNT_TOKEN`.
+#[test]
+fn doppler_token_secret_appears_only_on_preflight_package_and_upload_steps() {
+    let rendered = rendered_files_for_the_real_identifiers();
+    let mut with_secret: Vec<String> = Vec::new();
+    for node in ["pipeline_yml", "signing_preflight_yml", "release_yml"] {
+        let (_, file) = rendered
+            .iter()
+            .find(|(n, _)| *n == node)
+            .unwrap_or_else(|| panic!("`{node}` was rendered"));
+        let parsed: serde_json::Value = serde_json::from_str(file.content())
+            .unwrap_or_else(|err| panic!("`{node}` must parse as JSON: {err}"));
+        for step in parsed["steps"].as_array().unwrap() {
+            let key = step["key"].as_str().unwrap_or("").to_string();
+            for plugin in step
+                .get("plugins")
+                .and_then(|p| p.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if let Some(config) = plugin.get(TART_CI_PLUGIN_KEY)
+                    && let Some(secret) = config.get("doppler_token_secret")
+                {
+                    assert_eq!(
+                        secret, "DOPPLER_SERVICE_ACCOUNT_TOKEN",
+                        "`{key}`'s doppler_token_secret"
+                    );
+                    with_secret.push(key.clone());
+                }
+            }
+        }
+    }
+    with_secret.sort();
+    assert_eq!(
+        with_secret,
+        vec![
+            "walter-package",
+            "walter-signing-preflight",
+            "walter-upload"
+        ],
+        "doppler_token_secret must appear on exactly these three steps"
+    );
+}
+
+/// `release.yml` chains `walter-validation` -> `walter-package` ->
+/// `walter-upload` by `depends_on`, and every step disables retries.
+#[test]
+fn release_yml_chains_the_three_steps_with_retries_off() {
+    let rendered = rendered_files_for_the_real_identifiers();
+    let (_, file) = rendered
+        .iter()
+        .find(|(n, _)| *n == "release_yml")
+        .expect("release_yml was rendered");
+    let parsed: serde_json::Value =
+        serde_json::from_str(file.content()).expect("release.yml must parse as JSON");
+    let steps = parsed["steps"]
+        .as_array()
+        .expect("release.yml's steps must be an array");
+    let keys: Vec<&str> = steps.iter().map(|s| s["key"].as_str().unwrap()).collect();
+    assert_eq!(
+        keys,
+        vec!["walter-validation", "walter-package", "walter-upload"]
+    );
+    assert_eq!(steps[1]["depends_on"], "walter-validation");
+    assert_eq!(steps[2]["depends_on"], "walter-package");
+    for step in steps {
+        assert_eq!(
+            step["retry"]["automatic"], false,
+            "`{}`'s retry.automatic",
+            step["key"]
+        );
+        assert_eq!(
+            step["retry"]["manual"], false,
+            "`{}`'s retry.manual",
+            step["key"]
+        );
+    }
+}
+
+/// `release.yml`'s package step writes exactly SHARED VALUES' three
+/// package outputs.
+#[test]
+fn release_yml_package_step_names_the_three_package_outputs() {
+    let rendered = rendered_files_for_the_real_identifiers();
+    let (_, file) = rendered
+        .iter()
+        .find(|(n, _)| *n == "release_yml")
+        .expect("release_yml was rendered");
+    let parsed: serde_json::Value =
+        serde_json::from_str(file.content()).expect("release.yml must parse as JSON");
+    let package = parsed["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["key"] == "walter-package")
+        .expect("walter-package step exists");
+    let paths: Vec<&str> = package["artifact_paths"]
+        .as_array()
+        .expect("artifact_paths is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            "apps/walter/.ci-artifacts/package/Walter.ipa",
+            "apps/walter/.ci-artifacts/package/package-receipt.json",
+            "apps/walter/.ci-artifacts/package/inspection-report.json",
+        ]
+    );
+}
+
+/// Every script path a `command` or the stage-input hook names resolves
+/// to a path `walter_files` actually binds -- catching a typo that would
+/// otherwise only surface as a guest "file not found".
+///
+/// Scoped to `command` strings (and the hook's whole content): scanning a
+/// whole JSON file's bytes would also pick up `artifact_paths` (directory
+/// prefixes like `apps/walter/.ci-artifacts/package/`, never a file this
+/// table binds) and the local plugin reference `./apps/walter/.buildkite/
+/// plugins/stage-input` (a directory, checked separately below).
+#[test]
+fn every_script_path_a_command_or_hook_names_is_in_walter_files() {
+    fn extract_walter_paths(content: &str) -> Vec<String> {
+        let mut paths = Vec::new();
+        let bytes = content.as_bytes();
+        for (start, _) in content.match_indices("apps/walter/") {
+            let mut end = start;
+            while end < bytes.len() {
+                let c = bytes[end] as char;
+                if c.is_ascii_alphanumeric() || "/_.-".contains(c) {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            paths.push(content[start..end].to_string());
+        }
+        paths
+    }
+
+    let known_paths: std::collections::HashSet<&str> =
+        WALTER_FILES.iter().map(|(_, path)| *path).collect();
+    let rendered = rendered_files_for_the_real_identifiers();
+    let mut checked_files = 0;
+
+    for node in [
+        "bootstrap_yml",
+        "pipeline_yml",
+        "signing_preflight_yml",
+        "release_yml",
+    ] {
+        let (_, file) = rendered
+            .iter()
+            .find(|(n, _)| *n == node)
+            .unwrap_or_else(|| panic!("`{node}` was rendered"));
+        let parsed: serde_json::Value = serde_json::from_str(file.content())
+            .unwrap_or_else(|err| panic!("`{node}` must parse as JSON: {err}"));
+        checked_files += 1;
+        for step in parsed["steps"].as_array().unwrap_or_else(|| {
+            panic!("`{node}`.steps must be an array");
+        }) {
+            let Some(command) = step.get("command").and_then(|c| c.as_str()) else {
+                continue;
+            };
+            for path in extract_walter_paths(command) {
+                assert!(
+                    known_paths.contains(path.as_str()),
+                    "`{node}`'s step `{}` command names `{path}`, which is not a path in \
+                     WALTER_FILES",
+                    step["key"]
+                );
+            }
+        }
+    }
+
+    for node in ["upload_pipeline_sh", "stage_input_pre_command"] {
+        let (_, file) = rendered
+            .iter()
+            .find(|(n, _)| *n == node)
+            .unwrap_or_else(|| panic!("`{node}` was rendered"));
+        checked_files += 1;
+        for path in extract_walter_paths(file.content()) {
+            assert!(
+                known_paths.contains(path.as_str()),
+                "`{node}` names `{path}`, which is not a path in WALTER_FILES"
+            );
+        }
+    }
+    assert_eq!(
+        checked_files, 6,
+        "every command/hook-bearing file was scanned"
+    );
+
+    // The upload step's local plugin reference is a directory
+    // (`./apps/walter/.buildkite/plugins/stage-input`), not a file
+    // `WALTER_FILES` binds directly -- but it must be the exact parent of
+    // both files the plugin ships, which is the typo this reference can
+    // actually hide.
+    let (_, release_file) = rendered
+        .iter()
+        .find(|(n, _)| *n == "release_yml")
+        .expect("release_yml was rendered");
+    let release: serde_json::Value =
+        serde_json::from_str(release_file.content()).expect("release.yml must parse as JSON");
+    let upload_step = release["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["key"] == "walter-upload")
+        .expect("walter-upload step exists");
+    let plugin_dir = upload_step["plugins"]
+        .as_array()
+        .expect("walter-upload.plugins is an array")
+        .iter()
+        .find_map(|plugin| {
+            plugin
+                .as_object()
+                .and_then(|map| map.keys().find(|k| k.starts_with("./")))
+        })
+        .expect("walter-upload names the local stage-input plugin")
+        .strip_prefix("./")
+        .expect("the local plugin key starts with ./")
+        .to_string();
+    for suffix in ["plugin.yml", "hooks/pre-command"] {
+        let expected = format!("{plugin_dir}/{suffix}");
+        assert!(
+            known_paths.contains(expected.as_str()),
+            "the local plugin directory `{plugin_dir}` must be the parent of `{suffix}` in \
+             WALTER_FILES, got no match for `{expected}`"
+        );
+    }
+}
+
+/// The stage-input hook is sourced by the Buildkite agent, never executed
+/// as its own process: it must never `exec` (which would replace the
+/// sourcing shell) and never `exit` (which would skip the wrapper's own
+/// after-dump).
+#[test]
+fn the_stage_input_hook_never_execs_or_exits() {
+    let rendered = rendered_files_for_the_real_identifiers();
+    let (_, file) = rendered
+        .iter()
+        .find(|(n, _)| *n == "stage_input_pre_command")
+        .expect("stage_input_pre_command was rendered");
+    let content = file.content();
+    assert!(
+        !content.contains("exec "),
+        "the hook must never exec, since the agent sources it: {content}"
+    );
+    assert!(
+        !content.contains("exit"),
+        "the hook must never exit, since the agent sources it: {content}"
+    );
 }

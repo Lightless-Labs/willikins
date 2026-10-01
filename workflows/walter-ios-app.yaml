@@ -3630,6 +3630,232 @@ steps:
         if __name__ == "__main__":
             unittest.main()
 
+  # W6 (milestone 3h, decisions (c), (e)): the signing preflight -- the
+  # same checks the package job runs first (Doppler names present,
+  # keychain lifecycle with an emptiness check, profiles fetched by name,
+  # identity∩profile intersection, entitlement coverage), no build. Carries
+  # decision (d)'s env block like every pipeline-definition file.
+  signing_preflight_yml:
+    tool: repo.file.render
+    with:
+      path: apps/walter/.buildkite/signing-preflight.yml
+      template: |
+        {
+          "env": {
+            "GIT_CONFIG_COUNT": "3",
+            "GIT_CONFIG_KEY_0": "credential.https://github.com/Bande-a-Bonnot/monorepo.git.helper",
+            "GIT_CONFIG_VALUE_0": "",
+            "GIT_CONFIG_KEY_1": "credential.https://github.com/Bande-a-Bonnot/monorepo.git.helper",
+            "GIT_CONFIG_VALUE_1": "!buildkite-agent secret get DOPPLER_SERVICE_ACCOUNT_TOKEN | sed 's/^/Authorization: Bearer /' | curl -fsS --max-time 20 -H @- 'https://api.doppler.com/v3/configs/config/secret?project=walter&config=prd_deployment_ios&name=GH_CLONE_TOKEN' | python3 -c 'import json, sys; print(\"username=x-access-token\"); print(\"password=\" + json.load(sys.stdin)[\"value\"][\"computed\"])'",
+            "GIT_CONFIG_KEY_2": "url.https://github.com/Bande-a-Bonnot/monorepo.git.insteadOf",
+            "GIT_CONFIG_VALUE_2": "git@github.com:Bande-a-Bonnot/monorepo.git"
+          },
+          "steps": [
+            {
+              "key": "walter-signing-preflight",
+              "label": "Walter: signing access preflight",
+              "timeout_in_minutes": 15,
+              "concurrency": 1,
+              "concurrency_group": "big-cabbage/tart-ci-macos",
+              "agents": {"queue": "ci-macos-apple-silicon"},
+              "env": {"CI": "true", "TART_NO_AUTO_PRUNE": "1"},
+              "plugins": [
+                {
+                  "github.com/Lightless-Labs/tart-ci#11fc336384a3c2a88209dfba3c429bbf61c1dac7": {
+                    "image": "ci-macos-rust-bazel-ios-20260910-v2",
+                    "os": "macos",
+                    "headless": true,
+                    "always_pull": false,
+                    "shell": "/bin/bash",
+                    "checkout_mount": "checkout",
+                    "doppler_token_secret": "DOPPLER_SERVICE_ACCOUNT_TOKEN",
+                    "env": [
+                      "BUILDKITE_COMMIT",
+                      "BUILDKITE_JOB_ID",
+                      "BUILDKITE_BUILD_ID",
+                      "BUILDKITE_BUILD_NUMBER",
+                      "BUILDKITE_PIPELINE_SLUG",
+                      "BUILDKITE_BUILD_URL",
+                      "CI"
+                    ]
+                  }
+                }
+              ],
+              "command": "python3 apps/walter/tools/walter_ci.py signing-preflight"
+            }
+          ]
+        }
+
+  # W6 (milestone 3h, decisions (c), (e)): the release graph -- validation,
+  # then an isolated signed package (depends_on, doppler_token_secret, the
+  # three package outputs as artifact_paths), then upload-only (depends_on,
+  # doppler_token_secret, the local stage-input plugin). Every step
+  # disables both automatic and manual retry (cookbook: an uncertain
+  # upload must be reconciled by hand, never silently repeated).
+  release_yml:
+    tool: repo.file.render
+    with:
+      path: apps/walter/.buildkite/release.yml
+      template: |
+        {
+          "env": {
+            "GIT_CONFIG_COUNT": "3",
+            "GIT_CONFIG_KEY_0": "credential.https://github.com/Bande-a-Bonnot/monorepo.git.helper",
+            "GIT_CONFIG_VALUE_0": "",
+            "GIT_CONFIG_KEY_1": "credential.https://github.com/Bande-a-Bonnot/monorepo.git.helper",
+            "GIT_CONFIG_VALUE_1": "!buildkite-agent secret get DOPPLER_SERVICE_ACCOUNT_TOKEN | sed 's/^/Authorization: Bearer /' | curl -fsS --max-time 20 -H @- 'https://api.doppler.com/v3/configs/config/secret?project=walter&config=prd_deployment_ios&name=GH_CLONE_TOKEN' | python3 -c 'import json, sys; print(\"username=x-access-token\"); print(\"password=\" + json.load(sys.stdin)[\"value\"][\"computed\"])'",
+            "GIT_CONFIG_KEY_2": "url.https://github.com/Bande-a-Bonnot/monorepo.git.insteadOf",
+            "GIT_CONFIG_VALUE_2": "git@github.com:Bande-a-Bonnot/monorepo.git"
+          },
+          "steps": [
+            {
+              "key": "walter-validation",
+              "label": "Walter: credential-free validation",
+              "timeout_in_minutes": 180,
+              "retry": {"automatic": false, "manual": false},
+              "concurrency": 1,
+              "concurrency_group": "big-cabbage/tart-ci-macos",
+              "agents": {"queue": "ci-macos-apple-silicon"},
+              "env": {"CI": "true", "TART_NO_AUTO_PRUNE": "1"},
+              "plugins": [
+                {
+                  "github.com/Lightless-Labs/tart-ci#11fc336384a3c2a88209dfba3c429bbf61c1dac7": {
+                    "image": "ci-macos-rust-bazel-ios-20260910-v2",
+                    "os": "macos",
+                    "headless": true,
+                    "always_pull": false,
+                    "shell": "/bin/bash",
+                    "checkout_mount": "checkout",
+                    "env": [
+                      "BUILDKITE_COMMIT",
+                      "BUILDKITE_JOB_ID",
+                      "BUILDKITE_BUILD_ID",
+                      "BUILDKITE_BUILD_NUMBER",
+                      "BUILDKITE_PIPELINE_SLUG",
+                      "BUILDKITE_BUILD_URL",
+                      "CI"
+                    ]
+                  }
+                }
+              ],
+              "command": "python3 apps/walter/tools/walter_ci.py validate",
+              "artifact_paths": "apps/walter/.ci-artifacts/validation/**/*"
+            },
+            {
+              "key": "walter-package",
+              "depends_on": "walter-validation",
+              "label": "Walter: isolated signed package",
+              "timeout_in_minutes": 150,
+              "retry": {"automatic": false, "manual": false},
+              "concurrency": 1,
+              "concurrency_group": "big-cabbage/tart-ci-macos",
+              "agents": {"queue": "ci-macos-apple-silicon"},
+              "env": {"CI": "true", "TART_NO_AUTO_PRUNE": "1"},
+              "plugins": [
+                {
+                  "github.com/Lightless-Labs/tart-ci#11fc336384a3c2a88209dfba3c429bbf61c1dac7": {
+                    "image": "ci-macos-rust-bazel-ios-20260910-v2",
+                    "os": "macos",
+                    "headless": true,
+                    "always_pull": false,
+                    "shell": "/bin/bash",
+                    "checkout_mount": "checkout",
+                    "doppler_token_secret": "DOPPLER_SERVICE_ACCOUNT_TOKEN",
+                    "env": [
+                      "BUILDKITE_COMMIT",
+                      "BUILDKITE_JOB_ID",
+                      "BUILDKITE_BUILD_ID",
+                      "BUILDKITE_BUILD_NUMBER",
+                      "BUILDKITE_PIPELINE_SLUG",
+                      "BUILDKITE_BUILD_URL",
+                      "CI"
+                    ]
+                  }
+                }
+              ],
+              "command": "python3 apps/walter/tools/walter_ci.py package",
+              "artifact_paths": [
+                "apps/walter/.ci-artifacts/package/Walter.ipa",
+                "apps/walter/.ci-artifacts/package/package-receipt.json",
+                "apps/walter/.ci-artifacts/package/inspection-report.json"
+              ]
+            },
+            {
+              "key": "walter-upload",
+              "depends_on": "walter-package",
+              "label": "Walter: upload exact verified IPA",
+              "timeout_in_minutes": 120,
+              "retry": {"automatic": false, "manual": false},
+              "concurrency": 1,
+              "concurrency_group": "big-cabbage/tart-ci-macos",
+              "agents": {"queue": "ci-macos-apple-silicon"},
+              "env": {"CI": "true", "TART_NO_AUTO_PRUNE": "1"},
+              "plugins": [
+                {
+                  "github.com/Lightless-Labs/tart-ci#11fc336384a3c2a88209dfba3c429bbf61c1dac7": {
+                    "image": "ci-macos-rust-bazel-ios-20260910-v2",
+                    "os": "macos",
+                    "headless": true,
+                    "always_pull": false,
+                    "shell": "/bin/bash",
+                    "checkout_mount": "checkout",
+                    "doppler_token_secret": "DOPPLER_SERVICE_ACCOUNT_TOKEN",
+                    "env": [
+                      "BUILDKITE_COMMIT",
+                      "BUILDKITE_JOB_ID",
+                      "BUILDKITE_BUILD_ID",
+                      "BUILDKITE_BUILD_NUMBER",
+                      "BUILDKITE_PIPELINE_SLUG",
+                      "BUILDKITE_BUILD_URL",
+                      "CI"
+                    ]
+                  }
+                },
+                {"./apps/walter/.buildkite/plugins/stage-input": {}}
+              ],
+              "command": "python3 apps/walter/tools/walter_ci.py upload",
+              "artifact_paths": "apps/walter/.ci-artifacts/upload/**/*"
+            }
+          ]
+        }
+
+  # W6 (milestone 3h, decision (e)): the local plugin that binds the
+  # upload step to its predecessor's verified artifacts within the same
+  # build -- no configuration properties, so there is nothing to template.
+  stage_input_plugin_yml:
+    tool: repo.file.render
+    with:
+      path: apps/walter/.buildkite/plugins/stage-input/plugin.yml
+      template: |
+        {
+          "name": "Walter Release Stage Input",
+          "description": "Bind a release stage to its predecessor's verified artifacts within the same build.",
+          "author": "https://github.com/Bande-a-Bonnot",
+          "requirements": ["python3", "buildkite-agent"],
+          "configuration": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+
+  # W6 (milestone 3h, decision (e)): the host-side hook -- sourced by the
+  # Buildkite agent (a 100644 POSIX-shell hook is TypeShell and is
+  # sourced, never executed), so it must never `exec` and never `exit` on
+  # its success path, or the wrapper's own after-dump never runs. Stages
+  # walter-package's verified bytes into this build's checkout so
+  # walter-upload, running in the same build, can send exactly them.
+  stage_input_pre_command:
+    tool: repo.file.render
+    with:
+      path: apps/walter/.buildkite/plugins/stage-input/hooks/pre-command
+      template: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        : "${BUILDKITE_BUILD_CHECKOUT_PATH:?missing Buildkite checkout path}"
+        python3 "$BUILDKITE_BUILD_CHECKOUT_PATH/apps/walter/tools/walter_ci.py" stage-ipa --checkout "$BUILDKITE_BUILD_CHECKOUT_PATH"
+
   # W1: the write credential (decision (l)) -- new and narrow (Contents:
   # read and write only, never the older, wider gh_token above), from a
   # Doppler branch config no app config inherits.
@@ -3683,6 +3909,10 @@ steps:
         - ${{ steps.test_walter_ipa_py.file }}
         - ${{ steps.walter_ci_py.file }}
         - ${{ steps.test_walter_ci_py.file }}
+        - ${{ steps.signing_preflight_yml.file }}
+        - ${{ steps.release_yml.file }}
+        - ${{ steps.stage_input_plugin_yml.file }}
+        - ${{ steps.stage_input_pre_command.file }}
       message: "feat(walter): scaffold the iOS app, NSE, widgets and Buildkite files"
       token: ${{ steps.gh_write_token.value }}
 

@@ -1,0 +1,51 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/.buildkite/signing-preflight.yml
+---
+{
+  "env": {
+    "GIT_CONFIG_COUNT": "3",
+    "GIT_CONFIG_KEY_0": "credential.https://github.com/Bande-a-Bonnot/monorepo.git.helper",
+    "GIT_CONFIG_VALUE_0": "",
+    "GIT_CONFIG_KEY_1": "credential.https://github.com/Bande-a-Bonnot/monorepo.git.helper",
+    "GIT_CONFIG_VALUE_1": "!buildkite-agent secret get DOPPLER_SERVICE_ACCOUNT_TOKEN | sed 's/^/Authorization: Bearer /' | curl -fsS --max-time 20 -H @- 'https://api.doppler.com/v3/configs/config/secret?project=walter&config=prd_deployment_ios&name=GH_CLONE_TOKEN' | python3 -c 'import json, sys; print(\"username=x-access-token\"); print(\"password=\" + json.load(sys.stdin)[\"value\"][\"computed\"])'",
+    "GIT_CONFIG_KEY_2": "url.https://github.com/Bande-a-Bonnot/monorepo.git.insteadOf",
+    "GIT_CONFIG_VALUE_2": "git@github.com:Bande-a-Bonnot/monorepo.git"
+  },
+  "steps": [
+    {
+      "key": "walter-signing-preflight",
+      "label": "Walter: signing access preflight",
+      "timeout_in_minutes": 15,
+      "concurrency": 1,
+      "concurrency_group": "big-cabbage/tart-ci-macos",
+      "agents": {"queue": "ci-macos-apple-silicon"},
+      "env": {"CI": "true", "TART_NO_AUTO_PRUNE": "1"},
+      "plugins": [
+        {
+          "github.com/Lightless-Labs/tart-ci#11fc336384a3c2a88209dfba3c429bbf61c1dac7": {
+            "image": "ci-macos-rust-bazel-ios-20260910-v2",
+            "os": "macos",
+            "headless": true,
+            "always_pull": false,
+            "shell": "/bin/bash",
+            "checkout_mount": "checkout",
+            "doppler_token_secret": "DOPPLER_SERVICE_ACCOUNT_TOKEN",
+            "env": [
+              "BUILDKITE_COMMIT",
+              "BUILDKITE_JOB_ID",
+              "BUILDKITE_BUILD_ID",
+              "BUILDKITE_BUILD_NUMBER",
+              "BUILDKITE_PIPELINE_SLUG",
+              "BUILDKITE_BUILD_URL",
+              "CI"
+            ]
+          }
+        }
+      ],
+      "command": "python3 apps/walter/tools/walter_ci.py signing-preflight"
+    }
+  ]
+}

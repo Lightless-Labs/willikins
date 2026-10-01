@@ -1,0 +1,17 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/.buildkite/plugins/stage-input/plugin.yml
+---
+{
+  "name": "Walter Release Stage Input",
+  "description": "Bind a release stage to its predecessor's verified artifacts within the same build.",
+  "author": "https://github.com/Bande-a-Bonnot",
+  "requirements": ["python3", "buildkite-agent"],
+  "configuration": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}
