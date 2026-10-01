@@ -62,6 +62,6 @@ pub use client::{
 pub use tools::{
     DopplerBranchConfigEnsure, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
     DopplerConfigInheritableGate, DopplerConfigInheritsEnsure, DopplerProjectEnsure,
-    DopplerSecretGet, DopplerSecretSet, DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
-    DopplerValueGet,
+    DopplerProjectMemberEnsure, DopplerSecretGet, DopplerSecretSet, DopplerServiceTokenEnsure,
+    DopplerServiceTokenRotate, DopplerValueGet,
 };
