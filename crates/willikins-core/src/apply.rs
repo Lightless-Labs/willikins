@@ -887,6 +887,15 @@ pub fn apply(
 /// call and `ensure`'s own re-resolve, the same one every read-then-write
 /// has.
 ///
+/// Has no counterpart for [`Tool::updates`] (milestone 3h): an update
+/// never deletes anything, so there is nothing here for an unplanned one
+/// to make safe. A node planned [`Action::Update`] whose `replaces` turns
+/// `true` mid-run still hits this guard exactly as a `NoOp` or `Create`
+/// does -- `planned.action == Action::Replace` is the only exemption --
+/// and an unplanned `Create`-to-`Update` (or `Update`-to-`Create`) change
+/// mid-run is caught earlier still, by `check_drift`'s
+/// [`DriftKind::Action`], before any node in the run executes.
+///
 /// # Errors
 ///
 /// [`ToolErrorKind::Conflict`] for an unplanned replacement, or whatever
