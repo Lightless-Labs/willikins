@@ -264,12 +264,13 @@ fn list_project_names(http: &Http) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// `GET /v3/workplace/service_accounts?per_page=100`, every listed
-/// account's `(name, slug)`.
-fn list_service_accounts(http: &Http) -> Vec<(String, String)> {
-    let body = http
-        .get::<Json>("/v3/workplace/service_accounts?per_page=100")
-        .expect("listing service accounts failed");
+/// Every listed service account's `(name, slug)`, from an already-fetched
+/// `{"service_accounts": [...]}` body. Split out from
+/// [`list_service_accounts`] so [`Guard`]'s `Drop` can resolve names to
+/// slugs without the panicking `GET` that function itself does -- a
+/// listing failure during cleanup must be reported, never crash the
+/// unwind in progress.
+fn parse_service_accounts(body: &Json) -> Vec<(String, String)> {
     body.get("service_accounts")
         .and_then(Json::as_array)
         .map(|items| {
@@ -285,8 +286,23 @@ fn list_service_accounts(http: &Http) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-/// A created-or-looked-up resource's slug, tolerant of either
-/// `{"<kind>": {"slug": ...}}` or a bare `{"slug": ...}` envelope.
+/// `GET /v3/workplace/service_accounts?per_page=100`, every listed
+/// account's `(name, slug)`.
+fn list_service_accounts(http: &Http) -> Vec<(String, String)> {
+    let body = http
+        .get::<Json>("/v3/workplace/service_accounts?per_page=100")
+        .expect("listing service accounts failed");
+    parse_service_accounts(&body)
+}
+
+/// A created-or-looked-up project's slug, tolerant of either
+/// `{"project": {"slug": ...}}` or a bare `{"slug": ...}` envelope --
+/// used only for the creator's own account, to find its listed
+/// permissions in [`step_2`]. [`Guard`] is never given a slug this way:
+/// it registers and deletes service accounts **by name**
+/// ([`list_service_accounts`] resolves the current slug at delete time),
+/// so a surprising create-response shape here cannot leave an
+/// unregistered leftover.
 fn slug_of(body: &Json, kind: &str) -> String {
     body.pointer(&format!("/{kind}/slug"))
         .and_then(Json::as_str)
@@ -557,10 +573,15 @@ impl MemberCtx {
 
 /// Deletes every project and service account this run created, on every
 /// exit path -- a panic, a failed assertion, or an early return -- unless
-/// [`Guard::teardown`] already did so and disarmed it. Names are
-/// registered the moment their creation succeeds, before anything is
-/// asserted about them (plan step 2's own instruction), so a later
-/// assertion failure still cleans up everything created so far.
+/// [`Guard::teardown`] already did so and disarmed it. Names (never
+/// slugs -- see [`slug_of`]'s own doc) are registered the moment their
+/// creation succeeds, before anything is asserted about them (plan step
+/// 2's own instruction), so a later assertion failure still cleans up
+/// everything created so far. A service account is therefore deleted **by
+/// recorded name**: its current slug is resolved from a fresh listing at
+/// delete time, every matching entry at once -- step 9 may register the
+/// same name twice (the CI account and, if Doppler allowed it, its
+/// duplicate), and both must go.
 struct Guard {
     admin: Arc<Http>,
     projects: Vec<String>,
@@ -580,8 +601,8 @@ impl Guard {
         self.projects.push(name.to_string());
     }
 
-    fn register_service_account(&mut self, slug: &str) {
-        self.service_accounts.push(slug.to_string());
+    fn register_service_account(&mut self, name: &str) {
+        self.service_accounts.push(name.to_string());
     }
 
     fn disarm(&mut self) {
@@ -600,6 +621,16 @@ impl Guard {
         admin.delete(&format!(
             "/v3/workplace/service_accounts/service_account/{slug}"
         ))
+    }
+
+    /// Every currently-listed slug for `name`, usually zero or one but
+    /// possibly more (step 9's duplicate).
+    fn slugs_named<'a>(listing: &'a [(String, String)], name: &str) -> Vec<&'a str> {
+        listing
+            .iter()
+            .filter(|(listed, _)| listed == name)
+            .map(|(_, slug)| slug.as_str())
+            .collect()
     }
 
     /// Step 10: delete everything registered, confirm each project is
@@ -621,13 +652,17 @@ impl Guard {
                 "step 10: project `{project}` is still readable right after its own delete"
             );
         }
-        for slug in self.service_accounts.clone() {
-            Self::delete_service_account(&self.admin, &slug).unwrap_or_else(|err| {
-                panic!(
-                    "step 10: deleting service account `{slug}` failed (status {:?})",
-                    err.status
-                )
-            });
+        let listing = list_service_accounts(&self.admin);
+        for name in self.service_accounts.clone() {
+            for slug in Self::slugs_named(&listing, &name) {
+                Self::delete_service_account(&self.admin, slug).unwrap_or_else(|err| {
+                    panic!(
+                        "step 10: deleting service account `{name}` (slug `{slug}`) failed \
+                         (status {:?})",
+                        err.status
+                    )
+                });
+            }
         }
         self.disarm();
         harness.say(
@@ -663,24 +698,65 @@ impl Drop for Guard {
                 }
             }
         }
-        for slug in &self.service_accounts {
-            match Self::delete_service_account(&self.admin, slug) {
-                Ok(()) => println!("guard: deleted service account `{slug}`"),
-                Err(err) if err.status == Some(404) => {
-                    println!("guard: service account `{slug}` was already gone");
-                }
-                Err(err) => {
-                    println!(
-                        "guard: !!! LEFTOVER SERVICE ACCOUNT `{slug}` !!! (status {:?}); \
-                         delete it by hand",
-                        err.status
-                    );
-                    assert!(
-                        already_panicking,
-                        "the guard could not delete service account `{slug}` (status {:?})",
-                        err.status
-                    );
-                }
+        self.drop_service_accounts(already_panicking);
+    }
+}
+
+impl Guard {
+    /// [`Drop`]'s own service-account half, split out so `drop` itself
+    /// stays short: a listing failure here must be reported, not let
+    /// `list_service_accounts`'s own panicking `GET` abort an unwind
+    /// already in progress, so this resolves the listing with `.ok()`
+    /// and treats a failure to list as a failure to confirm every name is
+    /// gone.
+    fn drop_service_accounts(&self, already_panicking: bool) {
+        let listing = self
+            .admin
+            .get::<Json>("/v3/workplace/service_accounts?per_page=100")
+            .ok()
+            .map(|body| parse_service_accounts(&body));
+        let Some(listing) = listing else {
+            println!(
+                "guard: !!! could not list service accounts to resolve these by name: {:?} !!! \
+                 check them by hand",
+                self.service_accounts
+            );
+            assert!(
+                already_panicking,
+                "the guard could not list service accounts to clean up: {:?}",
+                self.service_accounts
+            );
+            return;
+        };
+        for name in &self.service_accounts {
+            let slugs = Self::slugs_named(&listing, name);
+            if slugs.is_empty() {
+                println!("guard: service account `{name}` was already gone");
+                continue;
+            }
+            for slug in slugs {
+                Self::delete_one_service_account(&self.admin, name, slug, already_panicking);
+            }
+        }
+    }
+
+    fn delete_one_service_account(admin: &Http, name: &str, slug: &str, already_panicking: bool) {
+        match Self::delete_service_account(admin, slug) {
+            Ok(()) => println!("guard: deleted service account `{name}`"),
+            Err(err) if err.status == Some(404) => {
+                println!("guard: service account `{name}` was already gone");
+            }
+            Err(err) => {
+                println!(
+                    "guard: !!! LEFTOVER SERVICE ACCOUNT `{name}` !!! (status {:?}); delete it \
+                     by hand",
+                    err.status
+                );
+                assert!(
+                    already_panicking,
+                    "the guard could not delete service account `{name}` (status {:?})",
+                    err.status
+                );
             }
         }
     }
@@ -731,8 +807,10 @@ struct Accounts {
     ci_token: String,
 }
 
-/// Step 2: create both throwaway service accounts, registering each slug
-/// with `guard` the moment its creation succeeds, before any assertion;
+/// Step 2: create both throwaway service accounts, registering each
+/// **name** with `guard` *before* the request that may create it (so a
+/// create that lands and then fails some other way is still cleaned up,
+/// the same ordering `live_write_cycle.rs`'s own `ProjectGuard` uses);
 /// mint a one-hour token for each; confirm the creator's workplace role
 /// is exactly its three permissions.
 fn step_2(
@@ -743,15 +821,15 @@ fn step_2(
     unix: u64,
 ) -> Accounts {
     let creator_name = format!("{PROBE_PREFIX}-creator-{unix}");
+    guard.register_service_account(&creator_name);
     let creator_body = create_creator_account(admin, &creator_name);
     let creator_slug = slug_of(&creator_body, "service_account");
-    guard.register_service_account(&creator_slug);
     let creator_token = mint_token(admin, &creator_slug, now);
 
     let ci_name = format!("{PROBE_PREFIX}-ci-{unix}");
+    guard.register_service_account(&ci_name);
     let ci_body = create_ci_account(admin, &ci_name);
     let ci_slug = slug_of(&ci_body, "service_account");
-    guard.register_service_account(&ci_slug);
     let ci_token = mint_token(admin, &ci_slug, now);
 
     let listing = list_service_accounts(admin);
@@ -821,7 +899,13 @@ fn step_3(
         INHERITED_SECRET_NAME,
         &secret_value,
     );
-    set_inherits(creator, &project_name, "prd_ci", &base_project_name, "prd");
+    // "As the admin": the admin token is the one already used throughout
+    // steps 4/6/7 to list and PATCH members on the creator's own project,
+    // so it is the principal with visibility into both projects here too.
+    // The creator's own workplace role (create_enclave_project, team,
+    // service_accounts) gives it no standing to read the *base* project it
+    // never created, so this must not run as the creator.
+    set_inherits(admin, &project_name, "prd_ci", &base_project_name, "prd");
 
     let project = DopplerProject::parse(&project_name).expect("step 3: the project name parses");
     harness.say(format!(
@@ -1023,21 +1107,19 @@ fn step_8(ci: &Http, harness: &mut Harness, ctx: &MemberCtx) {
 /// account's exact name (verify item 6). Whichever branch Doppler takes,
 /// confirms the corresponding `read` outcome the tool was never tested
 /// against live before.
-fn step_9(
-    admin: &Http,
-    tool: &DopplerProjectMemberEnsure,
-    guard: &mut Guard,
-    harness: &mut Harness,
-    ctx: &MemberCtx,
-) {
+fn step_9(admin: &Http, tool: &DopplerProjectMemberEnsure, harness: &mut Harness, ctx: &MemberCtx) {
     let attempt = admin.post::<Json>(
         "/v3/workplace/service_accounts",
         &serde_json::json!({"name": ctx.ci_account.to_string()}),
     );
     match attempt {
-        Ok(body) => {
-            let slug = slug_of(&body, "service_account");
-            guard.register_service_account(&slug);
+        // No extra `guard.register_service_account` call here: the CI
+        // account's name was already registered in step 2, and the guard
+        // deletes every account currently listed under a registered
+        // name, so a same-named duplicate is covered without being told
+        // about it twice (which would double the delete attempts and
+        // trip teardown's own no-404-tolerance on the second pass).
+        Ok(_body) => {
             let err = tool
                 .read(&ctx.inputs())
                 .expect_err("step 9: a duplicated name must make read refuse");
@@ -1124,7 +1206,7 @@ fn doppler_live_project_member_cycle() {
     step_6(&tool, &admin, &mut harness, &ctx);
     step_7(&tool, &admin, &mut harness, &ctx);
     step_8(&ci, &mut harness, &ctx);
-    step_9(&admin, &tool, &mut guard, &mut harness, &ctx);
+    step_9(&admin, &tool, &mut harness, &ctx);
 
     guard.teardown(&mut harness);
     let projects_after = list_project_names(&admin).len();
