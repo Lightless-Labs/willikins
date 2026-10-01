@@ -1609,6 +1609,90 @@ fn walter_files_files_are_fully_known_at_plan_on_a_first_run() {
     }
 }
 
+/// Acceptance 10's clause W1 left untested: once the scaffold has landed,
+/// a re-run with the marker present and **every** seeded file edited in
+/// the fake state plans `walter_files` `NoOp`, applies it `Unchanged`,
+/// and leaves every edit -- and the marker -- exactly as it found them.
+/// The marker alone decides (decision (c)); a seed is never re-read.
+#[test]
+fn a_rerun_with_every_seeded_file_edited_plans_walter_files_noop() {
+    let workflow = document();
+    let state = seeded_state();
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+    let inputs = base_inputs();
+
+    let planned1 = plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("{err}"));
+    let mut observer1 = RecordingObserver::new();
+    let applied1 = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &planned1,
+        &approval(),
+        &mut observer1,
+    )
+    .expect("run 1 applies (blocked gates are Ok)");
+    assert!(
+        matches!(
+            status_of(&applied1, "walter_files", None),
+            NodeStatus::Created
+        ),
+        "run 1 lands the scaffold"
+    );
+
+    let key = willikins_providers_fake::state::scaffold_key(
+        &GitHubRepo::parse(MONOREPO).unwrap(),
+        &willikins_types::GitBranchName::parse("main").unwrap(),
+    );
+    let edited: std::collections::HashMap<String, String> = {
+        let mut locked = state.lock().unwrap();
+        let landed = locked
+            .scaffolds
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("run 1 landed files at `{key}`"));
+        assert_eq!(
+            landed.len(),
+            RENDER_NODES_IN_FILES_ORDER.len() + 1,
+            "seventeen seeds plus the marker landed"
+        );
+        for (path, content) in landed.iter_mut() {
+            if path != MARKER {
+                *content = format!("# a developer rewrote {path}\n");
+            }
+        }
+        landed.clone()
+    };
+
+    let planned2 = plan(&checked, &inputs, &catalog)
+        .unwrap_or_else(|err| panic!("a re-run over edited seeds plans: {err}"));
+    assert_eq!(action_of(&planned2, "walter_files", None), Action::NoOp);
+    let mut observer2 = RecordingObserver::new();
+    let applied2 = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &planned2,
+        &approval(),
+        &mut observer2,
+    )
+    .expect("run 2 applies");
+    assert!(
+        matches!(
+            status_of(&applied2, "walter_files", None),
+            NodeStatus::Unchanged
+        ),
+        "run 2: walter_files must be Unchanged, got {:?}",
+        status_of(&applied2, "walter_files", None)
+    );
+    assert_eq!(
+        state.lock().unwrap().scaffolds.get(&key),
+        Some(&edited),
+        "every developer edit and the marker survive the re-run untouched"
+    );
+}
+
 /// Decision (b)'s `Foreign` row at the document level: a marker path that
 /// already holds a file willikins did not write fails `plan` as
 /// `NameTaken` on `walter_files`, naming the marker in its key, and
