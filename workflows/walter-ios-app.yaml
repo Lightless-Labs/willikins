@@ -1319,6 +1319,35 @@ steps:
         Triggers stay disabled until this scaffold has been reviewed and the pipeline
         has run at least once with real content.
 
+  # W2 (milestone 3h, decision (h)): `.gitignore` and `release-config.json`,
+  # the only files with new placeholders. `release-config.json`'s three
+  # bundle ids are each a whole JSON string value, never spliced into
+  # Python -- the only placeholder shape the scripts (W3-W5) need.
+  walter_gitignore:
+    tool: repo.file.render
+    with:
+      path: apps/walter/.gitignore
+      template: |
+        /.ci-artifacts/
+  release_config_json:
+    tool: repo.file.render
+    with:
+      path: apps/walter/tools/release-config.json
+      values: ['${{ inputs.app_identifier }}', '${{ inputs.nse_identifier }}', '${{ inputs.widgets_identifier }}']
+      template: |
+        {
+          "schema": 1,
+          "bundle_ids": {
+            "app": "{{ 0 }}",
+            "nse": "{{ 1 }}",
+            "widgets": "{{ 2 }}"
+          },
+          "marketing_version": "0.1.0",
+          "build_number_offset": 0,
+          "doppler": {"project": "walter", "config": "prd_deployment_ios"},
+          "bazel_target": "//apps/walter/ios:Walter"
+        }
+
   # W1: the write credential (decision (l)) -- new and narrow (Contents:
   # read and write only, never the older, wider gh_token above), from a
   # Doppler branch config no app config inherits.
@@ -1359,6 +1388,8 @@ steps:
         - ${{ steps.provider_settings.file }}
         - ${{ steps.buildkite_readme.file }}
         - ${{ steps.generate_app_icon_py.file }}
+        - ${{ steps.walter_gitignore.file }}
+        - ${{ steps.release_config_json.file }}
       message: "feat(walter): scaffold the iOS app, NSE, widgets and Buildkite files"
       token: ${{ steps.gh_write_token.value }}
 

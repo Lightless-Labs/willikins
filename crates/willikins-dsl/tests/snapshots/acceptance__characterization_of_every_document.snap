@@ -770,6 +770,11 @@ provider_settings.path: RepoPath
 provider_settings.template: TemplateSource
 buildkite_readme.path: RepoPath
 buildkite_readme.template: TemplateSource
+walter_gitignore.path: RepoPath
+walter_gitignore.template: TemplateSource
+release_config_json.path: RepoPath
+release_config_json.template: TemplateSource
+release_config_json.values: TemplateValue
 gh_write_token_secret.config: DopplerConfig
 gh_write_token_secret.name: SecretName
 gh_write_token.value: DopplerSecretValue

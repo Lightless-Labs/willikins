@@ -1524,6 +1524,30 @@ fn info_plist_declares_all_four_interface_orientations_in_danksworths_order() {
     );
 }
 
+/// Acceptance 8 (W2, decision (h)): the rendered `tools/release-config.json`
+/// parses with `serde_json` and holds the three real bundle identifiers.
+#[test]
+fn rendered_release_config_json_parses_and_holds_the_real_identifiers() {
+    let (_, file) = rendered_files_for_the_real_identifiers()
+        .into_iter()
+        .find(|(node, _)| *node == "release_config_json")
+        .expect("release_config_json was rendered");
+    let parsed: serde_json::Value = serde_json::from_str(file.content())
+        .unwrap_or_else(|err| panic!("rendered release-config.json must parse as JSON: {err}"));
+    assert_eq!(
+        parsed["bundle_ids"]["app"], "com.bande-a-bonnot.walter",
+        "bundle_ids.app must hold the real app identifier"
+    );
+    assert_eq!(
+        parsed["bundle_ids"]["nse"], "com.bande-a-bonnot.walter.nse",
+        "bundle_ids.nse must hold the real NSE identifier"
+    );
+    assert_eq!(
+        parsed["bundle_ids"]["widgets"], "com.bande-a-bonnot.walter.widgets",
+        "bundle_ids.widgets must hold the real widgets identifier"
+    );
+}
+
 /// Every render node's planned `file`, for the real identifiers
 /// `com.bande-a-bonnot.walter`, `.nse`, `.widgets`. Read at plan time:
 /// `repo.file.render` is pure, so `plan` itself computes and carries every
@@ -1635,13 +1659,19 @@ const WALTER_FILES: &[(&str, &str)] = &[
         "generate_app_icon_py",
         "apps/walter/ios/tools/generate_app_icon.py",
     ),
+    ("walter_gitignore", "apps/walter/.gitignore"),
+    (
+        "release_config_json",
+        "apps/walter/tools/release-config.json",
+    ),
 ];
 
 /// W0: the number of `{{ N }}` placeholders `every_placeholder_sits_in_a_quoted_or_identifier_only_position`
 /// expects across every render in [`WALTER_FILES`] (six in
 /// `ios/BUILD.bazel`: three profile names, three bundle ids; one app
-/// group per entitlements file).
-const PLACEHOLDER_COUNT: usize = 9;
+/// group per entitlements file; three JSON-value lines in
+/// `tools/release-config.json`, W2).
+const PLACEHOLDER_COUNT: usize = 12;
 
 /// Walter's scaffold marker, `walter_files.marker`'s own literal.
 const MARKER: &str = "apps/walter/.willikins-scaffold";
@@ -1661,9 +1691,16 @@ const MARKER: &str = "apps/walter/.willikins-scaffold";
 /// A strict allowlist on purpose: a template change that adds a
 /// placeholder anywhere else must change this test, which is the review
 /// that change needs.
+///
+/// W2 extends the allowlist by exactly one shape, `is_quoted_json_value`:
+/// a whole JSON string value `"<key>": "{{ N }}"`, optional trailing
+/// comma, `<key>` in {`app`, `nse`, `widgets`}, allowed only in
+/// `apps/walter/tools/release-config.json` (decision (h)).
 #[test]
 fn every_placeholder_sits_in_a_quoted_or_identifier_only_position() {
     use willikins_core::{Binding, PortName};
+
+    const RELEASE_CONFIG_PATH: &str = "apps/walter/tools/release-config.json";
 
     /// `bundle_id = "{{ N }}",` or `profile_name = "{{ N }}",` -- a whole
     /// Starlark string literal holding exactly one placeholder.
@@ -1687,11 +1724,53 @@ fn every_placeholder_sits_in_a_quoted_or_identifier_only_position() {
             .is_some_and(is_exact_placeholder)
     }
 
+    /// `"app": "{{ 0 }}"`, `"nse": "{{ 1 }}",`, `"widgets": "{{ 2 }}"` --
+    /// a whole JSON string value for one of `release-config.json`'s three
+    /// bundle-id keys, with an optional trailing comma. This shape says
+    /// nothing about which file it is in: the caller restricts it to
+    /// `RELEASE_CONFIG_PATH`.
+    fn is_quoted_json_value(line: &str) -> bool {
+        let line = line.trim();
+        let line = line.strip_suffix(',').unwrap_or(line);
+        ["app", "nse", "widgets"].iter().any(|key| {
+            line.strip_prefix('"')
+                .and_then(|rest| rest.strip_prefix(key))
+                .and_then(|rest| rest.strip_prefix("\": \""))
+                .and_then(|rest| rest.strip_suffix('"'))
+                .is_some_and(is_exact_placeholder)
+        })
+    }
+
     fn is_exact_placeholder(text: &str) -> bool {
         text.strip_prefix("{{ ")
             .and_then(|rest| rest.strip_suffix(" }}"))
             .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
     }
+
+    /// The gate every placeholder line must pass: which shapes are
+    /// allowed, and (for the JSON-value shape) in which one file.
+    fn placeholder_is_allowed(path: &str, line: &str) -> bool {
+        is_quoted_starlark_attribute(line)
+            || is_app_group_string(line)
+            || (path == RELEASE_CONFIG_PATH && is_quoted_json_value(line))
+    }
+
+    // Negative cases (W2), checked before the real document is walked:
+    // the JSON-value shape must be refused outside release-config.json,
+    // and a different shape (a key outside {app, nse, widgets}) must be
+    // refused even inside release-config.json.
+    assert!(
+        placeholder_is_allowed(RELEASE_CONFIG_PATH, "\"app\": \"{{ 0 }}\","),
+        "sanity: the real shape must be accepted in its own file"
+    );
+    assert!(
+        !placeholder_is_allowed("apps/walter/ios/BUILD.bazel", "\"app\": \"{{ 0 }}\","),
+        "the release-config.json JSON-value shape must be refused in any other path"
+    );
+    assert!(
+        !placeholder_is_allowed(RELEASE_CONFIG_PATH, "\"other\": \"{{ 0 }}\","),
+        "a key outside {{app, nse, widgets}} must be refused even in release-config.json"
+    );
 
     let workflow = document();
     let literal = |node: &willikins_core::Node, port: &str| match node
@@ -1712,17 +1791,18 @@ fn every_placeholder_sits_in_a_quoted_or_identifier_only_position() {
         let path = literal(node, "path");
         let template = literal(node, "template");
         let templated_file = path == "apps/walter/ios/BUILD.bazel"
+            || path == RELEASE_CONFIG_PATH
             || std::path::Path::new(&path)
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("entitlements"));
         for line in template.lines().filter(|line| line.contains("{{")) {
             assert!(
                 templated_file,
-                "`{name}` ({path}) holds a placeholder, but only ios/BUILD.bazel and the \
-                 entitlements files may: {line}"
+                "`{name}` ({path}) holds a placeholder, but only ios/BUILD.bazel, the \
+                 entitlements files, and release-config.json may: {line}"
             );
             assert!(
-                is_quoted_starlark_attribute(line) || is_app_group_string(line),
+                placeholder_is_allowed(&path, line),
                 "`{name}` ({path}): a placeholder outside a quoted or identifier-only \
                  position: {line}"
             );
@@ -1734,8 +1814,9 @@ fn every_placeholder_sits_in_a_quoted_or_identifier_only_position() {
         WALTER_FILES.len(),
         "every render node was inspected"
     );
-    // Six in ios/BUILD.bazel (three profile names, three bundle ids) and
-    // one app group per entitlements file.
+    // Six in ios/BUILD.bazel (three profile names, three bundle ids), one
+    // app group per entitlements file, and three JSON-value lines in
+    // tools/release-config.json (W2).
     assert_eq!(
         placeholders, PLACEHOLDER_COUNT,
         "every placeholder was inspected"

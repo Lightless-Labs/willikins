@@ -1,0 +1,18 @@
+---
+source: crates/willikins-cli/tests/walter_document.rs
+expression: "format!(\"{}\\n---\\n{}\", file.path(), file.content())"
+---
+apps/walter/tools/release-config.json
+---
+{
+  "schema": 1,
+  "bundle_ids": {
+    "app": "com.bande-a-bonnot.walter",
+    "nse": "com.bande-a-bonnot.walter.nse",
+    "widgets": "com.bande-a-bonnot.walter.widgets"
+  },
+  "marketing_version": "0.1.0",
+  "build_number_offset": 0,
+  "doppler": {"project": "walter", "config": "prd_deployment_ios"},
+  "bazel_target": "//apps/walter/ios:Walter"
+}
