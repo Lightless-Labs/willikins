@@ -166,15 +166,19 @@ class _ApiKey:
 
     def __enter__(self):
         self.directory = tempfile.mkdtemp(prefix="walter-asc-key-")
-        os.chmod(self.directory, 0o700)
-        self.path = os.path.join(self.directory, "AuthKey_" + self.key_id + ".p8")
         try:
-            data = base64.b64decode(self._b64, validate=True)
-        except Exception:
-            raise WalterCiError("the App Store Connect key is not valid base64") from None
-        descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(data)
+            os.chmod(self.directory, 0o700)
+            self.path = os.path.join(self.directory, "AuthKey_" + self.key_id + ".p8")
+            try:
+                data = base64.b64decode(self._b64, validate=True)
+            except Exception:
+                raise WalterCiError("the App Store Connect key is not valid base64") from None
+            descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(data)
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
         return self
 
     def __exit__(self, *_exc):
@@ -231,26 +235,39 @@ def _signing_checks(runner, secrets, config, repo, *, inner=None):
     assert_clean(keychain.captured_search_list, runner=runner)
 
 
-def _resolve_ipa(runner, repo, target):
+def _execution_root(runner, repo):
+    """`bazel info execution_root`: cquery's output paths are relative to this, not the
+    workspace root, which may hold no `bazel-out` entry under a nondefault `symlink_prefix`."""
     output = _run(
-        runner, ["bazel", "cquery", "--output=files", target], cwd=repo, env=child_env(), timeout=120,
+        runner, ["bazel", "info", "execution_root"], cwd=repo, env=child_env(), timeout=60,
+        error="reading the Bazel execution root failed",
+    ).decode("utf-8", "replace").strip()
+    if not output or not os.path.isabs(output):
+        raise WalterCiError("bazel info execution_root returned an unexpected value")
+    return output
+
+
+def _resolve_ipa(runner, repo, target, flags):
+    """`target`'s one output under the same `flags` it was built with -- never a
+    `bazel-bin` convenience-symlink guess (cookbook section 7.3)."""
+    output = _run(
+        runner, ["bazel", "cquery", "--output=files", target] + list(flags), cwd=repo, env=child_env(), timeout=120,
         error="resolving the IPA output failed",
     ).decode("utf-8", "replace")
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     if len(lines) != 1:
         raise WalterCiError("bazel cquery did not resolve to exactly one output")
-    path = lines[0] if os.path.isabs(lines[0]) else os.path.join(repo, lines[0])
+    root = _execution_root(runner, repo)
+    path = lines[0] if os.path.isabs(lines[0]) else os.path.join(root, lines[0])
     _require_regular_file(path)
     return path
 
 
 def _copy_regular(src, dest):
     _require_regular_file(src)
-    with open(src, "rb") as handle:
-        data = handle.read()
     descriptor = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(data)
+    with open(src, "rb") as source, os.fdopen(descriptor, "wb") as handle:
+        shutil.copyfileobj(source, handle)
 
 
 def cmd_validate(args, *, runner=default_runner):
@@ -292,31 +309,31 @@ def cmd_package(args, *, runner=default_runner):
     ident = identity()
     clone = verify_source(args.checkout, runner=runner)
     config = load_release_config(clone)
-    number, version = build_version(ident, config)
+    _, version = build_version(ident, config)
     secrets = fetch_doppler("package")
 
     with _ApiKey(secrets) as pre_key:
         client = _asc_client(pre_key, runner)
         app_id = client.app_id(config["bundle_ids"]["app"])
-        if client.builds(app_id, config["marketing_version"], str(number)):
+        if client.builds(app_id, config["marketing_version"], version):
             raise WalterCiError("a build already exists for " + version)
 
     ipa_holder = {}
+    build_flags = (
+        "--config=beta", "--config=ios_device", "--ios_multi_cpus=arm64",
+        "--embed_label=" + version, "--host_macos_minimum_os=15.0",
+    )
 
     def _build():
         _run(
-            runner,
-            [
-                "bazel", "build", config["bazel_target"], "--config=beta", "--config=ios_device",
-                "--ios_multi_cpus=arm64", "--embed_label=" + version, "--host_macos_minimum_os=15.0",
-            ],
+            runner, ["bazel", "build", config["bazel_target"]] + list(build_flags),
             cwd=clone, env=child_env(), timeout=3600, error="the package build failed",
         )
-        ipa_holder["path"] = _resolve_ipa(runner, clone, config["bazel_target"])
+        ipa_holder["path"] = _resolve_ipa(runner, clone, config["bazel_target"], build_flags)
 
     _signing_checks(runner, secrets, config, clone, inner=_build)
 
-    report = inspect(ipa_holder["path"], config, str(number), runner=runner)
+    report = inspect(ipa_holder["path"], config, version, runner=runner)
     dest_dir = artifact_dir(args.checkout, "package")
     dest = os.path.join(dest_dir, "Walter.ipa")
     _copy_regular(ipa_holder["path"], dest)
@@ -384,7 +401,7 @@ def cmd_upload(args, *, runner=default_runner):
     ident = identity()
     clone = verify_source(args.checkout, runner=runner)
     config = load_release_config(clone)
-    number, version = build_version(ident, config)
+    _, version = build_version(ident, config)
 
     input_dir = os.path.join(args.checkout, "apps", "walter", ".ci-artifacts", "upload-input")
     ipa_path = os.path.join(input_dir, "Walter.ipa")
@@ -392,16 +409,16 @@ def cmd_upload(args, *, runner=default_runner):
     _require_regular_file(ipa_path)
     _require_regular_file(receipt_path)
     digest = _verify_receipt(receipt_path, ipa_path, commit=ident["commit"])
-    inspect(ipa_path, config, str(number), runner=runner)
+    inspect(ipa_path, config, version, runner=runner)
 
     secrets = fetch_doppler("upload")
     with _ApiKey(secrets) as api_key:
         client = _asc_client(api_key, runner)
         app_id = client.app_id(config["bundle_ids"]["app"])
-        if client.builds(app_id, config["marketing_version"], str(number)):
+        if client.builds(app_id, config["marketing_version"], version):
             raise WalterCiError("a build already exists for " + version)
         _upload_ipa(runner, args.checkout, ipa_path, api_key, ident)
-        client.wait_valid(app_id, config["marketing_version"], str(number))
+        client.wait_valid(app_id, config["marketing_version"], version)
 
     _write_receipt(args.checkout, "upload", ident, True, {"version": version, "sha256": digest}, name="upload-receipt.json")
 
@@ -420,7 +437,7 @@ def _build_parser():
     sub = parser.add_subparsers(dest="stage", required=True)
     for name in _HANDLERS:
         stage_parser = sub.add_parser(name)
-        stage_parser.add_argument("--checkout", required=True)
+        stage_parser.add_argument("--checkout", default=os.getcwd())
     return parser
 
 

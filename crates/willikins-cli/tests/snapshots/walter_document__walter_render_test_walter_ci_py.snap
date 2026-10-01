@@ -42,13 +42,15 @@ def scripted_runner(script):
 
 class EntryPointTests(unittest.TestCase):
     def test_validate_refuses_a_set_doppler_token_before_anything_else(self):
-        with mock.patch.dict(os.environ, {"DOPPLER_TOKEN": "tok"}):
+        with mock.patch.dict(os.environ, {**IDENTITY_ENV, "DOPPLER_TOKEN": "tok"}):
             args = argparse.Namespace(checkout="/mount")
 
             def never(*_a, **_k):
                 raise AssertionError("no subprocess may run")
 
-            self.assertRaises(common.WalterCiError, ci.cmd_validate, args, runner=never)
+            with self.assertRaises(common.WalterCiError) as ctx:
+                ci.cmd_validate(args, runner=never)
+            self.assertIn("Doppler", str(ctx.exception))
 
     def test_build_version_applies_the_offset_and_formats_cfbundleversion(self):
         ident = {"build_number": 42}
@@ -89,6 +91,27 @@ class EntryPointTests(unittest.TestCase):
                 args = argparse.Namespace(checkout=tmp)
                 self.assertRaises(common.WalterCiError, ci.cmd_stage_ipa, args, runner=runner)
             self.assertEqual(len(runner.calls), 1, "a failed outcome must stop before any download")
+
+    def test_stage_ipa_refuses_a_hash_mismatch_and_leaves_upload_input_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def runner(argv, **kwargs):
+                if argv[:3] == ["buildkite-agent", "step", "get"]:
+                    return {"returncode": 0, "stdout": b"passed\n"}
+                if argv[:3] == ["buildkite-agent", "artifact", "download"]:
+                    package_dir = os.path.join(argv[4], "apps", "walter", ".ci-artifacts", "package")
+                    os.makedirs(package_dir)
+                    with open(os.path.join(package_dir, "Walter.ipa"), "wb") as handle:
+                        handle.write(b"ipa-bytes")
+                    receipt = {"commit": COMMIT, "checks": {"size": 9, "sha256": "0" * 64}}
+                    with open(os.path.join(package_dir, "package-receipt.json"), "w") as handle:
+                        json.dump(receipt, handle)
+                return {"returncode": 0, "stdout": b""}
+
+            with mock.patch.dict(os.environ, IDENTITY_ENV):
+                args = argparse.Namespace(checkout=tmp)
+                self.assertRaises(common.WalterCiError, ci.cmd_stage_ipa, args, runner=runner)
+            upload_input = os.path.join(tmp, "apps", "walter", ".ci-artifacts", "upload-input")
+            self.assertTrue(not os.path.isdir(upload_input) or not os.listdir(upload_input))
 
     def test_upload_ipa_writes_the_attempt_file_before_invoking_altool(self):
         with tempfile.TemporaryDirectory() as tmp:
