@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-dsl/tests/acceptance.rs
+assertion_line: 353
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
@@ -735,6 +736,8 @@ build_bazel_app.template: TemplateSource
 build_bazel_ios.path: RepoPath
 build_bazel_ios.template: TemplateSource
 build_bazel_ios.values: TemplateValue
+generate_app_icon_py.path: RepoPath
+generate_app_icon_py.template: TemplateSource
 sample_app_swift.path: RepoPath
 sample_app_swift.template: TemplateSource
 nse_swift.path: RepoPath
