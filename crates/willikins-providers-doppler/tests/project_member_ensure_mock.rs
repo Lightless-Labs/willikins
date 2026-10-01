@@ -407,6 +407,7 @@ fn ensure_on_present_reports_unchanged_and_makes_no_write() {
     );
     let post = provider
         .mock("POST", "/v3/projects/project/members")
+        .match_query(mockito::Matcher::Any)
         .expect(0)
         .create();
     let patch = provider
@@ -414,6 +415,7 @@ fn ensure_on_present_reports_unchanged_and_makes_no_write() {
             "PATCH",
             "/v3/projects/project/members/member/service_account/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         )
+        .match_query(mockito::Matcher::Any)
         .expect(0)
         .create();
     let ensured = tool(provider.url())
@@ -507,6 +509,7 @@ fn ensure_on_mismatch_is_conflict_and_makes_no_write() {
     );
     let post = provider
         .mock("POST", "/v3/projects/project/members")
+        .match_query(mockito::Matcher::Any)
         .expect(0)
         .create();
     let err = tool(provider.url())
@@ -541,8 +544,45 @@ fn ensure_never_issues_a_delete() {
         .match_query(mockito::Matcher::Any)
         .expect(0)
         .create();
-    let _ = tool(provider.url()).ensure(&inputs(&viewer(), &[prd()]), &SinkToken::new());
+    let err = tool(provider.url())
+        .ensure(&inputs(&viewer(), &[prd()]), &SinkToken::new())
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
     delete.assert();
+}
+
+/// An existing environment this crate cannot re-express as an
+/// `EnvironmentSlug` (too long for its 16-character limit) is never
+/// silently dropped from the `PATCH`'s union: `ensure` refuses instead
+/// (decision (a) addendum, D3).
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_refuses_rather_than_drops_an_unparseable_existing_environment() {
+    let mut provider = MockProvider::start();
+    mock_accounts(&mut provider, &[service_account_json("buildkite-ci", SLUG)]);
+    mock_members(
+        &mut provider,
+        &[member_json(
+            "service_account",
+            SLUG,
+            "viewer",
+            false,
+            &["a-branch-config-nobody-asked-about"],
+        )],
+    );
+    let patch = provider
+        .mock(
+            "PATCH",
+            "/v3/projects/project/members/member/service_account/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+        .match_query(mockito::Matcher::Any)
+        .expect(0)
+        .create();
+    let err = tool(provider.url())
+        .ensure(&inputs(&viewer(), &[prd()]), &SinkToken::new())
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    patch.assert();
 }
 
 /// A failed write whose re-read finds the member already `Present`
