@@ -1469,6 +1469,9 @@ const RENDER_NODES_IN_FILES_ORDER: [&str; 17] = [
     "buildkite_readme",
 ];
 
+/// Walter's scaffold marker, `walter_files.marker`'s own literal.
+const MARKER: &str = "apps/walter/.willikins-scaffold";
+
 /// Adversarial pass (Walter group, 2026-10-01): every `{{ N }}`
 /// placeholder in every `repo.file.render` template sits in a quoted or
 /// identifier-only position -- never a command, a path, or an unquoted
@@ -1604,4 +1607,47 @@ fn walter_files_files_are_fully_known_at_plan_on_a_first_run() {
         assert_eq!(bound.path(), rendered.path(), "`{render}`'s path");
         assert_eq!(bound.content(), rendered.content(), "`{render}`'s content");
     }
+}
+
+/// Decision (b)'s `Foreign` row at the document level: a marker path that
+/// already holds a file willikins did not write fails `plan` as
+/// `NameTaken` on `walter_files`, naming the marker in its key, and
+/// nothing is written.
+#[test]
+fn a_foreign_marker_fails_plan_and_writes_nothing() {
+    let workflow = document();
+    let state = seeded_state();
+    {
+        let mut locked = state.lock().unwrap();
+        *locked = std::mem::take(&mut *locked).with_scaffold_files(
+            &GitHubRepo::parse(MONOREPO).unwrap(),
+            &willikins_types::GitBranchName::parse("main").unwrap(),
+            &[(MARKER, "someone else's notes\n")],
+        );
+    }
+    let before = state.lock().unwrap().scaffolds.clone();
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks: {errors:?}"));
+    let err = plan(&checked, &base_inputs(), &catalog)
+        .expect_err("plan must refuse a marker path willikins does not own");
+    match &err {
+        willikins_core::PlanError::NameTaken { node, key, .. } => {
+            assert_eq!(node.as_str(), "walter_files");
+            let marker = key
+                .get(&PortName::parse("marker").unwrap())
+                .map(|value| value.render().to_string());
+            assert_eq!(
+                marker.as_deref(),
+                Some(MARKER),
+                "the refusal names the marker"
+            );
+        }
+        other => panic!("expected NameTaken on walter_files, got {other}"),
+    }
+    assert_eq!(
+        state.lock().unwrap().scaffolds,
+        before,
+        "a refused plan writes nothing"
+    );
 }
