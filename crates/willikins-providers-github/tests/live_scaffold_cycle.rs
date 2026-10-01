@@ -183,13 +183,33 @@ fn unix_seconds() -> u64 {
         .as_secs()
 }
 
+/// The one org this cycle may create, write in, or delete from -- trust
+/// boundary 1 of `docs/plans/2026-09-30-milestone-3g-file-writing.md`
+/// ("Live GitHub writes only in the sandbox org `Willikins-Test`").
+const SANDBOX_ORG: &str = "Willikins-Test";
+
+/// `value` as a [`GitHubOrg`], refused unless it is [`SANDBOX_ORG`]
+/// (GitHub org names are case-insensitive). The org comes from the
+/// environment, so without this a mis-set variable would point a create
+/// and a delete at a real organisation. Adversarial pass (Walter group,
+/// 2026-10-01).
+fn sandbox_org_from(value: &str) -> Result<GitHubOrg, String> {
+    if !value.eq_ignore_ascii_case(SANDBOX_ORG) {
+        return Err(format!(
+            "`{value}` is not the sandbox org `{SANDBOX_ORG}`; this cycle writes nowhere else \
+             (trust boundary 1)"
+        ));
+    }
+    GitHubOrg::parse(value).map_err(|_| format!("`{value}` is not a valid GitHub org slug"))
+}
+
 /// The sandbox org this cycle runs against, from `WILLIKINS_SANDBOX_GITHUB_ORG`
 /// -- the same variable `tests/live_write_cycle.rs`'s own `sandbox_repo`
-/// reads.
+/// reads -- refused unless it names [`SANDBOX_ORG`].
 fn sandbox_org() -> GitHubOrg {
     let value =
         std::env::var("WILLIKINS_SANDBOX_GITHUB_ORG").expect("WILLIKINS_SANDBOX_GITHUB_ORG is set");
-    GitHubOrg::parse(&value).expect("a valid GitHub org slug")
+    sandbox_org_from(&value).unwrap_or_else(|reason| panic!("{reason}"))
 }
 
 /// `/repos/{owner}/{name}`, the one path every raw call in this file
@@ -1080,4 +1100,30 @@ fn expected_marker_content_is_sorted_by_path_with_the_required_header() {
         third.ends_with(" b.txt"),
         "expected `b.txt` second, got: {third}"
     );
+}
+
+/// Trust boundary 1: live GitHub writes only in the sandbox org
+/// `Willikins-Test`. The org name comes from the environment, so the
+/// harness refuses any other org before its first call -- a mis-set
+/// `WILLIKINS_SANDBOX_GITHUB_ORG` must never create or delete a repository
+/// in a real organisation. GitHub org names are case-insensitive.
+#[test]
+fn sandbox_org_from_refuses_every_org_but_the_sandbox() {
+    for real in [
+        "Bande-a-Bonnot",
+        "Lightless-Labs",
+        "willikins-test-other",
+        "Willikins",
+    ] {
+        assert!(
+            sandbox_org_from(real).is_err(),
+            "`{real}` is not the sandbox org and must be refused"
+        );
+    }
+    for sandbox in ["Willikins-Test", "willikins-test", "WILLIKINS-TEST"] {
+        assert!(
+            sandbox_org_from(sandbox).is_ok(),
+            "`{sandbox}` is the sandbox org"
+        );
+    }
 }
