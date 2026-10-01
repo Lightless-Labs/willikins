@@ -1350,10 +1350,10 @@ fn pipeline_is_ordered_after_the_scaffold() {
     );
 }
 
-/// Acceptance 10: `walter_files` binds all seventeen renders, and no
-/// `operator.acknowledge` node remains for M3 or M7.
+/// Acceptance 10: `walter_files` binds every render `WALTER_FILES` names,
+/// and no `operator.acknowledge` node remains for M3 or M7.
 #[test]
-fn walter_files_binds_all_seventeen_renders_and_m3_m7_acknowledgements_are_gone() {
+fn walter_files_binds_every_render_and_m3_m7_acknowledgements_are_gone() {
     use willikins_core::{Binding, NodeName, PortName};
     let workflow = document();
     let walter_files = &workflow.nodes[&NodeName::parse("walter_files").unwrap()];
@@ -1363,8 +1363,8 @@ fn walter_files_binds_all_seventeen_renders_and_m3_m7_acknowledgements_are_gone(
     };
     assert_eq!(
         files.len(),
-        17,
-        "walter_files.files must bind all 17 renders"
+        WALTER_FILES.len(),
+        "walter_files.files must bind every render in WALTER_FILES"
     );
 
     for name in ["m3_repo_files", "m7_bootstrap"] {
@@ -1441,26 +1441,6 @@ fn every_rendered_starlark_file_uses_only_valid_escapes() {
 /// `repo.file.render` is pure, so `plan` itself computes and carries every
 /// render's known `file` output (no apply needed).
 fn rendered_files_for_the_real_identifiers() -> Vec<(&'static str, RepoFile)> {
-    const RENDER_NODES: [&str; 17] = [
-        "build_bazel_app",
-        "build_bazel_ios",
-        "walter_app_swift",
-        "nse_swift",
-        "widgets_swift",
-        "info_plist",
-        "nse_info_plist",
-        "widgets_info_plist",
-        "walter_entitlements",
-        "nse_entitlements",
-        "widgets_entitlements",
-        "privacy_manifest",
-        "pipeline_yml",
-        "upload_pipeline_sh",
-        "bootstrap_yml",
-        "provider_settings",
-        "buildkite_readme",
-    ];
-
     let workflow = document();
     let state = seeded_state();
     let catalog = willikins_providers_fake::catalog(state.clone());
@@ -1484,13 +1464,13 @@ fn rendered_files_for_the_real_identifiers() -> Vec<(&'static str, RepoFile)> {
 
     let planned = plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("{err}"));
 
-    RENDER_NODES
-        .into_iter()
-        .map(|node| {
+    WALTER_FILES
+        .iter()
+        .map(|(node, path)| {
             let planned_node = planned
                 .nodes
                 .iter()
-                .find(|n| n.name.as_str() == node && n.instance.is_none())
+                .find(|n| n.name.as_str() == *node && n.instance.is_none())
                 .unwrap_or_else(|| panic!("node `{node}` was planned"));
             let file = planned_node
                 .outputs
@@ -1498,32 +1478,78 @@ fn rendered_files_for_the_real_identifiers() -> Vec<(&'static str, RepoFile)> {
                 .unwrap_or_else(|| panic!("`{node}.file` was planned"))
                 .downcast::<RepoFile>()
                 .unwrap_or_else(|| panic!("`{node}.file` is a RepoFile"));
-            (node, file.clone())
+            assert_eq!(
+                file.path().as_str(),
+                *path,
+                "`{node}`'s rendered path must match its WALTER_FILES row"
+            );
+            (*node, file.clone())
         })
         .collect()
 }
 
-/// The seventeen render nodes `walter_files.files` binds, in the order it
-/// binds them.
-const RENDER_NODES_IN_FILES_ORDER: [&str; 17] = [
-    "build_bazel_app",
-    "build_bazel_ios",
-    "walter_app_swift",
-    "nse_swift",
-    "widgets_swift",
-    "info_plist",
-    "nse_info_plist",
-    "widgets_info_plist",
-    "walter_entitlements",
-    "nse_entitlements",
-    "widgets_entitlements",
-    "privacy_manifest",
-    "pipeline_yml",
-    "upload_pipeline_sh",
-    "bootstrap_yml",
-    "provider_settings",
-    "buildkite_readme",
+/// W0: the one table every count and every ordered list in this file
+/// derives from -- each render node `walter_files.files` binds, in the
+/// order it binds them, paired with its repo path. A later task adds a
+/// row here instead of editing five assertions.
+const WALTER_FILES: &[(&str, &str)] = &[
+    ("build_bazel_app", "apps/walter/BUILD.bazel"),
+    ("build_bazel_ios", "apps/walter/ios/BUILD.bazel"),
+    (
+        "walter_app_swift",
+        "apps/walter/ios/Walter/Sources/WalterApp.swift",
+    ),
+    (
+        "nse_swift",
+        "apps/walter/ios/WalterNotificationService/Sources/NotificationService.swift",
+    ),
+    (
+        "widgets_swift",
+        "apps/walter/ios/WalterWidgets/Sources/WalterWidgets.swift",
+    ),
+    ("info_plist", "apps/walter/ios/Resources/Info.plist"),
+    (
+        "nse_info_plist",
+        "apps/walter/ios/Resources/WalterNotificationService-Info.plist",
+    ),
+    (
+        "widgets_info_plist",
+        "apps/walter/ios/Resources/WalterWidgets-Info.plist",
+    ),
+    (
+        "walter_entitlements",
+        "apps/walter/ios/Resources/Walter.entitlements",
+    ),
+    (
+        "nse_entitlements",
+        "apps/walter/ios/Resources/WalterNotificationService.entitlements",
+    ),
+    (
+        "widgets_entitlements",
+        "apps/walter/ios/Resources/WalterWidgets.entitlements",
+    ),
+    (
+        "privacy_manifest",
+        "apps/walter/ios/Resources/PrivacyInfo.xcprivacy",
+    ),
+    ("pipeline_yml", "apps/walter/.buildkite/pipeline.yml"),
+    (
+        "upload_pipeline_sh",
+        "apps/walter/.buildkite/upload-pipeline.sh",
+    ),
+    ("bootstrap_yml", "apps/walter/.buildkite/bootstrap.yml"),
+    (
+        "provider_settings",
+        "apps/walter/.buildkite/provider-settings.json",
+    ),
+    ("buildkite_readme", "apps/walter/.buildkite/README.md"),
 ];
+
+/// W0: the number of `{{ N }}` placeholders `every_placeholder_sits_in_a_quoted_or_identifier_only_position`
+/// expects across every render in [`WALTER_FILES`] (six in
+/// `ios/BUILD.bazel`: three profile names, three bundle ids; one app
+/// group per entitlements file).
+const PLACEHOLDER_COUNT: usize = 9;
 
 /// Walter's scaffold marker, `walter_files.marker`'s own literal.
 const MARKER: &str = "apps/walter/.willikins-scaffold";
@@ -1611,10 +1637,17 @@ fn every_placeholder_sits_in_a_quoted_or_identifier_only_position() {
             placeholders += 1;
         }
     }
-    assert_eq!(render_nodes, 17, "every render node was inspected");
+    assert_eq!(
+        render_nodes,
+        WALTER_FILES.len(),
+        "every render node was inspected"
+    );
     // Six in ios/BUILD.bazel (three profile names, three bundle ids) and
     // one app group per entitlements file.
-    assert_eq!(placeholders, 9, "every placeholder was inspected");
+    assert_eq!(
+        placeholders, PLACEHOLDER_COUNT,
+        "every placeholder was inspected"
+    );
 }
 
 /// Adversarial pass (Walter group, 2026-10-01), W1's own open item: on a
@@ -1650,9 +1683,9 @@ fn walter_files_files_are_fully_known_at_plan_on_a_first_run() {
         .expect("walter_files.files is planned");
     assert!(files.is_known(), "walter_files.files must be known at plan");
     let elements = files.as_list().expect("walter_files.files is a known list");
-    assert_eq!(elements.len(), RENDER_NODES_IN_FILES_ORDER.len());
+    assert_eq!(elements.len(), WALTER_FILES.len());
 
-    for (element, render) in elements.iter().zip(RENDER_NODES_IN_FILES_ORDER) {
+    for (element, (render, path)) in elements.iter().zip(WALTER_FILES.iter()) {
         let bound = willikins_types::downcast::<RepoFile>(element.as_ref())
             .unwrap_or_else(|| panic!("the element bound from `{render}` is a RepoFile"));
         let rendered = node(render)
@@ -1662,6 +1695,11 @@ fn walter_files_files_are_fully_known_at_plan_on_a_first_run() {
             .unwrap_or_else(|| panic!("`{render}.file` is a known RepoFile at plan"));
         assert_eq!(bound.path(), rendered.path(), "`{render}`'s path");
         assert_eq!(bound.content(), rendered.content(), "`{render}`'s content");
+        assert_eq!(
+            bound.path().as_str(),
+            *path,
+            "`{render}`'s path must match its WALTER_FILES row"
+        );
     }
 }
 
@@ -1710,8 +1748,8 @@ fn a_rerun_with_every_seeded_file_edited_plans_walter_files_noop() {
             .unwrap_or_else(|| panic!("run 1 landed files at `{key}`"));
         assert_eq!(
             landed.len(),
-            RENDER_NODES_IN_FILES_ORDER.len() + 1,
-            "seventeen seeds plus the marker landed"
+            WALTER_FILES.len() + 1,
+            "every seed plus the marker landed"
         );
         for (path, content) in landed.iter_mut() {
             if path != MARKER {
@@ -1790,4 +1828,95 @@ fn a_foreign_marker_fails_plan_and_writes_nothing() {
         before,
         "a refused plan writes nothing"
     );
+}
+
+/// W0 (acceptance 6; SHARED VALUES "Size budgets"): the document's own
+/// byte length never exceeds three quarters of `MAX_DOCUMENT_BYTES`
+/// (192 KiB of the 256 KiB limit). Exceeding it means trimming a
+/// template, never raising the budget (the plan's Risk 1).
+#[test]
+fn the_document_is_within_its_size_budget() {
+    let path = workspace_root().join("workflows/walter-ios-app.yaml");
+    let bytes = std::fs::read(&path).unwrap_or_else(|err| panic!("reading the document: {err}"));
+    assert!(
+        bytes.len() <= 196_608,
+        "the document is {} bytes, over the 196,608-byte (192 KiB) budget",
+        bytes.len()
+    );
+}
+
+/// W0 (acceptance 6; SHARED VALUES "Size budgets"): every
+/// `repo.file.render` template literal stays at or under 20,480
+/// characters.
+#[test]
+fn every_render_template_is_within_its_size_budget() {
+    use willikins_core::{Binding, PortName};
+    let workflow = document();
+    let mut checked = 0;
+    for (name, node) in &workflow.nodes {
+        if node.tool.as_str() != "repo.file.render" {
+            continue;
+        }
+        let template = match node.with.get(&PortName::parse("template").unwrap()) {
+            Some(Binding::Literal(text)) => text,
+            other => panic!("`{name}.template` must be a literal, got {other:?}"),
+        };
+        let len = template.chars().count();
+        assert!(
+            len <= 20_480,
+            "`{name}`'s template is {len} characters, over the 20,480-character budget"
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked,
+        WALTER_FILES.len(),
+        "every render node's template was checked"
+    );
+}
+
+/// W0 (acceptance 6; SHARED VALUES "Size budgets"): `walter_files.files`
+/// never exceeds `github.scaffold.ensure`'s own 64-file bound.
+#[test]
+fn walter_files_holds_at_most_sixty_four_entries() {
+    use willikins_core::{Binding, NodeName, PortName};
+    let workflow = document();
+    let walter_files = &workflow.nodes[&NodeName::parse("walter_files").unwrap()];
+    let files = match walter_files.with.get(&PortName::parse("files").unwrap()) {
+        Some(Binding::List(elements)) => elements,
+        other => panic!("walter_files.files must be a list binding, got {other:?}"),
+    };
+    assert!(
+        files.len() <= 64,
+        "walter_files.files holds {} entries, over github.scaffold.ensure's 64-file bound",
+        files.len()
+    );
+}
+
+/// W0 (acceptance 6): writes every one of Walter's rendered files, for
+/// the real identifiers `com.bande-a-bonnot.walter`, `.nse` and
+/// `.widgets`, to its repo path under `WILLIKINS_WALTER_RENDER_DIR` --
+/// from a plan over the fake catalog, never an apply. This is the
+/// rendered-set gate the template tasks (W1-W6) run their own checks
+/// against (a scratch `bazel build`, `py_compile`, `bash -n`).
+/// `#[ignore]`d: it writes to the filesystem and needs the env var set.
+#[test]
+#[ignore = "writes under WILLIKINS_WALTER_RENDER_DIR"]
+fn render_walter_files_to_dir() {
+    let dir = std::env::var("WILLIKINS_WALTER_RENDER_DIR")
+        .unwrap_or_else(|_| panic!("WILLIKINS_WALTER_RENDER_DIR must be set"));
+    let dir = std::path::PathBuf::from(dir);
+    let mut written = 0;
+    for (node, file) in rendered_files_for_the_real_identifiers() {
+        let dest = dir.join(file.path().as_str());
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|err| panic!("creating `{}`'s parent: {err}", dest.display()));
+        }
+        std::fs::write(&dest, file.content())
+            .unwrap_or_else(|err| panic!("writing `{node}` to `{}`: {err}", dest.display()));
+        written += 1;
+    }
+    assert_eq!(written, WALTER_FILES.len(), "every render node was written");
+    println!("wrote {written} files under {}", dir.display());
 }
