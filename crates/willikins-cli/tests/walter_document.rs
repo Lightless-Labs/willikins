@@ -1447,6 +1447,28 @@ fn rendered_files_snapshot_for_the_real_identifiers() {
     }
 }
 
+/// The seventeen render nodes `walter_files.files` binds, in the order it
+/// binds them.
+const RENDER_NODES_IN_FILES_ORDER: [&str; 17] = [
+    "build_bazel_app",
+    "build_bazel_ios",
+    "walter_app_swift",
+    "nse_swift",
+    "widgets_swift",
+    "info_plist",
+    "nse_info_plist",
+    "widgets_info_plist",
+    "walter_entitlements",
+    "nse_entitlements",
+    "widgets_entitlements",
+    "privacy_manifest",
+    "pipeline_yml",
+    "upload_pipeline_sh",
+    "bootstrap_yml",
+    "provider_settings",
+    "buildkite_readme",
+];
+
 /// Adversarial pass (Walter group, 2026-10-01): every `{{ N }}`
 /// placeholder in every `repo.file.render` template sits in a quoted or
 /// identifier-only position -- never a command, a path, or an unquoted
@@ -1534,4 +1556,52 @@ fn every_placeholder_sits_in_a_quoted_or_identifier_only_position() {
     // Six in ios/BUILD.bazel (three profile names, three bundle ids) and
     // one app group per entitlements file.
     assert_eq!(placeholders, 9, "every placeholder was inspected");
+}
+
+/// Adversarial pass (Walter group, 2026-10-01), W1's own open item: on a
+/// first fake run, `walter_files` plans `Create` with its `files` input
+/// fully known, each element exactly the corresponding render's planned
+/// file. The plan is the operator's approval, and approval is the diff
+/// review (decision (f)), so the plan must carry every byte the commit
+/// will write. (The tool itself already refuses an unknown `files` as
+/// `Invalid`; this pins the approval-shows-content property, not that
+/// refusal.)
+#[test]
+fn walter_files_files_are_fully_known_at_plan_on_a_first_run() {
+    let workflow = document();
+    let state = seeded_state();
+    let catalog = willikins_providers_fake::catalog(state);
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+    let planned = plan(&checked, &base_inputs(), &catalog)
+        .unwrap_or_else(|err| panic!("a first run plans: {err}"));
+
+    let node = |name: &str| {
+        planned
+            .nodes
+            .iter()
+            .find(|n| n.name.as_str() == name && n.instance.is_none())
+            .unwrap_or_else(|| panic!("node `{name}` was planned"))
+    };
+    let walter_files = node("walter_files");
+    assert_eq!(walter_files.action, Action::Create);
+    let files = walter_files
+        .inputs
+        .get(&PortName::parse("files").unwrap())
+        .expect("walter_files.files is planned");
+    assert!(files.is_known(), "walter_files.files must be known at plan");
+    let elements = files.as_list().expect("walter_files.files is a known list");
+    assert_eq!(elements.len(), RENDER_NODES_IN_FILES_ORDER.len());
+
+    for (element, render) in elements.iter().zip(RENDER_NODES_IN_FILES_ORDER) {
+        let bound = willikins_types::downcast::<RepoFile>(element.as_ref())
+            .unwrap_or_else(|| panic!("the element bound from `{render}` is a RepoFile"));
+        let rendered = node(render)
+            .outputs
+            .get(&PortName::parse("file").unwrap())
+            .and_then(|value| value.downcast::<RepoFile>())
+            .unwrap_or_else(|| panic!("`{render}.file` is a known RepoFile at plan"));
+        assert_eq!(bound.path(), rendered.path(), "`{render}`'s path");
+        assert_eq!(bound.content(), rendered.content(), "`{render}`'s content");
+    }
 }
