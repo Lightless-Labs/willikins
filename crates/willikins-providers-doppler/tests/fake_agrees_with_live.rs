@@ -330,6 +330,228 @@ fn branch_config_absent_agrees_with_an_empty_fake_state() {
     assert_eq!(shape(&live), shape(&fake));
 }
 
+// ---------------------------------------------------------------------
+// doppler.project_member.ensure (milestone 3h task D3)
+// ---------------------------------------------------------------------
+
+fn member_project() -> DopplerProject {
+    DopplerProject::parse("sample").unwrap()
+}
+
+fn member_service_account() -> willikins_types::DopplerServiceAccountName {
+    willikins_types::DopplerServiceAccountName::parse("buildkite-ci").unwrap()
+}
+
+fn member_viewer() -> willikins_types::DopplerProjectRole {
+    willikins_types::DopplerProjectRole::parse("viewer").unwrap()
+}
+
+fn member_prd() -> EnvironmentSlug {
+    EnvironmentSlug::parse("prd").unwrap()
+}
+
+fn member_stg() -> EnvironmentSlug {
+    EnvironmentSlug::parse("stg").unwrap()
+}
+
+fn member_inputs(
+    role: &willikins_types::DopplerProjectRole,
+    environments: &[EnvironmentSlug],
+) -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(
+        PortName::parse("project").unwrap(),
+        Value::known(member_project()),
+    );
+    inputs.insert(
+        PortName::parse("service_account").unwrap(),
+        Value::known(member_service_account()),
+    );
+    inputs.insert(PortName::parse("role").unwrap(), Value::known(role.clone()));
+    inputs.insert(
+        PortName::parse("environments").unwrap(),
+        Value::known_list(environments.to_vec()),
+    );
+    inputs
+}
+
+fn live_project_member_tool(
+    url: String,
+) -> willikins_providers_doppler::DopplerProjectMemberEnsure {
+    let credential = Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
+    let http = Http::new(url, Vec::new(), credential);
+    willikins_providers_doppler::DopplerProjectMemberEnsure::new(Arc::new(DopplerClient::new(http)))
+}
+
+fn mock_member_accounts(provider: &mut MockProvider, slug: &str) {
+    provider
+        .mock("GET", "/v3/workplace/service_accounts")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"service_accounts": [{"name": "buildkite-ci", "slug": slug}]})
+                .to_string(),
+        )
+        .create();
+}
+
+fn mock_member_members(provider: &mut MockProvider, members: &serde_json::Value) {
+    provider
+        .mock("GET", "/v3/projects/project/members")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(serde_json::json!({"members": members}).to_string())
+        .create();
+}
+
+const MEMBER_SLUG: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
+#[test]
+fn project_member_absent_agrees() {
+    let mut provider = MockProvider::start();
+    mock_member_accounts(&mut provider, MEMBER_SLUG);
+    mock_member_members(&mut provider, &serde_json::json!([]));
+    let live = live_project_member_tool(provider.url())
+        .read(&member_inputs(&member_viewer(), &[member_prd()]))
+        .unwrap();
+    let state = FakeState::new().with_doppler_service_account(&member_service_account());
+    let fake = willikins_providers_fake::tools::DopplerProjectMemberEnsure::new(Arc::new(
+        Mutex::new(state),
+    ))
+    .read(&member_inputs(&member_viewer(), &[member_prd()]))
+    .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn project_member_present_agrees() {
+    let mut provider = MockProvider::start();
+    mock_member_accounts(&mut provider, MEMBER_SLUG);
+    mock_member_members(
+        &mut provider,
+        &serde_json::json!([{
+            "type": "service_account",
+            "slug": MEMBER_SLUG,
+            "role": {"identifier": "viewer"},
+            "access_all_environments": false,
+            "environments": ["prd"],
+        }]),
+    );
+    let live = live_project_member_tool(provider.url())
+        .read(&member_inputs(&member_viewer(), &[member_prd()]))
+        .unwrap();
+    let state = FakeState::new()
+        .with_doppler_service_account(&member_service_account())
+        .with_doppler_project_member(
+            &member_project(),
+            &member_service_account(),
+            "viewer",
+            false,
+            &["prd"],
+        );
+    let fake = willikins_providers_fake::tools::DopplerProjectMemberEnsure::new(Arc::new(
+        Mutex::new(state),
+    ))
+    .read(&member_inputs(&member_viewer(), &[member_prd()]))
+    .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+/// The case a mutation could hide: a role that matches but is missing a
+/// requested environment is `Absent` (with `updates() == true`) on both
+/// sides, never silently `Present`.
+#[test]
+fn project_member_needs_update_on_a_missing_environment_agrees() {
+    let mut provider = MockProvider::start();
+    mock_member_accounts(&mut provider, MEMBER_SLUG);
+    mock_member_members(
+        &mut provider,
+        &serde_json::json!([{
+            "type": "service_account",
+            "slug": MEMBER_SLUG,
+            "role": {"identifier": "viewer"},
+            "access_all_environments": false,
+            "environments": ["prd"],
+        }]),
+    );
+    let live_tool = live_project_member_tool(provider.url());
+    let live = live_tool
+        .read(&member_inputs(
+            &member_viewer(),
+            &[member_prd(), member_stg()],
+        ))
+        .unwrap();
+    let live_updates = live_tool
+        .updates(&member_inputs(
+            &member_viewer(),
+            &[member_prd(), member_stg()],
+        ))
+        .unwrap();
+    let state = FakeState::new()
+        .with_doppler_service_account(&member_service_account())
+        .with_doppler_project_member(
+            &member_project(),
+            &member_service_account(),
+            "viewer",
+            false,
+            &["prd"],
+        );
+    let fake_tool = willikins_providers_fake::tools::DopplerProjectMemberEnsure::new(Arc::new(
+        Mutex::new(state),
+    ));
+    let fake = fake_tool
+        .read(&member_inputs(
+            &member_viewer(),
+            &[member_prd(), member_stg()],
+        ))
+        .unwrap();
+    let fake_updates = fake_tool
+        .updates(&member_inputs(
+            &member_viewer(),
+            &[member_prd(), member_stg()],
+        ))
+        .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+    assert_eq!(live_updates, fake_updates);
+    assert!(fake_updates);
+}
+
+/// A role this tool would have to lower is `Mismatch` on both sides,
+/// never silently left alone (`Present`) or silently lowered.
+#[test]
+fn project_member_mismatch_on_a_higher_role_agrees() {
+    let mut provider = MockProvider::start();
+    mock_member_accounts(&mut provider, MEMBER_SLUG);
+    mock_member_members(
+        &mut provider,
+        &serde_json::json!([{
+            "type": "service_account",
+            "slug": MEMBER_SLUG,
+            "role": {"identifier": "collaborator"},
+            "access_all_environments": false,
+            "environments": ["prd"],
+        }]),
+    );
+    let live = live_project_member_tool(provider.url())
+        .read(&member_inputs(&member_viewer(), &[member_prd()]))
+        .unwrap();
+    let state = FakeState::new()
+        .with_doppler_service_account(&member_service_account())
+        .with_doppler_project_member(
+            &member_project(),
+            &member_service_account(),
+            "collaborator",
+            false,
+            &["prd"],
+        );
+    let fake = willikins_providers_fake::tools::DopplerProjectMemberEnsure::new(Arc::new(
+        Mutex::new(state),
+    ))
+    .read(&member_inputs(&member_viewer(), &[member_prd()]))
+    .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
 #[test]
 fn branch_config_present_agrees_with_a_seeded_fake_state() {
     let mut provider = MockProvider::start();
