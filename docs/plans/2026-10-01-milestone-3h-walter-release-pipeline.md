@@ -61,10 +61,24 @@ adds the arm, which is why commit 2 exists at all.
    exactly the case the decision table's "extra environments ... are never a mismatch" row exists for. Silently
    dropping such an entry from the union to make it parse would be a narrowing `PATCH`, which trust boundary 2
    forbids outright. `DopplerProjectMemberEnsure::union_environments` instead refuses with `Conflict`, naming the
-   one environment it cannot safely re-express, rather than sending a `PATCH` that would drop it. No acceptance-4 test
-   exercises this path (none of the specified cases name a foreign existing environment on a `NeedsUpdate` row), so
-   it is recorded here rather than claimed as tested; the live member cycle (D4) and a future adversarial pass are
-   the next places this could be probed for real.
+   one environment it cannot safely re-express, rather than sending a `PATCH` that would drop it. Pinned by
+   `tests/project_member_ensure_mock.rs`'s `ensure_refuses_rather_than_drops_an_unparseable_existing_environment`
+   (added in the task's third commit, below), which seeds a member with an environment past `EnvironmentSlug`'s
+   16-character limit and asserts the `PATCH` mock sees zero hits. The fake twin does not reproduce this refusal --
+   its `union_environments` operates on bare strings throughout, so it has nothing to fail to parse -- which is a
+   known, accepted gap between the two: `fake_agrees_with_live` compares `read`/`updates`, never `ensure`, on this
+   row, and no document (Walter included) ever seeds a project member with an out-of-grammar environment, so the
+   fake's `ensure` succeeding where the live tool would `Conflict` is unreachable in practice, not untested by
+   oversight.
+
+   D3 landed in three commits, not the one or two the task text allowed for: the third is a review pass over the
+   first two (opus-equivalent self-review before the task's own adversarial pass), fixing three mock guards that
+   asserted `.expect(0)` on a write mock built with no `.match_query(...)` -- which only matches a request carrying
+   no query string at all, so a stray `POST`/`PATCH` to an endpoint whose path always carries `?project=...` would
+   have landed as an unmatched request rather than tripping the guard -- and adding the fake tool's own missing
+   `#[cfg(test)]` module plus three more `fake_agrees_with_live` table rows (`access_all_environments` under
+   `Present`, the role-ranks-below-requested `NeedsUpdate` row with `updates()` checked on both sides, and the
+   unrankable-role `Mismatch` row). No production code changed in that third commit.
 
 ## Goal
 

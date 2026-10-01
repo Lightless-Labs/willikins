@@ -431,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn read_reports_absent_when_the_service_account_is_unknown() {
+    fn read_reports_not_found_when_the_service_account_is_unknown() {
         let err = tool(FakeState::new())
             .read(&inputs(&viewer(), &[prd()]))
             .unwrap_err();
