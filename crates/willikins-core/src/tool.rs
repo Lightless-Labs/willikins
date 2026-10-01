@@ -544,7 +544,7 @@ pub trait Tool: Send + Sync {
     /// (`docs/plans/2026-10-01-milestone-3h-sample-release-pipeline.md`,
     /// decision (b)). A tool-declared hook in the manner of
     /// [`Tool::replaces`] itself: `false` by default, so every existing
-    /// tool, catalog entry and plan is unaffected. [`crate::plan::plan_one`]
+    /// tool, catalog entry and plan is unaffected. [`crate::plan::plan`]
     /// calls it only for a non-pure, non-gate tool whose `read` has
     /// already reported [`Observation::Absent`] *and* whose `replaces`
     /// has already reported `false` -- exactly the case that would
