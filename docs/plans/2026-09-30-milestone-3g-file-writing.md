@@ -407,6 +407,23 @@ be deleted by hand once the real Doppler token authenticates again (it answered 
 2026-10-01). `AppleProfileContent` stays secret-typed for now; whether it still needs to be is
 its own reviewed change.
 
+**Addendum:** 2026-10-01 (adversarial pass, Walter) — an independent attack on B1, L1, W1 and `2b36422`,
+recorded in `docs/research/2026-10-01-m3g-adversarial-pass-walter.md`. Nine mutations, all killed; one
+(the fake scaffold re-checking seeds once the marker is present) survived every existing test and is
+killed only by a new one. Four W1 gaps are now pinned in `walter_document.rs`: every placeholder sits in a
+quoted or identifier-only position, by strict allowlist (`2f150b6`); `walter_files` plans with all
+seventeen files known on a first run (`2f39b5b`); a foreign marker fails plan and writes nothing
+(`e201cca`); a re-run with every seed edited plans `walter_files` `NoOp` (`fedbfb3`, acceptance 10's
+untested clause). Three real defects, fixed test-first: the bootstrap gate read `Present` for a stored
+configuration that repeats a key, since a JSON map keeps the last value silently; both twins now report
+it different (`8191313`). L1 took its org from the environment unchecked, and now refuses any org but
+`Willikins-Test` (`6de9a6f`); its delete guard stayed armed after a `4xx` create answer, so a name
+collision would have deleted someone else's repository, and now disarms (`a0179bf`). No secret,
+`Text` or configuration reaches a committed file, plan, report or error; the gate only ever `GET`s; a
+moved head can neither duplicate nor lose a commit; `2b36422` left only stale comments (fixed); every
+other document plans byte-identically. Open: the `GIT_CONFIG_*` override stays the operator's; an empty
+stored configuration equals an all-comment expected (low, unreachable for Walter).
+
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Bande-a-Bonnot/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
