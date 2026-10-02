@@ -362,10 +362,11 @@ fn missing_input(name: &InputName, spec: &InputSpec) -> MissingInput {
         ty: spec.ty.clone(),
         schema: entry.info.schema.clone(),
         document_description: spec.description.clone(),
-        default: spec
-            .default
-            .as_ref()
-            .map(|value| value.render().to_string()),
+        default: spec.default.as_ref().map(|value| {
+            value
+                .display(willikins_types::Disclosure::Masked)
+                .to_string()
+        }),
         example,
         prompt,
     }
@@ -854,5 +855,24 @@ mod tests {
                 .unwrap()
                 .contains("SYSTEM")
         );
+    }
+
+    /// Milestone 3i, decision (b4): `missing_input` renders a declared
+    /// default through `Value::display(Disclosure::Masked)`, never
+    /// `Value::render()`, so an identifier-typed default would print its
+    /// masked prefix in `MissingInput::default` rather than the full
+    /// value. `describe()` itself never reaches this with a default set
+    /// (an input with a default is never `missing`, see
+    /// [`MissingInput::default`]'s own doc), so `missing_input` is called
+    /// directly to exercise the route anyway, matching decision (b4)'s
+    /// "costs nothing and closes the last route".
+    #[test]
+    fn missing_input_renders_an_identifier_default_masked() {
+        let issuer =
+            willikins_types::AppleIssuerId::parse("57246542-96fe-1a63-e053-0824d011072a").unwrap();
+        let name = input_name("issuer_id");
+        let spec = InputSpec::new(ty("AppleIssuerId")).with_default(Value::known(issuer));
+        let missing = missing_input(&name, &spec);
+        assert_eq!(missing.default, Some("5724...".to_string()));
     }
 }

@@ -1603,6 +1603,61 @@ mod tests {
         }
     }
 
+    /// A one-node plan whose single output port (`issuer_id`, the
+    /// identifier-typed [`willikins_types::AppleIssuerId`]) holds `value`.
+    fn plan_with_issuer_id(value: &str) -> Plan {
+        let mut outputs = Outputs::new();
+        outputs.insert(
+            port("issuer_id"),
+            Value::known(willikins_types::AppleIssuerId::parse(value).unwrap()),
+        );
+        Plan {
+            workflow: workflow_name("fingerprint-test"),
+            nodes: vec![PlannedNode {
+                name: node("issue_cert"),
+                instance: None,
+                tool: tool("test.tool"),
+                action: Action::Compute,
+                inputs: Inputs::new(),
+                outputs,
+            }],
+            outputs: IndexMap::new(),
+            class: Class::Reversible,
+            requires_approval: false,
+            blocked: Vec::new(),
+            replacing: Vec::new(),
+        }
+    }
+
+    /// Milestone 3i, decision (b4) and acceptance 15/19: fingerprinting an
+    /// identifier-typed output must go through `Value::render()`, never
+    /// `Value::display()`, so the fingerprint carries the full value even
+    /// though `display(Disclosure::Masked)` would mask it — the exact
+    /// failure that would let two different certificates fingerprint
+    /// equal and make `apply`'s drift check blind to the difference.
+    #[test]
+    fn fingerprint_of_an_identifier_output_keeps_the_full_value() {
+        let plan = plan_with_issuer_id("57246542-96fe-1a63-e053-0824d011072a");
+        let fingerprint = plan.fingerprint();
+        assert_eq!(fingerprint.len(), 1);
+        let (output_port, rendered) = &fingerprint[0].outputs[0];
+        assert_eq!(output_port, &port("issuer_id"));
+        assert_eq!(rendered, "57246542-96fe-1a63-e053-0824d011072a");
+
+        // Two plans differing only in the identifier's own value must
+        // still fingerprint differently -- masking two distinct
+        // certificates to the same prefix must never make them look the
+        // same to the drift check.
+        let other = plan_with_issuer_id("00000000-0000-0000-0000-000000000000");
+        assert_ne!(plan.fingerprint(), other.fingerprint());
+
+        // `Plan`'s own `Serialize` (never `display()`) is what a
+        // serialized plan on disk or over the wire holds: it must carry
+        // the full identifier too, not a masked prefix.
+        let json = serde_json::to_string(&plan).unwrap();
+        assert!(json.contains("57246542-96fe-1a63-e053-0824d011072a"));
+    }
+
     #[test]
     fn two_plans_differing_only_in_a_non_secret_observed_output_have_different_fingerprints() {
         let a = plan_with_url("https://example.com/a");

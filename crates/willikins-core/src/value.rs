@@ -15,7 +15,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use willikins_types::object::DomainObject;
-use willikins_types::{DomainType, ParseError, Rendered};
+use willikins_types::{Disclosure, DomainType, ParseError, Rendered, mask_identifier};
 
 pub use willikins_types::registry::{Conversion, TypeName, TypeRef, TypeRegistry};
 
@@ -527,13 +527,58 @@ impl Value {
             }
         }
     }
+
+    /// Render this value the way an output surface should show it —
+    /// milestone 3i, decision (b4).
+    ///
+    /// [`Disclosure::Revealed`] is identical to [`Self::render`] for every
+    /// value, secret or not. [`Disclosure::Masked`] is identical too,
+    /// *except* for a known value whose object reports
+    /// [`DomainObject::is_identifier`] (true for an identifier-typed value
+    /// — never a secret one: `#[domain(secret, identifier)]` together is a
+    /// compile error, so this function never needs to choose between
+    /// redacting and masking the same value): its canonical string is
+    /// masked to [`mask_identifier`]'s prefix instead, element-wise for a
+    /// list. Identifier-ness comes from the object, not from this
+    /// function's own list of names, so a type that is widened to carry
+    /// `#[domain(identifier)]` is masked here with no change to this
+    /// crate.
+    ///
+    /// Never used by [`Self::render`], [`Self`]'s [`serde::Serialize`], or
+    /// [`crate::plan::Plan::fingerprint`] (all three must keep every full
+    /// value: see this function's own callers in `willikins-cli` and
+    /// `willikins-server` instead, never here).
+    #[must_use]
+    pub fn display(&self, disclosure: Disclosure) -> Rendered {
+        if disclosure == Disclosure::Revealed {
+            return self.render();
+        }
+        match &self.state {
+            ValueState::Known(Known::Scalar(object)) if object.is_identifier() => {
+                Rendered::Plain(mask_identifier(&object.render().to_string()))
+            }
+            ValueState::Known(Known::List(items))
+                if items.first().is_some_and(|object| object.is_identifier()) =>
+            {
+                let joined = items
+                    .iter()
+                    .map(|object| mask_identifier(&object.render().to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Rendered::Plain(format!("[{joined}]"))
+            }
+            _ => self.render(),
+        }
+    }
 }
 
 impl fmt::Debug for Value {
-    /// Goes through [`Self::render`], so a secret `Value` never prints its
-    /// bytes through `{:?}` no matter what container holds it.
+    /// Goes through [`Self::display`]`(`[`Disclosure::Masked`]`)`, so a
+    /// secret `Value` never prints its bytes through `{:?}` no matter what
+    /// container holds it, and an identifier-typed `Value` prints only its
+    /// masked prefix (milestone 3i, decision (b4)).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.render())
+        write!(f, "{}", self.display(Disclosure::Masked))
     }
 }
 
@@ -1363,6 +1408,107 @@ mod tests {
                 expected: identifier_ty.clone(),
                 found: identifier_ty,
             })
+        );
+    }
+
+    // -------------------------------------------------------------
+    // `Value::display` and `Debug` (milestone 3i, decision (b4), acceptance
+    // 15)
+    // -------------------------------------------------------------
+
+    fn issuer_id() -> willikins_types::AppleIssuerId {
+        willikins_types::AppleIssuerId::parse("57246542-96fe-1a63-e053-0824d011072a").unwrap()
+    }
+
+    #[test]
+    fn display_revealed_equals_render_for_an_identifier() {
+        let value = Value::known(issuer_id());
+        assert_eq!(
+            value.display(Disclosure::Revealed).to_string(),
+            value.render().to_string()
+        );
+        assert_eq!(
+            value.render().to_string(),
+            "57246542-96fe-1a63-e053-0824d011072a"
+        );
+    }
+
+    #[test]
+    fn display_masked_masks_a_known_identifier_scalar() {
+        let value = Value::known(issuer_id());
+        assert_eq!(value.display(Disclosure::Masked).to_string(), "5724...");
+    }
+
+    #[test]
+    fn display_masked_masks_every_element_of_a_known_identifier_list() {
+        let value = Value::known_list(vec![
+            issuer_id(),
+            willikins_types::AppleIssuerId::parse("abcdef01-2345-6789-abcd-ef0123456789").unwrap(),
+        ]);
+        assert_eq!(
+            value.display(Disclosure::Masked).to_string(),
+            "[5724..., abcd...]"
+        );
+    }
+
+    #[test]
+    fn display_masked_leaves_a_non_identifier_value_unchanged() {
+        let value = Value::known(github_org("lightless-labs"));
+        assert_eq!(
+            value.display(Disclosure::Masked).to_string(),
+            value.render().to_string()
+        );
+        assert_eq!(
+            value.display(Disclosure::Masked).to_string(),
+            "lightless-labs"
+        );
+    }
+
+    #[test]
+    fn display_masked_leaves_a_secret_value_unchanged() {
+        let value = Value::known(DopplerServiceToken::parse(EXAMPLE_TOKEN).unwrap());
+        assert_eq!(
+            value.display(Disclosure::Masked).to_string(),
+            "[REDACTED DopplerServiceToken]"
+        );
+    }
+
+    #[test]
+    fn display_masked_leaves_an_unknown_value_unchanged() {
+        let ty = TypeRef::scalar(TypeName::parse("AppleIssuerId").unwrap());
+        let value = Value::unknown(ty);
+        assert_eq!(value.display(Disclosure::Masked).to_string(), "<unknown>");
+    }
+
+    #[test]
+    fn debug_of_a_known_identifier_shows_only_the_masked_prefix() {
+        let value = Value::known(issuer_id());
+        assert_eq!(format!("{value:?}"), "5724...");
+        assert!(!format!("{value:?}").contains("96fe-1a63-e053-0824d011072a"));
+    }
+
+    /// Acceptance 15, and acceptance 19: masking a `Value` for display must
+    /// never touch what `render()`, `Serialize` or
+    /// `crate::plan::Plan::fingerprint` report — `apply`'s drift check and
+    /// `apply --plan-id`'s recorded-input rebuild both read those, in full,
+    /// regardless of `Disclosure`.
+    #[test]
+    fn render_and_serialize_keep_the_full_identifier_value_regardless_of_display() {
+        let value = Value::known(issuer_id());
+        // `display(Masked)` differs from `render()` -- that is the whole
+        // point of this function existing -- but `render()` itself, and
+        // `Serialize`, must stay exactly as they were before this task.
+        assert_ne!(
+            value.display(Disclosure::Masked).to_string(),
+            value.render().to_string()
+        );
+        assert_eq!(
+            value.render().to_string(),
+            "57246542-96fe-1a63-e053-0824d011072a"
+        );
+        assert_eq!(
+            serde_json::to_string(&value).unwrap(),
+            r#"{"type":"AppleIssuerId","list":false,"state":"known","value":"57246542-96fe-1a63-e053-0824d011072a"}"#
         );
     }
 }
