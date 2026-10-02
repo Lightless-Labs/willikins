@@ -10,6 +10,19 @@
 //! and one property test over generated valid values matching the type's
 //! own grammar, so the claim holds for more than the one example string a
 //! future edit might special-case.
+//!
+//! Scoped to exactly these seven, deliberately not all eight registered
+//! identifier types (task B8 added `DopplerValue`, so the registry's own
+//! pinned set -- `registry.rs`'s `the_identifier_set_is_exactly_these_eight_types`
+//! -- is now eight). `DopplerValue` carries no `pattern` at all (`max_len`
+//! only, the same shape as `Text`), so it admits the `.` `mask_identifier`
+//! always appends, and a masked `DopplerValue` *can* still parse back as a
+//! `DopplerValue`. That is `DopplerValue`'s own module doc's stated gap,
+//! not a bug this file's property would catch — `DopplerValue`'s whole
+//! point is to carry a value before a document has named what shape it
+//! has, one node before the parse tool that turns it into one of the
+//! seven types below (which keep their own tighter grammars, and this
+//! property, unchanged).
 
 use proptest::prelude::*;
 use willikins_types::{

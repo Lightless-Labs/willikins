@@ -135,6 +135,39 @@ pub struct DopplerServiceToken(secrecy::SecretString);
 )]
 pub struct DopplerSecretValue(secrecy::SecretString);
 
+/// A non-secret value read from Doppler by `doppler.value.get`, of
+/// unknown shape. Milestone 3i, task B8 (decision (b2)'s own "gap"):
+/// `doppler.value.get`'s output was [`crate::Text`] until this task, which
+/// let the two values it most commonly carries -- an App Store Connect
+/// issuer id or key id, resolved through `apple.issuer_id.parse`/
+/// `apple.key_id.parse` -- print in full on every output surface, the
+/// exact thing the operator objected to (this module's own plan,
+/// "Operator's words"). Retyping the output (and the two parse tools'
+/// `value` input) to this identifier type closes that gap by
+/// construction: any value flowing through `doppler.value.get` now masks
+/// by default, whichever credential it turns out to name.
+///
+/// Deliberately no `pattern`: like [`crate::Text`], this type's whole
+/// point is to carry a Doppler variable's value *before* a document names
+/// what shape it has (that naming happens one node later, at the parse
+/// tool that turns it into a real identifier type) -- so its grammar is
+/// `max_len` alone, the same as `Text`'s. One consequence, recorded rather
+/// than hidden: `mask_identifier`'s trailing `...` contains a `.`, which
+/// every other identifier type's grammar refuses and this one does not,
+/// so a masked `DopplerValue` can still parse back as a `DopplerValue`
+/// (just not as the `AppleIssuerId`/`AppleKeyId` a parse tool would turn
+/// it into -- those two keep their own tighter grammars unchanged). See
+/// `crates/willikins-types/tests/identifier_masking.rs`'s module doc for
+/// where this is pinned.
+#[derive(willikins_derive::DomainType)]
+#[domain(
+    identifier,
+    max_len = 65536,
+    description = "A non-secret value read from Doppler, of unknown shape; printed as a prefix.",
+    example = "57246542-96fe-1a63-e053-0824d011072a"
+)]
+pub struct DopplerValue(String);
+
 /// A Doppler service account's display `name`, as it appears in
 /// `GET /v3/workplace/service_accounts` and as the operator spells it when
 /// naming the CI account `doppler.project_member.ensure` should resolve.
@@ -1001,5 +1034,54 @@ mod tests {
         crate::assert_example_parses::<DopplerServiceAccountName>();
         crate::assert_example_parses::<DopplerProjectRole>();
         crate::assert_example_parses::<DopplerConfig>();
+        crate::assert_example_parses::<DopplerValue>();
+    }
+
+    // -------------------------------------------------------------
+    // DopplerValue (identifier, task B8)
+    // -------------------------------------------------------------
+
+    #[test]
+    fn doppler_value_accepts_any_non_empty_string() {
+        assert_eq!(
+            DopplerValue::parse("2X9R4HXF34").unwrap().as_str(),
+            "2X9R4HXF34"
+        );
+    }
+
+    #[test]
+    fn doppler_value_accepts_the_empty_string() {
+        assert!(DopplerValue::parse("").is_ok());
+    }
+
+    #[test]
+    fn doppler_value_rejects_over_max_len() {
+        let too_long = "a".repeat(65537);
+        assert!(DopplerValue::parse(&too_long).is_err());
+    }
+
+    #[test]
+    fn doppler_value_is_not_secret() {
+        const { assert!(!DopplerValue::IS_SECRET) };
+    }
+
+    #[test]
+    fn doppler_value_is_an_identifier() {
+        const { assert!(DopplerValue::IS_IDENTIFIER) };
+    }
+
+    #[test]
+    fn doppler_value_serde_round_trips() {
+        let value = DopplerValue::parse("2X9R4HXF34").unwrap();
+        let json = serde_json::to_string(&value).unwrap();
+        assert_eq!(json, "\"2X9R4HXF34\"");
+        assert_eq!(serde_json::from_str::<DopplerValue>(&json).unwrap(), value);
+    }
+
+    #[test]
+    fn doppler_value_debug_masks_but_display_is_whole() {
+        let value = DopplerValue::parse("57246542-96fe-1a63-e053-0824d011072a").unwrap();
+        assert_eq!(format!("{value:?}"), "DopplerValue(\"5724...\")");
+        assert_eq!(value.to_string(), "57246542-96fe-1a63-e053-0824d011072a");
     }
 }
