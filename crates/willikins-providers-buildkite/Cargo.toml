@@ -21,6 +21,10 @@ live-tests = []
 name = "live_write_cycle"
 required-features = ["live-tests"]
 
+[[test]]
+name = "live_bootstrap_cycle"
+required-features = ["live-tests"]
+
 [dependencies]
 willikins-core.workspace = true
 willikins-types.workspace = true
