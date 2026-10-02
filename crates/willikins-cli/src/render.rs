@@ -754,7 +754,9 @@ fn run_state_text(state: RunState) -> &'static str {
 /// [`willikins_core::disclosure::mask_json`] instead, unless `disclosure`
 /// is [`Disclosure::Revealed`]; [`redacted_value_text`] then reads back the
 /// same `value`/`state`/`list` shape `Value::render` itself would have
-/// produced, now masked when `mask_json` found an identifier to mask.
+/// produced, now masked when `mask_json` found an identifier to mask. The
+/// failure's own JSON (`error:`) goes through the same `mask_json` first:
+/// an `ApplyError::Tool` carries every earlier node's outputs.
 #[must_use]
 pub fn run_record_text(run: &RunRecord, disclosure: Disclosure) -> String {
     let mut lines = vec![
@@ -777,10 +779,15 @@ pub fn run_record_text(run: &RunRecord, disclosure: Disclosure) -> String {
     lines.extend(redacted_map_lines(run.outputs.as_json(), "  ", disclosure));
     lines.push(format!("state: {}", run_state_text(run.state)));
     if let Some(error) = &run.error {
-        lines.push(format!(
-            "error: {}",
-            single_line(&error.as_json().to_string())
-        ));
+        // The journal's own `Redacted<ApplyError>` JSON: an
+        // `ApplyError::Tool` carries the partial `Applied`, every earlier
+        // node's outputs in full (decision (b7)), so it is masked exactly
+        // like the output maps above.
+        let mut json = error.as_json().clone();
+        if disclosure == Disclosure::Masked {
+            willikins_core::disclosure::mask_json(&mut json);
+        }
+        lines.push(format!("error: {}", single_line(&json.to_string())));
     }
     if let Some(next_step) = &run.next_step {
         lines.push(format!("next_step: {}", single_line(next_step)));
@@ -1689,6 +1696,81 @@ mod tests {
 
         let masked = run_record_text(&run, Disclosure::Masked);
         assert!(masked.contains("issuer_id: 5724..."), "text: {masked}");
+        assert!(!masked.contains(FULL), "text leaked the full id: {masked}");
+
+        let revealed = run_record_text(&run, Disclosure::Revealed);
+        assert!(revealed.contains(FULL), "text: {revealed}");
+    }
+
+    /// Milestone 3i's independent adversarial pass: a failed run's
+    /// `error:` line is the journal's own `Redacted<ApplyError>` JSON, and
+    /// an [`willikins_core::ApplyError::Tool`] carries the partial
+    /// [`Applied`] built before the failure -- every earlier node's
+    /// outputs, full identifiers included (decision (b7): the journal keeps
+    /// full values). The per-node lines above it were masked, but this line
+    /// was printed whole, so `apply --plan-id`, `run` and `runs` in default
+    /// text mode showed a freshly created record's full id on any run that
+    /// failed after creating it.
+    #[test]
+    fn run_record_text_masks_an_identifier_inside_a_failed_runs_error_unless_revealed() {
+        const FULL: &str = "57246542-96fe-1a63-e053-0824d011072a";
+        let issuer = willikins_types::AppleIssuerId::parse(FULL).unwrap();
+        let mut created = Outputs::new();
+        created.insert(PortName::parse("issuer_id").unwrap(), Value::known(issuer));
+        let tool_error = willikins_core::ToolError {
+            kind: willikins_core::ToolErrorKind::Provider,
+            message: "provider responded 500".to_string(),
+        };
+        let applied = Applied {
+            nodes: vec![
+                AppliedNode {
+                    name: NodeName::parse("issuer_id").unwrap(),
+                    instance: None,
+                    tool: ToolName::parse("test.issuer").unwrap(),
+                    status: NodeStatus::Created,
+                    outputs: created,
+                },
+                AppliedNode {
+                    name: NodeName::parse("later").unwrap(),
+                    instance: None,
+                    tool: ToolName::parse("test.later").unwrap(),
+                    status: NodeStatus::Failed {
+                        error: tool_error.clone(),
+                    },
+                    outputs: Outputs::new(),
+                },
+            ],
+            outputs: IndexMap::new(),
+            blocked: Vec::new(),
+        };
+        let error = willikins_core::ApplyError::Tool {
+            node: NodeName::parse("later").unwrap(),
+            instance: None,
+            error: tool_error,
+            applied: Box::new(applied),
+        };
+        let recorded = willikins_journal::Redacted::from(&error);
+        assert!(
+            recorded.as_json().to_string().contains(FULL),
+            "the journal must keep the full value (decision (b7)), or this test proves nothing"
+        );
+        let run = RunRecord {
+            run_id: run_id(),
+            plan_id: plan_id(),
+            principal: principal("agent"),
+            started_at: willikins_core::Timestamp::now(),
+            state: RunState::Failed,
+            nodes: Vec::new(),
+            outputs: willikins_journal::Redacted::from(&IndexMap::new()),
+            error: Some(recorded),
+            blocked: Vec::new(),
+            next_step: None,
+            finished_at: Some(willikins_core::Timestamp::now()),
+        };
+
+        let masked = run_record_text(&run, Disclosure::Masked);
+        assert!(masked.contains("error:"), "text: {masked}");
+        assert!(masked.contains("5724..."), "text: {masked}");
         assert!(!masked.contains(FULL), "text leaked the full id: {masked}");
 
         let revealed = run_record_text(&run, Disclosure::Revealed);
