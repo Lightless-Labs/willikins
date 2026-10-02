@@ -7,12 +7,10 @@
 //! binary, against a real file journal, which is the one surface that
 //! test cannot reach.
 //!
-//! One run, the four OBSERVED gates deliberately unmet (a fresh seed: no
+//! One run, the three OBSERVED gates deliberately unmet (a fresh seed: no
 //! bundle id, no app record, `APP_GROUPS` not enabled, `APP_ATTEST` not
-//! enabled, and the pipeline's stored configuration never seeded to equal
-//! the rendered bootstrap -- `bootstrap_gate`, milestone 3g's own
-//! replacement for the old `m7_bootstrap` acknowledgement): `apply` must
-//! exit
+//! enabled -- M7, the former `bootstrap_gate`, is gone as a gate entirely,
+//! milestone 3i): `apply` must exit
 //! **3** (decision (j), point 7 -- `exit_for_run_state` maps
 //! `RunState::Blocked` to 3, distinct from a failure's 1), stdout must
 //! show the `blocked:` section and "re-run this document once done", and
@@ -23,10 +21,12 @@
 //! around here rather than fixed
 //!
 //! The one remaining `operator.acknowledge` leaf (M5) is deliberately
-//! supplied `done` here, **not** left unmet like the four observed gates
+//! supplied `done` here, **not** left unmet like the three observed gates
 //! (milestone 3h, W7: M6 is `ci_doppler_access`, a real node now, never an
 //! acknowledgement -- it plans and applies for real in this run, alongside
-//! `doppler`). Leaving M5 unsupplied hits a genuine,
+//! `doppler`; milestone 3i: M7 is `bootstrap`, a real write now, also
+//! never an acknowledgement or a gate, and also plans and applies for
+//! real). Leaving M5 unsupplied hits a genuine,
 //! pre-existing defect this test uncovered: `willikins_server::butler::resolve_recorded_inputs`
 //! rebuilds a plan's inputs from the journal's own recorded
 //! `PlanRecorded.inputs` by requiring **every** declared workflow input to
@@ -155,12 +155,13 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         // why: leaving it unmet trips a separate, pre-existing defect in
         // the journal-replay path, not the gate mechanism this test means
         // to prove. M3 and M7 are gone as acknowledgements (milestone 3g,
-        // W1): M3 is real writes now, and M7 is `bootstrap_gate`, an
-        // *observed* gate this run cannot satisfy (nothing seeds the
-        // pipeline's stored configuration), so it is deliberately left
-        // blocked below alongside the others. M6 is gone too (milestone
-        // 3h, W7): it is `ci_doppler_access`, a real node, no longer an
-        // input this run needs to supply at all.
+        // W1 and milestone 3i): M3 is real writes now, and M7 is
+        // `bootstrap` (`buildkite.pipeline.bootstrap.ensure`), a real
+        // write too, no longer a gate of any kind -- it plans and applies
+        // for real in this run, alongside `pipeline`, and is never in the
+        // blocked set below. M6 is gone too (milestone 3h, W7): it is
+        // `ci_doppler_access`, a real node, no longer an input this run
+        // needs to supply at all.
         "--input",
         "m5_apns_key_done=done",
     ]);
@@ -181,17 +182,16 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
         stdout.contains("re-run this document once done"),
         "stdout must tell the operator to re-run -- stdout: {stdout}"
     );
-    // The leaf app-record gate, the three per-identifier app-group gates
-    // (M1, M2), and the bootstrap gate (M7, milestone 3g: an observed
-    // gate now, never satisfied by this run since nothing seeds the
-    // pipeline's stored configuration).
+    // The leaf app-record gate and the three per-identifier app-group
+    // gates (M1, M2), plus the App Attest gate. `bootstrap` (M7) is never
+    // in this set any more (milestone 3i): it is a real write, not a
+    // gate.
     for node in [
         "app_record",
         "app_app_groups",
         "nse_app_groups",
         "widgets_app_groups",
         "app_app_attest",
-        "bootstrap_gate",
     ] {
         assert!(
             stdout.contains(node),

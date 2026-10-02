@@ -300,6 +300,15 @@
 # blocking manual fucking step"): no Apple API can create or download an
 # APNs auth key, so `m5_apns_key` remains the one `operator.acknowledge`
 # leaf left in this graph.
+#
+# **3i (2026-10-02): M7 stops being a gate too -- Walter writes its own
+# bootstrap.** The operator, on the paste: "What's this bootstrap gate
+# thing? Why is it done by hand?", then on a tool that writes it instead,
+# accepting only the file this document renders: "Makes sense, yeah."
+# `bootstrap_gate` is replaced, at the same position, by `bootstrap`
+# (`buildkite.pipeline.bootstrap.ensure`): it writes the pipeline's
+# `configuration` from `bootstrap_yml.file` when they differ, `NoOp`
+# once they agree -- no paste, no acknowledgement.
 name: walter-ios-app
 description: Provision Walter (app, NSE, widgets) end to end -- bundle identifiers, capabilities, signing profiles, the monorepo reference, Doppler, the Buildkite pipeline, and its scaffold files -- reporting every manual step as a gate.
 inputs:
@@ -1379,13 +1388,11 @@ steps:
       template: |
         # Walter Buildkite files
 
-        - `bootstrap.yml` is this document's own copy of the pipeline's intended
-          stored bootstrap step (`buildkite.pipeline.bootstrap.gate` compares the
-          two structurally, as YAML, not byte for byte). Paste it into the
-          pipeline's Settings -> Steps page by hand to replace the frozen upload
-          bootstrap the pipeline was created with, then re-run this document --
-          the gate reads `Compute` once they agree. Nothing here can do that
-          paste for you.
+        - `bootstrap.yml` is what `buildkite.pipeline.bootstrap.ensure` stores as
+          the pipeline's configuration on every run of this document, replacing
+          the frozen upload bootstrap the pipeline was created with. No paste:
+          the tool compares the stored configuration to this file structurally,
+          as YAML, and only writes when they differ.
         - `upload-pipeline.sh` is the selector the bootstrap step runs. It reads
           `WALTER_CI_ACTION` (`validation` by default, `signing-preflight`, or
           `release`) and uploads the matching pipeline file. An unrecognised
@@ -1434,15 +1441,13 @@ steps:
         processing state is unclear, resolve it in App Store Connect before
         starting another release, never by guessing and uploading again.
 
-        ## M7: pasting the stored bootstrap
+        ## M7: the stored bootstrap
 
         Buildkite's pipeline is created with a frozen, generic upload bootstrap
-        as its stored Settings -> Steps configuration -- willikins does not
-        write a pipeline's stored steps through Buildkite's API. Paste
-        this directory's own `bootstrap.yml`, by hand, into the pipeline's
-        Settings -> Steps page, replacing what is there. Re-running this
-        document afterwards is how the gate confirms the paste: it reads
-        `Compute` only once the two agree structurally, as YAML.
+        as its stored Settings -> Steps configuration. `buildkite.pipeline.bootstrap.ensure`
+        replaces it with this directory's own `bootstrap.yml` on every run,
+        only from that file -- never a literal, never input text (milestone
+        3i, decision (a1)). A re-run with nothing changed reads `NoOp`.
 
         Triggers stay disabled until this scaffold has been reviewed and the
         pipeline has run at least once with real content.
@@ -3996,17 +4001,16 @@ steps:
       cluster: ${{ steps.buildkite_cluster.cluster }}
       token: ${{ steps.bk_token.value }}
 
-  # W1: M7 is now an observed gate, not an acknowledgement (decision (h)).
-  # No typed pass-through beyond `slug`: `expected`'s content never
-  # reaches this gate's own report (a gate's `need`/`how` are `&'static
-  # str`), so `subject` (`org`, `slug`) is the only place the operator
-  # learns which pipeline to paste into.
-  bootstrap_gate:
-    tool: buildkite.pipeline.bootstrap.gate
+  # 3i: M7 is now a write, not an observed gate (decision (a9), header
+  # paragraph above). `bootstrap` stores `bootstrap_yml.file` as the
+  # pipeline's configuration whenever it differs -- never anything else,
+  # since `configuration` accepts only a `RepoFile` (trust boundary 1).
+  bootstrap:
+    tool: buildkite.pipeline.bootstrap.ensure
     with:
       org: la-bande-a-bonnot
       slug: ${{ steps.pipeline.slug }}
-      expected: ${{ steps.bootstrap_yml.file }}
+      configuration: ${{ steps.bootstrap_yml.file }}
       token: ${{ steps.bk_token.value }}
 
   # --- The one step that stays reported only: no API exposes its state,

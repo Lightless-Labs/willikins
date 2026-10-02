@@ -20,12 +20,13 @@
 //!    own `read` (which resolves the parent through `list_bundle_ids`)
 //!    finds nothing. The three profile nodes are `Skip`, never read.
 //!    The one remaining `operator.acknowledge` leaf (M5) is `Blocked` (no
-//!    `done` supplied), and so is `bootstrap_gate` (M7, milestone 3g):
-//!    the pipeline's stored configuration is still the frozen upload
-//!    bootstrap. `walter_files` lands the scaffold. `ci_doppler_access`
-//!    (M6, milestone 3h: a real node now, not an acknowledgement) plans
-//!    and applies `Create` here too, the project it grants access to
-//!    being predicted from `doppler`'s own output.
+//!    `done` supplied). `bootstrap` (M7, milestone 3i: a write now, not a
+//!    gate) plans `Update` and really writes the fake pipeline's stored
+//!    configuration on this very run, ordered after `pipeline` exists.
+//!    `walter_files` lands the scaffold. `ci_doppler_access` (M6,
+//!    milestone 3h: a real node now, not an acknowledgement) plans and
+//!    applies `Create` here too, the project it grants access to being
+//!    predicted from `doppler`'s own output.
 //!    - **Plan-only, between run 1 and run 2: App Groups is on, App
 //!      Attest is still off.** The fake state gains the app record and
 //!      `APP_GROUPS` on all three identifiers, but not yet `APP_ATTEST`
@@ -41,13 +42,15 @@
 //!    previously-blocked gate `Compute` and the three profile nodes
 //!    `Create` -- **and nothing else
 //!    changes**: every node that already ran in step 1 reads
-//!    `Unchanged`/`Computed`/`NoOp` (`ci_doppler_access` included). The
-//!    one acknowledgement leaf and `bootstrap_gate` are still `Blocked`.
-//! 3. **The acknowledgement is supplied** and the operator's paste
-//!    is stood in for (the pipeline's stored configuration becomes the
-//!    rendered bootstrap). A third run, same fake state, `done` on the
-//!    one `*_done` input: nothing is `Created`, nothing is blocked -- a
-//!    converged run end to end.
+//!    `Unchanged`/`Computed`/`NoOp` (`ci_doppler_access` and `bootstrap`
+//!    included -- run 1 already wrote the stored configuration, so a
+//!    fresh plan reads it `NoOp`). The one acknowledgement leaf is still
+//!    `Blocked`.
+//! 3. **The acknowledgement is supplied.** There is no operator paste to
+//!    stand in for any more: run 1 already wrote the pipeline's stored
+//!    configuration for real. A third run, same fake state, `done` on
+//!    the one `*_done` input: nothing is `Created`, nothing is blocked,
+//!    `bootstrap` reads `NoOp` -- a converged run end to end.
 //!
 //! Throughout: `check` succeeds (the type system's own proof that no
 //! secret reaches a non-secret port -- `willikins-design`'s "no bypass"
@@ -374,13 +377,13 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     let planned1 =
         plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
 
-    // Exactly the App Store Connect gates, the new bootstrap gate (W1: the
-    // pipeline does not exist yet, so its stored configuration cannot
-    // equal anything), plus the one remaining acknowledgement leaf, are
-    // blocked; nothing else. M3 is gone entirely (it is real work now,
-    // below), M7 is `bootstrap_gate`, not an acknowledgement, and W7
-    // (milestone 3h): M6 is `ci_doppler_access`, a real node -- it plans
-    // for real below, never blocked.
+    // Exactly the App Store Connect gates, plus the one remaining
+    // acknowledgement leaf, are blocked; nothing else. M3 is gone
+    // entirely (it is real work now, below), M7 is `bootstrap`
+    // (milestone 3i: a write, not a gate and not an acknowledgement --
+    // it plans `Update` below, never `Blocked`), and W7 (milestone 3h):
+    // M6 is `ci_doppler_access`, a real node -- it plans for real below,
+    // never blocked.
     let blocked_nodes: std::collections::BTreeSet<&str> =
         planned1.blocked.iter().map(|b| b.node.as_str()).collect();
     assert_eq!(
@@ -391,7 +394,6 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "nse_app_groups",
             "widgets_app_groups",
             "app_app_attest",
-            "bootstrap_gate",
             "m5_apns_key",
         ]),
         "run 1's blocked set"
@@ -429,6 +431,12 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     }
     assert_eq!(action_of(&planned1, "walter_files", None), Action::Create);
     assert_eq!(action_of(&planned1, "pipeline", None), Action::Create);
+    // 3i (acceptance 9): the pipeline does not exist yet, so `bootstrap`'s
+    // own `read` finds it `Absent` and `plan` reads that as `Update`
+    // (decision (a2)'s deliberate deviation: a `404` plans `Update`, never
+    // a hard error, so a document whose own upstream node creates the
+    // pipeline stays plannable on a first run).
+    assert_eq!(action_of(&planned1, "bootstrap", None), Action::Update);
     // W7 (acceptance 11): a first run plans `ci_doppler_access` `Create`
     // -- the project it grants access to (`doppler.project`, predicted)
     // does not exist yet in this fake state, so `read` finds it `Absent`.
@@ -483,10 +491,46 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         ),
         "run 1: `ci_doppler_access` must be Created"
     );
-    assert_eq!(applied1.blocked.len(), 7, "run 1's Applied.blocked");
+    // 3i (acceptance 9): run 1's apply really writes the fake pipeline's
+    // stored configuration -- `ensure` reports `changed: true`, so the
+    // status is `Created` exactly as any other first write is, whatever
+    // the planned `Action` was.
+    assert!(
+        matches!(status_of(&applied1, "bootstrap", None), NodeStatus::Created),
+        "run 1: `bootstrap` must be Created (ensure reported changed: true)"
+    );
+    assert_eq!(applied1.blocked.len(), 6, "run 1's Applied.blocked");
 
     let applied1_json = serde_json::to_string(&applied1).unwrap();
     assert_no_secret_leaked(&applied1_json);
+
+    // 3i (acceptance 9): the fake state now really holds the pipeline's
+    // stored configuration as exactly the bootstrap this document
+    // rendered -- no operator paste stands in for it any more. Extracted
+    // from `applied1` rather than re-typed here, so this assertion cannot
+    // silently drift from what the document actually wrote.
+    {
+        let bootstrap_content = rendered_file(&applied1, "bootstrap_yml")
+            .content()
+            .to_string();
+        let pipeline_slug = output_of(&applied1, "pipeline")
+            .get(&PortName::parse("slug").unwrap())
+            .expect("pipeline.slug was applied")
+            .downcast::<BuildkitePipelineSlug>()
+            .expect("pipeline.slug is a BuildkitePipelineSlug")
+            .clone();
+        let locked = state.lock().unwrap();
+        let key =
+            buildkite_pipeline_key(&BuildkiteOrg::parse(BUILDKITE_ORG).unwrap(), &pipeline_slug);
+        let record = locked
+            .buildkite_pipelines
+            .get(&key)
+            .unwrap_or_else(|| panic!("pipeline `{key}` was seeded by run 1's apply"));
+        assert_eq!(
+            record.configuration, bootstrap_content,
+            "run 1's apply must write the pipeline's stored configuration"
+        );
+    }
 
     // The identifiers are genuinely registered now: neither app-group gate
     // nor the app-record gate found anything to read at plan time, but
@@ -577,14 +621,13 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         vec![("identifier", APP_IDENTIFIER), ("capability", "APP_ATTEST")],
         "app_app_attest's blocked report must name the host identifier and APP_ATTEST"
     );
-    // And nothing but App Attest, the bootstrap gate and the one
-    // acknowledgement is still blocked: the three app-group gates and
-    // the app record are open. W1: `bootstrap_gate` remains blocked here
-    // too -- the pipeline's stored configuration is not touched by
-    // seeding App Groups, and nothing has yet stood in for the
-    // operator's own paste (that happens between run 2 and run 3, below).
-    // W7: `ci_doppler_access` is never in this set -- it is a real node,
-    // already `Created` by run 1's apply above.
+    // And nothing but App Attest and the one acknowledgement is still
+    // blocked: the three app-group gates and the app record are open.
+    // 3i: `bootstrap` is never in this set -- it is a real write, already
+    // `Created` by run 1's apply above, and seeding App Groups does not
+    // touch the pipeline's stored configuration, so a fresh plan reads
+    // it `NoOp`. W7: `ci_doppler_access` is never in this set either --
+    // it is a real node, already `Created` by run 1's apply above.
     let blocked_attest_off: std::collections::BTreeSet<&str> = planned_attest_off
         .blocked
         .iter()
@@ -592,9 +635,13 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         .collect();
     assert_eq!(
         blocked_attest_off,
-        std::collections::BTreeSet::from(["app_app_attest", "bootstrap_gate", "m5_apns_key"]),
-        "with App Groups on and App Attest off, only App Attest, the bootstrap gate and the \
-         acknowledgement block"
+        std::collections::BTreeSet::from(["app_app_attest", "m5_apns_key"]),
+        "with App Groups on and App Attest off, only App Attest and the acknowledgement block"
+    );
+    assert_eq!(
+        action_of(&planned_attest_off, "bootstrap", None),
+        Action::NoOp,
+        "bootstrap's stored configuration already equals the rendered file: NoOp"
     );
 
     // ------------------------------------------------------------------
@@ -611,8 +658,9 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     }
 
     // ------------------------------------------------------------------
-    // Run 2: every App Store Connect gate opens; the bootstrap gate and
-    // the one acknowledgement are still withheld.
+    // Run 2: every App Store Connect gate opens; the one acknowledgement
+    // is still withheld. `bootstrap` was already written for real by run
+    // 1's apply, so it is never blocked here.
     // ------------------------------------------------------------------
     let planned2 =
         plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
@@ -621,8 +669,8 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         planned2.blocked.iter().map(|b| b.node.as_str()).collect();
     assert_eq!(
         blocked_nodes2,
-        std::collections::BTreeSet::from(["bootstrap_gate", "m5_apns_key"]),
-        "run 2's blocked set: the bootstrap gate and the one acknowledgement leaf remain"
+        std::collections::BTreeSet::from(["m5_apns_key"]),
+        "run 2's blocked set: the one acknowledgement leaf remains"
     );
 
     for node in [
@@ -655,6 +703,9 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     }
     assert_eq!(action_of(&planned2, "doppler", None), Action::NoOp);
     assert_eq!(action_of(&planned2, "pipeline", None), Action::NoOp);
+    // 3i (acceptance 9): `bootstrap`'s stored configuration already
+    // equals the rendered file, written for real by run 1's apply.
+    assert_eq!(action_of(&planned2, "bootstrap", None), Action::NoOp);
     // W7 (acceptance 11): a re-run plans `ci_doppler_access` `NoOp` --
     // run 1's apply already granted it.
     assert_eq!(
@@ -685,7 +736,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
             "run 2: `{node}` must be Unchanged"
         );
     }
-    assert_eq!(applied2.blocked.len(), 2, "run 2's Applied.blocked");
+    assert_eq!(applied2.blocked.len(), 1, "run 2's Applied.blocked");
 
     // The universal claim, not a spot check: run 2's `Created` set is
     // EXACTLY the three nodes the app-group gates just unblocked -- nothing
@@ -748,35 +799,10 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     assert_no_secret_leaked(&applied2_json);
 
     // ------------------------------------------------------------------
-    // Between run 2 and run 3: the operator's own paste, standing in --
-    // the pipeline's stored `configuration` is set to exactly the
-    // bootstrap this document rendered (`bootstrap_yml`'s own output,
-    // extracted from `applied2` rather than re-typed here, so this test
-    // cannot silently drift from what the document actually wrote).
-    // ------------------------------------------------------------------
-    let bootstrap_content = rendered_file(&applied2, "bootstrap_yml")
-        .content()
-        .to_string();
-    let pipeline_slug = output_of(&applied2, "pipeline")
-        .get(&PortName::parse("slug").unwrap())
-        .expect("pipeline.slug was applied")
-        .downcast::<BuildkitePipelineSlug>()
-        .expect("pipeline.slug is a BuildkitePipelineSlug")
-        .clone();
-    {
-        let mut locked = state.lock().unwrap();
-        let key =
-            buildkite_pipeline_key(&BuildkiteOrg::parse(BUILDKITE_ORG).unwrap(), &pipeline_slug);
-        locked
-            .buildkite_pipelines
-            .get_mut(&key)
-            .unwrap_or_else(|| panic!("pipeline `{key}` was seeded by run 1's apply"))
-            .configuration = bootstrap_content;
-    }
-
-    // ------------------------------------------------------------------
-    // Run 3: the two acknowledgements are supplied, and the bootstrap
-    // gate now reads the paste above as equal. Everything converges.
+    // Run 3: the one remaining acknowledgement is supplied. There is no
+    // operator paste to stand in for -- run 1's apply already wrote the
+    // pipeline's stored configuration for real, and nothing since has
+    // touched it, so `bootstrap` reads `NoOp`. Everything converges.
     // ------------------------------------------------------------------
     let inputs3 = with_acknowledgements(inputs.clone());
     let planned3 =
@@ -786,6 +812,9 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         "run 3 must have no blocked gate left: {:?}",
         planned3.blocked
     );
+    // 3i (acceptance 9): the third run, with `m5_apns_key_done=done`,
+    // shows `bootstrap` NoOp.
+    assert_eq!(action_of(&planned3, "bootstrap", None), Action::NoOp);
 
     for node in [
         "app_id",
@@ -802,7 +831,7 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
         "doppler",
         "walter_files",
         "pipeline",
-        "bootstrap_gate",
+        "bootstrap",
         "m5_apns_key",
         "ci_doppler_access",
     ] {
@@ -1074,12 +1103,13 @@ fn the_document_reads_the_real_layout_by_name() {
         })
         .map(|(name, _)| name.as_str())
         .collect();
-    // W1: `bootstrap_gate` (`buildkite.pipeline.bootstrap.gate`) joins
-    // the set -- it authenticates and references the org exactly like
+    // 3i: `bootstrap` (`buildkite.pipeline.bootstrap.ensure`) joins the
+    // set, replacing `bootstrap_gate` (milestone 3g) at the same
+    // position -- it authenticates and references the org exactly like
     // `buildkite_cluster`/`pipeline`.
     assert_eq!(
         buildkite_nodes,
-        ["buildkite_cluster", "pipeline", "bootstrap_gate"]
+        ["buildkite_cluster", "pipeline", "bootstrap"]
     );
     for name in &buildkite_nodes {
         assert_eq!(
@@ -1095,18 +1125,18 @@ fn the_document_reads_the_real_layout_by_name() {
     }
     assert_eq!(literal("buildkite_cluster", "name"), "Default cluster");
     assert_eq!(
-        node("bootstrap_gate")
+        node("bootstrap")
             .with
             .get(&PortName::parse("slug").unwrap()),
         Some(&from("pipeline", "slug")),
-        "bootstrap_gate.slug must bind from pipeline.slug"
+        "bootstrap.slug must bind from pipeline.slug"
     );
     assert_eq!(
-        node("bootstrap_gate")
+        node("bootstrap")
             .with
-            .get(&PortName::parse("expected").unwrap()),
+            .get(&PortName::parse("configuration").unwrap()),
         Some(&from("bootstrap_yml", "file")),
-        "bootstrap_gate.expected must bind from bootstrap_yml.file"
+        "bootstrap.configuration must bind from bootstrap_yml.file"
     );
     for removed in ["buildkite_org", "cluster"] {
         assert!(
@@ -1409,7 +1439,10 @@ fn walter_files_binds_every_render_and_m3_m7_acknowledgements_are_gone() {
         "walter_files.files must bind every render in WALTER_FILES"
     );
 
-    for name in ["m3_repo_files", "m7_bootstrap"] {
+    // 3i (acceptance 9): `bootstrap_gate` is gone too -- `bootstrap`
+    // (`buildkite.pipeline.bootstrap.ensure`) replaces it at the same
+    // position.
+    for name in ["m3_repo_files", "m7_bootstrap", "bootstrap_gate"] {
         assert!(
             !workflow.nodes.contains_key(&NodeName::parse(name).unwrap()),
             "`{name}` must not exist as a node any more"

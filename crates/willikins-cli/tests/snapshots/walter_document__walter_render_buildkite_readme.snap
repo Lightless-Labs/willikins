@@ -6,13 +6,11 @@ apps/walter/.buildkite/README.md
 ---
 # Walter Buildkite files
 
-- `bootstrap.yml` is this document's own copy of the pipeline's intended
-  stored bootstrap step (`buildkite.pipeline.bootstrap.gate` compares the
-  two structurally, as YAML, not byte for byte). Paste it into the
-  pipeline's Settings -> Steps page by hand to replace the frozen upload
-  bootstrap the pipeline was created with, then re-run this document --
-  the gate reads `Compute` once they agree. Nothing here can do that
-  paste for you.
+- `bootstrap.yml` is what `buildkite.pipeline.bootstrap.ensure` stores as
+  the pipeline's configuration on every run of this document, replacing
+  the frozen upload bootstrap the pipeline was created with. No paste:
+  the tool compares the stored configuration to this file structurally,
+  as YAML, and only writes when they differ.
 - `upload-pipeline.sh` is the selector the bootstrap step runs. It reads
   `WALTER_CI_ACTION` (`validation` by default, `signing-preflight`, or
   `release`) and uploads the matching pipeline file. An unrecognised
@@ -61,15 +59,13 @@ reconciling it first** -- if `walter-upload` times out or Apple's
 processing state is unclear, resolve it in App Store Connect before
 starting another release, never by guessing and uploading again.
 
-## M7: pasting the stored bootstrap
+## M7: the stored bootstrap
 
 Buildkite's pipeline is created with a frozen, generic upload bootstrap
-as its stored Settings -> Steps configuration -- willikins does not
-write a pipeline's stored steps through Buildkite's API. Paste
-this directory's own `bootstrap.yml`, by hand, into the pipeline's
-Settings -> Steps page, replacing what is there. Re-running this
-document afterwards is how the gate confirms the paste: it reads
-`Compute` only once the two agree structurally, as YAML.
+as its stored Settings -> Steps configuration. `buildkite.pipeline.bootstrap.ensure`
+replaces it with this directory's own `bootstrap.yml` on every run,
+only from that file -- never a literal, never input text (milestone
+3i, decision (a1)). A re-run with nothing changed reads `NoOp`.
 
 Triggers stay disabled until this scaffold has been reviewed and the
 pipeline has run at least once with real content.

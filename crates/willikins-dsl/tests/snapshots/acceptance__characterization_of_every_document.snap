@@ -833,10 +833,10 @@ pipeline.slug: BuildkitePipelineSlug
 pipeline.repo: GitHubRepo
 pipeline.cluster: BuildkiteClusterId
 pipeline.token: BuildkiteToken
-bootstrap_gate.org: BuildkiteOrg
-bootstrap_gate.slug: BuildkitePipelineSlug
-bootstrap_gate.expected: RepoFile
-bootstrap_gate.token: BuildkiteToken
+bootstrap.org: BuildkiteOrg
+bootstrap.slug: BuildkitePipelineSlug
+bootstrap.configuration: RepoFile
+bootstrap.token: BuildkiteToken
 m5_apns_key.step: Text
 m5_apns_key.acknowledged: OperatorAcknowledgement
 ci_doppler_access.project: DopplerProject
