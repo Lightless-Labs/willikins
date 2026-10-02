@@ -863,7 +863,20 @@ struct ProjectMemberWire {
     slug: DopplerSlug,
     role: ProjectMemberRoleBody,
     access_all_environments: bool,
+    /// `null` on a member whose access spans every environment (live,
+    /// 2026-10-02: every project's own creator lists that way), so absent
+    /// and `null` both read as empty.
+    #[serde(default, deserialize_with = "null_as_empty")]
     environments: Vec<String>,
+}
+
+/// Deserializes `null` as an empty list (Doppler's own spelling of "no
+/// explicit environments" on an all-environments member).
+fn null_as_empty<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// `{"identifier": "..."}` -- Doppler's nested role shape on a listed
