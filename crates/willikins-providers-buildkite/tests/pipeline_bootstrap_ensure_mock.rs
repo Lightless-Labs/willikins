@@ -136,6 +136,67 @@ fn foreign_reads_foreign_and_ensure_conflicts_with_zero_patch() {
     patch.assert();
 }
 
+/// Adversarial pass (milestone 3i, 2026-10-0x): ownership is *exact*
+/// equality against `MANAGED_DESCRIPTION` ("managed-by: willikins"), never
+/// a substring test. A pipeline a human or another tool named
+/// `"managed-by: willikins-production"` (`MANAGED_DESCRIPTION` as a
+/// prefix of a longer, foreign description) or `"custom (managed-by:
+/// willikins) pipeline"` (as an embedded substring) is still foreign: a
+/// weaker `contains` check would let this tool `PATCH` -- overwriting a
+/// stored configuration trust boundary 4 says is never read back -- a
+/// pipeline this crate never created. The stored `configuration` is set
+/// equal to the document's rendered content on purpose, so a weakened
+/// ownership check would otherwise read `Present`/`Equal` and `ensure`
+/// would silently report `changed: false` with zero `PATCH`, not merely a
+/// wrong `Foreign`/`Conflict` -- either wrong answer is caught here.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_description_that_only_contains_the_marker_as_a_substring_is_still_foreign() {
+    let rendered = "steps:\n  - command: \"echo hi\"\n";
+    for foreign_description in [
+        "managed-by: willikins-production",
+        "custom (managed-by: willikins) pipeline",
+        "managed-by: willikins ",
+    ] {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", path())
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "description": foreign_description,
+                    "configuration": rendered,
+                })
+                .to_string(),
+            )
+            .create();
+        let patch = provider
+            .mock("PATCH", path())
+            .match_query(mockito::Matcher::Missing)
+            .expect(0)
+            .create();
+        let tool = ensure_tool_against(provider.url());
+        let configuration = RepoFile::new(
+            RepoPath::parse("apps/walter/.buildkite/bootstrap.yml").unwrap(),
+            rendered,
+        )
+        .unwrap();
+        let inputs = ensure_inputs(&configuration);
+
+        let observation = tool.read(&inputs).unwrap();
+        assert!(
+            matches!(observation, Observation::Foreign),
+            "{foreign_description:?}: {observation:?}"
+        );
+        assert!(!tool.updates(&inputs).unwrap(), "{foreign_description:?}");
+
+        let token = SinkToken::new();
+        let err = tool.ensure(&inputs, &token).unwrap_err();
+        assert_eq!(err.kind, ToolErrorKind::Conflict, "{foreign_description:?}");
+        patch.assert();
+    }
+}
+
 #[test]
 #[allow(clippy::disallowed_methods)] // a test mints its own token
 fn equal_re_quoted_reads_present_and_ensure_changes_nothing_with_zero_patch() {
