@@ -84,7 +84,7 @@ fn missing_reads_absent_updates_true_and_ensure_not_found_with_zero_patch() {
         .create();
     let patch = provider
         .mock("PATCH", path())
-        .match_query(mockito::Matcher::Any)
+        .match_query(mockito::Matcher::Missing)
         .expect(0)
         .create();
     let tool = ensure_tool_against(provider.url());
@@ -117,7 +117,7 @@ fn foreign_reads_foreign_and_ensure_conflicts_with_zero_patch() {
         .create();
     let patch = provider
         .mock("PATCH", path())
-        .match_query(mockito::Matcher::Any)
+        .match_query(mockito::Matcher::Missing)
         .expect(0)
         .create();
     let tool = ensure_tool_against(provider.url());
@@ -153,7 +153,7 @@ fn equal_re_quoted_reads_present_and_ensure_changes_nothing_with_zero_patch() {
         .create();
     let patch = provider
         .mock("PATCH", path())
-        .match_query(mockito::Matcher::Any)
+        .match_query(mockito::Matcher::Missing)
         .expect(0)
         .create();
     let tool = ensure_tool_against(provider.url());
@@ -288,6 +288,7 @@ fn different_whose_patch_succeeds_but_re_read_still_differs_reports_provider() {
         .create();
     let patch = provider
         .mock("PATCH", path())
+        .match_query(mockito::Matcher::Missing)
         .with_status(200)
         .with_body(
             serde_json::json!({"configuration": "steps:\n  - command: \"still wrong\"\n"})
@@ -329,6 +330,7 @@ fn a_patch_500_then_a_re_read_equal_reports_changed_false() {
         .create();
     let patch = provider
         .mock("PATCH", path())
+        .match_query(mockito::Matcher::Missing)
         .with_status(500)
         .with_body(serde_json::json!({"message": "boom"}).to_string())
         .expect(PATCH_RETRY_ATTEMPTS)

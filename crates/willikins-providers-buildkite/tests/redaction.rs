@@ -683,9 +683,10 @@ fn a_writer_configuration_marker_reaches_no_observation_or_error_on_the_read_sid
 
 /// The `PATCH` response's own markers (`provider.webhook_url` and
 /// `configuration`, exactly the two fields trust boundary 4 names) never
-/// reach `ensure`'s successful `Ensured`, its `Debug`, or any later
-/// `ToolError` -- across a `PATCH` that lands and a re-read that then
-/// (deliberately, via a second, different marker) still disagrees.
+/// reach `ensure`'s successful `Ensured` or its `Debug` -- across a
+/// `PATCH` that lands and a re-read that then confirms it (`Equal`,
+/// `changed: true`), with the marker sitting only in the response's
+/// `webhook_url`, never in the re-read's own stored `configuration`.
 #[test]
 #[allow(clippy::disallowed_methods)] // a test mints its own token
 fn a_patch_response_marker_reaches_no_ensured_debug_or_error() {
@@ -698,7 +699,7 @@ fn a_patch_response_marker_reaches_no_ensured_debug_or_error() {
     // Registered first, with its own `.expect(1)`: `ensure`'s pre-patch
     // `analyze` consumes this one hit; mockito then falls through to the
     // second GET mock below for the post-patch re-`analyze`.
-    provider
+    let pre_patch_read = provider
         .mock(
             "GET",
             "/v2/organizations/willikins-test/pipelines/third-thoughts",
@@ -713,11 +714,12 @@ fn a_patch_response_marker_reaches_no_ensured_debug_or_error() {
         )
         .expect(1)
         .create();
-    provider
+    let patch = provider
         .mock(
             "PATCH",
             "/v2/organizations/willikins-test/pipelines/third-thoughts",
         )
+        .match_query(mockito::Matcher::Missing)
         .with_status(200)
         .with_body(
             serde_json::json!({
@@ -726,8 +728,9 @@ fn a_patch_response_marker_reaches_no_ensured_debug_or_error() {
             })
             .to_string(),
         )
+        .expect(1)
         .create();
-    provider
+    let post_patch_read = provider
         .mock(
             "GET",
             "/v2/organizations/willikins-test/pipelines/third-thoughts",
@@ -749,6 +752,9 @@ fn a_patch_response_marker_reaches_no_ensured_debug_or_error() {
         .expect("ensures");
 
     assert!(ensured.changed);
+    pre_patch_read.assert();
+    patch.assert();
+    post_patch_read.assert();
     assert!(!format!("{ensured:?}").contains(WRITER_CONFIGURATION_MARKER));
     for (_, value) in ensured.outputs.iter() {
         assert!(

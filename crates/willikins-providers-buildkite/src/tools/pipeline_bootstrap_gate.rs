@@ -7,18 +7,26 @@
 //!
 //! Milestone 3a decision (a) froze `buildkite.pipeline.ensure`'s own
 //! `configuration` at the minimal "upload the real pipeline from the
-//! repository" bootstrap, and decision (h) keeps that: no tool in this
-//! crate ever takes a pipeline configuration, a command, a step, or any
-//! YAML as an input, and none ever will -- a pipeline configuration
-//! "becomes something an agent machine executes ... the moment a build is
-//! triggered, with no diff in between" (CLAUDE.md forbids exactly that
-//! shape of tool). What decision (h) makes automatable instead is the
-//! *check*: whether the operator has already pasted the real bootstrap
-//! (Sample's own `.buildkite/bootstrap.yml`, or any other document's) into
-//! the pipeline's Settings -> Steps by hand. This gate reads the stored
+//! repository" bootstrap, and decision (h) kept that *at the time*: no
+//! tool took a pipeline configuration, a command, a step, or any YAML as
+//! an input -- a pipeline configuration "becomes something an agent
+//! machine executes ... the moment a build is triggered, with no diff in
+//! between" (CLAUDE.md forbids exactly that shape of tool). What decision
+//! (h) made automatable instead was the *check*: whether the operator had
+//! already pasted the real bootstrap (Sample's own
+//! `.buildkite/bootstrap.yml`, or any other document's) into the
+//! pipeline's Settings -> Steps by hand. This gate reads the stored
 //! configuration and compares it against the bootstrap file the calling
 //! document renders (typically through `repo.file.render`, milestone 3g
 //! task T1); it never writes anything, and its own `ensure` is a read.
+//!
+//! **Superseded for `configuration` only, milestone 3i decision (a1):**
+//! the paste is no longer manual. `buildkite.pipeline.bootstrap.ensure`
+//! (`crate::tools::pipeline_bootstrap_ensure`) now writes the stored
+//! `configuration`, but only from a `RepoFile` the document renders --
+//! never a literal, a command, a step, or any value from a workflow
+//! input. This gate still exists for a document whose pipeline an
+//! operator manages by hand instead.
 //!
 //! # Structural comparison, not byte comparison
 //!
