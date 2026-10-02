@@ -29,15 +29,17 @@
 
 use std::sync::{Arc, Mutex};
 
-use willikins_core::{Inputs, Observation, PortName, Tool, Value};
+use willikins_core::{Inputs, Observation, PortName, SinkToken, Tool, ToolErrorKind, Value};
 use willikins_providers_buildkite::{
-    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure,
-    MANAGED_DESCRIPTION, UPLOAD_CONFIGURATION, ssh_repository_url,
+    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineBootstrapEnsure,
+    BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure, MANAGED_DESCRIPTION,
+    UPLOAD_CONFIGURATION, ssh_repository_url,
 };
 use willikins_providers_fake::FakeState;
 use willikins_providers_fake::state::BuildkitePipelineRecord;
 use willikins_providers_fake::tools::{
-    FakeBuildkiteClusterGet, FakeBuildkitePipelineBootstrapGate, FakeBuildkitePipelineEnsure,
+    FakeBuildkiteClusterGet, FakeBuildkitePipelineBootstrapEnsure,
+    FakeBuildkitePipelineBootstrapGate, FakeBuildkitePipelineEnsure,
 };
 use willikins_providers_http::testing::MockProvider;
 use willikins_providers_http::{Credential, Http};
@@ -695,4 +697,337 @@ fn bootstrap_gate_agrees_on_present_with_the_token_port_bound() {
 
     assert_eq!(shape(&live), shape(&fake));
     assert!(matches!(live, Observation::Present(_)), "{live:?}");
+}
+
+// ---------------------------------------------------------------------
+// Milestone 3i task A3: `buildkite.pipeline.bootstrap.ensure`'s own
+// agreement, over decision (a2)'s four states plus a null stored
+// configuration -- comparing `read`, `updates`, and `ensure` alike, not
+// only `read` as the gate's own section above does.
+// ---------------------------------------------------------------------
+
+fn bootstrap_configuration() -> RepoFile {
+    RepoFile::new(
+        RepoPath::parse("apps/sample/.buildkite/bootstrap.yml").unwrap(),
+        "steps:\n  - command: \"echo hi\"\n",
+    )
+    .unwrap()
+}
+
+fn bootstrap_ensure_inputs() -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(port("org"), Value::known(org()));
+    inputs.insert(port("slug"), Value::known(slug()));
+    inputs.insert(
+        port("configuration"),
+        Value::known(bootstrap_configuration()),
+    );
+    inputs
+}
+
+fn live_bootstrap_ensure_tool(url: String) -> BuildkitePipelineBootstrapEnsure {
+    let credential = Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+    let http = Http::new(url, Vec::new(), credential);
+    BuildkitePipelineBootstrapEnsure::new(Arc::new(BuildkiteClient::new(http)))
+}
+
+fn ensure_path() -> &'static str {
+    "/v2/organizations/willikins-test/pipelines/third-thoughts"
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn bootstrap_ensure_agrees_when_missing() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", ensure_path())
+        .with_status(404)
+        .create();
+    let live_tool = live_bootstrap_ensure_tool(provider.url());
+    let live_read = live_tool.read(&bootstrap_ensure_inputs()).unwrap();
+    let live_updates = live_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+    let token = SinkToken::new();
+    let live_ensure = live_tool
+        .ensure(&bootstrap_ensure_inputs(), &token)
+        .unwrap_err();
+
+    let fake_tool =
+        FakeBuildkitePipelineBootstrapEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+    let fake_read = fake_tool.read(&bootstrap_ensure_inputs()).unwrap();
+    let fake_updates = fake_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+    let fake_ensure = fake_tool
+        .ensure(&bootstrap_ensure_inputs(), &token)
+        .unwrap_err();
+
+    assert_eq!(shape(&live_read), shape(&fake_read));
+    assert_eq!(live_updates, fake_updates);
+    assert!(live_updates);
+    assert_eq!(live_ensure.kind, fake_ensure.kind, "{live_ensure:?}");
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn bootstrap_ensure_agrees_when_foreign() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", ensure_path())
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "description": "someone else's pipeline",
+                "configuration": "steps:\n  - command: \"echo hi\"\n",
+            })
+            .to_string(),
+        )
+        .create();
+    let live_tool = live_bootstrap_ensure_tool(provider.url());
+    let live_read = live_tool.read(&bootstrap_ensure_inputs()).unwrap();
+    let live_updates = live_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+    let token = SinkToken::new();
+    let live_ensure = live_tool
+        .ensure(&bootstrap_ensure_inputs(), &token)
+        .unwrap_err();
+
+    let state = FakeState::new().with_buildkite_pipeline(
+        &org(),
+        &slug(),
+        BuildkitePipelineRecord {
+            repository: ssh_repository_url(&repo()),
+            cluster_id: CLUSTER_ID.to_string(),
+            ours: false,
+            configuration: "steps:\n  - command: \"echo hi\"\n".to_string(),
+        },
+    );
+    let fake_tool = FakeBuildkitePipelineBootstrapEnsure::new(Arc::new(Mutex::new(state)));
+    let fake_read = fake_tool.read(&bootstrap_ensure_inputs()).unwrap();
+    let fake_updates = fake_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+    let fake_ensure = fake_tool
+        .ensure(&bootstrap_ensure_inputs(), &token)
+        .unwrap_err();
+
+    assert_eq!(shape(&live_read), shape(&fake_read));
+    assert_eq!(live_updates, fake_updates);
+    assert!(!live_updates);
+    assert_eq!(live_ensure.kind, fake_ensure.kind, "{live_ensure:?}");
+    assert_eq!(live_ensure.kind, ToolErrorKind::Conflict);
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn bootstrap_ensure_agrees_when_equal_though_requoted_and_neither_side_writes() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", ensure_path())
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "description": MANAGED_DESCRIPTION,
+                // Re-quoted, exactly the shape Buildkite's own
+                // documentation shows for a stored configuration --
+                // still structurally equal.
+                "configuration": "steps:\n  - command: 'echo hi'\n",
+            })
+            .to_string(),
+        )
+        // No `.expect()` cap: `read`, `updates`, and `ensure` each GET
+        // independently. No `PATCH` mock is registered at all: a write
+        // here would fail the live side with a connection or 501 error,
+        // proving none was ever sent.
+        .create();
+    let live_tool = live_bootstrap_ensure_tool(provider.url());
+    let live_read = live_tool.read(&bootstrap_ensure_inputs()).unwrap();
+    let live_updates = live_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+    let token = SinkToken::new();
+    let live_ensure = live_tool
+        .ensure(&bootstrap_ensure_inputs(), &token)
+        .unwrap();
+
+    let state = FakeState::new().with_buildkite_pipeline(
+        &org(),
+        &slug(),
+        BuildkitePipelineRecord {
+            repository: ssh_repository_url(&repo()),
+            cluster_id: CLUSTER_ID.to_string(),
+            ours: true,
+            configuration: "steps:\n  - command: 'echo hi'\n".to_string(),
+        },
+    );
+    let fake_tool = FakeBuildkitePipelineBootstrapEnsure::new(Arc::new(Mutex::new(state)));
+    let fake_read = fake_tool.read(&bootstrap_ensure_inputs()).unwrap();
+    let fake_updates = fake_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+    let fake_ensure = fake_tool
+        .ensure(&bootstrap_ensure_inputs(), &token)
+        .unwrap();
+
+    assert_eq!(shape(&live_read), shape(&fake_read));
+    assert_eq!(live_updates, fake_updates);
+    assert!(!live_updates);
+    assert_eq!(live_ensure.changed, fake_ensure.changed);
+    assert!(!live_ensure.changed);
+}
+
+#[test]
+fn bootstrap_ensure_agrees_when_different_before_any_write() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", ensure_path())
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "description": MANAGED_DESCRIPTION,
+                "configuration": "steps:\n  - command: \"buildkite-agent pipeline upload\"\n",
+            })
+            .to_string(),
+        )
+        // No `.expect()` cap: `read` and `updates` each GET
+        // independently, and no `PATCH` mock is registered at all since
+        // neither call ever writes.
+        .create();
+    let live_tool = live_bootstrap_ensure_tool(provider.url());
+    let live_read = live_tool.read(&bootstrap_ensure_inputs()).unwrap();
+    let live_updates = live_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+
+    let state = FakeState::new().with_buildkite_pipeline(
+        &org(),
+        &slug(),
+        BuildkitePipelineRecord {
+            repository: ssh_repository_url(&repo()),
+            cluster_id: CLUSTER_ID.to_string(),
+            ours: true,
+            configuration: "steps:\n  - command: \"buildkite-agent pipeline upload\"\n".to_string(),
+        },
+    );
+    let fake_tool = FakeBuildkitePipelineBootstrapEnsure::new(Arc::new(Mutex::new(state)));
+    let fake_read = fake_tool.read(&bootstrap_ensure_inputs()).unwrap();
+    let fake_updates = fake_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+
+    assert_eq!(shape(&live_read), shape(&fake_read));
+    assert_eq!(live_updates, fake_updates);
+    assert!(live_updates);
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn bootstrap_ensure_agrees_when_different_and_both_write_then_converge() {
+    let mut provider = MockProvider::start();
+    // Registration-ordered sequence, mirroring
+    // `pipeline_bootstrap_ensure_mock.rs`'s own
+    // `different_ensure_patches_then_re_reads_equal_and_reports_changed`:
+    // the pre-patch `analyze` consumes `pre_patch_read`, the `PATCH`
+    // consumes `patch`, and the post-patch re-`analyze` consumes
+    // `post_patch_read`.
+    let pre_patch_read = provider
+        .mock("GET", ensure_path())
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "description": MANAGED_DESCRIPTION,
+                "configuration": "steps:\n  - command: \"buildkite-agent pipeline upload\"\n",
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let patch = provider
+        .mock("PATCH", ensure_path())
+        .match_query(mockito::Matcher::Missing)
+        .match_body(willikins_providers_http::testing::json_body(
+            serde_json::json!({"configuration": "steps:\n  - command: \"echo hi\"\n"}),
+        ))
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"configuration": "steps:\n  - command: \"echo hi\"\n"}).to_string(),
+        )
+        .expect(1)
+        .create();
+    let post_patch_read = provider
+        .mock("GET", ensure_path())
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "description": MANAGED_DESCRIPTION,
+                "configuration": "steps:\n  - command: \"echo hi\"\n",
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let live_tool = live_bootstrap_ensure_tool(provider.url());
+    let token = SinkToken::new();
+    let live_ensure = live_tool
+        .ensure(&bootstrap_ensure_inputs(), &token)
+        .unwrap();
+    pre_patch_read.assert();
+    patch.assert();
+    post_patch_read.assert();
+
+    let state = Arc::new(Mutex::new(FakeState::new().with_buildkite_pipeline(
+        &org(),
+        &slug(),
+        BuildkitePipelineRecord {
+            repository: ssh_repository_url(&repo()),
+            cluster_id: CLUSTER_ID.to_string(),
+            ours: true,
+            configuration: "steps:\n  - command: \"buildkite-agent pipeline upload\"\n".to_string(),
+        },
+    )));
+    let fake_tool = FakeBuildkitePipelineBootstrapEnsure::new(state.clone());
+    let fake_updates = fake_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+    let fake_ensure = fake_tool
+        .ensure(&bootstrap_ensure_inputs(), &token)
+        .unwrap();
+
+    assert!(fake_updates);
+    assert_eq!(live_ensure.changed, fake_ensure.changed);
+    assert!(live_ensure.changed);
+    // Both sides converge: a second `ensure` against either is now
+    // unchanged.
+    assert!(
+        !FakeBuildkitePipelineBootstrapEnsure::new(state)
+            .ensure(&bootstrap_ensure_inputs(), &token)
+            .unwrap()
+            .changed
+    );
+}
+
+#[test]
+fn bootstrap_ensure_agrees_when_the_stored_configuration_is_null() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", ensure_path())
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "description": MANAGED_DESCRIPTION,
+                "configuration": null,
+            })
+            .to_string(),
+        )
+        .create();
+    let live_tool = live_bootstrap_ensure_tool(provider.url());
+    let live_read = live_tool.read(&bootstrap_ensure_inputs()).unwrap();
+    let live_updates = live_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+
+    // The fake's own record field is a plain `String`
+    // (`#[serde(default)]` makes an un-set field empty rather than
+    // `Option`-null), but an empty stored configuration is still
+    // structurally unequal to any real bootstrap -- the same "different"
+    // answer the live tool gives a genuine JSON `null`.
+    let state = FakeState::new().with_buildkite_pipeline(
+        &org(),
+        &slug(),
+        BuildkitePipelineRecord {
+            repository: ssh_repository_url(&repo()),
+            cluster_id: CLUSTER_ID.to_string(),
+            ours: true,
+            configuration: String::new(),
+        },
+    );
+    let fake_tool = FakeBuildkitePipelineBootstrapEnsure::new(Arc::new(Mutex::new(state)));
+    let fake_read = fake_tool.read(&bootstrap_ensure_inputs()).unwrap();
+    let fake_updates = fake_tool.updates(&bootstrap_ensure_inputs()).unwrap();
+
+    assert_eq!(shape(&live_read), shape(&fake_read));
+    assert_eq!(live_updates, fake_updates);
+    assert!(live_updates);
 }

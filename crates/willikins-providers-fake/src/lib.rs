@@ -34,8 +34,9 @@
 //! input port; milestone 3g task G2 added `github.scaffold.ensure`, the
 //! first non-pure tool with a `list<T>` input port; milestone 3g task B1
 //! added `buildkite.pipeline.bootstrap.gate`; milestone 3h task D3 added
-//! `doppler.project_member.ensure`),
-//! so the catalog this crate produces holds forty tools, in the
+//! `doppler.project_member.ensure`; milestone 3i task A3 added
+//! `buildkite.pipeline.bootstrap.ensure`),
+//! so the catalog this crate produces holds forty-one tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -115,6 +116,9 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::FakeBuildkitePipelineBootstrapGate::new(
         state.clone()
     ));
+    insert!(tools::FakeBuildkitePipelineBootstrapEnsure::new(
+        state.clone()
+    ));
     insert!(tools::FakeAppstoreBundleIdEnsure::new(state.clone()));
     insert!(tools::FakeAppstoreBundleIdCapabilityEnsure::new(
         state.clone()
@@ -183,6 +187,7 @@ mod tests {
             "buildkite.cluster.get",
             "buildkite.pipeline.ensure",
             "buildkite.pipeline.bootstrap.gate",
+            "buildkite.pipeline.bootstrap.ensure",
             "appstore.bundle_id.ensure",
             "appstore.bundle_id_capability.ensure",
             "appstore.certificate.get",
@@ -198,7 +203,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 40);
+        assert_eq!(names.len(), 41);
     }
 
     #[test]
