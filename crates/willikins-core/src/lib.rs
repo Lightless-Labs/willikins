@@ -15,6 +15,7 @@ pub mod catalog;
 pub mod check;
 pub mod class;
 pub mod describe;
+pub mod disclosure;
 pub mod plan;
 pub mod reported;
 pub mod site;
@@ -35,6 +36,7 @@ pub use describe::{
     AwaitingInput, Description, InputArg, InputError, MissingInput, PartialInputs, RawInput,
     describe,
 };
+pub use disclosure::mask_json;
 pub use plan::{
     Action, BlockedGate, InstanceFingerprint, Plan, PlanError, PlannedNode, Replacing, plan,
 };
