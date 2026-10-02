@@ -17,8 +17,8 @@ use willikins_types::{
     AppleCapabilitySetting, AppleCapabilityType, AppleCertificateSerial, AppleCertificateType,
     AppleProfileName, BuildkiteClusterName, BuildkiteOrg, BuildkitePipelineSlug, DomainType,
     DopplerConfig, DopplerProject, DopplerSecretValue, DopplerServiceAccountName,
-    DopplerServiceToken, DopplerTokenName, GitBranchName, GitHubRepo, ProjectSlug, RepoVisibility,
-    SecretName, SigNozIngestionKeyName, SigNozIngestionKeyValue, Text,
+    DopplerServiceToken, DopplerTokenName, DopplerValue, GitBranchName, GitHubRepo, ProjectSlug,
+    RepoVisibility, SecretName, SigNozIngestionKeyName, SigNozIngestionKeyValue,
 };
 
 /// A GitHub repository record: enough to answer `github.repo.ensure`'s
@@ -513,20 +513,22 @@ pub struct FakeState {
     pub doppler_service_tokens: HashSet<String>,
     /// Doppler secrets, keyed by `"<config>#<SECRET_NAME>"`.
     pub doppler_secrets: SecretsMap,
-    /// Doppler variables read as non-secret [`Text`] by
-    /// `doppler.value.get`, keyed the same way as [`Self::doppler_secrets`]
-    /// (`doppler_secret_key`). Deliberately a separate map rather than a
-    /// second read of `doppler_secrets`: `DopplerSecretValue` offers no
-    /// plaintext accessor outside a `SinkToken`-gated `expose` (this
-    /// crate never mints one outside its own tests), so there is no
-    /// token-less way for this map to be derived from that one. A live
-    /// Doppler variable answers both tools identically because they hit
-    /// the same endpoint; a fake-state seed file that wants both
-    /// `doppler.secret.get` and `doppler.value.get` to agree on one
-    /// variable must seed both maps at the same key with the same text --
-    /// this crate does not enforce that agreement, the same way it does
-    /// not enforce any other seeded fixture's internal consistency.
-    pub doppler_values: HashMap<String, Text>,
+    /// Doppler variables read as non-secret, identifier-typed
+    /// [`DopplerValue`] by `doppler.value.get` (milestone 3i, task B8;
+    /// [`willikins_types::Text`] before it), keyed the same way as
+    /// [`Self::doppler_secrets`] (`doppler_secret_key`). Deliberately a
+    /// separate map rather than a second read of `doppler_secrets`:
+    /// `DopplerSecretValue` offers no plaintext accessor outside a
+    /// `SinkToken`-gated `expose` (this crate never mints one outside its
+    /// own tests), so there is no token-less way for this map to be
+    /// derived from that one. A live Doppler variable answers both tools
+    /// identically because they hit the same endpoint; a fake-state seed
+    /// file that wants both `doppler.secret.get` and `doppler.value.get`
+    /// to agree on one variable must seed both maps at the same key with
+    /// the same text -- this crate does not enforce that agreement, the
+    /// same way it does not enforce any other seeded fixture's internal
+    /// consistency.
+    pub doppler_values: HashMap<String, DopplerValue>,
     /// Keys `doppler.secret.set` has been called against, keyed the same
     /// way as [`Self::doppler_secrets`]. Deliberately a separate,
     /// value-free set rather than writing into [`Self::doppler_secrets`]
@@ -894,7 +896,7 @@ impl FakeState {
         mut self,
         config: &DopplerConfig,
         name: &SecretName,
-        value: Text,
+        value: DopplerValue,
     ) -> Self {
         self.doppler_values
             .insert(doppler_secret_key(config, name), value);

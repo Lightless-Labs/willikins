@@ -1,8 +1,10 @@
-//! `apple.key_id.parse`: turns a [`Text`] into an [`AppleKeyId`]. Pure,
-//! non-secret -- [`crate::apple_issuer_id_parse`]'s own module doc
-//! explains why this parse node exists at all (nominal typing: a `Text`
-//! output cannot bind directly to `appstore.bundle_id.ensure`'s
-//! `key_id` port, which is `exact("AppleKeyId", true)`).
+//! `apple.key_id.parse`: turns a [`DopplerValue`] into an [`AppleKeyId`].
+//! Pure, non-secret -- [`crate::apple_issuer_id_parse`]'s own module doc
+//! explains why this parse node exists at all (nominal typing: a
+//! `DopplerValue` output cannot bind directly to
+//! `appstore.bundle_id.ensure`'s `key_id` port, which is
+//! `exact("AppleKeyId", true)`), and why the input is `DopplerValue`
+//! rather than [`willikins_types::Text`] (milestone 3i, task B8).
 
 use indexmap::IndexMap;
 
@@ -12,7 +14,7 @@ use willikins_core::tool::helpers::{
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
-use willikins_types::{AppleKeyId, DomainType, Text};
+use willikins_types::{AppleKeyId, DomainType, DopplerValue};
 
 /// `apple.key_id.parse`.
 pub struct AppleKeyIdParse {
@@ -24,7 +26,7 @@ impl AppleKeyIdParse {
     #[must_use]
     pub fn new() -> Self {
         let mut inputs = IndexMap::new();
-        inputs.insert(port("value"), exact("Text", true));
+        inputs.insert(port("value"), exact("DopplerValue", true));
         let mut outputs = IndexMap::new();
         outputs.insert(port("value"), scalar("AppleKeyId"));
         Self {
@@ -42,7 +44,7 @@ impl AppleKeyIdParse {
 
     fn compute(&self, inputs: &Inputs) -> Result<Outputs, ToolError> {
         require_present(&self.spec, inputs)?;
-        let text: Text = get(inputs, "value")?;
+        let text: DopplerValue = get(inputs, "value")?;
         let key_id = AppleKeyId::parse(text.as_str())
             .map_err(|err| invalid(format!("value: {}", err.reason)))?;
         let mut outputs = Outputs::new();
@@ -83,7 +85,7 @@ mod tests {
         let mut inputs = Inputs::new();
         inputs.insert(
             PortName::parse("value").unwrap(),
-            Value::known(Text::parse(value).unwrap()),
+            Value::known(DopplerValue::parse(value).unwrap()),
         );
         inputs
     }

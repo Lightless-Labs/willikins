@@ -14,8 +14,8 @@ key_base64.name: SecretName
 key_decoded.value: DopplerSecretValue
 key.value: OpaqueSecret
 OUTPUTS:
-issuer_id: Text
-key_id: Text
+issuer_id: DopplerValue
+key_id: DopplerValue
 PLAN:
 PLAN ERROR: node `issuer_id`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
 
@@ -35,10 +35,10 @@ WARNINGS:
 TYPES:
 issuer_id_text.config: DopplerConfig
 issuer_id_text.name: SecretName
-issuer_id.value: Text
+issuer_id.value: DopplerValue
 key_id_text.config: DopplerConfig
 key_id_text.name: SecretName
-key_id.value: Text
+key_id.value: DopplerValue
 key_base64.config: DopplerConfig
 key_base64.name: SecretName
 key_decoded.value: DopplerSecretValue
@@ -77,10 +77,10 @@ WARNINGS:
 TYPES:
 issuer_id_text.config: DopplerConfig
 issuer_id_text.name: SecretName
-issuer_id.value: Text
+issuer_id.value: DopplerValue
 key_id_text.config: DopplerConfig
 key_id_text.name: SecretName
-key_id.value: Text
+key_id.value: DopplerValue
 key_base64.config: DopplerConfig
 key_base64.name: SecretName
 key_decoded.value: DopplerSecretValue
@@ -221,10 +221,10 @@ WARNINGS:
 TYPES:
 issuer_id_text.config: DopplerConfig
 issuer_id_text.name: SecretName
-issuer_id.value: Text
+issuer_id.value: DopplerValue
 key_id_text.config: DopplerConfig
 key_id_text.name: SecretName
-key_id.value: Text
+key_id.value: DopplerValue
 key_base64.config: DopplerConfig
 key_base64.name: SecretName
 key_decoded.value: DopplerSecretValue
@@ -633,10 +633,10 @@ WARNINGS:
 TYPES:
 issuer_id_text.config: DopplerConfig
 issuer_id_text.name: SecretName
-issuer_id.value: Text
+issuer_id.value: DopplerValue
 key_id_text.config: DopplerConfig
 key_id_text.name: SecretName
-key_id.value: Text
+key_id.value: DopplerValue
 key_base64.config: DopplerConfig
 key_base64.name: SecretName
 key_decoded.value: DopplerSecretValue

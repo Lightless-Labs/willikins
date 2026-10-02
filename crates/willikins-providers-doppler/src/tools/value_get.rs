@@ -1,12 +1,23 @@
 //! `doppler.value.get`: reads a real Doppler variable's value as
-//! non-secret [`willikins_types::Text`]. Pure and read-only, and
-//! otherwise a byte-for-byte mirror of [`crate::tools::DopplerSecretGet`]
-//! — same config/name ports, same endpoint, same missing-parent
-//! tolerance (`404` and the Doppler `400` shape,
-//! `docs/solutions/providers/`) — with the one difference load-bearing to
-//! this whole tool's reason for existing: the value it reads back is
-//! typed [`willikins_types::Text`], not
+//! non-secret, identifier-typed [`willikins_types::DopplerValue`]. Pure
+//! and read-only, and otherwise a byte-for-byte mirror of
+//! [`crate::tools::DopplerSecretGet`] — same config/name ports, same
+//! endpoint, same missing-parent tolerance (`404` and the Doppler `400`
+//! shape, `docs/solutions/providers/`) — with the one difference
+//! load-bearing to this whole tool's reason for existing: the value it
+//! reads back is typed [`willikins_types::DopplerValue`], not
 //! [`willikins_types::DopplerSecretValue`].
+//!
+//! **Milestone 3i, task B8.** The output was [`willikins_types::Text`]
+//! until this task. `Text` is non-secret but not an identifier, so the
+//! App Store Connect issuer id and key id this tool most commonly reads —
+//! on their way to `apple.issuer_id.parse`/`apple.key_id.parse` — printed
+//! in full on every output surface, the exact complaint decision (b2)'s
+//! own "gap" records. `DopplerValue` carries no tighter grammar than
+//! `Text` (unknown shape is the whole point: the document names what
+//! shape the value has one node later, at the parse tool), only the
+//! `#[domain(identifier)]` flag, so this retype masks by default without
+//! narrowing what this tool can read.
 //!
 //! # What this tool does not protect against
 //!
@@ -61,7 +72,7 @@ impl DopplerValueGet {
         inputs.insert(port("config"), exact("DopplerConfig", true));
         inputs.insert(port("name"), exact("SecretName", true));
         let mut outputs = indexmap::IndexMap::new();
-        outputs.insert(port("value"), scalar("Text"));
+        outputs.insert(port("value"), scalar("DopplerValue"));
         Self {
             spec: ToolSpec {
                 name: tool_name("doppler.value.get"),
@@ -151,11 +162,13 @@ mod tests {
     }
 
     #[test]
-    fn output_port_is_a_non_secret_text() {
+    fn output_port_is_a_non_secret_identifier() {
+        let registry = willikins_types::registry();
+        let ty = willikins_types::TypeName::parse("DopplerValue").unwrap();
+        assert_eq!(registry.is_secret(&ty), Some(false));
         assert_eq!(
-            willikins_types::registry()
-                .is_secret(&willikins_types::TypeName::parse("Text").unwrap()),
-            Some(false)
+            registry.get(&ty).map(|entry| entry.info.identifier),
+            Some(true)
         );
     }
 

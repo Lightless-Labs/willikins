@@ -1,10 +1,13 @@
 //! `doppler.value.get`: reads a seeded Doppler variable's value as
-//! non-secret [`Text`]. Pure and read-only. The fake twin of
+//! non-secret, identifier-typed [`willikins_types::DopplerValue`]. Pure
+//! and read-only. The fake twin of
 //! `willikins_providers_doppler::tools::DopplerValueGet` — see that
 //! tool's module doc for the footgun this tool shares by construction (it
 //! is a fake, so there is no live Doppler visibility to worry about, but
 //! the same "choosing this tool over `doppler.secret.get` is the
-//! declaration of non-secrecy" applies to whoever seeds a fixture).
+//! declaration of non-secrecy" applies to whoever seeds a fixture) and
+//! for why the output is `DopplerValue` rather than
+//! [`willikins_types::Text`] (milestone 3i, task B8).
 
 use std::sync::{Arc, Mutex};
 
@@ -32,7 +35,7 @@ impl DopplerValueGet {
         inputs.insert(port("config"), exact("DopplerConfig", true));
         inputs.insert(port("name"), exact("SecretName", true));
         let mut outputs = IndexMap::new();
-        outputs.insert(port("value"), scalar("Text"));
+        outputs.insert(port("value"), scalar("DopplerValue"));
         Self {
             spec: ToolSpec {
                 name: tool_name("doppler.value.get"),
@@ -91,7 +94,7 @@ impl Tool for DopplerValueGet {
 mod tests {
     use super::*;
     use willikins_core::{PortName, ToolErrorKind, TypeName, TypeRef};
-    use willikins_types::{DomainType, Text};
+    use willikins_types::{DomainType, DopplerValue};
 
     fn config() -> DopplerConfig {
         DopplerConfig::parse("third-thoughts/prd").unwrap()
@@ -112,7 +115,7 @@ mod tests {
         let state = FakeState::new().with_doppler_value(
             &config(),
             &name(),
-            Text::parse("57246542-96fe-1a63-e053-0824d011072a").unwrap(),
+            DopplerValue::parse("57246542-96fe-1a63-e053-0824d011072a").unwrap(),
         );
         DopplerValueGet::new(Arc::new(Mutex::new(state)))
     }
@@ -126,10 +129,13 @@ mod tests {
     }
 
     #[test]
-    fn output_port_is_a_non_secret_text() {
+    fn output_port_is_a_non_secret_identifier() {
+        let registry = willikins_types::registry();
+        let ty = TypeName::parse("DopplerValue").unwrap();
+        assert_eq!(registry.is_secret(&ty), Some(false));
         assert_eq!(
-            willikins_types::registry().is_secret(&TypeName::parse("Text").unwrap()),
-            Some(false)
+            registry.get(&ty).map(|entry| entry.info.identifier),
+            Some(true)
         );
     }
 
