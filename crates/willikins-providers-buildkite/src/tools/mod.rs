@@ -4,9 +4,11 @@
 
 pub mod cluster_get;
 mod compare;
+pub mod pipeline_bootstrap_ensure;
 pub mod pipeline_bootstrap_gate;
 pub mod pipeline_ensure;
 
 pub use cluster_get::BuildkiteClusterGet;
+pub use pipeline_bootstrap_ensure::BuildkitePipelineBootstrapEnsure;
 pub use pipeline_bootstrap_gate::BuildkitePipelineBootstrapGate;
 pub use pipeline_ensure::BuildkitePipelineEnsure;
