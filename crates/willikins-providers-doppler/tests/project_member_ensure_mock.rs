@@ -523,6 +523,44 @@ fn ensure_on_needs_update_patches_the_sorted_union_and_never_deletes() {
 
 #[test]
 #[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_keeps_an_environment_the_request_never_named() {
+    // The member holds `dev`; the request names only `prd`. The `PATCH`
+    // must still carry `dev` -- a request-only list would narrow access.
+    let mut provider = MockProvider::start();
+    mock_accounts(&mut provider, &[service_account_json("buildkite-ci", SLUG)]);
+    mock_members(
+        &mut provider,
+        &[member_json(
+            "service_account",
+            SLUG,
+            "viewer",
+            false,
+            &["dev"],
+        )],
+    );
+    let patch = provider
+        .mock(
+            "PATCH",
+            "/v3/projects/project/members/member/service_account/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+        .match_query(mockito::Matcher::Any)
+        .match_body(json_body(serde_json::json!({
+            "role": "viewer",
+            "environments": ["dev", "prd"],
+        })))
+        .with_status(200)
+        .with_body("{}")
+        .expect(1)
+        .create();
+    let ensured = tool(provider.url())
+        .ensure(&inputs(&viewer(), &[prd()]), &SinkToken::new())
+        .unwrap();
+    assert!(ensured.changed);
+    patch.assert();
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
 fn ensure_on_needs_update_from_a_lower_role_omits_environments_when_access_all_is_set() {
     let mut provider = MockProvider::start();
     mock_accounts(&mut provider, &[service_account_json("buildkite-ci", SLUG)]);
