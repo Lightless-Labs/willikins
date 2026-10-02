@@ -125,6 +125,10 @@ pub struct TypeInfo {
     pub name: &'static str,
     /// [`DomainType::IS_SECRET`].
     pub secret: bool,
+    /// [`DomainType::IS_IDENTIFIER`]. Serialized immediately after
+    /// `secret` (milestone 3i, decision (b1)): the two disclosure
+    /// properties sit next to each other in the published catalog.
+    pub identifier: bool,
     /// [`DomainType::description`].
     pub description: &'static str,
     /// [`DomainType::example`].
@@ -139,6 +143,7 @@ impl TypeInfo {
         Self {
             name: T::TYPE_NAME,
             secret: T::IS_SECRET,
+            identifier: T::IS_IDENTIFIER,
             description: T::description(),
             example: T::example(),
             schema: T::json_schema(),
