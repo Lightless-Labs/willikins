@@ -972,3 +972,100 @@ async fn verify_item_5_legacy_session_mode_needs_a_session_header() {
         "the same call succeeds once the session id from initialize is presented"
     );
 }
+
+// ---------------------------------------------------------------------
+// Milestone 3i, decision (b7), acceptance 18: the approvals page masks
+// an identifier; the journal line behind the same plan keeps it full
+// ---------------------------------------------------------------------
+
+/// Plans `appstore-signing-profile-from-doppler` against the seeded
+/// first bundle identifier -- already carrying a matching certificate
+/// (`CERT1`) and profile (`PROFILE1`), so this is `NoOp` on the profile
+/// itself, a write only through `doppler.secret.set` -- and asserts it
+/// needs a human decision (the same `plan_irreversible`-style helper the
+/// rest of this file uses).
+fn plan_signing_profile(dir: &std::path::Path, butler: &Butler) -> String {
+    common::copy_fixture_as(
+        dir,
+        "appstore-signing-profile-from-doppler.yaml",
+        "appstore-signing-profile-from-doppler.yaml",
+    );
+    let inputs = common::partial_inputs(&[
+        ("config", "app-store-connect/prd"),
+        ("identifier", "com.example.willikins-demo"),
+        ("bundle_name", "willikins-demo"),
+        ("platform", "UNIVERSAL"),
+        ("certificate_type", "DISTRIBUTION"),
+        ("serial_number", "7B3F2A9C1D4E5F607182930A1B2C3D4E"),
+        ("destination_project", "third-thoughts"),
+        ("destination_environment", "prd"),
+        ("secret_name", "APPSTORE_SIGNING_PROFILE"),
+    ]);
+    let response = butler
+        .plan(
+            willikins_types::WorkflowName::parse("appstore-signing-profile-from-doppler").unwrap(),
+            &inputs,
+            common::principal("test-caller"),
+        )
+        .unwrap();
+    assert!(response.requires_approval, "{response:?}");
+    response.plan_id.to_string()
+}
+
+fn signing_profile_seed() -> willikins_providers_fake::FakeState {
+    let json = std::fs::read_to_string(
+        common::workspace_root().join("workflows/fixtures/state/appstore-signing-profile.json"),
+    )
+    .expect("the signing-profile seed file exists");
+    willikins_providers_fake::FakeState::from_json(&json).expect("the signing-profile seed parses")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_approvals_page_masks_an_identifier_while_the_journal_line_keeps_it_full() {
+    const FULL_CERTIFICATE: &str = "CERT1";
+    const MASKED_CERTIFICATE: &str = "CE...";
+    const FULL_PROFILE: &str = "PROFILE1";
+    const MASKED_PROFILE: &str = "PROF...";
+
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = willikins_providers_fake::catalog(Arc::new(Mutex::new(signing_profile_seed())));
+    let (butler, journal) = butler_with_catalog_and_journal(dir.path(), catalog, manual_clock());
+    let plan_id = plan_signing_profile(dir.path(), &butler);
+    let router = willikins_server::router(Arc::clone(&butler), &base_config());
+
+    let html = body_text(router.oneshot(get_approvals_request()).await.unwrap()).await;
+    assert!(
+        html.contains(MASKED_CERTIFICATE),
+        "the approvals page is missing the masked certificate prefix: {html}"
+    );
+    assert!(
+        !html.contains(FULL_CERTIFICATE),
+        "the full certificate id must never reach the approvals page: {html}"
+    );
+    assert!(
+        html.contains(MASKED_PROFILE),
+        "the approvals page is missing the masked profile prefix: {html}"
+    );
+    assert!(
+        !html.contains(FULL_PROFILE),
+        "the full profile id must never reach the approvals page: {html}"
+    );
+
+    // The journal line behind the very same plan keeps the full value
+    // (decision (b4)/(b7)): only the page's own rendering masks.
+    let journal_has_full_values = journal
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entries()
+        .iter()
+        .any(|entry| {
+            let json = serde_json::to_value(&entry.event).unwrap();
+            let text = json.to_string();
+            text.contains(FULL_CERTIFICATE) && text.contains(FULL_PROFILE)
+        });
+    assert!(
+        journal_has_full_values,
+        "the journal must keep the plan's full identifier values, masked only on display"
+    );
+    assert_eq!(butler.pending_approvals().len(), 1, "{plan_id}");
+}

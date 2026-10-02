@@ -13,12 +13,13 @@
 //!
 //! # Structured success and structured error, from one return type
 //!
-//! Every tool method below returns `Result<Json<T>, CallToolResult>`.
+//! Every tool method below returns `Result<Json<Masked<T>>, CallToolResult>`.
 //! rmcp's `#[tool]` macro reads the output schema off the `Ok` arm's
-//! `Json<T>` regardless of what the `Err` arm is (confirmed from
+//! `Json<_>` regardless of what the `Err` arm is (confirmed from
 //! `rmcp-macros`' own `extract_schema_from_return_type`, which matches
-//! `Result<Json<T>, E>` for any `E`) -- so this shape publishes exactly
-//! `T`'s schema as the tool's `outputSchema`, while `Err` carries a
+//! `Result<Json<U>, E>` for any `E`) -- so this shape publishes exactly
+//! `U`'s (here `Masked<T>`'s, which is `T`'s own, unchanged -- see
+//! [`Masked`]) schema as the tool's `outputSchema`, while `Err` carries a
 //! `CallToolResult` already built by [`domain_error`] with
 //! `CallToolResult::structured_error`'s `{kind, ...fields, message}` JSON.
 //! `CallToolResult: IntoCallToolResult` is a plain passthrough, so the
@@ -28,6 +29,17 @@
 //! rmcp itself cannot route (malformed JSON arguments, an unknown tool)
 //! or for the "exactly one of two fields" / "an input name does not
 //! parse" checks this module makes by hand before ever calling `Butler`.
+//!
+//! # Masking (milestone 3i, decision (b6))
+//!
+//! [`Masked`] is the chokepoint every tool's success value passes
+//! through before it serializes, and [`domain_error`] masks its JSON the
+//! same way on the error side -- so no account-revealing identifier
+//! (decision (b1)/(b2)) ever reaches `structured_content`, the rendered
+//! text content, or an error's JSON, over MCP. Unlike the CLI's
+//! `--reveal`, there is no parameter here that un-masks one: an agent's
+//! transcript is the place the operator least wants a full identifier to
+//! spread, and an operator who needs one uses the CLI instead.
 //!
 //! # Where the principal comes from
 //!
@@ -47,6 +59,7 @@
 //! on the async task -- the standard bridge (`docs/research/2026-09-12-m2-dependencies.md`
 //! section 1.5): rmcp's own repository has no special-cased alternative.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use http::request::Parts;
@@ -58,6 +71,7 @@ use rmcp::transport::stdio;
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 
 use willikins_core::describe::{PartialInputs, RawInput};
+use willikins_core::disclosure::mask_json;
 use willikins_core::{Description, InputName};
 use willikins_journal::{PlanId, PrincipalId, RunId, RunRecord};
 use willikins_types::WorkflowName;
@@ -67,23 +81,74 @@ use crate::read_ops::{DocumentSource, ProposeSlugResponse, ValidateResponse};
 use crate::startup::WorkflowSummary;
 use crate::types::PlanResponse;
 
+/// Wraps a tool's successful result so every identifier-typed [`Value`]
+/// anywhere inside it -- Milestone 3i decision (b6): the MCP surface is
+/// always masked, with no `--reveal` equivalent, since an agent's
+/// transcript is the place the operator least wants an account
+/// identifier to spread. Every `#[tool]` method below wraps its `Ok`
+/// value in this (`Json<Masked<T>>`), the single chokepoint on the
+/// success side the way [`domain_error`] is on the error side.
+///
+/// `Serialize` is `to_value(T)`, then [`mask_json`], then serialize --
+/// never byte-identical to `T`'s own `Serialize` by design. `JsonSchema`
+/// delegates to `T`'s own (same `schema_name` and `json_schema`),
+/// exactly the way `rmcp`'s own [`Json<T>`] delegates its `JsonSchema` to
+/// `T` -- so wrapping a result in `Masked` never changes its published
+/// `outputSchema`: [`willikins_core::value::Value`]'s schema already
+/// carries the optional `"masked": true` sibling of `"redacted"`
+/// (milestone 3i task B4), and that is the only difference a client ever
+/// sees. `schema_id` is left at the trait's own default (unlike a
+/// derived type's own, which is its full module path) for the same
+/// reason `Json<T>` leaves it too: nothing in this module ever compares
+/// `Masked<T>`'s `schema_id` against `T`'s.
+///
+/// [`Value`]: willikins_core::value::Value
+pub struct Masked<T>(pub T);
+
+impl<T: serde::Serialize> serde::Serialize for Masked<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut json = serde_json::to_value(&self.0).map_err(serde::ser::Error::custom)?;
+        mask_json(&mut json);
+        json.serialize(serializer)
+    }
+}
+
+impl<T: schemars::JsonSchema> schemars::JsonSchema for Masked<T> {
+    fn schema_name() -> Cow<'static, str> {
+        T::schema_name()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        T::json_schema(generator)
+    }
+}
+
 /// Build a [`CallToolResult`] carrying `error`'s own `{kind, ...fields}`
 /// shape plus `message` (its [`std::fmt::Display`] rendering), through
 /// [`willikins_core::Reported`] -- the same envelope every tool result's
 /// error carries, and the same one `ValidateResponse.errors` and the
 /// CLI's own JSON already use. Falls back to a bare `{kind: "Internal",
 /// message}` object only if `error` somehow fails to serialize, which no
-/// type in this workspace's own test suite has ever done.
+/// type in this workspace's own test suite has ever done. The resulting
+/// JSON is masked ([`mask_json`]) before it is wrapped, so a domain error
+/// that embeds a `Value` (e.g. a conflicting resource's identifier) never
+/// carries one in full either -- decision (b6)'s "no reveal parameter"
+/// applies to the error side exactly as it does to the success side.
 fn domain_error<E>(error: &E) -> CallToolResult
 where
     E: serde::Serialize + std::fmt::Display,
 {
-    let json = serde_json::to_value(willikins_core::Reported::new(error)).unwrap_or_else(|_| {
-        serde_json::json!({
-            "kind": "Internal",
-            "message": error.to_string(),
-        })
-    });
+    let mut json =
+        serde_json::to_value(willikins_core::Reported::new(error)).unwrap_or_else(|_| {
+            serde_json::json!({
+                "kind": "Internal",
+                "message": error.to_string(),
+            })
+        });
+    mask_json(&mut json);
     CallToolResult::structured_error(json)
 }
 
@@ -527,7 +592,7 @@ impl WillikinsHandler {
         &self,
         Parameters(params): Parameters<ValidateParams>,
         extensions: rmcp::model::Extensions,
-    ) -> Result<Result<Json<ValidateResponse>, CallToolResult>, ErrorData> {
+    ) -> Result<Result<Json<Masked<ValidateResponse>>, CallToolResult>, ErrorData> {
         let source = document_source_from(params.document, params.workflow)?;
         let principal = match self.principal_for(&extensions) {
             Ok(principal) => principal,
@@ -541,7 +606,9 @@ impl WillikinsHandler {
             Ok(result) => result,
             Err(busy) => return Ok(Err(busy)),
         };
-        Ok(result.map(Json).map_err(|error| domain_error(&error)))
+        Ok(result
+            .map(|value| Json(Masked(value)))
+            .map_err(|error| domain_error(&error)))
     }
 
     /// Report which inputs a workflow document or trusted-directory
@@ -558,7 +625,7 @@ impl WillikinsHandler {
         &self,
         Parameters(params): Parameters<DescribeParams>,
         extensions: rmcp::model::Extensions,
-    ) -> Result<Result<Json<Description>, CallToolResult>, ErrorData> {
+    ) -> Result<Result<Json<Masked<Description>>, CallToolResult>, ErrorData> {
         let source = document_source_from(params.document, params.workflow)?;
         let partial = partial_inputs_from(params.inputs)?;
         let principal = match self.principal_for(&extensions) {
@@ -573,7 +640,9 @@ impl WillikinsHandler {
             Ok(result) => result,
             Err(busy) => return Ok(Err(busy)),
         };
-        Ok(result.map(Json).map_err(|error| domain_error(&error)))
+        Ok(result
+            .map(|value| Json(Masked(value)))
+            .map_err(|error| domain_error(&error)))
     }
 
     /// Plan a trusted-directory workflow against the live catalog's
@@ -597,7 +666,7 @@ impl WillikinsHandler {
         &self,
         Parameters(params): Parameters<PlanParams>,
         extensions: rmcp::model::Extensions,
-    ) -> Result<Result<Json<PlanResponse>, CallToolResult>, ErrorData> {
+    ) -> Result<Result<Json<Masked<PlanResponse>>, CallToolResult>, ErrorData> {
         let partial = partial_inputs_from(params.inputs)?;
         let principal = match self.principal_for(&extensions) {
             Ok(principal) => principal,
@@ -612,7 +681,9 @@ impl WillikinsHandler {
             Ok(result) => result,
             Err(busy) => return Ok(Err(busy)),
         };
-        Ok(result.map(Json).map_err(|error| domain_error(&error)))
+        Ok(result
+            .map(|value| Json(Masked(value)))
+            .map_err(|error| domain_error(&error)))
     }
 
     /// Start applying a previously recorded plan.
@@ -626,16 +697,16 @@ impl WillikinsHandler {
         &self,
         Parameters(params): Parameters<ApplyParams>,
         extensions: rmcp::model::Extensions,
-    ) -> Result<Json<ApplyStarted>, CallToolResult> {
+    ) -> Result<Json<Masked<ApplyStarted>>, CallToolResult> {
         let principal = self.principal_for(&extensions)?;
         let butler = Arc::clone(&self.butler);
         self.run_bounded(move || butler.apply(params.plan_id, principal))
             .await?
             .map(|handle| {
-                Json(ApplyStarted {
+                Json(Masked(ApplyStarted {
                     run_id: handle.run_id,
                     state: "running",
-                })
+                }))
             })
             .map_err(|error| domain_error(&error))
     }
@@ -651,12 +722,12 @@ impl WillikinsHandler {
     async fn run_status(
         &self,
         Parameters(params): Parameters<RunStatusParams>,
-    ) -> Result<Json<RunRecord>, CallToolResult> {
+    ) -> Result<Json<Masked<RunRecord>>, CallToolResult> {
         let butler = Arc::clone(&self.butler);
         let run_id = params.run_id;
         let record = run_blocking(move || butler.run(run_id)).await;
         record
-            .map(Json)
+            .map(|record| Json(Masked(record)))
             .ok_or_else(|| domain_error(&RunLookupError::UnknownRun { run_id }))
     }
 
@@ -667,12 +738,12 @@ impl WillikinsHandler {
     async fn list_workflows(
         &self,
         extensions: rmcp::model::Extensions,
-    ) -> Result<Json<Vec<WorkflowSummary>>, CallToolResult> {
+    ) -> Result<Json<Masked<Vec<WorkflowSummary>>>, CallToolResult> {
         let principal = self.principal_for(&extensions)?;
         let butler = Arc::clone(&self.butler);
         self.run_bounded(move || butler.list_workflows(principal))
             .await?
-            .map(Json)
+            .map(|value| Json(Masked(value)))
             .map_err(|error| domain_error(&error))
     }
 
@@ -685,12 +756,12 @@ impl WillikinsHandler {
     async fn list_tools(
         &self,
         extensions: rmcp::model::Extensions,
-    ) -> Result<Json<serde_json::Value>, CallToolResult> {
+    ) -> Result<Json<Masked<serde_json::Value>>, CallToolResult> {
         let principal = self.principal_for(&extensions)?;
         let butler = Arc::clone(&self.butler);
-        Ok(Json(
+        Ok(Json(Masked(
             run_blocking(move || butler.list_tools(principal)).await,
-        ))
+        )))
     }
 
     /// Propose a project slug from a free-form display name.
@@ -700,12 +771,12 @@ impl WillikinsHandler {
         &self,
         Parameters(params): Parameters<ProposeSlugParams>,
         extensions: rmcp::model::Extensions,
-    ) -> Result<Json<ProposeSlugResponse>, CallToolResult> {
+    ) -> Result<Json<Masked<ProposeSlugResponse>>, CallToolResult> {
         let principal = self.principal_for(&extensions)?;
         let butler = Arc::clone(&self.butler);
         run_blocking(move || butler.propose_slug(&params.name, principal))
             .await
-            .map(Json)
+            .map(|value| Json(Masked(value)))
             .map_err(|error| domain_error(&error))
     }
 }
@@ -796,4 +867,111 @@ pub async fn serve_stdio_handler(handler: WillikinsHandler) -> Result<(), ServeE
     let service = handler.serve(stdio()).await.map_err(Box::new)?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A unit-level `kind`-tagged error embedding a `Value` directly --
+    /// the shape no production `ButlerError` happens to need today (a
+    /// conflicting resource's identifier, say), but exactly the shape
+    /// [`domain_error`]'s own doc promises to mask. Exercising it as a
+    /// standalone error, rather than hunting for a production call site
+    /// that already produces one, pins the chokepoint itself regardless
+    /// of which future error variant first needs it.
+    #[derive(serde::Serialize)]
+    #[serde(tag = "kind")]
+    enum ProbeError {
+        Conflict {
+            certificate: willikins_core::value::Value,
+        },
+    }
+
+    impl std::fmt::Display for ProbeError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "a probe conflict")
+        }
+    }
+
+    fn apple_certificate_id(text: &str) -> willikins_core::value::Value {
+        let type_name = willikins_types::TypeName::parse("AppleCertificateId").unwrap();
+        let object = willikins_types::registry().parse(&type_name, text).unwrap();
+        willikins_core::value::Value::known_dyn(object)
+    }
+
+    /// Milestone 3i, decision (b6), acceptance 17: a domain error whose
+    /// JSON embeds a `Value` is masked -- `domain_error` is the one
+    /// chokepoint on the error side, the way [`Masked`] is on the success
+    /// side, so nothing downstream has to remember to mask an error's own
+    /// fields.
+    #[test]
+    fn domain_error_masks_a_value_it_embeds() {
+        let error = ProbeError::Conflict {
+            certificate: apple_certificate_id("CERT1"),
+        };
+
+        let result = domain_error(&error);
+        let text = serde_json::to_string(&result).unwrap();
+
+        assert!(
+            !text.contains("CERT1"),
+            "the full identifier must never appear: {text}"
+        );
+        assert!(
+            text.contains("CE..."),
+            "the masked prefix is missing: {text}"
+        );
+        assert!(
+            text.contains("\"masked\":true"),
+            "the masked marker is missing: {text}"
+        );
+        // The error's own message still exists -- masking the embedded
+        // `Value` must not swallow `Reported`'s added field.
+        assert!(text.contains("a probe conflict"), "{text}");
+    }
+
+    /// `Masked<T>`'s `JsonSchema` is `T`'s own, unchanged -- the same
+    /// delegation `rmcp`'s own `Json<T>` already uses for its wrapper
+    /// (`schema_name` and `json_schema`, not `schema_id`: a derived type's
+    /// own `schema_id` is its full module path, which the base trait's
+    /// default -- the one `Masked` inherits, since it overrides neither --
+    /// does not reproduce; `Json<T>` does not override it either, and
+    /// nothing in this module ever compares the two), so wrapping a tool's
+    /// result in `Masked` never changes the published `outputSchema`.
+    #[test]
+    fn masked_schema_delegates_to_the_wrapped_type() {
+        use schemars::JsonSchema;
+
+        assert_eq!(
+            Masked::<ValidateResponse>::schema_name(),
+            ValidateResponse::schema_name()
+        );
+
+        let mut generator = schemars::SchemaGenerator::default();
+        let wrapped = Masked::<ValidateResponse>::json_schema(&mut generator);
+        let mut generator = schemars::SchemaGenerator::default();
+        let plain = ValidateResponse::json_schema(&mut generator);
+        assert_eq!(wrapped, plain);
+    }
+
+    /// `Masked<T>`'s `Serialize` masks a known identifier scalar nested
+    /// inside `T` and adds the `"masked": true` marker beside it, exactly
+    /// as `mask_json` does on its own (`willikins_core::disclosure`'s own
+    /// tests already pin `mask_json` itself; this pins that `Masked`
+    /// actually calls it).
+    #[test]
+    fn masked_serialize_masks_a_nested_identifier_value() {
+        #[derive(serde::Serialize)]
+        struct Wrapper {
+            certificate: willikins_core::value::Value,
+        }
+
+        let wrapper = Wrapper {
+            certificate: apple_certificate_id("CERT1"),
+        };
+        let json = serde_json::to_value(Masked(wrapper)).unwrap();
+        assert_eq!(json["certificate"]["value"], "CE...");
+        assert_eq!(json["certificate"]["masked"], true);
+    }
 }

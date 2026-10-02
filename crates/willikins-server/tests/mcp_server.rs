@@ -424,3 +424,272 @@ async fn no_seeded_secret_byte_reaches_any_mcp_response() {
         "the run should have written at least one GitHub Actions secret"
     );
 }
+
+// ---------------------------------------------------------------------
+// Milestone 3i, decision (b6), acceptance 17: identifiers mask over
+// every MCP result, with no reveal parameter
+// ---------------------------------------------------------------------
+
+/// The same fixture pair `crates/willikins-cli/tests/identifier_masking.rs`
+/// already proved masks correctly at the CLI, seeded fresh for each test
+/// here: the first bundle identifier already carries a matching
+/// certificate and profile, so `plan`/`describe` read everything
+/// `Present`/`NoOp`, no write and no approval gate to route around.
+fn signing_profile_seed() -> willikins_providers_fake::FakeState {
+    let json = std::fs::read_to_string(
+        common::workspace_root().join("workflows/fixtures/state/appstore-signing-profile.json"),
+    )
+    .expect("the signing-profile seed file exists");
+    willikins_providers_fake::FakeState::from_json(&json).expect("the signing-profile seed parses")
+}
+
+/// `appstore-signing-profile-from-doppler`'s inputs, as an MCP `inputs`
+/// argument object, for `identifier` -- the seed's first bundle
+/// identifier, matched by `FULL_CERTIFICATE`/`FULL_PROFILE` below.
+fn signing_profile_mcp_inputs(identifier: &str) -> serde_json::Value {
+    serde_json::json!({
+        "config": "app-store-connect/prd",
+        "identifier": identifier,
+        "bundle_name": "willikins-demo",
+        "platform": "UNIVERSAL",
+        "certificate_type": "DISTRIBUTION",
+        "serial_number": FULL_SERIAL,
+        "destination_project": "third-thoughts",
+        "destination_environment": "prd",
+        "secret_name": "APPSTORE_SIGNING_PROFILE",
+    })
+}
+
+const FULL_SERIAL: &str = "7B3F2A9C1D4E5F607182930A1B2C3D4E";
+const MASKED_SERIAL: &str = "7B3F...";
+const FULL_CERTIFICATE: &str = "CERT1";
+const MASKED_CERTIFICATE: &str = "CE...";
+const FULL_PROFILE: &str = "PROFILE1";
+const MASKED_PROFILE: &str = "PROF...";
+
+/// Depth-first search of a JSON value for any object carrying
+/// `"masked": true` -- the marker [`willikins_core::disclosure::mask_json`]
+/// adds beside a masked `"value"`.
+fn has_masked_marker(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.get("masked") == Some(&serde_json::Value::Bool(true))
+                || map.values().any(has_masked_marker)
+        }
+        serde_json::Value::Array(items) => items.iter().any(has_masked_marker),
+        _ => false,
+    }
+}
+
+/// `plan` over MCP masks every identifier-typed output (the certificate
+/// and the profile) and input (the serial number) alike, in both
+/// `structured_content` and the text content block (`serde_json::to_string`
+/// of the whole result reaches both), and marks each one `"masked": true`.
+/// No `--reveal` equivalent exists on this surface (decision (b6)).
+#[tokio::test(flavor = "multi_thread")]
+async fn plan_over_mcp_masks_every_identifier_output_and_input() {
+    let dir = tempfile::tempdir().unwrap();
+    common::copy_fixture_as(
+        dir.path(),
+        "appstore-signing-profile-from-doppler.yaml",
+        "appstore-signing-profile-from-doppler.yaml",
+    );
+    let state = Arc::new(Mutex::new(signing_profile_seed()));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let clock: Arc<dyn Clock> = common::manual_clock();
+    let b = Arc::new(butler(dir.path(), catalog, clock));
+    let client = connect(b, principal()).await;
+
+    let plan_result = client
+        .call_tool(call(
+            "plan",
+            serde_json::json!({
+                "workflow": "appstore-signing-profile-from-doppler",
+                "inputs": signing_profile_mcp_inputs("com.example.willikins-demo"),
+            }),
+        ))
+        .await
+        .expect("plan is routed");
+    assert_ne!(plan_result.is_error, Some(true), "{plan_result:?}");
+
+    let blob = serde_json::to_string(&plan_result).unwrap();
+    for full in [FULL_CERTIFICATE, FULL_PROFILE, FULL_SERIAL] {
+        assert!(!blob.contains(full), "plan leaked `{full}`: {blob}");
+    }
+    for masked in [MASKED_CERTIFICATE, MASKED_PROFILE, MASKED_SERIAL] {
+        assert!(blob.contains(masked), "plan is missing `{masked}`: {blob}");
+    }
+    let structured = plan_result
+        .structured_content
+        .expect("plan returns structured content");
+    assert!(
+        has_masked_marker(&structured),
+        "no masked:true marker in {structured}"
+    );
+}
+
+/// `describe` over MCP masks a resolved identifier-typed input
+/// (`serial_number`) the same way `plan` masks an output -- the CLI's
+/// own `describe_text_masks_a_resolved_identifier_typed_input` proves the
+/// same resolution at the text surface; this is its MCP counterpart, with
+/// no reveal.
+#[tokio::test(flavor = "multi_thread")]
+async fn describe_over_mcp_masks_a_resolved_identifier_input() {
+    let dir = tempfile::tempdir().unwrap();
+    common::copy_fixture_as(
+        dir.path(),
+        "appstore-signing-profile-from-doppler.yaml",
+        "appstore-signing-profile-from-doppler.yaml",
+    );
+    let state = Arc::new(Mutex::new(signing_profile_seed()));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let clock: Arc<dyn Clock> = common::manual_clock();
+    let b = Arc::new(butler(dir.path(), catalog, clock));
+    let client = connect(b, principal()).await;
+
+    let describe_result = client
+        .call_tool(call(
+            "describe",
+            serde_json::json!({
+                "workflow": "appstore-signing-profile-from-doppler",
+                "inputs": signing_profile_mcp_inputs("com.example.willikins-demo"),
+            }),
+        ))
+        .await
+        .expect("describe is routed");
+    assert_ne!(describe_result.is_error, Some(true), "{describe_result:?}");
+
+    let blob = serde_json::to_string(&describe_result).unwrap();
+    assert!(
+        !blob.contains(FULL_SERIAL),
+        "describe leaked the full serial: {blob}"
+    );
+    assert!(
+        blob.contains(MASKED_SERIAL),
+        "describe is missing the masked serial: {blob}"
+    );
+    let structured = describe_result
+        .structured_content
+        .expect("describe returns structured content");
+    assert!(
+        has_masked_marker(&structured),
+        "no masked:true marker in {structured}"
+    );
+}
+
+/// `apply` and `run_status` over MCP mask a freshly *created* identifier
+/// (a profile the fake really writes, never seeded, so this is not only
+/// "an already-known value happens to come back masked" but "a brand new
+/// identifier never printed before is masked the first time it is ever
+/// observed"), the same way `plan`/`describe` mask one already in the
+/// seed. The second bundle identifier is used because the first already
+/// has a matching profile (see `signing_profile_seed`'s own doc) --
+/// exactly `appstore_profile_apply_redaction.rs`'s own reason for the
+/// same choice. Approval is granted directly through `Butler::approve`
+/// (there is no `approve` tool over MCP; a pending plan is decided by a
+/// human elsewhere, per `WillikinsHandler::get_info`'s own instructions).
+#[tokio::test(flavor = "multi_thread")]
+async fn apply_and_run_status_over_mcp_mask_a_freshly_created_identifier() {
+    const NEW_PROFILE_FULL: &str = "FAKEPR0F00000002";
+    const NEW_PROFILE_MASKED: &str = "FAKE...";
+
+    let dir = tempfile::tempdir().unwrap();
+    common::copy_fixture_as(
+        dir.path(),
+        "appstore-signing-profile-from-doppler.yaml",
+        "appstore-signing-profile-from-doppler.yaml",
+    );
+    let state = Arc::new(Mutex::new(signing_profile_seed()));
+    let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
+    let clock: Arc<dyn Clock> = common::manual_clock();
+    let b = Arc::new(butler(dir.path(), catalog, clock));
+
+    let inputs = common::partial_inputs(&[
+        ("config", "app-store-connect/prd"),
+        ("identifier", "com.example.willikins-demo-two"),
+        ("bundle_name", "willikins-demo"),
+        ("platform", "UNIVERSAL"),
+        ("certificate_type", "DISTRIBUTION"),
+        ("serial_number", FULL_SERIAL),
+        ("destination_project", "third-thoughts"),
+        ("destination_environment", "prd"),
+        ("secret_name", "APPSTORE_SIGNING_PROFILE"),
+    ]);
+    let plan_response = b
+        .plan(
+            willikins_types::WorkflowName::parse("appstore-signing-profile-from-doppler").unwrap(),
+            &inputs,
+            principal(),
+        )
+        .expect("plan succeeds");
+    if plan_response.requires_approval {
+        b.approve(plan_response.plan_id, common::principal("approver"))
+            .expect("approve succeeds");
+    }
+
+    let client = connect(Arc::clone(&b), principal()).await;
+    let apply_result = client
+        .call_tool(call(
+            "apply",
+            serde_json::json!({ "plan_id": plan_response.plan_id.to_string() }),
+        ))
+        .await
+        .expect("apply is routed");
+    assert_ne!(apply_result.is_error, Some(true), "{apply_result:?}");
+    let run_id = apply_result
+        .structured_content
+        .clone()
+        .expect("apply returns structured content")["run_id"]
+        .as_str()
+        .expect("run_id is a string")
+        .to_string();
+
+    let mut status = None;
+    for _ in 0..200 {
+        let polled = client
+            .call_tool(call("run_status", serde_json::json!({ "run_id": run_id })))
+            .await
+            .expect("run_status is routed");
+        let done = polled
+            .structured_content
+            .as_ref()
+            .is_some_and(|json| json["state"] != "running");
+        status = Some(polled);
+        if done {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let status = status.expect("run_status was called at least once");
+    assert_ne!(status.is_error, Some(true), "{status:?}");
+
+    let blob = serde_json::to_string(&status).unwrap();
+    for full in [FULL_CERTIFICATE, NEW_PROFILE_FULL] {
+        assert!(!blob.contains(full), "run_status leaked `{full}`: {blob}");
+    }
+    for masked in [MASKED_CERTIFICATE, NEW_PROFILE_MASKED] {
+        assert!(
+            blob.contains(masked),
+            "run_status is missing `{masked}`: {blob}"
+        );
+    }
+    let structured = status
+        .structured_content
+        .expect("run_status returns structured content");
+    assert!(
+        has_masked_marker(&structured),
+        "no masked:true marker in {structured}"
+    );
+    // Not vacuous: the run really did create a fresh profile, not reuse
+    // the seeded one.
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .apple_profiles
+            .values()
+            .flatten()
+            .any(|record| record.id == NEW_PROFILE_FULL),
+        "the run should have created the profile `{NEW_PROFILE_FULL}`"
+    );
+}
