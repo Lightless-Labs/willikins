@@ -64,8 +64,8 @@ use std::sync::{Arc, Mutex};
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Action, Applied, Approval, InputName, NodeStatus, PortName, PrincipalId, RecordingObserver,
-    Timestamp, TypeName, TypeRef, Value, apply, check, plan,
+    Action, Applied, Approval, Class, InputName, NodeStatus, PortName, PrincipalId,
+    RecordingObserver, Timestamp, TypeName, TypeRef, Value, apply, check, plan,
 };
 use willikins_providers_fake::FakeState;
 use willikins_providers_fake::state::buildkite_pipeline_key;
@@ -376,6 +376,12 @@ fn gates_unmet_then_satisfied_then_acknowledged() {
     let inputs = base_inputs();
     let planned1 =
         plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+
+    // 3i (acceptance 9): the plan's approval class is still `Destructive`
+    // -- `bootstrap` joining the graph as a second `Destructive` tool
+    // alongside `appstore.profile.ensure` does not move it; `compute_class`
+    // is a max over every non-pure node's tool class.
+    assert_eq!(planned1.class, Class::Destructive);
 
     // Exactly the App Store Connect gates, plus the one remaining
     // acknowledgement leaf, are blocked; nothing else. M3 is gone
@@ -1437,6 +1443,19 @@ fn walter_files_binds_every_render_and_m3_m7_acknowledgements_are_gone() {
         files.len(),
         WALTER_FILES.len(),
         "walter_files.files must bind every render in WALTER_FILES"
+    );
+
+    // 3i (acceptance 9, decision (a4)): `bootstrap_yml.file` is bound
+    // both here, as a committed file, and to `bootstrap.configuration`
+    // (checked in `the_document_reads_the_real_layout_by_name`) --
+    // membership, not just a count, because the path/content rule cannot
+    // itself prove the file was also committed.
+    assert!(
+        files.contains(&Binding::Step {
+            node: NodeName::parse("bootstrap_yml").unwrap(),
+            port: PortName::parse("file").unwrap(),
+        }),
+        "walter_files.files must bind bootstrap_yml.file"
     );
 
     // 3i (acceptance 9): `bootstrap_gate` is gone too -- `bootstrap`

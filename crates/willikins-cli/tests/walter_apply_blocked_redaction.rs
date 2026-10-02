@@ -7,8 +7,8 @@
 //! binary, against a real file journal, which is the one surface that
 //! test cannot reach.
 //!
-//! One run, the three OBSERVED gates deliberately unmet (a fresh seed: no
-//! bundle id, no app record, `APP_GROUPS` not enabled, `APP_ATTEST` not
+//! One run, the five OBSERVED gate nodes deliberately unmet (a fresh seed:
+//! no bundle id, no app record, `APP_GROUPS` not enabled, `APP_ATTEST` not
 //! enabled -- M7, the former `bootstrap_gate`, is gone as a gate entirely,
 //! milestone 3i): `apply` must exit
 //! **3** (decision (j), point 7 -- `exit_for_run_state` maps
@@ -21,7 +21,8 @@
 //! around here rather than fixed
 //!
 //! The one remaining `operator.acknowledge` leaf (M5) is deliberately
-//! supplied `done` here, **not** left unmet like the three observed gates
+//! supplied `done` here, **not** left unmet like the five observed gate
+//! nodes
 //! (milestone 3h, W7: M6 is `ci_doppler_access`, a real node now, never an
 //! acknowledgement -- it plans and applies for real in this run, alongside
 //! `doppler`; milestone 3i: M7 is `bootstrap`, a real write now, also
