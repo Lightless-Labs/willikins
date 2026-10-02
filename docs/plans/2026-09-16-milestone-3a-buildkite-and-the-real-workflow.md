@@ -60,6 +60,12 @@ to the lowercase UUID that was sent (otherwise the post-create `read` would have
 `Mismatch { cluster }`, not `Present`), and a live `description` round-trips as the exact
 `managed-by: willikins` bytes (otherwise it would have been `Foreign`). The plan's `Completed`
 header is left for the coordinator, whose row task 12 is.
+**Addendum:** 2026-10-02 (milestone 3i) — decision (a) ("a frozen constant, no port") and trust
+boundary 8 ("the crate contains no `PATCH`, no shell, and no caller-supplied YAML") are superseded,
+for the `configuration` port only, by `buildkite.pipeline.bootstrap.ensure`. Trust boundary 7
+(credential-bearing response values never leave the client) is unchanged: the tool's `PATCH`
+response is read as `IgnoredAny`. See
+`docs/plans/2026-10-02-milestone-3i-bootstrap-writer-and-identifier-masking.md`.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (type system, tool contract, naming,
 "policy lives in the workflow, never in the tool")
 **Research:** `docs/research/2026-09-16-m3a-buildkite.md` — every Buildkite fact below is quoted

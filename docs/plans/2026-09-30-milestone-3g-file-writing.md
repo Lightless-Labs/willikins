@@ -445,6 +445,12 @@ moved head can neither duplicate nor lose a commit; `2b36422` left only stale co
 other document plans byte-identically. Open: the `GIT_CONFIG_*` override stays the operator's; an empty
 stored configuration equals an all-comment expected (low, unreachable for Sample).
 
+**Addendum:** 2026-10-02 (milestone 3i) — decision (h) ("writing it stays out") and trust boundary 6
+("compared, never written") are superseded: the bootstrap paste is no longer manual, written by
+`buildkite.pipeline.bootstrap.ensure` from a `RepoFile` the document renders. The gate
+(`buildkite.pipeline.bootstrap.gate`) stays in the catalog. See
+`docs/plans/2026-10-02-milestone-3i-bootstrap-writer-and-identifier-masking.md`.
+
 **Gate:** OPEN — two operator decisions are pending (see "Operator decisions pending"): direct commit versus
 branch plus pull request on `Example-Org/monorepo`'s `main` (recommended: direct), and the write
 credential (a new fine-grained token in a Doppler config no app inherits). Tasks E1 through B1 and the
