@@ -80,12 +80,19 @@ pub const MANAGED_DESCRIPTION: &str = "managed-by: willikins";
 ///  - command: "buildkite-agent pipeline upload"
 /// ```
 ///
-/// This is the *only* command-shaped string in this crate's whole
-/// surface, it is never built from an input, and there is no second one
-/// anywhere: no tool in this crate accepts a configuration, a command, a
-/// step, or any YAML at all. A workflow that wants different CI behaviour
-/// changes the repository's own `.buildkite/pipeline.yml`, which the
-/// pipeline this constant creates immediately reads and runs.
+/// This is the *only* command-shaped string this crate ever builds from
+/// nothing, and it is never built from an input: no tool in this crate
+/// accepts a command, a step, or any YAML from a workflow input, literal
+/// or default. A workflow that wants different CI behaviour changes the
+/// repository's own `.buildkite/pipeline.yml`, which the pipeline this
+/// constant creates immediately reads and runs.
+///
+/// **Superseded, narrowly, by milestone 3i decision (a1):**
+/// `buildkite.pipeline.bootstrap.ensure` can now overwrite a pipeline's
+/// stored `configuration`, but only with a `RepoFile` the calling
+/// document renders -- never a literal, an input, a default, or `Text`.
+/// This constant's own role (the frozen bootstrap a pipeline is *created*
+/// with) is unchanged.
 pub const UPLOAD_CONFIGURATION: &str = "steps:\n - command: \"buildkite-agent pipeline upload\"";
 
 /// The greatest number of pages [`BuildkiteClient::list_clusters_page`]'s

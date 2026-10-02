@@ -1,15 +1,20 @@
 //! Live Buildkite provider tools: `buildkite.pipeline.ensure`,
 //! `buildkite.cluster.get`, `buildkite.pipeline.bootstrap.gate` (milestone
-//! 3g task B1).
+//! 3g task B1), `buildkite.pipeline.bootstrap.ensure` (milestone 3i task
+//! A2).
 //!
 //! See `docs/plans/2026-09-16-milestone-3a-buildkite-and-the-real-workflow.md`'s
 //! `willikins-providers-buildkite` crate contract and trust boundaries 6
 //! ("A third execution-context credential, with no least-privilege
 //! split"), 7 ("Two Buildkite response values are credential-bearing and
 //! never leave the client"), and 8 ("The pipeline configuration is
-//! willikins' own frozen constant"). Facts about Buildkite's REST API are
-//! from `docs/research/2026-09-16-m3a-buildkite.md`, which quotes
-//! Buildkite's published documentation verbatim.
+//! willikins' own frozen constant" -- superseded for `configuration` only
+//! by `buildkite.pipeline.bootstrap.ensure`, milestone 3i decision (a1),
+//! which accepts a `RepoFile` the calling document renders and nothing
+//! else; boundary 8 still holds for every other pipeline attribute).
+//! Facts about Buildkite's REST API are from
+//! `docs/research/2026-09-16-m3a-buildkite.md`, which quotes Buildkite's
+//! published documentation verbatim.
 //!
 //! This crate's shape mirrors `willikins-providers-doppler` deliberately:
 //! same credential/`Http` split, same read-then-create idempotence
