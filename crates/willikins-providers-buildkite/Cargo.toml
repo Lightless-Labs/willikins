@@ -1,6 +1,6 @@
 [package]
 name = "willikins-providers-buildkite"
-description = "Live Buildkite provider tools: buildkite.pipeline.ensure, buildkite.cluster.get, buildkite.pipeline.bootstrap.gate"
+description = "Live Buildkite provider tools: buildkite.pipeline.ensure, buildkite.cluster.get, buildkite.pipeline.bootstrap.gate, buildkite.pipeline.bootstrap.ensure"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

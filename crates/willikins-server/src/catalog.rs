@@ -2,7 +2,8 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the live catalog (thirty-eight tools since
+//! `live_catalog` assembles the live catalog (thirty-nine tools since
+//! milestone 3i task A4 added `buildkite.pipeline.bootstrap.ensure`, after
 //! milestone 3h task D3 added `doppler.project_member.ensure`, after
 //! milestone 3g task B1 added `buildkite.pipeline.bootstrap.gate`, after
 //! task G2 added `github.scaffold.ensure`, after task T1
@@ -26,8 +27,9 @@
 //! added `doppler.value.get`; milestone 3e task B1 added
 //! `doppler.branch_config.ensure`; milestone 3h task D3 added
 //! `doppler.project_member.ensure`), `willikins-providers-buildkite`'s
-//! three (milestone 3a; milestone 3g task B1 added
-//! `buildkite.pipeline.bootstrap.gate`), `willikins-providers-signoz`'s
+//! four (milestone 3a; milestone 3g task B1 added
+//! `buildkite.pipeline.bootstrap.gate`; milestone 3i task A4 added
+//! `buildkite.pipeline.bootstrap.ensure`), `willikins-providers-signoz`'s
 //! one (the `SigNoz`
 //! task), and `willikins-providers-appstore`'s seven (two from the App
 //! Store Connect provider crate; milestone 3c added
@@ -50,7 +52,8 @@ use willikins_providers_appstore::{
     AppstoreProfileEnsure,
 };
 use willikins_providers_buildkite::{
-    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure,
+    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineBootstrapEnsure,
+    BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure,
 };
 use willikins_providers_doppler::{
     DopplerBranchConfigEnsure, DopplerClient, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
@@ -67,7 +70,7 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 38] = [
+pub const LIVE_TOOL_NAMES: [&str; 39] = [
     "naming.v1",
     "template.render",
     "operator.acknowledge",
@@ -99,6 +102,7 @@ pub const LIVE_TOOL_NAMES: [&str; 38] = [
     "buildkite.pipeline.ensure",
     "buildkite.cluster.get",
     "buildkite.pipeline.bootstrap.gate",
+    "buildkite.pipeline.bootstrap.ensure",
     "appstore.bundle_id.ensure",
     "appstore.bundle_id_capability.ensure",
     "appstore.certificate.get",
@@ -288,8 +292,11 @@ fn insert_signoz_tools(catalog: &mut Catalog, http: Http) {
     insert(catalog, Arc::new(SigNozIngestionKeyEnsure::new(signoz)));
 }
 
-/// Insert `willikins-providers-buildkite`'s three live tools, built from
-/// `http` (milestone 3g task B1 added `buildkite.pipeline.bootstrap.gate`).
+/// Insert `willikins-providers-buildkite`'s four live tools, built from
+/// `http` (milestone 3g task B1 added `buildkite.pipeline.bootstrap.gate`;
+/// milestone 3i task A4 added `buildkite.pipeline.bootstrap.ensure`,
+/// inserted right after the gate, matching [`LIVE_TOOL_NAMES`]' own
+/// order).
 fn insert_buildkite_tools(catalog: &mut Catalog, http: Http) {
     let buildkite = Arc::new(BuildkiteClient::new(http));
     insert(
@@ -302,7 +309,11 @@ fn insert_buildkite_tools(catalog: &mut Catalog, http: Http) {
     );
     insert(
         catalog,
-        Arc::new(BuildkitePipelineBootstrapGate::new(buildkite)),
+        Arc::new(BuildkitePipelineBootstrapGate::new(Arc::clone(&buildkite))),
+    );
+    insert(
+        catalog,
+        Arc::new(BuildkitePipelineBootstrapEnsure::new(buildkite)),
     );
 }
 
@@ -572,11 +583,13 @@ const DOPPLER_TOOL_NAMES: [&str; 12] = [
 ];
 
 /// `willikins-providers-buildkite`'s live tool names. See
-/// [`GITHUB_TOOL_NAMES`].
-const BUILDKITE_TOOL_NAMES: [&str; 3] = [
+/// [`GITHUB_TOOL_NAMES`]. Milestone 3i task A4 added
+/// `buildkite.pipeline.bootstrap.ensure`.
+const BUILDKITE_TOOL_NAMES: [&str; 4] = [
     "buildkite.pipeline.ensure",
     "buildkite.cluster.get",
     "buildkite.pipeline.bootstrap.gate",
+    "buildkite.pipeline.bootstrap.ensure",
 ];
 
 /// `willikins-providers-signoz`'s live tool names. See
@@ -1130,7 +1143,29 @@ mod tests {
         let workflow = workflow_with_bindings(&[
             ("buildkite.cluster.get", true),
             ("buildkite.pipeline.ensure", true),
+            ("buildkite.pipeline.bootstrap.ensure", true),
         ]);
+        assert!(first_unbound_node_for(&workflow, Provider::Buildkite).is_none());
+    }
+
+    /// Milestone 3i task A4, acceptance 8: a document whose
+    /// `buildkite.pipeline.bootstrap.ensure` node leaves `token` unbound
+    /// still needs `WILLIKINS_BUILDKITE_TOKEN`, named by this node.
+    #[test]
+    fn first_unbound_node_for_names_an_unbound_bootstrap_ensure_node() {
+        let workflow = workflow_with_bindings(&[("buildkite.pipeline.bootstrap.ensure", false)]);
+        let (node_name, tool) = first_unbound_node_for(&workflow, Provider::Buildkite)
+            .expect("the bootstrap ensure node leaves `token` unbound");
+        assert_eq!(node_name.as_str(), "step_0");
+        assert_eq!(tool.as_str(), "buildkite.pipeline.bootstrap.ensure");
+    }
+
+    /// Milestone 3i task A4, acceptance 8's other half: binding `token`
+    /// on the one `buildkite.pipeline.bootstrap.ensure` node means no
+    /// Buildkite credential is demanded at all.
+    #[test]
+    fn first_unbound_node_for_is_none_when_the_bootstrap_ensure_node_binds_token() {
+        let workflow = workflow_with_bindings(&[("buildkite.pipeline.bootstrap.ensure", true)]);
         assert!(first_unbound_node_for(&workflow, Provider::Buildkite).is_none());
     }
 
