@@ -807,6 +807,49 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "pure": true
   },
   {
+    "class": "destructive",
+    "description": "Write a willikins-owned Buildkite pipeline's stored YAML configuration from a bootstrap file this document renders.",
+    "inputs": {
+      "configuration": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "RepoFile"
+        }
+      },
+      "org": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "BuildkiteOrg"
+        }
+      },
+      "slug": {
+        "required": true,
+        "ty": {
+          "kind": "exact",
+          "type": "BuildkitePipelineSlug"
+        }
+      },
+      "token": {
+        "required": false,
+        "ty": {
+          "kind": "exact",
+          "type": "BuildkiteToken"
+        }
+      }
+    },
+    "key": [
+      "org",
+      "slug"
+    ],
+    "name": "buildkite.pipeline.bootstrap.ensure",
+    "outputs": {
+      "slug": "BuildkitePipelineSlug"
+    },
+    "pure": false
+  },
+  {
     "class": "reversible",
     "description": "Register or converge an App Store Connect bundle identifier.",
     "inputs": {
