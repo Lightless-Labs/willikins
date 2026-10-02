@@ -174,6 +174,19 @@ fix.
 
 **Characterization.** Byte-identical: no file under `workflows/` or `workflows/fixtures/` changed, and `git status`
 confirms no `.snap` anywhere in the tree was touched by this task's two commits.
+**Addendum:** 2026-10-02 (task X1, independent pass): a third adversarial pass over A1 to B8, recorded in
+`docs/research/2026-10-02-m3i-adversarial-pass.md`. It found two things and fixed both test-first.
+1. **A gap in decision (b5).** `run_record_text` printed a failed run's `error:` JSON unmasked. An
+   `ApplyError::Tool` carries the partial `Applied`, so `apply --plan-id`, `run` and `runs` printed full
+   identifiers in default text output. Fixed in `758d100`, which runs the error through `mask_json`
+   unless `--reveal` is given.
+2. **A test gap in decision (a2).** Nothing pinned that only a `404` reads `Missing`. Pinned in `0f8a2ec`
+   with a `403` mock.
+
+Four mutations were killed (M5 to M8). The characterization diff since 3i's base is exactly A5's two
+entries, Sample's four lines and B8's ten lines. One residual is left for the coordinator: a `for_each` over
+an identifier-typed list in a non-shipped document would print full instance keys, since B7's guards cover
+only the shipped documents.
 **Gate:** OPEN for every task except **B8**, which waits on the coordinator (it changes thirteen characterization
 entries; see "Needs the coordinator"). Nothing here calls a provider except the live bootstrap cycle (A7), which is
 written by an implementer and run once by the coordinator against the SANDBOX Buildkite organisation.
