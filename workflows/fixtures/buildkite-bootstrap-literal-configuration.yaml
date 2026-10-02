@@ -1,0 +1,19 @@
+# Milestone 3i, decision (a10) and acceptance 11
+# (docs/plans/2026-10-02-milestone-3i-bootstrap-writer-and-identifier-masking.md):
+# a YAML string literal bound to buildkite.pipeline.bootstrap.ensure's
+# `configuration` port. `configuration` accepts only `RepoFile`, and
+# milestone 3g's literal-into-`RepoFile` refusal (decision (e), acceptance
+# 4) applies unchanged to this new port. Pinned by
+# `buildkite_bootstrap_literal_configuration_fails_check_with_exactly_one_error`
+# (crates/willikins-dsl/tests/acceptance.rs). `check` must return exactly
+# one error:
+#   RepoFileLiteral { node: bootstrap, port: configuration }
+name: buildkite-bootstrap-literal-configuration
+description: A literal YAML string bound to buildkite.pipeline.bootstrap.ensure's configuration port.
+steps:
+  bootstrap:
+    tool: buildkite.pipeline.bootstrap.ensure
+    with:
+      org: willikins-test
+      slug: third-thoughts
+      configuration: "steps:\n  - command: echo hi\n"

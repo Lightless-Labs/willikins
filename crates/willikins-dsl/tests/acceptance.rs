@@ -185,6 +185,45 @@ fn template_source_or_repo_file_inputs_and_defaults_each_fail_check_with_exactly
     }
 }
 
+/// Milestone 3i, decision (a10) and acceptance 11
+/// (`docs/plans/2026-10-02-milestone-3i-bootstrap-writer-and-identifier-masking.md`):
+/// a literal YAML string bound to `buildkite.pipeline.bootstrap.ensure`'s
+/// `configuration` port fails exactly as milestone 3g's literal-into-
+/// `RepoFile` refusal does (decision (e), acceptance 4).
+#[test]
+fn buildkite_bootstrap_literal_configuration_fails_check_with_exactly_one_error() {
+    let errors = check_errors("workflows/fixtures/buildkite-bootstrap-literal-configuration.yaml");
+    assert_eq!(
+        errors,
+        vec![willikins_core::CheckError::RepoFileLiteral {
+            node: node("bootstrap"),
+            port: willikins_core::PortName::parse("configuration").unwrap(),
+        }]
+    );
+}
+
+/// Milestone 3i, decision (a10) and acceptance 11: `operator.acknowledge`'s
+/// `step` output (`Text`) bound to `buildkite.pipeline.bootstrap.ensure`'s
+/// `configuration` port is a plain type mismatch, because no `Text =>
+/// RepoFile` conversion row exists.
+#[test]
+fn buildkite_bootstrap_text_configuration_fails_check_with_exactly_one_error() {
+    let errors = check_errors("workflows/fixtures/buildkite-bootstrap-text-configuration.yaml");
+    assert_eq!(
+        errors,
+        vec![willikins_core::CheckError::TypeMismatch {
+            node: node("bootstrap"),
+            port: willikins_core::PortName::parse("configuration").unwrap(),
+            expected: willikins_core::PortType::Exact(willikins_core::TypeRef::scalar(
+                willikins_core::TypeName::parse("RepoFile").unwrap()
+            )),
+            found: willikins_core::TypeRef::scalar(
+                willikins_core::TypeName::parse("Text").unwrap()
+            ),
+        }]
+    );
+}
+
 // ---------------------------------------------------------------------
 // Milestone 3d, equivalence item 1: a characterization snapshot of every
 // shipped document, committed before any production change (C1). After

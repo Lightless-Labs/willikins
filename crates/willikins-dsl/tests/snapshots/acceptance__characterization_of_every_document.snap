@@ -255,6 +255,14 @@ CHECK ERRORS:
 CHECK ERRORS:
 - kind=TypeMismatch display=node `profile`, port `certificate`: expected AppleCertificateId, found `AppleBundleIdId` json={"kind":"TypeMismatch","node":"profile","port":"certificate","expected":{"kind":"exact","type":"AppleCertificateId"},"found":"AppleBundleIdId"}
 
+=== workflows/fixtures/buildkite-bootstrap-literal-configuration.yaml ===
+CHECK ERRORS:
+- kind=RepoFileLiteral display=node `bootstrap`, port `configuration`: a literal cannot supply a repository file json={"kind":"RepoFileLiteral","node":"bootstrap","port":"configuration"}
+
+=== workflows/fixtures/buildkite-bootstrap-text-configuration.yaml ===
+CHECK ERRORS:
+- kind=TypeMismatch display=node `bootstrap`, port `configuration`: expected RepoFile, found `Text` json={"kind":"TypeMismatch","node":"bootstrap","port":"configuration","expected":{"kind":"exact","type":"RepoFile"},"found":"Text"}
+
 === workflows/fixtures/buildkite-doppler-type-mismatch.yaml ===
 CHECK ERRORS:
 - kind=TypeMismatch display=node `pipeline`, port `cluster`: expected BuildkiteClusterId, found `DopplerProject` json={"kind":"TypeMismatch","node":"pipeline","port":"cluster","expected":{"kind":"exact","type":"BuildkiteClusterId"},"found":"DopplerProject"}
