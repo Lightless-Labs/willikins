@@ -291,12 +291,10 @@
 # a node, not a manual step" standard M4 (the profiles) already met. It
 # grants `viewer` on `prd` to the named CI service account, adding or
 # raising access only, idempotent like every other `ensure` here.
-# `service_account`'s value, `REPLACE-WITH-CI-SERVICE-ACCOUNT`, is a
-# placeholder literal: **the coordinator edits it in place** to the real
-# CI Doppler service account's name once they look it up (one of this
-# milestone's own "Needs the operator" items, since the name itself is
-# not yet known) -- the same "Just update the doc" convention D1/D2/R4
-# already established for this document's other literals. **M5 (the APNs
+# `service_account` is `Buildkite`, the operator's one CI Doppler service
+# account (every pipeline's `DOPPLER_SERVICE_ACCOUNT_TOKEN`), looked up by
+# name in the real workplace on 2026-10-01 -- a literal, per the "Just
+# update the doc" convention D1/D2/R4 already established. **M5 (the APNs
 # `.p8` key) stays exactly as it was, by the operator's own explicit
 # instruction** ("no, you shouldn't fucking remove m5. It's fucking
 # blocking manual fucking step"): no Apple API can create or download an
@@ -4026,16 +4024,15 @@ steps:
   # data edge from `doppler`'s own output, so this node is ordered after
   # the project it grants access to (predicted at plan time on a first
   # run, the same pass-through shape `configs`/`prd_config` already rely
-  # on). `service_account` is `REPLACE-WITH-CI-SERVICE-ACCOUNT`, a
-  # placeholder literal the coordinator edits in place once the real CI
-  # Doppler service account's name is known. `role`/`environments` are
+  # on). `service_account` is the CI service account's real name.
+  # `role`/`environments` are
   # SHARED VALUES' own choice: the least access that lets CI read --
   # `viewer` on `prd` alone, where the deployment secrets actually live.
   ci_doppler_access:
     tool: doppler.project_member.ensure
     with:
       project: ${{ steps.doppler.project }}
-      service_account: REPLACE-WITH-CI-SERVICE-ACCOUNT
+      service_account: Buildkite
       role: viewer
       environments: [prd]
 outputs:

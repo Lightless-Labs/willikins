@@ -116,7 +116,7 @@ fn a_blocked_walter_apply_exits_3_and_leaks_no_secret_into_the_journal() {
     // own `TempDir` and point `--fake-state` at that instead.
     //
     // (Milestone 3h, W7.) The same fixture also seeds a Doppler service
-    // account named `REPLACE-WITH-CI-SERVICE-ACCOUNT`, so
+    // account named `Buildkite` (the document's own literal), so
     // `ci_doppler_access` (`doppler.project_member.ensure`) resolves it
     // rather than failing `NotFound`. Unlike `walter_document.rs`'s own
     // tests, a static JSON fixture file cannot read the document's

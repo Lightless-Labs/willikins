@@ -197,10 +197,9 @@ fn seeded_state() -> Arc<Mutex<FakeState>> {
 
 /// W7: `ci_doppler_access.service_account`'s own literal, read from the
 /// document rather than hard-coded here (acceptance 11) -- so the
-/// coordinator's own edit of the placeholder, `REPLACE-WITH-CI-SERVICE-ACCOUNT`,
-/// to the real CI Doppler service account's name needs no matching test
-/// edit: the fake state is always seeded under whatever name the document
-/// itself names.
+/// document's own name for the CI Doppler service account needs no
+/// matching test edit: the fake state is always seeded under whatever
+/// name the document itself names.
 fn ci_doppler_access_service_account_name() -> willikins_types::DopplerServiceAccountName {
     use willikins_core::{Binding, NodeName, PortName};
     let workflow = document();
