@@ -31,17 +31,30 @@ Read `docs/plans/2026-09-11-willikins-design.md` before changing anything in `cr
 
 - No bare `String` in a tool port. Every port is a domain type from `willikins-types`.
 - Secret types never implement plain `Display` or serde `Serialize`. Redaction is by
-  construction, not by remembering to scrub. `Value` renders through `render()` everywhere.
+  construction, not by remembering to scrub. `Value` renders through `render()` everywhere;
+  an output surface uses `Value::display(Disclosure)` or `mask_json`, which are `render()` plus
+  identifier masking.
+- Identifier types (`#[domain(identifier)]`: the App Store Connect issuer id, key id and
+  certificate serial, Apple certificate, bundle id and profile record ids, the Buildkite
+  cluster id, and `DopplerValue`) print as a short prefix on every output surface: CLI text
+  and JSON, MCP results and errors, the approvals page. Only the CLI's `--reveal` prints them
+  whole. The journal and plan fingerprints keep full values, because apply and drift
+  detection read them back. No type is both secret and an identifier.
 - A secret output may only bind to a secret-accepting input. `check` enforces it; do not
   add a bypass. Everything knowable statically is rejected by `check`; `plan` only backstops.
 - Naming derivation (`naming::v1`) is frozen. Fix bugs in it by adding `v2`, never by editing
   `v1`. Adding a row for a new provider is not a version bump.
-- No tool may take a raw URL, shell command, or arbitrary API path as input.
+- No tool may take a raw URL, shell command, or arbitrary API path as input. Content a
+  document renders itself is the one exception. A `RepoFile`, built only by `repo.file.render`
+  from a document-literal template and typed substitutions and never from a literal, input,
+  default or `Text`, may be committed by `github.scaffold.ensure` or stored as a
+  willikins-owned Buildkite pipeline's configuration by `buildkite.pipeline.bootstrap.ensure`,
+  whose path must be a YAML file directly under a `.buildkite/` directory.
 - `SinkToken::new` is disallowed by `clippy.toml` outside the apply executor; tests opt in with
   a narrowly scoped `#[allow(clippy::disallowed_methods)]`. `Tool::read` never receives one.
 - The type registry refuses secret types for any literal or input, regardless of element count.
 - A conversion is registered only through `conversions!`, only from a total `From` impl, never
-  secret-to-public (a compile error), and is resolved by a single probe, never a search.
+  secret-to-public and never identifier-to-plain (both compile errors), and is resolved by a single probe, never a search.
 - Workflow documents and templates are privileged content: run only from a trusted ref.
 - No provider-token-shaped literal anywhere in the tree, source or docs alike: any of Doppler's
   six kinds (`dp.sa./pt./ct./st./scim./audit.`) or GitHub's six prefixes
