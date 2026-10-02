@@ -144,6 +144,16 @@ two real defects in the rendered scripts and three test gaps, and fixed all five
 4. `doppler.project_member.ensure` gained tests for an exact name match, the member's type (`6148101`), and keeping
    an environment the request never named (`5bb1532`). No production change.
 
+**Addendum (2026-10-02, coordinator):** D4's live member cycle ran in the sandbox workplace: all ten steps pass,
+every throwaway project and service account deleted. Its first two runs found two defects the mocks could not:
+(1) Doppler lists a member with access to every environment (every project's creator) as `"environments": null`,
+not `[]`, so the first live `read` failed to parse (`771c077`: null reads as empty, with a mock that sends null);
+(2) step 8's own download request omitted `format=json` and Doppler answered 415 (`deac809`; Sample's `sample_ci.py`
+already sends it). A separate probe settled how inheritance and access meet: a `viewer` on project A's `prd` reads
+a branch config of A that inherits from project B's inheritable config, through both the download and the
+single-secret endpoints, with no access to B at all. So `Buildkite` needs `viewer` on `sample`'s `prd` only, which
+`ci_doppler_access` grants (the real workplace already lists it so). The document names `Buildkite` (`df5a191`).
+
 The document is now 196,549 bytes of W0's 196,608 budget, so any further template change must trim a script first
 (risk 1). There are two new verify items: the value shape of `com.apple.developer.devicecheck.appattest-environment`
 in an App Store profile (`check_signing` compares it for equality), and whether `cmd_upload` should re-run
