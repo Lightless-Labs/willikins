@@ -24,4 +24,7 @@ pub use client::{
     UPLOAD_CONFIGURATION, credential_from_env, http_client, http_client_without_credential,
     pipeline_web_url, ssh_repository_url,
 };
-pub use tools::{BuildkiteClusterGet, BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure};
+pub use tools::{
+    BuildkiteClusterGet, BuildkitePipelineBootstrapEnsure, BuildkitePipelineBootstrapGate,
+    BuildkitePipelineEnsure,
+};

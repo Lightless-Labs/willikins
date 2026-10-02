@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use willikins_core::{Inputs, PortName, Tool, Value};
 use willikins_providers_buildkite::{
-    BuildkiteClient, BuildkitePipelineBootstrapGate, BuildkitePipelineEnsure,
+    BuildkiteClient, BuildkitePipelineBootstrapEnsure, BuildkitePipelineBootstrapGate,
+    BuildkitePipelineEnsure,
 };
 use willikins_providers_http::testing::MockProvider;
 use willikins_providers_http::{Credential, Http};
@@ -591,5 +592,171 @@ fn only_get_is_ever_recorded_across_read_and_ensure_present_and_absent() {
             method, "GET",
             "a request other than GET was recorded: {path}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------
+// Milestone 3i task A2: the same `configuration`-never-echoed guarantee,
+// for `buildkite.pipeline.bootstrap.ensure` -- both the stored
+// `configuration` it reads and the `PATCH` response it discards
+// (`provider.webhook_url` and `configuration` both carried on a real
+// `200`) must never reach any output, `ToolError`, `Debug`, or journal.
+// ---------------------------------------------------------------------
+
+/// Distinct from [`CONFIGURATION_MARKER`] (the gate's own marker) so a
+/// failure of either test names which tool actually leaked.
+const WRITER_CONFIGURATION_MARKER: &str = concat!("bkua_", "wlknWriterConfigMarker000000000000");
+
+fn ensure_inputs(configuration: &RepoFile) -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(PortName::parse("org").unwrap(), Value::known(org()));
+    inputs.insert(PortName::parse("slug").unwrap(), Value::known(slug()));
+    inputs.insert(
+        PortName::parse("configuration").unwrap(),
+        Value::known(configuration.clone()),
+    );
+    inputs
+}
+
+fn ensure_tool_against(url: String) -> BuildkitePipelineBootstrapEnsure {
+    let credential = Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+    let client = Arc::new(BuildkiteClient::new(Http::new(url, Vec::new(), credential)));
+    BuildkitePipelineBootstrapEnsure::new(client)
+}
+
+/// A stored `configuration` carrying the marker (different from the
+/// rendered `RepoFile`, so `read` reaches `Absent` and `ensure` reaches
+/// the `PATCH` path) never reaches `read`'s `Observation`, a failing
+/// `ensure`'s `ToolError`, or any `Debug`.
+#[test]
+fn a_writer_configuration_marker_reaches_no_observation_or_error_on_the_read_side() {
+    let configuration = format!(
+        "steps:\n  - command: \"echo hi\"\n    env:\n      TOKEN: \"{WRITER_CONFIGURATION_MARKER}\"\n"
+    );
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"description": "managed-by: willikins", "configuration": configuration})
+                .to_string(),
+        )
+        .create();
+    let rendered = RepoFile::new(
+        RepoPath::parse("apps/walter/.buildkite/bootstrap.yml").unwrap(),
+        "steps:\n  - command: \"echo hi\"\n",
+    )
+    .unwrap();
+    let tool = ensure_tool_against(provider.url());
+    let observation = tool.read(&ensure_inputs(&rendered)).expect("reads");
+
+    let mut failing = MockProvider::start();
+    failing
+        .mock(
+            "GET",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(500)
+        .with_body(
+            serde_json::json!({"message": "boom", "configuration": WRITER_CONFIGURATION_MARKER})
+                .to_string(),
+        )
+        .create();
+    let err = ensure_tool_against(failing.url())
+        .read(&ensure_inputs(&rendered))
+        .expect_err("500");
+
+    for text in [
+        format!("{observation:?}"),
+        format!("{err:?}"),
+        err.message.clone(),
+    ] {
+        assert!(
+            !text.contains(WRITER_CONFIGURATION_MARKER),
+            "the writer configuration marker leaked into: {text}"
+        );
+    }
+}
+
+/// The `PATCH` response's own markers (`provider.webhook_url` and
+/// `configuration`, exactly the two fields trust boundary 4 names) never
+/// reach `ensure`'s successful `Ensured`, its `Debug`, or any later
+/// `ToolError` -- across a `PATCH` that lands and a re-read that then
+/// (deliberately, via a second, different marker) still disagrees.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_patch_response_marker_reaches_no_ensured_debug_or_error() {
+    let rendered = RepoFile::new(
+        RepoPath::parse("apps/walter/.buildkite/bootstrap.yml").unwrap(),
+        "steps:\n  - command: \"echo hi\"\n",
+    )
+    .unwrap();
+    let mut provider = MockProvider::start();
+    // Registered first, with its own `.expect(1)`: `ensure`'s pre-patch
+    // `analyze` consumes this one hit; mockito then falls through to the
+    // second GET mock below for the post-patch re-`analyze`.
+    provider
+        .mock(
+            "GET",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "description": "managed-by: willikins",
+                "configuration": "steps:\n  - command: \"buildkite-agent pipeline upload\"\n",
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    provider
+        .mock(
+            "PATCH",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "configuration": "steps:\n  - command: \"echo hi\"\n",
+                "provider": {"webhook_url": WRITER_CONFIGURATION_MARKER},
+            })
+            .to_string(),
+        )
+        .create();
+    provider
+        .mock(
+            "GET",
+            "/v2/organizations/willikins-test/pipelines/third-thoughts",
+        )
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "description": "managed-by: willikins",
+                "configuration": "steps:\n  - command: \"echo hi\"\n",
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let tool = ensure_tool_against(provider.url());
+    let token = willikins_core::SinkToken::new();
+    let ensured = tool
+        .ensure(&ensure_inputs(&rendered), &token)
+        .expect("ensures");
+
+    assert!(ensured.changed);
+    assert!(!format!("{ensured:?}").contains(WRITER_CONFIGURATION_MARKER));
+    for (_, value) in ensured.outputs.iter() {
+        assert!(
+            !value
+                .render()
+                .to_string()
+                .contains(WRITER_CONFIGURATION_MARKER)
+        );
+        assert!(!format!("{value:?}").contains(WRITER_CONFIGURATION_MARKER));
     }
 }
