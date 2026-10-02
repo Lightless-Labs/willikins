@@ -49,7 +49,7 @@ Read these documents for more information:
 
 ## Providers
 
-GitHub and Doppler have live tools:
+GitHub, Doppler, and Buildkite have live tools:
 
 - GitHub: the repository and the Actions secret.
 - Doppler: the project, the config, the service token, the service token rotation, and the
@@ -57,6 +57,12 @@ GitHub and Doppler have live tools:
 - App Store Connect: the bundle identifier, the bundle identifier capability, the
   distribution certificate (`appstore.certificate.get`), and the App Store provisioning
   profile (`appstore.profile.ensure`).
+- Buildkite: the pipeline (`buildkite.pipeline.ensure`), the cluster read
+  (`buildkite.cluster.get`), comparing a pipeline's stored YAML configuration against a
+  document-rendered file (`buildkite.pipeline.bootstrap.gate`), and writing that stored
+  configuration from a document-rendered file (`buildkite.pipeline.bootstrap.ensure`,
+  milestone 3i). The writer accepts a `RepoFile` only -- never a literal, an input, or free
+  text -- and only `configuration` is ever sent.
 
 The certificate tool only reads. It selects 1 certificate by 2 inputs: the certificate type
 (`DISTRIBUTION` or `IOS_DISTRIBUTION`) and the serial number. Use the serial number of the
@@ -64,9 +70,6 @@ certificate whose `.p12` file your signing machine holds. The tool refuses when 
 certificate or more than 1 certificate matches. The profile tool makes only the
 `IOS_APP_STORE` type. Its content is a secret, and a workflow can store it in Doppler.
 Willikins never creates, changes, or revokes a certificate.
-
-Buildkite is not live. Milestone 3 adds a Buildkite provider that makes 1 pipeline for each
-repository. Railway and App Store Connect are possible providers after milestone 3.
 
 ## Try it
 
@@ -252,7 +255,7 @@ live test reads.
 | `WILLIKINS_READ_RATE_PER_MINUTE` | `60` | Never; optional. | A whole number. |
 | `WILLIKINS_GITHUB_TOKEN` | none | Live mode only (`WILLIKINS_FAKE_CATALOG` unset). | `github_pat_...` (fine-grained) or `ghp_...` (classic). |
 | `WILLIKINS_DOPPLER_TOKEN` | none | Live mode only. | `dp.sa.<40-44 characters>` (service account) or `dp.pt.<40-44 characters>` (personal). |
-| `WILLIKINS_BUILDKITE_TOKEN` | none | Live mode only. | `bkua_<20+ characters>` (API access token), needing `read_pipelines`, `write_pipelines`, and `read_clusters`. There is no narrower grant: `write_pipelines` also covers delete, so this credential can destroy any pipeline in the organisation it reaches — the mitigation is which organisation the token is scoped to, not the scope itself. |
+| `WILLIKINS_BUILDKITE_TOKEN` | none | Live mode only. | `bkua_<20+ characters>` (API access token), needing `read_pipelines`, `write_pipelines`, and `read_clusters`. There is no narrower grant: `write_pipelines` also covers delete and, since milestone 3i, writing a pipeline's stored YAML configuration, so this credential can destroy or reconfigure any pipeline in the organisation it reaches — the mitigation is which organisation the token is scoped to, not the scope itself. |
 | `WILLIKINS_FAKE_CATALOG` | unset | Never; optional. | Exactly `1`, or unset. Any other value refuses to start. |
 
 These variables exist only for the opt-in live tests run by hand during development. Never

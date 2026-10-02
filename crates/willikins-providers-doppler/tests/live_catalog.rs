@@ -67,7 +67,8 @@ const POSITIVE_FIXTURES: [&str; 7] = [
 ];
 
 /// Every tool name the assembled live catalog must hold, exactly.
-const LIVE_TOOL_NAMES: [&str; 38] = willikins_server::LIVE_TOOL_NAMES;
+/// Milestone 3i task A4 added `buildkite.pipeline.bootstrap.ensure`.
+const LIVE_TOOL_NAMES: [&str; 39] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

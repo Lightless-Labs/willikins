@@ -1,6 +1,15 @@
 # Milestone 3i: the bootstrap writer, and identifiers that print as prefixes
 
 **Created:** 2026-10-02
+**Addendum:** 2026-10-02 (task A4) — scope widened to also touch
+`crates/willikins-providers-doppler/tests/live_catalog.rs`, which re-exports `willikins_server::LIVE_TOOL_NAMES`
+into its own `[&str; 38]`-sized local const; bumping `LIVE_TOOL_NAMES` to 39 is a hard compile error there
+otherwise, and `-p willikins-server -p willikins-cli` never builds that crate's test targets. Gate widened to
+include `cargo clippy -p willikins-providers-doppler --all-targets` and `cargo test -p willikins-providers-doppler
+--test live_catalog` for this one commit. Separately, README.md had no existing Buildkite tool list to extend
+(the "Providers" section still said "Buildkite is not live", stale since milestone 3a); task A4 replaced that
+sentence with a Buildkite bullet naming all four live tools, since that is the closest fit to "update the
+README's tool list" that the repository actually has.
 **Gate:** OPEN for every task except **B8**, which waits on the coordinator (it changes thirteen characterization
 entries; see "Needs the coordinator"). Nothing here calls a provider except the live bootstrap cycle (A7), which is
 written by an implementer and run once by the coordinator against the SANDBOX Buildkite organisation.
