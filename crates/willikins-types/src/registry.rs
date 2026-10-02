@@ -1145,6 +1145,43 @@ mod tests {
         }
     }
 
+    /// Milestone 3i, task B2: the exact set of types marked
+    /// `#[domain(identifier)]`, pinned so a widening (or a narrowing) is a
+    /// reviewed diff rather than a silent drift. Decision (b2) names these
+    /// seven and no others.
+    #[test]
+    fn the_identifier_set_is_exactly_these_seven_types() {
+        const EXPECTED: [&str; 7] = [
+            "AppleIssuerId",
+            "AppleKeyId",
+            "AppleCertificateSerial",
+            "AppleCertificateId",
+            "AppleBundleIdId",
+            "AppleProfileId",
+            "BuildkiteClusterId",
+        ];
+        let mut expected: ::std::collections::HashSet<&str> = EXPECTED.into_iter().collect();
+        assert_eq!(expected.len(), EXPECTED.len(), "duplicate name in EXPECTED");
+
+        let registry = crate::registry();
+        for entry in registry.iter() {
+            if entry.info.identifier {
+                assert!(
+                    expected.remove(entry.info.name),
+                    "{}: marked identifier but not in the pinned set of seven \
+                     (decision (b2) names exactly these seven -- update both this test \
+                     and the plan if a widening is intended)",
+                    entry.info.name
+                );
+            }
+        }
+        assert!(
+            expected.is_empty(),
+            "pinned identifier type(s) not found in the registry (or no longer marked \
+             identifier): {expected:?}"
+        );
+    }
+
     #[test]
     fn the_production_registry_has_no_duplicate_or_identity_conversion_row() {
         let registry = crate::registry();

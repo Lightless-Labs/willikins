@@ -68,6 +68,7 @@ pub struct BuildkitePipelineSlug(String);
 #[domain(
     pattern = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
     description = "A Buildkite cluster's UUID.",
+    identifier,
     example = "018e5a22-d14c-7085-bb28-db0f83f43a1c"
 )]
 pub struct BuildkiteClusterId(String);

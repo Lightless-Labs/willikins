@@ -1,12 +1,12 @@
 ---
 source: crates/willikins-types/tests/catalog.rs
-assertion_line: 101
 expression: redacted
 ---
 [
   {
     "name": "WordList",
     "secret": false,
+    "identifier": false,
     "description": "An ordered, non-empty list of lowercase ASCII words, serialised as kebab-case.",
     "example": "third-thoughts",
     "schema": {
@@ -23,6 +23,7 @@ expression: redacted
   {
     "name": "ProjectSlug",
     "secret": false,
+    "identifier": false,
     "description": "The canonical, immutable slug identifying a project.",
     "example": "third-thoughts",
     "schema": {
@@ -40,6 +41,7 @@ expression: redacted
   {
     "name": "ComponentSlug",
     "secret": false,
+    "identifier": false,
     "description": "A slug identifying one component within a project.",
     "example": "api",
     "schema": {
@@ -57,6 +59,7 @@ expression: redacted
   {
     "name": "EnvironmentSlug",
     "secret": false,
+    "identifier": false,
     "description": "A slug identifying a deployment environment.",
     "example": "prd",
     "schema": {
@@ -74,6 +77,7 @@ expression: redacted
   {
     "name": "ProjectName",
     "secret": false,
+    "identifier": false,
     "description": "A project's free-form, human-readable display name.",
     "example": "Third Thoughts",
     "schema": {
@@ -91,6 +95,7 @@ expression: redacted
   {
     "name": "Text",
     "secret": false,
+    "identifier": false,
     "description": "A free-form piece of text. Never secret.",
     "example": "Third Thoughts",
     "schema": {
@@ -107,6 +112,7 @@ expression: redacted
   {
     "name": "TemplateSource",
     "secret": false,
+    "identifier": false,
     "description": "The source text of a template.",
     "example": "Hello, {{ value }}!",
     "schema": {
@@ -123,6 +129,7 @@ expression: redacted
   {
     "name": "TemplateValue",
     "secret": false,
+    "identifier": false,
     "description": "A substitution value for a rendered template placeholder. Refuses shell and quoting metacharacters.",
     "example": "com.example-org.sample",
     "schema": {
@@ -140,6 +147,7 @@ expression: redacted
   {
     "name": "RepoPath",
     "secret": false,
+    "identifier": false,
     "description": "A `/`-separated path inside a repository. Refuses `.git` segments and `.github/workflows/`.",
     "example": "apps/sample/ios/BUILD.bazel",
     "schema": {
@@ -156,6 +164,7 @@ expression: redacted
   {
     "name": "GitBranchName",
     "secret": false,
+    "identifier": false,
     "description": "A git branch name, a subset of git's own check-ref-format rules.",
     "example": "main",
     "schema": {
@@ -172,6 +181,7 @@ expression: redacted
   {
     "name": "CommitHeadline",
     "secret": false,
+    "identifier": false,
     "description": "A commit message's first line: 1 to 72 characters, one line, no control character.",
     "example": "feat(sample): scaffold the iOS app, NSE, widgets and Buildkite files",
     "schema": {
@@ -189,6 +199,7 @@ expression: redacted
   {
     "name": "RepoFile",
     "secret": false,
+    "identifier": false,
     "description": "A file to write into a repository: `<path>\\n<content>`.",
     "example": "apps/sample/BUILD.bazel\n# Reserve the app name.\n",
     "schema": {
@@ -204,6 +215,7 @@ expression: redacted
   {
     "name": "GitHubOrg",
     "secret": false,
+    "identifier": false,
     "description": "A GitHub organisation or user login.",
     "example": "lightless-labs",
     "schema": {
@@ -221,6 +233,7 @@ expression: redacted
   {
     "name": "RepoVisibility",
     "secret": false,
+    "identifier": false,
     "description": "A GitHub repository's visibility: private or public.",
     "example": "private",
     "schema": {
@@ -240,6 +253,7 @@ expression: redacted
   {
     "name": "GitHubRepo",
     "secret": false,
+    "identifier": false,
     "description": "A GitHub repository identity: owner/name.",
     "example": "lightless-labs/third-thoughts",
     "schema": {
@@ -257,6 +271,7 @@ expression: redacted
   {
     "name": "HttpsUrl",
     "secret": false,
+    "identifier": false,
     "description": "An https:// URL.",
     "example": "https://github.com/lightless-labs/third-thoughts",
     "schema": {
@@ -274,6 +289,7 @@ expression: redacted
   {
     "name": "ActionsSecretName",
     "secret": false,
+    "identifier": false,
     "description": "A GitHub Actions repository secret name. Must not start with GITHUB_, which GitHub reserves for its own automatically supplied secrets.",
     "example": "DOPPLER_TOKEN",
     "schema": {
@@ -291,6 +307,7 @@ expression: redacted
   {
     "name": "GitHubToken",
     "secret": true,
+    "identifier": false,
     "description": "A GitHub personal access token (fine-grained or classic).",
     "example": "[ELIDED SECRET EXAMPLE]",
     "schema": {
@@ -307,6 +324,7 @@ expression: redacted
   {
     "name": "EnvVarName",
     "secret": false,
+    "identifier": false,
     "description": "The name of a WILLIKINS_-namespaced environment variable.",
     "example": "WILLIKINS_DOPPLER_TOKEN",
     "schema": {
@@ -324,6 +342,7 @@ expression: redacted
   {
     "name": "DopplerProject",
     "secret": false,
+    "identifier": false,
     "description": "A Doppler project slug.",
     "example": "third-thoughts",
     "schema": {
@@ -341,6 +360,7 @@ expression: redacted
   {
     "name": "DopplerConfigName",
     "secret": false,
+    "identifier": false,
     "description": "A Doppler config name.",
     "example": "prd",
     "schema": {
@@ -358,6 +378,7 @@ expression: redacted
   {
     "name": "DopplerConfig",
     "secret": false,
+    "identifier": false,
     "description": "A Doppler config identity: project/name.",
     "example": "third-thoughts/prd",
     "schema": {
@@ -375,6 +396,7 @@ expression: redacted
   {
     "name": "DopplerTokenName",
     "secret": false,
+    "identifier": false,
     "description": "A Doppler service token name.",
     "example": "ci",
     "schema": {
@@ -392,6 +414,7 @@ expression: redacted
   {
     "name": "SecretName",
     "secret": false,
+    "identifier": false,
     "description": "A secret's name within a Doppler config.",
     "example": "DATABASE_URL",
     "schema": {
@@ -409,6 +432,7 @@ expression: redacted
   {
     "name": "DopplerServiceToken",
     "secret": true,
+    "identifier": false,
     "description": "A Doppler service token value.",
     "example": "[ELIDED SECRET EXAMPLE]",
     "schema": {
@@ -425,6 +449,7 @@ expression: redacted
   {
     "name": "DopplerSecretValue",
     "secret": true,
+    "identifier": false,
     "description": "A secret's value.",
     "example": "[ELIDED SECRET EXAMPLE]",
     "schema": {
@@ -442,6 +467,7 @@ expression: redacted
   {
     "name": "DopplerServiceAccountName",
     "secret": false,
+    "identifier": false,
     "description": "A Doppler service account's display name.",
     "example": "buildkite-ci",
     "schema": {
@@ -459,6 +485,7 @@ expression: redacted
   {
     "name": "DopplerProjectRole",
     "secret": false,
+    "identifier": false,
     "description": "A Doppler project role: viewer or collaborator (admin and owner are refused by grammar, because granting either hands another identity the project).",
     "example": "viewer",
     "schema": {
@@ -475,6 +502,7 @@ expression: redacted
   {
     "name": "BuildkiteOrg",
     "secret": false,
+    "identifier": false,
     "description": "A Buildkite organisation slug.",
     "example": "willikins-test",
     "schema": {
@@ -492,6 +520,7 @@ expression: redacted
   {
     "name": "BuildkitePipelineSlug",
     "secret": false,
+    "identifier": false,
     "description": "A Buildkite pipeline slug.",
     "example": "third-thoughts",
     "schema": {
@@ -509,6 +538,7 @@ expression: redacted
   {
     "name": "BuildkiteClusterId",
     "secret": false,
+    "identifier": true,
     "description": "A Buildkite cluster's UUID.",
     "example": "018e5a22-d14c-7085-bb28-db0f83f43a1c",
     "schema": {
@@ -525,6 +555,7 @@ expression: redacted
   {
     "name": "BuildkiteClusterName",
     "secret": false,
+    "identifier": false,
     "description": "A human-written Buildkite cluster name, such as `Default cluster`.",
     "example": "Default cluster",
     "schema": {
@@ -542,6 +573,7 @@ expression: redacted
   {
     "name": "BuildkiteToken",
     "secret": true,
+    "identifier": false,
     "description": "A Buildkite API access token (`bkua_`).",
     "example": "[ELIDED SECRET EXAMPLE]",
     "schema": {
@@ -558,6 +590,7 @@ expression: redacted
   {
     "name": "WorkflowName",
     "secret": false,
+    "identifier": false,
     "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
     "example": "new-rust-service",
     "schema": {
@@ -575,6 +608,7 @@ expression: redacted
   {
     "name": "Description",
     "secret": false,
+    "identifier": false,
     "description": "A free-text description shown to an agent, at most 1,024 characters.",
     "example": "Provision a GitHub repository and Doppler project for a Rust service.",
     "schema": {
@@ -591,6 +625,7 @@ expression: redacted
   {
     "name": "SigNozIngestionKeyName",
     "secret": false,
+    "identifier": false,
     "description": "The name of a SigNoz ingestion key.",
     "example": "willikins-example-key",
     "schema": {
@@ -608,6 +643,7 @@ expression: redacted
   {
     "name": "SigNozIngestionKeyValue",
     "secret": true,
+    "identifier": false,
     "description": "A SigNoz ingestion key's minted value.",
     "example": "[ELIDED SECRET EXAMPLE]",
     "schema": {
@@ -625,6 +661,7 @@ expression: redacted
   {
     "name": "OpaqueSecret",
     "secret": true,
+    "identifier": false,
     "description": "An opaque secret value passed between a resolver and a transform or parse tool. Asserts nothing about its shape.",
     "example": "[ELIDED SECRET EXAMPLE]",
     "schema": {
@@ -642,6 +679,7 @@ expression: redacted
   {
     "name": "AppleSigningKey",
     "secret": true,
+    "identifier": false,
     "description": "An EC P-256 private key, PKCS#8 or SEC1 PEM-encoded (canonicalised to PKCS#8). Secret.",
     "example": "[ELIDED SECRET EXAMPLE]",
     "schema": {
@@ -655,6 +693,7 @@ expression: redacted
   {
     "name": "AppleIssuerId",
     "secret": false,
+    "identifier": true,
     "description": "An App Store Connect API key's issuer id (a UUID, team keys only).",
     "example": "57246542-96fe-1a63-e053-0824d011072a",
     "schema": {
@@ -671,6 +710,7 @@ expression: redacted
   {
     "name": "AppleKeyId",
     "secret": false,
+    "identifier": true,
     "description": "An App Store Connect API key's key id (goes in the JWT `kid` header).",
     "example": "2X9R4HXF34",
     "schema": {
@@ -687,6 +727,7 @@ expression: redacted
   {
     "name": "AppleBundleIdentifier",
     "secret": false,
+    "identifier": false,
     "description": "An App Store Connect bundle identifier string, such as `com.example.MyApp`. Immutable once created.",
     "example": "com.example.MyApp",
     "schema": {
@@ -704,6 +745,7 @@ expression: redacted
   {
     "name": "AppleBundleIdName",
     "secret": false,
+    "identifier": false,
     "description": "A bundle id's human-written `name` attribute.",
     "example": "third-thoughts",
     "schema": {
@@ -722,6 +764,7 @@ expression: redacted
   {
     "name": "AppleBundleIdPlatform",
     "secret": false,
+    "identifier": false,
     "description": "An App Store Connect bundle id's platform: IOS, MAC_OS, or UNIVERSAL. Immutable once created.",
     "example": "UNIVERSAL",
     "schema": {
@@ -738,6 +781,7 @@ expression: redacted
   {
     "name": "AppleBundleIdId",
     "secret": false,
+    "identifier": true,
     "description": "An App Store Connect bundle id's Apple-assigned opaque record id.",
     "example": "T6G4XCV345",
     "schema": {
@@ -754,6 +798,7 @@ expression: redacted
   {
     "name": "AppleCapabilityType",
     "secret": false,
+    "identifier": false,
     "description": "An App Store Connect bundle id capability type.",
     "example": "PUSH_NOTIFICATIONS",
     "schema": {
@@ -770,6 +815,7 @@ expression: redacted
   {
     "name": "AppleObservableCapabilityType",
     "secret": false,
+    "identifier": false,
     "description": "Every bundle id capability type this crate can observe on a read, including two (APP_ATTEST, APP_ATTEST_OPT_IN) the API reports but refuses to create -- a read-only superset of AppleCapabilityType.",
     "example": "APP_ATTEST",
     "schema": {
@@ -786,6 +832,7 @@ expression: redacted
   {
     "name": "AppleCapabilitySetting",
     "secret": false,
+    "identifier": false,
     "description": "An App Store Connect bundle id capability setting, KEY=OPTION (a data protection class or a Sign in with Apple consent scope).",
     "example": "DATA_PROTECTION_PERMISSION_LEVEL=PROTECTED_UNTIL_FIRST_USER_AUTH",
     "schema": {
@@ -802,6 +849,7 @@ expression: redacted
   {
     "name": "AppleCertificateType",
     "secret": false,
+    "identifier": false,
     "description": "An App Store Connect certificate type: DISTRIBUTION or IOS_DISTRIBUTION (the two that can sign an App Store distribution profile).",
     "example": "DISTRIBUTION",
     "schema": {
@@ -818,6 +866,7 @@ expression: redacted
   {
     "name": "AppleCertificateSerial",
     "secret": false,
+    "identifier": true,
     "description": "An App Store Connect certificate's serial number (uppercase hexadecimal).",
     "example": "7B3F2A9C1D4E5F607182930A1B2C3D4E5F60",
     "schema": {
@@ -834,6 +883,7 @@ expression: redacted
   {
     "name": "AppleCertificateId",
     "secret": false,
+    "identifier": true,
     "description": "An App Store Connect certificate's Apple-assigned opaque record id.",
     "example": "C3RT1F1CATE9",
     "schema": {
@@ -850,6 +900,7 @@ expression: redacted
   {
     "name": "AppleProfileType",
     "secret": false,
+    "identifier": false,
     "description": "An App Store Connect provisioning profile type: IOS_APP_STORE only (every other profile type is out of scope and refused by this grammar).",
     "example": "IOS_APP_STORE",
     "schema": {
@@ -866,6 +917,7 @@ expression: redacted
   {
     "name": "AppleProfileName",
     "secret": false,
+    "identifier": false,
     "description": "A provisioning profile's human-written `name` attribute.",
     "example": "willikins-probe-delete-me-example",
     "schema": {
@@ -883,6 +935,7 @@ expression: redacted
   {
     "name": "AppleProfileId",
     "secret": false,
+    "identifier": true,
     "description": "An App Store Connect provisioning profile's Apple-assigned opaque record id.",
     "example": "PR0F1LE1D9999",
     "schema": {
@@ -899,6 +952,7 @@ expression: redacted
   {
     "name": "AppleProfileContent",
     "secret": true,
+    "identifier": false,
     "description": "An App Store Connect provisioning profile's base64-encoded content (a CMS-signed property list). Secret.",
     "example": "[ELIDED SECRET EXAMPLE]",
     "schema": {
@@ -916,6 +970,7 @@ expression: redacted
   {
     "name": "OperatorAcknowledgement",
     "secret": false,
+    "identifier": false,
     "description": "An operator's acknowledgement that a manual step is done (the only valid value is `done`); never defaulted, never a literal.",
     "example": "done",
     "schema": {

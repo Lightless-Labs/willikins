@@ -100,6 +100,7 @@ use crate::{DomainType, ParseError, SinkToken};
 #[domain(
     pattern = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
     description = "An App Store Connect API key's issuer id (a UUID, team keys only).",
+    identifier,
     example = "57246542-96fe-1a63-e053-0824d011072a"
 )]
 pub struct AppleIssuerId(String);
@@ -127,6 +128,7 @@ pub struct AppleIssuerId(String);
 #[domain(
     pattern = "[A-Z0-9]{2,32}",
     description = "An App Store Connect API key's key id (goes in the JWT `kid` header).",
+    identifier,
     example = "2X9R4HXF34"
 )]
 pub struct AppleKeyId(String);
@@ -620,6 +622,7 @@ pub struct AppleBundleIdPlatform(String);
 #[domain(
     pattern = "[A-Za-z0-9]{2,64}",
     description = "An App Store Connect bundle id's Apple-assigned opaque record id.",
+    identifier,
     example = "T6G4XCV345"
 )]
 pub struct AppleBundleIdId(String);
@@ -778,6 +781,7 @@ pub struct AppleCertificateType(String);
 #[domain(
     pattern = "[0-9A-F]{1,64}",
     description = "An App Store Connect certificate's serial number (uppercase hexadecimal).",
+    identifier,
     example = "7B3F2A9C1D4E5F607182930A1B2C3D4E5F60"
 )]
 pub struct AppleCertificateSerial(String);
@@ -793,6 +797,7 @@ pub struct AppleCertificateSerial(String);
 #[domain(
     pattern = "[A-Za-z0-9]{2,64}",
     description = "An App Store Connect certificate's Apple-assigned opaque record id.",
+    identifier,
     example = "C3RT1F1CATE9"
 )]
 pub struct AppleCertificateId(String);
@@ -1014,6 +1019,7 @@ impl From<AppleBundleIdentifier> for AppleProfileName {
 #[domain(
     pattern = "[A-Za-z0-9]{2,64}",
     description = "An App Store Connect provisioning profile's Apple-assigned opaque record id.",
+    identifier,
     example = "PR0F1LE1D9999"
 )]
 pub struct AppleProfileId(String);
