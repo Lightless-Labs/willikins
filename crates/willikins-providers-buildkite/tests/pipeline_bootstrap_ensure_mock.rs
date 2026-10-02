@@ -103,6 +103,42 @@ fn missing_reads_absent_updates_true_and_ensure_not_found_with_zero_patch() {
     patch.assert();
 }
 
+/// Only a `404` is `Missing`. A pipeline the token cannot read (`403`, a
+/// token without `read_pipelines`) must fail `read`, `updates` and
+/// `ensure` with the provider's error, never read `Absent` and plan an
+/// `Update` over a pipeline nobody looked at. Found by the milestone 3i
+/// independent adversarial pass: widening the `404` arm to every error
+/// survived this file and was caught only incidentally, by a redaction
+/// test's `expect_err`.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn a_read_the_token_is_not_allowed_fails_and_never_reads_missing() {
+    let mut provider = MockProvider::start();
+    let get = provider
+        .mock("GET", path())
+        .with_status(403)
+        .with_body(serde_json::json!({"message": "Forbidden"}).to_string())
+        .expect(3)
+        .create();
+    let patch = provider
+        .mock("PATCH", path())
+        .match_query(mockito::Matcher::Any)
+        .expect(0)
+        .create();
+    let tool = ensure_tool_against(provider.url());
+    let inputs = ensure_inputs(&valid_configuration());
+
+    let err = tool.read(&inputs).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider, "{err:?}");
+    let err = tool.updates(&inputs).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider, "{err:?}");
+    let token = SinkToken::new();
+    let err = tool.ensure(&inputs, &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider, "{err:?}");
+    get.assert();
+    patch.assert();
+}
+
 #[test]
 #[allow(clippy::disallowed_methods)] // a test mints its own token
 fn foreign_reads_foreign_and_ensure_conflicts_with_zero_patch() {
