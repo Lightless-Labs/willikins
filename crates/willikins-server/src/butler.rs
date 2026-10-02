@@ -52,6 +52,7 @@ use std::time::Duration;
 use indexmap::IndexMap;
 
 use willikins_core::describe::PartialInputs;
+use willikins_core::disclosure::mask_json;
 use willikins_core::{
     Applied, ApplyError, Approval, Catalog, Checked, InputName, PlanError, ToolError,
     ToolErrorKind, ToolName, TypeRef, TypeRegistry, Value,
@@ -1251,11 +1252,27 @@ fn resolve_recorded_inputs(
 /// present -- a scalar string, or an array of strings for a list -- but
 /// this checks rather than assumes, so a hand-edited or otherwise
 /// malformed record is refused, not panicked on.
+///
+/// Milestone 3i, task B7's error audit: the document's declared type for
+/// `ty` can change between the `plan` that recorded `entry` and the
+/// `apply` that reads it back (an edited document, or a restart against a
+/// stale record) -- exactly the "no longer parses against the reloaded
+/// document's declared type" case this function's own module doc
+/// describes. When that happens `entry` itself can still hold a
+/// previously-valid *identifier's* full value (a scalar recorded for a
+/// port the document now declares `list<T>`, or the reverse), so
+/// `bad_shape`'s message runs `entry` through [`mask_json`] before
+/// formatting it in -- the same chokepoint every other already-serialized
+/// surface uses -- rather than echoing the raw recorded JSON, which would
+/// print a full identifier in [`ButlerError::RecordedInputUnreadable`]'s
+/// message with no `--reveal` to ask for.
 fn parse_recorded_value(ty: &TypeRef, entry: &serde_json::Value) -> Result<Value, ParseError> {
     let bad_shape = || {
+        let mut masked = entry.clone();
+        mask_json(&mut masked);
         ParseError::new(
             "Value",
-            format!("recorded input value is not the expected shape: {entry}"),
+            format!("recorded input value is not the expected shape: {masked}"),
         )
     };
     if entry.get("state").and_then(serde_json::Value::as_str) != Some("known") {
@@ -1310,5 +1327,58 @@ fn drift_reason_kind(detail: &DriftDetail) -> willikins_journal::DriftReasonKind
         DriftDetail::Output { port, .. } => {
             willikins_journal::DriftReasonKind::Output { port: port.clone() }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Milestone 3i, task B7's error audit, commit 2: `parse_recorded_value`'s
+    /// `bad_shape` message used to interpolate the raw recorded `entry`
+    /// verbatim. A document can declare a different type for an input
+    /// between the `plan` that recorded it and a later `apply` (an edited
+    /// document, or a restart against a stale record -- this function's
+    /// own module doc), so a scalar `AppleIssuerId` recorded for a port
+    /// the document now declares `list<AppleIssuerId>` is exactly the
+    /// "wrong shape" this hits, with `entry["value"]` still holding the
+    /// full, previously-valid identifier. Pins that the message carries
+    /// only the masked prefix, both in the raw [`ParseError::reason`] and
+    /// in the [`ButlerError::RecordedInputUnreadable`] it is wrapped in.
+    #[test]
+    fn parse_recorded_value_masks_an_identifier_in_a_mismatched_shape_error() {
+        const FULL: &str = "57246542-96fe-1a63-e053-0824d011072a";
+        let entry = serde_json::json!({
+            "type": "AppleIssuerId",
+            "list": false,
+            "state": "known",
+            "value": FULL,
+        });
+        let ty = TypeRef::list_of(willikins_core::TypeName::parse("AppleIssuerId").unwrap());
+
+        let error = parse_recorded_value(&ty, &entry)
+            .expect_err("a recorded scalar is the wrong shape for a now-list-typed port");
+        assert!(
+            !error.reason.contains(FULL),
+            "reason must not quote the full identifier: {}",
+            error.reason
+        );
+        assert!(
+            error.reason.contains("5724..."),
+            "reason should still carry the masked prefix: {}",
+            error.reason
+        );
+
+        let butler_error = ButlerError::RecordedInputUnreadable {
+            input: InputName::parse("issuer").unwrap(),
+            error,
+        };
+        let text = butler_error.to_string();
+        assert!(
+            !text.contains(FULL),
+            "Display must not leak it either: {text}"
+        );
+        let json = serde_json::to_string(&butler_error).unwrap();
+        assert!(!json.contains(FULL), "nor its JSON serialization: {json}");
     }
 }
