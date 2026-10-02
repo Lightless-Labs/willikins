@@ -19,6 +19,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::{Form, Router, routing};
 
+use willikins_core::disclosure::mask_json;
 use willikins_journal::{
     AuthFailedReason, PlanId, PlanRecord, PrincipalId, Reason, Timestamp, Transport,
 };
@@ -117,9 +118,17 @@ fn document_says(dir: &Path, name: &WorkflowName) -> Option<String> {
 /// already-redacted JSON -- see `willikins_journal::journal::PlanRecord::plan`'s
 /// doc: every value in it already went through `Value::render()`/`Value::Serialize`,
 /// so this is exactly "the redacted plan rendered through `render()`",
-/// just JSON-shaped rather than the CLI's line-oriented text), and one
-/// approve and one reject form, each carrying this render's fresh
-/// single-use nonce.
+/// just JSON-shaped rather than the CLI's line-oriented text, further
+/// masked -- see below), and one approve and one reject form, each
+/// carrying this render's fresh single-use nonce.
+///
+/// Milestone 3i decision (b7): the plan JSON is masked ([`mask_json`])
+/// before it is pretty-printed, with no reveal -- the page is served over
+/// the network, which makes it the least appropriate place for a full
+/// identifier, and a prefix is enough to recognise the record being
+/// approved. The journal line behind `record` keeps the full value
+/// (decision (b4)): this function only ever reads a clone of the JSON it
+/// masks, never `record.plan` itself.
 fn render_plan_section(butler: &Butler, dir: &Path, record: &PlanRecord, nonce: &str) -> String {
     let now = butler.now();
     let age = elapsed(record.recorded_at, now).as_secs();
@@ -132,8 +141,9 @@ fn render_plan_section(butler: &Butler, dir: &Path, record: &PlanRecord, nonce: 
         |principal| principal.to_string(),
     );
     let class = format!("{:?}", record.class);
-    let plan_json =
-        serde_json::to_string_pretty(record.plan.as_json()).unwrap_or_else(|_| "{}".to_string());
+    let mut masked_plan = record.plan.as_json().clone();
+    mask_json(&mut masked_plan);
+    let plan_json = serde_json::to_string_pretty(&masked_plan).unwrap_or_else(|_| "{}".to_string());
     let plan_id = record.plan_id.to_string();
 
     let mut out = String::new();
