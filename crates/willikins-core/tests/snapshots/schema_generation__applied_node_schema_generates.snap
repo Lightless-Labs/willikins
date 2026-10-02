@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-core/tests/schema_generation.rs
-assertion_line: 35
 expression: schema
 ---
 {
@@ -220,6 +219,9 @@ expression: schema
       "properties": {
         "list": {
           "type": "boolean"
+        },
+        "masked": {
+          "const": true
         },
         "redacted": {
           "const": true

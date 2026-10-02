@@ -666,6 +666,14 @@ impl serde::Serialize for Value {
 /// known (a string for a scalar, a list of strings for a list), and
 /// `redacted` present (and `true`) only for a known secret value.
 ///
+/// `masked` (milestone 3i, decision (b4)) is a sibling of `redacted`,
+/// accepting only `true`: never emitted by this type's own `Serialize`
+/// (which always carries the full value, masking happening only at an
+/// output surface, after serialization), but accepted here because
+/// `willikins_core::disclosure::mask_json` adds exactly this key to a
+/// `Value`'s already-serialized JSON when it masks it, and that JSON must
+/// still validate against this same published schema.
+///
 /// The three `if`/`then` clauses are what make the last two clauses of that
 /// sentence more than prose: without them the schema listed the five keys
 /// and constrained nothing about how they combine, so a `value` on an
@@ -693,6 +701,7 @@ impl schemars::JsonSchema for Value {
                     ],
                 },
                 "redacted": { "const": true },
+                "masked": { "const": true },
             },
             "required": ["type", "list", "state"],
             "additionalProperties": false,
@@ -1125,6 +1134,13 @@ mod tests {
         .unwrap();
         let secret_scalar = serde_json::to_value(Value::known(secret_token())).unwrap();
         let secret_list = serde_json::to_value(Value::known_list(vec![secret_token()])).unwrap();
+        // Milestone 3i, decision (b4): what `mask_json` produces -- a known
+        // scalar's own serialized shape, plus `"masked": true` -- must
+        // still validate against this same published schema.
+        let masked_scalar = serde_json::json!({
+            "type": "AppleIssuerId", "list": false, "state": "known",
+            "value": "5724...", "masked": true
+        });
 
         for (name, instance) in [
             ("known_scalar", &known_scalar),
@@ -1134,6 +1150,7 @@ mod tests {
             ("unknown_list", &unknown_list),
             ("secret_scalar", &secret_scalar),
             ("secret_list", &secret_list),
+            ("masked_scalar", &masked_scalar),
         ] {
             assert!(
                 validator.is_valid(instance),
@@ -1216,12 +1233,40 @@ mod tests {
                     "state": "known", "value": "a", "redacted": false
                 }),
             ),
+            (
+                "masked false, which mask_json never emits",
+                serde_json::json!({
+                    "type": "AppleIssuerId", "list": false,
+                    "state": "known", "value": "5724...", "masked": false
+                }),
+            ),
         ] {
             assert!(
                 !validator.is_valid(&instance),
                 "{name} must be rejected by Value's schema: {instance}"
             );
         }
+    }
+
+    /// Acceptance 15's last sentence, checked by direct inspection of the
+    /// generated schema JSON rather than only through validation: `masked`
+    /// is declared as exactly `{"const": true}`, the same shape `redacted`
+    /// already has, so a JSON Schema reader sees the two disclosure
+    /// markers as siblings with one obvious meaning each. No new
+    /// validator dependency is needed for this -- `jsonschema` is already
+    /// a dev-dependency of this crate.
+    #[test]
+    fn schema_declares_masked_as_a_const_true_sibling_of_redacted() {
+        let schema = schemars::schema_for!(Value);
+        let value = schema.as_value();
+        assert_eq!(
+            value["properties"]["masked"],
+            serde_json::json!({"const": true})
+        );
+        assert_eq!(
+            value["properties"]["redacted"],
+            serde_json::json!({"const": true})
+        );
     }
 
     // Milestone 3d, decision (f): `Value::converted` is total over every
