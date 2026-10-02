@@ -932,6 +932,73 @@ mod tests {
         }
     }
 
+    /// Milestone 3i, task B7, decision (b8)'s first guard: no tool in
+    /// either catalog has an identifier-typed `ToolSpec::key` port or
+    /// `Gate::subject` port. Both ports reach the operator as
+    /// pre-rendered text before any output mode exists (an instance
+    /// fingerprint's own key string, and a blocked gate's `subject`) --
+    /// neither goes through `Value::display` or `mask_json`, so an
+    /// identifier bound to either would print in full with no
+    /// `--reveal` to ask for. Today nothing does; this pins that so a
+    /// future tool cannot add one unnoticed.
+    #[test]
+    fn no_live_or_fake_tool_has_an_identifier_typed_key_or_gate_subject_port() {
+        fn is_identifier(ty: &willikins_core::TypeRef) -> bool {
+            willikins_types::registry()
+                .get(&ty.name)
+                .is_some_and(|entry| entry.info.identifier)
+        }
+
+        fn check(catalog: &Catalog, label: &str) {
+            for spec in catalog.specs() {
+                for key_port in &spec.key {
+                    let port_spec = spec.inputs.get(key_port).unwrap_or_else(|| {
+                        panic!(
+                            "{label}: `{}`'s key port `{key_port}` is not one of its own inputs",
+                            spec.name
+                        )
+                    });
+                    if let willikins_core::PortType::Exact(ty) = &port_spec.ty {
+                        assert!(
+                            !is_identifier(ty),
+                            "{label}: `{}`'s key port `{key_port}` is identifier-typed (`{ty}`)",
+                            spec.name
+                        );
+                    }
+                }
+
+                let tool = catalog.get(&spec.name).unwrap_or_else(|| {
+                    panic!(
+                        "{label}: `{}` is in its own spec list but not the catalog",
+                        spec.name
+                    )
+                });
+                let Some(gate) = tool.gate() else { continue };
+                for subject in gate.subject {
+                    let port = willikins_core::PortName::parse(subject)
+                        .unwrap_or_else(|err| panic!("{label}: `{}`'s gate subject `{subject}` is not a valid port name: {err}", spec.name));
+                    let port_spec = spec.inputs.get(&port).unwrap_or_else(|| {
+                        panic!(
+                            "{label}: `{}`'s gate subject `{subject}` is not one of its own inputs",
+                            spec.name
+                        )
+                    });
+                    if let willikins_core::PortType::Exact(ty) = &port_spec.ty {
+                        assert!(
+                            !is_identifier(ty),
+                            "{label}: `{}`'s gate subject `{subject}` is identifier-typed (`{ty}`)",
+                            spec.name
+                        );
+                    }
+                }
+            }
+        }
+
+        check(&test_catalog(), "live");
+        let (_fake_state, fake_catalog) = willikins_providers_fake::empty();
+        check(&fake_catalog, "fake");
+    }
+
     // -------------------------------------------------------------
     // Per-document credential narrowing: `provider_of`, `first_tool_for`,
     // and `live_catalog_for_document`'s pure decision logic. The
