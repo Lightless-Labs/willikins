@@ -290,6 +290,43 @@ fn list_project_members_parses_an_unrankable_role_and_a_foreign_environment() {
     assert!(members[1].access_all_environments);
 }
 
+/// Live, 2026-10-02 (the sandbox member cycle's step 4): Doppler lists a
+/// member whose access spans every environment -- every project's own
+/// creator, an admin -- with `"environments": null`, not `[]`. A listing
+/// that carries one must still parse, its environments empty.
+#[test]
+fn list_project_members_parses_null_environments_on_an_all_environments_member() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", "/v3/projects/project/members")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("project".into(), "third-thoughts".into()),
+            mockito::Matcher::UrlEncoded("page".into(), "1".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+        ]))
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "members": [{
+                    "type": "service_account",
+                    "slug": "22222222-2222-2222-2222-222222222222",
+                    "role": { "identifier": "admin" },
+                    "access_all_environments": true,
+                    "environments": null,
+                }],
+                "success": true,
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+    let client = client_against(provider.url());
+    let members = client.list_project_members(&project()).unwrap();
+    assert_eq!(members.len(), 1);
+    assert!(members[0].access_all_environments);
+    assert!(members[0].environments.is_empty());
+}
+
 #[test]
 fn list_project_members_pages_past_a_full_first_page() {
     let mut provider = MockProvider::start();
