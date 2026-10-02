@@ -23,7 +23,7 @@ use clap::{Parser, Subcommand};
 use willikins_core::describe::{InputArg, PartialInputs, RawInput};
 use willikins_core::{Catalog, Checked, Reported};
 use willikins_dsl::DocumentError;
-use willikins_types::DomainType;
+use willikins_types::{Disclosure, DomainType};
 
 #[derive(Parser)]
 #[command(name = "willikins", version, about = "A provisioning butler")]
@@ -31,6 +31,13 @@ struct Cli {
     /// Emit machine-readable JSON instead of human-readable text.
     #[arg(long, global = true)]
     json: bool,
+
+    /// Print an account-revealing identifier (an App Store Connect issuer
+    /// id or key id, a certificate serial, a record id) in full instead of
+    /// its masked prefix. Secrets stay `[REDACTED ...]` either way
+    /// (milestone 3i, decision (b5)).
+    #[arg(long, global = true)]
+    reveal: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -119,22 +126,34 @@ enum Command {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let disclosure = if cli.reveal {
+        Disclosure::Revealed
+    } else {
+        Disclosure::Masked
+    };
     match cli.command {
-        Command::Validate { file } => cmd_validate(&file, cli.json),
-        Command::Describe { file, inputs } => cmd_describe(&file, &inputs, cli.json),
+        Command::Validate { file } => cmd_validate(&file, cli.json, disclosure),
+        Command::Describe { file, inputs } => cmd_describe(&file, &inputs, cli.json, disclosure),
         Command::Plan {
             file,
             inputs,
             fake_state,
             live,
-        } => cmd_plan(&file, &inputs, fake_state.as_deref(), live, cli.json),
-        Command::Schema { document, catalog } => cmd_schema(document, catalog),
-        Command::ProposeSlug { name } => cmd_propose_slug(&name, cli.json),
-        Command::Apply(args) => commands::cmd_apply(&args, cli.json),
-        Command::Approve(args) => commands::cmd_approve(&args, cli.json),
-        Command::Reject(args) => commands::cmd_reject(&args, cli.json),
-        Command::Runs(args) => commands::cmd_runs(&args, cli.json),
-        Command::Run(args) => commands::cmd_run(&args, cli.json),
+        } => cmd_plan(
+            &file,
+            &inputs,
+            fake_state.as_deref(),
+            live,
+            cli.json,
+            disclosure,
+        ),
+        Command::Schema { document, catalog } => cmd_schema(document, catalog, disclosure),
+        Command::ProposeSlug { name } => cmd_propose_slug(&name, cli.json, disclosure),
+        Command::Apply(args) => commands::cmd_apply(&args, cli.json, disclosure),
+        Command::Approve(args) => commands::cmd_approve(&args, cli.json, disclosure),
+        Command::Reject(args) => commands::cmd_reject(&args, cli.json, disclosure),
+        Command::Runs(args) => commands::cmd_runs(&args, cli.json, disclosure),
+        Command::Run(args) => commands::cmd_run(&args, cli.json, disclosure),
         Command::Serve(args) => willikins_server::cli::run_serve(&args),
         Command::HashToken => willikins_server::cli::run_hash_token(),
     }
@@ -189,9 +208,10 @@ pub(crate) fn load_and_check(
     file: &str,
     catalog: &Catalog,
     json: bool,
+    disclosure: Disclosure,
 ) -> Result<Checked, ExitCode> {
     let workflow = load_workflow(file, json)?;
-    check_workflow(&workflow, catalog, json)
+    check_workflow(&workflow, catalog, json, disclosure)
 }
 
 /// [`load_and_check`]'s check-only half: `check` an already-parsed
@@ -206,10 +226,11 @@ pub(crate) fn check_workflow(
     workflow: &willikins_core::Workflow,
     catalog: &Catalog,
     json: bool,
+    disclosure: Disclosure,
 ) -> Result<Checked, ExitCode> {
     willikins_core::check(workflow, catalog).map_err(|errors| {
         if json {
-            println!("{}", render::check_errors_json(&errors));
+            render::print_json(&render::check_errors_json(&errors), disclosure);
         } else {
             println!("{}", render::check_errors_text(&errors));
         }
@@ -253,12 +274,12 @@ pub(crate) fn build_partial_inputs(
     Ok(partial)
 }
 
-fn cmd_validate(file: &str, json: bool) -> ExitCode {
+fn cmd_validate(file: &str, json: bool, disclosure: Disclosure) -> ExitCode {
     let (_state, catalog) = willikins_providers_fake::empty();
-    match load_and_check(file, &catalog, json) {
+    match load_and_check(file, &catalog, json, disclosure) {
         Ok(checked) => {
             if json {
-                println!("{}", render::check_warnings_json(&checked.warnings));
+                render::print_json(&render::check_warnings_json(&checked.warnings), disclosure);
             } else {
                 let text = render::check_warnings_text(&checked.warnings);
                 if !text.is_empty() {
@@ -271,20 +292,21 @@ fn cmd_validate(file: &str, json: bool) -> ExitCode {
     }
 }
 
-fn print_description(description: &willikins_core::Description, json: bool) {
+fn print_description(
+    description: &willikins_core::Description,
+    json: bool,
+    disclosure: Disclosure,
+) {
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(description).unwrap_or_else(|_| "{}".to_string())
-        );
+        render::print_json(description, disclosure);
     } else {
-        println!("{}", render::describe_text(description));
+        println!("{}", render::describe_text(description, disclosure));
     }
 }
 
-fn cmd_describe(file: &str, inputs: &[InputArg], json: bool) -> ExitCode {
+fn cmd_describe(file: &str, inputs: &[InputArg], json: bool, disclosure: Disclosure) -> ExitCode {
     let (_state, catalog) = willikins_providers_fake::empty();
-    let checked = match load_and_check(file, &catalog, json) {
+    let checked = match load_and_check(file, &catalog, json, disclosure) {
         Ok(checked) => checked,
         Err(code) => return code,
     };
@@ -294,7 +316,7 @@ fn cmd_describe(file: &str, inputs: &[InputArg], json: bool) -> ExitCode {
     };
     let description = willikins_core::describe(&checked, &partial);
     let ok = description.errors.is_empty() && description.missing.is_empty();
-    print_description(&description, json);
+    print_description(&description, json, disclosure);
     if ok {
         ExitCode::from(0)
     } else {
@@ -308,6 +330,7 @@ fn cmd_plan(
     fake_state: Option<&str>,
     live: bool,
     json: bool,
+    disclosure: Disclosure,
 ) -> ExitCode {
     // The workflow is parsed before the catalog is built (not after, as
     // `validate`/`describe` do through `load_and_check`): a `--live`
@@ -325,11 +348,11 @@ fn cmd_plan(
     // selects. `plan` never seeds `--fake-state-out`, so the `FakeState`
     // handle this also returns is simply dropped here.
     let (catalog, _fake_state) =
-        match commands::build_catalog_for_document(live, fake_state, &workflow, json) {
+        match commands::build_catalog_for_document(live, fake_state, &workflow, json, disclosure) {
             Ok(built) => built,
             Err(code) => return code,
         };
-    let checked = match check_workflow(&workflow, &catalog, json) {
+    let checked = match check_workflow(&workflow, &catalog, json, disclosure) {
         Ok(checked) => checked,
         Err(code) => return code,
     };
@@ -340,19 +363,16 @@ fn cmd_plan(
     };
     let description = willikins_core::describe(&checked, &partial);
     if !description.errors.is_empty() || !description.missing.is_empty() {
-        print_description(&description, json);
+        print_description(&description, json, disclosure);
         return ExitCode::from(1);
     }
 
     match willikins_core::plan(&checked, &description.resolved, &catalog) {
         Ok(plan) => {
             if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&plan).unwrap_or_else(|_| "{}".to_string())
-                );
+                render::print_json(&plan, disclosure);
             } else {
-                println!("{}", render::plan_text(&plan));
+                println!("{}", render::plan_text(&plan, disclosure));
             }
             ExitCode::from(0)
         }
@@ -362,11 +382,7 @@ fn cmd_plan(
                 // (its own `Display`) alongside the `kind` its internal tag
                 // gives it -- the one object shape every error an agent
                 // reads has, the same one `render::check_errors_json` emits.
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&Reported::new(&err))
-                        .unwrap_or_else(|_| "{}".to_string())
-                );
+                render::print_json(&Reported::new(&err), disclosure);
             } else {
                 // Not `{err}`: a `PlanError` can carry a rendered item as
                 // a key, which a document shaped. See
@@ -378,21 +394,14 @@ fn cmd_plan(
     }
 }
 
-fn cmd_schema(document: bool, catalog: bool) -> ExitCode {
+fn cmd_schema(document: bool, catalog: bool, disclosure: Disclosure) -> ExitCode {
     if document {
         let schema = willikins_dsl::document_schema();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&schema).unwrap_or_else(|_| "{}".to_string())
-        );
+        render::print_json(&schema, disclosure);
         ExitCode::from(0)
     } else if catalog {
         let (_state, catalog) = willikins_providers_fake::empty();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&catalog.list_tools_json())
-                .unwrap_or_else(|_| "{}".to_string())
-        );
+        render::print_json(&catalog.list_tools_json(), disclosure);
         ExitCode::from(0)
     } else {
         eprintln!("schema: pass --document or --catalog");
@@ -411,37 +420,41 @@ fn cmd_schema(document: bool, catalog: bool) -> ExitCode {
 /// error carry the same `kind`. No `Butler` is built for this: both
 /// variants are constructed directly from the same parse this subcommand
 /// already ran, exactly as `Butler::propose_slug_inner` does internally.
-fn cmd_propose_slug(name: &str, json: bool) -> ExitCode {
+fn cmd_propose_slug(name: &str, json: bool, disclosure: Disclosure) -> ExitCode {
     let project_name = match willikins_types::ProjectName::parse(name) {
         Ok(name) => name,
         Err(error) => {
             return propose_slug_failure(
                 &willikins_server::ButlerError::InvalidProjectName { error },
                 json,
+                disclosure,
             );
         }
     };
     match willikins_types::propose_slug(&project_name) {
         Ok(slug) => {
             if json {
-                println!("{}", serde_json::json!({ "slug": slug.to_string() }));
+                render::print_json(&serde_json::json!({ "slug": slug.to_string() }), disclosure);
             } else {
                 println!("{slug}");
             }
             ExitCode::from(0)
         }
-        Err(error) => {
-            propose_slug_failure(&willikins_server::ButlerError::SlugProposal { error }, json)
-        }
+        Err(error) => propose_slug_failure(
+            &willikins_server::ButlerError::SlugProposal { error },
+            json,
+            disclosure,
+        ),
     }
 }
 
-fn propose_slug_failure(error: &willikins_server::ButlerError, json: bool) -> ExitCode {
+fn propose_slug_failure(
+    error: &willikins_server::ButlerError,
+    json: bool,
+    disclosure: Disclosure,
+) -> ExitCode {
     if json {
-        println!(
-            "{}",
-            serde_json::to_string(&Reported::new(error)).unwrap_or_default()
-        );
+        render::print_json(&Reported::new(error), disclosure);
     } else {
         println!("{error}");
     }
