@@ -1,0 +1,7 @@
+error[E0080]: evaluation panicked: conversions!: a conversion may not make an identifier plain; its target must itself be an identifier, or stricter still, a secret
+  --> tests/conversions/fail/identifier_to_plain.rs:34:13
+   |
+34 |     let _ = willikins_types::conversions![Identified => Plain];
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::_` failed here
+   |
+   = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `willikins_types::conversions` (in Nightly builds, run with -Z macro-backtrace for more info)

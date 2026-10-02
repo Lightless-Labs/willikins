@@ -574,27 +574,36 @@ pub(crate) use domain_types;
 /// trailing comma is optional. Used three ways: `willikins-types`'s own
 /// `lib.rs` lists the one production row inside `conversion_rows`; a test
 /// (in this crate or in `willikins-core`) builds a synthetic table over
-/// local types; and the two trybuild fixtures under `tests/conversions/`
-/// prove what each expansion step guarantees on its own.
+/// local types; and the trybuild fixtures under `tests/conversions/` prove
+/// what each expansion step guarantees on its own.
 ///
-/// Each `A => B` expands to three things, all load-bearing:
+/// Each `A => B` expands to four things, all load-bearing:
 ///
 /// 1. A `const _: () = assert!(...)` that fails to compile — E0080 at
 ///    evaluation, not merely a runtime panic — when `A::IS_SECRET` is true
-///    and `B::IS_SECRET` is false. "Secrecy only goes up." This is the one
-///    macro-exported name to which `TypeName`'s `from_static`-style
+///    and `B::IS_SECRET` is false. "Secrecy only goes up." This is one of
+///    the two macro-exported names to which `TypeName`'s `from_static`-style
 ///    already-valid contract does not apply: nothing here trusts `A` or
 ///    `B`, the assertion is over their own declared `IS_SECRET` consts.
-/// 2. A call to [`crate::__private::conversion::<A, B>()`], bounded
+/// 2. A second `const _: () = assert!(...)`, beside the first, that fails to
+///    compile when `A::IS_IDENTIFIER` is true and neither `B::IS_IDENTIFIER`
+///    nor `B::IS_SECRET` is — milestone 3i decision (b9), "disclosure is
+///    monotone": a conversion may not re-label an account-revealing
+///    identifier as plain `Text`. An identifier may convert to another
+///    identifier, or to something stricter still, a secret; never to a type
+///    that prints in full by default. Like the secrecy assertion, this one
+///    trusts nothing but `A` and `B`'s own declared `IS_IDENTIFIER` and
+///    `IS_SECRET` consts.
+/// 3. A call to [`crate::__private::conversion::<A, B>()`], bounded
 ///    `B: From<A>` — so a row with no hand-written `From` impl is a plain
 ///    E0277, and the row can never drift from the impl it names. That
 ///    function's own `const { }` block is a second, weaker belt on the
 ///    same secrecy rule; see its doc for why this macro's own `const _`
 ///    above is the real guarantee.
-/// 3. The row itself, carrying the type-erased converter, is what the
+/// 4. The row itself, carrying the type-erased converter, is what the
 ///    whole expression evaluates to — nothing here is *only* a
 ///    compile-time check with no runtime value, so a workspace build's
-///    ordinary `cargo test` cannot skip step 1's evaluation the way a
+///    ordinary `cargo test` cannot skip steps 1 and 2's evaluation the way a
 ///    monomorphization-gated check could.
 ///
 /// "One hop, no chains": this macro has no idea what other rows exist. A
@@ -612,6 +621,13 @@ macro_rules! conversions {
                             || <$to as $crate::DomainType>::IS_SECRET,
                         "conversions!: a conversion may not make a value less secret; \
                          its target must be at least as secret as its source"
+                    );
+                    const _: () = ::std::assert!(
+                        !<$from as $crate::DomainType>::IS_IDENTIFIER
+                            || <$to as $crate::DomainType>::IS_IDENTIFIER
+                            || <$to as $crate::DomainType>::IS_SECRET,
+                        "conversions!: a conversion may not make an identifier plain; \
+                         its target must itself be an identifier, or stricter still, a secret"
                     );
                     #[allow(clippy::disallowed_methods)] // the macro is the one sanctioned caller
                     let row = $crate::__private::conversion::<$from, $to>();
