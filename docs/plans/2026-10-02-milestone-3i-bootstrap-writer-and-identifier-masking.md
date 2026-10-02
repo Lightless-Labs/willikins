@@ -41,6 +41,88 @@ same observation).
    produces a typed `Value` (trust boundary 4's own point: it quotes the document's raw YAML, a field name, not a
    resolved value), so there is nothing for `mask_json` to find there either; routing it through `eprint_json`
    would have cost a `Disclosure` parameter on `load_workflow`/`print_document_error` for no behavioural change.
+**Addendum:** 2026-10-02 (task B7) — the three decision-(b8) guards and the error audit (decision (b10)),
+acceptance 20–21.
+
+**Guards (commit 1, no production code changed).**
+1. `crates/willikins-server/src/catalog.rs`'s `no_live_or_fake_tool_has_an_identifier_typed_key_or_gate_subject_port`
+   builds both the live catalog (`test_catalog()`, already in this module) and the fake one, then for every tool's
+   spec checks each `key` port's declared type and, when the tool is a gate, each `subject` port's declared type:
+   neither is identifier-typed anywhere today.
+2. `crates/willikins-cli/tests/prerendered_identifier_guards.rs`'s
+   `no_shipped_document_for_each_source_resolves_to_an_identifier_typed_list` walks every `workflows/*.yaml` and
+   `workflows/fixtures/*.yaml` document that `check` accepts and, for each node with a `for_each`, resolves the
+   source's element type (a `Binding::Input`'s declared type, or a `Binding::Step`'s producing node's declared
+   output type — list-ness is irrelevant to identifier-ness, the same way `check`'s own secrecy check treats it)
+   and asserts it is never identifier-typed. Every shipped `for_each` source today is one of those two shapes
+   (`inputs.environments`, `inputs.base_configs`, or a chained `steps.<node>.<port>`); none resolves to an
+   identifier type, and the guard asserts it actually found at least one `for_each` node, so it cannot pass
+   vacuously.
+3. The same file's `no_shipped_document_declares_an_identifier_typed_input_default` walks every input of every
+   document and asserts none with a `default:` is identifier-typed, with the same non-vacuity assertion. A
+   document-level default was already reachable only through `describe`'s `resolved` map (an input with a default
+   is never `missing`, so `MissingInput::default` — masked since task B4's own
+   `missing_input_renders_an_identifier_default_masked` — is dead code today); the same file's
+   `describe_masks_an_identifier_typed_input_default_and_reveal_shows_it_whole` is the end-to-end proof of the
+   reachable route instead: a throwaway document (a temp file, never under `workflows/`, so neither guard above
+   nor the characterization snapshot ever sees it) declares an `AppleIssuerId` input with a document default, and
+   `describe` masks it by default and reveals it whole under `--reveal`, in both text and `--json` (the
+   `"masked": true` marker included).
+
+**The error audit (decision (b10)).** Read every `#[error(...)]`/hand-written `Display` arm of `PlanError` and
+`ApplyError` (`willikins-core/src/plan.rs`, `apply.rs`), `CheckError` (`willikins-core/src/check.rs`), and
+`ButlerError` (`willikins-server/src/error.rs`), plus every `format!` feeding a `ToolError` or a `conflict`/
+`not_found`/`invalid` helper call in `willikins-providers-appstore`, `-buildkite`, `-doppler`, `-github`,
+`-signoz`, `-fake`, and the pure tools in `willikins-tools`. Method: for each interpolated variable, read its
+declared type at the field/binding site, not just its name at the format-string call site.
+- `PlanError`/`CheckError`: every arm interpolates a node/port/tool/input *name*, a `TypeRef` (type names, never a
+  value's content — pinned by the operator's own "fail loudly at parsing" decision, milestone 3d), a `Site`, or a
+  nested error's own `Display`. `PlanError::NameTaken`'s `key: Inputs` field is never interpolated at all (the
+  `..` in its match arm). Clean.
+- `ApplyError::Drift`'s `DriftKind::Output { port, planned: Value, observed: Value }` carries two full `Value`s,
+  but the `Display` arm destructures only `port` (`DriftKind::Output { port, .. }`) and never reaches `planned`/
+  `observed` at all. Clean in `Display`; both `Value`s do still reach `--json`'s `structured_content` through
+  ordinary `Serialize`, which is already masked by `mask_json`'s shape-matching walk (decision (b4)) — a different
+  route to the same output surface, not this audit's concern.
+- Every provider crate's parse-failure messages (`"... has a malformed {type} id: {err}"`,
+  `"App Store Connect returned a malformed {kind} id: {err}"`, the pure `apple.issuer_id.parse`/
+  `apple.key_id.parse` tools' own `invalid(format!("value: {}", err.reason))`) interpolate a
+  `willikins_types::ParseError`, never the rejected input: `crates/willikins-derive/src/codegen.rs`'s `checks()`
+  function, which every `#[domain(...)]` type (including all seven identifiers) uses for its `min_len`/`max_len`/
+  `pattern` validation, builds every rejection reason from the violated constraint alone (`"must be at least N
+  characters long"`, `"does not match the required pattern"`) and never quotes the value under test — confirmed by
+  reading that function, not assumed from its doc comment. The two hand-written parsers that do quote rejected
+  input (`willikins_types::quoted`, used by `TypeName::parse` and `TypeRef::parse` in `registry.rs`) reject a
+  *type name* or *type reference string* from document YAML, never a domain value, so quoting there is not this
+  audit's concern either. Every other interpolated identifier-adjacent variable across the provider crates
+  (`{identifier}`, `{capability}`, `{name}`, `{certificate_type}`) is a bundle identifier, a closed-vocabulary
+  value, or an operator-chosen name — printed in full by design (decision (b2)) — never one of the seven
+  identifier types' own resolved value.
+- **One finding.** `willikins-server/src/butler.rs`'s `parse_recorded_value` (which `resolve_recorded_inputs` calls
+  while rebuilding `apply`'s typed inputs from the journal after a restart) built its `bad_shape()` `ParseError`
+  with `format!("recorded input value is not the expected shape: {entry}")`, where `entry` is the *entire* raw
+  recorded JSON for that input — `Value`'s own wire shape, `"value"` field included. This function's own module
+  doc already names the trigger: a document's declared type for an input can change between the `plan` that
+  recorded it and a later `apply` (an edited document, or a resumed run against a stale record). When that
+  changes a port from scalar to `list<T>` (or back), `entry["value"]` still holds the *previous*, fully-valid
+  resolved value — which, for one of the seven identifier types, is a full, unmasked identifier — and `bad_shape`
+  printed it whole into `ParseError::reason`, which `ButlerError::RecordedInputUnreadable`'s own `Display` embeds
+  verbatim (`"recorded input `{input}` could not be read back: {error}"`). Because the leak is a `String` field
+  (`ParseError::reason`), not a nested object matching `Value`'s wire shape, `mask_json`'s shape-matching walk
+  (decision (b4)) does not catch it either — this was a real route around every masking chokepoint in the plan,
+  reachable without `--reveal`, in both the CLI's and MCP's `apply` failure output.
+
+**Commit 2: the fix.** `bad_shape()` now clones `entry`, masks the clone with `willikins_core::disclosure::mask_json`
+(the same chokepoint every other already-serialized surface uses), and formats the masked clone instead of the raw
+one. `crates/willikins-server/src/butler.rs`'s new test
+`parse_recorded_value_masks_an_identifier_in_a_mismatched_shape_error` seeds a known `AppleIssuerId` recorded for a
+now-list-typed port, confirms `parse_recorded_value` errors (the mismatched shape it always did), and asserts the
+full identifier appears in neither the raw `ParseError::reason` nor `ButlerError::RecordedInputUnreadable`'s
+`Display` nor its `Serialize`'d JSON — only the masked `5724...` prefix. No other variant needed a construction-time
+fix.
+
+**Characterization.** Byte-identical: no file under `workflows/` or `workflows/fixtures/` changed, and `git status`
+confirms no `.snap` anywhere in the tree was touched by this task's two commits.
 **Gate:** OPEN for every task except **B8**, which waits on the coordinator (it changes thirteen characterization
 entries; see "Needs the coordinator"). Nothing here calls a provider except the live bootstrap cycle (A7), which is
 written by an implementer and run once by the coordinator against the SANDBOX Buildkite organisation.
