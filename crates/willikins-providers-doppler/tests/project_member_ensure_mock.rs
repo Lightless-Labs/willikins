@@ -185,6 +185,62 @@ fn two_name_matches_is_conflict() {
     assert_eq!(err.kind, ToolErrorKind::Conflict);
 }
 
+#[test]
+fn only_a_byte_for_byte_name_match_resolves() {
+    // Near misses -- another case, a suffix, a prefix -- never resolve:
+    // listed alone they leave the name `NotFound`, and listed beside the
+    // exact name they never make it ambiguous.
+    let near_misses = [
+        service_account_json("Buildkite-CI", "11111111-1111-1111-1111-111111111111"),
+        service_account_json("buildkite-ci-old", "22222222-2222-2222-2222-222222222222"),
+        service_account_json("old-buildkite-ci", "33333333-3333-3333-3333-333333333333"),
+    ];
+    let mut provider = MockProvider::start();
+    mock_accounts(&mut provider, &near_misses);
+    let err = tool(provider.url())
+        .read(&inputs(&viewer(), &[prd()]))
+        .unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::NotFound);
+
+    let mut provider = MockProvider::start();
+    let mut accounts = near_misses.to_vec();
+    accounts.push(service_account_json("buildkite-ci", SLUG));
+    mock_accounts(&mut provider, &accounts);
+    mock_members(
+        &mut provider,
+        &[member_json(
+            "service_account",
+            SLUG,
+            "viewer",
+            false,
+            &["prd"],
+        )],
+    );
+    let observation = tool(provider.url())
+        .read(&inputs(&viewer(), &[prd()]))
+        .unwrap();
+    assert!(matches!(observation, Observation::Present(_)));
+}
+
+#[test]
+fn a_member_of_another_type_with_the_same_slug_is_not_this_service_account() {
+    // Only a `service_account` entry is this member: a workplace user or
+    // group listed under the same slug (here as an admin, which would read
+    // `Mismatch`) is someone else, so the service account reads `Absent`.
+    let mut provider = MockProvider::start();
+    mock_accounts(&mut provider, &[service_account_json("buildkite-ci", SLUG)]);
+    mock_members(
+        &mut provider,
+        &[member_json("workplace_user", SLUG, "admin", true, &[])],
+    );
+    let t = tool(provider.url());
+    assert!(matches!(
+        t.read(&inputs(&viewer(), &[prd()])).unwrap(),
+        Observation::Absent { .. }
+    ));
+    assert!(!t.updates(&inputs(&viewer(), &[prd()])).unwrap());
+}
+
 // ---------------------------------------------------------------------
 // decision (a)'s table
 // ---------------------------------------------------------------------
