@@ -261,6 +261,76 @@ impl BuildkiteClient {
         self.http.get(&path)
     }
 
+    /// `GET /v2/organizations/{org}/pipelines/{slug}`, the same endpoint
+    /// [`Self::get_pipeline`] and [`Self::get_pipeline_configuration`]
+    /// read, but deserializing `description` and `configuration`
+    /// together -- [`buildkite.pipeline.bootstrap.ensure`](crate::tools)'s
+    /// own call (milestone 3i decision (a2)), which must read both fields
+    /// in the same response to decide `Missing`/`Foreign`/`Equal`/`Different`
+    /// without a second round trip. Its own response type
+    /// ([`PipelineBootstrapBody`]), not a third field added to either
+    /// existing struct, for the same reason `get_pipeline_configuration`
+    /// already keeps its own.
+    ///
+    /// `pub` rather than `pub(crate)`, for the same reason
+    /// [`Self::delete_pipeline`] already documents: `tests/bootstrap_client_mock.rs`
+    /// links this crate as an external dependency and cannot see
+    /// `pub(crate)` items, and there is no second caller outside this
+    /// crate's own tool (milestone 3i task A2) to worry about.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_pipeline`].
+    pub fn get_pipeline_bootstrap(
+        &self,
+        org: &BuildkiteOrg,
+        slug: &BuildkitePipelineSlug,
+    ) -> Result<PipelineBootstrapBody, ProviderError> {
+        let path = format!("/v2/organizations/{org}/pipelines/{slug}");
+        self.http.get(&path)
+    }
+
+    /// `PATCH /v2/organizations/{org}/pipelines/{slug}` with a body
+    /// containing exactly one key, `configuration` -- never `name`,
+    /// `slug`, `steps`, `env`, or `description` (milestone 3i trust
+    /// boundary 2; Buildkite's own documentation says a new `name`
+    /// without a `slug` regenerates the slug). `content` is never
+    /// validated here: the caller (`buildkite.pipeline.bootstrap.ensure`,
+    /// task A2) is the one place that checks `content` came from a
+    /// `RepoFile` and parses as the required shape (trust boundary 1).
+    ///
+    /// Retried like every other idempotent verb through [`Http::patch`]
+    /// (full-replacement semantics: resending the same `configuration`
+    /// twice has the same effect as sending it once). The response, which
+    /// carries `provider.webhook_url` and `configuration` (both
+    /// credential-bearing or policy-bearing, trust boundary 4), is
+    /// deserialized into [`serde::de::IgnoredAny`] and discarded -- no
+    /// typed shape for it exists anywhere in this crate.
+    ///
+    /// `pub` for the same reason [`Self::get_pipeline_bootstrap`] is.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_pipeline`]. A `422` validation response's
+    /// `errors[]` array is never read for its content here: only
+    /// [`willikins_providers_http::Http`]'s own already-exists detection
+    /// inspects `errors[]` at all, and this method's path never hits
+    /// that case, so a `422` surfaces only the provider's bounded
+    /// `message`.
+    pub fn update_pipeline_configuration(
+        &self,
+        org: &BuildkiteOrg,
+        slug: &BuildkitePipelineSlug,
+        content: &str,
+    ) -> Result<(), ProviderError> {
+        let path = format!("/v2/organizations/{org}/pipelines/{slug}");
+        let body = UpdateConfigurationBody {
+            configuration: content,
+        };
+        self.http.patch::<serde::de::IgnoredAny>(&path, &body)?;
+        Ok(())
+    }
+
     /// `POST /v2/organizations/{org}/pipelines` with exactly `name`
     /// (equal to `slug`), `slug`, `cluster_id`, `repository`,
     /// `description` (the [`MANAGED_DESCRIPTION`] marker), and
@@ -472,6 +542,33 @@ pub(crate) struct PipelineConfigurationBody {
     pub(crate) configuration: Option<String>,
 }
 
+/// A Buildkite pipeline's REST representation, deserializing **only**
+/// `description` and `configuration` together --
+/// [`BuildkiteClient::get_pipeline_bootstrap`]'s own response type
+/// (milestone 3i decision (a2)). Neither [`PipelineBody`]'s six fields
+/// nor [`PipelineConfigurationBody`]'s one field gain a sibling for this:
+/// each existing caller keeps deserializing exactly what it always has.
+///
+/// **Never printed.** No `Debug` derive, for the same reason
+/// [`PipelineConfigurationBody`] has none: the stored configuration may
+/// carry an operator's own `env`, and this type's only caller
+/// (`buildkite.pipeline.bootstrap.ensure`'s `analyze`, task A2) compares
+/// both fields and drops the value -- neither ever becomes an output, an
+/// error message, a journal entry, or a `tracing` field. Pinned by this
+/// module's own `tests::pipeline_bootstrap_body_has_no_debug`.
+#[derive(Deserialize)]
+pub struct PipelineBootstrapBody {
+    /// The ownership marker field, compared exactly against
+    /// [`MANAGED_DESCRIPTION`]. Nullable: a pipeline created with no
+    /// description at all reads as `Foreign`, not `Missing`.
+    pub description: Option<String>,
+    /// The pipeline's stored configuration, compared structurally (as
+    /// parsed YAML) against the bootstrap `RepoFile` the calling document
+    /// renders. `None` reads as `Different` (decision (a2)'s table),
+    /// never as `Equal`.
+    pub configuration: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct CreatePipelineBody {
     name: String,
@@ -480,6 +577,23 @@ struct CreatePipelineBody {
     repository: String,
     description: String,
     configuration: String,
+}
+
+/// The `PATCH /v2/organizations/{org}/pipelines/{slug}` request body
+/// [`BuildkiteClient::update_pipeline_configuration`] sends: exactly one
+/// field, `configuration` (milestone 3i trust boundary 2). Its own struct
+/// rather than a partial [`CreatePipelineBody`], so a reviewer can see at
+/// a glance that no other key -- `name`, `slug`, `steps`, `env`,
+/// `description` -- can ever be serialized alongside it.
+///
+/// No `Debug` derive: `content` is the caller's `RepoFile` text, which is
+/// public by type (trust boundary 1), but this struct borrows it only for
+/// the one `send_json` call and has no other reason to exist, so it stays
+/// as narrow as [`PipelineBootstrapBody`] and [`PipelineConfigurationBody`]
+/// are on the read side.
+#[derive(Serialize)]
+struct UpdateConfigurationBody<'a> {
+    configuration: &'a str,
 }
 
 /// A Buildkite cluster's REST representation, deserializing only `id` and
@@ -505,6 +619,23 @@ mod tests {
 
     fn pattern() -> regex::Regex {
         regex::Regex::new(CREDENTIAL_PATTERN).expect("CREDENTIAL_PATTERN is a valid regex")
+    }
+
+    // A `static_assertions`-style negative (acceptance test 1): this
+    // compiles only while `PipelineBootstrapBody` implements no `Debug`.
+    // If one is ever derived or hand-written, both blanket impls below
+    // apply to it and resolving `some_item` through the ambiguous trait
+    // becomes an ambiguity error instead of a single candidate.
+    #[test]
+    fn pipeline_bootstrap_body_has_no_debug() {
+        trait AmbiguousIfDebug<A> {
+            fn some_item() {}
+        }
+        impl<T: ?Sized> AmbiguousIfDebug<()> for T {}
+        #[allow(dead_code)]
+        struct IsDebug;
+        impl<T: ?Sized + std::fmt::Debug> AmbiguousIfDebug<IsDebug> for T {}
+        let _ = <PipelineBootstrapBody as AmbiguousIfDebug<_>>::some_item;
     }
 
     #[test]
