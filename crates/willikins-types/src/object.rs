@@ -62,6 +62,14 @@ pub trait DomainObject: Send + Sync + fmt::Debug {
     fn type_name(&self) -> &'static str;
     /// [`crate::DomainType::IS_SECRET`].
     fn is_secret(&self) -> bool;
+    /// [`crate::DomainType::IS_IDENTIFIER`]: whether the value is an
+    /// account-revealing identifier the operator never chose, masked to a
+    /// prefix on every output surface unless disclosure is explicitly
+    /// requested (the CLI's `--reveal`). Defaults to `false`, so every
+    /// hand-written impl that predates milestone 3i needs no change.
+    fn is_identifier(&self) -> bool {
+        false
+    }
     /// The value's display form: its canonical string for a non-secret
     /// type, or a redaction marker for a secret one.
     fn render(&self) -> Rendered;
@@ -117,6 +125,10 @@ macro_rules! impl_domain_object_non_secret {
 
             fn is_secret(&self) -> bool {
                 false
+            }
+
+            fn is_identifier(&self) -> bool {
+                <$ty as $crate::DomainType>::IS_IDENTIFIER
             }
 
             fn render(&self) -> $crate::object::Rendered {

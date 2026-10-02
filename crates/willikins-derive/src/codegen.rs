@@ -151,6 +151,10 @@ fn domain_object_non_secret(name: &syn::Ident) -> TokenStream {
                 false
             }
 
+            fn is_identifier(&self) -> bool {
+                <Self as ::willikins_types::DomainType>::IS_IDENTIFIER
+            }
+
             fn render(&self) -> ::willikins_types::object::Rendered {
                 ::willikins_types::object::Rendered::Plain(::std::string::ToString::to_string(self))
             }
@@ -195,6 +199,14 @@ fn domain_object_secret(name: &syn::Ident) -> TokenStream {
                 true
             }
 
+            // A secret type is never an identifier too (the derive rejects
+            // `#[domain(secret, identifier)]` at macro-expansion time), so
+            // this is always `false` rather than threaded from the
+            // attribute, matching `IS_SECRET` above being hardcoded `true`.
+            fn is_identifier(&self) -> bool {
+                false
+            }
+
             fn render(&self) -> ::willikins_types::object::Rendered {
                 ::willikins_types::object::Rendered::Redacted {
                     type_name: <Self as ::willikins_types::DomainType>::TYPE_NAME,
@@ -218,6 +230,37 @@ fn domain_object_secret(name: &syn::Ident) -> TokenStream {
 
             fn clone_box(&self) -> ::std::boxed::Box<dyn ::willikins_types::object::DomainObject> {
                 ::std::boxed::Box::new(::std::clone::Clone::clone(self))
+            }
+        }
+    }
+}
+
+/// The `Debug` impl for a non-secret storage: the raw field, as before,
+/// unless `#[domain(identifier)]` is set, in which case `{:?}` prints the
+/// canonical string's masked prefix through
+/// [`mask_identifier`](willikins_types::mask_identifier) instead of the raw
+/// field. `canonical` is an expression yielding `&str` (or something that
+/// derefs to it) for the type's canonical string — `&self.0` for `String`
+/// storage, `self.0`'s `Display` form for any other storage. Either way the
+/// masked prefix still prints inside `debug_tuple`'s quoting, so a masked
+/// identifier's `Debug` reads e.g. `AppleIssuerId("5724...")`.
+fn debug_impl(name: &syn::Ident, attrs: &DomainAttrs, canonical: &TokenStream) -> TokenStream {
+    if attrs.identifier {
+        quote! {
+            impl ::std::fmt::Debug for #name {
+                fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                    f.debug_tuple(stringify!(#name))
+                        .field(&::willikins_types::mask_identifier(#canonical))
+                        .finish()
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl ::std::fmt::Debug for #name {
+                fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                    f.debug_tuple(stringify!(#name)).field(&self.0).finish()
+                }
             }
         }
     }
@@ -257,6 +300,8 @@ pub fn gen_string(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&str>
     let json_schema_impl = json_schema_impl(name, attrs, anchored);
     let eq_and_clone = structural_eq_and_clone(name);
     let domain_object_impl = domain_object_non_secret(name);
+    let debug_impl = debug_impl(name, attrs, &quote!(&self.0));
+    let is_identifier = attrs.identifier;
 
     quote! {
         #pattern_decl
@@ -272,6 +317,7 @@ pub fn gen_string(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&str>
         impl ::willikins_types::DomainType for #name {
             const TYPE_NAME: &'static str = stringify!(#name);
             const IS_SECRET: bool = false;
+            const IS_IDENTIFIER: bool = #is_identifier;
 
             fn description() -> &'static str {
                 #description
@@ -307,11 +353,7 @@ pub fn gen_string(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&str>
             }
         }
 
-        impl ::std::fmt::Debug for #name {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                f.debug_tuple(stringify!(#name)).field(&self.0).finish()
-            }
-        }
+        #debug_impl
 
         impl ::willikins_types::__private::serde::Serialize for #name {
             fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
@@ -382,6 +424,11 @@ pub fn gen_secret(name: &syn::Ident, attrs: &DomainAttrs, anchored: Option<&str>
         impl ::willikins_types::DomainType for #name {
             const TYPE_NAME: &'static str = stringify!(#name);
             const IS_SECRET: bool = true;
+            // A secret type is never an identifier too (the derive rejects
+            // `#[domain(secret, identifier)]` at macro-expansion time), so
+            // this is hardcoded `false` rather than threaded from the
+            // attribute, matching `IS_SECRET` above being hardcoded `true`.
+            const IS_IDENTIFIER: bool = false;
 
             fn description() -> &'static str {
                 #description
@@ -484,6 +531,12 @@ pub fn gen_other(
     let json_schema_impl = json_schema_impl(name, attrs, anchored);
     let eq_and_clone = structural_eq_and_clone(name);
     let domain_object_impl = domain_object_non_secret(name);
+    let debug_impl = debug_impl(
+        name,
+        attrs,
+        &quote!(&::std::string::ToString::to_string(&self.0)),
+    );
+    let is_identifier = attrs.identifier;
 
     quote! {
         #pattern_decl
@@ -499,6 +552,7 @@ pub fn gen_other(
         impl ::willikins_types::DomainType for #name {
             const TYPE_NAME: &'static str = stringify!(#name);
             const IS_SECRET: bool = false;
+            const IS_IDENTIFIER: bool = #is_identifier;
 
             fn description() -> &'static str {
                 #description
@@ -541,11 +595,7 @@ pub fn gen_other(
             }
         }
 
-        impl ::std::fmt::Debug for #name {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                f.debug_tuple(stringify!(#name)).field(&self.0).finish()
-            }
-        }
+        #debug_impl
 
         impl ::willikins_types::__private::serde::Serialize for #name {
             fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>

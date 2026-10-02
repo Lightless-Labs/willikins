@@ -6,6 +6,12 @@ pub struct DomainAttrs {
     pub min_len: Option<u64>,
     pub max_len: Option<u64>,
     pub secret: bool,
+    /// Milestone 3i, decision (b1): whether values of this type are an
+    /// account-revealing identifier the operator never chose, masked to a
+    /// prefix on every output surface by default. `#[domain(secret,
+    /// identifier)]` together is rejected in [`Self::parse`]: secrecy
+    /// already hides more than masking does, so a type is never both.
+    pub identifier: bool,
     pub description: syn::LitStr,
     /// An expression rather than a plain `syn::LitStr` on purpose: a
     /// secret type's example must satisfy its own pattern
@@ -27,6 +33,7 @@ impl DomainAttrs {
         let mut min_len: Option<syn::LitInt> = None;
         let mut max_len: Option<syn::LitInt> = None;
         let mut secret = false;
+        let mut identifier = false;
         let mut description: Option<syn::LitStr> = None;
         let mut example: Option<syn::Expr> = None;
 
@@ -47,6 +54,8 @@ impl DomainAttrs {
                     max_len = Some(meta.value()?.parse()?);
                 } else if meta.path.is_ident("secret") {
                     secret = true;
+                } else if meta.path.is_ident("identifier") {
+                    identifier = true;
                 } else if meta.path.is_ident("description") {
                     description = Some(meta.value()?.parse()?);
                 } else if meta.path.is_ident("example") {
@@ -54,7 +63,7 @@ impl DomainAttrs {
                 } else {
                     return Err(meta.error(
                         "unknown `#[domain(...)]` key; expected one of pattern, min_len, \
-                         max_len, secret, description, example",
+                         max_len, secret, identifier, description, example",
                     ));
                 }
                 Ok(())
@@ -66,6 +75,15 @@ impl DomainAttrs {
                 item_span,
                 "#[derive(DomainType)] requires a `#[domain(description = \"...\", \
                  example = \"...\")]` attribute",
+            ));
+        }
+
+        if secret && identifier {
+            return Err(syn::Error::new(
+                item_span,
+                "#[domain(secret, identifier)] is not allowed: a secret type is already \
+                 redacted everywhere, and identifier masking is a strictly weaker \
+                 guarantee; use `secret` alone",
             ));
         }
 
@@ -99,6 +117,7 @@ impl DomainAttrs {
             min_len,
             max_len,
             secret,
+            identifier,
             description,
             example,
         })

@@ -22,6 +22,13 @@
 //! An invalid `pattern` is a compile error at the attribute's span. A
 //! non-newtype input (an enum, a struct with named fields, a tuple struct
 //! with more than one field) is a compile error.
+//!
+//! `#[domain(identifier)]` marks a non-secret, account-revealing value
+//! (milestone 3i, decision (b1)): its generated `Debug` prints a masked
+//! prefix (`willikins_types::mask_identifier`) instead of the raw value,
+//! e.g. `AppleIssuerId("5724...")`, and `DomainObject::is_identifier`
+//! reports `true`. `#[domain(secret, identifier)]` together is a compile
+//! error: secrecy already hides more than masking does.
 
 use proc_macro::TokenStream;
 

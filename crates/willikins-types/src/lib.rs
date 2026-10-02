@@ -15,6 +15,7 @@
 extern crate self as willikins_types;
 
 pub mod __private;
+pub mod disclosure;
 pub mod object;
 #[cfg(test)]
 mod probe;
@@ -23,6 +24,7 @@ pub mod sink;
 /// Capability token gating access to secret values; see [`sink::SinkToken`].
 pub use sink::SinkToken;
 
+pub use disclosure::{Disclosure, IDENTIFIER_PREFIX_CHARS, mask_identifier};
 pub use object::{DomainObject, Rendered, downcast};
 
 /// Error returned when a string does not parse as a domain type.
@@ -98,6 +100,13 @@ pub trait DomainType: Sized + Clone + std::fmt::Debug + PartialEq + Eq {
     /// Whether values of this type are secret. Secret values may only flow
     /// into secret-accepting sinks and are redacted everywhere else.
     const IS_SECRET: bool = false;
+    /// Whether values of this type are an account-revealing identifier the
+    /// operator never chose (milestone 3i, decision (b1)): masked to a
+    /// prefix (see [`mask_identifier`]) on every output surface unless
+    /// disclosure is explicitly requested. `#[domain(secret, identifier)]`
+    /// together is a compile error in the derive: secrecy already hides
+    /// more than masking does, so a type is never both.
+    const IS_IDENTIFIER: bool = false;
 
     /// One-line description shown to agents in the type catalog.
     fn description() -> &'static str;
