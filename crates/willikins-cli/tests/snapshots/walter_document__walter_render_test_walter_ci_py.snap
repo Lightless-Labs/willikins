@@ -6,6 +6,7 @@ apps/walter/tools/tests/test_walter_ci.py
 ---
 """Offline tests for walter_ci.py: no network, no real git, no keychain, no bazel."""
 import argparse
+import collections
 import hashlib
 import json
 import os
@@ -131,6 +132,16 @@ class EntryPointTests(unittest.TestCase):
             with open(attempt_path) as handle:
                 self.assertEqual(json.load(handle)["commit"], COMMIT)
 
+
+    def test_signing_checks_asserts_clean_on_the_failing_path(self):
+        kc = mock.MagicMock(captured_search_list=("x",))
+        kc.__enter__.return_value, kc.__exit__.return_value = kc, False
+        with mock.patch.object(ci, "_asc_client"), mock.patch.object(ci, "_load_entitlements"), mock.patch.object(
+            ci, "SigningKeychain", return_value=kc
+        ), mock.patch.object(ci, "assert_clean") as clean:
+            secrets = collections.defaultdict(lambda: "AAAA")
+            self.assertRaises(common.WalterCiError, ci._signing_checks, None, secrets, {"bundle_ids": {}}, "/r")
+        clean.assert_called_once_with(("x",), runner=None)
 
 if __name__ == "__main__":
     unittest.main()

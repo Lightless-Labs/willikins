@@ -223,16 +223,19 @@ def _signing_checks(runner, secrets, config, repo, *, inner=None):
     p12 = base64.b64decode(secrets["APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64"], validate=True)
     password = secrets["APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD"]
     keychain = SigningKeychain(p12, password, runner=runner)
-    with keychain:
-        profiles = {}
-        for bundle_id, raw in profiles_raw.items():
-            install_profile(raw, runner=runner)
-            profiles[bundle_id] = profile_facts(raw, runner=runner)
-        identity_set = identities(keychain_path(), runner=runner)
-        check_signing(identity_set, profiles, entitlements)
-        if inner is not None:
-            inner()
-    assert_clean(keychain.captured_search_list, runner=runner)
+    try:
+        with keychain:
+            profiles = {}
+            for bundle_id, raw in profiles_raw.items():
+                install_profile(raw, runner=runner)
+                profiles[bundle_id] = profile_facts(raw, runner=runner)
+            identity_set = identities(keychain_path(), runner=runner)
+            check_signing(identity_set, profiles, entitlements)
+            if inner is not None:
+                inner()
+    finally:
+        if keychain.captured_search_list:
+            assert_clean(keychain.captured_search_list, runner=runner)
 
 
 def _execution_root(runner, repo):
