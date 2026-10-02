@@ -27,6 +27,32 @@ struct Probe(String);
 )]
 struct ProbeSecret(secrecy::SecretString);
 
+/// Milestone 3i, task B1: a `String`-storage identifier type, proving the
+/// derive's `identifier` codegen path actually compiles and masks (not
+/// merely `mask_identifier` the free function, which `disclosure.rs`'s own
+/// unit tests already cover). No production type is marked
+/// `#[domain(identifier)]` yet (that is task B2); this probe exists only
+/// so a future regression in the derive's expansion surfaces here, not one
+/// task later when B2 marks the first real type.
+#[derive(DomainType)]
+#[domain(
+    identifier,
+    description = "A probe identifier type (String storage) derived inside willikins-types itself",
+    example = "57246542-96fe-1a63-e053-0824d011072a"
+)]
+struct ProbeIdentifier(String);
+
+/// The same proof for `Other` storage (anything used through `FromStr` +
+/// `Display`), whose `Debug` codegen path is different from `String`
+/// storage's (it masks the `Display` form, not the raw field).
+#[derive(DomainType)]
+#[domain(
+    identifier,
+    description = "A probe identifier type (Other storage) derived inside willikins-types itself",
+    example = "123456789"
+)]
+struct ProbeIdentifierOther(u64);
+
 /// Proves the public-to-secret half of "secrecy only goes up": a
 /// conversion whose target is *more* secret than its source is admitted
 /// and compiles. Registers nothing in production; see
@@ -93,4 +119,52 @@ fn the_derive_emits_domain_object_inside_this_crate() {
     assert!(secret.is_secret());
     assert_eq!(secret.render().to_string(), "[REDACTED ProbeSecret]");
     assert_eq!(secret.expose(&SinkToken::new()), "probe-secret");
+}
+
+#[test]
+fn a_non_identifier_derived_type_reports_is_identifier_false() {
+    use crate::DomainObject;
+
+    let value = Probe::parse("probe").unwrap();
+    const { assert!(!<Probe as DomainType>::IS_IDENTIFIER) };
+    assert!(!DomainObject::is_identifier(&value));
+    // `Debug` is unchanged by this milestone for a non-identifier type.
+    assert_eq!(format!("{value:?}"), "Probe(\"probe\")");
+}
+
+#[test]
+fn the_derive_marks_a_string_storage_identifier_type() {
+    use crate::DomainObject;
+
+    let full = "57246542-96fe-1a63-e053-0824d011072a";
+    let value = ProbeIdentifier::parse(full).unwrap();
+
+    const { assert!(<ProbeIdentifier as DomainType>::IS_IDENTIFIER) };
+    const { assert!(!<ProbeIdentifier as DomainType>::IS_SECRET) };
+    assert!(DomainObject::is_identifier(&value));
+    assert!(!DomainObject::is_secret(&value));
+
+    // `Debug` masks; `Display`, `render()` and `Serialize` stay full
+    // (trust boundary 6: masking touches only output surfaces).
+    assert_eq!(format!("{value:?}"), "ProbeIdentifier(\"5724...\")");
+    assert_eq!(value.to_string(), full);
+    assert_eq!(value.render().to_string(), full);
+    assert_eq!(
+        serde_json::to_string(&value).unwrap(),
+        format!("\"{full}\"")
+    );
+}
+
+#[test]
+fn the_derive_marks_an_other_storage_identifier_type() {
+    use crate::DomainObject;
+
+    let value = ProbeIdentifierOther::parse("123456789").unwrap();
+
+    const { assert!(<ProbeIdentifierOther as DomainType>::IS_IDENTIFIER) };
+    assert!(DomainObject::is_identifier(&value));
+
+    assert_eq!(format!("{value:?}"), "ProbeIdentifierOther(\"1234...\")");
+    assert_eq!(value.to_string(), "123456789");
+    assert_eq!(value.render().to_string(), "123456789");
 }
