@@ -43,6 +43,57 @@ same observation).
    would have cost a `Disclosure` parameter on `load_workflow`/`print_document_error` for no behavioural change.
 **Addendum:** 2026-10-02 (task B7) — the three decision-(b8) guards and the error audit (decision (b10)),
 acceptance 20–21.
+**Addendum:** 2026-10-02 (task B8) — landed in two commits as specified, gated by the coordinator's B8 sign-off
+(items (1) and (2) of "Needs the coordinator"). Two corrections to this section's own predictions, found while
+implementing, neither changing any decision:
+1. **The characterization count is not thirteen.** Of the thirteen documents that call `doppler.value.get`, nine are
+   negative fixtures that fail `check` before `characterize()` ever reaches `TYPES:` (acceptance.rs's own
+   `characterize` returns right after `CHECK ERRORS:` on a `check` failure) — their entries are byte-identical, as
+   they must be, since the fixtures assert a *different* node's error, one that never resolves either parse tool's
+   input type. Only four documents actually render `TYPES:`/`OUTPUTS:` far enough to show the retyped lines:
+   `apple-signing-credential-from-doppler.yaml` (whose `issuer_id`/`key_id` nodes are themselves the
+   `doppler.value.get` reads, and whose `OUTPUTS:` exposes them directly, untouched by either parse tool — two
+   `OUTPUTS:` lines), `appstore-bundle-id-from-doppler.yaml`, `appstore-signing-profile-from-doppler.yaml`, and
+   `workflows/sample-ios-app.yaml` (two `TYPES:` lines each, the parse nodes' own `issuer_id.value`/`key_id.value`,
+   **not** `issuer_id_text.value`/`key_id_text.value` as this plan's wording suggested — `doppler.value.get`'s own
+   node has no `value` *input*, only a `value` *output*, which `TYPES:` never lists). Ten lines total, confirmed by
+   `git diff -U0` on the regenerated snapshot: every `-` line is `Text`, every `+` the same node and port as
+   `DopplerValue`, nothing else touched, no `PLAN ERROR` line changed anywhere. Sample's own document was already
+   counted once by task A6/A9 (decision (a9)); this is a second, independent two-line change to it, on different
+   ports.
+2. **`doppler.value.get`'s output and both parse tools' `value` input needed more than a one-line type-string
+   swap.** The live client (`DopplerClient::get_value`, and the response structs `TextValueBody`/
+   `TextValueValueBody`, renamed to `DopplerValueBody`/`DopplerValueValueBody`), the fake state
+   (`FakeState::doppler_values: HashMap<String, Text>` and `with_doppler_value`'s `value: Text` parameter, both
+   retyped to `DopplerValue`), and every call site constructing a `Text`-typed `value` for one of these three ports
+   by hand in Rust (not YAML) needed the matching change: `crates/willikins-providers-fake/tests/pure_tools_agree.rs`
+   (the catalog-driven pure-tool sweep, which feeds `apple_issuer_id_parse_inputs`/`apple_key_id_parse_inputs` and
+   seeds `with_doppler_value` directly) and the two tools' own unit tests in `willikins-tools`. A YAML document's own
+   `steps.*_text.value` binding needed no document edit anywhere, since both sides of that edge retype together.
+   Every module doc naming `Text` as the carried type (`value_get.rs` in both the live and fake crate, `client.rs`'s
+   `get_value`/the two response structs, `state.rs`'s `doppler_values` field, both parse tools' module docs) was
+   updated to say `DopplerValue` and to record why (the issuer id and key id this chain carries, printing in full
+   one node before the parse tool, is decision (b2)'s own named gap).
+
+`DopplerValue`'s chosen `example` (the required attribute the plan's SHARED VALUES table did not supply) is
+`"57246542-96fe-1a63-e053-0824d011072a"`, the real seeded App Store Connect issuer id from
+`workflows/fixtures/state/sample-ios-app.json` — the concrete value this type most often carries, and already the
+example SHARED VALUES uses for `mask_identifier`'s own worked example (`5724...`).
+
+Gates run exactly as specified, no deviation: commit 1 scoped to `-p willikins-types` (fmt, clippy --all-targets,
+test, `cargo check -p willikins-types`); commit 2 scoped to `-p willikins-providers-doppler -p
+willikins-providers-fake -p willikins-tools -p willikins-dsl -p willikins-cli` (fmt, one clippy `--all-targets`
+invocation, one test invocation), both green, both run twice (once to find the four predicted snapshot mismatches
+and the two `pure_tools_agree.rs`/tools-test-module call sites this addendum's point 2 names, once clean after
+fixing them) before committing. Verified directly against the built binary (acceptance 22, "check that Sample's plan
+text now prints `issuer_id_text.value` as a prefix" — read literally per point 1 above as `issuer_id`/`key_id`'s own
+`value` *output*): `willikins plan workflows/sample-ios-app.yaml` against the Sample fixture state prints
+`issuer_id_text (doppler.value.get): Compute` / `value: 5724...` and `issuer_id (apple.issuer_id.parse): Compute` /
+`value: 5724...` (and `2X9R...` for the key id pair) by default, with the full `57246542-96fe-1a63-e053-0824d011072a`
+and `2X9R4HXF34` appearing zero times in that output; `--reveal` shows both whole. No new CLI test was added for
+this, since `identifier_masking.rs` (B5) and `prerendered_identifier_guards.rs` (B7) already pin the general
+mechanism this relies on (an identifier-typed `Value` masks through `display(Disclosure)` regardless of which
+registered type it is), and this task registers no new render path.
 
 **Guards (commit 1, no production code changed).**
 1. `crates/willikins-server/src/catalog.rs`'s `no_live_or_fake_tool_has_an_identifier_typed_key_or_gate_subject_port`
