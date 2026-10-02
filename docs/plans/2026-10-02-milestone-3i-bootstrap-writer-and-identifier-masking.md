@@ -21,6 +21,26 @@ gate and is green, with no journal `.snap` touched (confirmed by `git status`). 
 did change, each by exactly the `masked` property (and, for two of the core snapshots, insta 1.48 also dropped a
 stale `assertion_line` metadata line on regeneration — not drift, see milestone 3i task B2's own addendum for the
 same observation).
+**Addendum:** 2026-10-02 (task B5) — three small deviations from the task's own wording, each kept narrow:
+1. `render::pending_approvals_text` was **not** given a `Disclosure` parameter. The task text says to "thread the
+   disclosure through describe_text, plan_text, applied_text, plan_response_text and pending approvals", but
+   `pending_approvals_text` renders only `PlanRecord::{plan_id, workflow, class, recorded_at}` — none of them a
+   `Value` — so there is nothing in it for a `Disclosure` to govern; threading an unused parameter through would
+   have been decorative. If a future `PlanRecord` field needs masking, it reaches the operator only through
+   `fail_apply`'s own text branch, which already has `disclosure` in scope to pass down at that point.
+2. `print_json`/`eprint_json` standardize every `--json` print site in `main.rs`/`commands.rs` on
+   `serde_json::to_string_pretty`, including four sites that previously printed compact JSON through
+   `serde_json::to_string` or `println!("{}", value)` (`validate`'s `check_errors_json`/`check_warnings_json`,
+   `propose-slug`'s failure path, and `approve`/`reject`'s `{"ok": true, ...}` success line). One chokepoint that
+   masks-then-serializes was simpler and safer than a chokepoint that also had to remember which call sites wanted
+   which formatting, and nothing in `crates/willikins-cli/tests/` string-matches compact JSON at any of those sites
+   (each parses with `serde_json::from_str` and reads fields) — confirmed by reading `tests/cli.rs` and
+   `tests/apply_and_journal.rs` before making the change.
+3. `main::print_document_error`'s `--json` branch was left calling `serde_json::to_string(err)` directly rather
+   than through `eprint_json`. A `DocumentError` is raised by `load_workflow`, before `check` or `plan` ever
+   produces a typed `Value` (trust boundary 4's own point: it quotes the document's raw YAML, a field name, not a
+   resolved value), so there is nothing for `mask_json` to find there either; routing it through `eprint_json`
+   would have cost a `Disclosure` parameter on `load_workflow`/`print_document_error` for no behavioural change.
 **Gate:** OPEN for every task except **B8**, which waits on the coordinator (it changes thirteen characterization
 entries; see "Needs the coordinator"). Nothing here calls a provider except the live bootstrap cycle (A7), which is
 written by an implementer and run once by the coordinator against the SANDBOX Buildkite organisation.

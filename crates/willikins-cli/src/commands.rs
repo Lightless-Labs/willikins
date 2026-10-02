@@ -46,7 +46,7 @@ use willikins_journal::{
 };
 use willikins_providers_fake::FakeState;
 use willikins_server::{Butler, ButlerConfig, ButlerError, PlanResponse, SharedJournal};
-use willikins_types::WorkflowName;
+use willikins_types::{Disclosure, WorkflowName};
 
 use crate::render;
 
@@ -251,15 +251,12 @@ fn usage_error(message: &str) -> ExitCode {
 /// a missing or malformed `--live` credential, a directory that fails
 /// startup validation, or an I/O failure this crate hit on its own
 /// account.
-fn fail_config<E>(error: &E, json: bool) -> ExitCode
+fn fail_config<E>(error: &E, json: bool, disclosure: Disclosure) -> ExitCode
 where
     E: serde::Serialize + std::fmt::Display,
 {
     if json {
-        eprintln!(
-            "{}",
-            serde_json::to_string(&Reported::new(error)).unwrap_or_else(|_| error.to_string())
-        );
+        render::eprint_json(&Reported::new(error), disclosure);
     } else {
         eprintln!("{}", render::single_line(&error.to_string()));
     }
@@ -279,8 +276,12 @@ where
 /// [`Reported`]'s added `message` would collide with it and emit the key
 /// twice. The stream and exit code are unchanged: this is still a
 /// configuration refusal, stderr and exit 2.
-fn fail_startup(error: willikins_server::StartupError, json: bool) -> ExitCode {
-    fail_config(&ButlerError::Startup { error }, json)
+fn fail_startup(
+    error: willikins_server::StartupError,
+    json: bool,
+    disclosure: Disclosure,
+) -> ExitCode {
+    fail_config(&ButlerError::Startup { error }, json, disclosure)
 }
 
 /// Print `error` -- JSON through [`Reported`], text as one escaped line
@@ -288,16 +289,12 @@ fn fail_startup(error: willikins_server::StartupError, json: bool) -> ExitCode {
 /// own handling of a [`willikins_core::PlanError`]) for a domain result
 /// reached only after a document at least parsed and checked: a
 /// `Butler` refusal, or an unrecognised run id.
-fn fail_domain<E>(error: &E, json: bool) -> ExitCode
+fn fail_domain<E>(error: &E, json: bool, disclosure: Disclosure) -> ExitCode
 where
     E: serde::Serialize + std::fmt::Display,
 {
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&Reported::new(error))
-                .unwrap_or_else(|_| "{}".to_string())
-        );
+        render::print_json(&Reported::new(error), disclosure);
     } else {
         println!("{}", render::single_line(&error.to_string()));
     }
@@ -319,9 +316,10 @@ fn fail_apply(
     journal_path: Option<&str>,
     butler: &Butler,
     json: bool,
+    disclosure: Disclosure,
 ) -> ExitCode {
     if json {
-        return fail_domain(error, json);
+        return fail_domain(error, json, disclosure);
     }
     println!("{}", render::single_line(&error.to_string()));
     if let (ButlerError::ApprovalRequired { .. }, Some(plan_id)) = (error, plan_id) {
@@ -373,6 +371,7 @@ pub(crate) fn build_catalog(
     live: bool,
     fake_state_path: Option<&str>,
     json: bool,
+    disclosure: Disclosure,
 ) -> Result<CatalogAndState, ExitCode> {
     if live {
         if fake_state_path.is_some() {
@@ -380,8 +379,8 @@ pub(crate) fn build_catalog(
                 "--live and --fake-state are mutually exclusive",
             ));
         }
-        let catalog =
-            willikins_server::live_catalog_from_env().map_err(|error| fail_config(&error, json))?;
+        let catalog = willikins_server::live_catalog_from_env()
+            .map_err(|error| fail_config(&error, json, disclosure))?;
         return Ok((catalog, None));
     }
     build_fake_catalog(fake_state_path)
@@ -402,6 +401,7 @@ pub(crate) fn build_catalog_for_document(
     fake_state_path: Option<&str>,
     workflow: &willikins_core::Workflow,
     json: bool,
+    disclosure: Disclosure,
 ) -> Result<CatalogAndState, ExitCode> {
     if live {
         if fake_state_path.is_some() {
@@ -410,7 +410,7 @@ pub(crate) fn build_catalog_for_document(
             ));
         }
         let catalog = willikins_server::live_catalog_for_document(workflow)
-            .map_err(|error| fail_config(&error, json))?;
+            .map_err(|error| fail_config(&error, json, disclosure))?;
         return Ok((catalog, None));
     }
     build_fake_catalog(fake_state_path)
@@ -443,6 +443,7 @@ fn open_journal(
     path: Option<&str>,
     clock: Arc<dyn Clock>,
     json: bool,
+    disclosure: Disclosure,
 ) -> Result<SharedJournal, ExitCode> {
     match path {
         Some(path) => FileJournal::open_with_clock(Path::new(path), clock)
@@ -454,6 +455,7 @@ fn open_journal(
                         error: error.to_string(),
                     },
                     json,
+                    disclosure,
                 )
             }),
         None => Ok(Arc::new(Mutex::new(MemoryJournal::with_clock(clock))) as SharedJournal),
@@ -506,25 +508,19 @@ fn wait_for_run(butler: &Butler, run_id: RunId) -> RunRecord {
     }
 }
 
-fn print_plan_response(response: &PlanResponse, json: bool) {
+fn print_plan_response(response: &PlanResponse, json: bool, disclosure: Disclosure) {
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(response).unwrap_or_else(|_| "{}".to_string())
-        );
+        render::print_json(response, disclosure);
     } else {
-        println!("{}", render::plan_response_text(response));
+        println!("{}", render::plan_response_text(response, disclosure));
     }
 }
 
-fn print_run_record(run: &RunRecord, json: bool) {
+fn print_run_record(run: &RunRecord, json: bool, disclosure: Disclosure) {
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(run).unwrap_or_else(|_| "{}".to_string())
-        );
+        render::print_json(run, disclosure);
     } else {
-        println!("{}", render::run_record_text(run));
+        println!("{}", render::run_record_text(run, disclosure));
     }
 }
 
@@ -578,16 +574,16 @@ fn dump_fake_state(state: &Mutex<FakeState>, path: &str) -> std::io::Result<()> 
 // ---------------------------------------------------------------------
 
 /// `apply`: dispatch on `file` vs `--plan-id`. See the module docs.
-pub fn cmd_apply(args: &ApplyArgs, json: bool) -> ExitCode {
+pub fn cmd_apply(args: &ApplyArgs, json: bool, disclosure: Disclosure) -> ExitCode {
     match (&args.file, &args.plan_id) {
         (Some(_), Some(_)) => usage_error("apply: pass a file or --plan-id, not both"),
         (None, None) => usage_error("apply: pass a file, or --plan-id <id> --journal <path>"),
-        (Some(file), None) => cmd_apply_file(args, file, json),
-        (None, Some(plan_id)) => cmd_apply_plan_id(args, plan_id, json),
+        (Some(file), None) => cmd_apply_file(args, file, json, disclosure),
+        (None, Some(plan_id)) => cmd_apply_plan_id(args, plan_id, json, disclosure),
     }
 }
 
-fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
+fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool, disclosure: Disclosure) -> ExitCode {
     if args.workflows_dir.is_some() {
         return usage_error("apply: --workflows-dir only applies with --plan-id");
     }
@@ -606,16 +602,21 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
         Ok(workflow) => workflow,
         Err(code) => return code,
     };
-    let (catalog, fake_state) =
-        match build_catalog_for_document(args.live, args.fake_state.as_deref(), &workflow, json) {
-            Ok(built) => built,
-            Err(code) => return code,
-        };
+    let (catalog, fake_state) = match build_catalog_for_document(
+        args.live,
+        args.fake_state.as_deref(),
+        &workflow,
+        json,
+        disclosure,
+    ) {
+        Ok(built) => built,
+        Err(code) => return code,
+    };
     if args.fake_state_out.is_some() && fake_state.is_none() {
         return usage_error("apply: --fake-state-out needs the fake providers (drop --live)");
     }
 
-    let checked = match crate::check_workflow(&workflow, &catalog, json) {
+    let checked = match crate::check_workflow(&workflow, &catalog, json, disclosure) {
         Ok(checked) => checked,
         Err(code) => return code,
     };
@@ -633,6 +634,7 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
                     error: format!("failed to create a temporary directory: {error}"),
                 },
                 json,
+                disclosure,
             );
         }
     };
@@ -643,11 +645,17 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
                 error: format!("{file}: failed to copy into a temporary directory: {error}"),
             },
             json,
+            disclosure,
         );
     }
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let journal = match open_journal(args.journal.as_deref(), Arc::clone(&clock), json) {
+    let journal = match open_journal(
+        args.journal.as_deref(),
+        Arc::clone(&clock),
+        json,
+        disclosure,
+    ) {
         Ok(journal) => journal,
         Err(code) => return code,
     };
@@ -659,7 +667,7 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
         clock,
     )) {
         Ok(butler) => butler,
-        Err(error) => return fail_startup(error, json),
+        Err(error) => return fail_startup(error, json, disclosure),
     };
 
     let outcome = plan_and_apply(
@@ -670,6 +678,7 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool) -> ExitCode {
         args.approve,
         args.journal.as_deref(),
         json,
+        disclosure,
     );
 
     if let Some(path) = &args.fake_state_out {
@@ -720,6 +729,7 @@ impl ApplyOutcome {
 /// the run to finish, and print the [`RunRecord`]. Shared by
 /// `cmd_apply_file`'s one-shot flow; `--plan-id` mode has an existing
 /// plan and so calls `butler.apply` directly instead.
+#[allow(clippy::too_many_arguments)] // `json`/`disclosure` join an already-long, pre-existing parameter list; bundling them into a struct would touch every other signature in this file for one commit's worth of threading
 fn plan_and_apply(
     butler: &Butler,
     workflow: WorkflowName,
@@ -728,14 +738,22 @@ fn plan_and_apply(
     approve: bool,
     journal_path: Option<&str>,
     json: bool,
+    disclosure: Disclosure,
 ) -> ApplyOutcome {
     let response = match butler.plan(workflow, partial, principal.clone()) {
         Ok(response) => response,
         Err(error) => {
-            return ApplyOutcome::refused(fail_apply(&error, None, journal_path, butler, json));
+            return ApplyOutcome::refused(fail_apply(
+                &error,
+                None,
+                journal_path,
+                butler,
+                json,
+                disclosure,
+            ));
         }
     };
-    print_plan_response(&response, json);
+    print_plan_response(&response, json, disclosure);
 
     if approve
         && response.requires_approval
@@ -747,6 +765,7 @@ fn plan_and_apply(
             journal_path,
             butler,
             json,
+            disclosure,
         ));
     }
 
@@ -759,18 +778,24 @@ fn plan_and_apply(
                 journal_path,
                 butler,
                 json,
+                disclosure,
             ));
         }
     };
     let run = wait_for_run(butler, handle.run_id);
-    print_run_record(&run, json);
+    print_run_record(&run, json, disclosure);
     ApplyOutcome {
         code: exit_for_run_state(&run),
         ran: true,
     }
 }
 
-fn cmd_apply_plan_id(args: &ApplyArgs, plan_id_str: &str, json: bool) -> ExitCode {
+fn cmd_apply_plan_id(
+    args: &ApplyArgs,
+    plan_id_str: &str,
+    json: bool,
+    disclosure: Disclosure,
+) -> ExitCode {
     let Some(journal_path) = args.journal.as_deref() else {
         return usage_error("apply --plan-id needs --journal <path>");
     };
@@ -797,6 +822,7 @@ fn cmd_apply_plan_id(args: &ApplyArgs, plan_id_str: &str, json: bool) -> ExitCod
                     error: error.to_string(),
                 },
                 json,
+                disclosure,
             );
         }
     };
@@ -806,13 +832,14 @@ fn cmd_apply_plan_id(args: &ApplyArgs, plan_id_str: &str, json: bool) -> ExitCod
     };
     let workflows_dir = PathBuf::from(args.workflows_dir.as_deref().unwrap_or("workflows"));
 
-    let (catalog, _fake_state) = match build_catalog(args.live, args.fake_state.as_deref(), json) {
-        Ok(built) => built,
-        Err(code) => return code,
-    };
+    let (catalog, _fake_state) =
+        match build_catalog(args.live, args.fake_state.as_deref(), json, disclosure) {
+            Ok(built) => built,
+            Err(code) => return code,
+        };
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let journal = match open_journal(Some(journal_path), Arc::clone(&clock), json) {
+    let journal = match open_journal(Some(journal_path), Arc::clone(&clock), json, disclosure) {
         Ok(journal) => journal,
         Err(code) => return code,
     };
@@ -824,15 +851,24 @@ fn cmd_apply_plan_id(args: &ApplyArgs, plan_id_str: &str, json: bool) -> ExitCod
         clock,
     )) {
         Ok(butler) => butler,
-        Err(error) => return fail_startup(error, json),
+        Err(error) => return fail_startup(error, json, disclosure),
     };
 
     let handle = match butler.apply(plan_id, principal) {
         Ok(handle) => handle,
-        Err(error) => return fail_apply(&error, Some(plan_id), Some(journal_path), &butler, json),
+        Err(error) => {
+            return fail_apply(
+                &error,
+                Some(plan_id),
+                Some(journal_path),
+                &butler,
+                json,
+                disclosure,
+            );
+        }
     };
     let run = wait_for_run(&butler, handle.run_id);
-    print_run_record(&run, json);
+    print_run_record(&run, json, disclosure);
     exit_for_run_state(&run)
 }
 
@@ -845,23 +881,25 @@ enum Decision {
     Reject(String),
 }
 
-pub fn cmd_approve(args: &ApproveArgs, json: bool) -> ExitCode {
+pub fn cmd_approve(args: &ApproveArgs, json: bool, disclosure: Disclosure) -> ExitCode {
     decide(
         &args.plan_id,
         &args.journal,
         &args.principal,
         &Decision::Approve,
         json,
+        disclosure,
     )
 }
 
-pub fn cmd_reject(args: &RejectArgs, json: bool) -> ExitCode {
+pub fn cmd_reject(args: &RejectArgs, json: bool, disclosure: Disclosure) -> ExitCode {
     decide(
         &args.plan_id,
         &args.journal,
         &args.principal,
         &Decision::Reject(args.reason.clone()),
         json,
+        disclosure,
     )
 }
 
@@ -877,6 +915,7 @@ fn decide(
     principal_str: &str,
     decision: &Decision,
     json: bool,
+    disclosure: Disclosure,
 ) -> ExitCode {
     let plan_id: PlanId = match plan_id_str.parse() {
         Ok(id) => id,
@@ -887,6 +926,7 @@ fn decide(
                     error: error.to_string(),
                 },
                 json,
+                disclosure,
             );
         }
     };
@@ -903,7 +943,7 @@ fn decide(
     };
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let journal = match open_journal(Some(journal_path), clock, json) {
+    let journal = match open_journal(Some(journal_path), clock, json, disclosure) {
         Ok(journal) => journal,
         Err(code) => return code,
     };
@@ -928,13 +968,16 @@ fn decide(
     match result {
         Ok(()) => {
             if json {
-                println!("{}", serde_json::json!({ "ok": true, "plan_id": plan_id }));
+                render::print_json(
+                    &serde_json::json!({ "ok": true, "plan_id": plan_id }),
+                    disclosure,
+                );
             } else {
                 println!("ok");
             }
             ExitCode::from(0)
         }
-        Err(error) => fail_domain(&error, json),
+        Err(error) => fail_domain(&error, json, disclosure),
     }
 }
 
@@ -942,7 +985,11 @@ fn decide(
 // runs / run
 // ---------------------------------------------------------------------
 
-fn open_replayed(path: &str, json: bool) -> Result<willikins_journal::ReplayedJournal, ExitCode> {
+fn open_replayed(
+    path: &str,
+    json: bool,
+    disclosure: Disclosure,
+) -> Result<willikins_journal::ReplayedJournal, ExitCode> {
     willikins_journal::replay(path).map_err(|error| {
         fail_config(
             &CliError::Journal {
@@ -950,27 +997,25 @@ fn open_replayed(path: &str, json: bool) -> Result<willikins_journal::ReplayedJo
                 error: error.to_string(),
             },
             json,
+            disclosure,
         )
     })
 }
 
-pub fn cmd_runs(args: &RunsArgs, json: bool) -> ExitCode {
-    let replayed = match open_replayed(&args.journal, json) {
+pub fn cmd_runs(args: &RunsArgs, json: bool, disclosure: Disclosure) -> ExitCode {
+    let replayed = match open_replayed(&args.journal, json, disclosure) {
         Ok(replayed) => replayed,
         Err(code) => return code,
     };
     let runs = replayed.runs();
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&runs).unwrap_or_else(|_| "[]".to_string())
-        );
+        render::print_json(&runs, disclosure);
     } else if runs.is_empty() {
         println!("no runs recorded");
     } else {
         let text = runs
             .iter()
-            .map(render::run_record_text)
+            .map(|run| render::run_record_text(run, disclosure))
             .collect::<Vec<_>>()
             .join("\n---\n");
         println!("{text}");
@@ -978,7 +1023,7 @@ pub fn cmd_runs(args: &RunsArgs, json: bool) -> ExitCode {
     ExitCode::from(0)
 }
 
-pub fn cmd_run(args: &RunArgs, json: bool) -> ExitCode {
+pub fn cmd_run(args: &RunArgs, json: bool, disclosure: Disclosure) -> ExitCode {
     let run_id: RunId = match args.run_id.parse() {
         Ok(id) => id,
         Err(error) => {
@@ -988,16 +1033,17 @@ pub fn cmd_run(args: &RunArgs, json: bool) -> ExitCode {
                     error: error.to_string(),
                 },
                 json,
+                disclosure,
             );
         }
     };
-    let replayed = match open_replayed(&args.journal, json) {
+    let replayed = match open_replayed(&args.journal, json, disclosure) {
         Ok(replayed) => replayed,
         Err(code) => return code,
     };
     match replayed.run(&run_id) {
         Some(run) => {
-            print_run_record(&run, json);
+            print_run_record(&run, json, disclosure);
             exit_for_run_state(&run)
         }
         None => fail_domain(
@@ -1005,6 +1051,7 @@ pub fn cmd_run(args: &RunArgs, json: bool) -> ExitCode {
                 run_id: run_id.to_string(),
             },
             json,
+            disclosure,
         ),
     }
 }
