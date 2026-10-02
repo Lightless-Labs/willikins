@@ -1161,13 +1161,20 @@ mod tests {
         }
     }
 
-    /// Milestone 3i, task B2: the exact set of types marked
-    /// `#[domain(identifier)]`, pinned so a widening (or a narrowing) is a
-    /// reviewed diff rather than a silent drift. Decision (b2) names these
-    /// seven and no others.
+    /// Milestone 3i, task B2 (widened by task B8): the exact set of types
+    /// marked `#[domain(identifier)]`, pinned so a widening (or a
+    /// narrowing) is a reviewed diff rather than a silent drift. Decision
+    /// (b2) names the first seven; task B8 adds the eighth, `DopplerValue`
+    /// (decision (b2)'s "gap"), which is identifier-typed but, unlike the
+    /// other seven, is not pinned by `identifier_masking.rs`'s
+    /// never-parses-back property: its grammar has no pattern at all
+    /// (`max_len` only, matching `Text`'s own shape), so it admits the `.`
+    /// `mask_identifier` always appends and a masked value can still parse
+    /// back as a `DopplerValue`. That file's own module doc names this
+    /// exception.
     #[test]
-    fn the_identifier_set_is_exactly_these_seven_types() {
-        const EXPECTED: [&str; 7] = [
+    fn the_identifier_set_is_exactly_these_eight_types() {
+        const EXPECTED: [&str; 8] = [
             "AppleIssuerId",
             "AppleKeyId",
             "AppleCertificateSerial",
@@ -1175,6 +1182,7 @@ mod tests {
             "AppleBundleIdId",
             "AppleProfileId",
             "BuildkiteClusterId",
+            "DopplerValue",
         ];
         let mut expected: ::std::collections::HashSet<&str> = EXPECTED.into_iter().collect();
         assert_eq!(expected.len(), EXPECTED.len(), "duplicate name in EXPECTED");
@@ -1184,9 +1192,9 @@ mod tests {
             if entry.info.identifier {
                 assert!(
                     expected.remove(entry.info.name),
-                    "{}: marked identifier but not in the pinned set of seven \
-                     (decision (b2) names exactly these seven -- update both this test \
-                     and the plan if a widening is intended)",
+                    "{}: marked identifier but not in the pinned set of eight \
+                     (decisions (b2) and B8's gap name exactly these eight -- update both \
+                     this test and the plan if a widening is intended)",
                     entry.info.name
                 );
             }

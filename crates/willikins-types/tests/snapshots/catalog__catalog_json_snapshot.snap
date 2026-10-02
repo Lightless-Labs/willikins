@@ -465,6 +465,23 @@ expression: redacted
     }
   },
   {
+    "name": "DopplerValue",
+    "secret": false,
+    "identifier": true,
+    "description": "A non-secret value read from Doppler, of unknown shape; printed as a prefix.",
+    "example": "57246542-96fe-1a63-e053-0824d011072a",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DopplerValue",
+      "description": "A non-secret value read from Doppler, of unknown shape; printed as a prefix.",
+      "type": "string",
+      "examples": [
+        "57246542-96fe-1a63-e053-0824d011072a"
+      ],
+      "maxLength": 65536
+    }
+  },
+  {
     "name": "DopplerServiceAccountName",
     "secret": false,
     "identifier": false,
