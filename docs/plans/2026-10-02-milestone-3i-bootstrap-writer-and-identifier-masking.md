@@ -10,6 +10,17 @@ include `cargo clippy -p willikins-providers-doppler --all-targets` and `cargo t
 (the "Providers" section still said "Buildkite is not live", stale since milestone 3a); task A4 replaced that
 sentence with a Buildkite bullet naming all four live tools, since that is the closest fit to "update the
 README's tool list" that the repository actually has.
+**Addendum:** 2026-10-02 (task B4) — decision (b4) and task B4's own text predicted that adding `Value`'s optional
+`"masked": { "const": true }` schema property would also regenerate `willikins-journal`'s `schema_generation__*`
+snapshots. It does not: every journal field that holds a `Value` (`PlanRecord.inputs`, `RunRecord.outputs`,
+`RunNode.outputs`) is wrapped in `Redacted<T>`, whose `JsonSchema` is the permissive `{}` for every `T`
+(`crates/willikins-journal/src/redacted.rs`) — so `Value`'s own schema never appears in a published journal shape,
+and `masked` cannot appear there either. `cargo test -p willikins-journal` was still run as part of commit 2's
+gate and is green, with no journal `.snap` touched (confirmed by `git status`). `willikins-core`'s seven
+`schema_generation__*` snapshots and `willikins-server`'s `mcp_server__the_tool_list_and_every_schema_is_snapshotted`
+did change, each by exactly the `masked` property (and, for two of the core snapshots, insta 1.48 also dropped a
+stale `assertion_line` metadata line on regeneration — not drift, see milestone 3i task B2's own addendum for the
+same observation).
 **Gate:** OPEN for every task except **B8**, which waits on the coordinator (it changes thirteen characterization
 entries; see "Needs the coordinator"). Nothing here calls a provider except the live bootstrap cycle (A7), which is
 written by an implementer and run once by the coordinator against the SANDBOX Buildkite organisation.

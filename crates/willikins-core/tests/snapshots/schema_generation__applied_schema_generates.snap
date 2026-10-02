@@ -331,6 +331,9 @@ expression: schema
         "list": {
           "type": "boolean"
         },
+        "masked": {
+          "const": true
+        },
         "redacted": {
           "const": true
         },

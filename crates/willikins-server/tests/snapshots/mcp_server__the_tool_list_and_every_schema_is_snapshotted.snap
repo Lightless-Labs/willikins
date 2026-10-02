@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-server/tests/mcp_server.rs
-assertion_line: 241
 expression: snapshot
 ---
 [
@@ -327,6 +326,9 @@ expression: snapshot
           "properties": {
             "list": {
               "type": "boolean"
+            },
+            "masked": {
+              "const": true
             },
             "redacted": {
               "const": true
@@ -961,6 +963,9 @@ expression: snapshot
           "properties": {
             "list": {
               "type": "boolean"
+            },
+            "masked": {
+              "const": true
             },
             "redacted": {
               "const": true
