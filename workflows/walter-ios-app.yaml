@@ -2309,6 +2309,7 @@ steps:
         import os
         import plistlib
         import re
+        import secrets
         import signal
         import tempfile
         import urllib.request
@@ -2379,6 +2380,7 @@ steps:
                     raise SigningError("a signing certificate and password are required")
                 self._p12 = p12
                 self._password = password
+                self._keychain_password = secrets.token_hex(24)
                 self._runner = runner
                 self._opener = opener or build_opener()
                 self._path = keychain_path()
@@ -2393,10 +2395,10 @@ steps:
                 _run_ignore(self._runner, ["delete-keychain", self._path])
                 self._previous_handler = signal.signal(signal.SIGTERM, _raise_sigterm)
                 try:
-                    _run(self._runner, ["create-keychain", "-p", self._password, self._path])
+                    _run(self._runner, ["create-keychain", "-p", self._keychain_password, self._path])
                     _run(self._runner, ["set-keychain-settings", "-lut", "7200", self._path])
                     _run(self._runner, ["list-keychains", "-d", "user", "-s"] + list(self.captured_search_list) + [self._path])
-                    _run(self._runner, ["unlock-keychain", "-p", self._password, self._path])
+                    _run(self._runner, ["unlock-keychain", "-p", self._keychain_password, self._path])
                     self._tmp = tempfile.mkdtemp(prefix="walter-signing-")
                     os.chmod(self._tmp, 0o700)
                     p12_path = os.path.join(self._tmp, "distribution.p12")
@@ -2410,7 +2412,7 @@ steps:
                     _run(self._runner, ["import", wwdr_path, "-k", self._path, "-T", "/usr/bin/codesign", "-T", SECURITY])
                     _run(
                         self._runner,
-                        ["set-key-partition-list", "-S", PARTITION_LIST, "-s", "-k", self._password, self._path],
+                        ["set-key-partition-list", "-S", PARTITION_LIST, "-s", "-k", self._keychain_password, self._path],
                     )
                 except BaseException:
                     self.__exit__(None, None, None)
@@ -2852,7 +2854,7 @@ steps:
                     self.assertEqual(new_list[5:-1], ["captured-entry"])
                     self.assertEqual(runner.calls[9][0], [SEC, "list-keychains", "-d", "user", "-s", "captured-entry"])
                     self.assertIn("-P", runner.calls[6][0])
-                    self.assertIn("pw", runner.calls[6][0])
+                    self.assertEqual([i for i, c in enumerate(runner.calls) if "pw" in c[0]], [6])
 
             def test_keychain_restores_on_exception(self):
                 with _home_env() as home:

@@ -94,7 +94,7 @@ class SigningTests(unittest.TestCase):
             self.assertEqual(new_list[5:-1], ["captured-entry"])
             self.assertEqual(runner.calls[9][0], [SEC, "list-keychains", "-d", "user", "-s", "captured-entry"])
             self.assertIn("-P", runner.calls[6][0])
-            self.assertIn("pw", runner.calls[6][0])
+            self.assertEqual([i for i, c in enumerate(runner.calls) if "pw" in c[0]], [6])
 
     def test_keychain_restores_on_exception(self):
         with _home_env() as home:

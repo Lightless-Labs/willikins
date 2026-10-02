@@ -18,6 +18,7 @@ import hashlib
 import os
 import plistlib
 import re
+import secrets
 import signal
 import tempfile
 import urllib.request
@@ -88,6 +89,7 @@ class SigningKeychain:
             raise SigningError("a signing certificate and password are required")
         self._p12 = p12
         self._password = password
+        self._keychain_password = secrets.token_hex(24)
         self._runner = runner
         self._opener = opener or build_opener()
         self._path = keychain_path()
@@ -102,10 +104,10 @@ class SigningKeychain:
         _run_ignore(self._runner, ["delete-keychain", self._path])
         self._previous_handler = signal.signal(signal.SIGTERM, _raise_sigterm)
         try:
-            _run(self._runner, ["create-keychain", "-p", self._password, self._path])
+            _run(self._runner, ["create-keychain", "-p", self._keychain_password, self._path])
             _run(self._runner, ["set-keychain-settings", "-lut", "7200", self._path])
             _run(self._runner, ["list-keychains", "-d", "user", "-s"] + list(self.captured_search_list) + [self._path])
-            _run(self._runner, ["unlock-keychain", "-p", self._password, self._path])
+            _run(self._runner, ["unlock-keychain", "-p", self._keychain_password, self._path])
             self._tmp = tempfile.mkdtemp(prefix="walter-signing-")
             os.chmod(self._tmp, 0o700)
             p12_path = os.path.join(self._tmp, "distribution.p12")
@@ -119,7 +121,7 @@ class SigningKeychain:
             _run(self._runner, ["import", wwdr_path, "-k", self._path, "-T", "/usr/bin/codesign", "-T", SECURITY])
             _run(
                 self._runner,
-                ["set-key-partition-list", "-S", PARTITION_LIST, "-s", "-k", self._password, self._path],
+                ["set-key-partition-list", "-S", PARTITION_LIST, "-s", "-k", self._keychain_password, self._path],
             )
         except BaseException:
             self.__exit__(None, None, None)
