@@ -183,6 +183,19 @@ confirms no `.snap` anywhere in the tree was touched by this task's two commits.
 2. **A test gap in decision (a2).** Nothing pinned that only a `404` reads `Missing`. Pinned in `0f8a2ec`
    with a `403` mock.
 
+**Addendum (2026-10-02, coordinator):** the milestone landed and the coordinator closed its own items. The approved
+sentences are in CLAUDE.md, AGENTS.md and the design doc (`d958c4a`), with B8's eighth identifier type, `DopplerValue`.
+Full gate on `d958c4a`: 196 suites, 3161 tests, 0 failed. A7's live bootstrap cycle ran once in the sandbox org: the
+writer and the gate both read Absent, one ensure wrote and converged, the gate then read Present, no build was
+scheduled or started by the write, `buildkite.pipeline.ensure` still read Present, and the pipeline was deleted (count
+back to 0). Verify item 4: the real `la-bande-a-bonnot/walter` pipeline is willikins-managed, provider `github`,
+trigger mode `code`, building branches and pull requests with no branch filter, and stores the 52-character frozen
+upload bootstrap; a push before the writer runs would start a build that finds no root `.buildkite/pipeline.yml` in the
+monorepo and fails without side effects. Verify item 5: `PIPELINE_CREATION_TOKEN` holds `read_clusters`,
+`read_pipelines`, `write_pipelines`. Verify item 8: the journal was `0644`; the coordinator set it to `0600`. Walter's
+real `plan --live` now reads 17 NoOp, 1 Create (`walter_files`), 1 Update (`bootstrap`), 60 Compute, 1 Blocked
+(`m5_apns_key`), with the App Store Connect issuer id and key id printed as prefixes.
+
 Four mutations were killed (M5 to M8). The characterization diff since 3i's base is exactly A5's two
 entries, Walter's four lines and B8's ten lines. One residual is left for the coordinator: a `for_each` over
 an identifier-typed list in a non-shipped document would print full instance keys, since B7's guards cover
