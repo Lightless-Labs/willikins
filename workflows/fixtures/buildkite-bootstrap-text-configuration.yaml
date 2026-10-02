@@ -1,0 +1,30 @@
+# Milestone 3i, decision (a10) and acceptance 11
+# (docs/plans/2026-10-02-milestone-3i-bootstrap-writer-and-identifier-masking.md):
+# operator.acknowledge's `step` output (`Text`) bound to
+# buildkite.pipeline.bootstrap.ensure's `configuration` port. No `Text =>
+# RepoFile` conversion row exists (decision (a1): a `RepoFile` comes only
+# from `repo.file.render`), so this is a plain type mismatch, not a
+# literal refusal. The `acknowledged` port needs an `OperatorAcknowledgement`
+# workflow input because `check` refuses a default or a literal for that
+# type (milestone 3e, decision (j) point 6). Pinned by
+# `buildkite_bootstrap_text_configuration_fails_check_with_exactly_one_error`
+# (crates/willikins-dsl/tests/acceptance.rs). `check` must return exactly
+# one error:
+#   TypeMismatch { node: bootstrap, port: configuration,
+#                  expected: Exact(RepoFile), found: Text }
+name: buildkite-bootstrap-text-configuration
+description: operator.acknowledge's Text output bound to buildkite.pipeline.bootstrap.ensure's configuration port.
+inputs:
+  bootstrap_done: { type: OperatorAcknowledgement }
+steps:
+  ack:
+    tool: operator.acknowledge
+    with:
+      step: Confirm the willikins-test pipeline exists
+      acknowledged: ${{ inputs.bootstrap_done }}
+  bootstrap:
+    tool: buildkite.pipeline.bootstrap.ensure
+    with:
+      org: willikins-test
+      slug: third-thoughts
+      configuration: ${{ steps.ack.step }}
