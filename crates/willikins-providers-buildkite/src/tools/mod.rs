@@ -3,6 +3,7 @@
 //! Buildkite tool table.
 
 pub mod cluster_get;
+mod compare;
 pub mod pipeline_bootstrap_gate;
 pub mod pipeline_ensure;
 
