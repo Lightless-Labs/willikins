@@ -2093,6 +2093,7 @@ steps:
                 with mock.patch.dict(os.environ, {"DOPPLER_TOKEN": "tok"}):
                     result = common.fetch_doppler("signing", opener=opener)
                 self.assertEqual(set(result), set(common.SIGNING_SECRET_NAMES))
+                self.assertEqual(common.DOPPLER_STAGE_NAMES["upload"], common.ASC_SECRET_NAMES)
                 self.assertNotIn("DOPPLER_TOKEN", os.environ)
 
                 short = FakeOpener(json.dumps({"APP_STORE_CONNECT_API_KEY_ID": "x"}).encode(), url=common.DOPPLER_URL)
