@@ -133,6 +133,22 @@ rather than converging alongside `doppler`/`pipeline`/`sample_files` as every ot
 already does. No acceptance criterion changes; this is the one place in the whole task where "read from the
 document" (acceptance 11's own words) cannot literally hold.
 
+**Addendum (2026-10-01, adversarial pass):** an independent attack on D1–W7, recorded in
+`docs/research/2026-10-01-m3h-adversarial-pass.md` with 12 mutations, each restored and confirmed by `cmp`. It found
+two real defects in the rendered scripts and three test gaps, and fixed all five test-first.
+1. W4's addendum was wrong. The keychain was not given "a random password": `SigningKeychain` reused the `.p12`
+   password, so that secret reached four argv lists. The keychain password is now `secrets.token_hex(24)`, and the
+   `.p12` password reaches only `security import -P` (`2a36f1d`).
+2. `assert_clean` now runs on the failing path too (cookbook §6.1 point 7, §11) (`5056115`).
+3. The upload stage's Doppler allowlist is pinned to the three App Store Connect names (`4b03410`).
+4. `doppler.project_member.ensure` gained tests for an exact name match, the member's type (`6148101`), and keeping
+   an environment the request never named (`5bb1532`). No production change.
+
+The document is now 196,549 bytes of W0's 196,608 budget, so any further template change must trim a script first
+(risk 1). There are two new verify items: the value shape of `com.apple.developer.devicecheck.appattest-environment`
+in an App Store profile (`check_signing` compares it for equality), and whether `cmd_upload` should re-run
+`_verify_receipt` under a test (a surviving mutant, left unfixed for lack of bytes).
+
 ## Goal
 
 The operator, 2026-10-01, verbatim: "Sample is meant to get its fucking pipeline. It should already have it. And I
