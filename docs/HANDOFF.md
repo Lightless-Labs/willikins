@@ -7,7 +7,33 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-10-01) — Sample is live on the real accounts; milestone 3g (file-writing) is built, attacked and live-proven in the sandbox; the real re-apply waits on the operator
+### RESUME HERE (2026-10-02) — Sample's full scaffold, CI pipeline, CI Doppler access and bootstrap are built, gated and live-proven; the real apply waits for the operator's approval
+
+- **Live state:** `main` pushed at the handoff commit. Full gate by the coordinator on `d958c4a`: 196 suites / 3161
+  tests / 0 failed. Goal and rules: `goal.txt` (untracked, never commit).
+- **Sample's real `plan --live` (2026-10-02, read-only):** 17 NoOp, 1 Create (`sample_files`: one signed commit of 35
+  files plus the marker to `main` of Example-Org/monorepo), 1 Update (`bootstrap`: the pipeline's stored steps),
+  60 Compute, 1 Blocked (`m5_apns_key`, the APNs `.p8`, which no Apple API creates). The rendered set builds with
+  `bazel build --config=ci //apps/sample/...` (8 targets) and its 36 Python tests pass. The operator approves the
+  plan before the real apply (`goal.txt`'s mandatory pause); afterwards re-run until every node reads NoOp, with
+  `--input m5_apns_key_done=done` once the operator says the key is stored.
+- **Milestone 3h** (`docs/plans/2026-10-01-milestone-3h-sample-release-pipeline.md`): Sample's full CI/CD pipeline
+  as scaffold templates (validation, signing preflight, package, upload, release, stage-input plugin, CI scripts and
+  tests), `doppler.project_member.ensure` (m6 became `ci_doppler_access`, granting the CI service account `Buildkite`
+  viewer on `sample` `prd`), `Action::Update`. Profiles are no longer copied into Doppler (`2b36422`).
+- **Milestone 3i** (`docs/plans/2026-10-02-milestone-3i-bootstrap-writer-and-identifier-masking.md`):
+  `buildkite.pipeline.bootstrap.ensure` writes a willikins-owned pipeline's stored configuration only from a
+  document-rendered `RepoFile` (the paste is gone); identifier types print as prefixes everywhere but the CLI's
+  `--reveal`. CLAUDE.md/AGENTS.md invariants and the design doc updated (`d958c4a`).
+- **Credentials:** willikins' real Doppler service account holds `create_enclave_project`, `team`, `service_accounts`
+  (granted 2026-10-01). Write token `github/example-org_willikins` `GH_CONTENTS_WRITE_TOKEN` (expires 2027-10-02).
+- **Host:** other sessions run cargo almost nonstop; agents wait for 3 quiet seconds, not 20, and the coordinator
+  gates and commits work agents could not. The disk filled twice; willikins' `target/` was swept to 15 GB.
+- **Open, after Sample:** composition (milestone 2b, `uses:`), splitting Sample into an organisation document and an
+  ios-app document; a check refusal of identifier-typed `for_each` sources (3i residual); the near-miss ownership test
+  on `buildkite.pipeline.ensure`; `AppleProfileContent` may no longer need to be secret-typed.
+
+### Earlier (2026-10-01) — Sample is live on the real accounts; milestone 3g (file-writing) is built, attacked and live-proven in the sandbox; the real re-apply waits on the operator
 
 - **Live state:** `main` pushed at the handoff commit on top of `70fa218`. Full gate by the coordinator on `70fa218`:
   188 suites / 2919 tests / 0 failed. Active goal and its rules: `goal.txt` at the repo root (untracked, never commit).
