@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use willikins_providers_http::{Credential, CredentialError, Http, ProviderError};
 use willikins_types::{
     DopplerConfig, DopplerConfigName, DopplerProject, DopplerProjectRole, DopplerSecretValue,
-    DopplerServiceToken, DopplerTokenName, EnvironmentSlug, SecretName, Text,
+    DopplerServiceToken, DopplerTokenName, DopplerValue, EnvironmentSlug, SecretName,
 };
 
 /// Doppler's REST API base URL.
@@ -462,13 +462,17 @@ impl DopplerClient {
     }
 
     /// Identical endpoint and shape to [`Self::get_secret`], deserialized
-    /// into [`Text`] instead of [`DopplerSecretValue`] — the whole reason
-    /// `doppler.value.get` exists (see that tool's module doc). Doppler's
-    /// response carries no `secret`/`non-secret` distinction of its own;
-    /// the difference is entirely which Rust type this client parses
-    /// `value.computed` into, which is exactly the "choosing a tool is
-    /// the author's declaration of non-secrecy" design the tool's module
-    /// doc states.
+    /// into [`DopplerValue`] instead of [`DopplerSecretValue`] — the whole
+    /// reason `doppler.value.get` exists (see that tool's module doc).
+    /// Doppler's response carries no `secret`/`non-secret` distinction of
+    /// its own; the difference is entirely which Rust type this client
+    /// parses `value.computed` into, which is exactly the "choosing a
+    /// tool is the author's declaration of non-secrecy" design the tool's
+    /// module doc states. `DopplerValue` rather than
+    /// [`willikins_types::Text`] since milestone 3i, task B8: the value
+    /// most often read this way is an App Store Connect issuer id or key
+    /// id, and an identifier type is what masks it on every output
+    /// surface by default.
     ///
     /// # Errors
     ///
@@ -478,11 +482,11 @@ impl DopplerClient {
         project: &DopplerProject,
         config: &DopplerConfigName,
         name: &SecretName,
-    ) -> Result<Option<Text>, ProviderError> {
+    ) -> Result<Option<DopplerValue>, ProviderError> {
         let path =
             format!("/v3/configs/config/secret?project={project}&config={config}&name={name}");
         self.http
-            .get::<TextValueBody>(&path)
+            .get::<DopplerValueBody>(&path)
             .map(|body| body.value.computed)
     }
 
@@ -1129,17 +1133,18 @@ struct SecretValueBody {
     computed: Option<DopplerSecretValue>,
 }
 
-/// The same envelope [`SecretBody`] parses, deserialized into [`Text`]
-/// instead: [`DopplerClient::get_value`]'s response shape.
+/// The same envelope [`SecretBody`] parses, deserialized into
+/// [`DopplerValue`] instead: [`DopplerClient::get_value`]'s response
+/// shape.
 #[derive(Debug, Deserialize)]
-struct TextValueBody {
-    value: TextValueValueBody,
+struct DopplerValueBody {
+    value: DopplerValueValueBody,
 }
 
 /// See [`SecretValueBody`] -- identical reasoning, non-secret payload.
 #[derive(Debug, Deserialize)]
-struct TextValueValueBody {
-    computed: Option<Text>,
+struct DopplerValueValueBody {
+    computed: Option<DopplerValue>,
 }
 
 #[cfg(test)]

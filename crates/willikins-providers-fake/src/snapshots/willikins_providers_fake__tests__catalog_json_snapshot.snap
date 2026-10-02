@@ -94,7 +94,7 @@ expression: "catalog.list_tools_json()[\"tools\"]"
         "required": true,
         "ty": {
           "kind": "exact",
-          "type": "Text"
+          "type": "DopplerValue"
         }
       }
     },
@@ -113,7 +113,7 @@ expression: "catalog.list_tools_json()[\"tools\"]"
         "required": true,
         "ty": {
           "kind": "exact",
-          "type": "Text"
+          "type": "DopplerValue"
         }
       }
     },
@@ -657,7 +657,7 @@ expression: "catalog.list_tools_json()[\"tools\"]"
     "key": [],
     "name": "doppler.value.get",
     "outputs": {
-      "value": "Text"
+      "value": "DopplerValue"
     },
     "pure": true
   },

@@ -41,8 +41,9 @@ use willikins_types::{
     AppleCertificateSerial, AppleCertificateType, AppleIssuerId, AppleKeyId,
     AppleObservableCapabilityType, AppleSigningKey, BuildkiteClusterName, BuildkiteOrg,
     BuildkitePipelineSlug, BuildkiteToken, DomainType, DopplerConfig, DopplerSecretValue,
-    GitHubOrg, GitHubRepo, GitHubToken, OpaqueSecret, OperatorAcknowledgement, ProjectSlug,
-    RepoFile, RepoPath, RepoVisibility, SecretName, TemplateSource, TemplateValue, Text,
+    DopplerValue, GitHubOrg, GitHubRepo, GitHubToken, OpaqueSecret, OperatorAcknowledgement,
+    ProjectSlug, RepoFile, RepoPath, RepoVisibility, SecretName, TemplateSource, TemplateValue,
+    Text,
 };
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
@@ -126,7 +127,8 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
             .with_doppler_value(
                 &config(),
                 &value_name(),
-                Text::parse("57246542-96fe-1a63-e053-0824d011072a").expect("a valid text value"),
+                DopplerValue::parse("57246542-96fe-1a63-e053-0824d011072a")
+                    .expect("a valid Doppler value"),
             )
             .with_doppler_config(&config())
             .with_doppler_config_inheritable(&config())
@@ -214,14 +216,15 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
     apple_issuer_id_parse_inputs.insert(
         port("value"),
         Value::known(
-            Text::parse("57246542-96fe-1a63-e053-0824d011072a").expect("valid text value"),
+            DopplerValue::parse("57246542-96fe-1a63-e053-0824d011072a")
+                .expect("valid Doppler value"),
         ),
     );
 
     let mut apple_key_id_parse_inputs = Inputs::new();
     apple_key_id_parse_inputs.insert(
         port("value"),
-        Value::known(Text::parse("2X9R4HXF34").expect("valid text value")),
+        Value::known(DopplerValue::parse("2X9R4HXF34").expect("valid Doppler value")),
     );
 
     let mut github_token_parse_inputs = Inputs::new();
