@@ -11,6 +11,7 @@
 **Addendum:** 2026-09-22 — first live verification of the App Store Connect provider against a real developer account: `filter[identifier]` matches by **substring**, not exactly, so the byte-for-byte compare is load-bearing and the read now paginates. A provider's filter is a narrowing hint, never a key. See "Credentials are ports, resolvers are nodes" below and `docs/research/2026-09-16-app-store-connect.md`.
 **Addendum:** 2026-09-12 — milestone 2 plan: two kinds of secret (graph secrets behind `SinkToken`, execution-context credentials behind one `authorize` function and a clippy entry); TLS terminated at the platform edge; the remote server plans and applies by workflow name only; a tool refuses rather than reconciles a non-key attribute it should not change; composition split out of milestone 2 into its own plan. See "Milestone 2 decisions".
 **Addendum:** 2026-09-23 — total conversions (milestone 3d): a port of type B accepts a scalar A iff A = B or a registered row A → B exists; one hop, no transitive search; secrecy only goes up, checked at compile time; check records the chosen conversion in Checked, and plan and apply apply it without the table. See `docs/plans/2026-09-23-milestone-3d-conversions.md`.
+**Addendum:** 2026-10-02 — milestone 3i: a Buildkite pipeline's stored configuration is written from a document-rendered RepoFile; identifier types print as prefixes on every output surface. See docs/plans/2026-10-02-milestone-3i-bootstrap-writer-and-identifier-masking.md.
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
 runs reusable, composable project-provisioning workflows against GitHub, Doppler, Buildkite,
@@ -24,7 +25,8 @@ a secret. The agent plans; the butler acts.
 - Remote-first. Willikins is an MCP server over Streamable HTTP running on its own host. The
   trust boundary is a network boundary, so the agent's shell access on its own machine is
   irrelevant to the butler's credentials. The same binary offers stdio as a local mode.
-- The agent receives handles and identifiers only, never secret values.
+- The agent receives handles and identifiers only, never secret values. Account identifiers
+  reach it as a short prefix; only the operator's own `--reveal` prints them whole.
 - Redaction is applied at the boundary to plan output, run logs, and provider error bodies.
 - Provider credentials are held server-side and are never workflow inputs. Provider auth is an
   implicit execution context, not a parameter.
@@ -43,6 +45,9 @@ a secret. The agent plans; the butler acts.
 - Secrecy is a property of the type, not a wrapper. `GitHubToken` is secret by definition.
   Debug and Display print a redacted marker. Serialization is permitted only into sink
   contexts. The taint check reads the property off the type.
+- Disclosure is a property of the type too. An identifier type prints as a prefix on every
+  output surface, decided where the type is defined, never in render code; what willikins reads
+  back (the journal, plan fingerprints) keeps the full value.
 - Format validation is pure and happens at parse time. Liveness and scope validation is a
   butler-side operation on the type that verifies against the provider without exposing the
   value.
@@ -72,6 +77,8 @@ a secret. The agent plans; the butler acts.
 - No tool may reduce to "call an API with my credentials" or "run a command". The step set is
   closed. An open step would make the isolation theatre: a prompt-injected agent could mint a
   token and ship it anywhere.
+- A Buildkite pipeline's stored configuration is the one executed artifact willikins writes
+  outside a commit, and only from a `RepoFile` the document renders (milestone 3i).
 - A secret output may only flow to a secret-accepting input. No coercion. Template rendering
   accepts no secrets at all. ("No coercion" means no coercion of a secret into a non-secret sink.
   A registered conversion can only raise secrecy, so none can produce one, and the secret check
@@ -153,7 +160,8 @@ once with a complete, typed set.
   steps. Provisioning and templating live in one graph because they reference each other:
   the Buildkite YAML needs the pipeline slug, CLAUDE.md names the Doppler project, README
   badges need the repo.
-- The type system guarantees a secret can never be rendered into a committed file.
+- The type system guarantees a secret can never be rendered into a committed file or a stored
+  pipeline configuration.
 - The second run is the feature. Record template version and answers in the repo so a later
   run can re-render, three-way merge, and open a PR per repo when an org convention changes.
 - Profiles compose as layers: base, plus rust-crate or ios-app, plus open-source or private.
