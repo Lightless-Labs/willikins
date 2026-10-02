@@ -1077,7 +1077,7 @@ fn step_7(tool: &DopplerProjectMemberEnsure, admin: &Http, harness: &mut Harness
 fn step_8(ci: &Http, harness: &mut Harness, ctx: &MemberCtx) {
     let project = &ctx.project;
     let download = ci.get::<Json>(&format!(
-        "/v3/configs/config/secrets/download?project={project}&config=prd_ci"
+        "/v3/configs/config/secrets/download?project={project}&config=prd_ci&format=json"
     ));
     let download_ok = download.is_ok();
     let has_key = download
@@ -1088,7 +1088,8 @@ fn step_8(ci: &Http, harness: &mut Harness, ctx: &MemberCtx) {
     assert!(
         download_ok && has_key,
         "step 8: the CI account's token could not read the inherited secret through \
-         prd_ci's download endpoint (ok: {download_ok}, key present: {has_key})"
+         prd_ci's download endpoint (ok: {download_ok}, key present: {has_key}, error: {:?})",
+        download.as_ref().err()
     );
 
     let one = ci.get::<Json>(&format!(
