@@ -150,37 +150,42 @@ fn bootstrap_file() -> RepoFile {
     .expect("a valid bootstrap RepoFile")
 }
 
-/// Scheduled and running build counts, read straight off a pipeline's
-/// own JSON (verify item 3: "a `PATCH` does not itself trigger a
-/// build"). Diagnostic only -- printed, never asserted against, since a
-/// single live run cannot rule out a build Buildkite schedules for an
-/// unrelated reason. Kept test-local, never added to [`BuildkiteClient`]:
-/// nothing in this crate's tools needs either field.
-#[derive(Debug, Clone, Copy)]
+/// Scheduled and running build counts, deserialized straight off a
+/// pipeline's own response (verify item 3: "a `PATCH` does not itself
+/// trigger a build"). Diagnostic only -- printed, never asserted
+/// against, since a single live run cannot rule out a build Buildkite
+/// schedules for an unrelated reason. Kept test-local, never added to
+/// [`BuildkiteClient`]: nothing in this crate's tools needs either
+/// field. Its own two-field `Deserialize`, not `serde_json::Value`, so
+/// the credential-bearing fields the same response carries
+/// (`configuration`, `provider.webhook_url`, trust boundary 4) are never
+/// even parsed into a value this test could print or `{:?}`.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
 struct BuildCounts {
-    scheduled: Option<i64>,
-    running: Option<i64>,
+    scheduled_builds_count: Option<i64>,
+    running_builds_count: Option<i64>,
 }
 
 impl BuildCounts {
     /// `GET /v2/organizations/{org}/pipelines/{slug}` through the raw
     /// [`Http`] client (never through [`BuildkiteClient`], which has no
     /// typed field for either count and must not grow one just for this
-    /// test), reading only the two counts and dropping the rest of the
-    /// body immediately.
+    /// test).
     fn read(http: &Http, org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) -> Self {
-        let body = http
-            .get::<serde_json::Value>(&format!("/v2/organizations/{org}/pipelines/{slug}"))
-            .expect("the pipeline exists at this point in the cycle");
-        Self {
-            scheduled: body
-                .get("scheduled_builds_count")
-                .and_then(serde_json::Value::as_i64),
-            running: body
-                .get("running_builds_count")
-                .and_then(serde_json::Value::as_i64),
-        }
+        http.get(&format!("/v2/organizations/{org}/pipelines/{slug}"))
+            .expect("the pipeline exists at this point in the cycle")
     }
+}
+
+/// A one-field `Deserialize`, not `serde_json::Value`: `the_bootstrap_cycles_pipeline_is_gone`'s
+/// leftover scan reads a pipeline list response whose items carry no
+/// credential-bearing field (unlike the single-pipeline response
+/// [`BuildCounts`] and [`check_absent_before_start`] each avoid parsing
+/// in full), but there is still no reason to deserialize more of each
+/// item than the one field that scan reads.
+#[derive(serde::Deserialize)]
+struct PipelineSlugOnly {
+    slug: String,
 }
 
 /// Pages `GET /v2/organizations/{org}/pipelines` to the first short page,
@@ -236,14 +241,26 @@ impl Drop for PipelineGuard {
 /// leftover from an aborted run is the operator's to remove by hand --
 /// this slug is generated from the current time, so a collision should
 /// never happen on its own.
+///
+/// Reads into `serde::de::IgnoredAny`, not `serde_json::Value`: the
+/// "already exists" arm must never format a parsed body, since a real
+/// pipeline's response carries `configuration` and
+/// `provider.webhook_url` (trust boundary 4) -- only the HTTP status is
+/// ever named.
 fn check_absent_before_start(raw_http: &Http, org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) {
-    match raw_http.get::<serde_json::Value>(&format!("/v2/organizations/{org}/pipelines/{slug}")) {
+    match raw_http
+        .get::<serde::de::IgnoredAny>(&format!("/v2/organizations/{org}/pipelines/{slug}"))
+    {
         Err(err) if err.status == Some(404) => {
             println!("step 2: `{org}/{slug}` reads 404 before this run: pass");
         }
-        other => panic!(
-            "`{org}/{slug}` is not absent before this run starts ({other:?}); it must be \
-             removed by hand before this test can run"
+        Ok(_) => panic!(
+            "`{org}/{slug}` already exists before this run starts; it must be removed by \
+             hand before this test can run"
+        ),
+        Err(err) => panic!(
+            "`{org}/{slug}` answered status {:?} before this run starts, expected 404",
+            err.status
         ),
     }
 }
@@ -499,7 +516,7 @@ fn buildkite_live_bootstrap_cycle() {
     let counts_before = BuildCounts::read(&raw_http, &org, &slug);
     println!(
         "step 6: build counts before the write: scheduled={:?} running={:?}",
-        counts_before.scheduled, counts_before.running
+        counts_before.scheduled_builds_count, counts_before.running_builds_count
     );
     step6_write_and_converge(
         &bootstrap_tool,
@@ -511,7 +528,7 @@ fn buildkite_live_bootstrap_cycle() {
     let counts_after = BuildCounts::read(&raw_http, &org, &slug);
     println!(
         "step 6: build counts after the write: scheduled={:?} running={:?}",
-        counts_after.scheduled, counts_after.running
+        counts_after.scheduled_builds_count, counts_after.running_builds_count
     );
 
     // Step 7.
@@ -555,19 +572,15 @@ fn the_bootstrap_cycles_pipeline_is_gone() {
 
     let mut leftovers = Vec::new();
     for page in 1..=MAX_PIPELINE_PAGES {
-        let items: Vec<serde_json::Value> = http
+        let items: Vec<PipelineSlugOnly> = http
             .get(&format!(
                 "/v2/organizations/{org}/pipelines?page={page}&per_page=100"
             ))
             .expect("lists the organisation's pipelines");
         let len = items.len();
         for item in &items {
-            if let Some(slug) = item
-                .get("slug")
-                .and_then(serde_json::Value::as_str)
-                .filter(|slug| slug.starts_with(SLUG_PREFIX))
-            {
-                leftovers.push(slug.to_string());
+            if item.slug.starts_with(SLUG_PREFIX) {
+                leftovers.push(item.slug.clone());
             }
         }
         if len < 100 {
