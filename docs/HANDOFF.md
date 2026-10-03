@@ -17,6 +17,12 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `bazel build --config=ci //apps/walter/...` (8 targets) and its 36 Python tests pass. The operator approves the
   plan before the real apply (`goal.txt`'s mandatory pause); afterwards re-run until every node reads NoOp, with
   `--input m5_apns_key_done=done` once the operator says the key is stored.
+- **Applied 2026-10-03 with the operator's approval** (run `01a10016`): `walter_files` committed Walter's scaffold to
+  `main` of Bande-a-Bonnot/monorepo (one commit, GitHub-verified signature, 36 files, all added under `apps/walter/`)
+  and `bootstrap` stored the rendered bootstrap in `la-bande-a-bonnot/walter`. A fresh `plan --live` reads 19 NoOp,
+  60 Compute, 1 Blocked (`m5_apns_key`): only the operator's APNs key remains.
+- **The operator's question for later (2026-10-03):** what happens if the repository is a new one, or the monorepo is
+  not cloned locally? (Not yet answered, by the operator's choice.)
 - **Milestone 3h** (`docs/plans/2026-10-01-milestone-3h-walter-release-pipeline.md`): Walter's full CI/CD pipeline
   as scaffold templates (validation, signing preflight, package, upload, release, stage-input plugin, CI scripts and
   tests), `doppler.project_member.ensure` (m6 became `ci_doppler_access`, granting the CI service account `Buildkite`
