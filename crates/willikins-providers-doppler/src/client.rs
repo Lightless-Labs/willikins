@@ -534,6 +534,76 @@ impl DopplerClient {
         Ok(())
     }
 
+    /// `GET /v3/configs/config/secrets/names?project=<project>&config=<config>&include_dynamic_secrets=false&include_managed_secrets=false`.
+    ///
+    /// Doppler's reference (`https://docs.doppler.com/reference/secrets-names.md`,
+    /// fetched 2026-10-04): "List Names", "Secret Names". Query: `project`
+    /// (required), `config` (required), `include_dynamic_secrets`
+    /// (boolean, default `false`, "Whether or not to issue leases and
+    /// include dynamic secret values for the config"),
+    /// `include_managed_secrets` (boolean, default `true`, "Whether to
+    /// include Doppler's auto-generated (managed) secrets"). `200`:
+    /// `{"names": ["STRIPE", "ALGOLIA", "DATABASE", "USER"]}`.
+    ///
+    /// **Why `include_dynamic_secrets=false`, explicit rather than relied
+    /// on as the default.** `true` issues leases — a side effect this
+    /// read must never cause (milestone 3j, trust boundary 1: "The gate
+    /// calls only `GET /v3/configs/config/secrets/names` and `GET
+    /// /v3/configs/config`... It never asks Doppler to issue a
+    /// dynamic-secret lease."). The default is already `false`, but
+    /// pinning it in the query (and in this method's mock tests, with
+    /// `match_query`) means a future refactor that drops the parameter
+    /// cannot silently flip this call onto the leasing path.
+    ///
+    /// **Why `include_managed_secrets=false`.** Managed names are
+    /// Doppler's own auto-injected `DOPPLER_*` variables, which an
+    /// operator never stores there themselves; including them would
+    /// answer `true` for a name no document put in the config, which is
+    /// not what a caller of this method is asking. Doppler's own default
+    /// for this parameter is `true` (include them), so this call departs
+    /// from the default deliberately, in the other direction from
+    /// `include_dynamic_secrets`.
+    ///
+    /// **What this returns, and what it never does.** Only whether `name`
+    /// is present in the listed array, compared to `name.as_str()` byte
+    /// for byte. The listed names are never parsed as [`SecretName`] (a
+    /// name Doppler's own grammar allows but willikins' refuses must not
+    /// fail this read), and the list itself never leaves this method: it
+    /// is not returned, logged, or formatted anywhere (milestone 3j, trust
+    /// boundary 2: "The list never leaves the client... No listed name
+    /// other than the one asked for reaches an output, a `ToolError`, the
+    /// journal, `tracing` or a panic message.").
+    ///
+    /// **Verify item 1 (unresolved as of this writing).** Nothing on
+    /// Doppler's reference page says whether this endpoint lists a name
+    /// inherited from a base config the caller's `config` inherits. The
+    /// milestone 3j plan's gate (`doppler.secret_name.gate`, not yet
+    /// written) is correct under either answer, by also walking
+    /// `inherits` itself; this method does not need to know, and does not
+    /// guess.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`]. A malformed `2xx` body (for example
+    /// `{"names": null}` or a body missing `names` entirely) is a
+    /// [`ProviderError`] carrying that status and a static message, never
+    /// the response text, from [`Http::get`]'s own parse-failure arm. The
+    /// tool that calls this method (not yet written) wraps that into a
+    /// message naming `config` and `name` instead.
+    #[allow(dead_code)] // `doppler.secret_name.gate` (task B2, not yet written) is the only caller
+    pub(crate) fn secret_name_listed(
+        &self,
+        project: &DopplerProject,
+        config: &DopplerConfigName,
+        name: &SecretName,
+    ) -> Result<bool, ProviderError> {
+        let path = format!(
+            "/v3/configs/config/secrets/names?project={project}&config={config}&include_dynamic_secrets=false&include_managed_secrets=false"
+        );
+        let body = self.http.get::<SecretNamesBody>(&path)?;
+        Ok(body.names.iter().any(|listed| listed == name.as_str()))
+    }
+
     /// `GET /v3/workplace/service_accounts?page=N&per_page=100`, paged
     /// until a page shorter than [`LIST_PER_PAGE`] is seen, collecting
     /// every listed service account's `name` and `slug` (milestone 3h
@@ -1133,6 +1203,28 @@ struct SecretValueBody {
     computed: Option<DopplerSecretValue>,
 }
 
+/// Doppler's secret-names-list response: `{"names": [...]}`, no envelope
+/// key (milestone 3j, decision (b2)). [`DopplerClient::secret_name_listed`]
+/// is the only reader.
+///
+/// **Deliberately no `Debug`, unlike every other response struct in this
+/// file.** Every field here is a name the operator chose for *some*
+/// secret in the config, not only the one [`DopplerClient::secret_name_listed`]'s
+/// caller asked about — milestone 3j's trust boundary 2 says that other
+/// names are never willikins' to print ("The other names in a config are
+/// part of the operator's layout, and the gate has no reason to print
+/// them"). A derived `Debug` would make every one of them reachable
+/// through a panic message, an `assert_eq!` failure, or any future
+/// `{:?}` of a value that happens to hold one — exactly the leak this
+/// struct exists to make a compile error instead of a code-review
+/// finding. `secret_name_listed` reduces this struct to the one `bool`
+/// its caller actually gets, so there is never a need to format it.
+#[allow(dead_code)] // `secret_name_listed` is its only reader; see that method's own allow
+#[derive(Deserialize)]
+struct SecretNamesBody {
+    names: Vec<String>,
+}
+
 /// The same envelope [`SecretBody`] parses, deserialized into
 /// [`DopplerValue`] instead: [`DopplerClient::get_value`]'s response
 /// shape.
@@ -1265,5 +1357,339 @@ mod tests {
     fn a_transport_failure_never_looks_like_a_missing_project() {
         let err = ProviderError::new(None, "request failed: connection reset");
         assert!(!looks_like_a_missing_project(&err));
+    }
+
+    // -----------------------------------------------------------------
+    // secret_name_listed (milestone 3j task B1)
+    // -----------------------------------------------------------------
+
+    use willikins_providers_http::testing::{MockProvider, load_fixture};
+    use willikins_types::DomainType;
+
+    /// A listed name that must never surface in any `Err`'s message or
+    /// `Debug` output -- trust boundary 2: the list never leaves this
+    /// client, so even a name this crate itself did not ask about must
+    /// not become visible through a failure path.
+    const WILLIKINS_LEAK_MARKER_NAME: &str = "WILLIKINS_LEAK_MARKER_NAME";
+
+    fn fixtures_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures")
+    }
+
+    fn client_against(url: String) -> DopplerClient {
+        let credential = Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
+        DopplerClient::new(Http::new(url, Vec::new(), credential))
+    }
+
+    /// The SHARED VALUES placeholder base project, underscored
+    /// (milestone 3j part A: `DopplerProject` now admits one). Doubles as
+    /// a check that the underscore survives into this endpoint's query
+    /// string unchanged.
+    fn project() -> DopplerProject {
+        DopplerProject::parse("shared_keys").unwrap()
+    }
+
+    fn config() -> DopplerConfigName {
+        DopplerConfigName::parse("prd").unwrap()
+    }
+
+    fn name() -> SecretName {
+        SecretName::parse("EXAMPLE_APNS_KEY").unwrap()
+    }
+
+    /// The exact query [`DopplerClient::secret_name_listed`] must send,
+    /// pinned field by field so a mock that dropped one -- in particular
+    /// `include_dynamic_secrets=false`, which guards against ever issuing
+    /// a dynamic-secret lease -- would fail to match rather than quietly
+    /// pass. `AllOf`, matching this crate's other client-method mock
+    /// tests (`project_member_client_mock.rs`), rather than `Exact`: no
+    /// other test in this crate pins a literal query string, and `AllOf`
+    /// already catches the one case this method's own trust boundary
+    /// cares about -- a dropped or flipped pair -- without this test
+    /// becoming the first to depend on `mockito`'s exact query-string
+    /// encoding and ordering.
+    fn names_query() -> mockito::Matcher {
+        mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("project".into(), "shared_keys".into()),
+            mockito::Matcher::UrlEncoded("config".into(), "prd".into()),
+            mockito::Matcher::UrlEncoded("include_dynamic_secrets".into(), "false".into()),
+            mockito::Matcher::UrlEncoded("include_managed_secrets".into(), "false".into()),
+        ])
+    }
+
+    #[test]
+    fn listed_among_several_names_reads_true() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(200)
+            .with_body(serde_json::json!({"names": ["A", "EXAMPLE_APNS_KEY"]}).to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let listed = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap();
+        assert!(listed);
+        mock.assert();
+    }
+
+    #[test]
+    fn an_empty_list_reads_false() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(200)
+            .with_body(serde_json::json!({"names": []}).to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let listed = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap();
+        assert!(!listed);
+        mock.assert();
+    }
+
+    /// No prefix, suffix, or case match counts: a near-miss name must not
+    /// be read as the one asked for.
+    #[test]
+    fn a_prefix_suffix_or_case_near_miss_never_counts_as_listed() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "names": ["EXAMPLE_APNS_KEY_OLD", "XEXAMPLE_APNS_KEY", "example_apns_key"]
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let listed = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap();
+        assert!(!listed);
+        mock.assert();
+    }
+
+    #[test]
+    fn a_null_names_array_is_a_malformed_2xx_error() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(200)
+            .with_body(serde_json::json!({"names": null}).to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap_err();
+        assert_eq!(err.status, Some(200));
+        mock.assert();
+    }
+
+    #[test]
+    fn a_missing_names_field_is_a_malformed_2xx_error() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(200)
+            .with_body("{}")
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap_err();
+        assert_eq!(err.status, Some(200));
+        mock.assert();
+    }
+
+    /// The genuine leak path for a `2xx`: a body that *does* list the
+    /// marker but fails to parse as [`SecretNamesBody`] anyway (a `names`
+    /// entry that is not a string). [`Http::finish`]'s malformed-body arm
+    /// reports only a line/column position, so the marker -- despite
+    /// being right there in the body -- must not reach the error.
+    #[test]
+    fn a_listed_marker_in_a_malformed_2xx_body_never_reaches_the_error() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(200)
+            .with_body(serde_json::json!({"names": [WILLIKINS_LEAK_MARKER_NAME, 7]}).to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap_err();
+        assert_eq!(err.status, Some(200));
+        assert!(!err.message.contains(WILLIKINS_LEAK_MARKER_NAME), "{err:?}");
+        assert!(
+            !format!("{err:?}").contains(WILLIKINS_LEAK_MARKER_NAME),
+            "{err:?}"
+        );
+        mock.assert();
+    }
+
+    #[test]
+    fn a_404_is_an_err_carrying_that_status() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(404)
+            .with_body(
+                serde_json::json!({
+                    "messages": ["Could not find requested project"],
+                    "names": [WILLIKINS_LEAK_MARKER_NAME],
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap_err();
+        assert_eq!(err.status, Some(404));
+        assert!(!err.message.contains(WILLIKINS_LEAK_MARKER_NAME), "{err:?}");
+        assert!(
+            !format!("{err:?}").contains(WILLIKINS_LEAK_MARKER_NAME),
+            "{err:?}"
+        );
+        // This endpoint's `404` meets (b3)'s shared predicate exactly like
+        // every other read in this crate.
+        assert!(looks_like_a_missing_project(&err));
+        mock.assert();
+    }
+
+    #[test]
+    fn a_400_no_access_is_an_err_carrying_that_status() {
+        let mut provider = MockProvider::start();
+        let mut body = load_fixture(&fixtures_dir(), "doppler", "error_400_no_access");
+        body["names"] = serde_json::json!([WILLIKINS_LEAK_MARKER_NAME]);
+        let mock = provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(400)
+            .with_body(body.to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap_err();
+        assert_eq!(err.status, Some(400));
+        assert!(!err.message.contains(WILLIKINS_LEAK_MARKER_NAME), "{err:?}");
+        assert!(
+            !format!("{err:?}").contains(WILLIKINS_LEAK_MARKER_NAME),
+            "{err:?}"
+        );
+        assert!(looks_like_a_missing_project(&err));
+        mock.assert();
+    }
+
+    #[test]
+    fn a_401_is_an_err_carrying_that_status_and_never_the_body() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(401)
+            .with_body(
+                serde_json::json!({
+                    "messages": ["Unauthorized"],
+                    "names": [WILLIKINS_LEAK_MARKER_NAME],
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap_err();
+        assert_eq!(err.status, Some(401));
+        assert!(!err.message.contains(WILLIKINS_LEAK_MARKER_NAME), "{err:?}");
+        assert!(
+            !format!("{err:?}").contains(WILLIKINS_LEAK_MARKER_NAME),
+            "{err:?}"
+        );
+        mock.assert();
+    }
+
+    #[test]
+    fn a_403_is_an_err_carrying_that_status_and_never_the_body() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(403)
+            .with_body(
+                serde_json::json!({
+                    "messages": ["Forbidden"],
+                    "names": [WILLIKINS_LEAK_MARKER_NAME],
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap_err();
+        assert_eq!(err.status, Some(403));
+        assert!(!err.message.contains(WILLIKINS_LEAK_MARKER_NAME), "{err:?}");
+        assert!(
+            !format!("{err:?}").contains(WILLIKINS_LEAK_MARKER_NAME),
+            "{err:?}"
+        );
+        mock.assert();
+    }
+
+    /// A `500` is retryable in [`Http`] itself (up to three extra
+    /// attempts with real backoff), so -- unlike the statuses above --
+    /// this test does not pin an exact call count: the point is the
+    /// final status and the leak check, not how many times the mock was
+    /// hit along the way, exactly as this crate's other GET-vs-5xx tests
+    /// (for example `branch_config_ensure_mock.rs`'s
+    /// `read_maps_a_5xx_to_a_bounded_provider_error`) already choose not
+    /// to.
+    #[test]
+    fn a_500_is_an_err_carrying_that_status() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(names_query())
+            .with_status(500)
+            .with_body(
+                serde_json::json!({
+                    "messages": ["Internal server error"],
+                    "names": [WILLIKINS_LEAK_MARKER_NAME],
+                })
+                .to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let err = client
+            .secret_name_listed(&project(), &config(), &name())
+            .unwrap_err();
+        assert_eq!(err.status, Some(500));
+        assert!(!err.message.contains(WILLIKINS_LEAK_MARKER_NAME), "{err:?}");
+        assert!(
+            !format!("{err:?}").contains(WILLIKINS_LEAK_MARKER_NAME),
+            "{err:?}"
+        );
     }
 }
