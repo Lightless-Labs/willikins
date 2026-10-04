@@ -391,11 +391,24 @@ Part B:
    malformed names body → `Provider`, message names `config` and `name`, no body text.
    Every `Present`/`Absent` carries `config` as output. `ensure` on `Absent` and on `Present` → `changed: false`,
    with no request other than the mocked reads.
+
+   **Addendum:** 2026-10-04 (task B2) — the two `500` rows (`config answers... 500`, `get_config` answers `500`)
+   carry no `.expect(n)`, for the reason task B1's own addendum above already gives: `Http::get` retries a `5xx` up
+   to three more times with real backoff, so the mock may be hit up to four times; the test pins the final status
+   only.
 6. **Names, never values** (B2). A source guard in `tests/secret_name_gate_mock.rs` reads
    `src/tools/secret_name_gate.rs` and `client.rs`'s `secret_name_listed` (via `include_str!`) and asserts the tool
    never names `get_secret`, `get_value`, `/secret?`, `/secrets?`, `/secrets/download` or
    `include_dynamic_secrets=true`. `tests/redaction.rs` gains a case: a listed marker name and a marker in the config
    body reach no output, `ToolError`, `Debug` of anything returned, or captured `tracing`.
+
+   **Addendum:** 2026-10-04 (task B2) — the source guard reads `src/tools/secret_name_gate.rs` alone, not
+   `client.rs`'s `secret_name_listed`. `include_str!` takes a whole file, and `client.rs` as a whole defines
+   `get_secret`, `get_value` and their `/secret?` paths for `doppler.secret.get` and `doppler.value.get`, so a
+   whole-file grep would fail on its own siblings; carving one method's body out of the file by string position is
+   fragile and asserts nothing task B1's own tests (acceptance 3's `match_query` pin on
+   `include_dynamic_secrets=false`) do not already pin. The gate's only path to any endpoint is through
+   `DopplerClient`, and the gate file names only `secret_name_listed` and `get_config`.
 7. **Fake parity** (B3). `catalog_parity`'s new snapshot is identical for live and fake. `fake_agrees_with_live` gains
    one row per (b2) branch the fake can express (direct, inherited, absent, missing config, missing base). The fake
    catalog snapshot gains one tool. The fake count pin reads 42.
