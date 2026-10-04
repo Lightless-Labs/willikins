@@ -1417,6 +1417,33 @@ mod tests {
         ])
     }
 
+    // A `static_assertions`-style negative (trust boundary 2, SHARED
+    // VALUES' "Deliberately no `Debug`"): this compiles only while
+    // `SecretNamesBody` implements no `Debug`. If one is ever derived or
+    // hand-written, both blanket impls below apply to it and resolving
+    // `some_item` through the ambiguous trait becomes an ambiguity error
+    // instead of a single candidate -- the same pattern
+    // `willikins_providers_buildkite::client`'s own
+    // `pipeline_bootstrap_body_has_no_debug` pins for
+    // `PipelineBootstrapBody`. Nothing else in this crate's test suite
+    // would catch a `Debug` derive landing here: acceptance 6's source
+    // guard (`tests/secret_name_gate_mock.rs`) greps only
+    // `secret_name_gate.rs`, and no test ever formats a `SecretNamesBody`
+    // with `{:?}`, so a stray derive would otherwise be silent until
+    // some future code actually used it to print a config's full name
+    // list.
+    #[test]
+    fn secret_names_body_has_no_debug() {
+        trait AmbiguousIfDebug<A> {
+            fn some_item() {}
+        }
+        impl<T: ?Sized> AmbiguousIfDebug<()> for T {}
+        #[allow(dead_code)]
+        struct IsDebug;
+        impl<T: ?Sized + std::fmt::Debug> AmbiguousIfDebug<IsDebug> for T {}
+        let _ = <SecretNamesBody as AmbiguousIfDebug<_>>::some_item;
+    }
+
     #[test]
     fn listed_among_several_names_reads_true() {
         let mut provider = MockProvider::start();
