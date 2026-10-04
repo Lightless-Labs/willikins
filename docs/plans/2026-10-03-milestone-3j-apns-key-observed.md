@@ -1,6 +1,7 @@
 # Milestone 3j: the APNs key is observed, not acknowledged
 
 **Created:** 2026-10-04 (from the operator's request of 2026-10-03)
+**Completed:** 2026-10-04 — the operator's iOS app document converged: a real run planned and applied every node with no change (19 NoOp, 62 Compute, nothing blocked).
 
 ## Goal
 

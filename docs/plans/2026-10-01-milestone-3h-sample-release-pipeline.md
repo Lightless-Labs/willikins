@@ -1,6 +1,7 @@
 # Milestone 3h: Sample's release pipeline, and the CI Doppler grant as something the document does
 
 **Created:** 2026-10-01
+**Completed:** 2026-10-04 — the operator's iOS app document converged: a real run planned and applied every node with no change (19 NoOp, 62 Compute, nothing blocked).
 **Gate:** OPEN. Nothing here needs the operator before implementation starts. Three operator items block only
 the real apply (see "Needs the operator"), and one literal (the CI service account's name) is the coordinator's.
 **Design:** `docs/plans/2026-09-11-willikins-design.md` (Templates; Trust model: "Workflow definitions and

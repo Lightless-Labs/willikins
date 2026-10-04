@@ -1,7 +1,7 @@
 ---
 title: Let willikins write files into a repository
 created: 2026-09-29
-status: pending
+status: done
 priority: medium
 area: providers/github
 related:
@@ -23,3 +23,5 @@ The survey's design notes stand: the file content type is non-secret by construc
 can never reach a committed file without a new rule; decide one commit versus many, direct commit
 versus branch and pull request, where templates live, and what "ours" means for a file that
 already exists. When this lands, Sample's M3 gate becomes a node instead of an acknowledgement.
+
+**Done 2026-10-04:** milestone 3g (`docs/plans/2026-09-30-milestone-3g-file-writing.md`) built it: `repo.file.render`, `github.scaffold.ensure` (one signed seed commit, never overwrites), list bindings; milestones 3h and 3i added the pipeline templates and the bootstrap writer.

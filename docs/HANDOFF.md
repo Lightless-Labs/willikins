@@ -7,37 +7,27 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-10-02) — Sample's full scaffold, CI pipeline, CI Doppler access and bootstrap are built, gated and live-proven; the real apply waits for the operator's approval
+### RESUME HERE (2026-10-04) — the operator's iOS app is provisioned end to end: a real run of its document plans and applies every node with no change
 
-- **Live state:** `main` pushed at the handoff commit. Full gate by the coordinator on `d958c4a`: 196 suites / 3161
-  tests / 0 failed. Goal and rules: `goal.txt` (untracked, never commit).
-- **Sample's real `plan --live` (2026-10-02, read-only):** 17 NoOp, 1 Create (`sample_files`: one signed commit of 35
-  files plus the marker to `main` of Example-Org/monorepo), 1 Update (`bootstrap`: the pipeline's stored steps),
-  60 Compute, 1 Blocked (`m5_apns_key`, the APNs `.p8`, which no Apple API creates). The rendered set builds with
-  `bazel build --config=ci //apps/sample/...` (8 targets) and its 36 Python tests pass. The operator approves the
-  plan before the real apply (`goal.txt`'s mandatory pause); afterwards re-run until every node reads NoOp, with
-  `--input m5_apns_key_done=done` once the operator says the key is stored.
-- **Applied 2026-10-03 with the operator's approval** (run `01a10016`): `sample_files` committed Sample's scaffold to
-  `main` of Example-Org/monorepo (one commit, GitHub-verified signature, 36 files, all added under `apps/sample/`)
-  and `bootstrap` stored the rendered bootstrap in `example-bk-org/sample`. A fresh `plan --live` reads 19 NoOp,
-  60 Compute, 1 Blocked (`m5_apns_key`): only the operator's APNs key remains.
-- **The operator's question for later (2026-10-03):** what happens if the repository is a new one, or the monorepo is
-  not cloned locally? (Not yet answered, by the operator's choice.)
-- **Milestone 3h** (`docs/plans/2026-10-01-milestone-3h-sample-release-pipeline.md`): Sample's full CI/CD pipeline
-  as scaffold templates (validation, signing preflight, package, upload, release, stage-input plugin, CI scripts and
-  tests), `doppler.project_member.ensure` (m6 became `ci_doppler_access`, granting the CI service account `Buildkite`
-  viewer on `sample` `prd`), `Action::Update`. Profiles are no longer copied into Doppler (`2b36422`).
-- **Milestone 3i** (`docs/plans/2026-10-02-milestone-3i-bootstrap-writer-and-identifier-masking.md`):
-  `buildkite.pipeline.bootstrap.ensure` writes a willikins-owned pipeline's stored configuration only from a
-  document-rendered `RepoFile` (the paste is gone); identifier types print as prefixes everywhere but the CLI's
-  `--reveal`. CLAUDE.md/AGENTS.md invariants and the design doc updated (`d958c4a`).
-- **Credentials:** willikins' real Doppler service account holds `create_enclave_project`, `team`, `service_accounts`
-  (granted 2026-10-01). Write token `github/example-org_willikins` `GH_CONTENTS_WRITE_TOKEN` (expires 2027-10-02).
-- **Host:** other sessions run cargo almost nonstop; agents wait for 3 quiet seconds, not 20, and the coordinator
-  gates and commits work agents could not. The disk filled twice; willikins' `target/` was swept to 15 GB.
-- **Open, after Sample:** composition (milestone 2b, `uses:`), splitting Sample into an organisation document and an
-  ios-app document; a check refusal of identifier-typed `for_each` sources (3i residual); the near-miss ownership test
-  on `buildkite.pipeline.ensure`; `AppleProfileContent` may no longer need to be secret-typed.
+- **Live state:** `main` pushed. Full gate on the 3j tree: 200 suites / 3240 tests, two shipped-document list pins
+  then fixed (`398700f`). Goal and rules: `goal.txt` (untracked, never commit).
+- **The operator's documents are private** (2026-10-03): the repository is public, so the real iOS app document, its
+  fake state and its tests live gitignored in `private/` and `crates/willikins-cli/tests/operator_*.rs`. History was
+  rewritten to remove them and every operator name (placeholders such as `example-org` stand in). Local, untracked
+  hooks in `.git/hooks` refuse a commit, message or push naming the operator's setup
+  (`~/.config/willikins/private-names.txt`). Never write a real name into a tracked file, plan or commit message.
+- **Converged 2026-10-04** (run `01a108f9`): 19 NoOp, 62 Compute, nothing blocked. Applied along the way: the scaffold
+  commit and the stored bootstrap (2026-10-03), then the APNs base config's inheritance (2026-10-04).
+- **Milestones completed:** 3g (file-writing), 3h (the release pipeline, CI Doppler access as a node), 3i (the
+  bootstrap writer, identifier masking with `--reveal`), 3j (`DopplerProject` admits underscores;
+  `doppler.secret_name.gate` observes a secret's name, through inheritance, so the APNs key is checked, never
+  acknowledged).
+- **Open:** the operator's question, what happens for a new repository or one not cloned locally (answered in the
+  conversation of 2026-10-04: willikins never needs a clone; a brand-new repository needs `github.repo.ensure` to
+  initialise a branch before a scaffold can commit); composition (milestone 2b, `uses:`); a check refusal of
+  identifier-typed `for_each` sources; the near-miss ownership test on `buildkite.pipeline.ensure`; whether
+  `AppleProfileContent` still needs to be secret-typed; the 3j attacker's notes (the gate's inherits walk is now only a
+  backstop; the fake does not model a branch config inheriting its root).
 
 ### Earlier (2026-10-01) — Sample is live on the real accounts; milestone 3g (file-writing) is built, attacked and live-proven in the sandbox; the real re-apply waits on the operator
 

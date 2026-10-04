@@ -1,6 +1,7 @@
 # Milestone 3i: the bootstrap writer, and identifiers that print as prefixes
 
 **Created:** 2026-10-02
+**Completed:** 2026-10-04 — the operator's iOS app document converged: a real run planned and applied every node with no change (19 NoOp, 62 Compute, nothing blocked).
 **Addendum:** 2026-10-02 (task A4) — scope widened to also touch
 `crates/willikins-providers-doppler/tests/live_catalog.rs`, which re-exports `willikins_server::LIVE_TOOL_NAMES`
 into its own `[&str; 38]`-sized local const; bumping `LIVE_TOOL_NAMES` to 39 is a hard compile error there

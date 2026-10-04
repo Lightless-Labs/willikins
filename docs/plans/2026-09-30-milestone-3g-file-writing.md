@@ -1,6 +1,7 @@
 # Milestone 3g: file-writing — Sample's files become something the document does
 
 **Created:** 2026-09-30
+**Completed:** 2026-10-04 — the operator's iOS app document converged: a real run planned and applied every node with no change (19 NoOp, 62 Compute, nothing blocked).
 **Addendum:** 2026-09-30 (coordinator) — the operator settled the open choice: "Commit straight." Sample's document commits directly to `main` of Example-Org/monorepo, matching the monorepo's own ruling of 2026-07-09. Tasks P1–P3 (branch and pull-request tools) are dropped from this milestone; the tool still writes to whatever branch a document names, so another document may choose differently.
 **Addendum:** 2026-09-30 (E1) — decision (a)'s "`Site::Port` plus `index`, or a new `Site::ListElement`" choice
 is `Site::ListElement`, as expected, but boxed: `Site::ListElement(Box<ListElementSite>)`, built with a new
