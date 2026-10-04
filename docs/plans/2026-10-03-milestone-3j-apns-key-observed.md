@@ -412,6 +412,13 @@ Part B:
 7. **Fake parity** (B3). `catalog_parity`'s new snapshot is identical for live and fake. `fake_agrees_with_live` gains
    one row per (b2) branch the fake can express (direct, inherited, absent, missing config, missing base). The fake
    catalog snapshot gains one tool. The fake count pin reads 42.
+
+   **Addendum:** 2026-10-04 (task B3) — registering a new pure tool in the fake catalog also trips
+   `willikins-providers-fake/tests/pure_tools_agree.rs`'s own catalog-driven sweep, which asserts that the count of
+   cases it checks equals the count of pure tools the catalog holds. Not named by (b5) or this acceptance, but
+   required for `-p willikins-providers-fake`'s own gate to stay green: a `doppler.secret_name.gate` case was added
+   there too, reusing `config()`/`secret_name()` (already seeded into `doppler_secrets` by that file's own shared
+   state) so the gate reads `Present` directly.
 8. **Registration** (B4). `LIVE_TOOL_NAMES` has 40 names in order, and so does the `live_catalog.rs` copy. A document
    using only this tool demands `WILLIKINS_DOPPLER_TOKEN`.
 
