@@ -202,11 +202,17 @@ fn secret_name(name: &str) -> SecretName {
 /// panicking (that aborts the process and hides the original failure),
 /// so a failed delete during a panic prints the project's full name
 /// loudly and returns; it panics only when it is itself the first
-/// failure. "Already gone" is read through
-/// [`looks_like_a_missing_project`], never a literal `404`, for the same
-/// reason `tests/live_write_cycle.rs`'s own `ProjectGuard` tolerates
-/// `400` here: once this token can see any project, a project that is
-/// genuinely gone answers either shape.
+/// failure.
+///
+/// **"Already gone" here is a literal `404` or `400`, not
+/// [`looks_like_a_missing_project`].** That predicate is specific to the
+/// "does not have access to requested project" message a `GET` answers
+/// for a project outside this token's grant; `DELETE`ing a project that
+/// is already gone answers a bare `400` with no such message
+/// (`tests/live_write_cycle.rs`'s own `ProjectGuard::drop`, observed
+/// 2026-09-14). Reusing the GET-shaped predicate here would treat that
+/// bare `400` as a real failure and misreport a clean exit as a
+/// leftover.
 struct ProjectGuard {
     http: Arc<Http>,
     child: Option<DopplerProject>,
@@ -249,7 +255,7 @@ impl Drop for ProjectGuard {
             println!("guard: deleting `{project}`");
             match Self::delete(&self.http, &project) {
                 Ok(()) => println!("guard: deleted `{project}`"),
-                Err(err) if looks_like_a_missing_project(&err) => {
+                Err(err) if err.status == Some(404) || err.status == Some(400) => {
                     println!(
                         "guard: `{project}` was already gone (status {:?})",
                         err.status
@@ -275,17 +281,22 @@ impl Drop for ProjectGuard {
 /// Step 1: both fixed project names must be absent — read through
 /// [`looks_like_a_missing_project`], never a literal `404` (its own doc:
 /// once this token can see any project in the workplace, a missing one
-/// answers `400` "does not have access" instead). A leftover from an
-/// aborted run is the operator's to remove by hand, so this test refuses
-/// to proceed and names it rather than deleting something it did not
-/// create here.
+/// answers `400` "does not have access" instead). A name already
+/// visible here would mean this run's own timestamped name collided
+/// with something already in the workplace — a prior aborted run that
+/// landed in the same second, most plausibly — so this test refuses to
+/// proceed rather than touch it any further. The guard was armed with
+/// both names before this step ran, so unwinding from this panic still
+/// attempts the same `DELETE` a clean run would have, on the chance that
+/// what is there really is this run's own leftover; a human should
+/// still confirm nothing unexpected was removed.
 fn step_1_absent(raw: &Http, base: &DopplerProject, child: &DopplerProject) {
     for project in [base, child] {
         match raw.get::<Json>(&project_path(project)) {
             Err(err) if looks_like_a_missing_project(&err) => {}
             Ok(_) => panic!(
-                "step 1: `{project}` already exists, left behind by an aborted run; a leftover \
-                 is the operator's to delete by hand, so this test refuses to proceed"
+                "step 1: `{project}` already exists; this run refuses to proceed, though its \
+                 guard will still try to delete it on unwind since it already holds this name"
             ),
             Err(err) => panic!(
                 "step 1: GET of `{project}` answered an unexpected status {:?}",

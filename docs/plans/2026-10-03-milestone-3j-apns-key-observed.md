@@ -476,6 +476,15 @@ source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_TESTS=1 RUST_TEST_THREA
 
 Nothing prints a token, a secret value, or any project other than the throwaway pair.
 
+**Addendum:** 2026-10-04 (task B5) — steps 1 and 12's "read `404`" above is read through
+`looks_like_a_missing_project`, never a literal `404`, matching decision (b3)'s own reasoning: once this token can
+see any project in the workplace, a project outside its grant (and, equally, one that never existed) answers `400`
+"does not have access" instead of `404`. The implementing test's guard, which `DELETE`s the throwaway pair on every
+exit path, tolerates a *different* pair of statuses for that call specifically — a literal `404` or `400` with no
+particular message — because `tests/live_write_cycle.rs`'s own `ProjectGuard::drop` already found that `DELETE`ing a
+project that is already gone answers a bare `400` carrying no "does not have access" text at all; reusing
+`looks_like_a_missing_project` there would misread that bare `400` as a real failure.
+
 ## Verify before relying on them
 
 1. **Does `GET /v3/configs/config/secrets/names` list inherited names?** Live cycle step 8. The gate is correct either
