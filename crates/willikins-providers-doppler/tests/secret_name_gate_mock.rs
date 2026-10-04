@@ -110,6 +110,11 @@ fn unlisted_with_no_inherits_reads_absent() {
     assert_config_output(&predicted);
 }
 
+/// Acceptance 5's own row literally names `inherits: [shared_keys/prd]`
+/// (SHARED VALUES' placeholder base), so this test walks that exact
+/// base rather than a generic one — exercising the underscored-project
+/// widening (milestone 3j part A) through this gate's own walk and
+/// query string, the one place the milestone's two halves meet.
 #[test]
 fn unlisted_single_base_lists_it_reads_present() {
     let mut provider = MockProvider::start();
@@ -122,11 +127,11 @@ fn unlisted_single_base_lists_it_reads_present() {
     provider
         .mock("GET", config_path("third-thoughts", "prd").as_str())
         .with_status(200)
-        .with_body(fixture("config_get_inherits_present").to_string())
+        .with_body(fixture("config_get_inherits_underscore").to_string())
         .expect(1)
         .create();
-    provider
-        .mock("GET", names_path("shared-apple", "base").as_str())
+    let base_mock = provider
+        .mock("GET", names_path("shared_keys", "prd").as_str())
         .with_status(200)
         .with_body(names_body(&["EXAMPLE_APNS_KEY"]))
         .expect(1)
@@ -136,6 +141,7 @@ fn unlisted_single_base_lists_it_reads_present() {
         panic!("expected Present");
     };
     assert_config_output(&outputs);
+    base_mock.assert();
 }
 
 #[test]
@@ -267,8 +273,11 @@ fn unlisted_base_answers_403_is_err() {
     assert_eq!(err.kind, ToolErrorKind::Provider);
 }
 
+/// (b2) step 2's own "`get_config` itself answering the missing-project
+/// shape" bullet: the direct listing came back unlisted, so the walk
+/// begins, and `get_config` is the one that answers `404`.
 #[test]
-fn config_answers_404_reads_absent_with_no_walk() {
+fn get_config_answers_404_reads_absent() {
     let mut provider = MockProvider::start();
     provider
         .mock("GET", names_path("third-thoughts", "prd").as_str())
@@ -276,9 +285,6 @@ fn config_answers_404_reads_absent_with_no_walk() {
         .with_body(names_body(&["OTHER"]))
         .expect(1)
         .create();
-    // The `GET /v3/configs/config` read itself answers the missing-project
-    // shape: no base is ever read, because there is no `inherits` array to
-    // walk.
     provider
         .mock("GET", config_path("third-thoughts", "prd").as_str())
         .with_status(404)
@@ -293,8 +299,10 @@ fn config_answers_404_reads_absent_with_no_walk() {
     );
 }
 
+/// Same shape, the `400` "no access" spelling of the missing-project
+/// answer.
 #[test]
-fn config_answers_400_no_access_reads_absent_with_no_walk() {
+fn get_config_answers_400_no_access_reads_absent() {
     let mut provider = MockProvider::start();
     provider
         .mock("GET", names_path("third-thoughts", "prd").as_str())
@@ -314,6 +322,63 @@ fn config_answers_400_no_access_reads_absent_with_no_walk() {
         matches!(observation, Observation::Absent { .. }),
         "{observation:?}"
     );
+}
+
+/// (b2) step 1's own "no walk" bullet: the *direct* names call on
+/// `config` itself answers the missing-project shape, so `get_config`
+/// is never called at all — the path a fresh document hits on its first
+/// run, before the config it is about to create exists.
+/// `.expect(0)` plus `.assert()` on the config mock is what actually
+/// pins "no walk": without asserting it, an unexpected extra call would
+/// pass silently.
+#[test]
+fn names_on_config_answers_404_reads_absent_with_no_walk() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", names_path("third-thoughts", "prd").as_str())
+        .with_status(404)
+        .with_body(fixture("error_404").to_string())
+        .expect(1)
+        .create();
+    let config_mock = provider
+        .mock("GET", config_path("third-thoughts", "prd").as_str())
+        .with_status(200)
+        .with_body(fixture("config_get_inherits_present").to_string())
+        .expect(0)
+        .create();
+    let tool = tool_against(provider.url());
+    let observation = tool.read(&inputs()).unwrap();
+    assert!(
+        matches!(observation, Observation::Absent { .. }),
+        "{observation:?}"
+    );
+    config_mock.assert();
+}
+
+/// Same shape, the `400` "no access" spelling of the missing-project
+/// answer, on the direct call.
+#[test]
+fn names_on_config_answers_400_no_access_reads_absent_with_no_walk() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", names_path("third-thoughts", "prd").as_str())
+        .with_status(400)
+        .with_body(fixture("error_400_no_access").to_string())
+        .expect(1)
+        .create();
+    let config_mock = provider
+        .mock("GET", config_path("third-thoughts", "prd").as_str())
+        .with_status(200)
+        .with_body(fixture("config_get_inherits_present").to_string())
+        .expect(0)
+        .create();
+    let tool = tool_against(provider.url());
+    let observation = tool.read(&inputs()).unwrap();
+    assert!(
+        matches!(observation, Observation::Absent { .. }),
+        "{observation:?}"
+    );
+    config_mock.assert();
 }
 
 #[test]
