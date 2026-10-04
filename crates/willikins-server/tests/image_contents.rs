@@ -276,6 +276,7 @@ fn the_image_workflows_directory_holds_exactly_the_sixteen_positive_documents() 
         "doppler-ios.yaml",
         "doppler-backend.yaml",
         "doppler-backend-for-ios.yaml",
+        "doppler-inherited-secret-gate.yaml",
         "signoz-ingestion-key.yaml",
         "apple-signing-credential-from-doppler.yaml",
         "apple-signing-credential-from-inputs.yaml",
