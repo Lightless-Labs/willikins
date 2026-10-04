@@ -52,8 +52,9 @@ Read these documents for more information:
 GitHub, Doppler, and Buildkite have live tools:
 
 - GitHub: the repository and the Actions secret.
-- Doppler: the project, the config, the service token, the service token rotation, and the
-  secret read.
+- Doppler: the project, the config, the service token, the service token rotation, the
+  secret read, and whether a named secret is visible in a config, set there directly or
+  inherited (`doppler.secret_name.gate`).
 - App Store Connect: the bundle identifier, the bundle identifier capability, the
   distribution certificate (`appstore.certificate.get`), and the App Store provisioning
   profile (`appstore.profile.ensure`).

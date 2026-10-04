@@ -4,7 +4,8 @@
 //! the sink `doppler.secret.set`; milestone 3e's task B1 added
 //! `doppler.branch_config.ensure`; task R3 added the gate
 //! `doppler.config.inheritable.gate`; milestone 3j task B2 added the gate
-//! `doppler.secret_name.gate`, not yet registered in any catalog). Their
+//! `doppler.secret_name.gate`, registered in the live catalog by task
+//! B4). Their
 //! [`willikins_core::ToolSpec`]s must equal, field for field,
 //! `willikins_providers_fake`'s tools of the same names — pinned in
 //! `tests/catalog_parity.rs` by comparing each spec's JSON form

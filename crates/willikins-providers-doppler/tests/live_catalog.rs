@@ -1,13 +1,14 @@
 //! The *whole* live catalog — `willikins-tools`' eleven pure tools
 //! (milestone 3g task T1 added `repo.file.render`),
 //! `willikins-providers-github`'s four live tools (milestone 3g task G2 added `github.scaffold.ensure`; milestone 3e task 2
-//! added `github.repo.get`), this crate's eleven live
+//! added `github.repo.get`), this crate's thirteen live
 //! Doppler tools (milestone 3 added `doppler.config.inheritable.ensure`
 //! and `doppler.config.inherits.ensure`; the `SigNoz` task added
 //! `doppler.secret.set`; the App Store Connect credential correction
 //! added `doppler.value.get`; milestone 3e task B1 added
 //! `doppler.branch_config.ensure`; milestone 3h task D3 added
-//! `doppler.project_member.ensure`), (milestone 3a)
+//! `doppler.project_member.ensure`; milestone 3j task B4 added the gate
+//! `doppler.secret_name.gate`), (milestone 3a)
 //! `willikins-providers-buildkite`'s two live tools, and (the App Store
 //! Connect provider crate, plus milestone 3c's `appstore.certificate.get`)
 //! `willikins-providers-appstore`'s six live tools (milestone 3c task 2
@@ -68,7 +69,8 @@ const POSITIVE_FIXTURES: [&str; 7] = [
 
 /// Every tool name the assembled live catalog must hold, exactly.
 /// Milestone 3i task A4 added `buildkite.pipeline.bootstrap.ensure`.
-const LIVE_TOOL_NAMES: [&str; 39] = willikins_server::LIVE_TOOL_NAMES;
+/// Milestone 3j task B4 added `doppler.secret_name.gate`.
+const LIVE_TOOL_NAMES: [&str; 40] = willikins_server::LIVE_TOOL_NAMES;
 
 fn workflows_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

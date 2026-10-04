@@ -2,7 +2,8 @@
 //! caller builds the [`willikins_core::Catalog`] a [`crate::ButlerConfig`]
 //! needs.
 //!
-//! `live_catalog` assembles the live catalog (thirty-nine tools since
+//! `live_catalog` assembles the live catalog (forty tools since
+//! milestone 3j task B4 added `doppler.secret_name.gate`, after
 //! milestone 3i task A4 added `buildkite.pipeline.bootstrap.ensure`, after
 //! milestone 3h task D3 added `doppler.project_member.ensure`, after
 //! milestone 3g task B1 added `buildkite.pipeline.bootstrap.gate`, after
@@ -20,13 +21,14 @@
 //! `willikins-providers-github`'s four
 //! live tools (milestone 3e task 2 added `github.repo.get`; milestone 3g
 //! task G2 added `github.scaffold.ensure`),
-//! `willikins-providers-doppler`'s eleven (milestone 3 added
+//! `willikins-providers-doppler`'s thirteen (milestone 3 added
 //! `doppler.config.inheritable.ensure` and
 //! `doppler.config.inherits.ensure`; the `SigNoz` task added
 //! `doppler.secret.set`; the App Store Connect credential correction
 //! added `doppler.value.get`; milestone 3e task B1 added
 //! `doppler.branch_config.ensure`; milestone 3h task D3 added
-//! `doppler.project_member.ensure`), `willikins-providers-buildkite`'s
+//! `doppler.project_member.ensure`; milestone 3j task B4 added the gate
+//! `doppler.secret_name.gate`), `willikins-providers-buildkite`'s
 //! four (milestone 3a; milestone 3g task B1 added
 //! `buildkite.pipeline.bootstrap.gate`; milestone 3i task A4 added
 //! `buildkite.pipeline.bootstrap.ensure`), `willikins-providers-signoz`'s
@@ -58,8 +60,8 @@ use willikins_providers_buildkite::{
 use willikins_providers_doppler::{
     DopplerBranchConfigEnsure, DopplerClient, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
     DopplerConfigInheritableGate, DopplerConfigInheritsEnsure, DopplerProjectEnsure,
-    DopplerProjectMemberEnsure, DopplerSecretGet, DopplerSecretSet, DopplerServiceTokenEnsure,
-    DopplerServiceTokenRotate, DopplerValueGet,
+    DopplerProjectMemberEnsure, DopplerSecretGet, DopplerSecretNameGate, DopplerSecretSet,
+    DopplerServiceTokenEnsure, DopplerServiceTokenRotate, DopplerValueGet,
 };
 use willikins_providers_github::{
     GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure, GitHubRepoGet, GitHubScaffoldEnsure,
@@ -70,7 +72,7 @@ use willikins_providers_signoz::{SigNozClient, SigNozIngestionKeyEnsure};
 /// Every tool name [`live_catalog_with`] (and so [`Butler::live_catalog`])
 /// inserts, in insertion order -- pinned by
 /// `tests::the_live_catalog_has_exactly_these_tools_and_no_fake_tool_fits`.
-pub const LIVE_TOOL_NAMES: [&str; 39] = [
+pub const LIVE_TOOL_NAMES: [&str; 40] = [
     "naming.v1",
     "template.render",
     "operator.acknowledge",
@@ -91,6 +93,7 @@ pub const LIVE_TOOL_NAMES: [&str; 39] = [
     "doppler.branch_config.ensure",
     "doppler.config.inheritable.ensure",
     "doppler.config.inheritable.gate",
+    "doppler.secret_name.gate",
     "doppler.config.inherits.ensure",
     "doppler.project_member.ensure",
     "doppler.service_token.ensure",
@@ -234,8 +237,10 @@ fn insert_github_tools(catalog: &mut Catalog, http: Http) {
     insert(catalog, Arc::new(GitHubScaffoldEnsure::new(github)));
 }
 
-/// Insert `willikins-providers-doppler`'s eleven live tools, built from
-/// `http`.
+/// Insert `willikins-providers-doppler`'s thirteen live tools, built from
+/// `http` (milestone 3j task B4 added `doppler.secret_name.gate`,
+/// inserted right after `doppler.config.inheritable.gate`, matching
+/// [`LIVE_TOOL_NAMES`]' own order).
 fn insert_doppler_tools(catalog: &mut Catalog, http: Http) {
     let doppler = Arc::new(DopplerClient::new(http));
     insert(
@@ -257,6 +262,10 @@ fn insert_doppler_tools(catalog: &mut Catalog, http: Http) {
     insert(
         catalog,
         Arc::new(DopplerConfigInheritableGate::new(Arc::clone(&doppler))),
+    );
+    insert(
+        catalog,
+        Arc::new(DopplerSecretNameGate::new(Arc::clone(&doppler))),
     );
     insert(
         catalog,
@@ -566,13 +575,15 @@ const GITHUB_TOOL_NAMES: [&str; 4] = [
 ];
 
 /// `willikins-providers-doppler`'s live tool names. See
-/// [`GITHUB_TOOL_NAMES`].
-const DOPPLER_TOOL_NAMES: [&str; 12] = [
+/// [`GITHUB_TOOL_NAMES`]. Milestone 3j task B4 added
+/// `doppler.secret_name.gate`.
+const DOPPLER_TOOL_NAMES: [&str; 13] = [
     "doppler.project.ensure",
     "doppler.config.ensure",
     "doppler.branch_config.ensure",
     "doppler.config.inheritable.ensure",
     "doppler.config.inheritable.gate",
+    "doppler.secret_name.gate",
     "doppler.config.inherits.ensure",
     "doppler.project_member.ensure",
     "doppler.service_token.ensure",
@@ -1277,6 +1288,21 @@ mod tests {
             .expect("doppler has no credential port to bind at all");
         assert_eq!(node_name.as_str(), "step_0");
         assert_eq!(tool.as_str(), "doppler.project.ensure");
+    }
+
+    /// Milestone 3j task B4, acceptance 8: a document using only
+    /// `doppler.secret_name.gate` still demands `WILLIKINS_DOPPLER_TOKEN`,
+    /// exactly like every other `doppler.*` tool. `DOPPLER_TOOL_NAMES` is
+    /// an explicit list rather than a prefix check, so a tool added to
+    /// the live catalog but left out of that list would silently escape
+    /// this gate instead of failing a test.
+    #[test]
+    fn a_document_using_only_secret_name_gate_demands_doppler_token() {
+        let workflow = workflow_using(&["doppler.secret_name.gate"]);
+        let (node_name, tool) = first_unbound_node_for(&workflow, Provider::Doppler)
+            .expect("doppler.secret_name.gate has no credential port to bind at all");
+        assert_eq!(node_name.as_str(), "step_0");
+        assert_eq!(tool.as_str(), "doppler.secret_name.gate");
     }
 
     #[test]
