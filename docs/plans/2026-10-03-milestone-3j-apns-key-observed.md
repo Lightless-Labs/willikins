@@ -362,6 +362,17 @@ Part B:
    match). `{"names": null}` and `{}` → `Err` with a 2xx status. `404`, `400` no-access, `401`, `403` and `500` →
    `Err` carrying the status. A marker name `WILLIKINS_LEAK_MARKER_NAME` in a listed body never appears in any `Err`
    message or `Debug` output.
+
+   **Addendum:** 2026-10-04 (task B1) — every mock asserts `.expect(1)` except the `500` one: `Http::get` retries a
+   `5xx` up to three more times with real backoff, so that mock may be hit up to four times, and the test pins the
+   query and the final status only, as this crate's other GET-vs-5xx tests (for example
+   `branch_config_ensure_mock.rs`'s `read_maps_a_5xx_to_a_bounded_provider_error`) already choose to. Also: "a
+   listed marker never appears in any `Err`" is structurally vacuous for a non-2xx response —
+   `provider_error_from_body` builds a message from the body's `message`/`messages` field alone and never reads
+   `names` — so the marker in those five bodies proves nothing by itself; it is kept anyway, as a cheap check that
+   stays true. The path that actually exercises the trust boundary is a `2xx` body that lists the marker and fails
+   to parse (a non-string entry), which
+   `a_listed_marker_in_a_malformed_2xx_body_never_reaches_the_error` covers.
 4. **Spec** (B2). Validates against the registry. Key empty, pure, `Reversible`, gate subject `["config", "name"]`,
    one output `config`. A `Catalog` accepts it.
 5. **Observation rows** (B2, `tests/secret_name_gate_mock.rs`), one per (b2) branch, each mock with `.expect(n)` so an
