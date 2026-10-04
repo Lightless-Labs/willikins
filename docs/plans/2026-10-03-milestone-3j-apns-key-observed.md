@@ -502,6 +502,12 @@ project that is already gone answers a bare `400` carrying no "does not have acc
 
 1. **Does `GET /v3/configs/config/secrets/names` list inherited names?** Live cycle step 8. The gate is correct either
    way (decision (b4)). Recorded as an addendum here and in `docs/solutions/providers/`.
+
+   **Addendum:** 2026-10-04 (settled by the coordinator's one sandbox run of the live names cycle, all 12 steps
+   passing) — **yes, it lists inherited names.** Step 9's gate read `Present` through inheritance. The walk in
+   decision (b2) step 2 is therefore a backstop: it runs only when Doppler's own direct listing says the name is not
+   visible. Recorded in `docs/solutions/providers/doppler-names-endpoint-lists-inherited-names.md`, and in
+   `client.rs`'s `secret_name_listed` doc (`3da9800`).
 2. **Can an inheritable config itself inherit?** The docs are silent. If it can, the one-level walk can falsely block
    on a key two levels up (decision (b4)). It is settled by the next sandbox probe that needs it, not by this
    milestone.
@@ -554,6 +560,16 @@ implementer's own `Co-Authored-By` trailer. Nobody pushes.
 | C2 | **Tracked document and fixtures** (decision (c5); acceptance 10, 11). Commit 1: the three negative fixtures with headers, their acceptance tests beside the existing fixture tests, and three characterization entries. Commit 2: the positive document, its fake state, `crates/willikins-cli/tests/inherited_secret_gate_document.rs`, and its characterization entry. Scoped: `-p willikins-dsl -p willikins-cli` | sonnet implements |
 | C3 | **The operator's iOS app document** (decisions (c1), (c3), (c4); acceptance 12). Gitignored paths only, **no commit**: the private document, its fake state, its `crates/willikins-cli/tests/operator_*.rs` tests and their snapshots. The real names come from the coordinator's brief, never from this plan. Scoped: `-p willikins-cli`, the `operator_*` test targets | sonnet implements |
 | X1 | **Adversarial pass**, recorded under `docs/research/2026-10-0x-m3j-adversarial-pass.md`, placeholders only. Every bypass becomes a fixture plus a test. At least four mutations restored from saved copies (`cmp` for byte identity). Priority targets: any read of a value, or any endpoint outside trust boundary 1; a dynamic-secret lease; a listed name other than the asked one reaching any output, error or `Debug`; a `Present` from a prefix, suffix, case or substring match; a `Present` from a base the config does not actually inherit; `Foreign`/`NameTaken` reachable; an `Err` where (b3) says `Absent`, or `Absent` where it says `Err`; an underscore project smuggling a query parameter; the pass-through `Unknown` in `Absent` | opus |
+
+**Addendum:** 2026-10-04 (task X1, second and independent pass,
+`docs/research/2026-10-03-m3j-adversarial-pass.md`) — no defect against the trust boundaries. Seven mutations
+(M8 to M14, continuing the first pass's M1 to M7) were each restored and `cmp`-confirmed. One survived: the fake
+gate's top-level `doppler_configs` check was untested, because every missing-config case seeded an empty state. Test
+added (`f0fe7a5`). Decision (c2) describes the gate observing at plan time only in the `Blocked` direction. The
+opposite direction, a plan-time `Present` going stale because `inherit` drops the base holding the name, cannot
+happen: `inherits.ensure` is add-only, and a config inheriting a base outside the requested set refuses to plan with
+`AttributeMismatch`. That is now pinned over the tracked document (`f43bc2a`, killing M14). The characterization
+entries are unchanged by this pass.
 
 Then the coordinator:
 - signs off C1's characterization change, or declines it (decision (c2)'s fallback);
