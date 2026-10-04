@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-dsl/tests/acceptance.rs
+assertion_line: 463
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
@@ -283,6 +284,10 @@ CHECK ERRORS:
 CHECK ERRORS:
 - kind=Cycle display=cycle among nodes: `a` json={"kind":"Cycle","nodes":["a"]}
 
+=== workflows/fixtures/doppler-project-doubled-underscore.yaml ===
+CHECK ERRORS:
+- kind=InvalidLiteral display=node `base_config_gate`, port `config`: invalid literal: DopplerConfig: project: does not match the required pattern json={"kind":"InvalidLiteral","node":"base_config_gate","port":"config","error":{"type_name":"DopplerConfig","reason":"project: does not match the required pattern"}}
+
 === workflows/fixtures/duplicate-for-each-default.yaml ===
 CHECK ERRORS:
 - kind=DuplicateForEachDefault display=node `configs`: input `environments`'s default has two items both keyed `prd`; for_each instances must be distinguishable json={"kind":"DuplicateForEachDefault","node":"configs","input":"environments","key":"prd"}
@@ -487,6 +492,14 @@ CHECK ERRORS:
 === workflows/fixtures/secret-literal.yaml ===
 CHECK ERRORS:
 - kind=SecretLiteral display=node `ci_secret`, port `value`: a literal cannot supply a secret value json={"kind":"SecretLiteral","node":"ci_secret","port":"value"}
+
+=== workflows/fixtures/secret-name-gate-lowercase-name.yaml ===
+CHECK ERRORS:
+- kind=InvalidLiteral display=node `apns_key`, port `name`: invalid literal: SecretName: does not match the required pattern json={"kind":"InvalidLiteral","node":"apns_key","port":"name","error":{"type_name":"SecretName","reason":"does not match the required pattern"}}
+
+=== workflows/fixtures/secret-name-gate-secret-into-name.yaml ===
+CHECK ERRORS:
+- kind=SecretToNonSecretSink display=secret value from node `secret`, port `value` flows into non-secret sink at `apns_key.name` json={"kind":"SecretToNonSecretSink","from":["secret","value"],"to":{"kind":"port","node":"apns_key","port":"name"}}
 
 === workflows/fixtures/secret-set-derived-config.yaml ===
 WARNINGS:

@@ -1,0 +1,16 @@
+# Negative fixture. Milestone 3j, task A1/C2 (acceptance 2, 11): a
+# doubled underscore in a `DopplerConfig` literal's project segment stays
+# refused under the widened (a1) grammar -- "no leading, trailing or
+# doubled separator" -- exactly as a single underscore (`shared_keys`)
+# now succeeds. Acceptance test:
+# `doppler_project_doubled_underscore_fails_check_with_exactly_one_error`
+# in `crates/willikins-dsl/tests/acceptance.rs`. `check` returns exactly
+# one error:
+#   InvalidLiteral { node: base_config_gate, port: config, error: { type_name: "DopplerConfig", .. } }
+name: doppler-project-doubled-underscore
+description: A DopplerConfig literal with a doubled underscore in its project segment.
+steps:
+  base_config_gate:
+    tool: doppler.config.inheritable.gate
+    with:
+      config: shared__keys/prd

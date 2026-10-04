@@ -224,6 +224,77 @@ fn buildkite_bootstrap_text_configuration_fails_check_with_exactly_one_error() {
     );
 }
 
+/// Milestone 3j, task C2 (acceptance 11): a Doppler secret value, read by
+/// `doppler.secret.get`, bound into `doppler.secret_name.gate`'s own
+/// `name` port. `SecretName` does not accept secrets, and the secret has
+/// an attributable source (`secret.value`), so `check` reports
+/// `SecretToNonSecretSink` in preference to the `TypeMismatch` it also
+/// is -- the same precedence `secret_into_template_fails_check_with_exactly_one_taint_error`
+/// and `secret_into_repo_file_fails_check_with_exactly_one_taint_error`
+/// already pin for this exact shape.
+#[test]
+fn secret_name_gate_secret_into_name_fails_check_with_exactly_one_error() {
+    let errors = check_errors("workflows/fixtures/secret-name-gate-secret-into-name.yaml");
+    assert_eq!(
+        errors,
+        vec![willikins_core::CheckError::SecretToNonSecretSink {
+            from: (
+                node("secret"),
+                willikins_core::PortName::parse("value").unwrap()
+            ),
+            to: willikins_core::Site::Port {
+                node: node("apns_key"),
+                port: willikins_core::PortName::parse("name").unwrap(),
+            },
+        }]
+    );
+}
+
+/// Milestone 3j, task C2 (acceptance 11): a lowercase literal bound to
+/// `doppler.secret_name.gate`'s `name` port fails `SecretName`'s grammar
+/// (`[A-Z_][A-Z0-9_]*`).
+#[test]
+fn secret_name_gate_lowercase_name_fails_check_with_exactly_one_error() {
+    let errors = check_errors("workflows/fixtures/secret-name-gate-lowercase-name.yaml");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    match &errors[0] {
+        willikins_core::CheckError::InvalidLiteral {
+            node: n,
+            port,
+            error,
+        } => {
+            assert_eq!(n, &node("apns_key"));
+            assert_eq!(port, &willikins_core::PortName::parse("name").unwrap());
+            assert_eq!(error.type_name, "SecretName");
+        }
+        other => panic!("expected InvalidLiteral, got {other:?}"),
+    }
+}
+
+/// Milestone 3j, task A1/C2 (acceptance 2, 11): a doubled underscore in a
+/// `DopplerConfig` literal's project segment stays refused under the
+/// widened (a1) grammar. `DopplerConfig::parse` delegates to
+/// `DopplerProject::parse` for the project segment, but wraps every
+/// failure under its own `TYPE_NAME`, so the reported error names
+/// `DopplerConfig`, not `DopplerProject`.
+#[test]
+fn doppler_project_doubled_underscore_fails_check_with_exactly_one_error() {
+    let errors = check_errors("workflows/fixtures/doppler-project-doubled-underscore.yaml");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    match &errors[0] {
+        willikins_core::CheckError::InvalidLiteral {
+            node: n,
+            port,
+            error,
+        } => {
+            assert_eq!(n, &node("base_config_gate"));
+            assert_eq!(port, &willikins_core::PortName::parse("config").unwrap());
+            assert_eq!(error.type_name, "DopplerConfig");
+        }
+        other => panic!("expected InvalidLiteral, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------
 // Milestone 3d, equivalence item 1: a characterization snapshot of every
 // shipped document, committed before any production change (C1). After
