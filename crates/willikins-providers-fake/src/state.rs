@@ -278,6 +278,14 @@ impl SecretsMap {
         self.0.get(key)
     }
 
+    /// Whether `key` is seeded, without reading or cloning its value --
+    /// what `doppler.secret_name.gate`'s fake twin needs (milestone 3j,
+    /// task B3): a name's visibility, never its content.
+    #[must_use]
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.0.contains_key(key)
+    }
+
     /// Seed `value` at `key`, returning the value it replaced, if any.
     pub fn insert(&mut self, key: String, value: DopplerSecretValue) -> Option<DopplerSecretValue> {
         self.0.insert(key, value)

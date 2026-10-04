@@ -16,6 +16,12 @@
 //! live tool a mock body standing for *the same real world*, then assert
 //! both tools answer the same way.
 //!
+//! Milestone 3j task B3 adds the same proof for `doppler.secret_name.gate`:
+//! a name listed directly, one inherited through a single base, a name
+//! listed nowhere, a config that does not exist yet, and an inherited
+//! base that does not exist -- the five shapes decision (b2) and (b3)'s
+//! walk and no-walk branches distinguish.
+//!
 //! **The one limit this file records rather than works around**: the fake
 //! `doppler.branch_config.ensure` has no concept of `root` or of one
 //! config's `environment` (`FakeState::doppler_configs` is
@@ -28,13 +34,14 @@ use std::sync::{Arc, Mutex};
 
 use willikins_core::{Inputs, Observation, PortName, Tool, Value};
 use willikins_providers_doppler::{
-    DopplerBranchConfigEnsure, DopplerClient, DopplerConfigInheritableEnsure,
+    DopplerBranchConfigEnsure, DopplerClient, DopplerConfigInheritableEnsure, DopplerSecretNameGate,
 };
 use willikins_providers_fake::FakeState;
 use willikins_providers_http::testing::{MockProvider, load_fixture};
 use willikins_providers_http::{Credential, Http};
 use willikins_types::{
-    DomainType, DopplerConfig, DopplerConfigName, DopplerProject, EnvironmentSlug,
+    DomainType, DopplerConfig, DopplerConfigName, DopplerProject, DopplerSecretValue,
+    EnvironmentSlug, SecretName,
 };
 
 fn fixtures_dir() -> std::path::PathBuf {
@@ -703,5 +710,192 @@ fn branch_config_present_agrees_with_a_seeded_fake_state() {
     ))
     .read(&branch_inputs())
     .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+// `doppler.secret_name.gate` (milestone 3j task B3): five rows, one per
+// shape the fake can express. `gate_config()`/`gate_base()` deliberately
+// reuse this file's own `config()`/`shared_keys` placeholder naming
+// (SHARED VALUES), matching `secret_name_gate_mock.rs`'s own fixtures.
+
+fn gate_config() -> DopplerConfig {
+    DopplerConfig::parse("third-thoughts/prd").unwrap()
+}
+
+fn gate_base() -> DopplerConfig {
+    DopplerConfig::parse("shared_keys/prd").unwrap()
+}
+
+fn gate_name() -> SecretName {
+    SecretName::parse("EXAMPLE_APNS_KEY").unwrap()
+}
+
+fn gate_inputs() -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(
+        PortName::parse("config").unwrap(),
+        Value::known(gate_config()),
+    );
+    inputs.insert(PortName::parse("name").unwrap(), Value::known(gate_name()));
+    inputs
+}
+
+fn live_secret_name_gate_tool(url: String) -> DopplerSecretNameGate {
+    let credential = Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken");
+    let http = Http::new(url, Vec::new(), credential);
+    DopplerSecretNameGate::new(Arc::new(DopplerClient::new(http)))
+}
+
+fn gate_names_path(project: &str, config_name: &str) -> String {
+    format!(
+        "/v3/configs/config/secrets/names?project={project}&config={config_name}&include_dynamic_secrets=false&include_managed_secrets=false"
+    )
+}
+
+fn gate_config_path(project: &str, config_name: &str) -> String {
+    format!("/v3/configs/config?project={project}&config={config_name}")
+}
+
+fn gate_names_body(names: &[&str]) -> String {
+    serde_json::json!({ "names": names }).to_string()
+}
+
+fn fake_secret_value() -> DopplerSecretValue {
+    DopplerSecretValue::parse("willikins fake-agrees-with-live probe, not a secret").unwrap()
+}
+
+#[test]
+fn secret_name_gate_listed_directly_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", gate_names_path("third-thoughts", "prd").as_str())
+        .with_status(200)
+        .with_body(gate_names_body(&["EXAMPLE_APNS_KEY"]))
+        .create();
+
+    let live = live_secret_name_gate_tool(provider.url())
+        .read(&gate_inputs())
+        .unwrap();
+    let state = FakeState::new()
+        .with_doppler_config(&gate_config())
+        .with_doppler_secret(&gate_config(), &gate_name(), fake_secret_value());
+    let fake =
+        willikins_providers_fake::tools::DopplerSecretNameGate::new(Arc::new(Mutex::new(state)))
+            .read(&gate_inputs())
+            .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn secret_name_gate_inherited_via_one_base_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", gate_names_path("third-thoughts", "prd").as_str())
+        .with_status(200)
+        .with_body(gate_names_body(&["OTHER"]))
+        .create();
+    provider
+        .mock("GET", gate_config_path("third-thoughts", "prd").as_str())
+        .with_status(200)
+        .with_body(fixture("config_get_inherits_underscore").to_string())
+        .create();
+    provider
+        .mock("GET", gate_names_path("shared_keys", "prd").as_str())
+        .with_status(200)
+        .with_body(gate_names_body(&["EXAMPLE_APNS_KEY"]))
+        .create();
+
+    let live = live_secret_name_gate_tool(provider.url())
+        .read(&gate_inputs())
+        .unwrap();
+    let state = FakeState::new()
+        .with_doppler_config(&gate_config())
+        .with_doppler_config(&gate_base())
+        .with_doppler_config_inherits(&gate_config(), &[gate_base()])
+        .with_doppler_secret(&gate_base(), &gate_name(), fake_secret_value());
+    let fake =
+        willikins_providers_fake::tools::DopplerSecretNameGate::new(Arc::new(Mutex::new(state)))
+            .read(&gate_inputs())
+            .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn secret_name_gate_unlisted_anywhere_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", gate_names_path("third-thoughts", "prd").as_str())
+        .with_status(200)
+        .with_body(gate_names_body(&["OTHER"]))
+        .create();
+    provider
+        .mock("GET", gate_config_path("third-thoughts", "prd").as_str())
+        .with_status(200)
+        .with_body(fixture("config_get_present").to_string())
+        .create();
+
+    let live = live_secret_name_gate_tool(provider.url())
+        .read(&gate_inputs())
+        .unwrap();
+    let state = FakeState::new().with_doppler_config(&gate_config());
+    let fake =
+        willikins_providers_fake::tools::DopplerSecretNameGate::new(Arc::new(Mutex::new(state)))
+            .read(&gate_inputs())
+            .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn secret_name_gate_config_missing_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", gate_names_path("third-thoughts", "prd").as_str())
+        .with_status(404)
+        .with_body(fixture("error_404").to_string())
+        .create();
+
+    let live = live_secret_name_gate_tool(provider.url())
+        .read(&gate_inputs())
+        .unwrap();
+    let fake = willikins_providers_fake::tools::DopplerSecretNameGate::new(Arc::new(Mutex::new(
+        FakeState::new(),
+    )))
+    .read(&gate_inputs())
+    .unwrap();
+    assert_eq!(shape(&live), shape(&fake));
+}
+
+#[test]
+fn secret_name_gate_base_missing_agrees() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock("GET", gate_names_path("third-thoughts", "prd").as_str())
+        .with_status(200)
+        .with_body(gate_names_body(&["OTHER"]))
+        .create();
+    provider
+        .mock("GET", gate_config_path("third-thoughts", "prd").as_str())
+        .with_status(200)
+        .with_body(fixture("config_get_inherits_underscore").to_string())
+        .create();
+    provider
+        .mock("GET", gate_names_path("shared_keys", "prd").as_str())
+        .with_status(404)
+        .with_body(fixture("error_404").to_string())
+        .create();
+
+    let live = live_secret_name_gate_tool(provider.url())
+        .read(&gate_inputs())
+        .unwrap();
+    // The base is never seeded into `doppler_configs`: the fake's own
+    // walk contributes nothing for it, mirroring the live tool's base
+    // answering the missing-project shape.
+    let state = FakeState::new()
+        .with_doppler_config(&gate_config())
+        .with_doppler_config_inherits(&gate_config(), &[gate_base()]);
+    let fake =
+        willikins_providers_fake::tools::DopplerSecretNameGate::new(Arc::new(Mutex::new(state)))
+            .read(&gate_inputs())
+            .unwrap();
     assert_eq!(shape(&live), shape(&fake));
 }

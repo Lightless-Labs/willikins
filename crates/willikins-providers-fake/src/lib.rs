@@ -35,8 +35,9 @@
 //! first non-pure tool with a `list<T>` input port; milestone 3g task B1
 //! added `buildkite.pipeline.bootstrap.gate`; milestone 3h task D3 added
 //! `doppler.project_member.ensure`; milestone 3i task A3 added
-//! `buildkite.pipeline.bootstrap.ensure`),
-//! so the catalog this crate produces holds forty-one tools, in the
+//! `buildkite.pipeline.bootstrap.ensure`; milestone 3j task B3 added
+//! `doppler.secret_name.gate`, right after `doppler.config.inheritable.gate`),
+//! so the catalog this crate produces holds forty-two tools, in the
 //! order [`catalog`] inserts them.
 //!
 //! # Every `ensure` reads its own state first
@@ -103,6 +104,7 @@ pub fn catalog(state: Arc<Mutex<FakeState>>) -> Catalog {
     insert!(tools::DopplerBranchConfigEnsure::new(state.clone()));
     insert!(tools::DopplerConfigInheritableEnsure::new(state.clone()));
     insert!(tools::DopplerConfigInheritableGate::new(state.clone()));
+    insert!(tools::DopplerSecretNameGate::new(state.clone()));
     insert!(tools::DopplerConfigInheritsEnsure::new(state.clone()));
     insert!(tools::DopplerProjectMemberEnsure::new(state.clone()));
     insert!(tools::DopplerServiceTokenEnsure::new(state.clone()));
@@ -176,6 +178,7 @@ mod tests {
             "doppler.branch_config.ensure",
             "doppler.config.inheritable.ensure",
             "doppler.config.inheritable.gate",
+            "doppler.secret_name.gate",
             "doppler.config.inherits.ensure",
             "doppler.project_member.ensure",
             "doppler.service_token.ensure",
@@ -203,7 +206,7 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
-        assert_eq!(names.len(), 41);
+        assert_eq!(names.len(), 42);
     }
 
     #[test]

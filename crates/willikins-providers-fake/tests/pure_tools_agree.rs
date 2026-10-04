@@ -13,8 +13,9 @@
 //! `doppler.value.get`, `fake.secret_list`, (milestone 3a)
 //! `buildkite.cluster.get`, (milestone 3c) `appstore.certificate.get`,
 //! (milestone 3e task 2) `github.repo.get`, (G3) `operator.acknowledge`,
-//! (task R3) `doppler.config.inheritable.gate`, and (milestone 3g task
-//! B1) `buildkite.pipeline.bootstrap.gate`
+//! (task R3) `doppler.config.inheritable.gate`, (milestone 3g task
+//! B1) `buildkite.pipeline.bootstrap.gate`, and (milestone 3j task B3)
+//! `doppler.secret_name.gate`
 //! from this crate — are checked here in one
 //! place, through the catalog, so a new pure tool registered later is a
 //! one-line addition rather than a test nobody writes.
@@ -309,6 +310,13 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
     let mut config_inheritable_gate_inputs = Inputs::new();
     config_inheritable_gate_inputs.insert(port("config"), Value::known(config()));
 
+    // Reuses `config()`/`secret_name()`, already seeded into
+    // `doppler_secrets` above, so this gate reads `Present` directly
+    // (milestone 3j task B3).
+    let mut secret_name_gate_inputs = Inputs::new();
+    secret_name_gate_inputs.insert(port("config"), Value::known(config()));
+    secret_name_gate_inputs.insert(port("name"), Value::known(secret_name()));
+
     let mut buildkite_pipeline_bootstrap_gate_inputs = Inputs::new();
     buildkite_pipeline_bootstrap_gate_inputs.insert(port("org"), Value::known(buildkite_org()));
     buildkite_pipeline_bootstrap_gate_inputs.insert(port("slug"), Value::known(bootstrap_slug()));
@@ -363,6 +371,7 @@ fn every_pure_tool_answers_ensure_exactly_the_way_it_answers_read() {
             "doppler.config.inheritable.gate",
             config_inheritable_gate_inputs,
         ),
+        ("doppler.secret_name.gate", secret_name_gate_inputs),
         ("repo.file.render", repo_file_render_inputs),
         (
             "buildkite.pipeline.bootstrap.gate",
