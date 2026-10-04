@@ -28,6 +28,14 @@ required-features = ["live-tests"]
 name = "live_project_member_cycle"
 required-features = ["live-tests"]
 
+# `tests/live_secret_name_gate_cycle.rs` (milestone 3j task B5): the one
+# test target that exercises `doppler.secret_name.gate` against the real
+# sandbox workplace, creating and deleting a throwaway base/child project
+# pair. Same gating shape as `live_write_cycle` above.
+[[test]]
+name = "live_secret_name_gate_cycle"
+required-features = ["live-tests"]
+
 [dependencies]
 willikins-core.workspace = true
 willikins-types.workspace = true
