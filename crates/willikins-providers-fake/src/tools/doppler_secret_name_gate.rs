@@ -17,12 +17,17 @@
 //! read or a clone of the value itself. If none of those three holds the
 //! name directly, the gate walks [`FakeState::doppler_config_inherits`]
 //! for `config` one level, applying the very same membership test to
-//! each base in turn (a base absent from
-//! [`FakeState::doppler_configs`] contributes nothing, because nothing
-//! is ever seeded under a key for a config that does not exist). There
-//! is no new seed field: a seed that wants a name visible seeds
-//! [`FakeState::doppler_secrets`] exactly as every existing seed already
-//! does.
+//! each base in turn -- **after** checking the base is itself a member of
+//! [`FakeState::doppler_configs`]. That check is load-bearing, not
+//! redundant: the live tool can only ever learn a name from a base that
+//! answers its own names endpoint, which requires the base to exist, so
+//! a base this fake has not seeded as existing must contribute nothing
+//! to the walk even if some other seed left a secret keyed under its
+//! name by mistake (adversarial pass, milestone 3j task X1 --
+//! `read_reports_absent_when_the_inherited_base_does_not_exist_even_if_a_secret_is_seeded_under_its_key`
+//! pins it red without the check). There is no new seed field: a seed
+//! that wants a name visible seeds [`FakeState::doppler_secrets`] exactly
+//! as every existing seed already does.
 
 use std::sync::{Arc, Mutex};
 
@@ -106,7 +111,13 @@ impl DopplerSecretNameGate {
         }
         if let Some(bases) = state.doppler_config_inherits.get(&key) {
             for base in bases {
-                if Self::listed(state, base, name) {
+                // A base absent from `doppler_configs` 404s live, which
+                // `secret_name_listed` maps to "contributes nothing" --
+                // never to a leak of whatever happens to be seeded under
+                // its key (adversarial pass, milestone 3j task X1). This
+                // existence check makes that true here too, rather than
+                // leaving it as an unenforced seeding convention.
+                if state.doppler_configs.contains(base) && Self::listed(state, base, name) {
                     return Observation::Present(Self::outputs_for(config));
                 }
             }
@@ -266,6 +277,42 @@ mod tests {
             t.read(&inputs()).unwrap(),
             Observation::Absent { .. }
         ));
+    }
+
+    /// Adversarial pass (milestone 3j, task X1): the live tool only ever
+    /// learns a name from a base that answers its own `GET
+    /// .../secrets/names` -- which requires the base to exist. A base
+    /// absent from [`FakeState::doppler_configs`] 404s live, so it must
+    /// contribute nothing to this fake's walk either, even if some other
+    /// seed accidentally left a secret keyed under that base's name
+    /// (a seed-ordering mistake the module doc merely asks authors not to
+    /// make, not something the type system prevents). Without the walk's
+    /// own existence check, this test is red: the base's seeded secret
+    /// makes the fake read `Present` for a base live would never be able
+    /// to read at all.
+    #[test]
+    fn read_reports_absent_when_the_inherited_base_does_not_exist_even_if_a_secret_is_seeded_under_its_key()
+     {
+        let state = Arc::new(Mutex::new(
+            FakeState::new()
+                .with_doppler_config(&config())
+                .with_doppler_config_inherits(&config(), &[base()])
+                // `base()` is deliberately never passed to
+                // `with_doppler_config`: this secret is seeded under a
+                // base the fake's own `doppler_configs` set does not
+                // know exists.
+                .with_doppler_secret(
+                    &base(),
+                    &name(),
+                    DopplerSecretValue::parse("willikins test secret value").unwrap(),
+                ),
+        ));
+        let t = tool(state);
+        assert!(
+            matches!(t.read(&inputs()).unwrap(), Observation::Absent { .. }),
+            "a base missing from doppler_configs must contribute nothing to the walk, \
+             matching the live tool's 404-on-a-nonexistent-base behaviour"
+        );
     }
 
     #[test]
