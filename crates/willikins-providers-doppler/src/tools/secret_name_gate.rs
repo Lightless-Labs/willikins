@@ -84,7 +84,9 @@
 //! (`https://docs.doppler.com/reference/secrets-names.md`) says whether
 //! `GET /v3/configs/config/secrets/names` lists a name inherited from a
 //! base config (milestone 3j, verify item 1). Step 2's walk makes this
-//! gate correct either way, so no task here waits on the answer:
+//! gate correct either way. The live names cycle settled it on 2026-10-04:
+//! the endpoint does list inherited names, so the walk is a backstop.
+//! Both answers, as written before it was settled:
 //!
 //! - **If the endpoint lists inherited names,** step 1 already answers
 //!   `Present` for an inherited key, and the walk only ever runs when the
@@ -153,8 +155,7 @@ static GATE: Gate = Gate {
     subject: &["config", "name"],
 };
 
-/// `doppler.secret_name.gate`. Not registered in any catalog yet (task
-/// B4 does that).
+/// `doppler.secret_name.gate`, registered in the live and fake catalogs.
 pub struct DopplerSecretNameGate {
     spec: ToolSpec,
     client: Arc<DopplerClient>,
