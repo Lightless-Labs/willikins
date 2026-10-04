@@ -340,6 +340,30 @@ mod tests {
         );
     }
 
+    /// Milestone 3j, task A1 (acceptance 2): the gate on an underscored
+    /// base config, `shared_keys/prd`, sends exactly one request with the
+    /// expected query -- `.expect(1)` fails the test if the client ever
+    /// sends a second, differently-shaped request, and the literal query
+    /// string pins the raw query exactly rather than matching any query on
+    /// the path.
+    #[test]
+    fn gate_on_an_underscored_base_config_sends_exactly_the_expected_query() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("GET", "/v3/configs/config?project=shared_keys&config=prd")
+            .with_status(200)
+            .with_body(fixture("config_get_inheritable_true").to_string())
+            .expect(1)
+            .create();
+        let config = DopplerConfig::parse("shared_keys/prd").unwrap();
+        let mut shared_keys_inputs = Inputs::new();
+        shared_keys_inputs.insert(port("config"), Value::known(config));
+        let tool = tool_against(provider.url());
+        let observation = tool.read(&shared_keys_inputs).unwrap();
+        assert!(matches!(observation, Observation::Present(_)));
+        mock.assert();
+    }
+
     #[test]
     fn read_propagates_a_genuine_provider_failure_rather_than_blocking() {
         let mut provider = MockProvider::start();

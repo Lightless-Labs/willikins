@@ -57,6 +57,7 @@ are deliberately left out because no tool reads them.
 | `config_get_inherits_extra.json` | `GET /v3/configs/config` (200, `inherits` holding one entry beyond what a test asks for) | the two-entry `inherits` array is **confirmed live 2026-09-21** (a project run through `doppler-backend-for-ios.yaml` inherits both shared bases); that this is the body a *narrower* request then reads is the fixture's own construction. Used by `config_inherits_ensure_mock.rs` and `fake_agrees_with_live.rs` to pin the `Mismatch` reasoning in `doppler.config.inherits.ensure`'s own module doc, and the live refusal it produces was seen the same day |
 | `config_post_inheritable.json` | `POST /v3/configs/config/inheritable` | same caveat: both `POST`s answer `200` with the config object (research note), so this reuses that shape; not recorded live |
 | `config_post_inherits.json` | `POST /v3/configs/config/inherits` | same caveat as `config_post_inheritable.json` |
+| `config_get_inherits_underscore.json` | `GET /v3/configs/config` (200, `inherits: [{project, config}]` with an underscored project) | not independently recorded live; constructed from `config_get_inherits_present.json` with the base's `project` changed to an underscored slug (`shared_keys`, milestone 3j decision (a1)'s placeholder). The point is purely that `ConfigRefBody.project: DopplerProject` now deserializes an underscored project name, which it could not before that milestone's widening. Used by `config_inherits_ensure_mock.rs` |
 
 ## What the live run changed
 

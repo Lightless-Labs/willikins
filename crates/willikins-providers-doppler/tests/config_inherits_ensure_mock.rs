@@ -44,6 +44,33 @@ fn inputs() -> Inputs {
     inputs
 }
 
+/// `inputs()` with an arbitrary `inherits` list, for the underscored-base
+/// rows below (milestone 3j decision (a1)).
+fn inputs_with(inherits: Vec<DopplerConfig>) -> Inputs {
+    let mut inputs = Inputs::new();
+    inputs.insert(PortName::parse("config").unwrap(), Value::known(config()));
+    inputs.insert(
+        PortName::parse("inherits").unwrap(),
+        Value::known_list(inherits),
+    );
+    inputs
+}
+
+/// The placeholder base config milestone 3j's plan uses throughout:
+/// `shared_keys/prd`. Only parseable once `DopplerProject` admits
+/// underscores (task A1).
+fn shared_keys_prd() -> DopplerConfig {
+    DopplerConfig::parse("shared_keys/prd").unwrap()
+}
+
+/// An unrelated second base, used to pin the "missing one entry" case
+/// below: `other/prd` is never actually inherited by the fixture, so
+/// asking for it alongside `shared_keys/prd` must read `Absent`, not
+/// `Present`.
+fn other_prd() -> DopplerConfig {
+    DopplerConfig::parse("other/prd").unwrap()
+}
+
 #[test]
 fn read_reports_present_when_the_set_matches_exactly() {
     let mut provider = MockProvider::start();
@@ -58,6 +85,56 @@ fn read_reports_present_when_the_set_matches_exactly() {
     let tool = DopplerConfigInheritsEnsure::new(client_against(provider.url()));
     let observation = tool.read(&inputs()).unwrap();
     assert!(matches!(observation, Observation::Present(_)));
+}
+
+/// Milestone 3j, task A1 (acceptance 2): a config whose `GET` reports it
+/// inheriting an underscored base (`config_get_inherits_underscore.json`)
+/// reads `Present` when asked for exactly that base. Before task A1
+/// widened `DopplerProject`, the fixture's own `ConfigRefBody.project`
+/// failed to deserialize at all, so this test could not even reach an
+/// observation.
+#[test]
+fn read_reports_present_for_an_underscored_base_the_config_actually_inherits() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(200)
+        .with_body(fixture("config_get_inherits_underscore").to_string())
+        .create();
+    let tool = DopplerConfigInheritsEnsure::new(client_against(provider.url()));
+    let observation = tool.read(&inputs_with(vec![shared_keys_prd()])).unwrap();
+    assert!(
+        matches!(observation, Observation::Present(_)),
+        "{observation:?}"
+    );
+}
+
+/// Same fixture, asked for `[shared_keys/prd, other/prd]`: the config
+/// only actually inherits the first, so this is the ordinary "missing
+/// entry, nothing extra" case, `Absent` rather than `Mismatch` (the
+/// module doc's own distinction).
+#[test]
+fn read_reports_absent_when_asked_for_an_underscored_base_plus_one_more() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(200)
+        .with_body(fixture("config_get_inherits_underscore").to_string())
+        .create();
+    let tool = DopplerConfigInheritsEnsure::new(client_against(provider.url()));
+    let observation = tool
+        .read(&inputs_with(vec![shared_keys_prd(), other_prd()]))
+        .unwrap();
+    assert!(
+        matches!(observation, Observation::Absent { .. }),
+        "{observation:?}"
+    );
 }
 
 #[test]
