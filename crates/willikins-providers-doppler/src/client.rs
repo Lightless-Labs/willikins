@@ -574,23 +574,24 @@ impl DopplerClient {
     /// other than the one asked for reaches an output, a `ToolError`, the
     /// journal, `tracing` or a panic message.").
     ///
-    /// **Verify item 1 (unresolved as of this writing).** Nothing on
-    /// Doppler's reference page says whether this endpoint lists a name
-    /// inherited from a base config the caller's `config` inherits. The
-    /// milestone 3j plan's gate (`doppler.secret_name.gate`, not yet
-    /// written) is correct under either answer, by also walking
-    /// `inherits` itself; this method does not need to know, and does not
-    /// guess.
+    /// **Verify item 1, settled 2026-10-04.** Doppler's reference page
+    /// does not say whether this endpoint lists a name inherited from a
+    /// base config the caller's `config` inherits. The milestone 3j live
+    /// names cycle (`tests/live_secret_name_gate_cycle.rs`, step 8)
+    /// answered it in the sandbox workplace: it does, so a name inherited
+    /// through config inheritance reads `true` here directly.
+    /// `doppler.secret_name.gate` also walks `inherits` itself, which keeps
+    /// it correct even if that answer ever changes; this method does not
+    /// need to know either way.
     ///
     /// # Errors
     ///
     /// See [`Self::get_project`]. A malformed `2xx` body (for example
     /// `{"names": null}` or a body missing `names` entirely) is a
     /// [`ProviderError`] carrying that status and a static message, never
-    /// the response text, from [`Http::get`]'s own parse-failure arm. The
-    /// tool that calls this method (not yet written) wraps that into a
+    /// the response text, from [`Http::get`]'s own parse-failure arm.
+    /// `doppler.secret_name.gate`, the only caller, wraps that into a
     /// message naming `config` and `name` instead.
-    #[allow(dead_code)] // `doppler.secret_name.gate` (task B2, not yet written) is the only caller
     pub(crate) fn secret_name_listed(
         &self,
         project: &DopplerProject,
@@ -1219,7 +1220,6 @@ struct SecretValueBody {
 /// struct exists to make a compile error instead of a code-review
 /// finding. `secret_name_listed` reduces this struct to the one `bool`
 /// its caller actually gets, so there is never a need to format it.
-#[allow(dead_code)] // `secret_name_listed` is its only reader; see that method's own allow
 #[derive(Deserialize)]
 struct SecretNamesBody {
     names: Vec<String>,
