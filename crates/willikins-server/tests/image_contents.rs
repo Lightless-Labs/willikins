@@ -282,7 +282,6 @@ fn the_image_workflows_directory_holds_exactly_the_sixteen_positive_documents() 
         "appstore-bundle-id-from-doppler.yaml",
         "appstore-bundle-id-from-inputs.yaml",
         "appstore-signing-profile-from-doppler.yaml",
-        "sample-ios-app.yaml",
         "github-repo-token-from-doppler.yaml",
         "buildkite-cluster-token-from-doppler.yaml",
     ]

@@ -68,7 +68,6 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
         "appstore-bundle-id-from-doppler.yaml",
         "appstore-bundle-id-from-inputs.yaml",
         "appstore-signing-profile-from-doppler.yaml",
-        "sample-ios-app.yaml",
         "github-repo-token-from-doppler.yaml",
         "buildkite-cluster-token-from-doppler.yaml",
     ] {
@@ -102,7 +101,6 @@ fn starting_against_the_real_workflows_directory_succeeds_and_journals_server_st
             "new-rust-service",
             "rotate-service-token",
             "signoz-ingestion-key",
-            "sample-ios-app",
         ]
     );
 }

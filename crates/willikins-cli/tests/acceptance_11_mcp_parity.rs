@@ -83,7 +83,7 @@ fn butler() -> Butler {
 /// As [`butler`], but with `read_rate_per_minute` set: the sweep below
 /// makes one `validate` call per shipped document against a clock that
 /// never advances, so the default of 60 reads a minute refused the 61st
-/// document (`sample-ios-app.yaml`, last in sort order) with
+/// document (the last in sort order) with
 /// `RateLimited` once the fixture count passed 60 -- the rate limiter is
 /// not what that sweep tests.
 fn butler_with_read_rate(read_rate_per_minute: u32) -> Butler {

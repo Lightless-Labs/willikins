@@ -101,7 +101,7 @@ fn the_doppler_chain_plans_and_references_the_repository() {
 
 /// Every existing document using `github.repo.get`, `github.repo.ensure`
 /// or `github.actions_secret.ensure` (`new-rust-service.yaml`,
-/// `sample-ios-app.yaml`, and others) leaves the new `token` port
+/// and others) leaves the new `token` port
 /// completely unbound, and keeps checking exactly as it did: proven here
 /// directly against the tool's spec (`required` is `false`), and proven
 /// for those documents themselves by

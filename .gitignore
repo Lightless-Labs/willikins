@@ -11,3 +11,10 @@ nohup.out
 
 # Railway IaC: the TypeScript SDK `railway config plan` evaluates .railway/railway.ts with.
 node_modules/
+
+# Operator documents and everything derived from them stay on the operator's machine,
+# never in this public repository (2026-10-03): the documents, their fake-state fixtures,
+# the tests that read them (tests/operator_*.rs), and the snapshots of the files they render.
+/private/
+/crates/willikins-cli/tests/operator_*.rs
+/crates/willikins-cli/tests/snapshots/operator_*
