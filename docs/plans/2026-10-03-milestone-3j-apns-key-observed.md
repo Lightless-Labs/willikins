@@ -436,6 +436,19 @@ Part C:
     `secret-name-gate-lowercase-name.yaml` (`name: example_apns_key`) → exactly one `InvalidLiteral` for `SecretName`.
     `doppler-project-doubled-underscore.yaml` (`config: shared__keys/prd`) → exactly one `InvalidLiteral` for
     `DopplerConfig`. The characterization snapshot gains exactly the four C2 entries.
+
+    **Addendum:** 2026-10-04 (task C2) — `secret-name-gate-secret-into-name.yaml`'s own error is not a plain
+    `TypeMismatch`. `SecretName` does not accept secrets, and the secret value has an attributable source (the
+    `doppler.secret.get` node's own `value` output), so `check.rs`'s own documented precedence reports
+    `CheckError::SecretToNonSecretSink { from: (secret, value), to: Site::Port { node: apns_key, port: name } }`
+    instead — the same shape `secret-into-template.yaml` and `secret-into-repo-file.yaml` already pin for this exact
+    kind of binding. This acceptance item's wording ("exactly one type error ... `DopplerSecretValue` into
+    `SecretName`") is read loosely, as a description of the shape rather than the literal `CheckError` variant; the
+    fixture's own header comment and its acceptance test
+    (`secret_name_gate_secret_into_name_fails_check_with_exactly_one_error`,
+    `crates/willikins-dsl/tests/acceptance.rs`) pin `SecretToNonSecretSink` directly. Task C1 had already landed by
+    the time this task ran, so `apns_key.config` binds `${{ steps.inherit.config }}` (not the branch-config
+    fallback), and the tracked document's test includes the skip-propagation case decision (c2) describes.
 12. **The private document** (C3, gitignored tests, run but never committed). Decision (c4)'s list, including the
     two-run shape and the skip propagation. No `m5_apns_key_done` anywhere in the private document or its tests.
 13. **Guards stay green.** `secret_literal_guard`, `no_gh_writes_guard`, `no_certificate_writes_guard`, and the 3i
