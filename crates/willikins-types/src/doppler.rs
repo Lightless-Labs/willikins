@@ -19,9 +19,27 @@ use crate::{DomainType, ParseError};
 /// not a Doppler requirement: every project this codebase creates is
 /// named after a [`crate::ProjectSlug`] (`naming::v1::doppler_project`),
 /// whose kebab-case form is always inside this pattern.
+///
+/// Doppler keeps underscores in project slugs: a 2026-10-03 sandbox probe
+/// created a project named `willikins_probe_delete_me` and it came back
+/// with exactly that slug, not a hyphenated one. This type's grammar
+/// widens by one separator, `[a-z0-9]+(?:[-_][a-z0-9]+)*` -- an underscore
+/// is admitted in exactly the same place a hyphen already was, between two
+/// runs of letters and digits -- rather than going flat
+/// (`[a-z0-9_-]+`, [`DopplerConfigName`]'s shape). The structured form is
+/// the smallest widening that admits every slug the evidence shows
+/// (a shared base project such as `shared_keys`, the probed
+/// `willikins_probe_delete_me`, every kebab slug `naming::v1` derives)
+/// while keeping every existing refusal: a leading, trailing or doubled
+/// separator stays refused, where the flat form would admit `_x`, `x_`,
+/// `x__y`, none of which any probe showed and none of which a document
+/// needs (plan `docs/plans/2026-10-03-milestone-3j-apns-key-observed.md`,
+/// decision (a1)). `naming::v1::doppler_project` is unchanged: it never
+/// derives an underscore, so its kebab-case output stays inside the
+/// widened grammar without being touched.
 #[derive(willikins_derive::DomainType)]
 #[domain(
-    pattern = "[a-z0-9]+(?:-[a-z0-9]+)*",
+    pattern = "[a-z0-9]+(?:[-_][a-z0-9]+)*",
     max_len = 64,
     description = "A Doppler project slug.",
     example = "third-thoughts"
@@ -271,7 +289,7 @@ const DOPPLER_CONFIG_MAX_LEN: usize = 64 + 1 + 60;
 /// The published schema pattern: [`DopplerProject`]'s pattern, a literal
 /// slash, then [`DopplerConfigName`]'s pattern, unanchored individually so
 /// they combine into one whole-string match.
-const DOPPLER_CONFIG_PATTERN: &str = r"^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9_-]+$";
+const DOPPLER_CONFIG_PATTERN: &str = r"^[a-z0-9]+(?:[-_][a-z0-9]+)*/[a-z0-9_-]+$";
 
 impl DopplerConfig {
     /// Build a config identity directly from its already-parsed parts.
@@ -427,6 +445,152 @@ mod tests {
         let value = DopplerProject::parse("third-thoughts").unwrap();
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(json, "\"third-thoughts\"");
+        assert_eq!(
+            serde_json::from_str::<DopplerProject>(&json).unwrap(),
+            value
+        );
+    }
+
+    /// Doppler keeps underscores in project slugs (2026-10-03 sandbox
+    /// probe: a project named `willikins_probe_delete_me` got exactly that
+    /// slug). This type's grammar widens by one separator,
+    /// `[a-z0-9]+(?:[-_][a-z0-9]+)*`, structured rather than flat (plan
+    /// `docs/plans/2026-10-03-milestone-3j-apns-key-observed.md`, decision
+    /// (a1)): an underscore is admitted in exactly the same place a hyphen
+    /// already is, so every existing refusal (a leading, trailing or
+    /// doubled separator) stays refused. `naming::v1` is unchanged -- it
+    /// never derives an underscore, so it stays inside the widened grammar
+    /// without being touched.
+    #[test]
+    fn doppler_project_accepts_and_refuses_the_a1_rows() {
+        for good in [
+            "shared_keys",
+            "willikins_probe_delete_me",
+            "third-thoughts",
+            "a_b-c",
+            "x",
+            "app2_shared",
+            &"a".repeat(64),
+        ] {
+            assert!(
+                DopplerProject::parse(good).is_ok(),
+                "{good:?} must be accepted"
+            );
+        }
+        for bad in [
+            "_shared",
+            "shared_",
+            "shared__keys",
+            "shared_-keys",
+            "-third",
+            "Shared_Keys",
+            "shared.keys",
+            "shared/keys",
+            "shared_keys&project=other",
+            "shared_keys?x",
+            "shared_keys#x",
+            "shared%5Fkeys",
+            "shared keys",
+            "shared+keys",
+            "shared_keys\n",
+            "..",
+            "",
+            &"a".repeat(65),
+        ] {
+            assert!(
+                DopplerProject::parse(bad).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+    }
+
+    /// Same rows (a1), through `DopplerConfig::parse("{row}/prd")` and
+    /// through `DOPPLER_CONFIG_PATTERN` directly: the regex and `parse`
+    /// must agree on every row, for every row `r`, **except** `65 × a`,
+    /// which is covered separately below
+    /// (`doppler_config_regex_and_parse_diverge_on_the_max_len_boundary`):
+    /// `DOPPLER_CONFIG_PATTERN` carries no length bound (that lives in the
+    /// schema's separate `maxLength`), so a row that is refused only by
+    /// `max_len` matches the regex while `parse` still refuses it. `64 ×
+    /// a` has no such divergence and is included here.
+    #[test]
+    fn doppler_config_agrees_with_the_regex_on_every_a1_row() {
+        let sixty_four_as = "a".repeat(64);
+        let accepted = [
+            "shared_keys",
+            "willikins_probe_delete_me",
+            "third-thoughts",
+            "a_b-c",
+            "x",
+            "app2_shared",
+            sixty_four_as.as_str(),
+        ];
+        let refused = [
+            "_shared",
+            "shared_",
+            "shared__keys",
+            "shared_-keys",
+            "-third",
+            "Shared_Keys",
+            "shared.keys",
+            "shared/keys",
+            "shared_keys&project=other",
+            "shared_keys?x",
+            "shared_keys#x",
+            "shared%5Fkeys",
+            "shared keys",
+            "shared+keys",
+            "shared_keys\n",
+            "..",
+            "",
+        ];
+        let pattern = regex::Regex::new(DOPPLER_CONFIG_PATTERN).unwrap();
+        for row in accepted.iter().chain(refused.iter()) {
+            let candidate = format!("{row}/prd");
+            let parsed = DopplerConfig::parse(&candidate);
+            let should_accept = accepted.contains(row);
+            assert_eq!(
+                parsed.is_ok(),
+                should_accept,
+                "DopplerConfig::parse({candidate:?}) accepted = {}, expected {should_accept}",
+                parsed.is_ok()
+            );
+            assert_eq!(
+                pattern.is_match(&candidate),
+                parsed.is_ok(),
+                "regex and parse disagree on {candidate:?}"
+            );
+        }
+    }
+
+    /// The one row (a1) where `DOPPLER_CONFIG_PATTERN` and `parse`
+    /// knowingly diverge: `65 × a` is refused by `parse` only through
+    /// `DopplerProject`'s `max_len = 64`, not through its character-class
+    /// pattern, and `DOPPLER_CONFIG_PATTERN` carries no length bound of its
+    /// own (the schema's separate `maxLength` enforces that). So the regex
+    /// matches a row `parse` still refuses. Pinned explicitly rather than
+    /// silently dropped from the loop above.
+    #[test]
+    fn doppler_config_regex_and_parse_diverge_on_the_max_len_boundary() {
+        let candidate = format!("{}/prd", "a".repeat(65));
+        let pattern = regex::Regex::new(DOPPLER_CONFIG_PATTERN).unwrap();
+        assert!(
+            pattern.is_match(&candidate),
+            "the regex has no length bound and should match"
+        );
+        assert!(
+            DopplerConfig::parse(&candidate).is_err(),
+            "parse must still refuse it via DopplerProject's max_len"
+        );
+    }
+
+    /// A project slug with an underscore round-trips through serde exactly
+    /// like a kebab one.
+    #[test]
+    fn doppler_project_with_underscore_serde_round_trips() {
+        let value = DopplerProject::parse("shared_keys").unwrap();
+        let json = serde_json::to_string(&value).unwrap();
+        assert_eq!(json, "\"shared_keys\"");
         assert_eq!(
             serde_json::from_str::<DopplerProject>(&json).unwrap(),
             value

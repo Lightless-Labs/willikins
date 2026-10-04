@@ -354,7 +354,7 @@ expression: redacted
         "third-thoughts"
       ],
       "maxLength": 64,
-      "pattern": "^(?:[a-z0-9]+(?:-[a-z0-9]+)*)$"
+      "pattern": "^(?:[a-z0-9]+(?:[-_][a-z0-9]+)*)$"
     }
   },
   {
@@ -390,7 +390,7 @@ expression: redacted
         "third-thoughts/prd"
       ],
       "maxLength": 125,
-      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9_-]+$"
+      "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*/[a-z0-9_-]+$"
     }
   },
   {
