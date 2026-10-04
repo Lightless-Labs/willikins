@@ -341,6 +341,14 @@ Part A:
    `DOPPLER_CONFIG_PATTERN` regex matches iff `parse` succeeds. `doppler_project_rejects_leading_hyphen` and
    `doppler_config_refuses_a_smuggled_query_parameter_in_its_name` are unchanged and green.
    `naming_v1_properties.rs` is unchanged and green. The types catalog snapshot differs in exactly two `pattern` lines.
+
+   **Addendum:** 2026-10-04 (task A1) — this acceptance's "the regex matches iff `parse` succeeds, for every row"
+   holds for every (a1) row except `65 × a`. `DOPPLER_CONFIG_PATTERN` carries no length bound (that lives in the
+   schema's separate `maxLength`), so `65 × a/prd` matches the regex while `parse` still refuses it through
+   `DopplerProject`'s `max_len = 64`. The implementing test pins the agreement over every row but `65 × a`, and pins
+   this one divergence explicitly and separately
+   (`doppler_config_regex_and_parse_diverge_on_the_max_len_boundary`), rather than silently dropping it from the
+   loop.
 2. **Where it meets a request or a response** (A1). A `GET /v3/configs/config?project=shared_keys&config=prd` mock
    (`match_query` pinning the raw query) answers `doppler.config.inheritable.gate`'s read. The new fixture
    `config_get_inherits_underscore.json` (a config inheriting `shared_keys/prd`) makes `doppler.config.inherits.ensure`
