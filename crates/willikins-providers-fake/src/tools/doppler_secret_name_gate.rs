@@ -315,6 +315,34 @@ mod tests {
         );
     }
 
+    /// The top-level twin of the walk's own existence check above: live,
+    /// the names endpoint on a config that does not exist answers the
+    /// missing-project shape, which reads `Absent` with no walk, so a
+    /// secret seeded under that config's key must not make the fake read
+    /// `Present`. Every other `Absent`-for-a-missing-config case here
+    /// and in `fake_agrees_with_live.rs` seeds nothing at all, so the
+    /// `doppler_configs` check this pins was never exercised (milestone
+    /// 3j, second adversarial pass).
+    #[test]
+    fn read_reports_absent_when_the_config_does_not_exist_even_if_a_secret_is_seeded_under_its_key()
+    {
+        let state = Arc::new(Mutex::new(
+            // `config()` is deliberately never passed to
+            // `with_doppler_config`.
+            FakeState::new().with_doppler_secret(
+                &config(),
+                &name(),
+                DopplerSecretValue::parse("willikins test secret value").unwrap(),
+            ),
+        ));
+        let t = tool(state);
+        assert!(
+            matches!(t.read(&inputs()).unwrap(), Observation::Absent { .. }),
+            "a config missing from doppler_configs must read Absent, matching the live \
+             tool's missing-project answer on the names endpoint"
+        );
+    }
+
     #[test]
     fn present_passes_the_config_through_as_its_own_output() {
         let state = Arc::new(Mutex::new(
