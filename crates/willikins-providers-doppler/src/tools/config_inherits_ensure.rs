@@ -28,16 +28,35 @@
 //! config, with nothing extra) are the ordinary `Absent` case: the
 //! `POST` would only ever *add* to what is already there, so it cannot
 //! stomp anything.
+//!
+//! # The `config` output: ordering a downstream gate after inheritance
+//!
+//! This tool's `config` output passes its own `config` input straight
+//! through, unchanged by whatever `inherits` turns out to be. The DSL
+//! orders nodes only by data bindings, so without an output nothing
+//! could bind "after this config's inheritance is set" — a downstream
+//! gate reading the same config for a secret it expects to see through
+//! inheritance (`doppler.secret_name.gate`, milestone 3j) would otherwise
+//! be a sibling of this node rather than its successor, and a blocked
+//! base config would then produce two blocked reports instead of one.
+//! It is known in `Present`, in `Absent`'s `predicted`, and in every
+//! `Ensured` this tool returns — after a write, after a converged read
+//! and after a failed write whose re-read lands on `Present` — because
+//! `apply` reuses a pure node's own planned outputs rather than
+//! re-reading it (`crates/willikins-dsl/src/apply.rs`), so a port left
+//! `Unknown` in `Absent`'s `predicted` would make a downstream gate's own
+//! `get(inputs, "config")` fail at plan time on every fresh run, which
+//! includes every run where this tool plans `Create`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use willikins_core::tool::helpers::{
-    conflict, exact, get, invalid, list, port, require_present, tool_name,
+    conflict, exact, get, invalid, list, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, PortSpec, PortType, SinkToken, Tool, ToolError,
-    ToolSpec,
+    ToolSpec, Value,
 };
 use willikins_types::DopplerConfig;
 
@@ -63,12 +82,14 @@ impl DopplerConfigInheritsEnsure {
                 derived_only: false,
             },
         );
+        let mut outputs = indexmap::IndexMap::new();
+        outputs.insert(port("config"), scalar("DopplerConfig"));
         Self {
             spec: ToolSpec {
                 name: tool_name("doppler.config.inherits.ensure"),
                 description: "Ensure a Doppler config inherits a set of base configs.".to_string(),
                 inputs,
-                outputs: indexmap::IndexMap::new(),
+                outputs,
                 key: vec![port("config")],
                 class: Class::Reversible,
                 pure: false,
@@ -118,8 +139,19 @@ impl DopplerConfigInheritsEnsure {
         inherits.iter().map(ToString::to_string).collect()
     }
 
+    /// The `config` output: this tool's own `config` input, passed
+    /// through unchanged. See the module doc's "`config` output"
+    /// section for why every branch of `observe` and `ensure` carries
+    /// it known.
+    fn outputs_for(config: &DopplerConfig) -> Outputs {
+        let mut outputs = Outputs::new();
+        outputs.insert(port("config"), Value::known(config.clone()));
+        outputs
+    }
+
     /// `GET` the config, mapped to an [`Observation`]. Shared by `read`
-    /// and `ensure`. See the module doc for the `Mismatch` reasoning.
+    /// and `ensure`. See the module doc for the `Mismatch` reasoning and
+    /// for the `config` output.
     fn observe(
         &self,
         config: &DopplerConfig,
@@ -139,15 +171,15 @@ impl DopplerConfigInheritsEnsure {
                         port: port("inherits"),
                     })
                 } else if actual == wanted {
-                    Ok(Observation::Present(Outputs::new()))
+                    Ok(Observation::Present(Self::outputs_for(config)))
                 } else {
                     Ok(Observation::Absent {
-                        predicted: Outputs::new(),
+                        predicted: Self::outputs_for(config),
                     })
                 }
             }
             Err(err) if looks_like_a_missing_project(&err) => Ok(Observation::Absent {
-                predicted: Outputs::new(),
+                predicted: Self::outputs_for(config),
             }),
             Err(err) => Err(err.into()),
         }
@@ -186,7 +218,7 @@ impl Tool for DopplerConfigInheritsEnsure {
             Observation::Absent { .. } => {
                 match self.client.set_config_inherits(&config, &wanted) {
                     Ok(()) => Ok(Ensured {
-                        outputs: Outputs::new(),
+                        outputs: Self::outputs_for(&config),
                         changed: true,
                     }),
                     // Doppler documents no error-body schema at all, so a

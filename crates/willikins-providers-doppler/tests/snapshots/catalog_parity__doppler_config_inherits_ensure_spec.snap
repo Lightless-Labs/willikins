@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-providers-doppler/tests/catalog_parity.rs
+assertion_line: 179
 expression: "spec_json(DopplerConfigInheritsEnsure::new(test_client()).spec())"
 ---
 {
@@ -25,6 +26,8 @@ expression: "spec_json(DopplerConfigInheritsEnsure::new(test_client()).spec())"
     "config"
   ],
   "name": "doppler.config.inherits.ensure",
-  "outputs": {},
+  "outputs": {
+    "config": "DopplerConfig"
+  },
   "pure": false
 }

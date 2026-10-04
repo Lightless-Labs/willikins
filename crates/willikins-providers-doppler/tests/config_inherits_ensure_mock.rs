@@ -137,6 +137,27 @@ fn read_reports_absent_when_asked_for_an_underscored_base_plus_one_more() {
     );
 }
 
+/// Milestone 3j, task C1 (acceptance 9): `Present` carries `config` as
+/// its own output, the pass-through decision (c2) adds.
+#[test]
+fn read_reports_config_known_in_present() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(200)
+        .with_body(fixture("config_get_inherits_present").to_string())
+        .create();
+    let tool = DopplerConfigInheritsEnsure::new(client_against(provider.url()));
+    let Observation::Present(outputs) = tool.read(&inputs()).unwrap() else {
+        panic!("expected Present");
+    };
+    let out = outputs.get(&PortName::parse("config").unwrap()).unwrap();
+    assert_eq!(out.render().to_string(), "third-thoughts/prd");
+}
+
 #[test]
 fn read_reports_absent_when_nothing_is_inherited_yet() {
     let mut provider = MockProvider::start();
@@ -151,6 +172,50 @@ fn read_reports_absent_when_nothing_is_inherited_yet() {
     let tool = DopplerConfigInheritsEnsure::new(client_against(provider.url()));
     let observation = tool.read(&inputs()).unwrap();
     assert!(matches!(observation, Observation::Absent { .. }));
+}
+
+/// Milestone 3j, task C1 (acceptance 9): `Absent`'s own `predicted`
+/// carries `config` known too, not only `Present`'s outputs -- the port
+/// a downstream gate reads at plan time on every fresh run, where this
+/// tool itself plans `Create`.
+#[test]
+fn read_reports_config_known_in_absent_predicted() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(200)
+        .with_body(fixture("config_get_present").to_string())
+        .create();
+    let tool = DopplerConfigInheritsEnsure::new(client_against(provider.url()));
+    let Observation::Absent { predicted } = tool.read(&inputs()).unwrap() else {
+        panic!("expected Absent");
+    };
+    let out = predicted.get(&PortName::parse("config").unwrap()).unwrap();
+    assert_eq!(out.render().to_string(), "third-thoughts/prd");
+}
+
+/// Same claim, for the missing-project tolerance, since that is a
+/// separate branch of `observe` that also returns `Absent`.
+#[test]
+fn read_reports_config_known_in_absent_predicted_on_404() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(404)
+        .with_body(fixture("error_404").to_string())
+        .create();
+    let tool = DopplerConfigInheritsEnsure::new(client_against(provider.url()));
+    let Observation::Absent { predicted } = tool.read(&inputs()).unwrap() else {
+        panic!("expected Absent");
+    };
+    let out = predicted.get(&PortName::parse("config").unwrap()).unwrap();
+    assert_eq!(out.render().to_string(), "third-thoughts/prd");
 }
 
 /// The module doc's own claim: an extra the caller did not ask for is
@@ -288,6 +353,13 @@ fn ensure_on_a_present_config_makes_no_post() {
     let token = SinkToken::new();
     let ensured = tool.ensure(&inputs(), &token).unwrap();
     assert!(!ensured.changed);
+    // Milestone 3j, task C1 (acceptance 9): `config` is known after a
+    // converged read too, the branch that never reaches the `POST`.
+    let out = ensured
+        .outputs
+        .get(&PortName::parse("config").unwrap())
+        .unwrap();
+    assert_eq!(out.render().to_string(), "third-thoughts/prd");
     post.assert();
 }
 
@@ -344,6 +416,37 @@ fn ensure_sets_the_requested_inherits_and_asserts_the_request_body() {
     post.assert();
 }
 
+/// Milestone 3j, task C1 (acceptance 9): `config` is known in the
+/// `Ensured` returned right after a successful write, not only after a
+/// later `read`.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_reports_config_known_after_a_write() {
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(200)
+        .with_body(fixture("config_get_present").to_string())
+        .create();
+    provider
+        .mock("POST", "/v3/configs/config/inherits")
+        .with_status(200)
+        .with_body(fixture("config_post_inherits").to_string())
+        .create();
+    let tool = DopplerConfigInheritsEnsure::new(client_against(provider.url()));
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&inputs(), &token).unwrap();
+    assert!(ensured.changed);
+    let out = ensured
+        .outputs
+        .get(&PortName::parse("config").unwrap())
+        .unwrap();
+    assert_eq!(out.render().to_string(), "third-thoughts/prd");
+}
+
 #[test]
 #[allow(clippy::disallowed_methods)] // a test mints its own token
 fn an_error_after_the_post_re_reads_and_reports_unchanged_when_present() {
@@ -376,6 +479,14 @@ fn an_error_after_the_post_re_reads_and_reports_unchanged_when_present() {
     let token = SinkToken::new();
     let ensured = tool.ensure(&inputs(), &token).unwrap();
     assert!(!ensured.changed);
+    // Milestone 3j, task C1 (acceptance 9): `config` is known even after
+    // a failed write, as long as the re-read it falls back to lands on
+    // `Present`.
+    let out = ensured
+        .outputs
+        .get(&PortName::parse("config").unwrap())
+        .unwrap();
+    assert_eq!(out.render().to_string(), "third-thoughts/prd");
     first_read.assert();
     post.assert();
     second_read.assert();

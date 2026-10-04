@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-providers-fake/src/lib.rs
+assertion_line: 235
 expression: "catalog.list_tools_json()[\"tools\"]"
 ---
 [
@@ -496,7 +497,9 @@ expression: "catalog.list_tools_json()[\"tools\"]"
       "config"
     ],
     "name": "doppler.config.inherits.ensure",
-    "outputs": {},
+    "outputs": {
+      "config": "DopplerConfig"
+    },
     "pure": false
   },
   {

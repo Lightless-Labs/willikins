@@ -5,6 +5,12 @@
 //! for why): a config that already inherits something this call's
 //! `inherits` input did not name is `Mismatch`, never silently dropped
 //! or silently left alone.
+//!
+//! Also mirrors the live tool's `config` output: a pass-through of this
+//! tool's own `config` input, known in `Present`, in `Absent`'s
+//! `predicted`, and in every `Ensured`. See the live tool's module doc
+//! for why (ordering a downstream gate after inheritance; `apply` reuses
+//! a pure node's planned outputs rather than re-reading it).
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
@@ -13,12 +19,14 @@ use indexmap::IndexMap;
 
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, PortSpec, PortType, SinkToken, Tool, ToolError,
-    ToolSpec,
+    ToolSpec, Value,
 };
 use willikins_types::DopplerConfig;
 
 use crate::state::{FakeState, doppler_config_key};
-use crate::support::{conflict, exact, get, invalid, list, port, require_present, tool_name};
+use crate::support::{
+    conflict, exact, get, invalid, list, port, require_present, scalar, tool_name,
+};
 
 /// `doppler.config.inherits.ensure`.
 pub struct DopplerConfigInheritsEnsure {
@@ -45,12 +53,14 @@ impl DopplerConfigInheritsEnsure {
                 derived_only: false,
             },
         );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("config"), scalar("DopplerConfig"));
         Self {
             spec: ToolSpec {
                 name: tool_name(Self::TOOL_NAME),
                 description: "Ensure a Doppler config inherits a set of base configs.".to_string(),
                 inputs,
-                outputs: IndexMap::new(),
+                outputs,
                 key: vec![port("config")],
                 class: Class::Reversible,
                 pure: false,
@@ -93,7 +103,21 @@ impl DopplerConfigInheritsEnsure {
         inherits.iter().map(doppler_config_key).collect()
     }
 
-    fn observe(state: &FakeState, key: &str, wanted: &BTreeSet<String>) -> Observation {
+    /// The `config` output: this tool's own `config` input, passed
+    /// through unchanged. See the module doc and the live tool's own
+    /// module doc for why every branch carries it known.
+    fn outputs_for(config: &DopplerConfig) -> Outputs {
+        let mut outputs = Outputs::new();
+        outputs.insert(port("config"), Value::known(config.clone()));
+        outputs
+    }
+
+    fn observe(
+        state: &FakeState,
+        config: &DopplerConfig,
+        key: &str,
+        wanted: &BTreeSet<String>,
+    ) -> Observation {
         let actual: BTreeSet<String> = state
             .doppler_config_inherits
             .get(key)
@@ -106,10 +130,10 @@ impl DopplerConfigInheritsEnsure {
                 port: port("inherits"),
             }
         } else if &actual == wanted {
-            Observation::Present(Outputs::new())
+            Observation::Present(Self::outputs_for(config))
         } else {
             Observation::Absent {
-                predicted: Outputs::new(),
+                predicted: Self::outputs_for(config),
             }
         }
     }
@@ -126,7 +150,7 @@ impl Tool for DopplerConfigInheritsEnsure {
         let wanted = Self::wanted_set(&wanted);
         let mut state = self.state.lock().unwrap();
         state.record_read_call(Self::TOOL_NAME, &key);
-        Ok(Self::observe(&state, &key, &wanted))
+        Ok(Self::observe(&state, &config, &key, &wanted))
     }
 
     fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
@@ -138,7 +162,7 @@ impl Tool for DopplerConfigInheritsEnsure {
         if let Some(err) = state.take_fail_ensure_once(Self::TOOL_NAME, &key) {
             return Err(err);
         }
-        match Self::observe(&state, &key, &wanted) {
+        match Self::observe(&state, &config, &key, &wanted) {
             Observation::Present(outputs) => Ok(Ensured {
                 outputs,
                 changed: false,
@@ -152,7 +176,7 @@ impl Tool for DopplerConfigInheritsEnsure {
                     .doppler_config_inherits
                     .insert(key, wanted.into_iter().collect());
                 Ok(Ensured {
-                    outputs: Outputs::new(),
+                    outputs: Self::outputs_for(&config),
                     changed: true,
                 })
             }
@@ -228,6 +252,34 @@ mod tests {
         );
     }
 
+    /// Milestone 3j, task C1 (acceptance 9): `Absent`'s own `predicted`
+    /// carries `config` known, not just `Present`'s outputs -- a
+    /// downstream gate's `get(inputs, "config")` reads this on every
+    /// fresh run, where `inherits.ensure` itself plans `Create`.
+    #[test]
+    fn read_reports_config_known_in_absent_predicted() {
+        let Observation::Absent { predicted } = tool().read(&full_inputs()).unwrap() else {
+            panic!("expected Absent");
+        };
+        let out = predicted.get(&PortName::parse("config").unwrap()).unwrap();
+        assert_eq!(out.render().to_string(), "third-thoughts/prd");
+    }
+
+    #[test]
+    fn read_reports_config_known_in_present() {
+        let state = Arc::new(Mutex::new(
+            FakeState::new().with_doppler_config_inherits(&config(), &[base()]),
+        ));
+        let Observation::Present(outputs) = DopplerConfigInheritsEnsure::new(state)
+            .read(&full_inputs())
+            .unwrap()
+        else {
+            panic!("expected Present");
+        };
+        let out = outputs.get(&PortName::parse("config").unwrap()).unwrap();
+        assert_eq!(out.render().to_string(), "third-thoughts/prd");
+    }
+
     #[test]
     fn read_rejects_a_missing_port() {
         let err = tool().read(&Inputs::new()).unwrap_err();
@@ -251,6 +303,28 @@ mod tests {
         assert!(first.changed);
         let second = tool.ensure(&full_inputs(), &token).unwrap();
         assert!(!second.changed);
+    }
+
+    /// Milestone 3j, task C1 (acceptance 9): `config` is known after a
+    /// write (first call, `changed: true`) and after a converged read
+    /// (second call, `changed: false`).
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_reports_config_known_after_a_write_and_after_a_converged_read() {
+        let tool = tool();
+        let token = SinkToken::new();
+        let first = tool.ensure(&full_inputs(), &token).unwrap();
+        let out = first
+            .outputs
+            .get(&PortName::parse("config").unwrap())
+            .unwrap();
+        assert_eq!(out.render().to_string(), "third-thoughts/prd");
+        let second = tool.ensure(&full_inputs(), &token).unwrap();
+        let out = second
+            .outputs
+            .get(&PortName::parse("config").unwrap())
+            .unwrap();
+        assert_eq!(out.render().to_string(), "third-thoughts/prd");
     }
 
     #[test]
