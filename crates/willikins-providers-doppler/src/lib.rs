@@ -4,7 +4,8 @@
 //! `doppler.config.inheritable.gate`,
 //! `doppler.config.inherits.ensure`, `doppler.service_token.ensure`,
 //! `doppler.service_token.rotate`, `doppler.secret.get`,
-//! `doppler.secret.set`, and `doppler.value.get`.
+//! `doppler.secret_name.gate` (milestone 3j task B2, not yet registered
+//! in any catalog), `doppler.secret.set`, and `doppler.value.get`.
 //!
 //! See `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`'s
 //! `willikins-providers-doppler` crate contract and trust boundaries 1
@@ -62,6 +63,6 @@ pub use client::{
 pub use tools::{
     DopplerBranchConfigEnsure, DopplerConfigEnsure, DopplerConfigInheritableEnsure,
     DopplerConfigInheritableGate, DopplerConfigInheritsEnsure, DopplerProjectEnsure,
-    DopplerProjectMemberEnsure, DopplerSecretGet, DopplerSecretSet, DopplerServiceTokenEnsure,
-    DopplerServiceTokenRotate, DopplerValueGet,
+    DopplerProjectMemberEnsure, DopplerSecretGet, DopplerSecretNameGate, DopplerSecretSet,
+    DopplerServiceTokenEnsure, DopplerServiceTokenRotate, DopplerValueGet,
 };

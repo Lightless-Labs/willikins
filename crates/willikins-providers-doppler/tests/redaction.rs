@@ -23,8 +23,8 @@ use std::sync::{Arc, Mutex};
 
 use willikins_core::{PortName, Tool, Value};
 use willikins_providers_doppler::{
-    DopplerClient, DopplerProjectEnsure, DopplerSecretGet, DopplerServiceTokenEnsure,
-    DopplerServiceTokenRotate,
+    DopplerClient, DopplerProjectEnsure, DopplerSecretGet, DopplerSecretNameGate,
+    DopplerServiceTokenEnsure, DopplerServiceTokenRotate,
 };
 use willikins_providers_http::testing::MockProvider;
 use willikins_providers_http::{Credential, Http};
@@ -378,4 +378,108 @@ fn every_request_carries_the_marker_in_authorization_and_in_no_other_header() {
             .collect::<std::collections::BTreeSet<_>>(),
         "every verb must have carried an Authorization header"
     );
+}
+
+/// Stands in for a secret *name* other than the one
+/// `doppler.secret_name.gate` is asked about — valid under
+/// [`SecretName`]'s grammar, so it can sit in a listed `names` array
+/// exactly like a real secret under a name willikins never prints
+/// (milestone 3j, trust boundary 2).
+const NAME_MARKER: &str = "WILLIKINS_NAME_LEAK_MARKER";
+
+/// `doppler.secret_name.gate`: a listed marker name (never the one asked
+/// about) and a marker in the config body's free-form `environment`
+/// field reach no `Observation`, rendered output, or `ToolError` —
+/// Debug or message — across a direct `Present`, a full walk, and a
+/// base's own failure that lists the marker in its `names` array rather
+/// than its `messages` text (the same split `client.rs`'s own mock
+/// tests already pin: the error message is built from `messages` alone,
+/// never from `names`).
+#[test]
+fn a_secret_name_gate_marker_never_leaks_anywhere() {
+    let config = DopplerConfig::parse("third-thoughts/prd").unwrap();
+    let name = SecretName::parse("EXAMPLE_APNS_KEY").unwrap();
+    let mut inputs = willikins_core::Inputs::new();
+    inputs.insert(
+        PortName::parse("config").unwrap(),
+        Value::known(config.clone()),
+    );
+    inputs.insert(PortName::parse("name").unwrap(), Value::known(name));
+
+    // Direct `Present`: the marker is listed alongside the asked name,
+    // so it never needs to leave the client at all.
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config/secrets/names?project=third-thoughts&config=prd\
+             &include_dynamic_secrets=false&include_managed_secrets=false",
+        )
+        .with_status(200)
+        .with_body(serde_json::json!({"names": [NAME_MARKER, "EXAMPLE_APNS_KEY"]}).to_string())
+        .create();
+    let tool = DopplerSecretNameGate::new(client_against(provider.url()));
+    let observation = tool.read(&inputs).expect("reads");
+    let debug = format!("{observation:?}");
+    assert!(!debug.contains(NAME_MARKER), "Debug leaked: {debug}");
+    let willikins_core::Observation::Present(outputs) = &observation else {
+        panic!("expected Present: {observation:?}");
+    };
+    let rendered = outputs
+        .get(&PortName::parse("config").unwrap())
+        .unwrap()
+        .render()
+        .to_string();
+    assert!(!rendered.contains(NAME_MARKER), "render leaked: {rendered}");
+
+    // The walk: unlisted directly (the marker is the only listed name),
+    // the config body's own `environment` field also carries the
+    // marker, and the one base this config inherits answers `403` with
+    // the marker in its `names` array (never its `messages` text).
+    let mut provider = MockProvider::start();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config/secrets/names?project=third-thoughts&config=prd\
+             &include_dynamic_secrets=false&include_managed_secrets=false",
+        )
+        .with_status(200)
+        .with_body(serde_json::json!({"names": [NAME_MARKER]}).to_string())
+        .create();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config?project=third-thoughts&config=prd",
+        )
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "config": {
+                    "name": "prd",
+                    "root": true,
+                    "environment": format!("prd-{NAME_MARKER}"),
+                    "inherits": [{"project": "shared-apple", "config": "base"}],
+                    "project": "third-thoughts",
+                }
+            })
+            .to_string(),
+        )
+        .create();
+    provider
+        .mock(
+            "GET",
+            "/v3/configs/config/secrets/names?project=shared-apple&config=base\
+             &include_dynamic_secrets=false&include_managed_secrets=false",
+        )
+        .with_status(403)
+        .with_body(
+            serde_json::json!({"messages": ["Forbidden"], "names": [NAME_MARKER]}).to_string(),
+        )
+        .create();
+    let tool = DopplerSecretNameGate::new(client_against(provider.url()));
+    let err = tool
+        .read(&inputs)
+        .expect_err("the base's 403 is a genuine failure, never Absent");
+    assert!(!err.message.contains(NAME_MARKER), "{}", err.message);
+    assert!(!format!("{err:?}").contains(NAME_MARKER), "{err:?}");
 }
