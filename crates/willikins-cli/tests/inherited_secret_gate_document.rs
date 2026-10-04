@@ -31,14 +31,17 @@
 //! 5. **The binding itself.** `apns_key.config` is a `Binding::Step`
 //!    reading `inherit`'s own `config` output, pinning the (c2) edge
 //!    decision this document exercises.
+//! 6. **No plan-to-apply drift through `inherit`.** A config already
+//!    inheriting a base this document does not name refuses to plan, so
+//!    `apns_key` is never `Compute` on a base the same run would drop.
 
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Action, Approval, Binding, InputName, NodeName, NodeStatus, PortName, RecordingObserver,
-    TypeName, TypeRef, Value, apply, check, plan,
+    Action, Approval, Binding, InputName, NodeName, NodeStatus, PlanError, PortName,
+    RecordingObserver, Site, TypeName, TypeRef, Value, apply, check, plan,
 };
 use willikins_providers_fake::FakeState;
 use willikins_types::{DomainType, DopplerConfig, DopplerSecretValue, SecretName};
@@ -322,5 +325,48 @@ fn apns_key_config_binds_inherit_config() {
             assert_eq!(port.as_str(), "config");
         }
         other => panic!("expected a Binding::Step onto inherit.config, got {other:?}"),
+    }
+}
+
+/// Plan-to-apply drift (milestone 3j, second adversarial pass). `apns_key`
+/// observes at plan time only, and `apply` reuses a pure node's planned
+/// outputs, so a plan-time `Present` would go stale if `inherit`, in the
+/// same run, replaced the config's inheritance with a set that drops the
+/// base the name was seen in: the run would end green and only the next
+/// run would block. `inherit` never drops a base. A config that already
+/// inherits a base this document does not name reads `Mismatch`, so the
+/// whole run refuses to plan (`AttributeMismatch` at `inherit.inherits`)
+/// instead of planning `apns_key` `Compute` on a name it is about to lose.
+#[test]
+fn a_config_inheriting_a_base_the_document_does_not_name_refuses_to_plan() {
+    let other_base = DopplerConfig::parse("other_keys/prd").unwrap();
+    let branch = DopplerConfig::parse("third-thoughts/prd_deploy").unwrap();
+    let state = Arc::new(Mutex::new(
+        FakeState::new()
+            .with_doppler_config(&base_config())
+            .with_doppler_config_inheritable(&base_config())
+            .with_doppler_config(&other_base)
+            .with_doppler_config_inheritable(&other_base)
+            .with_doppler_secret(
+                &other_base,
+                &secret_name(),
+                DopplerSecretValue::parse("willikins test secret value").unwrap(),
+            )
+            .with_doppler_config(&branch)
+            .with_doppler_config_inherits(&branch, std::slice::from_ref(&other_base)),
+    ));
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = check(&document(), &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+    let err = plan(&checked, &base_inputs(), &catalog)
+        .expect_err("inherit must refuse to drop a base, so the run must not plan");
+    match err {
+        PlanError::AttributeMismatch {
+            site: Site::Port { node, port },
+        } => {
+            assert_eq!(node.as_str(), "inherit");
+            assert_eq!(port.as_str(), "inherits");
+        }
+        other => panic!("expected AttributeMismatch at inherit.inherits, got {other:?}"),
     }
 }
