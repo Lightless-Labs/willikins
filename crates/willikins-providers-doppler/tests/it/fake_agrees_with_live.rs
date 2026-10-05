@@ -4,7 +4,7 @@
 //!
 //! `catalog_parity.rs` pins the two catalogs' specs equal — agreement by
 //! construction, since both specs are hand-written. Milestone 3a's
-//! `willikins-providers-buildkite/tests/fake_agrees_with_live.rs` closed
+//! `willikins-providers-buildkite/tests/it/fake_agrees_with_live.rs` closed
 //! the same gap for Buildkite after mutation found the fake and live
 //! copies of a frozen form could drift while every other test in both
 //! crates stayed green; this file is this milestone's own instance of

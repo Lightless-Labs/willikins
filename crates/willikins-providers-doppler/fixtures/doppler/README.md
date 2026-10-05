@@ -22,7 +22,7 @@ either already exists, because a leftover from an aborted run is the operator's 
 hand** — the test never deletes something it did not create in that run. A second `#[ignore]`
 test in the same file, gated on `WILLIKINS_LIVE_LEFTOVER_CHECK=1`, confirms both are gone.
 
-`tests/live_probe.rs` is the read-only half. It ran for the first time on 2026-09-14 and
+`tests/it/live_probe.rs` is the read-only half. It ran for the first time on 2026-09-14 and
 verified nothing: the dedicated test workplace holds no persistent project, so every check that
 needs one answered `404`. It stays for a workplace that keeps one.
 

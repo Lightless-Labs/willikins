@@ -33,7 +33,7 @@
 //!
 //! ```text
 //! source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_PROBE=1 \
-//!   cargo test -p willikins-providers-doppler --test live_probe -- --ignored \
+//!   cargo test -p willikins-providers-doppler --test it live_probe:: -j 2 -- --ignored \
 //!   --nocapture
 //! ```
 //!
@@ -61,14 +61,13 @@
 //! Confirm both exist, and their response shapes, the first time this
 //! probe actually runs.
 
-mod common;
-
 use serde_json::Value;
 use willikins_providers_doppler::looks_like_a_missing_project;
 use willikins_providers_http::ProviderError;
 use willikins_types::{DomainType, DopplerProject};
 
-use common::{record_and_compare, record_raw};
+use crate::common;
+use crate::common::{record_and_compare, record_raw};
 
 /// One endpoint's whole check: record `result` (if it succeeded) against
 /// `fixture_name`, print exactly one `pass`/`fail` line naming
@@ -287,14 +286,14 @@ fn doppler_live_probe() {
 /// [`redact`] is the only thing standing between a real Doppler response
 /// and a file on disk, and it is reached exclusively from an `#[ignore]`d
 /// test that has never run — so nothing had ever executed it. This test
-/// is *not* ignored: it seeds the same markers `tests/redaction.rs`
+/// is *not* ignored: it seeds the same markers `tests/it/redaction.rs`
 /// sweeps, in every position a real response could put them (a bare
 /// object, nested inside another, inside an array, and inside an array
 /// nested inside an object), and proves none survives.
 #[test]
 fn redact_strips_every_secret_bearing_field_at_every_depth() {
     // `concat!`-joined so this file holds no literal spelling the whole
-    // thing contiguously (same marker as `tests/redaction.rs`).
+    // thing contiguously (same marker as `tests/it/redaction.rs`).
     const TOKEN_MARKER: &str = concat!("dp.st.", "wlknTokenMarker0000000000000000000000000");
     const SECRET_MARKER: &str = "wlkn-secret-marker-9f2h7ap5rz8s";
 

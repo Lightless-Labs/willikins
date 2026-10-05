@@ -14,7 +14,7 @@
 //! send a value the API requires in the request body. It is deliberately
 //! not driven through this shared file's "no recorded request line
 //! carries the marker" assertion, which would be false for it on
-//! purpose; its own file (`tests/secret_set_mock.rs`) proves the
+//! purpose; its own file (`tests/it/secret_set_mock.rs`) proves the
 //! narrower claim that *does* hold — the value reaches the `POST` body
 //! and nowhere else (no error, no `Debug`, no `Observation`).
 

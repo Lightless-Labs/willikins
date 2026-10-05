@@ -514,7 +514,7 @@ fn ensure_on_present_never_writes_and_reports_unchanged() {
 /// strings fails this test rather than only a code review.
 #[test]
 fn the_tool_never_names_a_value_reading_endpoint() {
-    let tool_source = include_str!("../src/tools/secret_name_gate.rs");
+    let tool_source = include_str!("../../src/tools/secret_name_gate.rs");
     for forbidden in [
         "get_secret",
         "get_value",

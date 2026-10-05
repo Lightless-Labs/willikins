@@ -38,7 +38,6 @@ use std::path::{Path, PathBuf};
 const PENDING: &[&str] = &[
     "willikins-cli",
     "willikins-providers-appstore",
-    "willikins-providers-doppler",
     "willikins-server",
 ];
 

@@ -4,7 +4,7 @@
 //! output of an earlier, non-pure node. `check` needs only tool specs,
 //! not live network access, so the all-fake catalog (whose
 //! `doppler.secret.set`/`doppler.secret.get` specs are pinned equal to
-//! the live ones by `tests/catalog_parity.rs`) is enough to check
+//! the live ones by `tests/it/catalog_parity.rs`) is enough to check
 //! against.
 
 fn workflows_dir() -> std::path::PathBuf {

@@ -8,7 +8,7 @@
 //! nothing `check` can see. Neither catalog's tools are called here: a
 //! `check` is pure, so the live tools' `Http` may point at a port nothing
 //! listens on. Mirrors `willikins-providers-github`'s
-//! `tests/catalog_check_parity.rs`, flipped: GitHub stays fake here,
+//! `tests/it/catalog_check_parity.rs`, flipped: GitHub stays fake here,
 //! Doppler is live.
 
 use std::sync::{Arc, Mutex};

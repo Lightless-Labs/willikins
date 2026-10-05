@@ -215,7 +215,7 @@ fn ensure_reports_changed_true_even_when_the_secret_already_existed() {
     );
 }
 
-/// This crate's one exception to `tests/redaction.rs`'s "no recorded
+/// This crate's one exception to `tests/it/redaction.rs`'s "no recorded
 /// request line carries the marker" rule, by design (see that file's own
 /// updated module doc): the value reaches the `POST` body, since sending
 /// it is this tool's whole job, but nowhere else -- not the `read` path,

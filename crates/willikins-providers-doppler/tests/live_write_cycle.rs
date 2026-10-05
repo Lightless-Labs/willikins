@@ -8,7 +8,7 @@
 //! the credential is read (through
 //! [`willikins_providers_doppler::credential_from_env`], itself
 //! `Credential::from_env`) only past that gate, exactly as
-//! `tests/live_probe.rs` does.
+//! `tests/it/live_probe.rs` does.
 //!
 //! ```text
 //! source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_TESTS=1 \

@@ -9,7 +9,7 @@
 //! ignored `retry-after` entirely and simply backed off exponentially
 //! would have passed every one of them.
 //!
-//! `willikins-providers-http`'s own `tests/adversarial_retry.rs` pins the
+//! `willikins-providers-http`'s own `tests/it/adversarial_retry.rs` pins the
 //! cap on a bare `Http`. What this file pins is the same guarantee
 //! reached *through a Doppler tool*, on the exact endpoints the five
 //! tools call.
