@@ -46,7 +46,6 @@ const PENDING: &[&str] = &[
     "willikins-providers-http",
     "willikins-providers-signoz",
     "willikins-server",
-    "willikins-types",
 ];
 
 /// Which of (d7)'s rules a [`Violation`] names, plus the ratchet's own

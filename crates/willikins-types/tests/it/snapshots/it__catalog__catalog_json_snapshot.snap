@@ -1,5 +1,5 @@
 ---
-source: crates/willikins-types/tests/catalog.rs
+source: crates/willikins-types/tests/it/catalog.rs
 expression: redacted
 ---
 [
