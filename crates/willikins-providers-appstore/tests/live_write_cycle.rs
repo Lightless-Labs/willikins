@@ -71,9 +71,9 @@
 //!   && J=$(printf 'header = "Authorization: Bearer %s"\n' "$WILLIKINS_DOPPLER_TOKEN" \
 //!        | curl -sf -K - \
 //!        "https://api.doppler.com/v3/configs/config/secrets/download?project=app-store-connect&config=prd&format=json") \
-//!   && export ASC_API_KEY_ISSUER_ID=$(printf '%s' "$J" | jq -r .ASC_API_KEY_ISSUER_ID) \
-//!             ASC_API_KEY_ID=$(printf '%s' "$J" | jq -r .ASC_API_KEY_ID) \
-//!             ASC_API_KEY_BASE64=$(printf '%s' "$J" | jq -r .ASC_API_KEY_BASE64) \
+//!   && export APP_STORE_CONNECT_API_KEY_ISSUER_ID=$(printf '%s' "$J" | jq -r .APP_STORE_CONNECT_API_KEY_ISSUER_ID) \
+//!             APP_STORE_CONNECT_API_KEY_ID=$(printf '%s' "$J" | jq -r .APP_STORE_CONNECT_API_KEY_ID) \
+//!             APP_STORE_CONNECT_API_KEY_BASE64=$(printf '%s' "$J" | jq -r .APP_STORE_CONNECT_API_KEY_BASE64) \
 //!   && unset J \
 //!   && WILLIKINS_LIVE_TESTS=1 RUST_TEST_THREADS=2 cargo test \
 //!        -p willikins-providers-appstore --features live-tests \
@@ -117,25 +117,31 @@ use willikins_types::{
 mod apple_error_report;
 
 fn credential_parts() -> (AppleIssuerId, AppleKeyId, AppleSigningKey) {
-    let issuer_id = std::env::var("ASC_API_KEY_ISSUER_ID").expect("ASC_API_KEY_ISSUER_ID is set");
-    let key_id = std::env::var("ASC_API_KEY_ID").expect("ASC_API_KEY_ID is set");
-    let key_base64 = std::env::var("ASC_API_KEY_BASE64").expect("ASC_API_KEY_BASE64 is set");
+    let issuer_id = std::env::var("APP_STORE_CONNECT_API_KEY_ISSUER_ID")
+        .expect("APP_STORE_CONNECT_API_KEY_ISSUER_ID is set");
+    let key_id =
+        std::env::var("APP_STORE_CONNECT_API_KEY_ID").expect("APP_STORE_CONNECT_API_KEY_ID is set");
+    let key_base64 = std::env::var("APP_STORE_CONNECT_API_KEY_BASE64")
+        .expect("APP_STORE_CONNECT_API_KEY_BASE64 is set");
     let key_bytes = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         key_base64.trim(),
     )
-    .unwrap_or_else(|_| panic!("ASC_API_KEY_BASE64 does not decode as base64"));
+    .unwrap_or_else(|_| panic!("APP_STORE_CONNECT_API_KEY_BASE64 does not decode as base64"));
     // `String::from_utf8`'s `FromUtf8Error` carries the bytes it
     // rejected in its `Debug`, so an `.expect()` here would print the
     // decoded private key into the test log on exactly the run where
     // something went wrong. Drop the error instead.
-    let key_pem = String::from_utf8(key_bytes)
-        .unwrap_or_else(|_| panic!("the decoded ASC_API_KEY_BASE64 is not valid UTF-8"));
+    let key_pem = String::from_utf8(key_bytes).unwrap_or_else(|_| {
+        panic!("the decoded APP_STORE_CONNECT_API_KEY_BASE64 is not valid UTF-8")
+    });
     (
-        AppleIssuerId::parse(&issuer_id).expect("ASC_API_KEY_ISSUER_ID is a valid issuer id"),
-        AppleKeyId::parse(&key_id).expect("ASC_API_KEY_ID is a valid key id"),
-        AppleSigningKey::parse(&key_pem)
-            .unwrap_or_else(|_| panic!("ASC_API_KEY_BASE64 does not decode to a valid P-256 key")),
+        AppleIssuerId::parse(&issuer_id)
+            .expect("APP_STORE_CONNECT_API_KEY_ISSUER_ID is a valid issuer id"),
+        AppleKeyId::parse(&key_id).expect("APP_STORE_CONNECT_API_KEY_ID is a valid key id"),
+        AppleSigningKey::parse(&key_pem).unwrap_or_else(|_| {
+            panic!("APP_STORE_CONNECT_API_KEY_BASE64 does not decode to a valid P-256 key")
+        }),
     )
 }
 

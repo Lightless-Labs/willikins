@@ -58,8 +58,8 @@ says less.
 
 ## What inference still cannot do
 
-Nothing recovers the fact that `ASC_API_KEY_BASE64` is sensitive and
-`ASC_API_KEY_ISSUER_ID` is not. That lives in Doppler's per-secret `computedVisibility`
+Nothing recovers the fact that `APP_STORE_CONNECT_API_KEY_BASE64` is sensitive and
+`APP_STORE_CONNECT_API_KEY_ISSUER_ID` is not. That lives in Doppler's per-secret `computedVisibility`
 (`masked` / `restricted` / `unmasked`, and `computed` propagates through references) or in
 the author's head. The operator declined to gate on visibility for a practical reason
 worth recording: *"I only ever mark Doppler secrets as masked, no restricted, so....."* —

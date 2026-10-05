@@ -66,7 +66,7 @@ fn secret_name() -> SecretName {
 }
 
 fn value_name() -> SecretName {
-    SecretName::parse("ASC_API_KEY_ISSUER_ID").expect("a valid secret name")
+    SecretName::parse("APP_STORE_CONNECT_API_KEY_ISSUER_ID").expect("a valid secret name")
 }
 
 fn buildkite_org() -> BuildkiteOrg {

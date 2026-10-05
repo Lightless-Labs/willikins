@@ -101,7 +101,7 @@ mod tests {
     }
 
     fn name() -> SecretName {
-        SecretName::parse("ASC_API_KEY_ISSUER_ID").unwrap()
+        SecretName::parse("APP_STORE_CONNECT_API_KEY_ISSUER_ID").unwrap()
     }
 
     fn full_inputs() -> Inputs {
@@ -159,7 +159,7 @@ mod tests {
         let err = tool.read(&full_inputs()).unwrap_err();
         assert_eq!(err.kind, ToolErrorKind::NotFound);
         assert!(err.message.contains("third-thoughts/prd"));
-        assert!(err.message.contains("ASC_API_KEY_ISSUER_ID"));
+        assert!(err.message.contains("APP_STORE_CONNECT_API_KEY_ISSUER_ID"));
     }
 
     #[test]

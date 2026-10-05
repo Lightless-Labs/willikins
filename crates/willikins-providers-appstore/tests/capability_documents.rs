@@ -48,11 +48,11 @@ fn scalar_input(type_name: &str, text: &str) -> Value {
 fn seeded_state() -> std::sync::Arc<std::sync::Mutex<FakeState>> {
     let json = serde_json::json!({
         "doppler_values": {
-            "app-store-connect/prd#ASC_API_KEY_ISSUER_ID": "57246542-96fe-1a63-e053-0824d011072a",
-            "app-store-connect/prd#ASC_API_KEY_ID": "2X9R4HXF34",
+            "app-store-connect/prd#APP_STORE_CONNECT_API_KEY_ISSUER_ID": "57246542-96fe-1a63-e053-0824d011072a",
+            "app-store-connect/prd#APP_STORE_CONNECT_API_KEY_ID": "2X9R4HXF34",
         },
         "doppler_secrets": {
-            "app-store-connect/prd#ASC_API_KEY_BASE64": "VGhpcyBpcyBhbiBleGFtcGxlIGtleSBmb3IgdGVzdHMgb25seS4KLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3ZMNTJyZWtFcWdHcW9XbjkKK1lCa0lRdVFXRU9UaEtxcUlYYnZvbmVuY0FXaFJBTkNBQVRkdC9YZDRjL0NMT0thMmpvRDlHMXBCOTh1d0tOKwpMR0p2SzNoS1RyeFRXbkowR3lRaVAzUm1DdWJ6bCtHUVIvL2g5Y2lGYW1qeU5jSE1qVlUyY0tiQQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==",
+            "app-store-connect/prd#APP_STORE_CONNECT_API_KEY_BASE64": "VGhpcyBpcyBhbiBleGFtcGxlIGtleSBmb3IgdGVzdHMgb25seS4KLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3ZMNTJyZWtFcWdHcW9XbjkKK1lCa0lRdVFXRU9UaEtxcUlYYnZvbmVuY0FXaFJBTkNBQVRkdC9YZDRjL0NMT0thMmpvRDlHMXBCOTh1d0tOKwpMR0p2SzNoS1RyeFRXbkowR3lRaVAzUm1DdWJ6bCtHUVIvL2g5Y2lGYW1qeU5jSE1qVlUyY0tiQQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==",
         },
         "apple_bundle_ids": {
             "com.example.MyApp": {
@@ -142,7 +142,7 @@ steps:
     tool: doppler.value.get
     with:
       config: ${{ inputs.config }}
-      name: ASC_API_KEY_ISSUER_ID
+      name: APP_STORE_CONNECT_API_KEY_ISSUER_ID
   issuer_id:
     tool: apple.issuer_id.parse
     with:
@@ -151,7 +151,7 @@ steps:
     tool: doppler.value.get
     with:
       config: ${{ inputs.config }}
-      name: ASC_API_KEY_ID
+      name: APP_STORE_CONNECT_API_KEY_ID
   key_id:
     tool: apple.key_id.parse
     with:
@@ -160,7 +160,7 @@ steps:
     tool: doppler.secret.get
     with:
       config: ${{ inputs.config }}
-      name: ASC_API_KEY_BASE64
+      name: APP_STORE_CONNECT_API_KEY_BASE64
   key_decoded:
     tool: base64.decode
     with:
@@ -196,11 +196,11 @@ outputs:
 fn seeded_state_without_a_bundle_id() -> std::sync::Arc<std::sync::Mutex<FakeState>> {
     let json = serde_json::json!({
         "doppler_values": {
-            "app-store-connect/prd#ASC_API_KEY_ISSUER_ID": "57246542-96fe-1a63-e053-0824d011072a",
-            "app-store-connect/prd#ASC_API_KEY_ID": "2X9R4HXF34",
+            "app-store-connect/prd#APP_STORE_CONNECT_API_KEY_ISSUER_ID": "57246542-96fe-1a63-e053-0824d011072a",
+            "app-store-connect/prd#APP_STORE_CONNECT_API_KEY_ID": "2X9R4HXF34",
         },
         "doppler_secrets": {
-            "app-store-connect/prd#ASC_API_KEY_BASE64": "VGhpcyBpcyBhbiBleGFtcGxlIGtleSBmb3IgdGVzdHMgb25seS4KLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3ZMNTJyZWtFcWdHcW9XbjkKK1lCa0lRdVFXRU9UaEtxcUlYYnZvbmVuY0FXaFJBTkNBQVRkdC9YZDRjL0NMT0thMmpvRDlHMXBCOTh1d0tOKwpMR0p2SzNoS1RyeFRXbkowR3lRaVAzUm1DdWJ6bCtHUVIvL2g5Y2lGYW1qeU5jSE1qVlUyY0tiQQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==",
+            "app-store-connect/prd#APP_STORE_CONNECT_API_KEY_BASE64": "VGhpcyBpcyBhbiBleGFtcGxlIGtleSBmb3IgdGVzdHMgb25seS4KLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ3ZMNTJyZWtFcWdHcW9XbjkKK1lCa0lRdVFXRU9UaEtxcUlYYnZvbmVuY0FXaFJBTkNBQVRkdC9YZDRjL0NMT0thMmpvRDlHMXBCOTh1d0tOKwpMR0p2SzNoS1RyeFRXbkowR3lRaVAzUm1DdWJ6bCtHUVIvL2g5Y2lGYW1qeU5jSE1qVlUyY0tiQQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==",
         },
     })
     .to_string();

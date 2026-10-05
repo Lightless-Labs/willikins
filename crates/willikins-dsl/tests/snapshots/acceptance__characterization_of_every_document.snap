@@ -18,7 +18,7 @@ OUTPUTS:
 issuer_id: DopplerValue
 key_id: DopplerValue
 PLAN:
-PLAN ERROR: node `issuer_id`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
+PLAN ERROR: node `issuer_id`: NotFound: no secret at `third-thoughts/prd#APP_STORE_CONNECT_API_KEY_ISSUER_ID`
 
 === workflows/apple-signing-credential-from-inputs.yaml ===
 WARNINGS:
@@ -54,7 +54,7 @@ OUTPUTS:
 id: AppleBundleIdId
 identifier: AppleBundleIdentifier
 PLAN:
-PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
+PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#APP_STORE_CONNECT_API_KEY_ISSUER_ID`
 
 === workflows/appstore-bundle-id-from-inputs.yaml ===
 WARNINGS:
@@ -112,7 +112,7 @@ store.value: AppleProfileContent
 OUTPUTS:
 profile: AppleProfileId
 PLAN:
-PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
+PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#APP_STORE_CONNECT_API_KEY_ISSUER_ID`
 
 === workflows/buildkite-cluster-token-from-doppler.yaml ===
 WARNINGS:
@@ -258,7 +258,7 @@ healthkit.capability: AppleCapabilityType
 healthkit.setting: AppleCapabilitySetting
 OUTPUTS:
 PLAN:
-PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#ASC_API_KEY_ISSUER_ID`
+PLAN ERROR: node `issuer_id_text`: NotFound: no secret at `third-thoughts/prd#APP_STORE_CONNECT_API_KEY_ISSUER_ID`
 
 === workflows/fixtures/appstore-profile-content-into-template.yaml ===
 CHECK ERRORS:
