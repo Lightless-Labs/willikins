@@ -11,11 +11,10 @@
 //! `variant => "tag"` pair per arm instead of deriving the tag from
 //! `stringify!`.
 
-mod common;
-
 use std::collections::{BTreeMap, HashSet};
 
-use common::{node, port, principal, reason, tool_name, workflow_name};
+use crate::common;
+use crate::common::{node, port, principal, reason, tool_name, workflow_name};
 use willikins_core::{Class, InstanceFingerprint, NodeStatus, ToolError, ToolErrorKind};
 use willikins_journal::{
     ApplyRefusedReason, AuthFailedReason, DriftReasonKind, Event, Outcome, PlanId, Redacted, RunId,

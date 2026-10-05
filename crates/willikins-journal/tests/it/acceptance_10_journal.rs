@@ -19,7 +19,7 @@
 //!   produces, since that is the file a real deployment would actually
 //!   see contended.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

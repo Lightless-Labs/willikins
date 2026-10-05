@@ -12,9 +12,8 @@
 //! it makes the boundary visible instead of leaving a reader to assume the
 //! journal scrubs text it has no way to inspect.
 
-mod common;
-
-use common::{node, port, principal, workflow_name};
+use crate::common;
+use crate::common::{node, port, principal, workflow_name};
 use indexmap::IndexMap;
 use willikins_core::{
     Action, Applied, ApplyError, Class, DriftKind, Inputs, InstanceRef, NodeStatus, Outputs,

@@ -23,8 +23,6 @@
 //! journal file, not the one the newer image wrote. Recorded as a
 //! decision in `docs/research/2026-09-15-e2e-http-adversarial-pass-2.md`.
 
-mod common;
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -293,7 +291,7 @@ fn the_frozen_fixture_still_carries_both_run_outcomes() {
 #[ignore = "one-shot fixture generation; the committed fixture is frozen"]
 #[allow(clippy::too_many_lines)] // one literal list of every event kind; splitting it hides what it covers
 fn regenerate_the_frozen_fixture() {
-    use common::{document_sha256, node, port, principal, reason, tool_name, workflow_name};
+    use crate::common::{document_sha256, node, port, principal, reason, tool_name, workflow_name};
     use indexmap::IndexMap;
     use willikins_core::{Class, InstanceFingerprint, NodeStatus, ToolError, ToolErrorKind};
     use willikins_journal::{

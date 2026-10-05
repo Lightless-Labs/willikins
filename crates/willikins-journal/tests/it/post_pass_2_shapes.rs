@@ -31,8 +31,6 @@
 //! overclaim in the note, which never mentions `NodeStatus`, but a gap
 //! all the same.
 
-mod common;
-
 use std::path::{Path, PathBuf};
 
 use willikins_journal::{ApplyRefusedReason, AuthFailedReason, Event, Transport};
@@ -217,7 +215,7 @@ fn every_node_status_kind_the_pre_change_fixture_misses_replays() {
 #[test]
 #[ignore = "one-shot fixture generation; the committed fixture is frozen"]
 fn regenerate_the_frozen_fixture() {
-    use common::{document_sha256, node, principal, workflow_name};
+    use crate::common::{document_sha256, node, principal, workflow_name};
     use indexmap::IndexMap;
     use willikins_core::{Class, InstanceFingerprint, NodeStatus};
     use willikins_journal::{Clock, Journal, ManualClock, PlanId, Redacted, RunId, Timestamp};

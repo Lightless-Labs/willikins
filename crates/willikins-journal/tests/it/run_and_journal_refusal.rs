@@ -14,11 +14,10 @@
 //! this test drives it through [`run_and_journal`] instead, which is
 //! the part that decides what gets journaled.
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::common;
 use willikins_core::describe::{PartialInputs, RawInput};
 use willikins_core::{Approval, InputName, Workflow, apply, check, plan};
 use willikins_journal::{Event, Journal, MemoryJournal, PlanId, Redacted, run_and_journal};

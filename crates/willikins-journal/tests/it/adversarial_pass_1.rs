@@ -13,13 +13,13 @@
 //! server's, task 10a) is visible in code rather than only in a plan
 //! document.
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
+use crate::common;
+use crate::common::{node, port, principal, tool_name, workflow_name};
 use willikins_core::describe::{PartialInputs, RawInput};
 use willikins_core::{
     Approval, Checked, Class, Ensured, InputName, Inputs, Observation, Outputs, PortSpec, PortType,
@@ -30,8 +30,6 @@ use willikins_journal::{
 };
 use willikins_providers_fake::FakeState;
 use willikins_types::DomainType;
-
-use common::{node, port, principal, tool_name, workflow_name};
 
 /// The seeded service token every run in this file mints, and the bytes of
 /// it that must never appear on a journal line.

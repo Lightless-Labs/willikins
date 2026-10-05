@@ -37,7 +37,6 @@ use std::path::{Path, PathBuf};
 /// so a new crate starts in the target layout.
 const PENDING: &[&str] = &[
     "willikins-cli",
-    "willikins-journal",
     "willikins-providers-appstore",
     "willikins-providers-buildkite",
     "willikins-providers-doppler",

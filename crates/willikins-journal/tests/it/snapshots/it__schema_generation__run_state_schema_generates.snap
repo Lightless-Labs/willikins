@@ -1,5 +1,5 @@
 ---
-source: crates/willikins-journal/tests/schema_generation.rs
+source: crates/willikins-journal/tests/it/schema_generation.rs
 assertion_line: 29
 expression: schema
 ---

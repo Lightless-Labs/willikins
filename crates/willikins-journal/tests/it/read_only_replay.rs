@@ -11,10 +11,9 @@
 //! `FileJournal::open` gives for the same bytes; replay never creates or
 //! otherwise modifies the file.
 
-mod common;
-
 use std::io::Write as _;
 
+use crate::common;
 use willikins_journal::{Entry, Event, FileJournal, Journal, JournalError, Timestamp};
 
 fn temp_dir() -> tempfile::TempDir {

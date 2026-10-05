@@ -55,7 +55,7 @@ fn lock_probe_child() {
 /// to observe `expectation`, and return whether that child passed.
 fn spawn_probe(path: &std::path::Path, expectation: &str) -> bool {
     let status = Command::new(std::env::current_exe().expect("the test binary's own path"))
-        .args(["--ignored", "--exact", "lock_probe_child"])
+        .args(["--ignored", "--exact", "locking::lock_probe_child"])
         .env(PATH_VAR, path)
         .env(EXPECT_VAR, expectation)
         .status()

@@ -9,11 +9,10 @@
 //! this test isolates the claim to the journal crate's own construction
 //! rules, per this crate's module docs.
 
-mod common;
-
 use indexmap::IndexMap;
 
-use common::{node, port, workflow_name};
+use crate::common;
+use crate::common::{node, port, workflow_name};
 use willikins_core::{Class, Inputs, Outputs, Value};
 use willikins_journal::{Event, PlanId, Redacted, RunId};
 use willikins_types::DomainType;

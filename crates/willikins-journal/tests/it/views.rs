@@ -8,9 +8,8 @@
 //! `tests/acceptance_10_journal.rs` covers the happy path end to end
 //! through a real run; this file covers the edges.
 
-mod common;
-
-use common::{node, principal, reason, workflow_name};
+use crate::common;
+use crate::common::{node, principal, reason, workflow_name};
 use indexmap::IndexMap;
 use willikins_core::{Class, InstanceFingerprint, NodeStatus, OutputName, Value};
 use willikins_journal::{
