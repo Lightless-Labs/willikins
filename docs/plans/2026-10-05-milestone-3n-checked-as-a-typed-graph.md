@@ -365,7 +365,7 @@ Implementers read this table, never their prompts, for these values.
 | Keying backstop (F3) | `PlanError::EdgeTypeMismatch { site: Site::ForEach { node }, expected: TypeRef::scalar(element), found }` |
 | New `CheckError` (B1) | `IdentifierForEachSource { node: NodeName, ty: TypeRef }` (`ty`: the source's resolved `list<T>`), kind `"IdentifierForEachSource"`, Display `` node `{node}`: `for_each` over `{ty}`, an identifier type: its instance keys would print identifiers whole `` |
 | B1 fixture | `workflows/fixtures/identifier-for-each.yaml`, shaped like `for-each-over-scalar.yaml`: input `ids: { type: list<AppleCertificateId> }`; step `loop: { tool: fake.irreversible.ensure, for_each: ${{ inputs.ids }}, with: { key: third-thoughts } }`. `check` returns exactly `[IdentifierForEachSource { node: loop, ty: list<AppleCertificateId> }]` |
-| Unreachable ratchet (S1 on) | non-test `unreachable!`/`.expect(`/`.unwrap()`/`panic!` per file. Today `plan.rs` 30, `apply.rs` 9, `describe.rs` 2. Final: `plan.rs` 6 (`replacing_entry`'s key port, the four `Catalog::insert` gate ones, `plan_one`'s "handled above"), `apply.rs` 2 (`check_drift`'s two), `describe.rs` 0. A task lowers the constants to what it leaves and never raises one |
+| Unreachable ratchet (S1 on) | non-test `unreachable!`/`.expect(`/`.unwrap()`/`panic!` per file: the lines above the file's first `#[cfg(test)]` module, or the whole file when it has none (`apply.rs` has none). Measured at `28dc3e1`: `plan.rs` 30 `unreachable!` and 0 of the other three, `apply.rs` 9 and 0, `describe.rs` 2 and 0. Final: `plan.rs` 6 (`replacing_entry`'s key port, the four `Catalog::insert` gate ones, `plan_one`'s "handled above"), `apply.rs` 2 (`check_drift`'s two), `describe.rs` 0. A task lowers the constants to what it leaves and never raises one |
 | B2 signatures | `plan(checked: &Checked, inputs: &IndexMap<InputName, Value>) -> Result<Plan, PlanError>`; `apply(checked, inputs, approved, approval, observer)` |
 | Placeholders | "the operator's iOS app document", `example-org`, `com.example.app` |
 
@@ -436,8 +436,10 @@ drops its catalog parameter.
    snapshot if it exists: none moves. A `.snap.new` is a defect, not a review item. The one exception is B1's added
    entry.
 7. **No second lookup.** The existing `probe_conversion` tripwire in `check.rs`'s tests is extended. Non-test code in
-   `plan.rs`, `apply.rs` and `describe.rs` contains no `Binding`, `.nodes`, `catalog.get(`, `Value::parse(` or
-   `.workflow(`. From G7 on this is also a type fact: `DocumentView` has no nodes.
+   `plan.rs`, `apply.rs` and `describe.rs` contains no `Binding`, `catalog.get(` or `.workflow(`. Non-test code in
+   `plan.rs` and `apply.rs` also contains no `Value::parse(`. `describe.rs`'s `parse_raw` stays, because it is the
+   one sanctioned place a caller's text becomes a `Value`. No grep for `.nodes`, since `Plan::nodes` is legitimately
+   indexed there. From G7 on, the nodes are unreachable by type: `DocumentView` has none.
 8. **The ratchet** (S1 on). A test counts non-test `unreachable!`/`.expect(`/`.unwrap()`/`panic!` per file against
    SHARED VALUES' constants, and after G7 asserts the final values.
 9. **Gates over sources** (G5). A document with a `for_each` gate and acknowledgement inputs bound in a `with:`
