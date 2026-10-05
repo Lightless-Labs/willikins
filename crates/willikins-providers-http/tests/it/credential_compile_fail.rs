@@ -2,7 +2,7 @@
 //! asks that `serde_json::to_string(&credential)` and
 //! `format!("{credential}")` both fail to compile. `.stderr` files were
 //! generated with `TRYBUILD=overwrite` (see
-//! `willikins-types/tests/derive_compile_fail.rs` for the same pattern).
+//! `willikins-types/tests/it/derive_compile_fail.rs` for the same pattern).
 
 #[test]
 fn compile_fail() {

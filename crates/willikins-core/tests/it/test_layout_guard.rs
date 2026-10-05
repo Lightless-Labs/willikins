@@ -42,7 +42,6 @@ const PENDING: &[&str] = &[
     "willikins-providers-buildkite",
     "willikins-providers-doppler",
     "willikins-providers-github",
-    "willikins-providers-http",
     "willikins-providers-signoz",
     "willikins-server",
 ];
