@@ -41,7 +41,6 @@ const PENDING: &[&str] = &[
     "willikins-providers-appstore",
     "willikins-providers-buildkite",
     "willikins-providers-doppler",
-    "willikins-providers-fake",
     "willikins-providers-github",
     "willikins-providers-http",
     "willikins-providers-signoz",
