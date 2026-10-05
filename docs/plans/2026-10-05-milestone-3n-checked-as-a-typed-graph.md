@@ -2,6 +2,15 @@
 
 **Created:** 2026-10-05 (the typed-graph lane of the operator's "what's next? We can explore multiple lanes in
 parallel"; source `todos/2026-09-23-checked-as-a-typed-graph.md`)
+**Reviewed:** 2026-10-05 (portfolio review of the five plans of 2026-10-05: 3k, 2b, 3l, 3m, 3n)
+**Addendum:** 2026-10-05 — portfolio review. Order confirmed and extended: 3k first, then F1–F3, then 3l, then 2b,
+then S1 onward, then 3m last, so 3m's `rollback.rs`, `resolve_pure` and `not_reversible` are written against the
+sealed graph. Fixes: F3 has three test-only `known_dyn` callers, not two (`value.rs`'s own tests too); B1's commit 1
+adds the `render.rs` arm `willikins-cli` needs (`check_error_detail` matches `CheckError` exhaustively); B2 is one
+workspace commit with no shim, because Rust has no overloading and a `#[deprecated]` shim fails every unmigrated
+caller under `-D warnings`; the gitignored `operator_*` tests call the three-argument `plan` (16 sites) and `apply`
+(8 sites), so B2 migrates them locally, uncommitted (Needs the operator); a trybuild fixture directory sits beside
+`tests/it/`, never inside it. If 3m lands first after all, G3, G7 and B2 carry `rollback.rs`.
 
 ## Goal
 
@@ -122,8 +131,8 @@ fails after a partial write, and the error says so.
   keying, which now names each item by the source's declared element type. A mismatch is
   `PlanError::EdgeTypeMismatch { site: Site::ForEach { node }, expected, found }`, an existing variant at an existing
   site. Once (f2) has landed, an input (already type-checked) and a tool output (checked at production) cannot reach
-  this, so it is a backstop. Its two test-only callers (`disclosure.rs`'s test table, `willikins-server/src/mcp.rs`'s
-  test helper) move to `known_dyn_as`.
+  this, so it is a backstop. Its three test-only callers (`value.rs`'s own tests, `disclosure.rs`'s test table,
+  `willikins-server/src/mcp.rs`'s test helper) move to `known_dyn_as`.
 - `known_dyn_list(element, items)` is unchanged. Tests use it on purpose to forge impostor lists, and `plan`'s
   aggregation feeds it only outputs that (f2) has already checked.
 
@@ -310,9 +319,11 @@ The disallowed-methods rule and the `probe_conversion` tripwire stay as belt and
 
 This is about 208 `plan` and 109 `apply` call sites in roughly 30 files, plus milestone 3m's `resolve_pure` if it has
 landed. The edit is mechanical: delete one argument. **Precondition:** verify item 4's audit, already done before G1,
-showed that no caller checks against one catalog and plans or applies against another. B2 is one commit per crate,
-each green alone. Core goes first, with a deprecated two-argument shim kept only until the last crate's commit and
-then deleted. If the coordinator declines, the parameter stays, documented as "used only for its registry", and
+showed that no caller checks against one catalog and plans or applies against another. B2 is **one workspace commit**
+(portfolio review: a per-crate split needs a shim, a shim cannot share the name `plan` because Rust has no
+overloading, and a `#[deprecated]` one turns every unmigrated caller into a `-D warnings` failure). The same step
+migrates the 16 `plan(&checked, …, &catalog)` and 8 `apply(` call sites in the gitignored
+`crates/willikins-cli/tests/operator_*.rs` on the operator's machine, never committed (they are not tracked). If the coordinator declines, the parameter stays, documented as "used only for its registry", and
 nothing else in this plan changes.
 
 ### (b3) Not this milestone: `TYPE_NAME` checked in the derive
@@ -407,7 +418,11 @@ written against G3's resolver.
 tests under `tests/it/`. Tasks here name test files by role, and an implementer puts them wherever 3k has left that
 crate. Milestone 3m's R4 adds `resolve_pure(checked, catalog, inputs, wanted)`, which walks `Checked::order` and
 shares `plan`'s resolver. If R4 lands before G3, G3 migrates it. If after, it is written against the graph. B2 also
-drops its catalog parameter.
+drops its catalog parameter. The portfolio order (2026-10-05) puts 3m after this whole milestone. If it lands first
+anyway, `rollback.rs` (`plan_teardown` walks node bindings and tool declarations) joins G3's and G7's scope, since
+G7 deletes the `workflow()` it would read, and its `&Catalog` parameters join B2. After 3k, a new test is a
+`tests/it/<stem>.rs` module, a `--test <stem>` gate is `--test it <stem>::`, and S1's trybuild fixtures live in
+their own directory beside `tests/it/` (as `willikins-types` keeps `tests/derive/fail/`), driven by one `it` module.
 
 ## Acceptance tests
 
@@ -528,8 +543,8 @@ stash, `checkout --` or `reset`), with the implementer's own `Co-Authored-By` tr
 | G5 | **Gates over sources** (decision (g4); acceptance 9). One commit: `collect_causes` and `mark_blocked` over sources, `awaiting_inputs` by `with_position`; `plan.rs` drops its `Binding` import. Scoped: `-p willikins-core`, then `-p willikins-cli` gate tests and dsl acceptance | sonnet implements |
 | G6 | **Apply from the graph** (decision (g3); acceptance 10). One commit: every port resolved from the graph with the group's item; attribution returned by the resolver; `binding_may_change_mid_run`, `classify_unknown_binding` and `first_unknown_required_input`'s assertion deleted; `apply.rs` drops `Binding`. Scoped: `-p willikins-core`, then `-p willikins-cli` and `-p willikins-server` apply tests | sonnet implements, opus attacks |
 | G7 | **Views, not copies** (decision (s1); acceptance 6, 7, 8). Commit 1: `types()`, `edge()` and `output_types()` computed from the graph; the stored maps deleted. Commit 2: `pub(crate) fn workflow()` deleted; the tripwire extended (acceptance 7); the ratchet set to its final values. Scoped: `-p willikins-core`, then dsl acceptance (the TYPES and OUTPUTS sections are the proof) | sonnet implements |
-| B1 | **GATED (coordinator sign-off): identifier `for_each` refused** (decision (b1); acceptance 11; verify item 6). Commit 1, core: the variant, its place in `check_for_each`, the module doc's order, serialization and `Display` tests. Commit 2: the fixture with its header comment, its acceptance test, its one characterization entry, and the 3i document guard deleted. Scoped: `-p willikins-core -p willikins-dsl -p willikins-cli` | sonnet implements |
-| B2 | **GATED (coordinator sign-off): no catalog in `plan`/`apply`** (decision (b2); verify item 4). One commit per crate, core first with a temporary shim, the shim deleted in the last. Purely mechanical. Any call site that is not a plain argument deletion stops the task and is reported. Scoped: workspace clippy, then each crate's tests as it is edited | sonnet implements |
+| B1 | **GATED (coordinator sign-off): identifier `for_each` refused** (decision (b1); acceptance 11; verify item 6). Commit 1, core: the variant, its place in `check_for_each`, the module doc's order, serialization and `Display` tests, and its arm in `crates/willikins-cli/src/render.rs`'s `check_error_detail` (exhaustive, so `willikins-cli` does not compile without it). Commit 2: the fixture with its header comment, its acceptance test, its one characterization entry, and the 3i document guard deleted. Scoped: `-p willikins-core -p willikins-dsl -p willikins-cli` | sonnet implements |
+| B2 | **GATED (coordinator sign-off): no catalog in `plan`/`apply`** (decision (b2); verify item 4). One workspace commit, no shim (decision (b2)). Purely mechanical. Any call site that is not a plain argument deletion stops the task and is reported. The same step deletes the argument at the gitignored `operator_*` tests' call sites, locally, never staged (Needs the operator). Scoped: workspace clippy, then each edited crate's tests, then the `operator_*` targets | sonnet implements |
 | X1 | **Adversarial pass**, recorded under `docs/research/2026-10-xx-m3n-adversarial-pass.md`, placeholders only. Every bypass becomes a fixture plus a test. At least four mutations restored from saved copies (`cmp` for byte identity). Priority targets: any way to build or edit a `Checked` outside `check`; a source resolving to a value of a type other than its edge's; an `Item` reaching a single node; a keyed reference resolving into the wrong instance; `awaiting_inputs` or `holds_back` reordering; a plan JSON, fingerprint or `NodeStarted.inputs` that moved; a tool output admitted by name rather than `TypeId`; a literal's content in `Debug`; a panic reachable from any document | opus |
 | D1 | **Documents** (coordinator). The `check.rs` module doc's "Known gaps" and ordering sections; a CLAUDE.md and AGENTS.md invariant (edited together, byte-identical): "`Checked` is built only by `check`; `plan`, `apply` and `describe` read its typed graph and never a `Binding`"; the design doc's type-system section addendum; the todo marked done; HANDOFF's RESUME HERE and todo table; this plan's addenda and **Completed** header | coordinator |
 
@@ -555,7 +570,8 @@ how values reach tools.
 7. **Ordering against 2b.** If 2b slips, S1 onward waits, while F1–F3 continue. If the coordinator reverses the
    order, see the sequencing section's last paragraph.
 8. **Privacy.** Nothing in this milestone needs a real name. The private `operator_*` tests are run, never edited,
-   except in B1's recheck, which is read-only.
+   except in B1's recheck, which is read-only, and in B2, which deletes the catalog argument at their `plan`/`apply`
+   call sites locally and never commits them (Needs the operator).
 9. **Host contention.** Other sessions run cargo almost continuously. If no 3-second quiet window comes within 40
    minutes, the task stops and reports the contention.
 
@@ -569,4 +585,7 @@ how values reach tools.
 
 ## Needs the operator
 
-Nothing.
+1. **B2 edits the gitignored `operator_*` tests** (portfolio review): they call `plan(&checked, &inputs, &catalog)`
+   16 times and `apply(` 8 times, so B2 leaves them uncompilable unless the catalog argument is deleted there too.
+   The plan's answer: the B2 implementer makes that one mechanical deletion locally, uncommitted, in the same step.
+   The operator confirms that, or makes the edit themselves. Only needed if B2 is signed off.
