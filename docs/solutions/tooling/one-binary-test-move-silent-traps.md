@@ -35,6 +35,12 @@ mutation check: temporarily flip the child's own expectation, confirm the *paren
 and confirm that with the filter left unqualified the same mutation would have passed — proving the silent trap
 really is silent, not merely theoretical.
 
+A one-off check only proves the filter right once, and any later module rename makes it stale again. So the
+child now writes a marker file before it probes, and the parent panics if the marker is missing, naming this trap
+(`e75cc89`, from `docs/research/2026-10-05-m3k-adversarial-pass.md`). A child that runs no test is therefore a red
+test, not a pass. Any new test that spawns its own binary with a filter should do the same, not trust the exit
+code alone.
+
 ## Trap 2: a proptest regression seed left where proptest no longer looks
 
 **Symptom.** A `proptest!` macro with default failure persistence (`SourceParallel`, the default) writes and
