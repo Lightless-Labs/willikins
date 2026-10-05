@@ -26,8 +26,8 @@ path inside its own binary. After the move, every test's path is `<module>::<nam
 the *full* path). The old, unqualified name now matches nothing: the child process runs zero tests, exits `0`,
 and the parent that waits on its exit code reads it as success.
 
-**Mechanism** (plan's "Sources, verbatim", Cargo book): `--exact` is a full-path match, not a substring. Once a
-binary holds `mod locking;`, every test in that file is addressed as `locking::lock_probe_child`.
+**Mechanism** (plan's decision (d2)): `--exact` is a full-path match, not a substring. Once a binary holds
+`mod locking;`, every test in that file is addressed as `locking::lock_probe_child`.
 
 **What closes it.** Update every such filter string to the module-qualified form
 (`"locking::lock_probe_child"`, in willikins-journal's `locking.rs`). The plan's acceptance 4 pins this with a
@@ -43,11 +43,14 @@ runs, still passes, and silently stops reading the seed that pinned a previously
 regression could reappear and nothing would notice until the failing input is independently rediscovered.
 
 **Mechanism** (plan's "Sources, verbatim", proptest's `failure_persistence/file.rs`): `SourceParallel` walks
-*up* from the test's own source file until it finds a directory holding `lib.rs` or `main.rs`, then writes the
-seed at `<that directory's parent>/proptest-regressions/<relative path>.txt`. Once `tests/it/main.rs` exists,
-that walk stops one level higher than it used to (at `tests/it/`, not at the crate root), so an old seed sitting
-at `tests/<stem>.proptest-regressions` is no longer the path proptest computes — and proptest creates a new,
-empty history rather than erroring.
+*up* from the test's own source file looking for a directory holding `lib.rs` or `main.rs`; if it finds one, it
+writes the seed at `<that directory's parent>/proptest-regressions/<relative path>.txt`, and otherwise falls
+back to `WithSource`, which writes `<source file>.proptest-regressions` right beside the test. Before the move,
+the walk up from `tests/<stem>.rs` found neither file and used that fallback — which is exactly why the old seed
+sat at `tests/ensure_properties.proptest-regressions`, next to the source, not under a `proptest-regressions/`
+directory. Once `tests/it/main.rs` exists, the walk up from `tests/it/<stem>.rs` finds it on the very first step,
+so `SourceParallel` now applies and the seed path becomes `tests/proptest-regressions/<stem>.txt` — a different
+path from the one the old file sits at, which proptest therefore never reads again.
 
 **What closes it.** `git mv` the seed file to where proptest will now look,
 `tests/proptest-regressions/<stem>.txt` (done once, in willikins-providers-fake's `ensure_properties.rs`; see

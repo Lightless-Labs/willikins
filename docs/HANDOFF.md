@@ -750,10 +750,10 @@ research, with a correction block on its slug section),
   exercises it.
 - **Integration tests build as one binary per crate** (`tests/it/main.rs`, milestone 3k, 2026-10-05). Run one
   module with `cargo test -p <crate> --test it <module>::` — the module prefix is load-bearing, since `--exact`
-  without it silently matches nothing rather than failing loudly. A new `tests/<stem>.rs` needs a `mod <stem>;`
+  without it silently matches nothing rather than failing loudly. A new `tests/it/<stem>.rs` needs a `mod <stem>;`
   line in `tests/it/main.rs` or it is silently never compiled; the layout guard
   (`crates/willikins-core/tests/it/test_layout_guard.rs`) catches that, plus a leftover `tests/snapshots/` or a
-  `tests/*.proptest-regressions` file (proptest's seed-file walk now stops at `tests/it/`, so a seed left beside
+  `tests/*.proptest-regressions` file (proptest's seed-file walk now finds `tests/it/main.rs` first, so a seed left beside
   the old source path is silently never read — new seeds land under `tests/proptest-regressions/<stem>.txt`). The
   10 `required-features = ["live-tests"]` targets and the three gitignored `operator_*` targets stayed top-level
   and unmoved.

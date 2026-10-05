@@ -90,7 +90,7 @@ background with a 600000 ms timeout. The trybuild suite alone takes about 90 sec
 
 Each crate's default-built integration tests compile as one binary, `tests/it/main.rs`, one module per
 former `tests/<stem>.rs` file (milestone 3k). Run one test module with
-`cargo test -p <crate> --test it <module>:: -j 2`, note the trailing `::`: `--exact` now needs the module
+`cargo test -p <crate> --test it <module>:: -j 2` (note the trailing `::`). `--exact` now needs the module
 prefix too (`<module>::<test_name>`), or it silently matches nothing instead of failing. A new
 `tests/it/<stem>.rs` must get a `mod <stem>;` line in `tests/it/main.rs` or it is silently never compiled;
 `crates/willikins-core/tests/it/test_layout_guard.rs` catches both lapses. The `required-features =
