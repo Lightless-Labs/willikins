@@ -5,13 +5,13 @@
 //! `WILLIKINS_LIVE_TESTS=1` — the credential is read (through
 //! [`willikins_providers_github::credential_from_env`], itself
 //! `Credential::from_env`) only past that gate, exactly as
-//! `tests/live_probe.rs` does. The org comes from
+//! `tests/it/live_probe.rs` does. The org comes from
 //! `WILLIKINS_SANDBOX_GITHUB_ORG`.
 //!
 //! ```text
 //! source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_TESTS=1 \
-//!   cargo test -p willikins-providers-github --test live_write_cycle \
-//!   -- --ignored --nocapture
+//!   cargo test -p willikins-providers-github --test it live_write_cycle:: \
+//!   -j 2 -- --ignored --nocapture
 //! ```
 //!
 //! It drives the two real tools — never a mock — against a repository
@@ -75,8 +75,6 @@
 //! so the command above never runs it concurrently with the cycle that
 //! deliberately creates that repository.
 
-mod common;
-
 use std::sync::Arc;
 
 use rand_core::RngCore as _;
@@ -91,7 +89,8 @@ use willikins_types::{
     RepoVisibility,
 };
 
-use common::{live_dir, record_and_compare};
+use crate::common;
+use crate::common::{live_dir, record_and_compare};
 
 /// The cycle's fixed repository name. Distinctive on purpose: anything by
 /// this name in the sandbox org is this test's, and a leftover one is

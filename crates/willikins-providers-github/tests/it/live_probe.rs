@@ -20,18 +20,16 @@
 //! test; the verifier does, sourcing
 //! `~/.config/willikins/sandbox.env` in the same command:
 //! `source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_PROBE=1 \
-//! cargo test -p willikins-providers-github --test live_probe -- --ignored \
-//! --nocapture` (`--nocapture` because `cargo test` otherwise swallows a
-//! passing test's `println!` output, and this test's whole point is
-//! those pass/skip/fail lines).
-
-mod common;
+//! cargo test -p willikins-providers-github --test it live_probe:: -j 2 \
+//! -- --ignored --nocapture` (`--nocapture` because `cargo test` otherwise
+//! swallows a passing test's `println!` output, and this test's whole
+//! point is those pass/skip/fail lines).
 
 use serde_json::Value;
 use willikins_providers_http::ProviderError;
 use willikins_types::{DomainType, GitHubOrg};
 
-use common::record_and_compare;
+use crate::common::record_and_compare;
 
 /// One endpoint's whole check: record `result` (if it succeeded) against
 /// `fixture_name`, print exactly one `pass`/`fail` line naming

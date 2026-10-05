@@ -6,8 +6,9 @@
 //! same shape for App Store Connect's three credential ports.
 //!
 //! This document is new -- an addition, never a change to an existing
-//! one -- so `crates/willikins-dsl/tests/acceptance.rs`'s characterization
-//! sweep picks it up on its own and gains exactly one new snapshot entry;
+//! one -- so `crates/willikins-dsl/tests/it/acceptance.rs`'s
+//! characterization sweep picks it up on its own and gains exactly one
+//! new snapshot entry;
 //! nothing about any pre-existing document's `check`/`plan` output moves.
 
 use indexmap::IndexMap;
@@ -105,9 +106,9 @@ fn the_doppler_chain_plans_and_references_the_repository() {
 /// completely unbound, and keeps checking exactly as it did: proven here
 /// directly against the tool's spec (`required` is `false`), and proven
 /// for those documents themselves by
-/// `crates/willikins-dsl/tests/acceptance.rs`'s characterization sweep,
-/// whose snapshot gains only this file's own new document, byte-identical
-/// otherwise.
+/// `crates/willikins-dsl/tests/it/acceptance.rs`'s characterization
+/// sweep, whose snapshot gains only this file's own new document,
+/// byte-identical otherwise.
 #[test]
 fn an_unbound_token_port_is_not_required_by_check() {
     let (_state, catalog) = willikins_providers_fake::empty();
