@@ -10,7 +10,7 @@
 //! this crate, not merely unused: this guard is what keeps that true after
 //! the people who remember why have moved on, in the manner of
 //! `crates/willikins-cli/tests/no_gh_writes_guard.rs` and
-//! `crates/willikins-core/tests/secret_literal_guard.rs`.
+//! `crates/willikins-core/tests/it/secret_literal_guard.rs`.
 //!
 //! # Scope
 //!
@@ -77,7 +77,7 @@ fn crate_root() -> PathBuf {
 /// This file itself: it necessarily names every token and path shape this
 /// guard looks for, in its own doc comment and unit tests.
 fn is_exempt(relative: &str) -> bool {
-    relative == "tests/no_certificate_writes_guard.rs"
+    relative == "tests/it/no_certificate_writes_guard.rs"
 }
 
 /// Every `.rs` file under `src/` and `tests/`, crate-relative,
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn this_guard_file_is_exempt_from_itself() {
-        assert!(is_exempt("tests/no_certificate_writes_guard.rs"));
-        assert!(!is_exempt("tests/bundle_id_ensure_mock.rs"));
+        assert!(is_exempt("tests/it/no_certificate_writes_guard.rs"));
+        assert!(!is_exempt("tests/it/bundle_id_ensure_mock.rs"));
     }
 }

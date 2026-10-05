@@ -1,24 +1,16 @@
 ---
-source: crates/willikins-providers-appstore/tests/catalog_parity.rs
-assertion_line: 121
-expression: "spec_json(AppstoreBundleIdCapabilityGate::new(NOWHERE).spec())"
+source: crates/willikins-providers-appstore/tests/it/catalog_parity.rs
+expression: "spec_json(AppstoreCertificateGet::new(NOWHERE).spec())"
 ---
 {
   "class": "reversible",
-  "description": "A gate: whether a named capability is enabled on a bundle identifier.",
+  "description": "Select an App Store Connect distribution certificate by type and serial number.",
   "inputs": {
-    "capability": {
+    "certificate_type": {
       "required": true,
       "ty": {
         "kind": "exact",
-        "type": "AppleObservableCapabilityType"
-      }
-    },
-    "identifier": {
-      "required": true,
-      "ty": {
-        "kind": "exact",
-        "type": "AppleBundleIdentifier"
+        "type": "AppleCertificateType"
       }
     },
     "issuer_id": {
@@ -41,12 +33,19 @@ expression: "spec_json(AppstoreBundleIdCapabilityGate::new(NOWHERE).spec())"
         "kind": "exact",
         "type": "AppleKeyId"
       }
+    },
+    "serial_number": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleCertificateSerial"
+      }
     }
   },
   "key": [],
-  "name": "appstore.bundle_id_capability.gate",
+  "name": "appstore.certificate.get",
   "outputs": {
-    "identifier": "AppleBundleIdentifier"
+    "certificate": "AppleCertificateId"
   },
   "pure": true
 }

@@ -1,16 +1,16 @@
 ---
-source: crates/willikins-providers-appstore/tests/catalog_parity.rs
-expression: "spec_json(AppstoreProfileEnsure::new(NOWHERE).spec())"
+source: crates/willikins-providers-appstore/tests/it/catalog_parity.rs
+expression: "spec_json(AppstoreBundleIdCapabilityEnsure::new(NOWHERE).spec())"
 ---
 {
-  "class": "destructive",
-  "description": "Produce (or report) an App Store Connect IOS_APP_STORE provisioning profile relating a bundle identifier to a distribution certificate.",
+  "class": "reversible",
+  "description": "Switch on one capability of an already-registered App Store Connect bundle id.",
   "inputs": {
-    "certificate": {
+    "capability": {
       "required": true,
       "ty": {
         "kind": "exact",
-        "type": "AppleCertificateId"
+        "type": "AppleCapabilityType"
       }
     },
     "identifier": {
@@ -41,29 +41,21 @@ expression: "spec_json(AppstoreProfileEnsure::new(NOWHERE).spec())"
         "type": "AppleKeyId"
       }
     },
-    "name": {
-      "required": true,
+    "setting": {
+      "required": false,
       "ty": {
         "kind": "exact",
-        "type": "AppleProfileName"
-      }
-    },
-    "profile_type": {
-      "required": true,
-      "ty": {
-        "kind": "exact",
-        "type": "AppleProfileType"
+        "type": "AppleCapabilitySetting"
       }
     }
   },
   "key": [
     "identifier",
-    "name"
+    "capability"
   ],
-  "name": "appstore.profile.ensure",
+  "name": "appstore.bundle_id_capability.ensure",
   "outputs": {
-    "content": "AppleProfileContent",
-    "profile": "AppleProfileId"
+    "capability": "AppleCapabilityType"
   },
   "pure": false
 }

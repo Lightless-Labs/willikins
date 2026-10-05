@@ -129,7 +129,7 @@ fn the_doppler_chain_plans_and_registers_the_bundle_id() {
 /// points to: a document reaching this tool with a *drifted* `name`
 /// fails at `plan()` with `AttributeMismatch`, even though
 /// `Tool::ensure` itself can converge that exact drift (proven directly
-/// by `tests/bundle_id_ensure_mock.rs`'s
+/// by `tests/it/bundle_id_ensure_mock.rs`'s
 /// `ensure_converges_a_name_mismatch_via_patch`). This is
 /// `willikins_core::plan`'s own pre-existing invariant -- every
 /// `Observation::Mismatch` is terminal before any node's `ensure` runs --

@@ -1,11 +1,19 @@
 ---
-source: crates/willikins-providers-appstore/tests/catalog_parity.rs
-expression: "spec_json(AppstoreAppGet::new(NOWHERE).spec())"
+source: crates/willikins-providers-appstore/tests/it/catalog_parity.rs
+assertion_line: 121
+expression: "spec_json(AppstoreBundleIdCapabilityGate::new(NOWHERE).spec())"
 ---
 {
   "class": "reversible",
-  "description": "A gate: whether an App Store Connect app record exists for a bundle identifier.",
+  "description": "A gate: whether a named capability is enabled on a bundle identifier.",
   "inputs": {
+    "capability": {
+      "required": true,
+      "ty": {
+        "kind": "exact",
+        "type": "AppleObservableCapabilityType"
+      }
+    },
     "identifier": {
       "required": true,
       "ty": {
@@ -36,7 +44,7 @@ expression: "spec_json(AppstoreAppGet::new(NOWHERE).spec())"
     }
   },
   "key": [],
-  "name": "appstore.app.get",
+  "name": "appstore.bundle_id_capability.gate",
   "outputs": {
     "identifier": "AppleBundleIdentifier"
   },

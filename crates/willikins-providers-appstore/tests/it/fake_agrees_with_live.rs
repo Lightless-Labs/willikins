@@ -1,6 +1,6 @@
 //! The fake App Store Connect tools agree with the live ones
 //! *behaviourally*, not only on their `ToolSpec`s -- the same gap
-//! `willikins-providers-buildkite/tests/fake_agrees_with_live.rs` closes
+//! `willikins-providers-buildkite/tests/it/fake_agrees_with_live.rs` closes
 //! for Buildkite, for the same reason its own module doc gives.
 //!
 //! Method: for each observation `appstore.bundle_id.ensure` and

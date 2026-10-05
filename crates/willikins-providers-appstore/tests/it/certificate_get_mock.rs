@@ -271,7 +271,7 @@ fn read_maps_a_403_to_missing_permission() {
 }
 
 /// Every request this tool ever sends is a `GET` -- pinned here for the
-/// same reason `tests/no_certificate_writes_guard.rs` pins it for the
+/// same reason `tests/it/no_certificate_writes_guard.rs` pins it for the
 /// crate's source: nothing about a *test* proves the guard, but nothing
 /// stops a future edit from calling `.post`/`.patch`/`.delete` either.
 /// The never-written mock's path is `"/"`, not `/v1/certificates` --

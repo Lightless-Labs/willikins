@@ -1,5 +1,5 @@
 ---
-source: crates/willikins-providers-appstore/tests/catalog_parity.rs
+source: crates/willikins-providers-appstore/tests/it/catalog_parity.rs
 assertion_line: 51
 expression: "spec_json(AppstoreBundleIdEnsure::new(NOWHERE).spec())"
 ---

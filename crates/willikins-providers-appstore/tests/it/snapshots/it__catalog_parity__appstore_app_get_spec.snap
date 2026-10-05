@@ -1,10 +1,10 @@
 ---
-source: crates/willikins-providers-appstore/tests/catalog_parity.rs
-expression: "spec_json(AppstoreAppGroupGate::new(NOWHERE).spec())"
+source: crates/willikins-providers-appstore/tests/it/catalog_parity.rs
+expression: "spec_json(AppstoreAppGet::new(NOWHERE).spec())"
 ---
 {
   "class": "reversible",
-  "description": "A gate: whether APP_GROUPS is enabled on a bundle identifier.",
+  "description": "A gate: whether an App Store Connect app record exists for a bundle identifier.",
   "inputs": {
     "identifier": {
       "required": true,
@@ -36,7 +36,7 @@ expression: "spec_json(AppstoreAppGroupGate::new(NOWHERE).spec())"
     }
   },
   "key": [],
-  "name": "appstore.app_group.gate",
+  "name": "appstore.app.get",
   "outputs": {
     "identifier": "AppleBundleIdentifier"
   },

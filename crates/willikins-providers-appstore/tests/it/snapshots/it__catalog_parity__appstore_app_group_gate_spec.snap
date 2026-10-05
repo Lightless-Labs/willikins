@@ -1,16 +1,16 @@
 ---
-source: crates/willikins-providers-appstore/tests/catalog_parity.rs
-expression: "spec_json(AppstoreCertificateGet::new(NOWHERE).spec())"
+source: crates/willikins-providers-appstore/tests/it/catalog_parity.rs
+expression: "spec_json(AppstoreAppGroupGate::new(NOWHERE).spec())"
 ---
 {
   "class": "reversible",
-  "description": "Select an App Store Connect distribution certificate by type and serial number.",
+  "description": "A gate: whether APP_GROUPS is enabled on a bundle identifier.",
   "inputs": {
-    "certificate_type": {
+    "identifier": {
       "required": true,
       "ty": {
         "kind": "exact",
-        "type": "AppleCertificateType"
+        "type": "AppleBundleIdentifier"
       }
     },
     "issuer_id": {
@@ -33,19 +33,12 @@ expression: "spec_json(AppstoreCertificateGet::new(NOWHERE).spec())"
         "kind": "exact",
         "type": "AppleKeyId"
       }
-    },
-    "serial_number": {
-      "required": true,
-      "ty": {
-        "kind": "exact",
-        "type": "AppleCertificateSerial"
-      }
     }
   },
   "key": [],
-  "name": "appstore.certificate.get",
+  "name": "appstore.app_group.gate",
   "outputs": {
-    "certificate": "AppleCertificateId"
+    "identifier": "AppleBundleIdentifier"
   },
   "pure": true
 }

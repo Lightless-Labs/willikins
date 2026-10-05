@@ -57,7 +57,7 @@ examples in shape only.
 | `profile_get_expired.json` | Documented shape | Same instance, `expirationDate` moved to the past, `profileState` left `ACTIVE` -- the `Conflict` (expired) arm, independent of `profileState` per decision (d). |
 | `profile_post_created.json` | Documented shape | `POST /v1/profiles`'s success response, `profileContent` present in the `201` body. |
 | `profile_post_created_no_content.json` | Documented shape | The same create response with `profileContent` omitted -- exercises `ensure`'s follow-up `GET` (verify item 5, unsettled until the live cycle runs). |
-| `profile_post_created_links_only.json` | Apple's JSON:API shape (task-3 adversarial pass) | `POST /v1/profiles`'s `201` as Apple sends it without an `include`: every relationship carries `links` (and `meta`) but **no `data`**. The task-2 client required `relationships.certificates.data`, so this real shape failed to parse, and the created profile's id was lost with it -- `tests/profile_create_response_shapes.rs`. |
+| `profile_post_created_links_only.json` | Apple's JSON:API shape (task-3 adversarial pass) | `POST /v1/profiles`'s `201` as Apple sends it without an `include`: every relationship carries `links` (and `meta`) but **no `data`**. The task-2 client required `relationships.certificates.data`, so this real shape failed to parse, and the created profile's id was lost with it -- `tests/it/profile_create_response_shapes.rs`. |
 | `profile_list_one_links_only.json` | Apple's JSON:API shape (task-3 adversarial pass) | The relationship list read with the same links-only `certificates` relationship on its row, in case Apple returns relationships the `fields[profiles]` list did not name. |
 
 None of the certificate fixtures' ids, serials, or names are the operator's own -- `C3RT1F1CATE1`..`C3RT1F1CATE7` and the `7B3F...`/`AA11...` serials are invented, chosen only to match the pre-flight's own *observed shape* (uppercase hex; the pre-flight saw 30 to 32 characters on all 5 real certificates, and these fixtures use up to 36 -- still well inside `AppleCertificateSerial`'s generous `{1,64}` bound, not a claim that 36 was itself observed live; a `DISTRIBUTION` certificate's `name` beginning `Apple Distribution`).
@@ -65,7 +65,7 @@ None of the certificate fixtures' ids, serials, or names are the operator's own 
 None of the profile fixtures' ids, names, or content are the operator's own either -- `PR0F1LE1D0001` and its siblings are invented ids in the same made-up-but-plausible shape as the certificate and bundle id fixtures, and every `profileContent` value is the base64 encoding of a plain descriptive sentence (`willikins-example-profile-content-example`), never a real CMS-signed property list and never anything decodable back to Apple-shaped data.
 
 **Nothing here is live-verified yet.** This crate makes no live API call
-during ordinary `cargo test --workspace` — see `tests/live_probe.rs`
+during ordinary `cargo test --workspace` — see `tests/it/live_probe.rs`
 (read-only, `#[ignore]`) and `tests/live_write_cycle.rs` (guarded,
 `#[ignore]`, requires the `live-tests` feature and
 `WILLIKINS_LIVE_TESTS=1`) for how to record real responses under

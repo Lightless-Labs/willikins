@@ -1,7 +1,7 @@
 //! The read-only live probe against the operator's real App Store
 //! Connect account. `#[ignore]`, and inert even under `--ignored` unless
 //! `WILLIKINS_LIVE_PROBE=1` -- the credential parts are read only past
-//! that gate, mirroring `willikins-providers-buildkite/tests/live_probe.rs`.
+//! that gate, mirroring `willikins-providers-buildkite/tests/it/live_probe.rs`.
 //!
 //! **This is the operator's live developer account. There is no sandbox
 //! team.** Every call this file makes is a `GET`. Nothing is created,
@@ -35,7 +35,7 @@
 //!
 //!    Whatever the answer, `appstore.bundle_id.ensure` is already
 //!    correct: it compares every returned row byte-for-byte itself and
-//!    never trusts the filter (`tests/bundle_id_ensure_mock.rs`'s
+//!    never trusts the filter (`tests/it/bundle_id_ensure_mock.rs`'s
 //!    `read_reports_absent_when_only_a_prefix_neighbor_matches_the_filter`).
 //!    The probe settles the research note's unresolved item; it does not
 //!    change what the tool does.
@@ -58,7 +58,7 @@
 //!             APP_STORE_CONNECT_API_KEY_BASE64=$(jq -r .APP_STORE_CONNECT_API_KEY_BASE64 <<<"$J") \
 //!   && unset J \
 //!   && WILLIKINS_LIVE_PROBE=1 cargo test -p willikins-providers-appstore \
-//!        --test live_probe -j 2 -- --ignored --nocapture
+//!        --test it live_probe:: -j 2 -- --ignored --nocapture
 //! ```
 //!
 //! No `gh` command is run. Nothing here prints a credential, a JWT, or
