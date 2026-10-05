@@ -5,13 +5,12 @@
 //! of a `Plan` or a `PlanError`), `for_each` expansion (empty sources,
 //! duplicate keys), determinism, and the panic surface.
 
-mod common;
-
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use common::{input, list_ty, node, output, port, tool_name, ty, workflow_name};
+use crate::common;
+use crate::common::{input, list_ty, node, output, port, tool_name, ty, workflow_name};
 use willikins_core::{
     Action, Binding, Catalog, Class, Ensured, InputSpec, Inputs, Node, Observation, Outputs,
     PartialInputs, PlanError, PortSpec, PortType, RawInput, SinkToken, Site, Tool, ToolError,

@@ -11,14 +11,12 @@
 //! scenario where those very nodes legitimately must run, so the tool
 //! itself has to behave, not merely refuse to be called.
 
-mod common;
-
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use common::{input, node, output, port, tool_name, ty, workflow_name};
+use crate::common::{input, node, output, port, tool_name, ty, workflow_name};
 use willikins_core::{
     Action, Binding, Catalog, CatalogError, Class, Ensured, Gate, GateError, InputSpec, Inputs,
     Node, Observation, Outputs, PortSpec, PortType, SinkToken, Tool, ToolError, ToolSpec, Value,

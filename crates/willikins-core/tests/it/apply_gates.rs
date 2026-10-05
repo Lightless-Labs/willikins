@@ -10,14 +10,12 @@
 //! here): proving this through a real document and a real `Butler` binary
 //! run is G3/T3's job, once Sample's own gates exist.
 
-mod common;
-
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use common::{input, node, port, tool_name, ty, workflow_name};
+use crate::common::{input, node, port, tool_name, ty, workflow_name};
 use willikins_core::{
     Action, ApplyError, ApplyEvent, Approval, Binding, Catalog, Class, Ensured, Gate, InputSpec,
     Inputs, Node, NodeStatus, Observation, Outputs, PortSpec, PortType, RecordingObserver,

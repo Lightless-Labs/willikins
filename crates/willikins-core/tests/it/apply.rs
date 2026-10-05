@@ -13,13 +13,12 @@
 //! real catalog is tracked in
 //! `todos/2026-09-13-apply-tests-on-the-real-fake-catalog.md`.
 
-mod common;
-
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use common::{
+use crate::common;
+use crate::common::{
     RequiresKnownInputTool, ScriptedEnsureTool, UnreadableUpstreamTool, apply_test_catalog,
     distinctive_token, input, node, port, principal, timestamp, tool_name, ty, workflow_name,
 };

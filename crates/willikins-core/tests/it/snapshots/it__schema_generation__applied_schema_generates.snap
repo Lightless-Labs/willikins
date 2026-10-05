@@ -1,44 +1,151 @@
 ---
-source: crates/willikins-core/tests/schema_generation.rs
+source: crates/willikins-core/tests/it/schema_generation.rs
 expression: schema
 ---
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AppliedNode",
-  "description": "What happened to one planned node instance, alongside its final\noutputs.",
+  "title": "Applied",
+  "description": "The result of a successful [`apply`] run.",
   "type": "object",
   "properties": {
-    "instance": {
-      "description": "The `for_each` instance key, if any.",
-      "type": [
-        "string",
-        "null"
-      ]
+    "blocked": {
+      "description": "Every gate this run found [`Action::Blocked`], taken from the fresh\nre-plan rule 2 produced — the same shape [`Plan::blocked`] carries,\nand empty under the same condition. `#[serde(skip_serializing_if =\n\"Vec::is_empty\")]` so an `Applied` with no blocked gate serializes\nbyte-identically to before this field existed. `Ok(Applied)` with a\nnon-empty `blocked` is a **blocked run**, not an error — see\ndecision (j), `docs/plans/2026-09-27-milestone-3e-new-ios-app.md`.\n\n`default` as well, though nothing deserializes this type: the JSON\nSchema the MCP server publishes as a tool's `outputSchema` is built for\nthe deserialize contract, which lists every field without a serde\ndefault as `required` -- and a skipped field that is `required`\nmakes every result without it fail its own published schema\n(`crates/willikins-server/tests/mcp_output_schema_conformance.rs`).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/BlockedGate"
+      }
     },
-    "name": {
-      "description": "The node this instance belongs to.",
-      "$ref": "#/$defs/NodeName"
+    "nodes": {
+      "description": "Every attempted node instance, in plan order — including one whose\nown planned [`Action`] was [`Action::Blocked`] or [`Action::Skip`]\n(see [`NodeStatus::Blocked`]/[`NodeStatus::Skipped`]): the walk\ncontinues past those, unlike a tool failure. An instance the run\nstopped at (rejected by [`ApplyError::UnknownInput`] or\n[`ApplyError::UnknownRequiredInput`]) before it was ever started is\nabsent here rather than carrying a synthetic status; see those\nvariants' own docs.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AppliedNode"
+      }
     },
     "outputs": {
-      "description": "This instance's final output values. Empty for [`NodeStatus::NotRun`]\nand [`NodeStatus::Failed`].",
-      "$ref": "#/$defs/Outputs"
-    },
-    "status": {
-      "description": "What happened.",
-      "$ref": "#/$defs/NodeStatus"
-    },
-    "tool": {
-      "description": "The tool this node called.",
-      "$ref": "#/$defs/ToolName"
+      "description": "Every workflow output's resolved value.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "$ref": "#/$defs/Value"
+        }
+      }
     }
   },
   "required": [
-    "name",
-    "tool",
-    "status",
+    "nodes",
     "outputs"
   ],
   "$defs": {
+    "AppliedNode": {
+      "description": "What happened to one planned node instance, alongside its final\noutputs.",
+      "type": "object",
+      "properties": {
+        "instance": {
+          "description": "The `for_each` instance key, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The node this instance belongs to.",
+          "$ref": "#/$defs/NodeName"
+        },
+        "outputs": {
+          "description": "This instance's final output values. Empty for [`NodeStatus::NotRun`]\nand [`NodeStatus::Failed`].",
+          "$ref": "#/$defs/Outputs"
+        },
+        "status": {
+          "description": "What happened.",
+          "$ref": "#/$defs/NodeStatus"
+        },
+        "tool": {
+          "description": "The tool this node called.",
+          "$ref": "#/$defs/ToolName"
+        }
+      },
+      "required": [
+        "name",
+        "tool",
+        "status",
+        "outputs"
+      ]
+    },
+    "BlockedGate": {
+      "description": "One [`Action::Blocked`] gate in a [`Plan`]: what it needs, how to make it\ntrue, what it was checking, and every node it holds back.\n\nPlain data — never a [`Value`] — so it holds no secret by construction:\n`need` and `how` come straight from the gate's own `&'static str`s, and\n`subject` is rendered text, never a live value. See\n[`crate::tool::Gate`]'s own doc.\n\nDerives [`serde::Deserialize`] as well as `Serialize` (added by task G2):\n`willikins-journal`'s `Event::RunFinished` stores a run's own\n`Vec<BlockedGate>` directly rather than through `Redacted`, since none\nof its fields is ever a [`Value`] — the same reasoning that lets\n[`crate::apply::NodeStatus`] round-trip untouched.",
+      "type": "object",
+      "properties": {
+        "awaiting_inputs": {
+          "description": "Every workflow input, bound directly to one of this node's ports,\nwhose value is still [`crate::value::ValueState::Unknown`] — G3: an\nunsupplied [`willikins_types::OperatorAcknowledgement`] input, so the\nreport can say which `--input name=done` would satisfy this gate. In\nport declaration order, deduplicated by name. Empty for a gate that\nobserves provider state rather than an operator acknowledgement.\n\n`#[serde(default)]` (2026-09-29 addendum, milestone 3e's finding 1\nlast sentence): this field arrived after `BlockedGate` already\nderived `Deserialize` (task G2), so a `RunFinished { Blocked }` line\nwritten between G2 and G3 carries no `awaiting_inputs` key at all;\nwithout a default, replaying it fails outright rather than reading\nit as empty, which is the same forward-compatibility gap `Plan`'s\nown fields already close with `#[serde(default,\nskip_serializing_if = \"Vec::is_empty\")]`. Serialization is\nunaffected: the field is still always written, so the wire shape\nthis binary produces does not change.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/InputName"
+          }
+        },
+        "holds_back": {
+          "description": "Every node this gate holds back — [`Action::Skip`] because it binds\nthis gate directly or transitively — in plan order, deduplicated by\nname.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NodeName"
+          }
+        },
+        "how": {
+          "description": "The gate's own [`crate::tool::Gate::how`].",
+          "type": "string"
+        },
+        "instance": {
+          "description": "The `for_each` instance key, if any; `None` for a node with no\n`for_each`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "need": {
+          "description": "The gate's own [`crate::tool::Gate::need`].",
+          "type": "string"
+        },
+        "node": {
+          "description": "The blocked node.",
+          "$ref": "#/$defs/NodeName"
+        },
+        "subject": {
+          "description": "Each of the gate's [`crate::tool::Gate::subject`] ports, rendered\nfrom the bound input that reached it, in declared order.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/PortName"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "tool": {
+          "description": "The gate tool this node calls.",
+          "$ref": "#/$defs/ToolName"
+        }
+      },
+      "required": [
+        "node",
+        "tool",
+        "need",
+        "how",
+        "subject",
+        "holds_back"
+      ]
+    },
+    "InputName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
     "NodeName": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]*$"
@@ -166,6 +273,10 @@ expression: schema
           "$ref": "#/$defs/Value"
         }
       }
+    },
+    "PortName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
     },
     "ToolError": {
       "description": "A tool's failure to `read` or `ensure`.\n\nNever includes an input value: an implementation must build `message`\nfrom the tool's own state and provider response, not from the\n[`Inputs`] it was given, so this type carries no obligation for callers\nto redact it themselves.",

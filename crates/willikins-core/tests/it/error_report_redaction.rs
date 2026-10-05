@@ -21,9 +21,7 @@
 //! assertions cover both renderings an agent can read: the serialized
 //! `Reported` JSON and the error's own `Display`.
 
-mod common;
-
-use common::{input, node, port, tool_name, ty};
+use crate::common::{input, node, port, tool_name, ty};
 use willikins_core::{CheckError, Inputs, PlanError, PortType, Reported, Site, Value};
 use willikins_types::{DomainType, DopplerServiceToken, ParseError};
 

@@ -1,5 +1,5 @@
 ---
-source: crates/willikins-core/tests/plan.rs
+source: crates/willikins-core/tests/it/plan.rs
 expression: "serde_json::to_string_pretty(&result).unwrap()"
 ---
 {

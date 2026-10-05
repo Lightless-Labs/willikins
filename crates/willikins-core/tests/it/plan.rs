@@ -3,13 +3,12 @@
 //! positive fixture (see `tests/common`), plus a handful of dummy tools for
 //! scenarios no fake tool can produce on its own.
 
-mod common;
-
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use common::{input, list_ty, node, output, port, tool_name, ty, workflow_name};
+use crate::common;
+use crate::common::{input, list_ty, node, output, port, tool_name, ty, workflow_name};
 use willikins_core::{
     Action, Binding, Catalog, Class, Ensured, InputSpec, Inputs, Node, Observation, Outputs,
     PlanError, PortSpec, PortType, SinkToken, Site, Tool, ToolError, ToolSpec, Value, Workflow,

@@ -4,11 +4,9 @@
 //! [`willikins_core::PlanError`]; see that file's own doc for why the
 //! `variant_kinds!` macro is duplicated here rather than shared.
 
-mod common;
-
 use std::collections::HashSet;
 
-use common::{node, port};
+use crate::common::{node, port};
 use willikins_core::{
     Action, Applied, ApplyError, Class, DriftKind, InstanceRef, PlanError, ToolError,
     ToolErrorKind, Value,

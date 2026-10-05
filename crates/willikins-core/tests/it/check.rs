@@ -9,7 +9,7 @@
 //! ([`common::new_rust_service_workflow`]) is shared with `tests/plan.rs`
 //! and friends, rather than duplicated here.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 

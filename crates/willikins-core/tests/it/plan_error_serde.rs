@@ -6,11 +6,9 @@
 //! one list of names, so a variant added to [`PlanError`] cannot reach an
 //! agent without a sample here -- see the macro's own doc comment.
 
-mod common;
-
 use std::collections::HashSet;
 
-use common::{input, node, port, tool_name, ty};
+use crate::common::{input, node, port, tool_name, ty};
 use willikins_core::{Inputs, PlanError, Site, ToolError, ToolErrorKind};
 
 /// One instance of every [`PlanError`] variant.

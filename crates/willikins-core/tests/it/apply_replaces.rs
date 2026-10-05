@@ -22,13 +22,11 @@
 //! `willikins-core`, and the fake catalog does not model Apple's
 //! invalidation.
 
-mod common;
-
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use common::{input, node, port, tool_name, ty, workflow_name};
+use crate::common::{input, node, port, tool_name, ty, workflow_name};
 use willikins_core::{
     Action, ApplyError, Approval, Binding, Catalog, Class, Ensured, InputSpec, Inputs, Node,
     NodeStatus, Observation, Outputs, PortSpec, PortType, RecordingObserver, SinkToken, Tool,

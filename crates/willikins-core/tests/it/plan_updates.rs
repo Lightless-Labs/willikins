@@ -6,13 +6,11 @@
 //! lack of a counterpart, and `check_drift`'s existing `Action` comparison)
 //! belongs to `willikins-core` itself.
 
-mod common;
-
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use common::{input, node, port, tool_name, ty, workflow_name};
+use crate::common::{input, node, port, tool_name, ty, workflow_name};
 use willikins_core::{
     Action, ApplyError, Approval, Binding, Catalog, Class, DriftKind, Ensured, Gate, InputSpec,
     Inputs, Node, Observation, Outputs, PlanError, PortSpec, PortType, RecordingObserver,

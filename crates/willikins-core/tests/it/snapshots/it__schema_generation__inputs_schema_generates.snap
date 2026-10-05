@@ -1,5 +1,5 @@
 ---
-source: crates/willikins-core/tests/schema_generation.rs
+source: crates/willikins-core/tests/it/schema_generation.rs
 expression: schema
 ---
 {

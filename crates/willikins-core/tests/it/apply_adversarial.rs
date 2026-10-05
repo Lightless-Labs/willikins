@@ -17,13 +17,12 @@
 //! does *not* do, so the guarantee it depends on is visible in code
 //! rather than only in a plan document.
 
-mod common;
-
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use common::{
+use crate::common;
+use crate::common::{
     distinctive_token, input, node, port, principal, timestamp, tool_name, ty, workflow_name,
 };
 use willikins_core::{

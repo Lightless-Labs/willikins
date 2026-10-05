@@ -96,7 +96,7 @@ const SKIPPED_DIRS: &[&str] = &["target", ".git", "node_modules", ".claude", "li
 /// runtime in its own unit tests, never spelled contiguously in its own
 /// source) to prove the matcher below recognises them.
 fn is_exempt(relative: &str) -> bool {
-    relative == "crates/willikins-core/tests/secret_literal_guard.rs"
+    relative == "crates/willikins-core/tests/it/secret_literal_guard.rs"
 }
 
 /// Every file in the tree, repository-relative, `/`-separated, skipping
