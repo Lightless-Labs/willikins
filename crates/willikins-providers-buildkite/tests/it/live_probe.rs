@@ -30,16 +30,15 @@
 //!
 //! ```text
 //! source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_PROBE=1 \
-//!   cargo test -p willikins-providers-buildkite --test live_probe -- --ignored \
+//!   cargo test -p willikins-providers-buildkite --test it live_probe:: -j 2 -- --ignored \
 //!   --nocapture
 //! ```
-
-mod common;
 
 use serde_json::Value;
 use willikins_types::{BuildkiteOrg, DomainType};
 
-use common::record_and_compare;
+use crate::common;
+use crate::common::record_and_compare;
 
 /// The three scopes this crate's credential needs (plan trust boundary
 /// 6). Checked both as the plural spelling the scope table uses and,

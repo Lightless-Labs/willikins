@@ -1,5 +1,5 @@
 ---
-source: crates/willikins-providers-buildkite/tests/catalog_parity.rs
+source: crates/willikins-providers-buildkite/tests/it/catalog_parity.rs
 assertion_line: 61
 expression: "spec_json(BuildkiteClusterGet::new(test_client()).spec())"
 ---

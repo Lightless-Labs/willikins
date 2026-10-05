@@ -10,7 +10,7 @@
 //! plain `cargo test --workspace` never builds it. `#[ignore]` on top of
 //! that, and inert even under `--ignored` unless `WILLIKINS_LIVE_TESTS=1`
 //! -- the credential is read only past that gate, exactly as
-//! `tests/live_write_cycle.rs` and `tests/live_probe.rs` do.
+//! `tests/live_write_cycle.rs` and `tests/it/live_probe.rs` do.
 //!
 //! **Trust boundary 5: writes only in the sandbox organisation**
 //! (`WILLIKINS_SANDBOX_BUILDKITE_ORG`), only on the throwaway pipeline
@@ -63,7 +63,7 @@
 //!
 //! `Foreign` cannot be proved live (making a pipeline foreign needs a
 //! `description` `PATCH`, which this crate never sends) -- the mocks in
-//! `tests/pipeline_bootstrap_ensure_mock.rs` prove that arm. Nothing here
+//! `tests/it/pipeline_bootstrap_ensure_mock.rs` prove that arm. Nothing here
 //! prints a token, the stored configuration read back, or any pipeline
 //! other than the one throwaway slug this run owns.
 //!

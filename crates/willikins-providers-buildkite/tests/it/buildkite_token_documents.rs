@@ -2,11 +2,11 @@
 //! milestone 3e task K1's demonstration that `buildkite.cluster.get`'s new
 //! optional `token` port is a genuinely free credential port, resolved
 //! from Doppler through `buildkite.token.parse`, exactly the way
-//! `willikins-providers-github/tests/github_token_documents.rs` proves the
+//! `willikins-providers-github/tests/it/github_token_documents.rs` proves the
 //! same shape for GitHub (task R2).
 //!
 //! This document is new -- an addition, never a change to an existing
-//! one -- so `crates/willikins-dsl/tests/acceptance.rs`'s characterization
+//! one -- so `crates/willikins-dsl/tests/it/acceptance.rs`'s characterization
 //! sweep picks it up on its own and gains exactly one new snapshot entry;
 //! nothing about any pre-existing document's `check`/`plan` output moves.
 
@@ -128,7 +128,7 @@ fn the_doppler_chain_plans_and_references_the_cluster() {
 /// the new `token` port completely unbound, and keeps checking exactly
 /// as it did: proven here directly against both tools' specs (`required`
 /// is `false` on each), and proven for those documents themselves by
-/// `crates/willikins-dsl/tests/acceptance.rs`'s characterization sweep,
+/// `crates/willikins-dsl/tests/it/acceptance.rs`'s characterization sweep,
 /// whose snapshot gains only this file's own new document, byte-identical
 /// otherwise.
 #[test]

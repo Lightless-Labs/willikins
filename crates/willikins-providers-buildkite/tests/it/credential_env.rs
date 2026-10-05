@@ -10,7 +10,7 @@
 //!
 //! ```text
 //!   source ~/.config/willikins/sandbox.env \
-//!     && cargo test -p willikins-providers-buildkite --test credential_env \
+//!     && cargo test -p willikins-providers-buildkite --test it credential_env:: -j 2 \
 //!        -- --ignored --nocapture
 //! ```
 //!

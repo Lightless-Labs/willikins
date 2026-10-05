@@ -7,7 +7,7 @@
 //! plain `cargo test --workspace` never builds it. `#[ignore]` on top of
 //! that, and inert even under `--ignored` unless `WILLIKINS_LIVE_TESTS=1`
 //! -- the credential is read only past that gate, exactly as
-//! `tests/live_probe.rs` does.
+//! `tests/it/live_probe.rs` does.
 //!
 //! ```text
 //! source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_TESTS=1 \
@@ -36,7 +36,7 @@
 //!    pipeline is unchanged afterwards. `Foreign` is **not** proved live
 //!    and cannot be: making a real pipeline foreign means editing its
 //!    `description`, which needs a `PATCH` this crate deliberately does
-//!    not have. `tests/pipeline_ensure_mock.rs` proves that arm;
+//!    not have. `tests/it/pipeline_ensure_mock.rs` proves that arm;
 //! 6. the pipeline is deleted through [`BuildkiteClient::delete_pipeline`]
 //!    directly (no tool calls it -- see that method's own doc), re-read
 //!    as `Absent`, and the guard is disarmed.
@@ -147,7 +147,7 @@ impl Drop for PipelineGuard {
 /// real pipeline foreign means editing its `description`, which needs a
 /// `PATCH` this crate does not have and will not grow (plan decision (a);
 /// "Pipeline update, delete, and archive tools" is out of scope).
-/// `tests/pipeline_ensure_mock.rs` proves that arm.
+/// `tests/it/pipeline_ensure_mock.rs` proves that arm.
 ///
 /// `ensure` is called on each mismatched input too. That is still not a
 /// write: `ensure` refuses a `Mismatch` with `Conflict` before it reaches
@@ -244,7 +244,7 @@ fn buildkite_live_write_cycle() {
     // JSON array rebuilt from the one id the tool returned, and
     // `common::record_and_compare` compares *top-level object keys* --
     // which for an array is the empty set on both sides, so the
-    // comparison would pass no matter what came back. `tests/live_probe.rs`
+    // comparison would pass no matter what came back. `tests/it/live_probe.rs`
     // records the real `GET .../clusters` body, which is the response
     // whose shape this crate actually parses; duplicating it here with a
     // synthetic value would assert nothing and would read as if it did.

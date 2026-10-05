@@ -1,13 +1,12 @@
 ---
-source: crates/willikins-providers-buildkite/tests/catalog_parity.rs
-assertion_line: 74
-expression: "spec_json(BuildkitePipelineBootstrapGate::new(test_client()).spec())"
+source: crates/willikins-providers-buildkite/tests/it/catalog_parity.rs
+expression: "spec_json(BuildkitePipelineBootstrapEnsure::new(test_client()).spec())"
 ---
 {
-  "class": "reversible",
-  "description": "A gate: whether a Buildkite pipeline's stored configuration equals the bootstrap a document renders.",
+  "class": "destructive",
+  "description": "Write a willikins-owned Buildkite pipeline's stored YAML configuration from a bootstrap file this document renders.",
   "inputs": {
-    "expected": {
+    "configuration": {
       "required": true,
       "ty": {
         "kind": "exact",
@@ -36,10 +35,13 @@ expression: "spec_json(BuildkitePipelineBootstrapGate::new(test_client()).spec()
       }
     }
   },
-  "key": [],
-  "name": "buildkite.pipeline.bootstrap.gate",
+  "key": [
+    "org",
+    "slug"
+  ],
+  "name": "buildkite.pipeline.bootstrap.ensure",
   "outputs": {
     "slug": "BuildkitePipelineSlug"
   },
-  "pure": true
+  "pure": false
 }

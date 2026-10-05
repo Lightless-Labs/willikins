@@ -10,8 +10,8 @@ for what remains open.
 `willikins-test` organisation: `GET /v2/access-token` (no scope needed),
 `GET /v2/organizations/willikins-test/clusters`, and `GET
 .../pipelines/willikins-probe-does-not-exist`. All three passed
-(`cargo test -p willikins-providers-buildkite --test live_probe -- --ignored
---nocapture`, `WILLIKINS_LIVE_PROBE=1`). The real, redacted responses are
+(`cargo test -p willikins-providers-buildkite --test it live_probe:: -j 2 --
+--ignored --nocapture`, `WILLIKINS_LIVE_PROBE=1`). The real, redacted responses are
 under `fixtures/buildkite/live/` (gitignored — never committed, since they
 carry the organisation's and the operator's own identity); the table below
 records what each answered, not the bytes themselves.

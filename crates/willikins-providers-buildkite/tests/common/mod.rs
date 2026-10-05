@@ -1,5 +1,5 @@
 //! Helpers shared by this crate's two opt-in live tests: the read-only
-//! probe (`tests/live_probe.rs`) and the write cycle
+//! probe (`tests/it/live_probe.rs`) and the write cycle
 //! (`tests/live_write_cycle.rs`, compiled only with the `live-tests`
 //! feature). Mirrors `willikins-providers-doppler/tests/common/mod.rs`
 //! exactly, redefined for Buildkite's own credential-bearing field names.

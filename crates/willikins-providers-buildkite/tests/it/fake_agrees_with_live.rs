@@ -1,7 +1,7 @@
 //! The fake Buildkite tools agree with the live ones *behaviourally*, not
 //! only on their `ToolSpec`s.
 //!
-//! `tests/catalog_parity.rs` pins the two catalogs' specs equal. That is
+//! `tests/it/catalog_parity.rs` pins the two catalogs' specs equal. That is
 //! agreement by construction: both specs are hand-written, and a spec says
 //! nothing about what a tool does with the ports it declares. Milestone 2's
 //! first live smoke run was lost to exactly that gap, and the milestone 3a
