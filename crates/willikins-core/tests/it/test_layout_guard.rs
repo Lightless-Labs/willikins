@@ -11,8 +11,9 @@
 //!    (one with a `required-features` line in that crate's `Cargo.toml`)
 //!    or, in `willikins-cli` only, an `operator_*.rs` private target;
 //! 2. `tests/it/main.rs` exists, and every other `tests/it/*.rs` is
-//!    declared there by a `mod <stem>;` line -- an undeclared file would
-//!    silently stop compiling;
+//!    declared there by a `mod <stem>;` item rustc really compiles (not
+//!    commented out, not under a `cfg` or `path` attribute) -- an
+//!    undeclared file would silently stop compiling;
 //! 3. `tests/snapshots/` (the old, pre-move location) is absent, or (in
 //!    `willikins-cli` only) holds only `operator_*` entries;
 //! 4. every `tests/it/snapshots/*.snap` starts with `it__<m>__` for a
@@ -158,24 +159,121 @@ fn top_level_rs_stems(dir: &Path) -> Vec<String> {
     out
 }
 
-/// Every identifier declared by a `mod <ident>;` (or `pub mod <ident>;`)
-/// line in `main_rs_text`. A commented-out line (`// mod foo;`) is never
-/// a declaration -- matching that would turn rule 2 into exactly the
-/// silent loss it exists to catch, since a commented module compiles
-/// nothing.
+/// Every identifier `main_rs_text` declares with a `mod <ident>;` (or
+/// `pub mod <ident>;`) item that really compiles `<ident>.rs` beside it.
+///
+/// Read as text, but not line by line: a declaration only counts when
+/// rustc would compile the file it names, since anything else turns rule
+/// 2 into exactly the silent loss it exists to catch. So comments are
+/// stripped first, `//` and nested `/* */` alike, and a `mod` item does
+/// not count under a `#[cfg(..)]` (which may compile it to nothing) or a
+/// `#[path = ".."]` (which compiles some other file), nor anything at all
+/// under a crate-level `#![cfg(..)]`. An attribute this cannot close
+/// stops the scan, so what follows it counts as undeclared. Every miss
+/// errs loud: a declaration this does not understand is a red guard,
+/// never a green one.
 fn declared_modules(main_rs_text: &str) -> Vec<String> {
-    main_rs_text
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            let rest = trimmed
-                .strip_prefix("mod ")
-                .or_else(|| trimmed.strip_prefix("pub mod "))?;
-            let ident = rest.strip_suffix(';')?.trim();
-            (!ident.is_empty() && ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-                .then_some(ident.to_string())
-        })
-        .collect()
+    let code = strip_comments(main_rs_text);
+    let mut declared = Vec::new();
+    let mut rest = code.as_str();
+    // Whether an outer attribute since the last item stops the next one
+    // from compiling its own file.
+    let mut disabled = false;
+    loop {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        let (inner, attribute) = if let Some(after) = rest.strip_prefix("#![") {
+            (true, after)
+        } else if let Some(after) = rest.strip_prefix("#[") {
+            (false, after)
+        } else {
+            let end = rest.find(['\n', ';']).map_or(rest.len(), |index| index + 1);
+            if let Some(ident) = module_ident(&rest[..end])
+                && !disabled
+            {
+                declared.push(ident);
+            }
+            disabled = false;
+            rest = &rest[end..];
+            continue;
+        };
+        let Some(close) = closing_bracket(attribute) else {
+            break;
+        };
+        let name = attribute[..close].trim_start();
+        if inner && name.starts_with("cfg") {
+            return Vec::new();
+        }
+        if !inner && (name.starts_with("cfg") || name.starts_with("path")) {
+            disabled = true;
+        }
+        rest = &attribute[close + 1..];
+    }
+    declared
+}
+
+/// `item`'s identifier when it is exactly `mod <ident>;` or
+/// `pub mod <ident>;`, whitespace aside.
+fn module_ident(item: &str) -> Option<String> {
+    let trimmed = item.trim();
+    let rest = trimmed
+        .strip_prefix("pub ")
+        .map_or(trimmed, str::trim_start)
+        .strip_prefix("mod ")?;
+    let ident = rest.strip_suffix(';')?.trim();
+    (!ident.is_empty() && ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .then(|| ident.to_string())
+}
+
+/// The byte index of the `]` that closes an attribute whose `#[` (or
+/// `#![`) has already been consumed, counting nested brackets.
+fn closing_bracket(attribute: &str) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (index, c) in attribute.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' if depth == 0 => return Some(index),
+            ']' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `text` with its `//` line comments and (nesting) `/* */` block
+/// comments removed, line breaks kept. Not string-literal-aware: a `//`
+/// or `/*` inside a string reads as a comment, which can only hide a
+/// declaration (a loud, red guard), never invent one.
+fn strip_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut depth = 0_usize;
+    while let Some(c) = chars.next() {
+        match (c, chars.peek()) {
+            ('/', Some('*')) => {
+                chars.next();
+                depth += 1;
+            }
+            ('*', Some('/')) if depth > 0 => {
+                chars.next();
+                depth -= 1;
+            }
+            ('/', Some('/')) if depth == 0 => {
+                for skipped in chars.by_ref() {
+                    if skipped == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            ('\n', _) => out.push('\n'),
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Checks one crate directory (holding `Cargo.toml` and `tests/`)
@@ -431,6 +529,101 @@ fn rule_2_fires_on_an_undeclared_module() {
             detail: "willikins-example: tests/it/b.rs has no `mod b;` line in main.rs".to_string(),
         }]
     );
+}
+
+/// Rule 2's bypasses: each `main.rs` below spells `mod b;` as text, yet
+/// rustc never compiles `tests/it/b.rs`, so every test in it would vanish
+/// with the guard green. Found by the milestone 3k adversarial pass
+/// (`docs/research/2026-10-05-m3k-adversarial-pass.md`), which proved the
+/// first one on the real tree: a block-commented `mod state_bookkeeping;`
+/// in `willikins-providers-fake` dropped its list from 13 tests to 8.
+fn assert_b_is_undeclared(case: &str, main_rs: &str) {
+    let dir = scratch(case);
+    write_well_formed_it(&dir);
+    std::fs::write(dir.join("tests").join("it").join("main.rs"), main_rs)
+        .expect("rewrites main.rs");
+    std::fs::write(
+        dir.join("tests").join("it").join("b.rs"),
+        "#[test]\nfn it_works() {}\n",
+    )
+    .expect("writes b.rs");
+
+    assert_eq!(
+        check_crate(&dir, "willikins-example", false),
+        vec![Violation {
+            rule: Rule::UndeclaredModule,
+            detail: "willikins-example: tests/it/b.rs has no `mod b;` line in main.rs".to_string(),
+        }],
+        "main.rs was:\n{main_rs}"
+    );
+}
+
+#[test]
+fn rule_2_fires_on_a_block_commented_declaration() {
+    assert_b_is_undeclared("block_commented", "mod a;\n/*\nmod b;\n*/\n");
+}
+
+/// Rust block comments nest, so stripping only up to the first `*/`
+/// would leave `mod b;` looking live.
+#[test]
+fn rule_2_fires_on_a_nested_block_commented_declaration() {
+    assert_b_is_undeclared(
+        "nested_block_commented",
+        "mod a;\n/* outer /* inner */\nmod b;\n*/\n",
+    );
+}
+
+#[test]
+fn rule_2_fires_on_a_cfg_disabled_declaration() {
+    assert_b_is_undeclared("cfg_disabled", "mod a;\n#[cfg(any())]\nmod b;\n");
+    assert_b_is_undeclared(
+        "cfg_disabled_multi_line",
+        "mod a;\n#[cfg(\n    any()\n)]\n\nmod b;\n",
+    );
+}
+
+/// `#[path]` makes `mod b;` compile some other file, never `b.rs`.
+#[test]
+fn rule_2_fires_on_a_path_redirected_declaration() {
+    assert_b_is_undeclared("path_redirected", "mod a;\n#[path = \"a.rs\"]\nmod b;\n");
+}
+
+/// A crate-level `#![cfg(..)]` compiles the whole binary to nothing, so
+/// no module in it counts as declared.
+#[test]
+fn rule_2_fires_on_every_module_under_a_crate_level_cfg() {
+    let dir = scratch("crate_level_cfg");
+    write_well_formed_it(&dir);
+    std::fs::write(
+        dir.join("tests").join("it").join("main.rs"),
+        "#![cfg(any())]\nmod a;\n",
+    )
+    .expect("rewrites main.rs");
+
+    assert_eq!(
+        check_crate(&dir, "willikins-example", false),
+        vec![Violation {
+            rule: Rule::UndeclaredModule,
+            detail: "willikins-example: tests/it/a.rs has no `mod a;` line in main.rs".to_string(),
+        }]
+    );
+}
+
+/// The other side of the bypass fixtures: the real `main.rs` shape (a
+/// `//!` paragraph, the `#[path]`-declared shared `common`, which is not
+/// a `tests/it/` file at all) and an attribute that changes nothing about
+/// what compiles must stay green.
+#[test]
+fn a_path_declared_common_and_a_lint_attribute_are_not_violations() {
+    let dir = scratch("common_and_lint_attribute");
+    write_well_formed_it(&dir);
+    std::fs::write(
+        dir.join("tests").join("it").join("main.rs"),
+        "//! Doc.\n\n#[path = \"../common/mod.rs\"]\nmod common;\n\n#[allow(dead_code)]\nmod a;\n",
+    )
+    .expect("rewrites main.rs");
+
+    assert_eq!(check_crate(&dir, "willikins-example", false), Vec::new());
 }
 
 #[test]
