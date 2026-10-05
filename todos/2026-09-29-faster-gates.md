@@ -29,3 +29,5 @@ default-built integration tests now compile as one binary, `tests/it/main.rs`: 1
 operator's machine, the 10 `live-tests`-gated targets and the three private `operator_*` targets unchanged and
 unmoved. The "measurably faster" half of "done when" is the plan's T16 (after-measurement and close, the
 coordinator's); see the plan's Completed header and its T0/T16 addenda for the numbers once that lands.
+
+**Done 2026-10-05:** milestone 3k (`docs/plans/2026-10-05-milestone-3k-faster-gates.md`): one integration-test binary per crate; test run 251 s → 108 s, 167 test executables (3.08 GB) → 16 (529 MB).
