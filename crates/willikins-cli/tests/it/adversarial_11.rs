@@ -1114,7 +1114,7 @@ fn fake_state_out_writes_nothing_when_no_run_reached_a_final_state() {
 /// `willikins serve` is `willikins-server serve`: one implementation, so
 /// the same arguments in the same environment give the same refusal and
 /// the same exit code. The three assertions below are exactly what
-/// `crates/willikins-server/tests/binary_startup.rs` pins for its own
+/// `crates/willikins-server/tests/it/binary_startup.rs` pins for its own
 /// binary (`serve_without_stdio_refuses_with_exit_code_2`,
 /// `serve_http_and_serve_stdio_together_refuses`,
 /// `serve_stdio_with_no_environment_refuses_naming_the_missing_variable`).

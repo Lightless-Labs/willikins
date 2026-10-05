@@ -19,7 +19,7 @@
 //! The describe-default test below is the complement: it builds its own
 //! throwaway document in a temp directory, declaring an identifier-typed
 //! input with a document default, and drives the real `willikins`
-//! binary exactly as `tests/identifier_masking.rs` does. `describe`'s
+//! binary exactly as `tests/it/identifier_masking.rs` does. `describe`'s
 //! `missing_input_renders_an_identifier_default_masked` (milestone 3i
 //! task B4, `crates/willikins-core/src/describe.rs`) already pins the
 //! mechanism `MissingInput::default` would use; this test instead proves
@@ -41,7 +41,7 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Every `workflows/*.yaml` and `workflows/fixtures/*.yaml` path, as a full
-/// filesystem path. Mirrors `crates/willikins-dsl/tests/acceptance.rs`'s
+/// filesystem path. Mirrors `crates/willikins-dsl/tests/it/acceptance.rs`'s
 /// own `every_document_path`, redefined here rather than shared because
 /// that one is a private helper of a different crate's test binary.
 fn every_document_path() -> Vec<PathBuf> {
@@ -247,7 +247,7 @@ outputs:
 "#
     );
     let dir = std::env::temp_dir().join(format!(
-        "willikins-cli-test-{}-identifier-default-guard",
+        "willikins-cli-prerendered-guard-{}-identifier-default-guard",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();

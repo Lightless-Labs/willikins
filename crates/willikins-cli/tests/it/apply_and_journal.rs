@@ -1,6 +1,6 @@
 //! Task 11: process-level tests for `apply`, `approve`, `reject`, `runs`,
 //! and `run`, driving the built `willikins` binary exactly the way
-//! `tests/cli.rs` drives `validate`/`describe`/`plan`.
+//! `tests/it/cli.rs` drives `validate`/`describe`/`plan`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

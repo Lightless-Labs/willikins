@@ -1,7 +1,7 @@
 //! Milestone 3i, task B5 (decision (b5); acceptance 16, and acceptance 19's
 //! regression): process-level tests for the global `--reveal` flag,
 //! driving the built `willikins` binary exactly the way
-//! `tests/apply_and_journal.rs` and `tests/appstore_profile_apply_redaction.rs`
+//! `tests/it/apply_and_journal.rs` and `tests/it/appstore_profile_apply_redaction.rs`
 //! do.
 //!
 //! The fixture throughout is `workflows/appstore-signing-profile-from-doppler.yaml`
@@ -96,7 +96,7 @@ const MASKED_PROFILE: &str = "PROF...";
 // its cwd at the *package* root (`crates/willikins-cli`), not the
 // workspace root, so a relative path would resolve to
 // `crates/willikins-cli/workflows/...` and the CLI would exit 2 on every
-// test here (`tests/cli.rs`'s own `workspace_root`/`workflow` helpers, and
+// test here (`tests/it/cli.rs`'s own `workspace_root`/`workflow` helpers, and
 // `appstore_profile_apply_redaction.rs`'s own `workspace_root().join(...)`
 // calls, exist for exactly this reason).
 static SEED: LazyLock<String> = LazyLock::new(|| {

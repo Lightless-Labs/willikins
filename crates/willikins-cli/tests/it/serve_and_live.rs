@@ -185,7 +185,7 @@ fn apply_live_without_credentials_refuses_the_same_way() {
 /// `willikins_providers_doppler::credential_from_env` itself checks),
 /// assembled from two literals rather than written as one: a contiguous
 /// `dp.sa.`-prefixed run of 40+ alphanumeric characters is exactly the
-/// shape `crates/willikins-core/tests/secret_literal_guard.rs` flags
+/// shape `crates/willikins-core/tests/it/secret_literal_guard.rs` flags
 /// tree-wide, even inside a test, and the fix is to stop writing the
 /// literal, never to bypass the scanner.
 fn doppler_test_token() -> String {
@@ -563,7 +563,7 @@ fn live_and_fake_state_are_mutually_exclusive() {
 }
 
 /// `hash-token` on the `willikins` binary (task 12, step A said "both
-/// binaries"). `crates/willikins-server/tests/hash_token.rs` already
+/// binaries"). `crates/willikins-server/tests/it/hash_token.rs` already
 /// exercises the shared implementation against
 /// `CARGO_BIN_EXE_willikins-server` in depth; this test proves the
 /// `willikins` binary's own `Command::HashToken` arm actually dispatches

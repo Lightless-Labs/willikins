@@ -4,7 +4,7 @@
 //! instead of stdio. The CLI-comparing half of acceptance test 11
 //! (validate/describe/plan parity, `list_tools` vs `schema --catalog`,
 //! `propose_slug`, the three negative-fixture `kind` checks) lives in
-//! `crates/willikins-cli/tests/acceptance_11_mcp_parity.rs` instead,
+//! `crates/willikins-cli/tests/it/acceptance_11_mcp_parity.rs` instead,
 //! because `CARGO_BIN_EXE_willikins` is only set for a test that is part
 //! of the package owning that binary target -- the same reason the
 //! library-level parity test lives there (see that file's own module
@@ -430,7 +430,7 @@ async fn no_seeded_secret_byte_reaches_any_mcp_response() {
 // every MCP result, with no reveal parameter
 // ---------------------------------------------------------------------
 
-/// The same fixture pair `crates/willikins-cli/tests/identifier_masking.rs`
+/// The same fixture pair `crates/willikins-cli/tests/it/identifier_masking.rs`
 /// already proved masks correctly at the CLI, seeded fresh for each test
 /// here: the first bundle identifier already carries a matching
 /// certificate and profile, so `plan`/`describe` read everything

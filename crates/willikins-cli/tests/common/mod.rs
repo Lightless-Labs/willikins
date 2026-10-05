@@ -4,7 +4,7 @@
 //! Two test targets include this module, and the whole point is that
 //! they share it:
 //!
-//! - `tests/smoke_parity.rs` -- ungated, part of the workspace gate,
+//! - `tests/it/smoke_parity.rs` -- ungated, part of the workspace gate,
 //!   runs the same four `willikins` invocations against the **fake**
 //!   catalog;
 //! - `tests/live_smoke.rs` -- behind this crate's `live-tests` feature,
@@ -301,7 +301,7 @@ pub fn willikins(args: &[&str], vars: &[(&str, &str)]) -> Invocation {
 ///
 /// `apply --json` prints the `PlanResponse` and then the `RunRecord` (or
 /// a refusal) as two separate pretty-printed documents on stdout, not
-/// one envelope -- the same reader `tests/apply_and_journal.rs` uses.
+/// one envelope -- the same reader `tests/it/apply_and_journal.rs` uses.
 /// Text that is not JSON at all yields an empty list rather than
 /// panicking, so a refusal printed on stderr still reaches an assertion
 /// that can name it.

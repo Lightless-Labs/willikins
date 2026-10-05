@@ -31,8 +31,8 @@
 //! there.
 //!
 //! Adversarial pass 2 note: this guard is the same shape as
-//! `willikins-core/tests/expose_secret_guard.rs`, which pins the single-
-//! credential-site rule, and as `willikins-core/tests/secret_literal_guard.rs`,
+//! `willikins-core/tests/it/expose_secret_guard.rs`, which pins the single-
+//! credential-site rule, and as `willikins-core/tests/it/secret_literal_guard.rs`,
 //! landed alongside it. All three are string scans over the tree, and all
 //! three are weaker than the invariant they protect -- a shell script can
 //! spell `gh` as `$G` and a Rust file can build the string at runtime.
@@ -56,7 +56,7 @@ const SKIPPED_DIRS: &[&str] = &["target", ".git", "docs", "todos", "node_modules
 
 /// Files that may name the tool because they *are* this rule.
 fn is_exempt(relative: &str) -> bool {
-    relative == "crates/willikins-cli/tests/no_gh_writes_guard.rs" || relative == "CLAUDE.md"
+    relative == "crates/willikins-cli/tests/it/no_gh_writes_guard.rs" || relative == "CLAUDE.md"
 }
 
 /// Whether `name` is a file something in this repository executes.
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn the_exempt_files_are_the_two_guards_that_must_say_gh_by_name() {
         assert!(is_exempt(
-            "crates/willikins-cli/tests/no_gh_writes_guard.rs"
+            "crates/willikins-cli/tests/it/no_gh_writes_guard.rs"
         ));
         assert!(is_exempt("CLAUDE.md"));
         assert!(!is_exempt("deploy/teardown.sh"));

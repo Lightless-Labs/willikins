@@ -711,7 +711,7 @@ fn check_failure_json_objects_all_carry_kind_and_message() {
 }
 
 /// Milestone 2 acceptance test 9 (see also
-/// `crates/willikins-cli/tests/acceptance.rs`'s
+/// `crates/willikins-cli/tests/it/acceptance.rs`'s
 /// `milestone_2_acceptance_09_attribute_mismatch_visibility`, which pins
 /// the same case at the library level): the repository is ours and
 /// `public`; `workflows/new-rust-service.yaml`'s `visibility` input

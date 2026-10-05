@@ -487,12 +487,12 @@ fn every_sink_token_new_call_site_is_the_executor_a_test_item_or_a_tests_file() 
 /// 4's own wording. This test proves that exemption is not vacuous: at
 /// least one `tests/` file in the workspace really does call
 /// `SinkToken::new` today (several fake-tool test modules do, and this
-/// crate's own `tests/apply.rs`-adjacent helpers do too), so the crate
+/// crate's own `tests/it/apply.rs`-adjacent helpers do too), so the crate
 /// still compiles and this whole suite still runs — which it would not if
 /// the exemption were actually enforced against `tests/` files.
 #[test]
 fn a_tests_directory_file_calling_sink_token_new_is_not_itself_a_failure() {
-    let path = crates_root().join("willikins-cli/tests/acceptance.rs");
+    let path = crates_root().join("willikins-cli/tests/it/acceptance.rs");
     let source = std::fs::read_to_string(&path).unwrap();
     assert!(
         source.contains("SinkToken::new()"),

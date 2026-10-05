@@ -9,7 +9,7 @@
 //! Invalid Binary". Certificate writes are **structurally absent** from
 //! this crate, not merely unused: this guard is what keeps that true after
 //! the people who remember why have moved on, in the manner of
-//! `crates/willikins-cli/tests/no_gh_writes_guard.rs` and
+//! `crates/willikins-cli/tests/it/no_gh_writes_guard.rs` and
 //! `crates/willikins-core/tests/it/secret_literal_guard.rs`.
 //!
 //! # Scope

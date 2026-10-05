@@ -5,7 +5,7 @@
 //! typed-port guarantees hold across the Buildkite provider's own surface,
 //! not only the milestone 1 one.
 //!
-//! Mirrors `tests/acceptance.rs`'s own conventions (a real parsed
+//! Mirrors `tests/it/acceptance.rs`'s own conventions (a real parsed
 //! [`willikins_dsl`] document, the real `willikins-providers-fake` catalog,
 //! and — for the type-parity check — the real live `ToolSpec`s built
 //! through `willikins_server::live_catalog_with` against an `Http` that
@@ -64,7 +64,7 @@ fn load(path: &Path) -> Workflow {
 }
 
 // ---------------------------------------------------------------------
-// small identifier constructors, mirroring `tests/acceptance.rs`
+// small identifier constructors, mirroring `tests/it/acceptance.rs`
 // ---------------------------------------------------------------------
 
 fn ty(name: &str) -> TypeRef {
@@ -355,7 +355,7 @@ fn acceptance_11_the_plan_is_reversible_and_auto_approves() {
 
 // The container-image half of acceptance test 11 -- the glob test naming
 // the workflows the image admits -- lives in
-// `crates/willikins-server/tests/image_contents.rs::the_image_workflows_directory_holds_exactly_the_ten_positive_documents`,
+// `crates/willikins-server/tests/it/image_contents.rs::the_image_workflows_directory_holds_exactly_the_ten_positive_documents`,
 // updated alongside this file.
 
 // ---------------------------------------------------------------------

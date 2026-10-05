@@ -5,8 +5,8 @@
 //!
 //! Recorded in
 //! `docs/research/2026-09-14-executor-journal-adversarial-pass-1.md`; the
-//! rest of the pass lives in `willikins-core`'s `tests/apply_adversarial.rs`
-//! and `willikins-journal`'s `tests/adversarial_pass_1.rs`.
+//! rest of the pass lives in `willikins-core`'s `tests/it/apply_adversarial.rs`
+//! and `willikins-journal`'s `tests/it/adversarial_pass_1.rs`.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};

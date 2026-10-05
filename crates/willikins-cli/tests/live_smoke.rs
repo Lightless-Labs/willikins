@@ -60,7 +60,7 @@
 //!
 //! Every expectation table and JSON reader this file uses lives in
 //! `tests/common/mod.rs` and is exercised on every workspace gate by
-//! `tests/smoke_parity.rs`, which makes the same four invocations
+//! `tests/it/smoke_parity.rs`, which makes the same four invocations
 //! against the fake catalog. The live run is therefore the first time
 //! only the *providers* differ.
 

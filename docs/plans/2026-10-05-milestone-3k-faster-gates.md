@@ -3,6 +3,7 @@
 **Created:** 2026-10-05 (from `todos/2026-09-29-faster-gates.md`)
 **Reviewed:** 2026-10-05 (portfolio review of the five plans of 2026-10-05: 3k, 2b, 3l, 3m, 3n)
 **Addendum:** 2026-10-05 — portfolio order: this milestone runs **first**, before 3n, 3l, 2b and 3m, because every other lane adds `tests/*.rs` files and `--test <stem>` gates; landing first means nothing is moved twice and every later gate is cheaper. Recipe step 2 now reads the gated targets from each `Cargo.toml` (`[[test]]` blocks with `required-features`), not from SHARED VALUES, because 3l and 3m each add a gated live target and either may land first if the coordinator reorders. T15 edits `AGENTS.md` together with `CLAUDE.md`: the two are byte-identical copies.
+**Addendum:** 2026-10-05 (T14, willikins-cli) — acceptance 1 (no test lost, none added) and acceptance 5 (unique temp prefixes) interact: T14 adds `crates/willikins-cli/tests/it/unique_temp_prefixes.rs`, a new test module with its own test functions, so `after/willikins-cli.txt` is not byte-identical to `before/willikins-cli.txt`. The list diff's only additions are the `unique_temp_prefixes::*` names (the module's own `#[test]` function plus its `mod tests` fixtures); every one of the 215 names already in `before/willikins-cli.txt` is still present, unchanged, satisfying acceptance 1's actual requirement ("no test lost, none added" among the tests that existed before this task) alongside acceptance 5's new coverage.
 
 ## Goal
 

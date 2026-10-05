@@ -13,7 +13,7 @@
 //! - the pre-flight credential checks and the leftover checks, which are
 //!   questions about a real account;
 //! - `deploy/teardown.sh`, already covered twice over by
-//!   `tests/teardown_script.rs` -- once against its own stubbed scenario
+//!   `tests/it/teardown_script.rs` -- once against its own stubbed scenario
 //!   suite, once against a real `willikins run --json` document, which
 //!   is the tie that matters (the script's `jq` paths).
 //!
@@ -26,7 +26,7 @@
 //!   invisible until the live run. What pins that class of difference is
 //!   each provider crate's own live-against-fake parity test, such as
 //!   `read_agrees_with_the_fake_tool_on_a_project_it_does_not_hold` in
-//!   `willikins-providers-doppler`'s `tests/service_token_ensure_mock.rs`.
+//!   `willikins-providers-doppler`'s `tests/it/service_token_ensure_mock.rs`.
 //!
 //! The one place the two halves differ on purpose: the live run starts
 //! from an account where nothing exists, while fake state does not
@@ -37,11 +37,10 @@
 //! a seed that did would only assert that a hand-written file says what
 //! the first apply already proved.
 
-mod common;
-
 use std::path::{Path, PathBuf};
 
-use common::{
+use crate::common;
+use crate::common::{
     FIRST_APPLY, Invocation, PRINCIPAL, ROTATION, SECOND_APPLY, assert_no_credential_bytes,
     assert_nodes, assert_repo_url, assert_token_unknown, positive_inputs, recorded_run_count,
     rotation_inputs, willikins, workspace_path,

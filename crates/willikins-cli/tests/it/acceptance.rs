@@ -373,7 +373,7 @@ fn acceptance_03_static_errors() {
     // type": the mechanism is `Value::parse` against the type registry,
     // the exact call `describe`'s own raw-input resolution (and so the
     // CLI's `--input` flag) makes. Already pinned the same way by
-    // `willikins-core/tests/check.rs`'s
+    // `willikins-core/tests/it/check.rs`'s
     // `acceptance_3_the_registry_refuses_a_secret_literal_input_value`;
     // re-verified here since it is this acceptance test's own last
     // sentence.
@@ -823,7 +823,7 @@ fn acceptance_07_plan_against_seeded_state() {
 /// them, and the redaction marker does. This does not depend on any
 /// provider state.
 ///
-/// `crates/willikins-core/tests/redaction.rs` already pins this same
+/// `crates/willikins-core/tests/it/redaction.rs` already pins this same
 /// guarantee for `Inputs`, `Outputs`, `Observation`, and a `ToolError`
 /// built from a deliberately careless tool; this test adds the
 /// `PlannedNode`/`Plan` embedding the plan text also names, and the
@@ -1025,7 +1025,7 @@ fn acceptance_08b_seeded_secret_never_leaks() {
 /// in `willikins-types`: golden tests in `src/naming.rs` (`golden_github_repo`,
 /// `golden_doppler_project`, `golden_doppler_root_config`, and the
 /// multi-word-environment case), and property tests in
-/// `tests/naming_properties.rs` and `tests/naming_v1_properties.rs` — the
+/// `tests/it/naming_properties.rs` and `tests/it/naming_v1_properties.rs` — the
 /// latter two explicitly named after this acceptance test in their own
 /// module docs. Pascal's non-injectivity for digit-only words is pinned
 /// there too. This test only re-derives the design doc's own worked
@@ -1102,7 +1102,7 @@ fn acceptance_10_reserved_words() {
 
 /// Acceptance test 11's guarantees are compile-time and already pinned by
 /// `willikins-types`' own `trybuild` suite
-/// (`crates/willikins-types/tests/derive_compile_fail.rs`'s `compile_fail`
+/// (`crates/willikins-types/tests/it/derive_compile_fail.rs`'s `compile_fail`
 /// test, against fixtures under `tests/derive/fail/`): `#[domain(secret)]`
 /// on a `String` newtype, `secrecy::SecretString` storage without
 /// `secret`, and `serde_json::to_string(&token)` on a secret type (which
