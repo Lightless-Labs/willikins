@@ -2,6 +2,13 @@
 
 **Created:** 2026-10-05 (from the operator's question of 2026-10-04: what happens for a new repository, or one that
 is not cloned locally)
+**Reviewed:** 2026-10-05 (portfolio review of the five plans of 2026-10-05: 3k, 2b, 3l, 3m, 3n)
+**Addendum:** 2026-10-05 — portfolio review. Order: 3k, then 3n F1–F3, then this milestone, then 2b, 3n's S and G
+parts, and 3m. D1 adds a top-level document under `workflows/`, which two exact-set pins in `willikins-server` list
+(`acceptance_13_trusted_directory.rs`, twice, and `image_contents.rs`), so D1 now updates them and gates them. 3m's
+P1 extends the same `RepoBody` and the same exhaustive destructure in `repo_ensure.rs` after this milestone; S1's new
+field stays `#[serde(default)]` so 3m's fixtures keep parsing. After 3k, new integration tests live under `tests/it/`
+(Gates).
 
 ## Goal
 
@@ -472,6 +479,13 @@ RUST_TEST_THREADS=2 cargo test -p <crate> [-p <crate>...] -j 2 --no-fail-fast
 
 No task changes `willikins-types`, so `cargo check -p willikins-types` is not needed per task.
 
+**After milestone 3k.** If 3k has landed (the portfolio order puts it first), every new or edited non-gated
+integration test named here lives at `crates/<c>/tests/it/<stem>.rs` with a `mod <stem>;` line in `tests/it/main.rs`
+(`scaffold_ensure_mock`, `scaffold_fake_agrees_with_live`, `new_repository_scaffold_document`), a `--test <stem>`
+gate becomes `--test it <stem>::`, and the characterization snapshot is
+`crates/willikins-dsl/tests/it/snapshots/it__acceptance__characterization_of_every_document.snap`. The gated live
+target L1 stays top-level with its own `[[test]]` entry, as 3k decision (d3) keeps every `live-tests` target.
+
 Commit as soon as a commit's scoped gates are green, with `git commit --only <paths>`. Local hooks refuse any commit
 or message naming the operator's private setup: never `--no-verify`; rewrite with placeholders.
 
@@ -488,7 +502,7 @@ implementer's own `Co-Authored-By` trailer. Nobody pushes.
 | S3 | **Ensure on an empty repository** (decision (a); acceptance 4–9). One commit: `scaffold_ensure.rs`'s `ensure` initialises per decision (a), with the waits through `GitHubClient::pause`; mock tests with a recording `Sleeper`. Scoped: `-p willikins-providers-github` | sonnet implements, opus attacks |
 | S4 | **Refusals name the rules in force** (decision (e); acceptance 11). One commit: `branch_rule_types` in `client.rs`, the suffix on a refused commit with an unmoved head and on a refused first-file `PUT`, mock tests. Scoped: `-p willikins-providers-github` | sonnet implements |
 | F1 | **The fake models existence, emptiness and branches** (acceptance 12, 13). Commit 1, `crates/willikins-providers-fake`: the record fields, `with_empty_repo`, the fake `github.repo.ensure` create, the fake scaffold's table, and its own unit tests (those that never seeded a repository now seed one with `with_repo`, which keeps `branches: None`). Commit 2, `crates/willikins-providers-github/tests/scaffold_fake_agrees_with_live.rs` rows. Scoped: `-p willikins-providers-fake -p willikins-providers-github`, then `-p willikins-cli` and `-p willikins-dsl` tests to prove no other fake consumer moved. Also run the gitignored `operator_*` test targets of `willikins-cli` (run, never committed); report any that fail rather than editing them. The fake create's `"branches": []` appears in `--fake-state-out` dumps (`apply_and_journal.rs`, `smoke_parity.rs`); those tests reload the dump and never snapshot it, so no snapshot moves | sonnet implements, opus attacks |
-| D1 | **The tracked document** (acceptance 14–17). One commit: `workflows/github-new-repository-scaffold.yaml` with a header comment naming its test, `workflows/fixtures/state/new-repository-empty-trunk.json`, `crates/willikins-cli/tests/new_repository_scaffold_document.rs`, and the characterization snapshot's one new entry (diff-reviewed). Placeholders only (`example-org`). Scoped: `-p willikins-cli -p willikins-dsl` | sonnet implements |
+| D1 | **The tracked document** (acceptance 14–17). One commit: `workflows/github-new-repository-scaffold.yaml` with a header comment naming its test, `workflows/fixtures/state/new-repository-empty-trunk.json`, `crates/willikins-cli/tests/new_repository_scaffold_document.rs`, and the characterization snapshot's one new entry (diff-reviewed). The same commit adds the document to the server's exact-set pins: both lists in `crates/willikins-server/tests/acceptance_13_trusted_directory.rs` (file names and the sorted `list_workflows` names) and the set in `crates/willikins-server/tests/image_contents.rs` (whose message counts the documents). Placeholders only (`example-org`). Scoped: `-p willikins-cli -p willikins-dsl`, plus `-p willikins-server --test acceptance_13_trusted_directory --test image_contents` | sonnet implements |
 | L1 | **The live new-repository cycle** (the section above), written and compiling under `--features live-tests`, never run by the implementer. One commit: the test file and its `[[test]]` entry in `crates/willikins-providers-github/Cargo.toml`. Scoped: `cargo clippy -p willikins-providers-github --features live-tests --all-targets -j 2 -- -D warnings` | sonnet writes, coordinator runs once |
 | X1 | **Adversarial pass**, recorded under `docs/research/2026-10-0x-m3l-adversarial-pass.md`, placeholders only. Every bypass becomes a test. At least four mutations restored from saved copies (`cmp` for byte identity). Priority targets: a `PUT` carrying `sha` (an overwrite path); a `PUT` on a repository that is not empty; a decision taken from the `PUT`'s own body instead of a re-read; a body fragment in any error; the first-file write on a branch other than the default; `Absent` where the table says an error (a `301`, a `409` on a non-empty repository); a second root commit on resume; a happy-path request that was not issued before this milestone; the fake disagreeing with live on any modelled row | opus |
 
