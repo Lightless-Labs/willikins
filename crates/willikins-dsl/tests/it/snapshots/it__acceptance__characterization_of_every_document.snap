@@ -1,5 +1,5 @@
 ---
-source: crates/willikins-dsl/tests/acceptance.rs
+source: crates/willikins-dsl/tests/it/acceptance.rs
 assertion_line: 463
 expression: report
 ---
