@@ -1,6 +1,18 @@
 # Milestone 3m: deterministic, safe rollback of what one run created
 
 **Created:** 2026-10-05 (from `todos/2026-09-29-deterministic-safe-rollback.md`)
+**Reviewed:** 2026-10-05 (portfolio review of the five plans of 2026-10-05: 3k, 2b, 3l, 3m, 3n)
+**Addendum:** 2026-10-05 — portfolio review. Order: this milestone runs **last**, after 3k, 3n F1–F3, 3l, 2b and 3n's
+S, G and B parts, so `rollback.rs`, `resolve_pure` and `not_reversible` are written once against the sealed typed
+graph (no `Binding`, no catalog lookup), its plan-JSON change does not land inside 3n's byte-identical window, and the
+teardown identity can include 2b's used documents. Fixes: R2's "trybuild compile-fail without `executor`" cannot run in
+this workspace (`willikins-types` turns `executor` on for its own tests through a self dev-dependency;
+`crates/willikins-types/tests/derive_compile_fail.rs` documents why) and becomes the structural guarantee SinkToken
+already uses; retiring `deploy/teardown.sh` is a code change (a cli test runs its suite and `no_gh_writes_guard`
+expects it on disk), so it is task D0, gated, not part of D1; F1 commit 1 edits the `Plan { .. }` literals in
+`willikins-cli`'s `render.rs` tests and regenerates the published plan schemas; the only tracked characterization
+is the dsl one (it prints `plan_json`); R8/R9 check and copy 2b's used-document closure; P1 extends the `RepoBody` 3l
+already extended. Two interactions are recorded under Risks. "Sequencing with other milestones" below holds the rest.
 
 ## Goal
 
@@ -325,7 +337,7 @@ requires approval. `willikins rollback --plan-id <id> --journal <path> [--live |
 teardown. `<file>` is copied into the CLI's private trusted directory exactly as `apply <file>` does, so its hash is
 checked against the run's.
 
-`deploy/teardown.sh` is **retired** once L4 has done its job live: task D1 deletes it and points the HANDOFF and
+`deploy/teardown.sh` is **retired** once L4 has done its job live: task D0 deletes it and D1 points the HANDOFF and
 README at `willikins rollback`.
 
 ### 10. The forward plan names what rollback could not undo
@@ -346,7 +358,10 @@ characterization snapshot of a document with such a node gains this array. The d
 
 1. **Declarations validate** (R1, R3): `Catalog::insert` refuses a `needs` or `within` port that is not an input, a
    `Delete` without an inverse, an inverse without `Delete`, and a pure tool declaring anything.
-2. **`TeardownToken` is gated** (R2): a trybuild compile-fail without `executor`, and a tripwire test (beside
+2. **`TeardownToken` is gated** (R2): structurally, as `SinkToken` is (`TeardownToken::new` declared only under
+   `#[cfg(feature = "executor")]`, and `cargo check -p willikins-types` with no `--tests` succeeding with `executor`
+   off; a trybuild case cannot express it here, see `derive_compile_fail.rs`'s module doc), the `clippy.toml` row,
+   and a tripwire test (beside
    `sink_token_guard.rs`) that no source outside `rollback.rs` names `TeardownToken::new`.
 3. **`resolve_pure`** (R4) evaluates a resolver chain (`env.get` → parse), leaves a pure node bound to an impure output
    `Unknown`, and calls no impure tool's `read` and no pure node outside the wanted closure (a gate stub counting
@@ -411,7 +426,29 @@ is recorded as an addendum here and in `docs/solutions/providers/`).
    2026-10-05 (`projects-delete.md`, `environments-delete.md`, `configs-delete.md`). The project delete takes a
    **body** (`Http::delete_with_body`); the other two take a query.
 
+## Sequencing with other milestones (portfolio review, 2026-10-05)
+
+- **3k** (one integration-test binary per crate) lands first. Every new non-gated test this plan names lives at
+  `crates/<c>/tests/it/<stem>.rs` with a `mod <stem>;` line in `tests/it/main.rs` (`reversal_table`,
+  `delete_call_sites_guard`, the `TeardownToken` tripwire, the rollback and mock tests); a `--test <stem>` gate becomes
+  `--test it <stem>::` (R2's `--test sink_token_guard`, P7's `--test reversal_table`, P8's
+  `--test delete_call_sites_guard`); a guard's self-exemption path names `tests/it/`. The live cycles L1–L3 are gated
+  targets and stay top-level with their own `[[test]]` entries.
+- **3n** (`Checked` as a typed graph) lands before this plan. `resolve_pure`, `plan_teardown` and `not_reversible`
+  read `CheckedNode`s, their `Source`s and their tool handles, never a `Binding` or `catalog.get(`; if 3n's B2 landed,
+  none of the new functions takes a `&Catalog`. 3n's tripwire (no `Binding` in `plan.rs`) then covers `resolve_pure`.
+  If the coordinator reverses the order, 3n's G3 and G7 carry `rollback.rs` too (3n's addendum says so).
+- **2b** (composition) lands before this plan: node names may be `/`-paths (`org/gh_token`), which changes nothing
+  here; the teardown's document identity is the root sha plus `PlanRecorded.used` (R8), and the CLI copies the
+  closure (R9).
+- **3l** (new repositories) lands before this plan: `RepoBody` and the fake's `GitHubRepoRecord` already carry its
+  fields; P1 and P6 build on them (a fake repository delete removes the whole record, branches included).
+
 ## Gates
+
+**Published shapes.** Any commit that changes a type published by a `schema_generation` snapshot (core, journal) or by
+the server's `mcp_server__the_tool_list_and_every_schema_is_snapshotted` snapshot regenerates that snapshot in the same
+commit, diff-reviewed as additions only, and runs the owning crate's test.
 
 Scoped per task, as each row says. `-j 2`, `RUST_TEST_THREADS=2`, in the background with a 600,000 ms timeout,
 reading the log body. Never two cargo commands at once. The coordinator runs the full four-command gate once after
@@ -426,13 +463,13 @@ implementer's own `Co-Authored-By` trailer. Nobody pushes.
 | # | Task | Delegate to |
 | --- | --- | --- |
 | R1 | **`Reversal` and `Within`** (decision 3; acceptance 1). `rollback.rs` with the declaration types, `Tool::reversal()` defaulting to `Retained { why: UNDECLARED }`, and `Catalog::insert`'s port validation. No tool changes. Scoped: `-p willikins-core` | sonnet implements |
-| R2 | **`TeardownToken`** (trust boundary 2; acceptance 2). `sink.rs`, the `clippy.toml` row, the trybuild case, the tripwire test. Scoped: `-p willikins-types`, `-p willikins-core --test sink_token_guard` and the new guard, then `cargo check -p willikins-types` | sonnet implements |
+| R2 | **`TeardownToken`** (trust boundary 2; acceptance 2). `sink.rs` (`new` under `#[cfg(feature = "executor")]`, documented beside `SinkToken`'s note in `derive_compile_fail.rs`'s module doc), the `clippy.toml` row, the tripwire test. No trybuild case (the self dev-dependency unifies `executor` on). Scoped: `-p willikins-types`, `-p willikins-core --test sink_token_guard` and the new guard, then `cargo check -p willikins-types` | sonnet implements |
 | R3 | **`Inverse`, `Created`, `Standing`, `Deleted`** (decision 3). `Tool::inverse()`, and `Catalog::insert`'s "`Delete` exactly when `inverse()` is `Some`". Test stubs in `testing.rs`. Scoped: `-p willikins-core` | sonnet implements |
 | R4 | **`resolve_pure`** (decision 5; acceptance 3). In `plan.rs`, sharing `plan`'s binding resolution. Not a second probe of the conversion table: the tripwire test that greps `plan.rs` must still pass. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
 | R5 | **`plan_teardown`** (decisions 1, 2, 4's gate rows, 6; acceptance 4–6). `RunFacts` (built by callers, so core does not depend on the journal crate), `Teardown`, `TeardownStep`, `TeardownAction`, riding, ordering, total refusal. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
 | R6 | **`apply_teardown`** (decision 8's apply; acceptance 7, 8's core half). Re-plan, compare, mint, delete in order, stop on failure. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
-| R7 | **Journal** (decision 8; acceptance 9). The four events, the new reasons, `Teardown: Redactable`, the typed `StepFingerprint`, `TeardownRecord`, approval and rejection replay resolving either record kind, `RunRecord::rolled_back_by`, the pre-milestone replay test, and the redaction case. Scoped: `-p willikins-journal` | sonnet implements |
-| P1 | **GitHub inverse** (decisions 4, 7; acceptance 12). `delete_repo`, a repo read with the decision 7 fields, `GitHubRepoEnsure`'s `Delete` and inverse; `Contained` for `actions_secret` and `scaffold`. Mock tests pin each query. Commit 1: the client. Commit 2: the tool. Scoped: `-p willikins-providers-github` | sonnet implements, opus attacks |
+| R7 | **Journal** (decision 8; acceptance 9). The four events, the new reasons, `Teardown: Redactable`, the typed `StepFingerprint`, `TeardownRecord`, approval and rejection replay resolving either record kind, `RunRecord::rolled_back_by`, the pre-milestone replay test, and the redaction case. Journal `schema_generation` snapshots and the server's `mcp_server` snapshot that publish a changed shape are regenerated in the same commit (additions only). Scoped: `-p willikins-journal`, plus `cargo clippy -p willikins-server -p willikins-cli --all-targets` and `-p willikins-server --test mcp_server` | sonnet implements |
+| P1 | **GitHub inverse** (decisions 4, 7; acceptance 12). `delete_repo`, a repo read with the decision 7 fields, `GitHubRepoEnsure`'s `Delete` and inverse; `Contained` for `actions_secret` and `scaffold`. Mock tests pin each query. Commit 1: the client. Commit 2: the tool. `RepoBody` (which 3l's S1 extended with `default_branch`) gains the decision 7 fields as `#[serde(default)]` options, since existing mock fixtures predate them; `repo_ensure.rs`'s exhaustive `observe` destructure gains them as `_`. Scoped: `-p willikins-providers-github` | sonnet implements, opus attacks |
 | P2 | **Doppler project inverse** (decision 7's project row). `delete_project` (body), `delete_environment`, `delete_config`, and the list reads (environments, configs with `created_at`/`inheritedBy`, names, tokens). Commit 1: the client. Commit 2: `doppler.project.ensure`. Scoped: `-p willikins-providers-doppler` | sonnet implements, opus attacks |
 | P3 | **Doppler config, branch config and token inverses**, and the `Contained`/`Retained` declarations of the other six Doppler tools. Scoped: `-p willikins-providers-doppler` | sonnet implements, opus attacks |
 | P4 | **Buildkite inverse.** The builds read, `buildkite.pipeline.ensure`'s inverse, `bootstrap.ensure` `Contained`; `delete_pipeline`'s doc now names its one non-test caller. Scoped: `-p willikins-providers-buildkite` | sonnet implements |
@@ -440,18 +477,25 @@ implementer's own `Co-Authored-By` trailer. Nobody pushes.
 | P6 | **Fake twins**: the same declarations on every fake tool, fake inverses for the six `Delete` tools over `FakeState` (no timestamps: the fake skips the window rule, which the mock tests pin instead), parity of declarations in `catalog_parity.rs`, and `fake_agrees_with_live.rs` rows for standing. Scoped: `-p willikins-providers-fake` | sonnet implements |
 | P7 | **Declaration table** (acceptance 13). `crates/willikins-server/tests/reversal_table.rs` over `LIVE_TOOL_NAMES`, plus the `Within` type check of decision 3. Scoped: `-p willikins-server --test reversal_table` | sonnet implements |
 | P8 | **Delete call-site guard** (acceptance 14). `crates/willikins-cli/tests/delete_call_sites_guard.rs`, written like `no_gh_writes_guard.rs`. Scoped: `-p willikins-cli --test delete_call_sites_guard` | sonnet implements |
-| R8 | **`Butler::plan_rollback` / `apply_rollback`** (decisions 5, 8; acceptance 8, 10). `RunFacts` from the journal through `parse_recorded_value`, the document hash check, `resolve_pure`, LIFO, double rollback, windows. On the fake catalog. Scoped: `-p willikins-server` | sonnet implements, opus attacks |
-| R9 | **CLI `rollback`** (decision 9; acceptance 11). The subcommand, text and JSON rendering through `mask_json`, and the fake-state round trip test. Scoped: `-p willikins-cli` (the new tests and `render` only) | sonnet implements |
-| F1 | **`Plan::not_reversible`** (decision 10; acceptance 15). Commit 1: the field and its computation in core, with tests. Commit 2: rendering and every characterization snapshot, diff-reviewed (only added arrays). Scoped: `-p willikins-core`, then `-p willikins-dsl -p willikins-cli` | sonnet implements |
+| R8 | **`Butler::plan_rollback` / `apply_rollback`** (decisions 5, 8; acceptance 8, 10). `RunFacts` from the journal through `parse_recorded_value`, the document hash check, `resolve_pure`, LIFO, double rollback, windows. On the fake catalog. After 2b: the document is linked through the trusted-directory resolver before `check`, and the teardown refuses `DocumentChanged` unless the root's sha **and** the run's `PlanRecorded.used` closure both match, exactly as 2b's S2 does for apply. Scoped: `-p willikins-server` | sonnet implements, opus attacks |
+| R9 | **CLI `rollback`** (decision 9; acceptance 11). The subcommand, text and JSON rendering through `mask_json`, and the fake-state round trip test. `<file>` is copied with its linked closure, as 2b's K1 made `apply <file>` do. Scoped: `-p willikins-cli` (the new tests and `render` only) | sonnet implements |
+| F1 | **`Plan::not_reversible`** (decision 10; acceptance 15). Commit 1: the field and its computation in core, with tests; in the same commit, because each goes red without it: the `Plan { .. }` struct literals in `crates/willikins-cli/src/render.rs`'s tests, core's `schema_generation__plan_schema` snapshot and the server's `mcp_server` snapshot (both publish `Plan`), and the dsl characterization snapshot, which prints every document's `plan_json` (the only tracked characterization; `willikins-cli` has none, and its 35 gitignored `operator_*` snapshots hold no plan JSON). All diff-reviewed as added `not_reversible` arrays or schema properties only. Commit 2: text rendering after `replacing`. Scoped: `-p willikins-core -p willikins-dsl`, `cargo clippy -p willikins-cli -p willikins-server --all-targets`, `-p willikins-server --test mcp_server`, then `-p willikins-cli`; run the gitignored `operator_*` targets and report, never commit | sonnet implements |
 | L1 | **GitHub live rollback cycle** (acceptance 16, verify 1–2), behind `live-tests`, in the sandbox org only. Written and compiling, **never run by the implementer**. Scoped: `cargo clippy -p willikins-providers-github --features live-tests --all-targets -j 2 -- -D warnings` | sonnet writes, coordinator runs once |
 | L2 | **Doppler live rollback cycle** (verify 3–7, 9), as L1, in the sandbox workplace | sonnet writes, coordinator runs once |
 | L3 | **Buildkite live rollback cycle** (verify 8), as L1, in the sandbox org | sonnet writes, coordinator runs once |
 | L4 | **End to end through the CLI**: `apply` then `rollback` of `workflows/new-rust-service-buildkite.yaml` in the sandbox, with a scratch journal. A coordinator runbook in this plan's addendum, not a test | coordinator |
 | X1 | **Adversarial pass** (acceptance 17), recorded under `docs/research/2026-10-0x-m3m-adversarial-pass.md`. Priority targets: a delete reachable without a `TeardownToken` or from a document; a candidate that the run did not create (Update, Replace, NoOp, another run's); a rider deleted on its own; a container deleted despite foreign contents (a hand-set secret, an inheriting config elsewhere, a build, a push); a window bypass by clock or format; a `3xx` repo followed; a credential read from the journal; a value in a reason; LIFO bypass; a teardown applied after its standing changed | opus |
-| D1 | **Docs**: retire `deploy/teardown.sh` after L4, add a design-doc addendum and a CLAUDE.md invariant (edit `AGENTS.md` identically), update the HANDOFF, close the todo, and write the MCP follow-up todo | coordinator |
+| D0 | **Retire `deploy/teardown.sh`** (decision 9), after L4 has run live. One commit: delete `deploy/teardown.sh`, `deploy/teardown_test.sh` and `crates/willikins-cli/tests/teardown_script.rs` (which runs that suite); in `crates/willikins-cli/tests/no_gh_writes_guard.rs`, `the_walk_reads_every_kind_of_file_this_repository_executes` drops `deploy/teardown.sh` from its on-disk list (no tracked `.sh` file remains, so `is_runnable("teardown.sh")` stays as the name check only) and the comments that cite the script as the guard's origin stay as history; `smoke_parity.rs`'s comments and README's two teardown sections point at `willikins rollback`. The guard must still pass with no `.sh` in the tree. Scoped: `-p willikins-cli` (`no_gh_writes_guard`, `smoke_parity`), `cargo clippy -p willikins-cli --all-targets` | sonnet implements |
+| D1 | **Docs**: after D0, add a design-doc addendum and a CLAUDE.md invariant (edit `AGENTS.md` identically), update the HANDOFF, close the todo, and write the MCP follow-up todo | coordinator |
 
 ## Risks
 
+- **A resumed scaffold makes its repository unrollbackable** (with 3l). 3l's recovery for a scaffold that stopped
+  between its two writes is "re-run the document". That second run's scaffold commit moves `pushed_at` past the first
+  run's `settled_by`, so after the second run is rolled back (LIFO; its scaffold is `Contained` and deletes nothing),
+  the first run's repository reads `Drifted` and the teardown refuses. Safe, by hand to resolve; X1 should confirm the
+  refusal names the push. A rule that forgives pushes made by later, rolled-back runs of the same workflow is a later
+  decision.
 - **Over-refusal.** The drift rules are strict on purpose: a pipeline with one build, or a repo with one issue, refuses.
   The remedy is by hand and stated in the reason. Loosening a rule is a later decision with its own plan.
 - **Clock skew larger than two minutes** turns a resource willikins created into `NotOurs`, which refuses (safe) and
