@@ -1,5 +1,5 @@
 ---
-source: crates/willikins-providers-signoz/tests/catalog_parity.rs
+source: crates/willikins-providers-signoz/tests/it/catalog_parity.rs
 expression: "spec_json(SigNozIngestionKeyEnsure::new(test_client()).spec())"
 ---
 {
