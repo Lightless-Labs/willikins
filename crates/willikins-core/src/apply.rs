@@ -595,21 +595,26 @@ pub fn apply(
     #[allow(clippy::disallowed_methods)]
     let token = SinkToken::new();
 
-    // Rule 4.
+    // Rule 4. Walks `checked.order`, not `fresh.nodes`: a `for_each` node
+    // whose source has zero items contributes no entry at all to
+    // `fresh.nodes` (`plan` never expands it), so driving the walk from
+    // `fresh.nodes` would skip such a node outright and leave it with no
+    // `results` entry at all — decision (f1), point 1. Walking
+    // `checked.order` instead visits every node; its group of planned
+    // instances, read from `fresh.nodes`, is simply empty in that case.
     let workflow = &checked.workflow;
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut applied_nodes: Vec<AppliedNode> = Vec::new();
 
     let mut index = 0;
-    while index < fresh.nodes.len() {
-        let name = fresh.nodes[index].name.clone();
+    for name in &checked.order {
         let node = workflow
             .nodes
-            .get(&name)
-            .unwrap_or_else(|| unreachable!("`fresh.nodes` names only workflow nodes"));
+            .get(name)
+            .unwrap_or_else(|| unreachable!("`checked.order` names only workflow nodes"));
         let tool = catalog
             .get(&node.tool)
-            .unwrap_or_else(|| unreachable!("`approved` was planned against a compatible catalog"));
+            .unwrap_or_else(|| unreachable!("`checked` was checked against a compatible catalog"));
         let spec = tool.spec();
 
         // A whole-node `Action::Skip` (decision (j), point 3) plans as a
@@ -619,12 +624,19 @@ pub fn apply(
         // individual `for_each` instance's own action can be `Blocked` (a
         // gate applied per item) but never `Skip` — only the node as a whole
         // collapses to one `Skip` entry (see `plan`'s own `GateTracking`).
-        let whole_skip = fresh.nodes[index].action == Action::Skip;
+        // `fresh.nodes.get(index)` is `None`, or names a *later* node,
+        // exactly when this node's own group is empty (an unskipped
+        // `for_each` with zero instances): never `Skip` in that case either,
+        // since a whole skip always plans exactly one entry.
+        let whole_skip = match fresh.nodes.get(index) {
+            Some(planned) if planned.name == *name => planned.action == Action::Skip,
+            _ => false,
+        };
 
         let mut group_end = index;
         let mut group_outputs: Vec<(Option<String>, Outputs, bool)> = Vec::new();
 
-        while group_end < fresh.nodes.len() && fresh.nodes[group_end].name == name {
+        while group_end < fresh.nodes.len() && fresh.nodes[group_end].name == *name {
             let planned = &fresh.nodes[group_end];
 
             // Classify by `planned.action` first, before any input

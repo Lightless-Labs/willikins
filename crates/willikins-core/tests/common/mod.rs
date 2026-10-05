@@ -735,6 +735,67 @@ impl Tool for MutableOutputTool {
     }
 }
 
+/// A minimal non-pure test tool with one required `list<T>` input port
+/// (`element_ty` names `T`), used as a plain downstream sink or as a
+/// `for_each` node's own tool: it records every `ensure` call's full
+/// [`Inputs`], so a test can inspect exactly what each call (or each
+/// instance) received (F1, acceptance 1 and 2). `read` always reports
+/// `Absent`, so every plan is [`willikins_core::Action::Create`] and
+/// `apply` always calls `ensure`. Keyless, like [`ConstantForEachTool`].
+pub struct RecordingListTool {
+    spec: ToolSpec,
+    pub ensures: Arc<Mutex<Vec<Inputs>>>,
+}
+
+impl RecordingListTool {
+    /// A tool named `name` whose single required input port `in_port` is
+    /// `list<element_ty>`.
+    #[must_use]
+    pub fn new(name: &str, in_port: &str, element_ty: &str) -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port(in_port),
+            willikins_core::PortSpec {
+                ty: willikins_core::PortType::Exact(list_ty(element_ty)),
+                required: true,
+                derived_only: false,
+            },
+        );
+        Self {
+            spec: ToolSpec {
+                name: tool_name(name),
+                description: "Test tool: records every call's list input.".to_string(),
+                inputs,
+                outputs: IndexMap::new(),
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+            ensures: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl Tool for RecordingListTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Absent {
+            predicted: Outputs::new(),
+        })
+    }
+
+    fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        self.ensures.lock().unwrap().push(inputs.clone());
+        Ok(Ensured {
+            outputs: Outputs::new(),
+            changed: true,
+        })
+    }
+}
+
 /// One instance's [`willikins_core::NodeStatus`] in an
 /// [`willikins_core::Applied`], by node name and instance key.
 ///

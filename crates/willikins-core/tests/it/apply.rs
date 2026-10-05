@@ -20,7 +20,8 @@ use indexmap::IndexMap;
 use crate::common;
 use crate::common::{
     RequiresKnownInputTool, ScriptedEnsureTool, UnreadableUpstreamTool, apply_test_catalog,
-    distinctive_token, input, node, port, principal, timestamp, tool_name, ty, workflow_name,
+    distinctive_token, input, list_ty, node, output, port, principal, timestamp, tool_name, ty,
+    workflow_name,
 };
 use willikins_core::{
     Action, ApplyError, ApplyEvent, Approval, Binding, Catalog, Class, DriftKind, InputSpec, Node,
@@ -1229,6 +1230,117 @@ fn a_cleared_approval_flag_does_not_bypass_the_gate() {
         "and must call no ensure: {:?}",
         locked.ensure_calls
     );
+}
+
+// ---------------------------------------------------------------------
+// Milestone 3n, decision (f1): two apply panics `plan`'s own re-derivation
+// from the document never hits, predicted from reading `apply.rs` and
+// `plan.rs` (verify item 1).
+// ---------------------------------------------------------------------
+
+/// Acceptance test 1 (decision (f1), point 1): a `for_each` source that is
+/// an empty list plans zero instances, so `plan`'s own `fresh.nodes` has no
+/// entry at all for the `for_each` node (`plan` never expands it — pinned
+/// for `plan` by `plan_adversarial.rs`'s
+/// `an_empty_for_each_source_plans_zero_instances_and_a_known_empty_list`).
+/// Before the fix, `apply`'s outer walk is driven by `fresh.nodes` itself,
+/// so it never visits the `for_each` node either, and never records a
+/// `results` entry for it — a downstream `Step` port, and the workflow
+/// output on the same source, both then panic in `resolve_step` with
+/// `` `checked.order` plans every node before its dependents ``. After the
+/// fix, `apply` succeeds: zero instances, and both the downstream port and
+/// the output are a known empty `list<DopplerConfig>`.
+#[test]
+fn an_empty_for_each_source_applies_zero_instances_and_a_known_empty_list() {
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let mut fake_catalog = apply_test_catalog(Arc::clone(&state));
+    let sink = common::RecordingListTool::new("test.sink_list_configs", "configs", "DopplerConfig");
+    let ensures = Arc::clone(&sink.ensures);
+    fake_catalog
+        .insert(Arc::new(sink))
+        .expect("the sink's own spec validates");
+
+    let workflow = Workflow::new(workflow_name("empty-for-each-apply"))
+        .input(
+            input("environments"),
+            InputSpec::new(list_ty("EnvironmentSlug")),
+        )
+        .node(
+            node("configs"),
+            Node::new(tool_name("doppler.config.ensure"))
+                .for_each(Binding::Input(input("environments")))
+                .port(
+                    port("project"),
+                    Binding::Literal("third-thoughts".to_string()),
+                )
+                .port(port("environment"), Binding::Item),
+        )
+        .node(
+            node("root"),
+            Node::new(tool_name("test.sink_list_configs")).port(
+                port("configs"),
+                Binding::Step {
+                    node: node("configs"),
+                    port: port("config"),
+                },
+            ),
+        )
+        .output(
+            output("all_configs"),
+            Binding::Step {
+                node: node("configs"),
+                port: port("config"),
+            },
+        );
+    let checked = check(&workflow, &fake_catalog).expect("the document checks cleanly");
+
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("environments"),
+        Value::parse_list(&list_ty("EnvironmentSlug"), &[]).unwrap(),
+    );
+
+    let approved = plan(&checked, &inputs, &fake_catalog).expect("an empty list plans");
+    assert!(
+        approved
+            .nodes
+            .iter()
+            .all(|planned| planned.name != node("configs")),
+        "an empty for_each source contributes no planned node for `configs`: {:?}",
+        approved.nodes
+    );
+
+    let mut observer = RecordingObserver::new();
+    let applied = apply(
+        &checked,
+        &inputs,
+        &fake_catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect("apply must succeed with zero instances, never panic");
+
+    let all_configs = applied
+        .outputs
+        .get(&output("all_configs"))
+        .expect("the output is resolved");
+    assert!(
+        all_configs.is_known(),
+        "an empty aggregation is known, not unknown"
+    );
+    assert!(all_configs.as_list().expect("a list").is_empty());
+
+    let calls = ensures.lock().unwrap();
+    assert_eq!(calls.len(), 1, "the downstream sink still runs once");
+    let configs = calls[0]
+        .get(&port("configs"))
+        .expect("`configs` is bound at ensure time");
+    assert!(
+        configs.is_known(),
+        "the downstream port is a known empty list, not unknown"
+    );
+    assert!(configs.as_list().expect("a list").is_empty());
 }
 
 // ---------------------------------------------------------------------
