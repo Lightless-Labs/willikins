@@ -15,6 +15,7 @@ milestone moves each crate's default-built integration tests into **one** binary
 per former file. That means **13** binaries in the public tree, 16 on the operator's machine, and the 10 gated
 targets unchanged. Each move is `git mv` (history follows with `git log --follow`). Each crate is one task and one
 commit, green alone.
+**Addendum:** 2026-10-05 (coordinator, T0) — baseline at `c7076c5`, warm, after touching `willikins-core/src/lib.rs`: clippy 67 s; `test --no-run --timings` 382 s; the full test run 251 s (200 suites, 3242 passed, 19 ignored, 0 failed). `target/` 17,783,836 KB (`deps` 6,294,040 KB, `incremental` 11,331,980 KB). Integration-test executables: 167, 3082 MB (cli 20/226 MB, core 21/220, dsl 4/64, journal 13/173, appstore 15/372, buildkite 10/218, doppler 24/581, fake 6/84, github 12/283, http 5/103, signoz 5/105, server 23/582, types 9/70). The 13 `before/<crate>.txt` lists are outside the tree.
 
 Done when:
 - every crate's default-built integration tests build as one binary;

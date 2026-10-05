@@ -13,6 +13,7 @@ expects it on disk), so it is task D0, gated, not part of D1; F1 commit 1 edits 
 `willikins-cli`'s `render.rs` tests and regenerates the published plan schemas; the only tracked characterization
 is the dsl one (it prints `plan_json`); R8/R9 check and copy 2b's used-document closure; P1 extends the `RepoBody` 3l
 already extended. Two interactions are recorded under Risks. "Sequencing with other milestones" below holds the rest.
+**Addendum:** 2026-10-05 (operator's decisions) — (a) `appstore.profile.ensure` stays Retained: a teardown never deletes a provisioning profile. (b) A Buildkite pipeline with any build is drift: the teardown refuses and says why; willikins never deletes build history. (c) The sandbox Buildkite token already deletes throwaway pipelines in the sandbox org (milestone 3i's live bootstrap cycle, step 8, 2026-10-02).
 
 ## Goal
 

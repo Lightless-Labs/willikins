@@ -9,6 +9,7 @@ parts, and 3m. D1 adds a top-level document under `workflows/`, which two exact-
 P1 extends the same `RepoBody` and the same exhaustive destructure in `repo_ensure.rs` after this milestone; S1's new
 field stays `#[serde(default)]` so 3m's fixtures keep parsing. After 3k, new integration tests live under `tests/it/`
 (Gates).
+**Addendum:** 2026-10-05 (operator's decision) — no new credential mechanism: repositories in a real organisation are created with an org-scoped PAT stored in Doppler, as every other provider credential already is ("We already use a PAT for everything for now. Don't start making up new requirements."). The GitHub App option is dropped from this plan.
 
 ## Goal
 
