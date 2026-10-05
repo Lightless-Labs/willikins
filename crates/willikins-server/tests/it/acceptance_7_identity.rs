@@ -2,7 +2,7 @@
 //! `Butler` rather than `willikins_core::apply` directly. The HTTP half
 //! (the approval page, nonce/origin checks) is task 10b's.
 
-mod common;
+use crate::common;
 
 use willikins_core::Class;
 use willikins_journal::{ApplyRefusedReason, Event, RunState};

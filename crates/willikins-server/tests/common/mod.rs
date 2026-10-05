@@ -97,7 +97,7 @@ pub fn butler_with_journal(
 }
 
 /// Open the [`FileJournal`] at `path`, retrying briefly (matching
-/// `tests/file_journal_round_trip.rs`'s own `open_once_unlocked`) rather
+/// `tests/it/file_journal_round_trip.rs`'s own `open_once_unlocked`) rather
 /// than racing whichever previous holder's last strong `Arc` reference
 /// (a dropped `Butler`, a dropped read-only handle) is what releases the
 /// exclusive `flock`.
@@ -274,7 +274,7 @@ impl Tool for BlockingTool {
 
 /// Like [`butler_with_journal`], over any [`Clock`] rather than a
 /// [`ManualClock`] specifically -- what an adversarial test that needs a
-/// clock which *blocks* (see `tests/adversarial_10a.rs`'s
+/// clock which *blocks* (see `tests/it/adversarial_10a.rs`'s
 /// `GateOnceClock`) hands a `Butler`.
 pub fn butler_with_any_clock(
     dir: &Path,

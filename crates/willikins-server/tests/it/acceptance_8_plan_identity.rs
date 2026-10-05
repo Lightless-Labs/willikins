@@ -10,7 +10,7 @@
 //! `two_plans_differing_only_in_a_seeded_secret_value_have_equal_fingerprints`);
 //! nothing here duplicates it.
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

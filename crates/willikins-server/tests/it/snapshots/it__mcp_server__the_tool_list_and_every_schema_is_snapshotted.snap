@@ -1,5 +1,5 @@
 ---
-source: crates/willikins-server/tests/mcp_server.rs
+source: crates/willikins-server/tests/it/mcp_server.rs
 expression: snapshot
 ---
 [

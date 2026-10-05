@@ -2,9 +2,9 @@
 //! acceptance test 7's HTTP half, and verify item 5 -- every one of them
 //! against `willikins_server::router(...)` directly through
 //! `tower::ServiceExt::oneshot`, never a bound port (the one exception,
-//! a real `TcpListener`, is `tests/http_smoke.rs`).
+//! a real `TcpListener`, is `tests/it/http_smoke.rs`).
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -479,7 +479,7 @@ async fn the_eleventh_plan_in_a_minute_is_rate_limited_while_another_principal_s
 
 // ---------------------------------------------------------------------
 // Startup refusals (unit-level; see `HttpConfig::build`'s own tests for
-// the three http-mode rules, and `tests/binary_startup.rs` for the
+// the three http-mode rules, and `tests/it/binary_startup.rs` for the
 // process-level check that the binary actually surfaces them).
 // ---------------------------------------------------------------------
 

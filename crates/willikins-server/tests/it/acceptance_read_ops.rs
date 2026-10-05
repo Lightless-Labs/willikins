@@ -4,7 +4,7 @@
 //! the combined `describe`/`validate` bucket -- task 10b pins the HTTP
 //! surface of the same limiter).
 
-mod common;
+use crate::common;
 
 use willikins_server::{ButlerConfig, ButlerError, DocumentSource};
 use willikins_types::{DomainType, WorkflowName};

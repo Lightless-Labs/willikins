@@ -13,7 +13,7 @@
 //! fixture, `run_status` on an unknown run, and the secret-never-leaks
 //! sweep.
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 

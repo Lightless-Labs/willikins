@@ -3,7 +3,7 @@
 //! every document in the directory before it will run at all, and
 //! `Butler::list_workflows` lists exactly what is there.
 
-mod common;
+use crate::common;
 
 use willikins_journal::{Clock, Event, MemoryJournal};
 use willikins_server::{Butler, ButlerConfig, ButlerError, StartupError};

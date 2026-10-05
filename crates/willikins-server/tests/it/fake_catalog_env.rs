@@ -5,7 +5,7 @@
 //! The refusal case is process-level and fast (`.output()`, no server
 //! ever starts listening). The "it actually behaves like `--fake`"
 //! cases need a running server and live in
-//! `tests/serve_http_deploy_pins.rs`, alongside the other two pins this
+//! `tests/it/serve_http_deploy_pins.rs`, alongside the other two pins this
 //! task adds (the journal file's owner, and the default bind address).
 
 use std::process::{Command, Output};
@@ -80,7 +80,7 @@ fn a_fake_catalog_value_of_0_refuses() {
 
 /// The refusal is checked before the environment's required variables --
 /// mirroring `serve_stdio_with_an_invalid_principal_refuses_before_touching_the_environment`
-/// in `tests/binary_startup.rs`, this pins that a malformed
+/// in `tests/it/binary_startup.rs`, this pins that a malformed
 /// `WILLIKINS_FAKE_CATALOG` is caught even when the workflow directory
 /// and journal path are entirely unset.
 #[test]
@@ -150,7 +150,7 @@ fn every_near_miss_of_1_refuses() {
 /// `--fake` and `WILLIKINS_FAKE_CATALOG=1` together are not a conflict:
 /// the two mean the same thing, so the server starts. (That it announces
 /// the fake catalog exactly once, not twice, is
-/// `tests/serve_http_deploy_pins.rs`'s own pin -- it needs a running
+/// `tests/it/serve_http_deploy_pins.rs`'s own pin -- it needs a running
 /// server.) Here: no refusal, so the process does not exit 2 before it
 /// reaches its own missing-variable refusal for the workflow directory.
 #[test]

@@ -8,7 +8,7 @@
 //! releases, and the failing journal refuses on exactly the append the
 //! test names.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};

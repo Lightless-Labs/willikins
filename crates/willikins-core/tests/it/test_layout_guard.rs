@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 /// Shrinks by one per milestone 3k task (see the plan's task table,
 /// T4-T14) and ends empty at T14. The constant and this guard then stay,
 /// so a new crate starts in the target layout.
-const PENDING: &[&str] = &["willikins-cli", "willikins-server"];
+const PENDING: &[&str] = &["willikins-cli"];
 
 /// Which of (d7)'s rules a [`Violation`] names, plus the ratchet's own
 /// direction for a crate in [`PENDING`].

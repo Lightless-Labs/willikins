@@ -12,7 +12,7 @@
 //! This drives the real `Butler` into a real plan failure instead, so
 //! swapping the attempt at the call site fails a test.
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 

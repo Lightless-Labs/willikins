@@ -20,7 +20,7 @@
 //! unsupplied), through an in-process rmcp client, exactly as
 //! `mcp_server.rs` drives the handler.
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 

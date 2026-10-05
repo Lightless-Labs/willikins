@@ -3,7 +3,7 @@
 //! port and the test learns it from `local_addr()`, never guessing one),
 //! answers `/healthz`, then shuts down on a oneshot signal. Every other
 //! HTTP acceptance test drives `router()` directly through
-//! `tower::ServiceExt::oneshot` (`tests/http_server.rs`), with no port
+//! `tower::ServiceExt::oneshot` (`tests/it/http_server.rs`), with no port
 //! bound at all.
 
 use std::sync::{Arc, Mutex};

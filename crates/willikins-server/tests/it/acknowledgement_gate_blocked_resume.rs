@@ -5,7 +5,7 @@
 //! unsupplied `OperatorAcknowledgement` input at all. So the very first
 //! `apply` of a plan whose acknowledgement gate is unmet -- decision (j)'s
 //! "run, get blocked, re-run" -- refused instead of starting a blocked
-//! run. `crates/willikins-core/tests/operator_acknowledge_document.rs`
+//! run. `crates/willikins-core/tests/it/operator_acknowledge_document.rs`
 //! and `crates/willikins-cli/tests/sample_apply_blocked_redaction.rs`
 //! each proved a *piece* of decision (j) (the fake catalog's `plan`
 //! alone; the CLI's `apply --approve` with the acknowledgements already
@@ -15,7 +15,7 @@
 //! the MCP surface (`plan`/`apply`/`run_status`), both before and after
 //! the operator supplies the acknowledgement.
 
-mod common;
+use crate::common;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ fn principal() -> PrincipalId {
 }
 
 /// Serve `butler` over an in-process duplex pair and connect a plain
-/// rmcp client to it, mirroring `tests/mcp_server.rs`'s own `connect`.
+/// rmcp client to it, mirroring `tests/it/mcp_server.rs`'s own `connect`.
 async fn connect(butler: Arc<Butler>, principal: PrincipalId) -> RunningService<RoleClient, ()> {
     let (client_io, server_io) = tokio::io::duplex(1024 * 1024);
     let handler = WillikinsHandler::new(butler, principal);
@@ -85,7 +85,7 @@ async fn an_unmet_acknowledgement_gate_blocks_then_resumes_through_a_real_apply_
     // own `Butler` (and every strong reference to its `FileJournal`, the
     // exclusive lock's own last holder) is fully dropped before the
     // journal is reopened independently below -- mirroring
-    // `tests/file_journal_round_trip.rs`'s own `drop(butler)`.
+    // `tests/it/file_journal_round_trip.rs`'s own `drop(butler)`.
     let run_id = {
         let (_state, catalog) = Butler::fake_catalog();
         let clock = common::manual_clock();
@@ -187,7 +187,7 @@ async fn an_unmet_acknowledgement_gate_blocks_then_resumes_through_a_real_apply_
 
     // The journal itself durably recorded the blocked outcome -- reopen
     // it independently of the `Butler` that produced it (a simulated
-    // restart), mirroring `tests/file_journal_round_trip.rs`.
+    // restart), mirroring `tests/it/file_journal_round_trip.rs`.
     {
         let reopened = common::open_file_journal_read_only(&journal_path);
         let replayed = reopened

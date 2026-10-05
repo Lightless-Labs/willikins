@@ -8,7 +8,7 @@
 //! trusted directory can be planned or applied; and no secret byte
 //! reaches a response, an error, or the journal.
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 

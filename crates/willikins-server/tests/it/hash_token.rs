@@ -3,7 +3,7 @@
 //! `hash-token` procedure so a real token never touches a command line
 //! or an argument list, only stdin.
 //!
-//! Process-level, following `tests/binary_startup.rs`'s own convention
+//! Process-level, following `tests/it/binary_startup.rs`'s own convention
 //! (`Command::new(env!("CARGO_BIN_EXE_willikins-server"))`), but piping
 //! bytes to the child's stdin rather than only inspecting its exit code.
 

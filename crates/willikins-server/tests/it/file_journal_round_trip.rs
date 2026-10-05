@@ -2,7 +2,7 @@
 //! `FileJournal` in a tempdir, then reopened independently (not through
 //! `Butler`) and compared for equal views.
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 

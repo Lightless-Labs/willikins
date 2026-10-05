@@ -9,12 +9,12 @@
 //! bounces off the existing code, the test stays as a pin, so a later
 //! change that opens the hole fails here rather than in production.
 //!
-//! Companion to `tests/http_server.rs` (acceptance test 12's own
-//! positive and negative cases) and `tests/mcp_server.rs` (the MCP
+//! Companion to `tests/it/http_server.rs` (acceptance test 12's own
+//! positive and negative cases) and `tests/it/mcp_server.rs` (the MCP
 //! surface's own). Nothing here makes a network call: every catalog is
 //! the fake one.
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
