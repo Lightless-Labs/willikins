@@ -16,7 +16,7 @@
 //! either node is ever ensured. This document is inlined with
 //! `willikins_dsl::parse_document` rather than added under
 //! `workflows/fixtures/`, since a file there is scanned by
-//! `acceptance__characterization_of_every_document.snap` and this test
+//! `it__acceptance__characterization_of_every_document.snap` and this test
 //! needs no entry in it.
 
 use indexmap::IndexMap;

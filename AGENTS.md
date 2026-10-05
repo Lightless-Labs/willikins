@@ -88,6 +88,15 @@ Read the log body, never just a captured exit code. In zsh, `$?` after a pipe is
 status; do not pipe gate output through `tail` or `tee`. This host is slow: run cargo in the
 background with a 600000 ms timeout. The trybuild suite alone takes about 90 seconds.
 
+Each crate's default-built integration tests compile as one binary, `tests/it/main.rs`, one module per
+former `tests/<stem>.rs` file (milestone 3k). Run one test module with
+`cargo test -p <crate> --test it <module>:: -j 2`, note the trailing `::`: `--exact` now needs the module
+prefix too (`<module>::<test_name>`), or it silently matches nothing instead of failing. A new
+`tests/it/<stem>.rs` must get a `mod <stem>;` line in `tests/it/main.rs` or it is silently never compiled;
+`crates/willikins-core/tests/it/test_layout_guard.rs` catches both lapses. The `required-features =
+["live-tests"]` targets and, in `willikins-cli`, the gitignored `operator_*` targets stay their own
+top-level binaries and are unaffected.
+
 Try the CLI:
 
 ```

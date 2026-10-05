@@ -13,7 +13,7 @@
 //! default. Both are read-only over every document under `workflows/`
 //! and `workflows/fixtures/` -- neither test writes a new fixture there,
 //! since the characterization snapshot
-//! (`crates/willikins-dsl/tests/snapshots/acceptance__characterization_of_every_document.snap`)
+//! (`crates/willikins-dsl/tests/it/snapshots/it__acceptance__characterization_of_every_document.snap`)
 //! must stay byte-identical for this task (acceptance 21).
 //!
 //! The describe-default test below is the complement: it builds its own

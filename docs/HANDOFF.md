@@ -3,11 +3,41 @@
 Current state of the project and active work. Read this at session start. Update before
 compaction, before handing off, after a milestone, and after a plan change or discovery.
 
-**Last updated:** 2026-09-29
+**Last updated:** 2026-10-05
 
 ## Current Status
 
-### RESUME HERE (2026-10-04) — the operator's iOS app is provisioned end to end: a real run of its document plans and applies every node with no change
+### RESUME HERE (2026-10-05) — milestone 3k (faster gates): every crate's default-built integration tests now build as one binary; T16 (after-measurement and close) is still open
+
+- **Live state:** `main` on top of T14's commit (`ee42d53`), plus T15's docs-only commit. Plan
+  `docs/plans/2026-10-05-milestone-3k-faster-gates.md`: T1–T14 landed, one crate per commit, in the plan's order
+  (dsl pilot, core, the layout guard, types, fake, http, journal, github, signoz, buildkite, doppler, appstore,
+  server, cli). T15 is this entry. **T16 (after-measurement and close) is open** — the coordinator repeats T0's
+  measurement protocol on the final tree and records both tables in a Completed header; until then the plan stays
+  un-Completed.
+- **What changed.** Every crate's top-level `crates/<c>/tests/*.rs` moved into one binary, `tests/it/main.rs`, one
+  `mod <stem>;` per former file (`git mv`, so `git log --follow` still works). Default-built integration-test
+  binaries: 13 in the public tree (one per crate), 16 on the operator's machine (the three gitignored
+  `crates/willikins-cli/tests/operator_*.rs` targets stay separate and unmoved). The 10
+  `required-features = ["live-tests"]` targets also stay top-level and unmoved; they build only with
+  `--features live-tests` (decision (d3)).
+- **Run one test module** with `cargo test -p <crate> --test it <module>::` (note the trailing `::`; add
+  `-j 2`/`RUST_TEST_THREADS=2` per the Commands section below). `--exact` now needs the module prefix too
+  (`<module>::<test_name>`), or it silently matches nothing — one of the three traps this milestone found, closed
+  by acceptance 4's mutation check and recorded under `docs/solutions/tooling/`.
+- **Guards that know their own path** now read `tests/it/...`: `crates/willikins-core/tests/it/secret_literal_guard.rs`,
+  `crates/willikins-core/tests/it/sink_token_guard.rs`, `crates/willikins-cli/tests/it/no_gh_writes_guard.rs`,
+  `crates/willikins-providers-appstore/tests/it/no_certificate_writes_guard.rs`. A new ratcheting layout guard,
+  `crates/willikins-core/tests/it/test_layout_guard.rs`, keeps the one-binary layout from eroding (an undeclared
+  `tests/it/*.rs`, a stray top-level file, a leftover `tests/snapshots/`, an orphaned `it__<m>__*.snap`, or a
+  `.proptest-regressions` file beside the old source path all go red); its `PENDING` list is now empty.
+- **Three silent traps found and closed**, written up under `docs/solutions/tooling/`: the `--exact` filter without
+  its module prefix; a proptest regression-seed file left where proptest's `SourceParallel` walk no longer looks
+  (now `tests/proptest-regressions/<stem>.txt`); and an undeclared `tests/it/*.rs` module, never compiled.
+- **Open: T16**, the coordinator's — the after-measurement against T0's baseline and the full four-command gate,
+  closing the plan.
+
+### Earlier (2026-10-04) — the operator's iOS app is provisioned end to end: a real run of its document plans and applies every node with no change
 
 - **Live state:** `main` pushed. Full gate on the 3j tree: 200 suites / 3240 tests, two shipped-document list pins
   then fixed (`398700f`). Goal and rules: `goal.txt` (untracked, never commit).
@@ -148,7 +178,7 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `appstore.profile.ensure` (`IOS_APP_STORE` only, refused by type otherwise, create-or-report because
   there is no PATCH, content typed `AppleProfileContent` and SECRET so it can reach
   `doppler.secret.set`); the 401/403 split (`UNAUTHENTICATED` versus `MISSING_PERMISSION`, bodies
-  still dropped for both); `tests/no_certificate_writes_guard.rs`; and
+  still dropped for both); `tests/it/no_certificate_writes_guard.rs`; and
   `workflows/appstore-signing-profile-from-doppler.yaml`.
 - **PROVEN LIVE on the operator's production Apple account, 2026-09-23.** 5 API-visible certificates,
   13 profiles, 21 bundle identifiers before, after, on an independent recount, and after `plan
@@ -397,8 +427,8 @@ compaction, before handing off, after a milestone, and after a plan change or di
   `gh` guard, in the very file it protects: a shell `case` arm begins with `*`, which the matcher
   treated as a comment continuation, so `*) gh api -X DELETE …` passed unseen. Both closed, and
   every fix proven by planting a real offender and watching the guard name its file and line. The
-  guards live at `crates/willikins-core/tests/secret_literal_guard.rs` and
-  `crates/willikins-cli/tests/no_gh_writes_guard.rs`, and CLAUDE.md carries both invariants.
+  guards live at `crates/willikins-core/tests/it/secret_literal_guard.rs` and
+  `crates/willikins-cli/tests/it/no_gh_writes_guard.rs`, and CLAUDE.md carries both invariants.
 - **Earlier (2026-09-16, the night):** milestone 2c's plan exists and is
   reviewed. Workflow `wf_cfe76f52-8cc` (six opus readers, a synthesizer, a drafter) wrote
   `docs/research/2026-09-16-m2c-authorization.md` (1,391 lines, every fact quoted from a source
@@ -718,6 +748,15 @@ research, with a correction block on its slug section),
   Regenerate with `TRYBUILD=overwrite` on a toolchain bump rather than hand-editing.
 - **Workflow-as-tool (composition) is milestone 2b**, its own plan; nothing in milestone 2
   exercises it.
+- **Integration tests build as one binary per crate** (`tests/it/main.rs`, milestone 3k, 2026-10-05). Run one
+  module with `cargo test -p <crate> --test it <module>::` — the module prefix is load-bearing, since `--exact`
+  without it silently matches nothing rather than failing loudly. A new `tests/<stem>.rs` needs a `mod <stem>;`
+  line in `tests/it/main.rs` or it is silently never compiled; the layout guard
+  (`crates/willikins-core/tests/it/test_layout_guard.rs`) catches that, plus a leftover `tests/snapshots/` or a
+  `tests/*.proptest-regressions` file (proptest's seed-file walk now stops at `tests/it/`, so a seed left beside
+  the old source path is silently never read — new seeds land under `tests/proptest-regressions/<stem>.txt`). The
+  10 `required-features = ["live-tests"]` targets and the three gitignored `operator_*` targets stayed top-level
+  and unmoved.
 
 ## Open TODOs
 
@@ -740,7 +779,6 @@ regenerated from that frontmatter; a todo marked `done` leaves it.
 | `todos/2026-09-22-secrecy-inference.md` | pending | high | Infer secrecy from use sites instead of declaring it at the source |
 | `todos/2026-09-23-checked-as-a-typed-graph.md` | pending | medium | Turn Checked into a typed graph that plan, apply and describe consume |
 | `todos/2026-09-29-deterministic-safe-rollback.md` | pending | medium | Deterministic, safe rollback of what a run created |
-| `todos/2026-09-29-faster-gates.md` | pending | high | Make the full gate faster by consolidating integration-test binaries |
 | `todos/2026-09-29-open-source-agent-tools.md` | pending | medium | Provision the operator's two open-source, self-hostable tools for AI agents |
 
 ## How Work Is Verified
