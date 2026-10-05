@@ -2,6 +2,14 @@
 
 **Created:** 2026-10-05 (the composition lane of the operator's "what's next? We can explore multiple lanes in
 parallel")
+**Reviewed:** 2026-10-05 (portfolio review of the five plans of 2026-10-05: 3k, 2b, 3l, 3m, 3n)
+**Addendum:** 2026-10-05 — portfolio review. Order: 3k, then 3n F1–F3, then 3l, then this milestone, then 3n's S and
+G parts, then 3m. Fixes, each so a task is green alone: `crates/willikins-cli/src/render.rs`'s `check_error_detail`
+matches `CheckError` exhaustively, so P2, L2 and C1 add their variants' render arms in the same commit and gate
+`willikins-cli`'s clippy; P1's patterns and R1's `InputError::NotSettable` are published by the server's `mcp_server`
+snapshot, so those tasks regenerate it; J1's new `PlanRecorded` field has construction sites in `willikins-server`,
+so J1 fills them. A general snapshot rule joins the Gates section, and acceptance 1's "dotted path" now says a
+`/`-separated path. After 3k, new integration tests live under `tests/it/` (Gates).
 
 ## Goal
 
@@ -426,8 +434,8 @@ already have a route: `values` (`TemplateValue`, with the registered `AppleBundl
 Part P:
 1. **Paths** (P1). `NodeName`/`InputName` accept `org/x`, `a/b/c`, `x` and refuse `org/`, `/x`, `org//x`, `Org/x`,
    `org.x`, `org/x.y`, the empty string. `PortName`/`OutputName` still refuse `a/b`. A document with a step key, input
-   name or `uses:` `with:` key containing `/` fails to load with a located `Semantic` error. A journal line with a
-   dotted path round-trips. `pre_pass_2_replay.rs`, and every other replay test, still pass unchanged. The existing
+   name or `uses:` `with:` key containing `/` fails to load with a located `Semantic` error. A journal line whose
+   node is a `/`-separated path (`org/base_gate`) round-trips. `pre_pass_2_replay.rs`, and every other replay test, still pass unchanged. The existing
    characterization snapshot is byte-identical.
 2. **The keyword** (P2). `uses-and-tool.yaml`, `uses-neither.yaml`, `uses-for-each.yaml` and
    `uses-bad-name.yaml` each fail to load with one located error. A `Workflow` with a non-empty `uses` map that
@@ -542,6 +550,18 @@ cargo check -p willikins-types -j 2        # whenever willikins-types changed
 must stay byte-identical. That is the evidence that linking changes nothing for a document without `uses:`. A
 snapshot update to it is a defect, not a review item.
 
+**Published shapes (portfolio review).** Any commit that changes a type published by a `schema_generation` snapshot
+(core, journal) or by the server's `mcp_server__the_tool_list_and_every_schema_is_snapshotted` snapshot regenerates
+that snapshot in the same commit, reviewed as pattern lines or additions only, and runs the owning crate's test. Any
+commit that adds a `CheckError` variant adds its arm to `crates/willikins-cli/src/render.rs`'s `check_error_detail`
+(an exhaustive match) and runs `cargo clippy -p willikins-cli --all-targets -j 2 -- -D warnings`.
+
+**After milestone 3k.** If 3k has landed (the portfolio order puts it first), a new integration test is
+`crates/<c>/tests/it/<stem>.rs` plus a `mod <stem>;` line in `tests/it/main.rs`, never a top-level file (3k's layout
+guard refuses one); a `--test <stem>` gate becomes `--test it <stem>::`; the dsl characterization snapshot is
+`crates/willikins-dsl/tests/it/snapshots/it__acceptance__characterization_of_every_document.snap`, and a new
+composition snapshot lands under `tests/it/snapshots/`. Paths below name files by their pre-3k location.
+
 Commit as soon as a commit's scoped gates are green, with `git commit --only <paths>`. Local hooks refuse any commit
 or message naming the operator's private setup: never `--no-verify`; rewrite with placeholders.
 
@@ -553,13 +573,13 @@ implementer's own `Co-Authored-By` trailer. Nobody pushes.
 
 | # | Task | Delegate to |
 | --- | --- | --- |
-| P1 | **Node and input paths** (decision (d3); acceptance 1). Commit 1, `willikins-core` `workflow.rs`: the widened pattern for `NodeName`/`InputName` and their tests. Check `Site`'s `no_two_site_forms_share_a_display_string` still holds with a `/` path, and add a path case to it. Commit 2, `willikins-dsl`: refuse `/` in authored step keys and input names, with a located error, tests, and the journal round-trip test in `willikins-journal`. Snapshots that publish the patterns are regenerated, and the diff is reviewed: pattern lines only. Scoped: `-p willikins-core -p willikins-dsl -p willikins-journal` | sonnet implements |
-| P2 | **`uses:` in the document and the model** (decisions (d1), (d12); acceptance 2). Commit 1, `willikins-core`: `Uses`, `Workflow.uses`, `check`'s `Unlinked` (first thing `check` does), the variant's serialization test. Commit 2, `willikins-dsl`: `StepDecl.tool`/`uses` as `Option`, exactly-one, no `for_each`, `WorkflowName` parse, `with:` keys parsed as `InputName`, the schema's `oneOf`, the four negative fixtures under `workflows/fixtures/composition/` with headers and tests. Scoped: `-p willikins-core -p willikins-dsl` | sonnet implements |
+| P1 | **Node and input paths** (decision (d3); acceptance 1). Commit 1, `willikins-core` `workflow.rs`: the widened pattern for `NodeName`/`InputName` and their tests. Check `Site`'s `no_two_site_forms_share_a_display_string` still holds with a `/` path, and add a path case to it. Commit 2, `willikins-dsl`: refuse `/` in authored step keys and input names, with a located error, tests, and the journal round-trip test in `willikins-journal`. Snapshots that publish the patterns are regenerated, and the diff is reviewed: pattern lines only. They include the server's `mcp_server` snapshot, which publishes `NodeName` and `InputName` (commit 1 regenerates it). Scoped: `-p willikins-core -p willikins-dsl -p willikins-journal`, plus `-p willikins-server --test mcp_server` | sonnet implements |
+| P2 | **`uses:` in the document and the model** (decisions (d1), (d12); acceptance 2). Commit 1, `willikins-core`: `Uses`, `Workflow.uses`, `check`'s `Unlinked` (first thing `check` does), the variant's serialization test, and its arm in `crates/willikins-cli/src/render.rs`'s `check_error_detail` (exhaustive). Commit 2, `willikins-dsl`: `StepDecl.tool`/`uses` as `Option`, exactly-one, no `for_each`, `WorkflowName` parse, `with:` keys parsed as `InputName`, the schema's `oneOf`, the four negative fixtures under `workflows/fixtures/composition/` with headers and tests. Scoped: `-p willikins-core -p willikins-dsl`, plus `cargo clippy -p willikins-cli --all-targets` | sonnet implements |
 | L1 | **The linker, structure** (decisions (d2), (d4) substitution, (d6), (d7) aliasing; acceptance 3; verify items 3, 5). One commit: `crates/willikins-core/src/compose.rs` (`link`, `Linked`, `ResolveFailure`, `Boundary`, `InputSpec.fixed_by`), exported from `lib.rs`. Unit tests with an in-memory resolver. No refusal beyond what the happy path needs. Scoped: `-p willikins-core`, then `-p willikins-dsl` acceptance | sonnet implements, opus attacks |
-| L2 | **The linker, refusals** (decisions (d4), (d7), (d9); acceptance 4). Commit 1: cycle, depth and size bounds, with the counting-resolver test. Commit 2: the boundary and alias refusals and `PathInAuthoredName`. When the reference sits in another `uses:` step's `with:`, `UnknownUsesOutput`'s and `KeyedOnUses`'s `Site::Port` names that `uses:` step as `node` and the child input as `port`. The grammars coincide, so no new `Site` variant is added for it. Each refusal that a document can express gets a fixture under `workflows/fixtures/composition/` (children beside it) and a test in `crates/willikins-dsl/tests/composition.rs`, which links with a directory resolver over that folder. Scoped: `-p willikins-core -p willikins-dsl` | sonnet implements, opus attacks |
-| C1 | **`check` at the boundary** (decisions (d4), (d5); acceptance 5, 6). One commit, `check.rs`: the signature rules over `Workflow.boundaries`, `UsesInputTypeMismatch` (exact, no probe), the fixtures for acceptance 5, and the class test. Scoped: `-p willikins-core -p willikins-dsl` | sonnet implements, opus attacks |
-| R1 | **Fixed inputs are not settable** (decision (d6); acceptance 7; verify items 2, 9). Commit 1, `describe.rs`: pin today's undeclared-name behaviour, then add hiding and `NotSettable`. Commit 2, `plan.rs`: `InputNotSettable`, and the acknowledgement gate's `awaiting_inputs` test through a linked composite. Scoped: `-p willikins-core` | sonnet implements |
-| J1 | **Plan identity covers the used documents** (decision (d10); acceptance 8). One commit, `willikins-journal` `event.rs`: the field, the byte-identical pre-2b replay test (the `principal` field's pattern), round-trip. Scoped: `-p willikins-journal` | sonnet implements |
+| L2 | **The linker, refusals** (decisions (d4), (d7), (d9); acceptance 4). Commit 1: cycle, depth and size bounds, with the counting-resolver test. Commit 2: the boundary and alias refusals and `PathInAuthoredName`. When the reference sits in another `uses:` step's `with:`, `UnknownUsesOutput`'s and `KeyedOnUses`'s `Site::Port` names that `uses:` step as `node` and the child input as `port`. The grammars coincide, so no new `Site` variant is added for it. Each refusal that a document can express gets a fixture under `workflows/fixtures/composition/` (children beside it) and a test in `crates/willikins-dsl/tests/composition.rs`, which links with a directory resolver over that folder. Each new `CheckError` variant gets its `render.rs` arm in the commit that adds it. Scoped: `-p willikins-core -p willikins-dsl`, plus `cargo clippy -p willikins-cli --all-targets` | sonnet implements, opus attacks |
+| C1 | **`check` at the boundary** (decisions (d4), (d5); acceptance 5, 6). One commit, `check.rs`: the signature rules over `Workflow.boundaries`, `UsesInputTypeMismatch` (exact, no probe), the fixtures for acceptance 5, the class test, and `UsesInputTypeMismatch`'s `render.rs` arm. Scoped: `-p willikins-core -p willikins-dsl`, plus `cargo clippy -p willikins-cli --all-targets` | sonnet implements, opus attacks |
+| R1 | **Fixed inputs are not settable** (decision (d6); acceptance 7; verify items 2, 9). Commit 1, `describe.rs`: pin today's undeclared-name behaviour, then add hiding and `NotSettable`. Commit 2, `plan.rs`: `InputNotSettable`, and the acknowledgement gate's `awaiting_inputs` test through a linked composite. `InputError` is published by core's `description`/`input_error` schema snapshots and by the server's `mcp_server` snapshot: commit 1 regenerates all three (additions only). Scoped: `-p willikins-core`, plus `-p willikins-server --test mcp_server` | sonnet implements |
+| J1 | **Plan identity covers the used documents** (decision (d10); acceptance 8). One commit, `willikins-journal` `event.rs`: the field, the byte-identical pre-2b replay test (the `principal` field's pattern), round-trip. `Event::PlanRecorded` is also constructed in `crates/willikins-server/src/butler.rs` (`plan_inner`; server tests only pattern-match it with `..`): the same commit fills `used` with an empty map there (S2 fills it for real). Journal schema snapshots that publish the event or `PlanRecord` are regenerated (additions only). Scoped: `-p willikins-journal`, plus `cargo clippy -p willikins-server --all-targets` | sonnet implements |
 | S1 | **Server: resolver, startup, validate and describe** (decision (d8); acceptance 9 first half; verify items 7, 8). One commit: a trusted-directory resolver in `document.rs` that records shas; `scan_directory` links every document; `Butler::validate`/`describe` link (a body's children come from the trusted directory), and the MCP `describe` response omits fixed inputs; `catalog.rs` credential computation over the linked graph. Scoped: `-p willikins-server` | sonnet implements, opus attacks |
 | S2 | **Server: plan and apply identity** (trust boundary 5; acceptance 9 second half). One commit: `Butler::plan` records `used`; `reload_and_check` re-links and compares the root sha and the `used` map; tests for each `DocumentChanged` case. Scoped: `-p willikins-server` | sonnet implements, opus attacks |
 | S3 | **Surfaces** (decision (d11); acceptance 10; verify item 6). One commit: `WorkflowSummary.uses`, `WorkflowSummary.inputs` excluding every input with `fixed_by.is_some()`, the approvals page's used-documents list, the MCP `list_workflows` snapshot. Scoped: `-p willikins-server` | sonnet implements |
