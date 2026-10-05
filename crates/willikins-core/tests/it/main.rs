@@ -25,4 +25,5 @@ mod redaction_adversarial;
 mod schema_generation;
 mod secret_literal_guard;
 mod sink_token_guard;
+mod test_layout_guard;
 mod value_render_parse_round_trip;
