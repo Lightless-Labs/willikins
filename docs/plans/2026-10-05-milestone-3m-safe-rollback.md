@@ -82,6 +82,7 @@ exactly what it will delete and what it cannot undo.
 | `Reversal` variants | `Delete { needs, within }`, `Contained { within, otherwise }`, `Retained { why }` | R1 |
 | `Within` | `{ tool: &'static str, ports: &'static [(&'static str, Side, &'static str)] }`, `Side` = `Input` \| `Output` | R1 |
 | `Standing` variants | `AsCreated`, `Gone`, `NotOurs { why }`, `Drifted { what }` (both `&'static str`) | R3 |
+| Step fingerprint | `StepFingerprint { node, instance, action, standing }`, typed, discriminants only, in `TeardownPlanned` | R5, R7 |
 | `TeardownAction` variants | `Delete { uncertain: bool }`, `RidesWith { container: InstanceRef }`, `Gone`, `Retained { why }`, `MadeByHand { need }`, `Unfinished` | R5 |
 | Token | `willikins_types::TeardownToken` in `crates/willikins-types/src/sink.rs`, `executor` feature | R2 |
 | `CREATION_SKEW` | 120 seconds, `pub const` in `rollback.rs` | R5, P1–P4 |
@@ -109,6 +110,7 @@ apply. So `Created` alone does not mean "created".
 | `Create` | `Created` | created by this run: the inverse decides |
 | `Create` | `Failed` | **uncertain**: the create may have landed before the failure (milestone 3c's 201-with-no-data orphan). A `Delete` tool's standing decides: `AsCreated` gives `Delete { uncertain: true }`, shown apart; `Gone` gives `Gone` |
 | `Create` | `NodeStarted` with no `NodeFinished` (the process died) | `Unfinished`: no window end exists, so the teardown names it as a manual check and never deletes it |
+| `Create` | `Unchanged` | the resource existed by the time `ensure` ran (a new Doppler project's auto-created `dev`/`stg`/`prd` root config, HANDOFF's 2026-09 live record). Not this node's creation, but it **may ride** with a container (decision 3) |
 | `Create` | `NotRun`, `Skipped`, `Blocked` | nothing was created |
 | `Replace`, `Update` | any | `Retained` ("changed in place, or replaced; the prior state cannot be restored") |
 | `NoOp`, `Compute` | any | not this run's doing; never listed, except gates (decision 4) |
@@ -166,11 +168,16 @@ tool's own input ports (or, for `Side::Output`, one of the container tool's outp
 `inverse()` is `Some`, and a pure tool declares nothing. A `Within` names its container by tool name. A test over
 `LIVE_TOOL_NAMES` checks that each one names a registered tool and that the ports it maps have the same type.
 
-**Containment is typed equality on recorded values.** An instance rides with a container instance when the
-container's tool matches the `Within`, the container is itself being deleted or rides with something being deleted,
-and every mapped port pair holds equal `Value`s in the journal (the `TypeRef` and the full recorded value). The mapping
-is deterministic and needs no graph. When it misfires it can only cause an under-deletion: a rider is never deleted on
-its own, and the container's own drift check (decision 7) must account for every rider.
+**Containment is typed equality on recorded values, over every instance of the run.** An instance rides with a
+container instance when the container's tool matches the `Within`, the container is itself being deleted or rides
+with something being deleted, and every mapped port pair holds equal `Value`s in the journal (the `TypeRef` and the
+full recorded value). Riding is computed over **all** of the run's instances, whatever their action or status, so a
+non-candidate can be a **transit rider**. A new project's auto-created `prd` config finishes `Unchanged`, yet a
+`doppler.secret.set` into it must still ride with the project. Without transit, that secret would be `Retained`, and
+the project's own drift rule would then refuse the whole teardown over a name this run wrote. A transit rider is listed
+as `RidesWith`, since it does go with its container. The mapping is deterministic and needs no graph. When it misfires
+it can only cause an under-deletion: a rider is never deleted on its own, and the container's own drift check
+(decision 7) must account for every rider.
 
 **Why `riders` reach the container's inverse:** a container must tolerate exactly what its own run put inside it.
 A new Doppler project holds the configs and secret names this run's riders created, plus Doppler's three default
@@ -220,9 +227,12 @@ bound to a **pure** resolver node, so:
 
 - The teardown requires the workflow document, by name from the trusted directory, **at the run's recorded
   `document_sha256`**. A changed document refuses with the existing `DocumentChanged`.
-- New `willikins_core::plan::resolve_pure(checked, catalog, inputs)` evaluates **only** the pure nodes, in
-  `Checked::order`, from the recorded workflow inputs (rebuilt with `Butler`'s existing `parse_recorded_value`). A pure
-  node bound to an impure node's output resolves `Unknown` and is not read.
+- New `willikins_core::plan::resolve_pure(checked, catalog, inputs, wanted)` evaluates, in `Checked::order` and from
+  the recorded workflow inputs (rebuilt with `Butler`'s existing `parse_recorded_value`), **only the backward closure
+  of `wanted`**: the pure nodes the `Delete` steps' secret `needs` ports are bound to, and their own pure ancestors.
+  Pure includes gates that read providers (`appstore.app.get`, `doppler.secret_name.gate`). Evaluating every pure node
+  would make deleting a GitHub repository need App Store credentials. The resolver chains are all a teardown reads. A
+  pure node bound to an impure node's output resolves `Unknown` and is not read.
 - Each `needs` port takes its non-secret value from the journal (`NodeStarted.inputs`, re-parsed by its declared
   type) and its secret value from `resolve_pure`. An unbound optional credential port stays unbound, and the tool
   falls back to its execution-context credential exactly as forward apply does. A secret `needs` port bound to an
@@ -270,10 +280,13 @@ willikins' only under an owned project. The operator deletes such a config by ha
 
 ### 8. Journal, approval, refusals
 
-- **Teardown plans share the `PlanId` namespace**, so `approve`/`reject` and the approval and apply windows
-  (`ButlerConfig`) work unchanged. `TeardownPlanned { plan_id, of_run, workflow, document_sha256, teardown:
-  Redacted<Teardown>, class, requires_approval: true, principal }` populates a `TeardownRecord` beside `PlanRecord`.
-  `Teardown` joins `Redactable`'s sealed set.
+- **Teardown plans share the `PlanId` namespace**, so the approval and apply windows (`ButlerConfig`) carry over.
+  `approve`/`reject` and their replay must resolve a `plan_id` in either `PlanRecord` or the new `TeardownRecord` (R7).
+  `TeardownPlanned { plan_id, of_run, workflow, document_sha256, teardown: Redacted<Teardown>, fingerprint:
+  Vec<StepFingerprint>, class, requires_approval: true, principal }` populates the `TeardownRecord`. `Teardown` joins
+  `Redactable`'s sealed set. `Redacted` JSON is one-way, so the apply-time comparison reads the **typed**
+  `StepFingerprint { node, instance, action, standing }` (action and standing as discriminants, no values). This is
+  the role `PlanRecorded.fingerprint` plays for forward apply.
 - **A teardown run** is `TeardownStarted { run_id, plan_id, of_run, principal }`, one `TeardownStepFinished { run_id,
   node, instance, status }` per step (`Deleted`, `AlreadyGone`, `Failed { error }`, `NotRun`, `Listed` for every
   non-delete step), then `TeardownFinished { run_id, outcome }` (`Succeeded` or `Failed { error }`). Separate events
@@ -282,12 +295,14 @@ willikins' only under an owned project. The operator deletes such a config by ha
 - **On replay**, a forward `RunRecord` gains `rolled_back_by: Option<RunId>` (`skip_serializing_if = "Option::is_none"`),
   set when a teardown of it finishes `Succeeded`.
 - **Apply** mirrors forward apply's rules: refuse an unknown plan, an expired window, a missing approval, a changed
-  document, or a second apply (`AlreadyApplied`). Then re-plan the teardown afresh and compare it with the approved one
-  step by step (same instances, same actions). A difference is `ApplyRefused { reason: Drift { …, detail: Standing }
+  document, or a second apply (`AlreadyApplied`). Then re-plan the teardown afresh and compare its fingerprint with
+  the approved one step by step (same instances, same actions, same standings). A difference is `ApplyRefused { reason: Drift { …, detail: Standing }
   }`, and nothing is deleted. Then mint the `TeardownToken`, run every `Delete` step in order, and stop at the first
   failure. The remaining steps are `NotRun`.
 - **Refusals at teardown plan time** (journaled as `ApplyRefused` with the new reasons): the run is a teardown
-  (`NotAForwardRun`); it is still in progress (`RunInProgress`); a teardown of it already succeeded
+  (`NotAForwardRun`); it has no `RunFinished`, because it is still running or the process died (`RunUnfinished`:
+  `settled_by` is undefined for it; the existing `RunInProgress` means another run holds the apply lock and stays
+  for that); a teardown of it already succeeded
   (`AlreadyRolledBack { run_id }`); or a **later** forward run of the same workflow in this journal mutated something
   (any planned `Create`/`Replace`/`Update` that finished `Created`) and has not itself been rolled back
   (`LaterRunFirst { run_id }`).
@@ -334,12 +349,15 @@ characterization snapshot of a document with such a node gains this array. The d
 2. **`TeardownToken` is gated** (R2): a trybuild compile-fail without `executor`, and a tripwire test (beside
    `sink_token_guard.rs`) that no source outside `rollback.rs` names `TeardownToken::new`.
 3. **`resolve_pure`** (R4) evaluates a resolver chain (`env.get` → parse), leaves a pure node bound to an impure output
-   `Unknown`, and calls no impure tool's `read` (a counting stub).
+   `Unknown`, and calls no impure tool's `read` and no pure node outside the wanted closure (a gate stub counting
+   zero reads).
 4. **The candidate predicate** (R5): `Create`+`Created` is a candidate; `Update`+`Created`, `Replace`+`Created` and
    `NoOp`+`Unchanged` are not; `Create`+`Failed`+`AsCreated` gives `Delete { uncertain: true }`; a started, unfinished
    instance is `Unfinished` and never deleted.
 5. **Order and riding** (R5): steps come out in reverse plan order. A config rides with the project created in the same
-   run. A config inside a pre-existing project is its own `Delete`. Mismatched values do not ride.
+   run. A config inside a pre-existing project is its own `Delete`. Mismatched values do not ride. A `Create` +
+   `Unchanged` root config is a transit rider, and a secret set into it rides with the project (the
+   `new-rust-service` shape).
 6. **Refusal is total** (R5): one `Drifted` step refuses the whole teardown, with no `TeardownPlanned` recorded.
 7. **Apply re-observes** (R6): a standing that changes between approval and apply refuses with `Drift`/`Standing`
    before any delete (a counting stub sees zero deletes). A delete failure stops the run, and later steps are
@@ -349,7 +367,7 @@ characterization snapshot of a document with such a node gains this array. The d
 9. **Journal** (R7): every new event round-trips. A journal written before this milestone replays byte for byte.
    `redaction_by_construction.rs` seeds a secret into a credential port of a teardown's `Created` and finds no byte
    of it in any line.
-10. **Refusals** (R8): `AlreadyRolledBack`, `LaterRunFirst`, `RunInProgress`, `NotAForwardRun`, `DocumentChanged`,
+10. **Refusals** (R8): `AlreadyRolledBack`, `LaterRunFirst`, `RunUnfinished`, `NotAForwardRun`, `DocumentChanged`,
     `ApprovalRequired`, `PlanExpired`, each journaled.
 11. **CLI round trip on fake state** (R9): `apply --fake-state S --fake-state-out A`, then `rollback --run R
     --fake-state A`, then approve, then `rollback --plan-id P --fake-state A --fake-state-out B`. `B` holds none of
@@ -413,7 +431,7 @@ implementer's own `Co-Authored-By` trailer. Nobody pushes.
 | R4 | **`resolve_pure`** (decision 5; acceptance 3). In `plan.rs`, sharing `plan`'s binding resolution. Not a second probe of the conversion table: the tripwire test that greps `plan.rs` must still pass. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
 | R5 | **`plan_teardown`** (decisions 1, 2, 4's gate rows, 6; acceptance 4–6). `RunFacts` (built by callers, so core does not depend on the journal crate), `Teardown`, `TeardownStep`, `TeardownAction`, riding, ordering, total refusal. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
 | R6 | **`apply_teardown`** (decision 8's apply; acceptance 7, 8's core half). Re-plan, compare, mint, delete in order, stop on failure. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
-| R7 | **Journal** (decision 8; acceptance 9). The four events, the new reasons, `Teardown: Redactable`, `TeardownRecord`, `RunRecord::rolled_back_by`, the pre-milestone replay test, and the redaction case. Scoped: `-p willikins-journal` | sonnet implements |
+| R7 | **Journal** (decision 8; acceptance 9). The four events, the new reasons, `Teardown: Redactable`, the typed `StepFingerprint`, `TeardownRecord`, approval and rejection replay resolving either record kind, `RunRecord::rolled_back_by`, the pre-milestone replay test, and the redaction case. Scoped: `-p willikins-journal` | sonnet implements |
 | P1 | **GitHub inverse** (decisions 4, 7; acceptance 12). `delete_repo`, a repo read with the decision 7 fields, `GitHubRepoEnsure`'s `Delete` and inverse; `Contained` for `actions_secret` and `scaffold`. Mock tests pin each query. Commit 1: the client. Commit 2: the tool. Scoped: `-p willikins-providers-github` | sonnet implements, opus attacks |
 | P2 | **Doppler project inverse** (decision 7's project row). `delete_project` (body), `delete_environment`, `delete_config`, and the list reads (environments, configs with `created_at`/`inheritedBy`, names, tokens). Commit 1: the client. Commit 2: `doppler.project.ensure`. Scoped: `-p willikins-providers-doppler` | sonnet implements, opus attacks |
 | P3 | **Doppler config, branch config and token inverses**, and the `Contained`/`Retained` declarations of the other six Doppler tools. Scoped: `-p willikins-providers-doppler` | sonnet implements, opus attacks |
