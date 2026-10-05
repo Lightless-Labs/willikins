@@ -22,6 +22,9 @@ compaction, before handing off, after a milestone, and after a plan change or di
   bootstrap writer, identifier masking with `--reveal`), 3j (`DopplerProject` admits underscores;
   `doppler.secret_name.gate` observes a secret's name, through inheritance, so the APNs key is checked, never
   acknowledged).
+- **App Store Connect secret names are uniform (2026-10-05):** every document reads
+  `APP_STORE_CONNECT_API_KEY_{ISSUER_ID,ID,BASE64}`, the names the real workplace and fastlane use; the sandbox
+  workplace was renamed to match (`838ec83`), so one document runs against either.
 - **Open:** the operator's question, what happens for a new repository or one not cloned locally (answered in the
   conversation of 2026-10-04: willikins never needs a clone; a brand-new repository needs `github.repo.ensure` to
   initialise a branch before a scaffold can commit); composition (milestone 2b, `uses:`); a check refusal of
@@ -718,15 +721,27 @@ research, with a correction block on its slug section),
 
 ## Open TODOs
 
-| File | Priority | Owner |
-| --- | --- | --- |
-| `todos/2026-09-12-milestone-2-plan.md` | high | the tracking todo; tasks 0–6 done, task 7 next |
-| `todos/2026-09-14-plan-identity-must-cover-inputs.md` | high | task 10a and adversarial pass 1 |
-| `todos/2026-09-14-pass-1-items-for-task-10a.md` | high | task 10a: plan identity, approval by journaled event, single-apply lock, digest type |
-| `todos/2026-09-12-error-json-uniformity-gaps.md` | medium | task 10a (`InputError`, `DocumentError` shapes) and 10b |
-| `todos/2026-09-13-apply-tests-on-the-real-fake-catalog.md` | low | any core task after 4 |
-| `todos/2026-09-14-journal-follow-ups.md` | low | task 10a |
-| `todos/2026-09-11-propose-slug-digit-letter-tokens.md` | low | not scheduled |
+Every pending item is a file under `todos/` (YAML frontmatter: `title`, `status`, `priority`). This table is
+regenerated from that frontmatter; a todo marked `done` leaves it.
+
+| File | Status | Priority | What |
+| --- | --- | --- | --- |
+| `todos/2026-09-11-propose-slug-digit-letter-tokens.md` | open | low | propose_slug: digit-then-letter tokens |
+| `todos/2026-09-12-error-json-uniformity-gaps.md` | open | medium | Close the gaps in the uniform {kind, message} error JSON before the MCP surface ships |
+| `todos/2026-09-13-apply-tests-on-the-real-fake-catalog.md` | open | low | willikins-core's apply tests can drop the FixedTokenService substitute |
+| `todos/2026-09-14-journal-follow-ups.md` | open | low | Journal follow-ups left by the task 5 verifier |
+| `todos/2026-09-14-plan-identity-must-cover-inputs.md` | open | medium | Plan identity must cover node inputs and the workflow name, not only the fingerprint |
+| `todos/2026-09-15-journal-repair-subcommand.md` | open | low | A journal-repair subcommand for a truncated last line |
+| `todos/2026-09-16-pluggable-auth-adapters.md` | open | medium | Pluggable authentication: keep the in-house default, allow adapters for external identity providers |
+| `todos/2026-09-16-unattended-agents-token-longevity.md` | open | medium | Unattended agents: how an agent's authority outlives a consent screen |
+| `todos/2026-09-20-agent-authored-workflows.md` | open | low | Agent-authored workflows: a future problem, and the shape of the answer |
+| `todos/2026-09-20-ios-scaffolding-step-and-entitlements-as-inputs.md` | open | medium | The iOS scaffolding step: entitlements are inputs, the build system is the document |
+| `todos/2026-09-20-remote-mcp-from-a-phone.md` | open | high | Usable from a phone: self-describing workflows and enumerable input values |
+| `todos/2026-09-22-secrecy-inference.md` | pending | high | Infer secrecy from use sites instead of declaring it at the source |
+| `todos/2026-09-23-checked-as-a-typed-graph.md` | pending | medium | Turn Checked into a typed graph that plan, apply and describe consume |
+| `todos/2026-09-29-deterministic-safe-rollback.md` | pending | medium | Deterministic, safe rollback of what a run created |
+| `todos/2026-09-29-faster-gates.md` | pending | high | Make the full gate faster by consolidating integration-test binaries |
+| `todos/2026-09-29-open-source-agent-tools.md` | pending | medium | Provision the operator's two open-source, self-hostable tools for AI agents |
 
 ## How Work Is Verified
 
