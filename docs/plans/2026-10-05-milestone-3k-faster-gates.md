@@ -1,6 +1,8 @@
 # Milestone 3k: faster gates, one integration-test binary per crate
 
 **Created:** 2026-10-05 (from `todos/2026-09-29-faster-gates.md`)
+**Reviewed:** 2026-10-05 (portfolio review of the five plans of 2026-10-05: 3k, 2b, 3l, 3m, 3n)
+**Addendum:** 2026-10-05 — portfolio order: this milestone runs **first**, before 3n, 3l, 2b and 3m, because every other lane adds `tests/*.rs` files and `--test <stem>` gates; landing first means nothing is moved twice and every later gate is cheaper. Recipe step 2 now reads the gated targets from each `Cargo.toml` (`[[test]]` blocks with `required-features`), not from SHARED VALUES, because 3l and 3m each add a gated live target and either may land first if the coordinator reorders. T15 edits `AGENTS.md` together with `CLAUDE.md`: the two are byte-identical copies.
 
 ## Goal
 
@@ -374,8 +376,10 @@ or the list diff is the red step).
 The per-crate recipe (R), referenced below:
 1. Remove the crate from `PENDING` in core's layout guard (from T4 on). Run the guard: red.
 2. List the files with
-   `git ls-files 'crates/<c>/tests/*.rs' | grep -E '^crates/<c>/tests/[^/]+\.rs$'`. Drop the gated targets
-   (SHARED VALUES). `git mv` each remaining file to `tests/it/`.
+   `git ls-files 'crates/<c>/tests/*.rs' | grep -E '^crates/<c>/tests/[^/]+\.rs$'`. Drop every file named by a
+   `[[test]]` block of `crates/<c>/Cargo.toml` that carries `required-features` (the same line scan the layout guard
+   uses; SHARED VALUES' list is the tree as of 2026-10-05, and a lane that landed since may have added one). Compare
+   the dropped set with SHARED VALUES and report any difference. `git mv` each remaining file to `tests/it/`.
 3. Write `tests/it/main.rs` (decision (d2)).
 4. Apply the crate's (d2), (d6), (d8) and (d9) edits, and fix doc comments inside the moved files that name their
    own old path or an old `--test <stem>` command.
@@ -399,7 +403,7 @@ The per-crate recipe (R), referenced below:
 | T12 | **willikins-providers-appstore:** 15 files, two gated stay, the `support/` path, `no_certificate_writes_guard` self-path (d6), 7 snapshots. The orphan `tests/common/` is untouched. Gates: `-p willikins-providers-appstore`, plus `--features live-tests` clippy | sonnet implements |
 | T13 | **willikins-server:** 23 files, `common`, 1 snapshot. Gates: `-p willikins-server` | sonnet implements |
 | T14 | **willikins-cli:** 17 files; `live_smoke` and the private `operator_*` stay; `common` (shared with `live_smoke`); `no_gh_writes_guard` self-path; core's `sink_token_guard` path (d6), in the same commit; the temp-prefix rename (d9); `PENDING` becomes empty. Gates: `-p willikins-cli` (on the operator's machine this includes the private targets, which must stay green and unmoved), `--features live-tests` clippy, `-p willikins-core --test it sink_token_guard`, the layout guard | sonnet implements, opus attacks |
-| T15 | **Docs, one commit, no code:** `docs/HANDOFF.md` (guard paths, the run-one-test form `cargo test -p <crate> --test it <module>::`, the binary count), the CLAUDE.md commands note (the same run-one-test line), the snapshot-path comments named in (d5), `docs/solutions/tooling/` (a new entry on the three silent traps: the `--exact` filter, the proptest seed location, an undeclared module), and the faster-gates todo (`status: done`), with the Open TODOs table regenerated. Historic plans and research records are not rewritten | sonnet implements |
+| T15 | **Docs, one commit, no code:** `docs/HANDOFF.md` (guard paths, the run-one-test form `cargo test -p <crate> --test it <module>::`, the binary count), the CLAUDE.md commands note (the same run-one-test line), with `AGENTS.md` edited identically (`cmp CLAUDE.md AGENTS.md` silent), the snapshot-path comments named in (d5), `docs/solutions/tooling/` (a new entry on the three silent traps: the `--exact` filter, the proptest seed location, an undeclared module), and the faster-gates todo (`status: done`), with the Open TODOs table regenerated. Historic plans and research records are not rewritten | sonnet implements |
 | T16 | **After-measurement and close (coordinator).** Repeat T0's protocol on the final tree, then the full four-command gate. Record both tables in a **Completed** header and an addendum here. If `target/` and the gate time did not drop, say so and why before closing. Tell the other session (or the operator) the numbers, since the untracked note's "done when" depends on them | coordinator |
 
 The `.d`-mapping script for T0 and T16 (read-only over `target/`; run from the repository root):
