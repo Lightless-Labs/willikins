@@ -796,6 +796,65 @@ impl Tool for RecordingListTool {
     }
 }
 
+/// A minimal non-pure test tool with no inputs and one fixed, known
+/// [`willikins_types::Text`] output — an upstream `Step` source for a
+/// `with:` list that also binds `${{ item }}` (F1, acceptance 2). `read`
+/// always reports `Absent`, so every plan of it is
+/// [`willikins_core::Action::Create`].
+pub struct FixedTextTool {
+    spec: ToolSpec,
+    out_port: PortName,
+    value: willikins_types::Text,
+}
+
+impl FixedTextTool {
+    /// A tool named `name` whose single output port `out_port` always
+    /// carries `value` (parsed as [`willikins_types::Text`]).
+    #[must_use]
+    pub fn new(name: &str, out_port: &str, value: &str) -> Self {
+        let mut outputs = IndexMap::new();
+        outputs.insert(port(out_port), ty("Text"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name(name),
+                description: "Test tool: one fixed, known Text output.".to_string(),
+                inputs: IndexMap::new(),
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+            out_port: port(out_port),
+            value: willikins_types::Text::parse(value).unwrap(),
+        }
+    }
+
+    fn outputs(&self) -> Outputs {
+        let mut outputs = Outputs::new();
+        outputs.insert(self.out_port.clone(), Value::known(self.value.clone()));
+        outputs
+    }
+}
+
+impl Tool for FixedTextTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Absent {
+            predicted: self.outputs(),
+        })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: self.outputs(),
+            changed: true,
+        })
+    }
+}
+
 /// One instance's [`willikins_core::NodeStatus`] in an
 /// [`willikins_core::Applied`], by node name and instance key.
 ///

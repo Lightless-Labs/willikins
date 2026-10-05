@@ -675,17 +675,46 @@ impl ResolveCtx<'_> {
 /// produced by [`crate::check::check`] against a catalog compatible with
 /// `catalog`, which is a caller contract violation, not a value `plan`
 /// deals with normally.
-#[allow(clippy::too_many_lines)] // one function, one topological walk; decision (j)'s skip-set
-// check inlines here rather than scattering the walk across more functions.
 pub fn plan(
     checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
     catalog: &Catalog,
 ) -> Result<Plan, PlanError> {
+    Ok(walk(checked, inputs, catalog)?.plan)
+}
+
+/// What [`plan`] and [`crate::apply::apply`] share: the finished [`Plan`],
+/// plus each planned instance's own `for_each` item, aligned by index with
+/// [`Plan::nodes`] (`None` for an instance of a node with no `for_each`).
+///
+/// This is milestone 3n's F1 giving the walk a first, minimal shape — just
+/// enough for `apply` to pass each instance the very item `plan` itself
+/// used, instead of re-resolving with no item at all (decision (f1), point
+/// 2). G1 later gives this walk a fuller shape (decision (g6)), subsuming
+/// this one.
+pub(crate) struct Walk {
+    pub(crate) plan: Plan,
+    pub(crate) items: Vec<Option<Value>>,
+}
+
+/// The shared body [`plan`] and [`crate::apply::apply`] both walk: see
+/// [`plan`]'s own doc for what this does and its errors and panics.
+#[allow(clippy::too_many_lines)] // one function, one topological walk; decision (j)'s skip-set
+// check inlines here rather than scattering the walk across more functions.
+pub(crate) fn walk(
+    checked: &Checked,
+    inputs: &IndexMap<InputName, Value>,
+    catalog: &Catalog,
+) -> Result<Walk, PlanError> {
     let workflow = &checked.workflow;
     check_input_types(workflow, inputs, catalog.registry())?;
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut planned: Vec<PlannedNode> = Vec::new();
+    // Aligned with `planned`, 1:1 (see `Walk`'s own doc); named apart from
+    // the `for_each` source's own local `items` (the matched instances'
+    // domain objects) a few lines below, which shadows this name inside
+    // its own match arm.
+    let mut plan_items: Vec<Option<Value>> = Vec::new();
     let mut gates = GateTracking::default();
     let mut replacing: Vec<Replacing> = Vec::new();
 
@@ -733,6 +762,7 @@ pub fn plan(
                 inputs: Inputs::new(),
                 outputs: fill_outputs(spec, &Outputs::new()),
             });
+            plan_items.push(None);
             results.insert(name.clone(), NodeResult::Skipped);
             gates.mark_whole_skipped(name.clone(), causes);
             continue;
@@ -757,6 +787,7 @@ pub fn plan(
                 }
                 let outputs = node_plan.outputs.clone();
                 planned.push(node_plan);
+                plan_items.push(None);
                 NodeResult::Scalar(outputs)
             }
             Some(source) => {
@@ -815,6 +846,7 @@ pub fn plan(
                         blocked,
                     });
                     planned.push(node_plan);
+                    plan_items.push(Some(item_value.clone()));
                 }
                 NodeResult::ForEach(instances)
             }
@@ -843,14 +875,17 @@ pub fn plan(
         outputs.insert(out_name.clone(), value);
     }
 
-    Ok(Plan {
-        workflow: workflow.name.clone(),
-        nodes: planned,
-        outputs,
-        class: checked.class,
-        requires_approval: checked.class.requires_approval(),
-        blocked: gates.into_blocked(),
-        replacing,
+    Ok(Walk {
+        plan: Plan {
+            workflow: workflow.name.clone(),
+            nodes: planned,
+            outputs,
+            class: checked.class,
+            requires_approval: checked.class.requires_approval(),
+            blocked: gates.into_blocked(),
+            replacing,
+        },
+        items: plan_items,
     })
 }
 

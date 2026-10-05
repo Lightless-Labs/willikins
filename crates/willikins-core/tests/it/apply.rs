@@ -24,8 +24,9 @@ use crate::common::{
     workflow_name,
 };
 use willikins_core::{
-    Action, ApplyError, ApplyEvent, Approval, Binding, Catalog, Class, DriftKind, InputSpec, Node,
-    NodeStatus, RecordingObserver, ToolErrorKind, Value, Workflow, apply, check, plan,
+    Action, ApplyError, ApplyEvent, Approval, Binding, Catalog, Class, DriftKind, InputSpec,
+    Inputs, Node, NodeStatus, RecordingObserver, ToolErrorKind, Value, Workflow, apply, check,
+    plan,
 };
 use willikins_providers_fake::state::FakeState;
 use willikins_types::{DomainType, GitHubOrg, ProjectSlug, RepoVisibility, naming};
@@ -1341,6 +1342,93 @@ fn an_empty_for_each_source_applies_zero_instances_and_a_known_empty_list() {
         "the downstream port is a known empty list, not unknown"
     );
     assert!(configs.as_list().expect("a list").is_empty());
+}
+
+/// Acceptance test 2 (decision (f1), point 2): a `for_each` node's
+/// `list<Text>` port is bound `[${{ item }}, ${{ steps.up.text }}]`.
+/// `check` accepts the `Item` element because it resolves through the
+/// node's own `ItemContext`, and `plan` passes each instance's own item
+/// correctly. Before the fix, `apply`'s `resolve_instance_inputs`
+/// re-resolves the *whole* list mid-run because it also holds a `Step`
+/// element, and does so with `item: None` for every element alike —
+/// including the `Item` one, which panics in `resolve_binding` with
+/// `` `check` rejects `item` used outside a for_each node ``. After the
+/// fix, `apply` passes the walk's own item, and each instance's `ensure`
+/// receives `[<its item>, <up's text>]`.
+#[test]
+fn item_in_a_list_port_applies_with_each_instances_own_item() {
+    let state = Arc::new(Mutex::new(FakeState::new()));
+    let mut fake_catalog = apply_test_catalog(Arc::clone(&state));
+    fake_catalog
+        .insert(Arc::new(common::FixedTextTool::new(
+            "test.fixed_text",
+            "text",
+            "upstream",
+        )))
+        .expect("the fixed tool's own spec validates");
+    let sink = common::RecordingListTool::new("test.sink_list_text", "texts", "Text");
+    let ensures = Arc::clone(&sink.ensures);
+    fake_catalog
+        .insert(Arc::new(sink))
+        .expect("the sink's own spec validates");
+
+    let workflow = Workflow::new(workflow_name("item-in-list-apply"))
+        .input(input("items"), InputSpec::new(list_ty("Text")))
+        .node(node("up"), Node::new(tool_name("test.fixed_text")))
+        .node(
+            node("each"),
+            Node::new(tool_name("test.sink_list_text"))
+                .for_each(Binding::Input(input("items")))
+                .port(
+                    port("texts"),
+                    Binding::List(vec![
+                        Binding::Item,
+                        Binding::Step {
+                            node: node("up"),
+                            port: port("text"),
+                        },
+                    ]),
+                ),
+        );
+    let checked = check(&workflow, &fake_catalog).expect("the document checks cleanly");
+
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("items"),
+        Value::parse_list(&list_ty("Text"), &["x", "y"]).unwrap(),
+    );
+
+    let approved = plan(&checked, &inputs, &fake_catalog).expect("plans");
+    let mut observer = RecordingObserver::new();
+    apply(
+        &checked,
+        &inputs,
+        &fake_catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect("apply must pass each instance its own item, never panic");
+
+    let calls = ensures.lock().unwrap();
+    assert_eq!(calls.len(), 2, "one ensure call per for_each instance");
+    let texts_of = |call: &Inputs| -> Vec<String> {
+        call.get(&port("texts"))
+            .expect("`texts` is bound at ensure time")
+            .as_list()
+            .expect("a known list")
+            .iter()
+            .map(|object| object.render().to_string())
+            .collect()
+    };
+    assert_eq!(
+        texts_of(&calls[0]),
+        vec!["x".to_string(), "upstream".to_string()]
+    );
+    assert_eq!(
+        texts_of(&calls[1]),
+        vec!["y".to_string(), "upstream".to_string()]
+    );
 }
 
 // ---------------------------------------------------------------------

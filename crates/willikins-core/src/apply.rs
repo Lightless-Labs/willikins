@@ -31,8 +31,8 @@ use crate::check::Checked;
 use crate::class::Class;
 use crate::plan::{Action, BlockedGate, Plan, PlannedNode};
 use crate::plan::{
-    ForEachInstance, InstanceFingerprint, NodeResult, PlanError, ResolveCtx, fill_outputs, plan,
-    resolve_and_deliver, resolve_binding,
+    ForEachInstance, InstanceFingerprint, NodeResult, PlanError, ResolveCtx, fill_outputs,
+    resolve_and_deliver, resolve_binding, walk,
 };
 use crate::site::Site;
 use crate::tool::{Ensured, Inputs, Outputs, PortName, Tool, ToolError, ToolErrorKind};
@@ -586,8 +586,8 @@ pub fn apply(
     }
 
     // Rule 2.
-    let fresh = plan(checked, inputs, catalog).map_err(|error| ApplyError::Plan { error })?;
-    check_drift(approved, &fresh)?;
+    let fresh = walk(checked, inputs, catalog).map_err(|error| ApplyError::Plan { error })?;
+    check_drift(approved, &fresh.plan)?;
 
     // Rule 3: the one non-test `SinkToken::new` call site in the
     // workspace; every other is a `#[cfg(test)]` item (see
@@ -595,13 +595,14 @@ pub fn apply(
     #[allow(clippy::disallowed_methods)]
     let token = SinkToken::new();
 
-    // Rule 4. Walks `checked.order`, not `fresh.nodes`: a `for_each` node
-    // whose source has zero items contributes no entry at all to
-    // `fresh.nodes` (`plan` never expands it), so driving the walk from
-    // `fresh.nodes` would skip such a node outright and leave it with no
-    // `results` entry at all — decision (f1), point 1. Walking
+    // Rule 4. Walks `checked.order`, not `fresh.plan.nodes`: a `for_each`
+    // node whose source has zero items contributes no entry at all to
+    // `fresh.plan.nodes` (`plan` never expands it), so driving the walk
+    // from `fresh.plan.nodes` would skip such a node outright and leave it
+    // with no `results` entry at all — decision (f1), point 1. Walking
     // `checked.order` instead visits every node; its group of planned
-    // instances, read from `fresh.nodes`, is simply empty in that case.
+    // instances, read from `fresh.plan.nodes`, is simply empty in that
+    // case.
     let workflow = &checked.workflow;
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut applied_nodes: Vec<AppliedNode> = Vec::new();
@@ -624,11 +625,11 @@ pub fn apply(
         // individual `for_each` instance's own action can be `Blocked` (a
         // gate applied per item) but never `Skip` — only the node as a whole
         // collapses to one `Skip` entry (see `plan`'s own `GateTracking`).
-        // `fresh.nodes.get(index)` is `None`, or names a *later* node,
+        // `fresh.plan.nodes.get(index)` is `None`, or names a *later* node,
         // exactly when this node's own group is empty (an unskipped
         // `for_each` with zero instances): never `Skip` in that case either,
         // since a whole skip always plans exactly one entry.
-        let whole_skip = match fresh.nodes.get(index) {
+        let whole_skip = match fresh.plan.nodes.get(index) {
             Some(planned) if planned.name == *name => planned.action == Action::Skip,
             _ => false,
         };
@@ -636,8 +637,12 @@ pub fn apply(
         let mut group_end = index;
         let mut group_outputs: Vec<(Option<String>, Outputs, bool)> = Vec::new();
 
-        while group_end < fresh.nodes.len() && fresh.nodes[group_end].name == *name {
-            let planned = &fresh.nodes[group_end];
+        while group_end < fresh.plan.nodes.len() && fresh.plan.nodes[group_end].name == *name {
+            let planned = &fresh.plan.nodes[group_end];
+            // This instance's own `for_each` item, exactly as `plan`
+            // recorded it (`None` for a node with no `for_each`) —
+            // decision (f1), point 2.
+            let item = fresh.items[group_end].as_ref();
 
             // Classify by `planned.action` first, before any input
             // resolution and before the `pure` branch: a `Blocked` gate
@@ -680,7 +685,7 @@ pub fn apply(
             }
 
             let resolved_inputs =
-                resolve_instance_inputs(checked, inputs, catalog, &results, node, planned)?;
+                resolve_instance_inputs(checked, inputs, catalog, &results, node, planned, item)?;
 
             if spec.pure {
                 let outputs = planned.outputs.clone();
@@ -759,7 +764,7 @@ pub fn apply(
                                 },
                                 outputs: Outputs::new(),
                             });
-                            applied_nodes.extend(not_run_tail(&fresh.nodes[group_end + 1..]));
+                            applied_nodes.extend(not_run_tail(&fresh.plan.nodes[group_end + 1..]));
                             return Err(ApplyError::Tool {
                                 node: name.clone(),
                                 instance: planned.instance.clone(),
@@ -796,7 +801,7 @@ pub fn apply(
                     group_outputs.push((planned.instance.clone(), outputs, false));
                 }
                 Some(UnknownRequired::Upstream { port, from }) => {
-                    applied_nodes.extend(not_run_tail(&fresh.nodes[group_end + 1..]));
+                    applied_nodes.extend(not_run_tail(&fresh.plan.nodes[group_end + 1..]));
                     return Err(ApplyError::UnknownInput {
                         node: name.clone(),
                         port,
@@ -809,7 +814,7 @@ pub fn apply(
                     });
                 }
                 Some(UnknownRequired::WorkflowInput { port, input }) => {
-                    applied_nodes.extend(not_run_tail(&fresh.nodes[group_end + 1..]));
+                    applied_nodes.extend(not_run_tail(&fresh.plan.nodes[group_end + 1..]));
                     return Err(ApplyError::UnknownRequiredInput {
                         node: name.clone(),
                         instance: planned.instance.clone(),
@@ -876,7 +881,7 @@ pub fn apply(
     Ok(Applied {
         nodes: applied_nodes,
         outputs,
-        blocked: fresh.blocked,
+        blocked: fresh.plan.blocked,
     })
 }
 
@@ -957,6 +962,17 @@ fn not_run_tail(remaining: &[PlannedNode]) -> Vec<AppliedNode> {
 /// `results`, this run's own accumulating outputs, delivering each through
 /// the edge (or, for a list, the per-element edges) `check` recorded for
 /// it, exactly as [`plan`] delivered the rest.
+///
+/// `item` is this instance's own `for_each` item, exactly the [`Value`]
+/// [`crate::plan::walk`] recorded for it (`None` for a node with no
+/// `for_each`). A re-resolved [`Binding::List`] may hold a
+/// [`Binding::Item`] element beside a [`Binding::Step`] or
+/// [`Binding::Keyed`] one -- the list as a whole needs re-resolving because
+/// of the latter, but every element, including the `Item` one, is
+/// re-resolved together (decision (f1), point 2). Passing `None` here
+/// would hit `resolve_binding`'s own "`check` rejects `item` used outside
+/// a `for_each` node" panic for that element, since `check` accepted it
+/// precisely because it is inside one.
 fn resolve_instance_inputs(
     checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
@@ -964,6 +980,7 @@ fn resolve_instance_inputs(
     results: &HashMap<NodeName, NodeResult>,
     node: &Node,
     planned: &PlannedNode,
+    item: Option<&Value>,
 ) -> Result<Inputs, ApplyError> {
     let mut resolved = planned.inputs.clone();
     let ctx = ResolveCtx {
@@ -975,7 +992,7 @@ fn resolve_instance_inputs(
     };
     for (port, binding) in &node.with {
         if binding_may_change_mid_run(binding) {
-            let delivered = resolve_and_deliver(&ctx, &planned.name, port, binding, None)
+            let delivered = resolve_and_deliver(&ctx, &planned.name, port, binding, item)
                 .map_err(|error| ApplyError::Plan { error })?;
             resolved.insert(port.clone(), delivered);
         }
