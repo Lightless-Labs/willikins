@@ -10,12 +10,14 @@
 //!
 //! The child process is this very test binary, re-executed with
 //! `--ignored --exact` so it runs exactly one otherwise-skipped test, and
-//! the path it should try under an environment variable. Spawning the test
+//! the path it should try under an environment variable. It leaves a marker
+//! file beside that path, so a filter that matches nothing (which exits 0)
+//! is a failure, not a pass. Spawning the test
 //! binary itself keeps the test self-contained: no helper crate, no
 //! `cargo` invocation from inside a test, and no assumption about the
 //! target directory's layout.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use willikins_journal::{Event, FileJournal, Journal, JournalError};
@@ -37,7 +39,12 @@ fn lock_probe_child() {
         return;
     };
     let expectation = std::env::var(EXPECT_VAR).expect("the child role needs an expectation");
-    let result = FileJournal::open(PathBuf::from(path));
+    let path = PathBuf::from(path);
+    // Before the probe, so a child that ran and then failed still leaves
+    // it: the marker says the filter matched, the exit status says how
+    // the probe went.
+    std::fs::write(ran_marker(&path), &expectation).expect("the child records that it ran");
+    let result = FileJournal::open(path);
     match expectation.as_str() {
         "refused" => assert!(
             matches!(result, Err(JournalError::Locked { .. })),
@@ -51,15 +58,43 @@ fn lock_probe_child() {
     }
 }
 
+/// The child's full test path, module prefix included: `--exact` matches
+/// the whole path, and a filter that matches nothing makes the child run
+/// no test at all and exit 0.
+const CHILD_TEST: &str = "locking::lock_probe_child";
+
+/// The file `lock_probe_child` writes beside `path` before it probes, so
+/// the parent can tell a child that passed from one that ran nothing.
+fn ran_marker(path: &Path) -> PathBuf {
+    let mut marker = path.as_os_str().to_owned();
+    marker.push(".child-ran");
+    PathBuf::from(marker)
+}
+
 /// Run `lock_probe_child` in a fresh process against `path`, expecting it
 /// to observe `expectation`, and return whether that child passed.
-fn spawn_probe(path: &std::path::Path, expectation: &str) -> bool {
+///
+/// Panics if the child never ran the probe. A stale [`CHILD_TEST`] (after
+/// a module rename, say) would otherwise make every probe "pass"
+/// silently; the milestone 3k adversarial pass
+/// (`docs/research/2026-10-05-m3k-adversarial-pass.md`) showed the three
+/// tests here staying green with the filter set to the pre-move
+/// `lock_probe_child`.
+fn spawn_probe(path: &Path, expectation: &str) -> bool {
+    let marker = ran_marker(path);
+    let _ = std::fs::remove_file(&marker);
     let status = Command::new(std::env::current_exe().expect("the test binary's own path"))
-        .args(["--ignored", "--exact", "locking::lock_probe_child"])
+        .args(["--ignored", "--exact", CHILD_TEST])
         .env(PATH_VAR, path)
         .env(EXPECT_VAR, expectation)
         .status()
         .expect("the child test process must start");
+    assert!(
+        marker.is_file(),
+        "the child process ran no test: `--exact {CHILD_TEST}` matched nothing, so it exited \
+         {status} without probing the lock. `--exact` takes the full test path, module prefix \
+         included (docs/solutions/tooling/one-binary-test-move-silent-traps.md)"
+    );
     status.success()
 }
 
