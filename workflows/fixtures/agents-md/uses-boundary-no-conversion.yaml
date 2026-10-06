@@ -1,0 +1,24 @@
+# Milestone 3o, task X1 (docs/research/2026-10-06-m3o-adversarial-pass.md,
+# target "any route by which caller text becomes prose ... a
+# conversion"): binds `example-org-agents-md`'s `project: TemplateValue`
+# input to an `AppleBundleIdentifier` -- a type a registered conversion
+# row (`AppleBundleIdentifier => TemplateValue`) could deliver, and would,
+# at an ordinary node port. A `uses:` boundary never probes the
+# conversion table (decision (d3)'s own cost: "the caller types the name
+# twice"), so this is `CheckError::UsesInputTypeMismatch` regardless --
+# the same general rule milestone 2b's own
+# `a_boundary_binding_that_only_converts_to_the_declared_type_still_mismatches`
+# pins abstractly, confirmed here end to end against the real
+# organisation document. Pinned by
+# `uses_boundary_no_conversion_is_refused_even_though_a_row_exists`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: uses-boundary-no-conversion
+description: "Negative fixture -- a uses: boundary requires an exact type match, never a registered conversion."
+inputs:
+  app_identifier:
+    type: AppleBundleIdentifier
+steps:
+  agents_md:
+    uses: example-org-agents-md
+    with:
+      project: ${{ inputs.app_identifier }}

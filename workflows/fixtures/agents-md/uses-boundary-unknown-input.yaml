@@ -1,0 +1,21 @@
+# Milestone 3o, task X1 (docs/research/2026-10-06-m3o-adversarial-pass.md,
+# target "a parent supplying or replacing the organisation's template"):
+# a `uses:` step attempts to bind `template` directly -- an input
+# `example-org-agents-md` never declares -- trying to replace the
+# organisation's own prose from the calling side. The linker
+# (`willikins_core::compose::link`, `validate_uses_step`) refuses this
+# eagerly, before `check` ever runs, with `CheckError::UnknownUsesInput`
+# naming the `uses:` step and the undeclared input. Pinned by
+# `uses_boundary_unknown_input_refuses_a_template_override_attempt`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: uses-boundary-unknown-input
+description: "Negative fixture -- a uses: step cannot bind an input the child never declared."
+inputs:
+  project:
+    type: TemplateValue
+steps:
+  agents_md:
+    uses: example-org-agents-md
+    with:
+      project: ${{ inputs.project }}
+      template: "evil content {{ 0 }}"

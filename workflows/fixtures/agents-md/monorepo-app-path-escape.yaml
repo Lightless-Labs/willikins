@@ -1,0 +1,59 @@
+# Milestone 3o, task X1 (docs/research/2026-10-06-m3o-adversarial-pass.md,
+# target "a seed path outside the app"): `monorepo-app.yaml` with
+# `agents_md.path` set to `../../AGENTS.md` instead of
+# `apps/sample/AGENTS.md` -- an attempt to seed a file outside the app's
+# own directory (the monorepo's root `AGENTS.md`, which already exists
+# by hand: decision (d2), "out of scope"). `RepoPath`'s own grammar
+# refuses any `..` segment (`crates/willikins-types/src/repo.rs`,
+# `repo_path_rejects_dot_dot_segment`), so this is
+# `CheckError::InvalidLiteral` naming node `agents_md`, port `path`, at
+# `check` -- the path is a `with:` literal, so its grammar is checked by
+# `check_literal`, never by `willikins_dsl::load_document`. `RepoPath`
+# refuses `.git/...` and `.github/workflows/...` the same way
+# (`repo_path_rejects_dot_git_segment_first`,
+# `repo_path_rejects_github_workflows`): this fixture exercises only the
+# `..` case; the type-level unit tests already pin the other two
+# directly. Pinned by
+# `monorepo_app_path_escape_is_refused_invalid_literal`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: monorepo-app-path-escape
+description: "Negative fixture -- a seed path cannot escape the repository with .."
+inputs:
+  app_identifier:
+    type: AppleBundleIdentifier
+    description: "The app's bundle identifier"
+steps:
+  monorepo:
+    tool: github.repo.get
+    with:
+      repo: Example-Org/monorepo
+  app_build:
+    tool: repo.file.render
+    with:
+      path: apps/sample/BUILD.bazel
+      template: "# Sample app package.\n"
+  app_files:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ steps.monorepo.repo }}
+      branch: main
+      marker: apps/sample/.willikins-scaffold
+      files:
+        - ${{ steps.app_build.file }}
+      message: "chore(sample): scaffold the app"
+  agents_md:
+    tool: repo.file.render
+    with:
+      path: ../../AGENTS.md
+      values:
+        - ${{ inputs.app_identifier }}
+      template: "Bundle identifier: {{ 0 }}\n"
+  agents:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ steps.app_files.repo }}
+      branch: main
+      marker: apps/sample/.willikins-agents
+      files:
+        - ${{ steps.agents_md.file }}
+      message: "docs(sample): seed AGENTS.md"

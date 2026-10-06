@@ -1,0 +1,27 @@
+# Milestone 3o, task X1 (docs/research/2026-10-06-m3o-adversarial-pass.md,
+# target "a literal output"): the alternative decision (d3) was chosen
+# over -- the organisation document exporting its rendered text as a
+# plain literal output, for the project document to parrot back into its
+# own `repo.file.render.template` -- rather than a `Step`-bound
+# `RepoFile`. `check_outputs` refuses a literal output outright
+# (`CheckError::LiteralOutput`), checked **as a root**, exactly the
+# property `example_org_agents_md_checks_as_a_root` already names in
+# its own doc comment but never exercises directly. Pinned by
+# `example_org_agents_md_literal_output_variant_fails_check_outputs`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: example-org-agents-md-literal-output
+description: "Negative fixture -- a literal workflow output is always refused, root or not."
+inputs:
+  project:
+    type: TemplateValue
+    description: "The project's canonical name"
+steps:
+  agents:
+    tool: repo.file.render
+    with:
+      path: AGENTS.md
+      values:
+        - ${{ inputs.project }}
+      template: "# {{ 0 }}\n"
+outputs:
+  file: "not a real RepoFile, just prose pretending to be the template's own output"

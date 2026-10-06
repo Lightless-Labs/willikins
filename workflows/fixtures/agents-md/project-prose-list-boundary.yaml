@@ -1,0 +1,23 @@
+# Milestone 3o, task X1 (docs/research/2026-10-06-m3o-adversarial-pass.md,
+# target "any route by which caller text becomes prose ... a list
+# element"): a `uses:` step's `with:` value is a YAML *sequence*, parsing
+# as `Binding::List(["A sentence with spaces"])` rather than
+# `Binding::Literal`. `check_boundaries` does not check a `Binding::List`
+# at all (milestone 2b's documented gap: `willikins-core/src/check.rs`,
+# `Resolver::check_boundaries`'s own doc, "[`Binding::List`] is left
+# unchecked here"). The prose is still refused, but only because
+# `example-org-agents-md` *references* `project` inside its own `values:`
+# list: substitution nests the parent's one-element list inside the
+# child's own one-element `values:` list, and `check_list_element`'s
+# defensive nested-list guard refuses it as `ListElementTypeMismatch`
+# -- never as a grammar violation naming the prose. Pinned by
+# `project_prose_list_boundary_is_refused_as_a_nested_list`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: project-prose-list-boundary
+description: "Negative fixture -- a uses: with: sequence bypasses the boundary's own literal check."
+steps:
+  agents_md:
+    uses: example-org-agents-md
+    with:
+      project:
+        - "A sentence with spaces"

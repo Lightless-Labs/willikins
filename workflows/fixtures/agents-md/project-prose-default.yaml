@@ -1,0 +1,20 @@
+# Milestone 3o, task X1 (docs/research/2026-10-06-m3o-adversarial-pass.md,
+# target "any route by which caller text becomes prose ... a default"):
+# a root input's own *default* is prose, never a literal supplied by a
+# `uses:` step. `TemplateValue`'s grammar refuses a space, so
+# `willikins_dsl::load_document`'s own `parse_default` (which parses a
+# declared default against its input's resolved type before `Document`
+# even becomes a `Workflow`) fails before `link` or `check` ever run.
+# Pinned by `project_prose_default_is_refused_at_load`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: project-prose-default
+description: "Negative fixture -- a TemplateValue input's default cannot be prose."
+inputs:
+  project:
+    type: TemplateValue
+    default: "A sentence with spaces"
+steps:
+  agents_md:
+    uses: example-org-agents-md
+    with:
+      project: ${{ inputs.project }}

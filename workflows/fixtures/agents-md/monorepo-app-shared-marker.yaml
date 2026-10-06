@@ -1,0 +1,57 @@
+# Milestone 3o, task X1 (docs/research/2026-10-06-m3o-adversarial-pass.md,
+# target "the two scaffolds sharing a marker"): `monorepo-app.yaml` with
+# `agents.marker` collapsed onto `app_files.marker` instead of its own
+# `apps/sample/.willikins-agents` -- the authoring mistake decision (d4)
+# exists to make impossible by shape. This document checks and plans
+# cleanly (no `check` error flags two nodes sharing a resource key), but
+# once `app_files` has landed, `agents`'s own `ensure` observes the
+# **same** marker already present and reports `NoOp` without ever
+# looking at its `files` -- `apps/sample/AGENTS.md` is silently never
+# written, with no error. Confirmed, not merely asserted: pinned by
+# `monorepo_app_shared_marker_silently_drops_agents_md`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs). This is exactly
+# why E2's real `monorepo-app.yaml` uses a second, distinct marker.
+name: monorepo-app-shared-marker
+description: "Negative fixture -- reusing the first scaffold's marker silently drops AGENTS.md."
+inputs:
+  app_identifier:
+    type: AppleBundleIdentifier
+    description: "The app's bundle identifier"
+steps:
+  monorepo:
+    tool: github.repo.get
+    with:
+      repo: Example-Org/monorepo
+  app_build:
+    tool: repo.file.render
+    with:
+      path: apps/sample/BUILD.bazel
+      template: "# Sample app package.\n"
+  app_files:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ steps.monorepo.repo }}
+      branch: main
+      marker: apps/sample/.willikins-scaffold
+      files:
+        - ${{ steps.app_build.file }}
+      message: "chore(sample): scaffold the app"
+  agents_md:
+    tool: repo.file.render
+    with:
+      path: apps/sample/AGENTS.md
+      values:
+        - ${{ inputs.app_identifier }}
+      template: |
+        # apps/sample
+
+        Bundle identifier: {{ 0 }}
+  agents:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ steps.app_files.repo }}
+      branch: main
+      marker: apps/sample/.willikins-scaffold
+      files:
+        - ${{ steps.agents_md.file }}
+      message: "docs(sample): seed AGENTS.md"

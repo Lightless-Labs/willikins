@@ -1,0 +1,52 @@
+# Milestone 3o, task X1 (docs/research/2026-10-06-m3o-adversarial-pass.md,
+# target "one listing the other's marker or files"): the second scaffold
+# (`agents`, its own distinct marker) lists a rendered file whose `path`
+# is the *first* scaffold's marker path
+# (`apps/sample/.willikins-scaffold`), attempting to overwrite that
+# marker as an ordinary file through the second commit. Once `app_files`
+# has landed, the real marker content is already at that path and does
+# not equal the attacker-chosen content, so `agents`'s own `ensure`
+# refuses with `Conflict`, naming the path -- the same byte-content guard
+# `observe()` (`github_scaffold_ensure.rs`) already runs for any
+# pre-existing, differing file. Pinned by
+# `monorepo_app_a_second_scaffold_cannot_overwrite_the_first_markers_path`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: monorepo-app-fake-marker-file
+description: "Negative fixture -- a second scaffold cannot overwrite the first scaffold's marker as a plain file."
+inputs:
+  app_identifier:
+    type: AppleBundleIdentifier
+    description: "The app's bundle identifier"
+steps:
+  monorepo:
+    tool: github.repo.get
+    with:
+      repo: Example-Org/monorepo
+  app_build:
+    tool: repo.file.render
+    with:
+      path: apps/sample/BUILD.bazel
+      template: "# Sample app package.\n"
+  app_files:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ steps.monorepo.repo }}
+      branch: main
+      marker: apps/sample/.willikins-scaffold
+      files:
+        - ${{ steps.app_build.file }}
+      message: "chore(sample): scaffold the app"
+  fake_marker:
+    tool: repo.file.render
+    with:
+      path: apps/sample/.willikins-scaffold
+      template: "attacker-controlled content, not the real marker\n"
+  agents:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ steps.app_files.repo }}
+      branch: main
+      marker: apps/sample/.willikins-agents
+      files:
+        - ${{ steps.fake_marker.file }}
+      message: "docs(sample): seed AGENTS.md"

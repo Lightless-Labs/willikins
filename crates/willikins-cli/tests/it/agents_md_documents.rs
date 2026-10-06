@@ -1,5 +1,8 @@
-//! Milestone 3o, tasks E1 and E2
-//! (`docs/plans/2026-10-06-milestone-3o-agents-md.md`):
+//! Milestone 3o, tasks E1, E2 and X1
+//! (`docs/plans/2026-10-06-milestone-3o-agents-md.md`): E1 and E2's own
+//! acceptance tests, below, plus X1's adversarial pass over both --
+//! every attempted bypass, each recorded with its exact refusal in
+//! `docs/research/2026-10-06-m3o-adversarial-pass.md`.
 //!
 //! **E1 (acceptance 1-3): the standalone pair** -- an organisation-owned
 //! used document (`workflows/fixtures/agents-md/example-org-agents-md.yaml`)
@@ -32,8 +35,9 @@ use std::sync::{Arc, Mutex};
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Action, Approval, Binding, CheckError, InputName, NodeName, NodeStatus, Plan, PlanError,
-    PortName, RecordingObserver, ResolveFailure, ToolErrorKind, Value, apply, check, link, plan,
+    Action, Approval, Binding, CheckError, InputName, NodeName, NodeStatus, OutputName, Plan,
+    PlanError, PortName, RecordingObserver, ResolveFailure, ToolErrorKind, Value, apply, check,
+    link, plan,
 };
 use willikins_providers_fake::FakeState;
 use willikins_providers_fake::state::{repo_key, scaffold_key};
@@ -542,5 +546,293 @@ fn agents_repo_binds_app_files_repo() {
             assert_eq!(port.as_str(), "repo");
         }
         other => panic!("expected a Binding::Step onto app_files.repo, got {other:?}"),
+    }
+}
+
+// --- Milestone 3o, task X1: adversarial pass on E1/E2 ---
+//
+// Every fixture below is recorded, with the exact refusal it produces,
+// in `docs/research/2026-10-06-m3o-adversarial-pass.md`.
+
+/// A root input's own *default* is prose. `TemplateValue`'s grammar
+/// refuses a space, so `willikins_dsl::load_document`'s `parse_default`
+/// fails before `link` or `check` ever run -- this document never even
+/// becomes a `Workflow`.
+#[test]
+fn project_prose_default_is_refused_at_load() {
+    let path = fixtures_dir().join("project-prose-default.yaml");
+    let err = willikins_dsl::load_document(&path)
+        .expect_err("a TemplateValue default that is prose must fail to load");
+    let message = err.to_string();
+    assert!(
+        message.contains("project"),
+        "the error should name the offending input: {message}"
+    );
+}
+
+/// A `uses:` step's `with:` value is a YAML sequence, so it parses as
+/// `Binding::List` rather than `Binding::Literal` -- `check_boundaries`
+/// does not check a `Binding::List` at all (milestone 2b's own
+/// documented gap). The prose still never reaches `AGENTS.md`: because
+/// `example-org-agents-md` references `project` inside its own
+/// single-element `values:` list, substitution nests the parent's
+/// one-element list inside it, and `check_list_element`'s defensive
+/// nested-list guard refuses the whole port with
+/// `CheckError::ListElementTypeMismatch` -- not a grammar error naming
+/// the prose itself, which is the gap worth recording, not a bypass.
+#[test]
+fn project_prose_list_boundary_is_refused_as_a_nested_list() {
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let workflow = linked("project-prose-list-boundary");
+    let errors = check(&workflow, &catalog)
+        .expect_err("a list-bound boundary input must still be refused once substituted");
+    assert!(
+        errors
+            .iter()
+            .any(|error| matches!(error, CheckError::ListElementTypeMismatch { .. })),
+        "expected a ListElementTypeMismatch from the nested-list guard: {errors:?}"
+    );
+}
+
+/// `example-org-agents-md`'s `project: TemplateValue` input is bound to
+/// an `AppleBundleIdentifier` -- a type the registered
+/// `AppleBundleIdentifier => TemplateValue` conversion row *could*
+/// deliver at an ordinary node port. A `uses:` boundary never probes the
+/// conversion table (decision (d3)'s own cost), so this is
+/// `CheckError::UsesInputTypeMismatch` regardless: the general rule
+/// milestone 2b's own
+/// `a_boundary_binding_that_only_converts_to_the_declared_type_still_mismatches`
+/// already pins abstractly, confirmed here end to end against the real
+/// organisation document.
+#[test]
+fn uses_boundary_no_conversion_is_refused_even_though_a_row_exists() {
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let workflow = linked("uses-boundary-no-conversion");
+    let errors = check(&workflow, &catalog)
+        .expect_err("a boundary binding that only converts must still mismatch");
+    assert!(
+        errors.iter().any(|error| matches!(
+            error,
+            CheckError::UsesInputTypeMismatch { node, input, expected, found }
+                if node.as_str() == "agents_md"
+                    && input.as_str() == "project"
+                    && expected.name.as_str() == "TemplateValue"
+                    && found.name.as_str() == "AppleBundleIdentifier"
+        )),
+        "expected UsesInputTypeMismatch(TemplateValue, AppleBundleIdentifier): {errors:?}"
+    );
+}
+
+/// A `uses:` step tries to bind `template` directly -- an input
+/// `example-org-agents-md` never declared -- attempting to replace the
+/// organisation's own prose from the calling side. The linker refuses
+/// this eagerly, before `check` ever runs, with
+/// `CheckError::UnknownUsesInput`.
+#[test]
+fn uses_boundary_unknown_input_refuses_a_template_override_attempt() {
+    let root = load("uses-boundary-unknown-input");
+    let dir = fixtures_dir();
+    let errors = link(&root, &mut |n| resolve_sibling(&dir, n))
+        .expect_err("binding an undeclared uses: input must be refused by the linker");
+    assert!(
+        errors.iter().any(|error| matches!(
+            error,
+            CheckError::UnknownUsesInput { node, input }
+                if node.as_str() == "agents_md" && input.as_str() == "template"
+        )),
+        "expected UnknownUsesInput naming `template`: {errors:?}"
+    );
+}
+
+/// `uses: malicious-used-document-template-source-input`, a used
+/// document whose own declared input type is disallowed
+/// (`TemplateSource`). `check_boundaries` runs the very same
+/// `check_input_spec` a root input goes through, so this gives
+/// `CheckError::DisallowedInputType` under the combined `bad/template`
+/// name -- exactly as if `template` were a root input of this document
+/// itself, before the literal `with:` binding is ever looked at.
+#[test]
+fn uses_boundary_disallowed_type_mirrors_the_root_check() {
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let workflow = linked("uses-boundary-disallowed-type");
+    let errors = check(&workflow, &catalog)
+        .expect_err("a used document declaring a TemplateSource input must be refused");
+    assert!(
+        errors.iter().any(|error| matches!(
+            error,
+            CheckError::DisallowedInputType { input, ty }
+                if input.as_str() == "bad/template" && ty.name.as_str() == "TemplateSource"
+        )),
+        "expected DisallowedInputType naming `bad/template`: {errors:?}"
+    );
+}
+
+/// The alternative decision (d3) was chosen over: the organisation
+/// document exporting its rendered text as a plain literal output
+/// instead of a `Step`-bound `RepoFile`. `check_outputs` refuses a
+/// literal output outright, checked **as a root** -- the property
+/// `example_org_agents_md_checks_as_a_root`'s own doc comment names but
+/// never exercises directly.
+#[test]
+fn example_org_agents_md_literal_output_variant_fails_check_outputs() {
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let workflow = load("example-org-agents-md-literal-output");
+    let errors = check(&workflow, &catalog).expect_err("a literal workflow output must be refused");
+    assert_eq!(
+        errors,
+        vec![CheckError::LiteralOutput {
+            output: OutputName::parse("file").unwrap()
+        }]
+    );
+}
+
+/// `monorepo-app.yaml` with `agents_md.path` set to `../../AGENTS.md`
+/// instead of `apps/sample/AGENTS.md` -- an attempt to seed a file
+/// outside the app's own directory. `RepoPath`'s own grammar refuses any
+/// `..` segment, so this is `CheckError::InvalidLiteral` naming node
+/// `agents_md`, port `path`.
+#[test]
+fn monorepo_app_path_escape_is_refused_invalid_literal() {
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let workflow = load("monorepo-app-path-escape");
+    let errors = check(&workflow, &catalog).expect_err("a `..` seed path must be refused");
+    assert!(
+        errors.iter().any(|error| matches!(
+            error,
+            CheckError::InvalidLiteral { node, port, .. }
+                if node.as_str() == "agents_md" && port.as_str() == "path"
+        )),
+        "expected InvalidLiteral naming node `agents_md`, port `path`: {errors:?}"
+    );
+}
+
+/// `monorepo-app.yaml` with `agents.marker` collapsed onto
+/// `app_files.marker`: `check` and `plan` both pass cleanly (two nodes
+/// sharing a resource key raises no error), but within one `apply`,
+/// `app_files` runs first and lands the shared marker; `agents`'s own
+/// `ensure` then observes that marker already `Present` and reports
+/// `Unchanged` without ever writing `apps/sample/AGENTS.md` -- a real,
+/// silent finding, not a refusal. This is exactly why the real
+/// `monorepo-app.yaml` gives the second scaffold its own marker
+/// (decision (d4)).
+#[test]
+fn monorepo_app_shared_marker_silently_drops_agents_md() {
+    let state = fresh_monorepo_state();
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let workflow = load("monorepo-app-shared-marker");
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("a shared marker is not itself a check error: {errors:?}"));
+    let inputs = monorepo_app_inputs();
+
+    let planned1 =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("plans cleanly: {err}"));
+    assert_eq!(action_of(&planned1, "app_files", None), Action::Create);
+    assert_eq!(action_of(&planned1, "agents", None), Action::Create);
+
+    let mut observer = RecordingObserver::new();
+    let applied1 = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &planned1,
+        &human_approval(),
+        &mut observer,
+    )
+    .expect("applies without error");
+    assert!(matches!(
+        status_of(&applied1, "app_files", None),
+        NodeStatus::Created
+    ));
+    // The silent drop: `agents` observes the marker `app_files` just
+    // landed (same key) and reports `Unchanged`, never `Created`.
+    assert!(matches!(
+        status_of(&applied1, "agents", None),
+        NodeStatus::Unchanged
+    ));
+
+    let locked = state.lock().unwrap();
+    let scaffold_map = locked
+        .scaffolds
+        .get(&scaffold_key(&monorepo_repo(), &branch()))
+        .expect("the scaffold map exists");
+    assert!(scaffold_map.contains_key("apps/sample/.willikins-scaffold"));
+    assert!(
+        !scaffold_map.contains_key("apps/sample/AGENTS.md"),
+        "AGENTS.md must never land when the second scaffold shares the first's marker"
+    );
+}
+
+/// The second scaffold (its own distinct marker) lists a rendered file
+/// whose `path` is the *first* scaffold's marker path, attempting to
+/// overwrite that marker as an ordinary file through the second commit.
+/// Once `app_files` has landed, the real marker content at that path
+/// differs from the attacker-chosen content, so `agents`'s own `ensure`
+/// refuses with `Conflict`, naming the path.
+#[test]
+fn monorepo_app_a_second_scaffold_cannot_overwrite_the_first_markers_path() {
+    let state = already_scaffolded_state();
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let workflow = load("monorepo-app-fake-marker-file");
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+    let inputs = monorepo_app_inputs();
+
+    let err = plan(&checked, &inputs, &catalog)
+        .expect_err("overwriting the first scaffold's marker as a file must refuse to plan");
+    match err {
+        PlanError::Tool {
+            node: failed_node,
+            error,
+        } => {
+            assert_eq!(failed_node, NodeName::parse("agents").unwrap());
+            assert_eq!(error.kind, ToolErrorKind::Conflict);
+            assert!(
+                error.message.contains("apps/sample/.willikins-scaffold"),
+                "the conflict must name the path: {}",
+                error.message
+            );
+        }
+        other => panic!("expected PlanError::Tool at `agents`, got {other:?}"),
+    }
+}
+
+/// E1's own analogue of acceptance 6: a different `AGENTS.md` already
+/// present at the standalone repository's root (seeded directly, never
+/// through an apply) fails the plan with `Conflict`, naming the path --
+/// the standalone pair had no test for this at all; only the monorepo
+/// pair (acceptance 6) did.
+#[test]
+fn standalone_service_a_different_existing_agents_md_fails_plan_naming_the_path() {
+    let state = Arc::new(Mutex::new(
+        FakeState::new()
+            .with_repo(&repo(), RepoVisibility::Private, true)
+            .with_scaffold_files(
+                &repo(),
+                &branch(),
+                &[("AGENTS.md", "someone else's file\n")],
+            ),
+    ));
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let workflow = linked("standalone-service");
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the linked document checks cleanly: {errors:?}"));
+    let inputs = standalone_inputs();
+
+    let err = plan(&checked, &inputs, &catalog)
+        .expect_err("a different existing AGENTS.md must refuse to plan");
+    match err {
+        PlanError::Tool {
+            node: failed_node,
+            error,
+        } => {
+            assert_eq!(failed_node, NodeName::parse("scaffold").unwrap());
+            assert_eq!(error.kind, ToolErrorKind::Conflict);
+            assert!(
+                error.message.contains("AGENTS.md"),
+                "the conflict must name the path: {}",
+                error.message
+            );
+        }
+        other => panic!("expected PlanError::Tool at `scaffold`, got {other:?}"),
     }
 }

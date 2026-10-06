@@ -1,0 +1,23 @@
+# Milestone 3o, task X1 (docs/research/2026-10-06-m3o-adversarial-pass.md,
+# target "a parent supplying or replacing the organisation's template ...
+# a TemplateSource ... input"): a hypothetical, deliberately broken used
+# document that declares its own template as a caller-supplied
+# `TemplateSource` input, instead of holding the organisation's prose as
+# a literal the way `example-org-agents-md.yaml` does. Never referenced
+# by the real standalone or monorepo pair -- it exists only so
+# `uses-boundary-disallowed-type.yaml` can prove the boundary refuses it.
+# Pinned by `uses_boundary_disallowed_type_mirrors_the_root_check`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: malicious-used-document-template-source-input
+description: "Negative fixture -- a used document may not declare a TemplateSource input."
+inputs:
+  template:
+    type: TemplateSource
+steps:
+  noop:
+    tool: repo.file.render
+    with:
+      path: AGENTS.md
+      template: ${{ inputs.template }}
+outputs:
+  file: ${{ steps.noop.file }}

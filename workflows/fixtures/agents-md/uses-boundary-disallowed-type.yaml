@@ -1,0 +1,19 @@
+# Milestone 3o, task X1 (docs/research/2026-10-06-m3o-adversarial-pass.md,
+# target "a parent supplying or replacing the organisation's template ...
+# a TemplateSource ... input"): `uses:`
+# `malicious-used-document-template-source-input`, a used document whose
+# own declared input type is disallowed. `check_boundaries` runs the
+# very same `check_input_spec` a root input goes through
+# (`willikins_core::check`), so this gives `CheckError::DisallowedInputType`
+# under the combined `bad/template` name -- exactly as if `template`
+# were a root input of this document itself, before the literal `with:`
+# binding below is ever looked at. Pinned by
+# `uses_boundary_disallowed_type_mirrors_the_root_check`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: uses-boundary-disallowed-type
+description: "Negative fixture -- DisallowedInputType fires at a uses: boundary exactly as it would at the root."
+steps:
+  bad:
+    uses: malicious-used-document-template-source-input
+    with:
+      template: "irrelevant"
