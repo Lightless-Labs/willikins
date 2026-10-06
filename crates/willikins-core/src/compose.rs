@@ -227,12 +227,33 @@ fn flatten(
     // with a path the linker itself produces. Checked for root and every
     // resolved child alike, since this is the top of every `flatten`
     // call; see the module docs.
+    //
+    // This covers every *key* `wf` declares (a node, a `uses:` step, an
+    // input) and, since X1's adversarial pass, every *binding target* a
+    // `Step`/`Keyed` reference names anywhere at `wf`'s own authored
+    // level too (a node's own `with`/`for_each`, a workflow output, or a
+    // `uses:` step's own `with:`). The DSL can never produce either kind
+    // of offender (`willikins-dsl/src/reference.rs`'s reference grammar
+    // accepts no `/` in a node segment), but a hand-built `Workflow` can:
+    // without this second half, `Binding::Step { node: "org/gh_token",
+    // .. }` -- a path that names no key `wf` itself declares, so the
+    // *key* scan alone never sees it -- passes through
+    // `rewrite_at_level` untouched (`wf.uses.contains_key(node)` is
+    // false for a multi-segment name), and resolves successfully if a
+    // used document named `org` happens to have an internal node called
+    // `gh_token`: a parent reaching directly into a child's internal
+    // node, exactly what trust boundary 4 ("the reference grammar cannot
+    // name a node inside a child") says must never happen. Every binding
+    // here is `wf`'s own, unrewritten by any `flatten` call yet, so a
+    // path-shaped target found here was authored, never produced by this
+    // module.
     if let Some(bad) = wf
         .nodes
         .keys()
         .map(NodeName::as_str)
         .chain(wf.uses.keys().map(NodeName::as_str))
         .chain(wf.inputs.keys().map(InputName::as_str))
+        .chain(authored_binding_targets(wf))
         .find(|name| name.contains('/'))
     {
         return Err(vec![CheckError::PathInAuthoredName {
@@ -563,6 +584,45 @@ fn rewrite_at_level(
         }
         Binding::Input(_) | Binding::Item | Binding::Literal(_) => Ok(binding.clone()),
     }
+}
+
+/// Every `Step`/`Keyed` binding target named anywhere at `wf`'s own
+/// authored level: each of its own nodes' `with` and `for_each`, each of
+/// its own outputs, and each of its own `uses:` steps' own `with:`. Used
+/// only by the `PathInAuthoredName` scan at the top of [`flatten`] (see
+/// its own comment) to catch a hand-built `Workflow` whose binding, not
+/// its key, carries a `/`.
+fn authored_binding_targets(wf: &Workflow) -> Vec<&str> {
+    fn walk<'a>(binding: &'a Binding, out: &mut Vec<&'a str>) {
+        match binding {
+            Binding::Step { node, .. } | Binding::Keyed { node, .. } => out.push(node.as_str()),
+            Binding::List(items) => {
+                for item in items {
+                    walk(item, out);
+                }
+            }
+            Binding::Input(_) | Binding::Item | Binding::Literal(_) => {}
+        }
+    }
+
+    let mut out = Vec::new();
+    for node in wf.nodes.values() {
+        if let Some(b) = &node.for_each {
+            walk(b, &mut out);
+        }
+        for b in node.with.values() {
+            walk(b, &mut out);
+        }
+    }
+    for b in wf.outputs.values() {
+        walk(b, &mut out);
+    }
+    for uses in wf.uses.values() {
+        for b in uses.with.values() {
+            walk(b, &mut out);
+        }
+    }
+    out
 }
 
 /// Whether `binding` is, or (for a list) contains, a bare `${{ item }}`
@@ -1918,6 +1978,85 @@ mod tests {
             err,
             vec![CheckError::PathInAuthoredName {
                 name: "bad/name".to_string(),
+            }]
+        );
+    }
+
+    /// X1 (the adversarial pass): the `PathInAuthoredName` scan's other
+    /// half. A hand-built `root` has one `uses:` step `org` (naming a
+    /// child with an internal node `gh_token`, never declared as an
+    /// output) and one output whose binding directly targets
+    /// `org/gh_token` by its *post-linking* path -- a reference the DSL
+    /// could never produce (its grammar accepts no `/` in a node
+    /// segment), but a hand-built `Workflow` can. Before this scan
+    /// covered binding targets too, `rewrite_at_level` would pass this
+    /// binding through untouched (`org/gh_token` is not a key of
+    /// `root.uses`), `resolve` would be called for `org`, and -- had its
+    /// child actually declared an internal node named `gh_token` -- the
+    /// reference would have resolved straight to it post-linking,
+    /// reaching inside the child exactly as trust boundary 4 forbids.
+    /// `resolve` must never even be called: the refusal fires before
+    /// `org` is ever looked up.
+    #[test]
+    fn a_slash_in_an_authored_bindings_target_is_refused() {
+        let root = Workflow::new(wf_name("root"))
+            .uses(
+                node("org"),
+                Uses {
+                    workflow: wf_name("child"),
+                    with: IndexMap::new(),
+                    position: 0,
+                },
+            )
+            .output(
+                output("leak"),
+                Binding::Step {
+                    node: node("org/gh_token"),
+                    port: port("value"),
+                },
+            );
+        let err = link(&root, &mut |name| {
+            panic!("resolve should not be called, got `{name}`")
+        })
+        .unwrap_err();
+        assert_eq!(
+            err,
+            vec![CheckError::PathInAuthoredName {
+                name: "org/gh_token".to_string(),
+            }]
+        );
+    }
+
+    /// The same binding-target scan over a `uses:` step's own `with:`
+    /// (rather than a root output): `root` uses `child`, binding its
+    /// declared input `known` to a `Step` targeting `sibling/internal`
+    /// directly.
+    #[test]
+    fn a_slash_in_a_uses_steps_with_binding_target_is_refused() {
+        let mut with = IndexMap::new();
+        with.insert(
+            input("known"),
+            Binding::Step {
+                node: node("sibling/internal"),
+                port: port("value"),
+            },
+        );
+        let root = Workflow::new(wf_name("root")).uses(
+            node("child"),
+            Uses {
+                workflow: wf_name("leafchild"),
+                with,
+                position: 0,
+            },
+        );
+        let err = link(&root, &mut |name| {
+            panic!("resolve should not be called, got `{name}`")
+        })
+        .unwrap_err();
+        assert_eq!(
+            err,
+            vec![CheckError::PathInAuthoredName {
+                name: "sibling/internal".to_string(),
             }]
         );
     }
