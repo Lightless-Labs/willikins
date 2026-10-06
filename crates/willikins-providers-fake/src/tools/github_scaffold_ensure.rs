@@ -522,9 +522,7 @@ impl Tool for GitHubScaffoldEnsure {
                 // `branch` so a second `ensure`/`read` sees
                 // `BranchExistence::Exists` rather than re-entering this
                 // path (decision (b): "empty" is "no branches at all").
-                if was_empty
-                    && let Some(record) = state.github_repos.get_mut(&repo_key(&repo))
-                {
+                if was_empty && let Some(record) = state.github_repos.get_mut(&repo_key(&repo)) {
                     record.branches = Some(vec![branch.clone()]);
                 }
                 Ok(Ensured {

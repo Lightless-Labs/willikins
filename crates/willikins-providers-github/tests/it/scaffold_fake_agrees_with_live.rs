@@ -13,11 +13,14 @@ use sha1::{Digest, Sha1};
 
 use willikins_core::{Inputs, Observation, PortName, SinkToken, Tool, ToolErrorKind, Value};
 use willikins_providers_fake::FakeState;
+use willikins_providers_fake::state::{GitHubRepoRecord, repo_key};
 use willikins_providers_fake::tools::GitHubScaffoldEnsure as FakeGitHubScaffoldEnsure;
 use willikins_providers_github::{GitHubClient, GitHubScaffoldEnsure};
 use willikins_providers_http::testing::MockProvider;
 use willikins_providers_http::{Credential, Http};
-use willikins_types::{CommitHeadline, DomainType, GitBranchName, GitHubRepo, RepoFile, RepoPath};
+use willikins_types::{
+    CommitHeadline, DomainType, GitBranchName, GitHubRepo, RepoFile, RepoPath, RepoVisibility,
+};
 
 /// A test mints its own token; `SinkToken::new` is disallowed elsewhere.
 #[allow(clippy::disallowed_methods)]
@@ -82,6 +85,207 @@ fn tree_entry(name: &str, mode: &str, kind: &str, sha: &str) -> serde_json::Valu
     })
 }
 
+/// Milestone 3l, task F1, acceptance 13: `git/ref/heads/{branch}` fails
+/// `404` -- decision (b)'s read table's own entry point for every row
+/// this test file adds beyond `agrees_on_absent`'s (present-and-missing
+/// marker) shape.
+fn mock_branch_404(provider: &mut MockProvider) {
+    provider
+        .mock("GET", "/repos/acme/widget/git/ref/heads/main")
+        .with_status(404)
+        .with_body(serde_json::json!({"message": "Not Found"}).to_string())
+        .create();
+}
+
+fn mock_repo_404(provider: &mut MockProvider) {
+    provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(404)
+        .with_body(serde_json::json!({"message": "Not Found"}).to_string())
+        .create();
+}
+
+fn mock_repo_200(provider: &mut MockProvider, default_branch: &str) {
+    provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"visibility": "private", "default_branch": default_branch})
+                .to_string(),
+        )
+        .create();
+}
+
+fn mock_branches(provider: &mut MockProvider, names: &[&str]) {
+    let entries: Vec<serde_json::Value> = names
+        .iter()
+        .map(|name| serde_json::json!({"name": name}))
+        .collect();
+    provider
+        .mock("GET", "/repos/acme/widget/branches?per_page=1")
+        .with_status(200)
+        .with_body(serde_json::json!(entries).to_string())
+        .create();
+}
+
+/// Milestone 3l, task F1, acceptance 13: no repository at all (`404` from
+/// `GET /repos`). Both sides report `Absent` on `read`, and `NotFound` on
+/// `ensure`.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn agrees_on_repository_absent() {
+    let mut provider = MockProvider::start();
+    mock_branch_404(&mut provider);
+    mock_repo_404(&mut provider);
+    let live_tool = live_against(provider.url());
+    let live_read = live_tool.read(&inputs(seed_files())).expect("live reads");
+    let token = mint();
+    let live_ensure = live_tool.ensure(&inputs(seed_files()), &token).unwrap_err();
+
+    let fake_tool = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+    let fake_read = fake_tool.read(&inputs(seed_files())).expect("fake reads");
+    let fake_ensure = fake_tool.ensure(&inputs(seed_files()), &token).unwrap_err();
+
+    assert_eq!(shape(&live_read), shape(&fake_read));
+    assert!(matches!(live_read, Observation::Absent { .. }));
+    assert_eq!(
+        live_ensure.kind,
+        ToolErrorKind::NotFound,
+        "{}",
+        live_ensure.message
+    );
+    assert_eq!(
+        fake_ensure.kind,
+        ToolErrorKind::NotFound,
+        "{}",
+        fake_ensure.message
+    );
+}
+
+/// An empty repository (`GET .../branches?per_page=1` answers `[]`)
+/// whose default branch equals the requested `branch`: both sides report
+/// `Absent` on `read`.
+#[test]
+fn agrees_on_an_empty_repository_with_the_matching_default_branch() {
+    let mut provider = MockProvider::start();
+    mock_branch_404(&mut provider);
+    mock_repo_200(&mut provider, "main");
+    mock_branches(&mut provider, &[]);
+    let live = live_against(provider.url())
+        .read(&inputs(seed_files()))
+        .expect("live reads");
+
+    let state = FakeState::new().with_empty_repo(&repo(), RepoVisibility::Private, None);
+    let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
+        .read(&inputs(seed_files()))
+        .expect("fake reads");
+
+    assert_eq!(shape(&live), shape(&fake));
+    assert!(matches!(live, Observation::Absent { .. }));
+}
+
+/// An empty repository whose default branch differs from the requested
+/// `branch`: both sides refuse `Conflict`, on `read` and `ensure` alike.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn agrees_on_an_empty_repository_with_a_mismatched_default_branch() {
+    let mut provider = MockProvider::start();
+    mock_branch_404(&mut provider);
+    mock_repo_200(&mut provider, "trunk");
+    mock_branches(&mut provider, &[]);
+    let live_tool = live_against(provider.url());
+    let live_read = live_tool.read(&inputs(seed_files())).unwrap_err();
+    let token = mint();
+    let live_ensure = live_tool.ensure(&inputs(seed_files()), &token).unwrap_err();
+
+    let trunk = GitBranchName::parse("trunk").unwrap();
+    let state = FakeState::new().with_empty_repo(&repo(), RepoVisibility::Private, Some(&trunk));
+    let fake_tool = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)));
+    let fake_read = fake_tool.read(&inputs(seed_files())).unwrap_err();
+    let fake_ensure = fake_tool.ensure(&inputs(seed_files()), &token).unwrap_err();
+
+    assert_eq!(
+        live_read.kind,
+        ToolErrorKind::Conflict,
+        "{}",
+        live_read.message
+    );
+    assert_eq!(
+        fake_read.kind,
+        ToolErrorKind::Conflict,
+        "{}",
+        fake_read.message
+    );
+    assert_eq!(
+        live_ensure.kind,
+        ToolErrorKind::Conflict,
+        "{}",
+        live_ensure.message
+    );
+    assert_eq!(
+        fake_ensure.kind,
+        ToolErrorKind::Conflict,
+        "{}",
+        fake_ensure.message
+    );
+}
+
+/// A non-empty repository (`branches` reports a different branch) still
+/// missing the requested `branch`: both sides keep the unchanged
+/// missing-branch `NotFound`, on `read` and `ensure` alike.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn agrees_on_a_non_empty_repository_missing_the_branch() {
+    let mut provider = MockProvider::start();
+    mock_branch_404(&mut provider);
+    mock_repo_200(&mut provider, "main");
+    mock_branches(&mut provider, &["other"]);
+    let live_tool = live_against(provider.url());
+    let live_read = live_tool.read(&inputs(seed_files())).unwrap_err();
+    let token = mint();
+    let live_ensure = live_tool.ensure(&inputs(seed_files()), &token).unwrap_err();
+
+    let mut fake_state = FakeState::new();
+    fake_state.github_repos.insert(
+        repo_key(&repo()),
+        GitHubRepoRecord {
+            visibility: RepoVisibility::Private,
+            ours: true,
+            archived: false,
+            branches: Some(vec![GitBranchName::parse("other").unwrap()]),
+            default_branch: None,
+        },
+    );
+    let fake_tool = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(fake_state)));
+    let fake_read = fake_tool.read(&inputs(seed_files())).unwrap_err();
+    let fake_ensure = fake_tool.ensure(&inputs(seed_files()), &token).unwrap_err();
+
+    assert_eq!(
+        live_read.kind,
+        ToolErrorKind::NotFound,
+        "{}",
+        live_read.message
+    );
+    assert_eq!(
+        fake_read.kind,
+        ToolErrorKind::NotFound,
+        "{}",
+        fake_read.message
+    );
+    assert_eq!(
+        live_ensure.kind,
+        ToolErrorKind::NotFound,
+        "{}",
+        live_ensure.message
+    );
+    assert_eq!(
+        fake_ensure.kind,
+        ToolErrorKind::NotFound,
+        "{}",
+        fake_ensure.message
+    );
+}
+
 fn mock_ref_and_commit(provider: &mut MockProvider) {
     provider
         .mock("GET", "/repos/acme/widget/git/ref/heads/main")
@@ -128,11 +332,13 @@ fn agrees_on_present() {
         .read(&inputs(seed_files()))
         .expect("live tool reads");
 
-    let state = FakeState::new().with_scaffold_files(
-        &repo(),
-        &branch(),
-        &[(".willikins-scaffold", "managed-by: willikins\n")],
-    );
+    let state = FakeState::new()
+        .with_repo(&repo(), RepoVisibility::Private, true)
+        .with_scaffold_files(
+            &repo(),
+            &branch(),
+            &[(".willikins-scaffold", "managed-by: willikins\n")],
+        );
     let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
         .read(&inputs(seed_files()))
         .expect("fake tool reads");
@@ -193,11 +399,9 @@ fn agrees_on_foreign() {
         .read(&inputs(seed_files()))
         .expect("live tool reads");
 
-    let state = FakeState::new().with_scaffold_files(
-        &repo(),
-        &branch(),
-        &[(".willikins-scaffold", "not ours\n")],
-    );
+    let state = FakeState::new()
+        .with_repo(&repo(), RepoVisibility::Private, true)
+        .with_scaffold_files(&repo(), &branch(), &[(".willikins-scaffold", "not ours\n")]);
     let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
         .read(&inputs(seed_files()))
         .expect("fake tool reads");
@@ -236,11 +440,9 @@ fn agrees_on_a_marker_whose_first_line_only_starts_with_the_header() {
     let live = live_against(provider.url())
         .read(&inputs(seed_files()))
         .expect("live tool reads");
-    let state = FakeState::new().with_scaffold_files(
-        &repo(),
-        &branch(),
-        &[(".willikins-scaffold", impostor)],
-    );
+    let state = FakeState::new()
+        .with_repo(&repo(), RepoVisibility::Private, true)
+        .with_scaffold_files(&repo(), &branch(), &[(".willikins-scaffold", impostor)]);
     let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
         .read(&inputs(seed_files()))
         .expect("fake tool reads");
@@ -274,7 +476,9 @@ fn agrees_on_a_seed_path_beneath_an_existing_file() {
         .read(&inputs(seed_files()))
         .unwrap_err();
 
-    let state = FakeState::new().with_scaffold_files(&repo(), &branch(), &[("ios", "a file\n")]);
+    let state = FakeState::new()
+        .with_repo(&repo(), RepoVisibility::Private, true)
+        .with_scaffold_files(&repo(), &branch(), &[("ios", "a file\n")]);
     let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
         .read(&inputs(seed_files()))
         .unwrap_err();
@@ -301,11 +505,9 @@ fn agrees_on_a_seed_path_that_is_an_existing_directory() {
         .read(&inputs(files.clone()))
         .unwrap_err();
 
-    let state = FakeState::new().with_scaffold_files(
-        &repo(),
-        &branch(),
-        &[("ios/BUILD.bazel", "someone's\n")],
-    );
+    let state = FakeState::new()
+        .with_repo(&repo(), RepoVisibility::Private, true)
+        .with_scaffold_files(&repo(), &branch(), &[("ios/BUILD.bazel", "someone's\n")]);
     let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
         .read(&inputs(files))
         .unwrap_err();
@@ -331,11 +533,9 @@ fn agrees_on_a_marker_path_occupied_by_a_file_or_a_directory() {
         &[tree_entry(".willikins-scaffold", "100644", "blob", "a-sha")],
     );
     let live = live_against(provider.url()).read(&under_file).unwrap();
-    let state = FakeState::new().with_scaffold_files(
-        &repo(),
-        &branch(),
-        &[(".willikins-scaffold", "a file\n")],
-    );
+    let state = FakeState::new()
+        .with_repo(&repo(), RepoVisibility::Private, true)
+        .with_scaffold_files(&repo(), &branch(), &[(".willikins-scaffold", "a file\n")]);
     let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
         .read(&under_file)
         .unwrap();
@@ -357,11 +557,9 @@ fn agrees_on_a_marker_path_occupied_by_a_file_or_a_directory() {
     let live = live_against(provider.url())
         .read(&inputs(seed_files()))
         .unwrap();
-    let state = FakeState::new().with_scaffold_files(
-        &repo(),
-        &branch(),
-        &[(".willikins-scaffold/x", "inside\n")],
-    );
+    let state = FakeState::new()
+        .with_repo(&repo(), RepoVisibility::Private, true)
+        .with_scaffold_files(&repo(), &branch(), &[(".willikins-scaffold/x", "inside\n")]);
     let fake = FakeGitHubScaffoldEnsure::new(Arc::new(Mutex::new(state)))
         .read(&inputs(seed_files()))
         .unwrap();
@@ -495,7 +693,11 @@ fn the_written_marker_is_byte_identical_between_fake_and_live() {
     let live_marker_base64 = marker_entry["contents"].as_str().unwrap();
     let live_marker_bytes = STANDARD.decode(live_marker_base64).unwrap();
 
-    let state = Arc::new(Mutex::new(FakeState::new()));
+    let state = Arc::new(Mutex::new(FakeState::new().with_repo(
+        &repo(),
+        RepoVisibility::Private,
+        true,
+    )));
     FakeGitHubScaffoldEnsure::new(state.clone())
         .ensure(&inputs(seed_files()), &token)
         .expect("fake tool commits");
