@@ -102,20 +102,17 @@ pub fn load_named_document(
         Some(path) => LoadError::Symlink(path),
         None => LoadError::NotFound,
     })?;
-    let workflow = willikins_dsl::load_document(&path).map_err(LoadError::Document)?;
+    // One read: the digest is of exactly the bytes that were parsed, so a
+    // file replaced between a parse and a second read can never record a
+    // digest that does not match the document planned (milestone 2b's
+    // adversarial pass).
+    let (workflow, bytes) =
+        willikins_dsl::load_document_with_bytes(&path).map_err(LoadError::Document)?;
     if &workflow.name != name {
         return Err(LoadError::NameMismatch {
             found: workflow.name.clone(),
         });
     }
-    // A second, independent read purely for the digest: `load_document`
-    // already validated the byte cap and read the file once to parse it;
-    // re-reading rather than threading the raw bytes through its own
-    // return keeps this module out of `willikins-dsl`'s internals (its
-    // `DocumentError` constructors are private to that crate) at the
-    // cost of one extra small local read, on a file that was just proven
-    // readable a moment ago.
-    let bytes = std::fs::read(&path).map_err(|_| LoadError::NotFound)?;
     Ok((DocumentSha256::compute(&bytes), workflow))
 }
 

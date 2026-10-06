@@ -323,6 +323,17 @@ fn is_anchored_or_aliased(event: &saphyr_parser::Event<'_>) -> bool {
 /// when the file cannot be read or is not UTF-8, or any error
 /// [`parse_document`] would return.
 pub fn load_document(path: &Path) -> Result<Workflow, DocumentError> {
+    load_document_with_bytes(path).map(|(workflow, _)| workflow)
+}
+
+/// [`load_document`], also returning the exact bytes it parsed, so a caller
+/// that records a digest of the document hashes what was parsed, never a
+/// second read of a file that may have changed in between.
+///
+/// # Errors
+///
+/// As [`load_document`].
+pub fn load_document_with_bytes(path: &Path) -> Result<(Workflow, Vec<u8>), DocumentError> {
     use std::io::Read;
 
     let read_error = |err: &dyn fmt::Display| {
@@ -355,8 +366,9 @@ pub fn load_document(path: &Path) -> Result<Workflow, DocumentError> {
         return Err(too_large(bytes.len()));
     }
 
-    let source = String::from_utf8(bytes).map_err(|err| read_error(&err))?;
-    parse_document(&source)
+    let source = std::str::from_utf8(&bytes).map_err(|err| read_error(&err))?;
+    let workflow = parse_document(source)?;
+    Ok((workflow, bytes))
 }
 
 /// The document format's published JSON schema, generated from
@@ -1533,6 +1545,19 @@ steps: {{}}
             DocumentErrorKind::TooLarge { bytes } => assert_eq!(bytes, size),
             other => panic!("expected TooLarge, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn load_document_with_bytes_returns_exactly_the_bytes_it_parsed() {
+        let source = "name: demo\ndescription: d\nsteps:\n  a: { tool: naming.v1, with: {} }\n";
+        let path = temp_file("with-bytes.yaml", source.as_bytes());
+        let (workflow, bytes) = load_document_with_bytes(&path).expect("parses");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(bytes, source.as_bytes());
+        assert_eq!(
+            serde_json::to_value(&workflow).expect("serializes"),
+            serde_json::to_value(parse_document(source).expect("parses")).expect("serializes"),
+        );
     }
 
     #[test]
