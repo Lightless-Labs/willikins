@@ -22,6 +22,36 @@ const TYPE_NAME_PATTERN: &str = "^[A-Z][A-Za-z0-9]*$";
 static TYPE_NAME_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(TYPE_NAME_PATTERN).expect("TYPE_NAME_PATTERN is valid"));
 
+/// `const fn` form of the same grammar [`TYPE_NAME_PATTERN`] describes: an
+/// uppercase ASCII letter, then any number of ASCII letters or digits.
+///
+/// Exists so a `const` assertion can enforce the grammar at a generic call
+/// site, where the regex engine behind [`TYPE_NAME_REGEX`] cannot run
+/// (milestone 3n, decision (f3): `willikins-core`'s `Value::known` and
+/// `known_list` use this, via `const { assert!(...) }`, to refuse a
+/// misnamed `DomainType::TYPE_NAME` at monomorphization instead of
+/// panicking at run time). [`TypeName::from_static`]'s `debug_assert!`
+/// uses it too. A test (`is_type_name_agrees_with_the_regex_on_a_table_of_names`)
+/// pins that this function and the regex agree.
+#[must_use]
+pub const fn is_type_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    if !bytes[0].is_ascii_uppercase() {
+        return false;
+    }
+    let mut i = 1;
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_alphanumeric() {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// The name of a domain type, as it appears in [`TypeRef`], port
 /// declarations, and JSON schemas: `PascalCase`, no separators.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -65,7 +95,7 @@ impl TypeName {
     /// serves for [`domain_types`].
     pub(crate) fn from_static(name: &'static str) -> Self {
         debug_assert!(
-            TYPE_NAME_REGEX.is_match(name),
+            is_type_name(name),
             "TYPE_NAME {name:?} does not match `{TYPE_NAME_PATTERN}`"
         );
         Self(name.to_string())
@@ -710,6 +740,46 @@ mod tests {
         let schema = serde_json::to_value(schemars::schema_for!(TypeName)).unwrap();
         assert_eq!(schema["type"], "string");
         assert_eq!(schema["pattern"], TYPE_NAME_PATTERN);
+    }
+
+    /// Milestone 3n, decision/acceptance (f3): the `const fn` must agree
+    /// with the regex every call site relies on, over a table covering
+    /// empty, a lowercase start, a digit start, `_`, `-`, non-ASCII (at
+    /// the start and mid-name), a single letter, and a long name.
+    #[test]
+    fn is_type_name_agrees_with_the_regex_on_a_table_of_names() {
+        let long = "A".repeat(200);
+        let cases: Vec<(&str, bool)> = vec![
+            ("", false),
+            ("gitHubRepo", false),
+            ("1GitHubRepo", false),
+            ("Git_HubRepo", false),
+            ("Git-HubRepo", false),
+            ("Ünicode", false),
+            ("GitHübRepo", false),
+            ("T", true),
+            ("GitHubRepo", true),
+            ("Abc123Xyz456", true),
+            ("A1", true),
+            (long.as_str(), true),
+        ];
+        assert_eq!(
+            cases.len(),
+            12,
+            "the acceptance test asks for at least 12 names"
+        );
+        for (name, expected) in cases {
+            assert_eq!(
+                is_type_name(name),
+                expected,
+                "is_type_name({name:?}) should be {expected}"
+            );
+            assert_eq!(
+                TYPE_NAME_REGEX.is_match(name),
+                expected,
+                "the regex disagrees with the test table for {name:?}"
+            );
+        }
     }
 
     // -------------------------------------------------------------
