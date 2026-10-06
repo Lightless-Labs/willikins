@@ -136,6 +136,13 @@ impl Tool for GitHubRepoEnsure {
                         visibility,
                         ours: true,
                         archived: false,
+                        // Milestone 3l, SHARED VALUES "Fake create (F1)":
+                        // a freshly created repository has no branches
+                        // yet (GitHub's own definition of empty), and no
+                        // default-branch key exists on the live create
+                        // body (decision (c)), so this never names one.
+                        branches: Some(Vec::new()),
+                        default_branch: None,
                     },
                 );
                 Ok(Ensured {
@@ -362,5 +369,27 @@ mod tests {
         );
         let observation = tool.read(&inputs).unwrap();
         assert!(matches!(observation, Observation::Present(_)));
+    }
+
+    /// Milestone 3l, task F1, acceptance 12: creating a repository records
+    /// it as empty (`branches: Some(vec![])`), never the legacy
+    /// `branches: None`, and names no default branch.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_on_creation_records_an_empty_repo() {
+        let state = Arc::new(Mutex::new(FakeState::new()));
+        let tool = GitHubRepoEnsure::new(state.clone());
+        let token = SinkToken::new();
+        tool.ensure(&inputs(RepoVisibility::Public), &token)
+            .unwrap();
+        let record = state
+            .lock()
+            .unwrap()
+            .github_repos
+            .get(&repo_key(&repo()))
+            .unwrap()
+            .clone();
+        assert_eq!(record.branches, Some(Vec::new()));
+        assert_eq!(record.default_branch, None);
     }
 }

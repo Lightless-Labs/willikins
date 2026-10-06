@@ -4,6 +4,27 @@
 //! G2. Port table and behaviour must equal the live tool's field for
 //! field (`tests/catalog_parity.rs`, `tests/scaffold_fake_agrees_with_live.rs`
 //! in `willikins-providers-github`).
+//!
+//! **A repository that does not exist, or exists but is empty.**
+//! Milestone 3l, task F1, mirroring decision (b)'s read table
+//! (`docs/plans/2026-10-05-milestone-3l-new-repositories.md`) for the
+//! cases this fake can model from `FakeState::github_repos`'
+//! [`crate::state::GitHubRepoRecord::branches`]: no record at all
+//! (`BranchExistence::RepositoryAbsent`); empty (`Some(vec![])`) with
+//! `branch` equal to the record's own default
+//! (`BranchExistence::Empty`); empty with a different `branch`
+//! (`BranchExistence::Mismatch`, a `Conflict` naming both); a non-empty
+//! `Some(list)` missing `branch` (`BranchExistence::MissingOnNonEmpty`,
+//! the unchanged missing-branch `NotFound`); and `None`, legacy
+//! "initialised, every branch exists" (`BranchExistence::Exists`,
+//! unaffected by this check at all). `read` maps `RepositoryAbsent` and
+//! `Empty` to [`Observation::Absent`], the same call decision (b) makes,
+//! so a document that creates its own repository in the same plan still
+//! plans cleanly. `ensure` on `Empty` lands the scaffold the same way it
+//! always has (this fake has no network latency to retry against, so it
+//! skips decision (a)'s own two-write split) and then records `branch`
+//! on the repository's own record, so a second `ensure` sees
+//! `BranchExistence::Exists` instead of re-entering this path.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -17,9 +38,9 @@ use willikins_core::{
 };
 use willikins_types::{CommitHeadline, GitBranchName, GitHubRepo, RepoFile, RepoPath};
 
-use crate::state::{FakeState, scaffold_key};
+use crate::state::{FakeState, default_branch_or_main, repo_key, scaffold_key};
 use crate::support::{
-    conflict, exact, get, invalid, list, port, require_present, scalar, tool_name,
+    conflict, exact, get, invalid, list, not_found, port, require_present, scalar, tool_name,
 };
 
 /// See `willikins_providers_github`'s live tool -- both crates share this
@@ -41,6 +62,29 @@ enum ScaffoldState {
         /// when writing, mirroring the live tool's own convergence.
         already_equal: HashSet<String>,
     },
+}
+
+/// Milestone 3l, task F1: whether `branch` exists on `repo`, according to
+/// `FakeState::github_repos`' own `branches` field -- this fake's model
+/// of decision (b)'s read table, for the cases it can model. See this
+/// module's own doc for the mapping to each read-table row.
+enum BranchExistence {
+    /// The branch exists: either a non-empty record whose `branches`
+    /// names it, or a legacy record (`branches: None`, "every branch
+    /// exists"). Proceed exactly as this tool always has, consulting
+    /// only `FakeState::scaffolds`.
+    Exists,
+    /// The repository is empty (`branches: Some(vec![])`) and `branch`
+    /// equals the record's own default.
+    Empty { default_branch: GitBranchName },
+    /// The repository is empty and `branch` does not equal the record's
+    /// own default.
+    Mismatch { default_branch: GitBranchName },
+    /// The repository has at least one branch, but not the requested
+    /// one.
+    MissingOnNonEmpty,
+    /// No record exists for this repository at all.
+    RepositoryAbsent,
 }
 
 /// `github.scaffold.ensure`.
@@ -236,6 +280,72 @@ impl GitHubScaffoldEnsure {
         ))
     }
 
+    /// Milestone 3l, task F1: this fake's own model of decision (b)'s read
+    /// table, from `state.github_repos` alone -- see this module's own
+    /// doc for the mapping.
+    fn observe_branch_existence(
+        state: &FakeState,
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+    ) -> BranchExistence {
+        let Some(record) = state.github_repos.get(&repo_key(repo)) else {
+            return BranchExistence::RepositoryAbsent;
+        };
+        let Some(branches) = &record.branches else {
+            return BranchExistence::Exists;
+        };
+        if branches.contains(branch) {
+            return BranchExistence::Exists;
+        }
+        if branches.is_empty() {
+            let default_branch = default_branch_or_main(record);
+            if *branch == default_branch {
+                BranchExistence::Empty { default_branch }
+            } else {
+                BranchExistence::Mismatch { default_branch }
+            }
+        } else {
+            BranchExistence::MissingOnNonEmpty
+        }
+    }
+
+    /// The `NotFound` `ensure` reports for
+    /// [`BranchExistence::RepositoryAbsent`] -- the same message the live
+    /// tool's `repository_absent_error` produces (milestone 3l, SHARED
+    /// VALUES "Repository-absent message (S3, `NotFound`)").
+    fn repository_absent_error(repo: &GitHubRepo) -> ToolError {
+        not_found(format!(
+            "`{repo}` does not exist; this tool never creates a repository (github.repo.ensure \
+             does)"
+        ))
+    }
+
+    /// The unchanged missing-branch `NotFound`, for
+    /// [`BranchExistence::MissingOnNonEmpty`] -- the same message decision
+    /// (b)'s table keeps for a non-empty repository missing the named
+    /// branch.
+    fn missing_branch_error(repo: &GitHubRepo, branch: &GitBranchName) -> ToolError {
+        not_found(format!(
+            "branch `{branch}` does not exist on `{repo}`; this tool never creates one"
+        ))
+    }
+
+    /// The `Conflict` for [`BranchExistence::Mismatch`] -- the same
+    /// message the live tool's `default_branch_mismatch` produces
+    /// (milestone 3l, SHARED VALUES "Default-branch mismatch (S2,
+    /// `Conflict`)").
+    fn default_branch_mismatch(
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+        default_branch: &GitBranchName,
+    ) -> ToolError {
+        conflict(format!(
+            "`{repo}` is empty, and its first commit can only land on its default branch \
+             `{default_branch}`, not `{branch}`; name `{default_branch}` in this document, or \
+             change the organisation's default branch name before the repository is created"
+        ))
+    }
+
     /// Whether `path`, itself absent from the flat `map`, is nonetheless
     /// occupied the way the live tool's tree walk sees it: some key lies
     /// beneath it (so it is a directory, the live tool's non-blob), or a
@@ -316,6 +426,24 @@ impl Tool for GitHubScaffoldEnsure {
         let mut state = self.state.lock().unwrap();
         let key = scaffold_key(&repo, &branch);
         state.record_read_call(Self::TOOL_NAME, &key);
+        match Self::observe_branch_existence(&state, &repo, &branch) {
+            BranchExistence::RepositoryAbsent | BranchExistence::Empty { .. } => {
+                return Ok(Observation::Absent {
+                    predicted: Self::outputs_for(&repo, &branch, &marker),
+                });
+            }
+            BranchExistence::Mismatch { default_branch } => {
+                return Err(Self::default_branch_mismatch(
+                    &repo,
+                    &branch,
+                    &default_branch,
+                ));
+            }
+            BranchExistence::MissingOnNonEmpty => {
+                return Err(Self::missing_branch_error(&repo, &branch));
+            }
+            BranchExistence::Exists => {}
+        }
         match Self::observe(state.scaffolds.get(&key), &marker, &files)? {
             ScaffoldState::Present => Ok(Observation::Present(Self::outputs_for(
                 &repo, &branch, &marker,
@@ -343,6 +471,30 @@ impl Tool for GitHubScaffoldEnsure {
             return Err(err);
         }
         let outputs = Self::outputs_for(&repo, &branch, &marker);
+        let was_empty = match Self::observe_branch_existence(&state, &repo, &branch) {
+            BranchExistence::RepositoryAbsent => {
+                return Err(Self::repository_absent_error(&repo));
+            }
+            BranchExistence::Mismatch { default_branch } => {
+                return Err(Self::default_branch_mismatch(
+                    &repo,
+                    &branch,
+                    &default_branch,
+                ));
+            }
+            BranchExistence::MissingOnNonEmpty => {
+                return Err(Self::missing_branch_error(&repo, &branch));
+            }
+            BranchExistence::Empty { default_branch } => {
+                debug_assert_eq!(
+                    default_branch, branch,
+                    "observe_branch_existence only produces Empty when branch already equals \
+                     the record's own default"
+                );
+                true
+            }
+            BranchExistence::Exists => false,
+        };
         match Self::observe(state.scaffolds.get(&key), &marker, &files)? {
             ScaffoldState::Present => Ok(Ensured {
                 outputs,
@@ -350,16 +502,31 @@ impl Tool for GitHubScaffoldEnsure {
             }),
             ScaffoldState::Foreign => Err(Self::foreign_conflict(&repo, &branch, &marker)),
             ScaffoldState::Absent { already_equal } => {
-                let map = state.scaffolds.entry(key).or_default();
-                for file in &files {
-                    if !already_equal.contains(file.path().as_str()) {
-                        map.insert(file.path().as_str().to_string(), file.content().to_string());
+                {
+                    let map = state.scaffolds.entry(key).or_default();
+                    for file in &files {
+                        if !already_equal.contains(file.path().as_str()) {
+                            map.insert(
+                                file.path().as_str().to_string(),
+                                file.content().to_string(),
+                            );
+                        }
                     }
+                    map.insert(
+                        marker_file.path().as_str().to_string(),
+                        marker_file.content().to_string(),
+                    );
                 }
-                map.insert(
-                    marker_file.path().as_str().to_string(),
-                    marker_file.content().to_string(),
-                );
+                // Milestone 3l, task F1: an empty-repository ensure's own
+                // first write makes the repository non-empty -- record
+                // `branch` so a second `ensure`/`read` sees
+                // `BranchExistence::Exists` rather than re-entering this
+                // path (decision (b): "empty" is "no branches at all").
+                if was_empty
+                    && let Some(record) = state.github_repos.get_mut(&repo_key(&repo))
+                {
+                    record.branches = Some(vec![branch.clone()]);
+                }
                 Ok(Ensured {
                     outputs,
                     changed: true,
@@ -373,10 +540,18 @@ impl Tool for GitHubScaffoldEnsure {
 mod tests {
     use super::*;
     use willikins_core::PortName;
-    use willikins_types::DomainType;
+    use willikins_types::{DomainType, RepoVisibility};
 
     fn repo() -> GitHubRepo {
         GitHubRepo::parse("acme/widget").unwrap()
+    }
+
+    /// A legacy-seeded repository (`branches: None`, "every branch
+    /// exists") -- what every test in this module that is not itself
+    /// about milestone 3l's existence/emptiness check wants, so this
+    /// task's new branch-existence check never changes their outcome.
+    fn legacy_repo_state() -> FakeState {
+        FakeState::new().with_repo(&repo(), RepoVisibility::Private, true)
     }
 
     fn branch() -> GitBranchName {
@@ -408,7 +583,7 @@ mod tests {
     }
 
     fn tool() -> GitHubScaffoldEnsure {
-        GitHubScaffoldEnsure::new(Arc::new(Mutex::new(FakeState::new())))
+        GitHubScaffoldEnsure::new(Arc::new(Mutex::new(legacy_repo_state())))
     }
 
     #[test]
@@ -446,7 +621,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn a_scaffold_half_applied_by_hand_still_converges() {
-        let state = Arc::new(Mutex::new(FakeState::new().with_scaffold_files(
+        let state = Arc::new(Mutex::new(legacy_repo_state().with_scaffold_files(
             &repo(),
             &branch(),
             &[("BUILD.bazel", "# reserve\n")],
@@ -462,7 +637,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // a test mints its own token
     fn ensure_conflicts_on_a_differing_seed_path_and_writes_nothing() {
-        let state = Arc::new(Mutex::new(FakeState::new().with_scaffold_files(
+        let state = Arc::new(Mutex::new(legacy_repo_state().with_scaffold_files(
             &repo(),
             &branch(),
             &[("BUILD.bazel", "someone else's content\n")],
@@ -477,7 +652,7 @@ mod tests {
 
     #[test]
     fn read_reports_foreign_when_the_marker_is_not_ours() {
-        let state = Arc::new(Mutex::new(FakeState::new().with_scaffold_files(
+        let state = Arc::new(Mutex::new(legacy_repo_state().with_scaffold_files(
             &repo(),
             &branch(),
             &[(".willikins-scaffold", "not ours\n")],
@@ -494,5 +669,150 @@ mod tests {
         let token = SinkToken::new();
         let err = tool.ensure(&inputs(Vec::new()), &token).unwrap_err();
         assert_eq!(err.kind, willikins_core::ToolErrorKind::Invalid);
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3l, task F1, acceptance 12: decision (b)'s table, for
+    // the cases this fake can model.
+    // -----------------------------------------------------------------
+
+    /// No `github_repos` record at all: `read` reports `Absent` (so a
+    /// document creating its own repository in the same plan still plans
+    /// cleanly), exactly like decision (b)'s table.
+    #[test]
+    fn read_reports_absent_when_the_repository_has_no_record() {
+        let tool = GitHubScaffoldEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+        let observation = tool.read(&inputs(seed_files())).unwrap();
+        assert!(matches!(observation, Observation::Absent { .. }));
+    }
+
+    /// No `github_repos` record at all: `ensure` refuses `NotFound`,
+    /// naming `github.repo.ensure` as the tool that creates one, and
+    /// writes nothing.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_reports_not_found_when_the_repository_has_no_record() {
+        let state = Arc::new(Mutex::new(FakeState::new()));
+        let tool = GitHubScaffoldEnsure::new(state.clone());
+        let token = SinkToken::new();
+        let err = tool.ensure(&inputs(seed_files()), &token).unwrap_err();
+        assert_eq!(err.kind, willikins_core::ToolErrorKind::NotFound);
+        assert!(err.message.contains("does not exist"), "{}", err.message);
+        assert!(
+            err.message.contains("github.repo.ensure"),
+            "{}",
+            err.message
+        );
+        assert!(state.lock().unwrap().scaffolds.is_empty());
+    }
+
+    /// An empty repository (`branches: Some(vec![])`) whose default
+    /// branch (unset, so `main`) equals the requested `branch`: `read`
+    /// reports `Absent`, and `ensure` lands the scaffold and then records
+    /// `branch` on the repository's own record.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn ensure_lands_on_an_empty_repository_with_the_default_branch_and_records_it() {
+        let state = Arc::new(Mutex::new(FakeState::new().with_empty_repo(
+            &repo(),
+            RepoVisibility::Private,
+            None,
+        )));
+        let tool = GitHubScaffoldEnsure::new(state.clone());
+        let read = tool.read(&inputs(seed_files())).unwrap();
+        assert!(matches!(read, Observation::Absent { .. }));
+
+        let token = SinkToken::new();
+        let ensured = tool.ensure(&inputs(seed_files()), &token).unwrap();
+        assert!(ensured.changed);
+
+        let record = state
+            .lock()
+            .unwrap()
+            .github_repos
+            .get(&repo_key(&repo()))
+            .unwrap()
+            .clone();
+        assert_eq!(record.branches, Some(vec![branch()]));
+
+        // A second ensure now sees `BranchExistence::Exists` and the
+        // scaffold already landed: idempotent.
+        let second = tool.ensure(&inputs(seed_files()), &token).unwrap();
+        assert!(!second.changed);
+        let observation = tool.read(&inputs(seed_files())).unwrap();
+        assert!(matches!(observation, Observation::Present(_)));
+    }
+
+    /// An empty repository whose default branch differs from the
+    /// requested `branch`: both `read` and `ensure` refuse `Conflict`,
+    /// naming both names, and write nothing.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn read_and_ensure_conflict_when_the_empty_repositorys_default_branch_differs() {
+        let trunk = GitBranchName::parse("trunk").unwrap();
+        let state = Arc::new(Mutex::new(FakeState::new().with_empty_repo(
+            &repo(),
+            RepoVisibility::Private,
+            Some(&trunk),
+        )));
+        let tool = GitHubScaffoldEnsure::new(state.clone());
+
+        let read_err = tool.read(&inputs(seed_files())).unwrap_err();
+        assert_eq!(read_err.kind, willikins_core::ToolErrorKind::Conflict);
+        assert!(read_err.message.contains("main"), "{}", read_err.message);
+        assert!(read_err.message.contains("trunk"), "{}", read_err.message);
+
+        let token = SinkToken::new();
+        let ensure_err = tool.ensure(&inputs(seed_files()), &token).unwrap_err();
+        assert_eq!(ensure_err.kind, willikins_core::ToolErrorKind::Conflict);
+        assert!(state.lock().unwrap().scaffolds.is_empty());
+    }
+
+    /// A non-empty repository (`branches: Some(list)`) missing the
+    /// requested `branch`: both `read` and `ensure` keep the unchanged
+    /// missing-branch `NotFound`, and write nothing.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn read_and_ensure_report_not_found_when_the_branch_is_missing_on_a_non_empty_repository() {
+        let mut seed_state = FakeState::new();
+        seed_state.github_repos.insert(
+            repo_key(&repo()),
+            crate::state::GitHubRepoRecord {
+                visibility: RepoVisibility::Private,
+                ours: true,
+                archived: false,
+                branches: Some(vec![GitBranchName::parse("other").unwrap()]),
+                default_branch: None,
+            },
+        );
+        let state = Arc::new(Mutex::new(seed_state));
+        let tool = GitHubScaffoldEnsure::new(state.clone());
+
+        let read_err = tool.read(&inputs(seed_files())).unwrap_err();
+        assert_eq!(read_err.kind, willikins_core::ToolErrorKind::NotFound);
+        assert!(
+            read_err.message.contains("does not exist on"),
+            "{}",
+            read_err.message
+        );
+
+        let token = SinkToken::new();
+        let ensure_err = tool.ensure(&inputs(seed_files()), &token).unwrap_err();
+        assert_eq!(ensure_err.kind, willikins_core::ToolErrorKind::NotFound);
+        assert!(state.lock().unwrap().scaffolds.is_empty());
+    }
+
+    /// A legacy record (`branches: None`, seeded by `with_repo`): both
+    /// `read` and `ensure` behave exactly as before this task, never
+    /// consulting branch existence at all.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a test mints its own token
+    fn a_legacy_repo_record_is_unaffected_by_the_branch_existence_check() {
+        let tool = GitHubScaffoldEnsure::new(Arc::new(Mutex::new(legacy_repo_state())));
+        let observation = tool.read(&inputs(seed_files())).unwrap();
+        assert!(matches!(observation, Observation::Absent { .. }));
+        let token = SinkToken::new();
+        let ensured = tool.ensure(&inputs(seed_files()), &token).unwrap();
+        assert!(ensured.changed);
     }
 }

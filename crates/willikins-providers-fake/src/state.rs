@@ -38,6 +38,39 @@ pub struct GitHubRepoRecord {
     /// repository this crate seeded before archiving existed).
     #[serde(default)]
     pub archived: bool,
+    /// Milestone 3l, task F1, SHARED VALUES "Fake record fields (F1)":
+    /// which branches exist. `None` (the default, and what every seed
+    /// file predating this field means) is legacy: "initialised, every
+    /// branch exists" -- `github.scaffold.ensure`'s fake twin never
+    /// consults this repository's branches at all and behaves exactly as
+    /// before this field existed. `Some(vec![])` is GitHub's own
+    /// definition of empty: no branches at all. `Some(list)` means
+    /// exactly those branches exist and no other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branches: Option<Vec<GitBranchName>>,
+    /// Milestone 3l, task F1: the repository's default branch. `None`
+    /// means `main` ([`default_branch_or_main`]), GitHub's own default
+    /// for an organisation that has not changed it -- the fake
+    /// `github.repo.ensure` create path (SHARED VALUES "Fake create
+    /// (F1)") always inserts `None` here, since the live create body has
+    /// no default-branch key (milestone 3l decision (c)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<GitBranchName>,
+}
+
+/// [`GitHubRepoRecord::default_branch`], or `main` when unset -- GitHub's
+/// own default for an organisation that has not changed its "Repository
+/// default branch" setting (milestone 3l decision (c)).
+///
+/// # Panics
+///
+/// Never, in practice: `"main"` always matches [`GitBranchName`]'s own
+/// grammar, so the fallback's `expect` cannot fail.
+#[must_use]
+pub fn default_branch_or_main(record: &GitHubRepoRecord) -> GitBranchName {
+    record.default_branch.clone().unwrap_or_else(|| {
+        GitBranchName::parse("main").expect("`main` is always a valid GitBranchName")
+    })
 }
 
 /// A Doppler project record: enough to answer `doppler.project.ensure`'s
@@ -793,7 +826,8 @@ impl FakeState {
         serde_json::from_str(json)
     }
 
-    /// Seed a GitHub repository.
+    /// Seed a GitHub repository. `branches: None` (legacy): "initialised,
+    /// every branch exists" -- see [`GitHubRepoRecord::branches`].
     #[must_use]
     pub fn with_repo(mut self, repo: &GitHubRepo, visibility: RepoVisibility, ours: bool) -> Self {
         self.github_repos.insert(
@@ -802,6 +836,8 @@ impl FakeState {
                 visibility,
                 ours,
                 archived: false,
+                branches: None,
+                default_branch: None,
             },
         );
         self
@@ -819,6 +855,35 @@ impl FakeState {
                 visibility: RepoVisibility::Private,
                 ours: false,
                 archived: true,
+                branches: None,
+                default_branch: None,
+            },
+        );
+        self
+    }
+
+    /// Seed an empty GitHub repository (milestone 3l, SHARED VALUES "Fake
+    /// helper (F1)"): `branches: Some(vec![])`, GitHub's own definition
+    /// of empty, so `github.scaffold.ensure`'s fake twin treats it exactly
+    /// as decision (b)'s "no branches at all" row, rather than
+    /// [`Self::with_repo`]'s legacy `branches: None`. `default_branch`
+    /// mirrors the organisation's own "Repository default branch"
+    /// setting; `None` means `main` ([`default_branch_or_main`]).
+    #[must_use]
+    pub fn with_empty_repo(
+        mut self,
+        repo: &GitHubRepo,
+        visibility: RepoVisibility,
+        default_branch: Option<&GitBranchName>,
+    ) -> Self {
+        self.github_repos.insert(
+            repo_key(repo),
+            GitHubRepoRecord {
+                visibility,
+                ours: true,
+                archived: false,
+                branches: Some(Vec::new()),
+                default_branch: default_branch.cloned(),
             },
         );
         self
@@ -1438,6 +1503,78 @@ mod tests {
             state
                 .take_fail_ensure_once("doppler.project.ensure", "p/stg")
                 .is_none()
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3l, task F1, acceptance 12
+    // -----------------------------------------------------------------
+
+    /// A `GitHubRepoRecord` seeded through `with_repo` (neither new field
+    /// set) round-trips byte-identically through `FakeState`'s JSON: no
+    /// `"branches"` or `"default_branch"` key appears at all
+    /// (`skip_serializing_if`), and reloading that JSON reproduces the
+    /// exact same record (`#[serde(default)]` on both fields).
+    #[test]
+    fn a_repo_record_with_neither_new_field_round_trips_byte_identically() {
+        let state = FakeState::new().with_repo(&repo(), RepoVisibility::Private, true);
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains("branches"), "json: {json}");
+        assert!(!json.contains("default_branch"), "json: {json}");
+        let back = FakeState::from_json(&json).unwrap();
+        let json_again = serde_json::to_string(&back).unwrap();
+        assert_eq!(json, json_again);
+        let record = back.github_repos.get(&repo_key(&repo())).unwrap();
+        assert_eq!(record.branches, None);
+        assert_eq!(record.default_branch, None);
+    }
+
+    /// Every existing fixture under `workflows/fixtures/state/` -- written
+    /// before `branches`/`default_branch` existed, so none mentions
+    /// either key -- still loads unchanged.
+    #[test]
+    fn every_existing_state_fixture_loads_unchanged() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("workflows")
+            .join("fixtures")
+            .join("state");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let json = std::fs::read_to_string(&path).unwrap();
+            FakeState::from_json(&json)
+                .unwrap_or_else(|err| panic!("{}: failed to load: {err}", path.display()));
+            checked += 1;
+        }
+        assert!(checked > 0, "no fixtures found under {}", dir.display());
+    }
+
+    /// [`FakeState::with_empty_repo`] sets `branches: Some(vec![])`, and a
+    /// default branch other than `main` round-trips through the builder.
+    #[test]
+    fn with_empty_repo_seeds_an_empty_repo_with_an_explicit_default_branch() {
+        let trunk = GitBranchName::parse("trunk").unwrap();
+        let state =
+            FakeState::new().with_empty_repo(&repo(), RepoVisibility::Private, Some(&trunk));
+        let record = state.github_repos.get(&repo_key(&repo())).unwrap();
+        assert_eq!(record.branches, Some(Vec::new()));
+        assert_eq!(record.default_branch, Some(trunk));
+        assert!(record.ours);
+    }
+
+    /// A `None` default branch means `main`.
+    #[test]
+    fn default_branch_or_main_falls_back_to_main_when_unset() {
+        let state = FakeState::new().with_empty_repo(&repo(), RepoVisibility::Private, None);
+        let record = state.github_repos.get(&repo_key(&repo())).unwrap();
+        assert_eq!(
+            default_branch_or_main(record),
+            GitBranchName::parse("main").unwrap()
         );
     }
 }
