@@ -1,0 +1,41 @@
+# Milestone 3o, task E1 (docs/plans/2026-10-06-milestone-3o-agents-md.md,
+# SHARED VALUES "Organisation AGENTS.md document (E1)", decision (d3)):
+# the organisation's own used document for a standalone repository's
+# whole `AGENTS.md` -- one `repo.file.render` node, a literal path, the
+# organisation's conventions as the template, one `TemplateValue` input
+# for the project's own name. A sibling document (`standalone-service
+# .yaml`) `uses:` this one and lists its `file` output in its scaffold.
+# Checks cleanly **as a root** against the fake catalog (decision (d3)'s
+# alternative, a literal template output, would fail `check_outputs` with
+# `LiteralOutput` instead -- this shape is the one that survives).
+# Pinned by `example_org_agents_md_checks_as_a_root`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: example-org-agents-md
+description: Render a standalone repository's AGENTS.md from Example-Org's own conventions.
+inputs:
+  project:
+    type: TemplateValue
+    description: "The project's canonical name"
+steps:
+  agents:
+    tool: repo.file.render
+    with:
+      path: AGENTS.md
+      values:
+        - ${{ inputs.project }}
+      template: |
+        # {{ 0 }}
+
+        Conventions for every Example-Org repository:
+
+        - Commits land on `main`; there is no long-lived branch.
+        - Every secret lives in Doppler, never in a committed file.
+        - CI is Buildkite; a pipeline reads `.buildkite/pipeline.yml`.
+
+        Commands:
+
+        - `cargo fmt --all --check`
+        - `cargo clippy --workspace --all-targets -- -D warnings`
+        - `cargo test --workspace`
+outputs:
+  file: ${{ steps.agents.file }}

@@ -16,6 +16,7 @@ mod acceptance_m3a_buildkite;
 mod adversarial;
 mod adversarial_11;
 mod adversarial_pass_1_cli;
+mod agents_md_documents;
 mod apply_and_journal;
 mod appstore_profile_apply_redaction;
 mod cli;

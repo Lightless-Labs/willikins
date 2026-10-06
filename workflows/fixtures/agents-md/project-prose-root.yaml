@@ -1,0 +1,18 @@
+# Milestone 3o, task E1 (docs/plans/2026-10-06-milestone-3o-agents-md.md,
+# SHARED VALUES "Negative fixture (E1)"): a `uses:` step's `with:`
+# literal is parsed directly against the used document's declared input
+# type (`check`'s `check_boundaries`, never embedded unchecked into a
+# deeper node first). `example-org-agents-md`'s `project` input is a
+# `TemplateValue` (no space, no newline); a prose literal is refused
+# `CheckError::InvalidLiteral { node: NodeName("agents_md"), port:
+# PortName("project"), .. }`, naming the `with:` input -- at `validate`
+# (link + check), before any `plan`. Pinned by
+# `project_prose_root_is_refused_invalid_literal_naming_the_with_input`
+# (crates/willikins-cli/tests/it/agents_md_documents.rs).
+name: project-prose-root
+description: "Negative fixture -- a uses: step cannot bind prose to a TemplateValue input."
+steps:
+  agents_md:
+    uses: example-org-agents-md
+    with:
+      project: "A sentence with spaces"
