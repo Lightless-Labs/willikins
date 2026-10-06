@@ -160,6 +160,9 @@ fn agrees_on_repository_absent() {
         "{}",
         fake_ensure.message
     );
+    // Independent adversarial pass: the fake re-types every SHARED VALUES
+    // message by hand, so equal kinds alone let its wording drift.
+    assert_eq!(live_ensure.message, fake_ensure.message);
 }
 
 /// An empty repository (`GET .../branches?per_page=1` answers `[]`)
@@ -228,6 +231,9 @@ fn agrees_on_an_empty_repository_with_a_mismatched_default_branch() {
         "{}",
         fake_ensure.message
     );
+    // Independent adversarial pass: messages, not only kinds.
+    assert_eq!(live_read.message, fake_read.message);
+    assert_eq!(live_ensure.message, fake_ensure.message);
 }
 
 /// A non-empty repository (`branches` reports a different branch) still
@@ -284,6 +290,9 @@ fn agrees_on_a_non_empty_repository_missing_the_branch() {
         "{}",
         fake_ensure.message
     );
+    // Independent adversarial pass: messages, not only kinds.
+    assert_eq!(live_read.message, fake_read.message);
+    assert_eq!(live_ensure.message, fake_ensure.message);
 }
 
 fn mock_ref_and_commit(provider: &mut MockProvider) {
