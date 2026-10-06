@@ -672,9 +672,6 @@ impl GitHubClient {
     /// never GitHub's own body, which could otherwise carry a fragment of
     /// the file this call just tried to write (the same reasoning as
     /// [`suppress_graphql_response_body`]).
-    // Not yet called by any tool: milestone 3l's task S3 is where
-    // `github.scaffold.ensure` starts calling this.
-    #[allow(dead_code)]
     pub(crate) fn create_first_file(
         &self,
         repo: &GitHubRepo,
@@ -701,9 +698,6 @@ impl GitHubClient {
     /// VALUES "Pause hook (S3)"), so a mock test's recording sleeper
     /// captures the wait instead of actually sleeping — the same seam
     /// [`Self::retry_secondary_limit`] already uses for its own waits.
-    // Not yet called by any tool: milestone 3l's task S3 is where
-    // `github.scaffold.ensure` starts calling this.
-    #[allow(dead_code)]
     pub(crate) fn pause(&self, duration: Duration) {
         self.sleeper.sleep(duration);
     }
@@ -1078,9 +1072,6 @@ fn suppress_graphql_response_body(err: ProviderError) -> ProviderError {
 /// `content`, `branch` — no `sha`, `committer` or `author` field exists
 /// on this type at all, so none can ever be added by accident at a call
 /// site.
-// Not yet constructed by any tool: milestone 3l's task S3 is where
-// `GitHubClient::create_first_file` starts being called.
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct FirstFileBody {
     message: String,
@@ -1091,9 +1082,6 @@ struct FirstFileBody {
 /// What every failure of [`GitHubClient::create_first_file`] says instead
 /// of GitHub's own response body (milestone 3l, SHARED VALUES "First-file
 /// failure message (S1)").
-// Not yet used by any tool: milestone 3l's task S3 is where
-// `GitHubClient::create_first_file` starts being called.
-#[allow(dead_code)]
 pub(crate) const FIRST_FILE_FAILURE_MESSAGE: &str =
     "GitHub refused to create the first file of an empty repository";
 
@@ -1104,9 +1092,6 @@ pub(crate) const FIRST_FILE_FAILURE_MESSAGE: &str =
 /// which is how `+` becomes `%2B` and `@` becomes `%40`, the only other
 /// characters [`RepoPath`] admits, without either needing its own
 /// special case.
-// Not yet called by any tool: milestone 3l's task S3 is where
-// `GitHubClient::create_first_file` starts being called.
-#[allow(dead_code)]
 fn encode_contents_path(path: &RepoPath) -> String {
     path.segments()
         .map(encode_contents_path_segment)
@@ -1119,9 +1104,6 @@ fn encode_contents_path(path: &RepoPath) -> String {
 /// `%XX` (uppercase hex). `RepoPath`'s own grammar admits only ASCII
 /// bytes in a segment, so iterating `str::bytes` (rather than `chars`)
 /// never splits a multi-byte character.
-// Not yet called by any tool: milestone 3l's task S3 is where
-// `GitHubClient::create_first_file` starts being called.
-#[allow(dead_code)]
 fn encode_contents_path_segment(segment: &str) -> String {
     use std::fmt::Write as _;
     let mut encoded = String::with_capacity(segment.len());
@@ -1144,9 +1126,6 @@ fn encode_contents_path_segment(segment: &str) -> String {
 /// fragment of the very file content this call just tried to write — the
 /// same reasoning as [`suppress_graphql_response_body`], applied to a
 /// REST body instead of a GraphQL one.
-// Not yet called by any tool: milestone 3l's task S3 is where
-// `GitHubClient::create_first_file` starts being called.
-#[allow(dead_code)]
 fn suppress_first_file_response_body(err: ProviderError) -> ProviderError {
     match err.status {
         None | Some(401 | 403) => err,

@@ -2,7 +2,8 @@
 //! decision (b)/(c)'s table
 //! (`docs/plans/2026-09-30-milestone-3g-file-writing.md`).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -10,8 +11,8 @@ use sha1::{Digest, Sha1};
 
 use willikins_core::{Inputs, Observation, PortName, SinkToken, Tool, ToolErrorKind, Value};
 use willikins_providers_github::{GitHubClient, GitHubScaffoldEnsure};
-use willikins_providers_http::testing::{MockProvider, partial_json_body};
-use willikins_providers_http::{Credential, Http};
+use willikins_providers_http::testing::{MockProvider, json_body, partial_json_body};
+use willikins_providers_http::{Credential, Http, Sleeper};
 use willikins_types::{CommitHeadline, DomainType, GitBranchName, GitHubRepo, RepoFile, RepoPath};
 
 /// The same algorithm `client::git_blob_sha` uses (`pub(crate)`, so this
@@ -99,6 +100,94 @@ fn mock_tree(provider: &mut MockProvider, sha: &str, entries: Vec<serde_json::Va
         .with_status(200)
         .with_body(serde_json::json!({"sha": sha, "tree": entries}).to_string())
         .create();
+}
+
+// -----------------------------------------------------------------------
+// `ensure`: decision (a)'s own table, milestone 3l, task S3.
+// -----------------------------------------------------------------------
+
+/// Three files whose byte-order-smallest path (`.editorconfig`, `'.'` <
+/// `'B'` < `'i'`) is the root file S3 writes through the Contents API.
+fn three_files() -> Vec<RepoFile> {
+    vec![
+        RepoFile::new(RepoPath::parse(".editorconfig").unwrap(), "root = true\n").unwrap(),
+        RepoFile::new(RepoPath::parse("BUILD.bazel").unwrap(), "# reserve\n").unwrap(),
+        RepoFile::new(RepoPath::parse("ios/BUILD.bazel").unwrap(), "ios content\n").unwrap(),
+    ]
+}
+
+/// A [`Sleeper`] that records every requested duration instead of
+/// waiting, so a test can assert exactly which waits `ensure` recorded,
+/// in order, without actually pausing.
+#[derive(Default)]
+struct RecordingSleeper(Mutex<Vec<Duration>>);
+
+impl Sleeper for RecordingSleeper {
+    fn sleep(&self, duration: Duration) {
+        self.0.lock().unwrap().push(duration);
+    }
+}
+
+impl RecordingSleeper {
+    fn waits(&self) -> Vec<Duration> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+/// A [`Sleeper`] that returns immediately -- used for [`Http`]'s own
+/// 429/5xx retry backoff in these tests, which is not what any
+/// acceptance here is pinning (that is [`RecordingSleeper`]'s job, on
+/// [`GitHubClient::with_sleeper`] instead).
+struct NoopSleeper;
+
+impl Sleeper for NoopSleeper {
+    fn sleep(&self, _duration: Duration) {}
+}
+
+/// A client whose own [`GitHubClient::pause`] waits are captured by a
+/// fresh [`RecordingSleeper`] (acceptance 7, 8's recorded waits), while
+/// [`Http`]'s unrelated retry backoff (acceptance 6's lost-response
+/// case) never actually sleeps.
+fn client_against_with_sleeper(url: String) -> (Arc<GitHubClient>, Arc<RecordingSleeper>) {
+    let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+    let http = Http::new(url, Vec::new(), credential).with_sleeper(Arc::new(NoopSleeper));
+    let recorder = Arc::new(RecordingSleeper::default());
+    let scaffold_sleeper: Arc<dyn Sleeper> = Arc::clone(&recorder) as Arc<dyn Sleeper>;
+    let client = GitHubClient::new(http).with_sleeper(scaffold_sleeper);
+    (Arc::new(client), recorder)
+}
+
+/// The three requests [`GitHubScaffoldEnsure`]'s `observe_without_branch`
+/// issues once the branch ref read fails: the branch ref itself (`404`),
+/// `GET /repos` (`default_branch` equal to [`branch`]), and an empty
+/// `branches` listing -- pinned with `.expect(calls)` each, since a
+/// scenario that re-observes while still empty (a `409` retry, or a
+/// ref-visibility poll) re-issues this same triple every time.
+fn mock_empty_repository(
+    provider: &mut MockProvider,
+    calls: usize,
+) -> (mockito::Mock, mockito::Mock, mockito::Mock) {
+    let ref_mock = provider
+        .mock("GET", "/repos/acme/widget/git/ref/heads/main")
+        .with_status(404)
+        .expect(calls)
+        .create();
+    let repo_mock = provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"visibility": "private", "topics": [], "default_branch": "main"})
+                .to_string(),
+        )
+        .expect(calls)
+        .create();
+    let branches_mock = provider
+        .mock("GET", "/repos/acme/widget/branches?per_page=1")
+        .with_status(200)
+        .with_body("[]")
+        .expect(calls)
+        .create();
+    (ref_mock, repo_mock, branches_mock)
 }
 
 // -----------------------------------------------------------------------
@@ -699,54 +788,518 @@ fn read_reports_absent_when_the_repository_is_empty_and_branch_is_the_default() 
     }
 }
 
-/// The same row, through `ensure`: a temporary `NotFound` naming task S3,
-/// which replaces it with the scaffold's own first write. No write.
+/// Acceptance 4, "Fresh": an empty repository, three files -- exactly one
+/// `PUT` of the root file (`.editorconfig`), then one `createCommitOnBranch`
+/// whose `additions` are the other two files plus the marker and whose
+/// `expectedHeadOid` is the root commit's own head. `changed: true`.
 #[test]
 #[allow(clippy::disallowed_methods)] // a test mints its own token
-fn ensure_reports_a_temporary_not_found_when_the_repository_is_empty() {
+fn ensure_on_a_fresh_empty_repository_puts_the_root_file_then_commits_the_rest() {
     let mut provider = MockProvider::start();
-    let ref_mock = provider
-        .mock("GET", "/repos/acme/widget/git/ref/heads/main")
-        .with_status(404)
+    let files = three_files();
+    let (ref_mock, repo_mock, branches_mock) = mock_empty_repository(&mut provider, 1);
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .match_body(json_body(serde_json::json!({
+            "message": "feat: scaffold\n\nThe first commit of an empty repository, seeded by \
+                         willikins. Marker: .willikins-scaffold.",
+            "content": STANDARD.encode("root = true\n"),
+            "branch": "main",
+        })))
+        .with_status(201)
+        .with_body("{}")
         .expect(1)
         .create();
-    let repo_mock = provider
-        .mock("GET", "/repos/acme/widget")
+
+    let editorconfig_sha = blob_sha(files[0].content().as_bytes());
+    mock_ref_and_commit(&mut provider, "root-head", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry(
+            ".editorconfig",
+            "100644",
+            "blob",
+            &editorconfig_sha,
+        )],
+    );
+
+    let build_bazel_sha = blob_sha(files[1].content().as_bytes());
+    let ios_build_sha = blob_sha(files[2].content().as_bytes());
+    let expected_marker_content = format!(
+        "managed-by: willikins\n{editorconfig_sha} .editorconfig\n{build_bazel_sha} \
+         BUILD.bazel\n{ios_build_sha} ios/BUILD.bazel\n"
+    );
+    let commit = provider
+        .mock("POST", "/graphql")
+        .match_body(partial_json_body(serde_json::json!({
+            "variables": {
+                "input": {
+                    "expectedHeadOid": "root-head",
+                    "fileChanges": {
+                        "additions": [
+                            {
+                                "path": ".willikins-scaffold",
+                                "contents": STANDARD.encode(&expected_marker_content),
+                            },
+                            {
+                                "path": "BUILD.bazel",
+                                "contents": STANDARD.encode("# reserve\n"),
+                            },
+                            {
+                                "path": "ios/BUILD.bazel",
+                                "contents": STANDARD.encode("ios content\n"),
+                            },
+                        ],
+                    },
+                },
+            },
+        })))
         .with_status(200)
         .with_body(
-            serde_json::json!({"visibility": "private", "topics": [], "default_branch": "main"})
+            serde_json::json!({"data": {"createCommitOnBranch": {"commit": {"oid": "new-sha"}}}})
                 .to_string(),
         )
         .expect(1)
         .create();
-    let branches_mock = provider
-        .mock("GET", "/repos/acme/widget/branches?per_page=1")
-        .with_status(200)
-        .with_body("[]")
-        .expect(1)
-        .create();
-    let commit = provider.mock("POST", "/graphql").expect(0).create();
-    let first_file = provider
-        .mock("PUT", "/repos/acme/widget/contents/BUILD.bazel")
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&scaffold_inputs(files), &token).unwrap();
+    assert!(ensured.changed);
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
+    put_mock.assert();
+    commit.assert();
+}
+
+/// Acceptance 5, "Resume after the root commit": the repository already
+/// holds only the root file, byte-equal, no marker -- no `PUT` at all; one
+/// `createCommitOnBranch` without the root file. `changed: true`. This
+/// never reaches `ScaffoldState::Empty` (the branch already has a head),
+/// so it proves S3's new code stays out of the way of the ordinary resume
+/// path.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_resumes_after_the_root_commit_without_a_put() {
+    let mut provider = MockProvider::start();
+    let files = three_files();
+    let editorconfig_sha = blob_sha(files[0].content().as_bytes());
+    mock_ref_and_commit(&mut provider, "root-head", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry(
+            ".editorconfig",
+            "100644",
+            "blob",
+            &editorconfig_sha,
+        )],
+    );
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
         .expect(0)
+        .create();
+
+    let build_bazel_sha = blob_sha(files[1].content().as_bytes());
+    let ios_build_sha = blob_sha(files[2].content().as_bytes());
+    let expected_marker_content = format!(
+        "managed-by: willikins\n{editorconfig_sha} .editorconfig\n{build_bazel_sha} \
+         BUILD.bazel\n{ios_build_sha} ios/BUILD.bazel\n"
+    );
+    let commit = provider
+        .mock("POST", "/graphql")
+        .match_body(partial_json_body(serde_json::json!({
+            "variables": {
+                "input": {
+                    "expectedHeadOid": "root-head",
+                    "fileChanges": {
+                        "additions": [
+                            {
+                                "path": ".willikins-scaffold",
+                                "contents": STANDARD.encode(&expected_marker_content),
+                            },
+                            {
+                                "path": "BUILD.bazel",
+                                "contents": STANDARD.encode("# reserve\n"),
+                            },
+                            {
+                                "path": "ios/BUILD.bazel",
+                                "contents": STANDARD.encode("ios content\n"),
+                            },
+                        ],
+                    },
+                },
+            },
+        })))
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": {"createCommitOnBranch": {"commit": {"oid": "new-sha"}}}})
+                .to_string(),
+        )
+        .expect(1)
         .create();
 
     let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
     let token = SinkToken::new();
-    let err = tool
-        .ensure(&scaffold_inputs(seed_files()), &token)
-        .unwrap_err();
-    assert_eq!(err.kind, ToolErrorKind::NotFound);
-    assert_eq!(
-        err.message,
-        "`acme/widget` is empty; this tool does not yet create a repository's first branch \
-         (milestone 3l task S3 adds that)"
+    let ensured = tool.ensure(&scaffold_inputs(files), &token).unwrap();
+    assert!(ensured.changed);
+    put_mock.assert();
+    commit.assert();
+}
+
+/// Acceptance 6, "Lost response", first half: the first-file `PUT`
+/// answers `502` four times (`Http::put`'s own retries: `MAX_RETRIES = 3`,
+/// four attempts total) while a re-observe sees the root file landed
+/// anyway -- the scaffold finishes, with no scaffold-level wait (a `502`
+/// is not a `409`, so decision (a) reports from the re-observe
+/// immediately rather than retrying the `PUT` itself).
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_finishes_when_a_lost_put_response_already_landed_the_root_file() {
+    let mut provider = MockProvider::start();
+    let files = three_files();
+    let (ref_mock, repo_mock, branches_mock) = mock_empty_repository(&mut provider, 1);
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .with_status(502)
+        .expect(4)
+        .create();
+
+    let editorconfig_sha = blob_sha(files[0].content().as_bytes());
+    mock_ref_and_commit(&mut provider, "root-head", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry(
+            ".editorconfig",
+            "100644",
+            "blob",
+            &editorconfig_sha,
+        )],
     );
+    let commit = provider
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": {"createCommitOnBranch": {"commit": {"oid": "new-sha"}}}})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let (client, sleeper) = client_against_with_sleeper(provider.url());
+    let tool = GitHubScaffoldEnsure::new(client);
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&scaffold_inputs(files), &token).unwrap();
+    assert!(ensured.changed);
+    assert!(sleeper.waits().is_empty());
     ref_mock.assert();
     repo_mock.assert();
     branches_mock.assert();
+    put_mock.assert();
     commit.assert();
-    first_file.assert();
+}
+
+/// Acceptance 6, "Lost response", second half: the first-file `PUT`
+/// answers `422` ("the file already exists") -- never retried by `Http`
+/// (`422` is not a retryable status) -- with a re-observe showing the
+/// root file landed. Same outcome as the `502` case.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_finishes_when_a_422_on_the_put_already_landed_the_root_file() {
+    let mut provider = MockProvider::start();
+    let files = three_files();
+    let (ref_mock, repo_mock, branches_mock) = mock_empty_repository(&mut provider, 1);
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .with_status(422)
+        .expect(1)
+        .create();
+
+    let editorconfig_sha = blob_sha(files[0].content().as_bytes());
+    mock_ref_and_commit(&mut provider, "root-head", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry(
+            ".editorconfig",
+            "100644",
+            "blob",
+            &editorconfig_sha,
+        )],
+    );
+    let commit = provider
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": {"createCommitOnBranch": {"commit": {"oid": "new-sha"}}}})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let (client, sleeper) = client_against_with_sleeper(provider.url());
+    let tool = GitHubScaffoldEnsure::new(client);
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&scaffold_inputs(files), &token).unwrap();
+    assert!(ensured.changed);
+    assert!(sleeper.waits().is_empty());
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
+    put_mock.assert();
+    commit.assert();
+}
+
+/// Acceptance 7, "Unavailable", first half: the first-file `PUT` answers
+/// `409` twice, then `201` -- two recorded waits of `UNAVAILABLE_WAIT`
+/// (`2s`), then the normal commit. Every `409` re-observe still reads
+/// empty, so each one re-issues the full empty-repository triple
+/// (`mock_empty_repository`'s own `calls` -- one initial, one per `409`).
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_retries_the_put_after_409_with_recorded_waits_then_commits() {
+    let mut provider = MockProvider::start();
+    let files = three_files();
+    let (ref_mock, repo_mock, branches_mock) = mock_empty_repository(&mut provider, 3);
+    let put_409 = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .with_status(409)
+        .expect(2)
+        .create();
+    let put_201 = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .with_status(201)
+        .with_body("{}")
+        .expect(1)
+        .create();
+
+    let editorconfig_sha = blob_sha(files[0].content().as_bytes());
+    mock_ref_and_commit(&mut provider, "root-head", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry(
+            ".editorconfig",
+            "100644",
+            "blob",
+            &editorconfig_sha,
+        )],
+    );
+    let commit = provider
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": {"createCommitOnBranch": {"commit": {"oid": "new-sha"}}}})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let (client, sleeper) = client_against_with_sleeper(provider.url());
+    let tool = GitHubScaffoldEnsure::new(client);
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&scaffold_inputs(files), &token).unwrap();
+    assert!(ensured.changed);
+    assert_eq!(sleeper.waits(), vec![Duration::from_secs(2); 2]);
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
+    put_409.assert();
+    put_201.assert();
+    commit.assert();
+}
+
+/// Acceptance 7, "Unavailable", second half: five `409`s in a row --
+/// `Err` after `MAX_UNAVAILABLE_ATTEMPTS` (five) attempts, no commit.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_gives_up_after_max_unavailable_attempts_on_persistent_409s() {
+    let mut provider = MockProvider::start();
+    let files = three_files();
+    let (ref_mock, repo_mock, branches_mock) = mock_empty_repository(&mut provider, 6);
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .with_status(409)
+        .expect(5)
+        .create();
+    let commit = provider.mock("POST", "/graphql").expect(0).create();
+
+    let (client, sleeper) = client_against_with_sleeper(provider.url());
+    let tool = GitHubScaffoldEnsure::new(client);
+    let token = SinkToken::new();
+    let err = tool.ensure(&scaffold_inputs(files), &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Conflict);
+    assert_eq!(
+        err.message,
+        "GitHub refused to create the first file of an empty repository"
+    );
+    assert_eq!(sleeper.waits(), vec![Duration::from_secs(2); 4]);
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
+    put_mock.assert();
+    commit.assert();
+}
+
+/// Acceptance 8, "Ref lag", first half: after a `201`, the re-observe
+/// reads empty three times, then `Absent` -- three recorded waits of
+/// `REF_VISIBLE_WAIT` (`300ms`). One empty triple for the initial
+/// observe plus one per lagging re-observe (`calls: 4`).
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_polls_for_ref_visibility_after_a_successful_put_with_recorded_waits() {
+    let mut provider = MockProvider::start();
+    let files = three_files();
+    let (ref_mock, repo_mock, branches_mock) = mock_empty_repository(&mut provider, 4);
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .with_status(201)
+        .with_body("{}")
+        .expect(1)
+        .create();
+
+    let editorconfig_sha = blob_sha(files[0].content().as_bytes());
+    mock_ref_and_commit(&mut provider, "root-head", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry(
+            ".editorconfig",
+            "100644",
+            "blob",
+            &editorconfig_sha,
+        )],
+    );
+    let commit = provider
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": {"createCommitOnBranch": {"commit": {"oid": "new-sha"}}}})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let (client, sleeper) = client_against_with_sleeper(provider.url());
+    let tool = GitHubScaffoldEnsure::new(client);
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&scaffold_inputs(files), &token).unwrap();
+    assert!(ensured.changed);
+    assert_eq!(sleeper.waits(), vec![Duration::from_millis(300); 3]);
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
+    put_mock.assert();
+    commit.assert();
+}
+
+/// Acceptance 8, "Ref lag", second half: the re-observe keeps reading
+/// empty for the one unconditional read plus every one of
+/// `MAX_REF_VISIBLE_POLLS` (ten) polls -- eleven empty reads in total,
+/// ten recorded waits, then the "not visible yet" `Provider` error. No
+/// commit.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_reports_ref_not_visible_after_exhausting_ref_visibility_polls() {
+    let mut provider = MockProvider::start();
+    let files = three_files();
+    // One initial empty triple, plus eleven more for the eleven empty
+    // re-observes after the `PUT`.
+    let (ref_mock, repo_mock, branches_mock) = mock_empty_repository(&mut provider, 12);
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .with_status(201)
+        .with_body("{}")
+        .expect(1)
+        .create();
+    let commit = provider.mock("POST", "/graphql").expect(0).create();
+
+    let (client, sleeper) = client_against_with_sleeper(provider.url());
+    let tool = GitHubScaffoldEnsure::new(client);
+    let token = SinkToken::new();
+    let err = tool.ensure(&scaffold_inputs(files), &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    assert_eq!(
+        err.message,
+        "the first commit of `acme/widget` landed, but `main` is not visible yet; re-run \
+         this document to finish the scaffold"
+    );
+    assert_eq!(sleeper.waits(), vec![Duration::from_millis(300); 10]);
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
+    put_mock.assert();
+    commit.assert();
+}
+
+/// Acceptance 9, one of the refusal/edge rows: a one-file scaffold whose
+/// single file is also the root file commits only the marker (`files`
+/// filtered by `already_equal` is empty once the root file is excluded).
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_on_an_empty_repository_with_one_file_commits_only_the_marker() {
+    let mut provider = MockProvider::start();
+    let one_file =
+        vec![RepoFile::new(RepoPath::parse(".editorconfig").unwrap(), "root = true\n").unwrap()];
+    let (ref_mock, repo_mock, branches_mock) = mock_empty_repository(&mut provider, 1);
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .with_status(201)
+        .with_body("{}")
+        .expect(1)
+        .create();
+
+    let editorconfig_sha = blob_sha(one_file[0].content().as_bytes());
+    mock_ref_and_commit(&mut provider, "root-head", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry(
+            ".editorconfig",
+            "100644",
+            "blob",
+            &editorconfig_sha,
+        )],
+    );
+    let expected_marker_content =
+        format!("managed-by: willikins\n{editorconfig_sha} .editorconfig\n");
+    let commit = provider
+        .mock("POST", "/graphql")
+        .match_body(partial_json_body(serde_json::json!({
+            "variables": {
+                "input": {
+                    "expectedHeadOid": "root-head",
+                    "fileChanges": {
+                        "additions": [
+                            {
+                                "path": ".willikins-scaffold",
+                                "contents": STANDARD.encode(&expected_marker_content),
+                            },
+                        ],
+                    },
+                },
+            },
+        })))
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": {"createCommitOnBranch": {"commit": {"oid": "new-sha"}}}})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&scaffold_inputs(one_file), &token).unwrap();
+    assert!(ensured.changed);
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
+    put_mock.assert();
+    commit.assert();
 }
 
 /// Row: `404`/`409` on the branch ref, `200` on `GET /repos` with
@@ -782,6 +1335,12 @@ fn read_and_ensure_conflict_when_the_empty_repositorys_default_branch_differs() 
             .expect(2)
             .create();
         let commit = provider.mock("POST", "/graphql").expect(0).create();
+        // Milestone 3l, acceptance 9: a mismatched default branch writes
+        // nothing, including no first-file `PUT`.
+        let first_file = provider
+            .mock("PUT", "/repos/acme/widget/contents/BUILD.bazel")
+            .expect(0)
+            .create();
 
         let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
         let read_err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
@@ -800,6 +1359,7 @@ fn read_and_ensure_conflict_when_the_empty_repositorys_default_branch_differs() 
             .unwrap_err();
         assert_eq!(ensure_err.kind, ToolErrorKind::Conflict, "{branch_status}");
         assert_eq!(ensure_err.message, read_err.message, "{branch_status}");
+        first_file.assert();
         ref_mock.assert();
         repo_mock.assert();
         branches_mock.assert();

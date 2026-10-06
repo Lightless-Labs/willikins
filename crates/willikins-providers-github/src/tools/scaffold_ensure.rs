@@ -30,9 +30,20 @@
 //! milestone 3j made for Doppler). `ensure` tells them apart: a missing
 //! repository is `NotFound` naming `github.repo.ensure` as the tool that
 //! creates one; an empty repository whose branch matches the default is
-//! [`ScaffoldState::Empty`], handled by milestone 3l's task S3 (until then,
-//! a temporary `NotFound` naming that task). An empty repository whose
-//! `branch` does *not* match the default is a `Conflict` naming both
+//! [`ScaffoldState::Empty`], and `ensure` lands the scaffold's own first
+//! write there (milestone 3l, task S3, decision (a)): the byte-order-smallest
+//! file in `files` is written through `GitHubClient::create_first_file` (the
+//! one route GitHub documents for an empty repository), then `ensure`
+//! re-observes -- never trusting the `PUT`'s own body -- and decides what to
+//! do next purely from that read: once the re-observe reports the root file
+//! landed, the rest of `files` plus the marker land as one ordinary
+//! `createCommitOnBranch`, exactly as for any other repository. A `409`
+//! whose re-observe still reads empty is retried (bounded,
+//! `GitHubClient::pause` between attempts); a successful `PUT` whose
+//! re-observe still reads empty is polled for ref visibility (also bounded,
+//! also paused); any other failure whose re-observe still reads empty is
+//! reported as-is. An empty repository whose `branch` does *not* match the
+//! default is a `Conflict` naming both
 //! names, at `read` and at `ensure` alike -- this tool has no way to
 //! create a branch other than the organisation's default on an empty
 //! repository (decision (c)). A non-empty repository still missing the
@@ -52,6 +63,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use indexmap::IndexMap;
 
@@ -80,6 +92,26 @@ const MIN_FILES: usize = 1;
 /// The most files a call may seed -- SHARED VALUES' `files: list<RepoFile>`
 /// bound.
 const MAX_FILES: usize = 64;
+
+/// Milestone 3l, SHARED VALUES "Waits (S3)": after a first-file `PUT`
+/// answers `409` and a re-observe still reads the repository as empty,
+/// the most attempts `ensure` makes at that `PUT` in total, including the
+/// first.
+const MAX_UNAVAILABLE_ATTEMPTS: u32 = 5;
+
+/// Milestone 3l, SHARED VALUES "Waits (S3)": the wait between successive
+/// first-file `PUT` attempts after a `409`.
+const UNAVAILABLE_WAIT: Duration = Duration::from_secs(2);
+
+/// Milestone 3l, SHARED VALUES "Waits (S3)": after a first-file `PUT`
+/// answers `2xx` but a re-observe still reads the repository as empty
+/// (ref visibility lags creation), the most extra re-observes `ensure`
+/// polls for before reporting "not visible yet".
+const MAX_REF_VISIBLE_POLLS: u32 = 10;
+
+/// Milestone 3l, SHARED VALUES "Waits (S3)": the wait between successive
+/// ref-visibility polls.
+const REF_VISIBLE_WAIT: Duration = Duration::from_millis(300);
 
 /// The most `createCommitOnBranch` attempts `ensure` makes in total,
 /// including the first: a busy trunk can move twice while this call is in
@@ -119,16 +151,15 @@ enum ScaffoldState {
     /// Milestone 3l, task S2: the repository exists but has no branches
     /// at all (GitHub's own definition of "empty"), and `branch` names
     /// its default branch. `read` maps this to [`Observation::Absent`];
-    /// `ensure` does not yet write anything here -- milestone 3l's task
-    /// S3 turns this into the scaffold's own first write (decision (a)).
+    /// `ensure` lands the scaffold's own first write here (milestone 3l,
+    /// task S3, decision (a)).
     Empty {
         /// The repository's reported default branch -- always equal to
         /// the `branch` input when this state is produced; see
-        /// [`GitHubScaffoldEnsure::observe_without_branch`]. Not yet read
-        /// by `ensure`: milestone 3l's task S3, which lands the scaffold's
-        /// own first write, is where that starts.
-        // Not yet read: milestone 3l's task S3 starts consulting it.
-        #[allow(dead_code)]
+        /// [`GitHubScaffoldEnsure::observe_without_branch`].
+        /// [`GitHubScaffoldEnsure::initialize_empty_repository`] takes
+        /// this as its own `debug_assert_eq!` of decision (a)'s first
+        /// check, rather than this crate carrying a field nothing reads.
         default_branch: GitBranchName,
     },
     /// Milestone 3l, task S2: no repository exists at this key that this
@@ -325,14 +356,45 @@ impl GitHubScaffoldEnsure {
         ))
     }
 
-    /// The temporary `NotFound` `ensure` reports for
-    /// [`ScaffoldState::Empty`] until milestone 3l's task S3 replaces it
-    /// with the scaffold's own first write (decision (a)).
-    fn empty_repository_not_yet_handled(repo: &GitHubRepo) -> ToolError {
-        not_found(format!(
-            "`{repo}` is empty; this tool does not yet create a repository's first branch \
-             (milestone 3l task S3 adds that)"
-        ))
+    /// The element of `files` whose [`RepoPath::as_str`] is smallest in
+    /// byte order (milestone 3l, SHARED VALUES "Root file (S3)") -- the
+    /// one seed path `ensure` writes through the Contents API to
+    /// initialise an empty repository's first branch (decision (a)).
+    /// `validate_shape` already enforces at least [`MIN_FILES`] entries
+    /// and no duplicate path, so this always finds exactly one smallest
+    /// element.
+    fn root_file(files: &[RepoFile]) -> &RepoFile {
+        files
+            .iter()
+            .min_by(|a, b| a.path().as_str().cmp(b.path().as_str()))
+            .expect("validate_shape enforces at least one file")
+    }
+
+    /// The first commit's message when `ensure` initialises an empty
+    /// repository (milestone 3l, SHARED VALUES "Root commit message
+    /// (S3)"): `message`'s headline, then a fixed body naming `marker` --
+    /// distinct from [`Tool::ensure`]'s own second-commit body
+    /// (`"Seeded by willikins. Marker: {marker}."`) so a reader of either
+    /// commit can tell which one seeded the repository.
+    fn root_commit_message(message: &CommitHeadline, marker: &RepoPath) -> String {
+        format!(
+            "{message}\n\nThe first commit of an empty repository, seeded by willikins. Marker: \
+             {marker}."
+        )
+    }
+
+    /// The `Provider` `ensure` reports when the first-file `PUT` landed
+    /// (or a later re-observe showed it had) but `branch`'s head still
+    /// is not visible after [`MAX_REF_VISIBLE_POLLS`] polls (milestone
+    /// 3l, SHARED VALUES "Ref not yet visible (S3, Provider)").
+    fn ref_not_yet_visible_error(repo: &GitHubRepo, branch: &GitBranchName) -> ToolError {
+        ToolError {
+            kind: ToolErrorKind::Provider,
+            message: format!(
+                "the first commit of `{repo}` landed, but `{branch}` is not visible yet; \
+                 re-run this document to finish the scaffold"
+            ),
+        }
     }
 
     /// The `Conflict` [`Self::observe_without_branch`] produces when an
@@ -536,6 +598,157 @@ impl GitHubScaffoldEnsure {
             already_equal,
         })
     }
+
+    /// Resolve `state` (already `Absent`, or `Empty` -- in which case
+    /// this lands the scaffold's own first write first, via
+    /// [`Self::initialize_empty_repository`], milestone 3l's task S3)
+    /// into the `(head, already_equal)` pair [`Tool::ensure`]'s own
+    /// commit loop needs, or `None` when nothing needs committing at all
+    /// (`Present`). Kept separate from `ensure` itself only to stay
+    /// under this crate's line-count lint; it has no life of its own
+    /// outside that call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolError`] for [`ScaffoldState::Foreign`],
+    /// [`ScaffoldState::RepositoryAbsent`], or anything
+    /// [`Self::initialize_empty_repository`] itself returns.
+    fn resolve_initial_state(
+        client: &GitHubClient,
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+        marker: &RepoPath,
+        files: &[RepoFile],
+        message: &CommitHeadline,
+        state: ScaffoldState,
+    ) -> Result<Option<(String, HashSet<String>)>, ToolError> {
+        match state {
+            ScaffoldState::Present => Ok(None),
+            ScaffoldState::Foreign => Err(Self::foreign_conflict(repo, branch, marker)),
+            ScaffoldState::RepositoryAbsent => Err(Self::repository_absent_error(repo)),
+            ScaffoldState::Absent {
+                head,
+                already_equal,
+            } => Ok(Some((head, already_equal))),
+            ScaffoldState::Empty { default_branch } => {
+                match Self::initialize_empty_repository(
+                    client,
+                    repo,
+                    branch,
+                    &default_branch,
+                    marker,
+                    files,
+                    message,
+                )? {
+                    ScaffoldState::Absent {
+                        head,
+                        already_equal,
+                    } => Ok(Some((head, already_equal))),
+                    ScaffoldState::Present => Ok(None),
+                    ScaffoldState::Foreign => Err(Self::foreign_conflict(repo, branch, marker)),
+                    ScaffoldState::RepositoryAbsent => Err(Self::repository_absent_error(repo)),
+                    // `initialize_empty_repository` never returns this
+                    // variant itself: its own loop either resolves past
+                    // `Empty` or returns `Err` directly.
+                    ScaffoldState::Empty { .. } => {
+                        unreachable!("initialize_empty_repository resolves Empty before returning")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Milestone 3l, task S3, decision (a): land the scaffold's own first
+    /// write on an empty repository through the Contents API, then
+    /// re-observe -- never trusting the `PUT`'s own body -- until the
+    /// repository is confirmed non-empty, returning the resulting state
+    /// so [`Tool::ensure`]'s own commit loop can land the rest of `files`
+    /// plus the marker exactly as it would for any other repository.
+    ///
+    /// Called only once `branch` is already confirmed equal to
+    /// `default_branch`, the repository's own default branch
+    /// ([`Self::observe_without_branch`]'s own check, decision (a)'s
+    /// first point) -- the `debug_assert_eq!` below checks that
+    /// invariant rather than repeating the refusal, since by the time a
+    /// caller reaches [`ScaffoldState::Empty`] the `Conflict` path has
+    /// already run.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolError`]:
+    /// - [`to_tool_error`] of the first-file `PUT`'s own failure, once a
+    ///   re-observe confirms the repository is still empty and the
+    ///   failure was not a `409` (or a `409` that has exhausted
+    ///   [`MAX_UNAVAILABLE_ATTEMPTS`] attempts).
+    /// - `Provider`, [`Self::ref_not_yet_visible_error`], once a `2xx`
+    ///   `PUT`'s re-observe still reads empty after
+    ///   [`MAX_REF_VISIBLE_POLLS`] polls.
+    /// - [`Self::foreign_conflict`] or [`Self::repository_absent_error`]
+    ///   if a re-observe between attempts shows the marker landed foreign
+    ///   to this tool, or the repository vanished outright -- both only
+    ///   reachable if something else wrote to the same repository
+    ///   concurrently.
+    ///
+    /// Never returns `Ok(ScaffoldState::Empty { .. })`: this method's own
+    /// loop only returns once a re-observe has moved past `Empty`, or
+    /// returns `Err` instead.
+    fn initialize_empty_repository(
+        client: &GitHubClient,
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+        default_branch: &GitBranchName,
+        marker: &RepoPath,
+        files: &[RepoFile],
+        message: &CommitHeadline,
+    ) -> Result<ScaffoldState, ToolError> {
+        debug_assert_eq!(
+            branch, default_branch,
+            "decision (a)'s first check already refused a mismatch before this is reached"
+        );
+        let root_file = Self::root_file(files).clone();
+        let root_message = Self::root_commit_message(message, marker);
+
+        let mut unavailable_attempts: u32 = 0;
+        loop {
+            unavailable_attempts += 1;
+            let put_result = client.create_first_file(repo, branch, &root_file, &root_message);
+            let put_was_409 = matches!(&put_result, Err(err) if err.status == Some(409));
+            let put_was_ok = put_result.is_ok();
+
+            // Whatever the `PUT` answered, re-observe and decide only
+            // from that read (decision (a), point 3) -- polling for ref
+            // visibility only when the `PUT` itself reported success,
+            // since a failed `PUT` reading empty again has nothing left
+            // to wait for at this layer.
+            let mut ref_polls: u32 = 0;
+            loop {
+                match Self::observe(client, repo, branch, marker, files)? {
+                    state @ (ScaffoldState::Absent { .. }
+                    | ScaffoldState::Present
+                    | ScaffoldState::Foreign
+                    | ScaffoldState::RepositoryAbsent) => return Ok(state),
+                    ScaffoldState::Empty { .. } => {
+                        if !put_was_ok {
+                            break;
+                        }
+                        if ref_polls >= MAX_REF_VISIBLE_POLLS {
+                            return Err(Self::ref_not_yet_visible_error(repo, branch));
+                        }
+                        client.pause(REF_VISIBLE_WAIT);
+                        ref_polls += 1;
+                    }
+                }
+            }
+
+            if put_was_409 && unavailable_attempts < MAX_UNAVAILABLE_ATTEMPTS {
+                client.pause(UNAVAILABLE_WAIT);
+                continue;
+            }
+            return Err(to_tool_error(put_result.expect_err(
+                "put_result is Err here: put_was_ok would have returned Ok above",
+            )));
+        }
+    }
 }
 
 impl Tool for GitHubScaffoldEnsure {
@@ -583,26 +796,14 @@ impl Tool for GitHubScaffoldEnsure {
         let mut state = Self::observe(&client, &repo, &branch, &marker, &files)?;
         let mut attempts: u32 = 0;
         loop {
-            let (head, already_equal) = match state {
-                ScaffoldState::Present => {
-                    return Ok(Ensured {
-                        outputs,
-                        changed: false,
-                    });
-                }
-                ScaffoldState::Foreign => {
-                    return Err(Self::foreign_conflict(&repo, &branch, &marker));
-                }
-                ScaffoldState::RepositoryAbsent => {
-                    return Err(Self::repository_absent_error(&repo));
-                }
-                ScaffoldState::Empty { .. } => {
-                    return Err(Self::empty_repository_not_yet_handled(&repo));
-                }
-                ScaffoldState::Absent {
-                    head,
-                    already_equal,
-                } => (head, already_equal),
+            let Some((head, already_equal)) = Self::resolve_initial_state(
+                &client, &repo, &branch, &marker, &files, &message, state,
+            )?
+            else {
+                return Ok(Ensured {
+                    outputs,
+                    changed: false,
+                });
             };
 
             let mut additions: Vec<RepoFile> = files
@@ -642,17 +843,23 @@ impl Tool for GitHubScaffoldEnsure {
                         ScaffoldState::Foreign => {
                             return Err(Self::foreign_conflict(&repo, &branch, &marker));
                         }
-                        // Both only reachable if the branch this attempt
+                        // Only reachable if the branch this attempt
                         // targeted was deleted, and the repository
                         // emptied or vanished outright, between the
                         // first observe and this re-read -- not a case
                         // the original commit failure can explain, so
-                        // these take priority over it.
+                        // this takes priority over it.
                         ScaffoldState::RepositoryAbsent => {
                             return Err(Self::repository_absent_error(&repo));
                         }
+                        // Same reasoning: a `createCommitOnBranch` cannot
+                        // have landed against a branch that no longer has
+                        // any head to compare-and-swap on, so there is
+                        // nothing this re-read can add -- report the
+                        // original failure rather than re-entering the
+                        // empty-repository initialisation a second time.
                         ScaffoldState::Empty { .. } => {
-                            return Err(Self::empty_repository_not_yet_handled(&repo));
+                            return Err(to_tool_error(original_err));
                         }
                         ScaffoldState::Absent {
                             head: new_head,
