@@ -34,7 +34,7 @@ expression: schema
       "type": "object",
       "additionalProperties": false,
       "patternProperties": {
-        "^[a-z][a-z0-9_]*$": {
+        "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$": {
           "$ref": "#/$defs/Value"
         }
       }
@@ -113,7 +113,7 @@ expression: schema
     },
     "InputName": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_]*$"
+      "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$"
     },
     "MissingInput": {
       "description": "A declared input `describe` found neither a raw value nor a default for.",

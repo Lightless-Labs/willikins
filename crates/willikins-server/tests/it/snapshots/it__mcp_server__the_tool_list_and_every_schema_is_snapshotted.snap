@@ -181,7 +181,7 @@ expression: snapshot
           "type": "object"
         },
         "InputName": {
-          "pattern": "^[a-z][a-z0-9_]*$",
+          "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$",
           "type": "string"
         },
         "MissingInput": {
@@ -392,7 +392,7 @@ expression: snapshot
           "additionalProperties": false,
           "description": "Every input that resolved to a concrete [`Value`]: a parsed raw\nvalue, or a declared default. In declaration order.",
           "patternProperties": {
-            "^[a-z][a-z0-9_]*$": {
+            "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$": {
               "$ref": "#/$defs/Value"
             }
           },
@@ -436,7 +436,7 @@ expression: snapshot
           "type": "string"
         },
         "InputName": {
-          "pattern": "^[a-z][a-z0-9_]*$",
+          "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$",
           "type": "string"
         },
         "InputSummary": {
@@ -712,7 +712,7 @@ expression: snapshot
           ]
         },
         "InputName": {
-          "pattern": "^[a-z][a-z0-9_]*$",
+          "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$",
           "type": "string"
         },
         "Inputs": {
@@ -726,7 +726,7 @@ expression: snapshot
           "type": "object"
         },
         "NodeName": {
-          "pattern": "^[a-z][a-z0-9_]*$",
+          "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$",
           "type": "string"
         },
         "Outputs": {
@@ -1179,11 +1179,11 @@ expression: snapshot
           "type": "object"
         },
         "InputName": {
-          "pattern": "^[a-z][a-z0-9_]*$",
+          "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$",
           "type": "string"
         },
         "NodeName": {
-          "pattern": "^[a-z][a-z0-9_]*$",
+          "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$",
           "type": "string"
         },
         "NodeStatus": {
@@ -2249,7 +2249,7 @@ expression: snapshot
           ]
         },
         "InputName": {
-          "pattern": "^[a-z][a-z0-9_]*$",
+          "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$",
           "type": "string"
         },
         "ListElementSite": {
@@ -2278,7 +2278,7 @@ expression: snapshot
           "type": "object"
         },
         "NodeName": {
-          "pattern": "^[a-z][a-z0-9_]*$",
+          "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$",
           "type": "string"
         },
         "OutputName": {

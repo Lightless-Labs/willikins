@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-core/tests/it/schema_generation.rs
-assertion_line: 28
 expression: schema
 ---
 {
@@ -25,7 +24,7 @@ expression: schema
   "$defs": {
     "InputName": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_]*$"
+      "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$"
     },
     "ParseError": {
       "description": "Error returned when a string does not parse as a domain type.",

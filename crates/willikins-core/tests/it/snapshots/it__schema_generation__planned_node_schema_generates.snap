@@ -96,7 +96,7 @@ expression: schema
     },
     "NodeName": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_]*$"
+      "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$"
     },
     "Outputs": {
       "description": "The typed values produced by a tool's output ports.\n\nSee [`Inputs`]: same shape, same redaction guarantee, opposite\ndirection.",

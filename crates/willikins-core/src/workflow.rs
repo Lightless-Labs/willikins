@@ -14,20 +14,38 @@ use indexmap::IndexMap;
 use crate::tool::{PortName, ToolName};
 use crate::value::{TypeRef, Value};
 
-/// The pattern every [`InputName`], [`NodeName`], and [`OutputName`] must
-/// match: `snake_case`, starting with a letter. Shared with
+/// The pattern every [`OutputName`] must match: `snake_case`, starting
+/// with a letter, exactly one segment. Shared in spirit with
 /// [`crate::tool::PortName`], but declared separately here rather than
 /// reused from `tool`, to keep the two modules independent.
-const WORKFLOW_NAME_PATTERN: &str = "^[a-z][a-z0-9_]*$";
+const SEGMENT_NAME_PATTERN: &str = "^[a-z][a-z0-9_]*$";
 
-static WORKFLOW_NAME_REGEX: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(WORKFLOW_NAME_PATTERN).expect("pattern is valid"));
+static SEGMENT_NAME_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(SEGMENT_NAME_PATTERN).expect("pattern is valid"));
+
+/// The pattern every [`InputName`] and [`NodeName`] must match:
+/// `snake_case` segments, each starting with a letter, joined by `/`.
+///
+/// Milestone 2b decision (d3): a linked node (or a used document's fixed
+/// input) is named `<uses step>/<child name>`, applied recursively
+/// (`app/org/base_gate`). An *authored* name is always one segment —
+/// `willikins-dsl` refuses a `/` in a step key or input name
+/// (`document_to_workflow`) — so a path of more than one segment can only
+/// ever come from the linker (milestone 2b's `compose::link`), never from
+/// a document directly.
+const PATH_NAME_PATTERN: &str = "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$";
+
+static PATH_NAME_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(PATH_NAME_PATTERN).expect("pattern is valid"));
 
 /// Declares one newtype identifier over `String`, validated on parse
-/// against [`WORKFLOW_NAME_PATTERN`], with `Display`, `serde`, and
-/// `JsonSchema` support. Mirrors [`crate::tool`]'s `identifier!` macro.
+/// against `$pattern`, with `Display`, `serde`, and `JsonSchema` support.
+/// Mirrors [`crate::tool`]'s `identifier!` macro, parameterized the same
+/// way: [`NodeName`] and [`InputName`] share [`PATH_NAME_PATTERN`] /
+/// [`PATH_NAME_REGEX`], while [`OutputName`] keeps
+/// [`SEGMENT_NAME_PATTERN`] / [`SEGMENT_NAME_REGEX`].
 macro_rules! workflow_identifier {
-    ($name:ident, $doc:literal) => {
+    ($name:ident, $pattern_const:ident, $pattern:expr, $regex:ident, $doc:literal) => {
         #[doc = $doc]
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(String);
@@ -39,14 +57,15 @@ macro_rules! workflow_identifier {
             ///
             /// Returns [`willikins_types::ParseError`] when `input` does not match the pattern.
             pub fn parse(input: &str) -> Result<Self, willikins_types::ParseError> {
-                if WORKFLOW_NAME_REGEX.is_match(input) {
+                if $regex.is_match(input) {
                     Ok(Self(input.to_string()))
                 } else {
                     Err(willikins_types::ParseError::new(
                         stringify!($name),
                         format!(
-                            "{input:?} is not a valid {} (expected to match `{WORKFLOW_NAME_PATTERN}`)",
+                            "{input:?} is not a valid {} (expected to match `{}`)",
                             stringify!($name),
+                            $pattern_const
                         ),
                     ))
                 }
@@ -92,7 +111,7 @@ macro_rules! workflow_identifier {
             fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
                 schemars::json_schema!({
                     "type": "string",
-                    "pattern": WORKFLOW_NAME_PATTERN,
+                    "pattern": $pattern,
                 })
             }
         }
@@ -101,14 +120,30 @@ macro_rules! workflow_identifier {
 
 workflow_identifier!(
     InputName,
-    "The name of a workflow input: `snake_case`, starting with a letter."
+    PATH_NAME_PATTERN,
+    PATH_NAME_PATTERN,
+    PATH_NAME_REGEX,
+    "The name of a workflow input: `snake_case` segments joined by `/`, \
+     each starting with a letter. An authored input name is always one \
+     segment; a `/`-separated path names a used document's fixed input \
+     (milestone 2b decision (d6))."
 );
 workflow_identifier!(
     NodeName,
-    "The name of a workflow node (a `steps.<name>` entry): `snake_case`, starting with a letter."
+    PATH_NAME_PATTERN,
+    PATH_NAME_PATTERN,
+    PATH_NAME_REGEX,
+    "The name of a workflow node (a `steps.<name>` entry): `snake_case` \
+     segments joined by `/`, each starting with a letter. An authored \
+     step key is always one segment; a `/`-separated path names a linked \
+     node produced by composing a `uses:` step with the document it uses \
+     (milestone 2b decision (d3))."
 );
 workflow_identifier!(
     OutputName,
+    SEGMENT_NAME_PATTERN,
+    SEGMENT_NAME_PATTERN,
+    SEGMENT_NAME_REGEX,
     "The name of a workflow output: `snake_case`, starting with a letter."
 );
 
@@ -310,11 +345,41 @@ mod tests {
     }
 
     #[test]
-    fn node_name_and_output_name_share_the_same_pattern() {
+    fn node_name_and_output_name_both_reject_a_leading_digit_or_uppercase() {
         assert!(NodeName::parse("ci_secret").is_ok());
         assert!(OutputName::parse("repo_url").is_ok());
         assert!(NodeName::parse("1bad").is_err());
         assert!(OutputName::parse("Bad").is_err());
+    }
+
+    /// Milestone 2b, decision (d3) and acceptance 1: `NodeName` and
+    /// `InputName` widen to a `/`-separated path of one-segment names,
+    /// `PortName` and `OutputName` stay one segment.
+    #[test]
+    fn node_name_and_input_name_accept_a_slash_separated_path() {
+        for ok in ["org/x", "a/b/c", "x"] {
+            assert!(NodeName::parse(ok).is_ok(), "NodeName should accept {ok:?}");
+            assert!(
+                InputName::parse(ok).is_ok(),
+                "InputName should accept {ok:?}"
+            );
+        }
+        for bad in ["org/", "/x", "org//x", "Org/x", "org.x", "org/x.y", ""] {
+            assert!(
+                NodeName::parse(bad).is_err(),
+                "NodeName should refuse {bad:?}"
+            );
+            assert!(
+                InputName::parse(bad).is_err(),
+                "InputName should refuse {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn port_name_and_output_name_still_refuse_a_slash() {
+        assert!(crate::tool::PortName::parse("a/b").is_err());
+        assert!(OutputName::parse("a/b").is_err());
     }
 
     #[test]

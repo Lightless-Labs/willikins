@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-core/tests/it/schema_generation.rs
-assertion_line: 27
 expression: schema
 ---
 {
@@ -66,7 +65,7 @@ expression: schema
     },
     "InputName": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_]*$"
+      "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$"
     },
     "TypeRef": {
       "type": "string",

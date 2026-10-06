@@ -15,13 +15,23 @@
 //!
 //! Text rendering is disambiguated too, which matters because
 //! `willikins-cli`'s `check_error_detail` renders a site through
-//! [`fmt::Display`] and nothing else. Every identifier matches
-//! `^[a-z][a-z0-9_]*$`, so it holds no `.` and no `[`: a [`Site::Port`] is
-//! always two dot-separated segments, a [`Site::ForEach`] always carries a
-//! `[`, and a [`Site::Output`] is always three dot-separated segments
-//! under the `workflow.outputs` prefix. No two forms can coincide, whatever
-//! a document names its steps, ports and outputs; see
+//! [`fmt::Display`] and nothing else. No identifier ever holds a `.` or a
+//! `[`: a [`Site::Port`] is always two `.`-separated segments, a
+//! [`Site::ForEach`] always carries a `[`, and a [`Site::Output`] is
+//! always three `.`-separated segments under the `workflow.outputs`
+//! prefix. No two forms can coincide, whatever a document names its
+//! steps, ports and outputs; see
 //! `tests::no_two_site_forms_share_a_display_string`.
+//!
+//! Milestone 2b, decision (d3), widens [`NodeName`] from one segment to a
+//! `/`-separated path (`org/base_gate`), so that a used document's linked
+//! nodes can be named `<uses step>/<child node>`. That widening does not
+//! touch this proof: `/` is neither `.` nor `[`, so a path-valued `node`
+//! renders as part of a [`Site::Port`] or [`Site::ForEach`] exactly as a
+//! one-segment name would, and still cannot coincide with a
+//! [`Site::Output`]'s `workflow.outputs.<name>` form. This is exactly why
+//! `/` was chosen over `.` for the path separator — see the design doc's
+//! decision (d3) note "why `/` and not `.`".
 
 use std::fmt;
 
@@ -228,6 +238,31 @@ mod tests {
             Site::Port {
                 node: node("n"),
                 port: port("p"),
+            }
+            .to_string(),
+        );
+        // Milestone 2b, decision (d3): a `/`-separated node name (as the
+        // linker produces) changes nothing. `workflow/outputs.x` (a
+        // `Site::Port` on a node literally named `workflow/outputs`)
+        // still cannot be confused with `workflow.outputs.x` (a
+        // `Site::Output` named `x`), because the separator before
+        // `outputs` is `/`, not `.`, in the first case.
+        assert_ne!(
+            Site::Port {
+                node: node("workflow/outputs"),
+                port: port("x"),
+            }
+            .to_string(),
+            Site::Output { name: output("x") }.to_string(),
+        );
+        assert_ne!(
+            Site::Port {
+                node: node("org/base_gate"),
+                port: port("x"),
+            }
+            .to_string(),
+            Site::ForEach {
+                node: node("org/base_gate"),
             }
             .to_string(),
         );
