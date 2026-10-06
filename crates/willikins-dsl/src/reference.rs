@@ -277,4 +277,28 @@ mod tests {
     fn for_each_rejects_a_malformed_reference() {
         assert!(parse_for_each_value("${{ steps.a }}").is_err());
     }
+
+    /// Milestone 2b, decision (d3), "references cannot reach inside": a
+    /// linked node's own name can hold a `/` (`org/base_gate`), but the
+    /// grammar here is unaffected by that widening -- `NodeName` and
+    /// `InputName`'s widened pattern never got threaded through these
+    /// regexes, which still only capture one `[a-z][a-z0-9_]*` segment.
+    /// A reference naming a path therefore fails to match any of the
+    /// three forms and is refused as "not a valid reference", the same
+    /// way `${{ steps.a.b.c }}` (an extra segment) already was -- no
+    /// code change was needed to keep this refused.
+    #[test]
+    fn a_slash_in_a_step_reference_node_is_rejected() {
+        assert!(parse_with_value("${{ steps.a/b.p }}").is_err());
+    }
+
+    #[test]
+    fn a_slash_in_a_keyed_reference_node_is_rejected() {
+        assert!(parse_with_value("${{ steps.a/b[k].p }}").is_err());
+    }
+
+    #[test]
+    fn a_slash_in_an_input_reference_name_is_rejected() {
+        assert!(parse_with_value("${{ inputs.a/b }}").is_err());
+    }
 }

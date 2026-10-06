@@ -365,6 +365,27 @@ pub fn document_schema() -> schemars::Schema {
     schemars::schema_for!(Document)
 }
 
+/// Refuse a `/` in an authored name at `path`: a step key or an input
+/// name is always one segment. `NodeName` and `InputName` widened
+/// (milestone 2b decision (d3)) to accept a `/`-separated path, but that
+/// path is reserved for the linker's own output (`<uses step>/<child
+/// name>`, `willikins_core::compose::link`) — an author never writes one
+/// directly. Without this check, `NodeName::parse`/`InputName::parse`
+/// would accept `raw_name` and silently let a document author claim a
+/// linked node's own namespace.
+fn refuse_authored_slash(path: &str, raw_name: &str) -> Result<(), DocumentError> {
+    if raw_name.contains('/') {
+        return Err(DocumentError::semantic(
+            path,
+            format!(
+                "{raw_name:?} may not contain `/`: an authored name is always one segment \
+                 (a `/`-separated path names a used document's own linked node)"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Convert a deserialized [`Document`] into a [`Workflow`], resolving
 /// every name, type, default, and reference along the way.
 fn document_to_workflow(document: &Document) -> Result<Workflow, DocumentError> {
@@ -379,6 +400,7 @@ fn document_to_workflow(document: &Document) -> Result<Workflow, DocumentError> 
 
     for (raw_name, decl) in &document.inputs {
         let path = format!("inputs.{raw_name}");
+        refuse_authored_slash(&path, raw_name)?;
         let name = InputName::parse(raw_name)
             .map_err(|err| DocumentError::semantic(path.clone(), err.to_string()))?;
         let ty = parse_input_type(&decl.ty, &format!("{path}.type"))?;
@@ -399,6 +421,7 @@ fn document_to_workflow(document: &Document) -> Result<Workflow, DocumentError> 
 
     for (raw_name, decl) in &document.steps {
         let path = format!("steps.{raw_name}");
+        refuse_authored_slash(&path, raw_name)?;
         let name = NodeName::parse(raw_name)
             .map_err(|err| DocumentError::semantic(path.clone(), err.to_string()))?;
         let tool = ToolName::parse(&decl.tool)
@@ -662,6 +685,56 @@ steps:
         .unwrap_err();
         match err.kind {
             DocumentErrorKind::Semantic { path, .. } => assert_eq!(path, "inputs.Bad"),
+            DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a semantic error")
+            }
+        }
+    }
+
+    /// Milestone 2b, decision (d3): `NodeName` widened to accept a
+    /// `/`-separated path, but an authored step key is always one
+    /// segment. The slash is refused before `NodeName::parse` ever sees
+    /// it, so this stays a located `Semantic` error naming the offending
+    /// step key, not a generic pattern-mismatch message.
+    #[test]
+    fn a_slash_in_a_step_key_is_a_semantic_error_at_the_step_path() {
+        let err = parse_document(
+            "\
+name: demo
+steps:
+  org/base_gate: { tool: naming.v1, with: {} }
+",
+        )
+        .unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Semantic { path, message } => {
+                assert_eq!(path, "steps.org/base_gate");
+                assert!(message.contains('/'), "{message}");
+            }
+            DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a semantic error")
+            }
+        }
+    }
+
+    /// Same as the step-key case, for an authored input name.
+    #[test]
+    fn a_slash_in_an_input_name_is_a_semantic_error_at_the_input_path() {
+        let err = parse_document(
+            "\
+name: demo
+inputs:
+  org/base_configs: { type: GitHubOrg }
+steps:
+  a: { tool: naming.v1, with: {} }
+",
+        )
+        .unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Semantic { path, message } => {
+                assert_eq!(path, "inputs.org/base_configs");
+                assert!(message.contains('/'), "{message}");
+            }
             DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
                 panic!("expected a semantic error")
             }

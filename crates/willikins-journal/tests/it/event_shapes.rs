@@ -17,8 +17,8 @@ use crate::common;
 use crate::common::{node, port, principal, reason, tool_name, workflow_name};
 use willikins_core::{Class, InstanceFingerprint, NodeStatus, ToolError, ToolErrorKind};
 use willikins_journal::{
-    ApplyRefusedReason, AuthFailedReason, DriftReasonKind, Event, Outcome, PlanId, Redacted, RunId,
-    Transport,
+    ApplyRefusedReason, AuthFailedReason, DriftReasonKind, Event, Journal, Outcome, PlanId,
+    Redacted, RunId, Transport,
 };
 
 macro_rules! variant_kinds {
@@ -325,4 +325,49 @@ fn an_unknown_top_level_field_on_entry_is_refused() {
 fn an_unknown_field_on_an_event_variant_is_refused() {
     let text = r#"{"kind":"approval_automatic","plan_id":"018f0000-0000-7000-8000-000000000000","class":"reversible","surprise":1}"#;
     assert!(serde_json::from_str::<Event>(text).is_err());
+}
+
+/// Milestone 2b, decision (d3), acceptance 1: a journal line whose node
+/// is a `/`-separated path (as the linker, not any author, produces --
+/// `org/base_gate`) round-trips through the real on-disk journal, not
+/// just through `serde` in memory. Written through `FileJournal`, read
+/// back through the lock-free `replay`, and checked against the raw
+/// line text too, so this proves the wire format, not only symmetry.
+#[test]
+fn a_path_node_journal_line_round_trips_through_the_real_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("journal.jsonl");
+    let path_node = node("org/base_gate");
+
+    {
+        let mut journal = willikins_journal::FileJournal::open(&path).unwrap();
+        journal
+            .append(Event::ServerStarted {
+                version: "0.1.0".to_string(),
+                workflows_dir: "/workflows".to_string(),
+                workflow_hashes: BTreeMap::new(),
+            })
+            .unwrap();
+        journal
+            .append(Event::NodeStarted {
+                run_id: willikins_journal::RunId::new(),
+                node: path_node.clone(),
+                instance: None,
+                inputs: Redacted::from(&willikins_core::Inputs::new()),
+            })
+            .unwrap();
+    }
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains(r#""node":"org/base_gate""#),
+        "the raw line must carry the path node verbatim: {text}"
+    );
+
+    let replayed = willikins_journal::replay(&path).unwrap();
+    let found = replayed
+        .entries()
+        .iter()
+        .any(|entry| matches!(&entry.event, Event::NodeStarted { node, .. } if *node == path_node));
+    assert!(found, "the path node must replay unchanged");
 }
