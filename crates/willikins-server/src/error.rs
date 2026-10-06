@@ -73,7 +73,10 @@ pub enum ButlerError {
         workflow: WorkflowName,
     },
     /// The named document's bytes (or its own internal name) no longer
-    /// match what `plan` recorded.
+    /// match what `plan` recorded -- or, milestone 2b trust boundary 5,
+    /// some document the plan's own `uses:` tree resolved has changed
+    /// bytes, or the set of resolved documents itself differs, since
+    /// `plan` time (see `crate::butler::Butler::reload_and_check`).
     DocumentChanged {
         /// The workflow whose document changed.
         workflow: WorkflowName,

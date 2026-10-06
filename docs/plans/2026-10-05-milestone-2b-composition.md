@@ -91,6 +91,17 @@ every fixed input before returning (ties to R1; acceptance 7's "the MCP `describ
 `willikins_core::Description` itself is untouched — core is outside S1's gates, and changing it would regenerate the
 server's `mcp_server` snapshot, which is not this task's to touch.
 
+**Addendum:** 2026-10-06 (task S2) — the task row's "Scoped: `-p willikins-server`" is incomplete: comparing
+`record.used` against a fresh `link`'s closure in `Butler::reload_and_check` requires `record` (a
+`willikins_journal::journal::PlanRecord`, the replay view) to actually carry `used` — and J1's own addendum
+explicitly defers that fold to "S2/S3, once `apply`'s drift check has a closure to compare against." This commit
+therefore also touches `crates/willikins-journal/src/journal.rs`: `PlanRecord` gains the `used:
+BTreeMap<WorkflowName, DocumentSha256>` field (`#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]`,
+matching `Event::PlanRecorded.used`'s own attributes), and `fold_plan_recorded` folds it straight from the event
+instead of discarding it (`used: _`). Gates widen to match: `-p willikins-server -p willikins-journal` for clippy
+and test, and the journal's own `plan_record_schema_generates` insta snapshot is regenerated (additions only) and
+reviewed as part of this commit, per the plan's "Published shapes" gate rule.
+
 ## Goal
 
 1. **Part P (the document).** A step may say `uses: <workflow-name>` instead of `tool: <tool-name>`. It binds the

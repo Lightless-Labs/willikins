@@ -69,6 +69,16 @@ expression: schema
       "description": "Whether this plan requires human approval.",
       "type": "boolean"
     },
+    "used": {
+      "description": "The content hash, at plan time, of every document a `uses:` step\nresolved (milestone 2b decision (d10)), folded straight from\n[`Event::PlanRecorded::used`] -- never the root, which\n`document_sha256` above already names. Empty for a plan with no\n`uses:` step, and for every line written before this field\nexisted, which is why it is `#[serde(default)]` and omitted from\nthe wire entirely when empty: every journal written before\nmilestone 2b replays unchanged, byte for byte.\n\n`willikins-server`'s `Butler::apply` (task S2) compares this\nagainst a fresh re-link at apply time and refuses\n`DocumentChanged` on any difference (trust boundary 5) -- the same\nrefusal a changed root already gets, now covering every document\nthe plan depends on.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$": {
+          "$ref": "#/$defs/DocumentSha256"
+        }
+      }
+    },
     "workflow": {
       "description": "The planned workflow's name.",
       "$ref": "#/$defs/WorkflowName"

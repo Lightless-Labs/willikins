@@ -181,13 +181,11 @@ impl<'a> TrustedResolver<'a> {
     /// Every document this resolver has loaded so far, by name -- the
     /// closure a `link` call actually used.
     ///
-    /// Not read by any caller yet: this task (S1) only needs `link`
-    /// itself to succeed or fail. `#[allow(dead_code)]` rather than
-    /// deleting it, the same way [`LoadError::Symlink`]'s own unread
-    /// field is kept, since task S2 (`Butler::plan` filling
-    /// `PlanRecorded.used`, decision (d10)) is this method's documented
-    /// future reader, and this module's own tests already exercise it.
-    #[allow(dead_code)]
+    /// Read by task S2's `Butler::plan_inner` (to fill
+    /// `PlanRecorded.used`, decision (d10)) and `Butler::reload_and_check`
+    /// (to compare apply time's fresh closure against the one `plan`
+    /// recorded, trust boundary 5): both build a fresh `TrustedResolver`,
+    /// `link` through it, and read this map once `link` returns `Ok`.
     #[must_use]
     pub fn shas(&self) -> &BTreeMap<WorkflowName, DocumentSha256> {
         &self.shas

@@ -16,6 +16,7 @@ mod adversarial_13;
 mod binary_startup;
 mod blocking_pool_13;
 mod composition_s1;
+mod composition_s2;
 mod deploy_host_headers;
 mod fake_catalog_env;
 mod file_journal_round_trip;

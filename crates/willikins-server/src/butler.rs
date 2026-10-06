@@ -540,9 +540,17 @@ impl Butler {
     // plan
     // -------------------------------------------------------------
 
-    /// Load, check, and plan `workflow` against the catalog, recording a
-    /// `PlanRecorded` event (and, when the plan needs none, an
-    /// `ApprovalAutomatic` right after it).
+    /// Load, link, check, and plan `workflow` against the catalog,
+    /// recording a `PlanRecorded` event (and, when the plan needs none,
+    /// an `ApprovalAutomatic` right after it).
+    ///
+    /// **Records the used closure** (milestone 2b, decision (d10)):
+    /// every document the link resolves (by name, in this `Butler`'s own
+    /// trusted directory -- trust boundary 1) is hashed and kept in
+    /// `PlanRecorded.used`, keyed by its own `WorkflowName`. `apply`'s
+    /// later reload (`Self::reload_and_check`) re-links and compares this
+    /// same closure, refusing `DocumentChanged` on any difference (trust
+    /// boundary 5) -- the same refusal a changed root already gets.
     ///
     /// # Errors
     ///
@@ -550,10 +558,11 @@ impl Butler {
     /// no document named `workflow` (including one whose own internal
     /// `name:` does not match the file it would have to be found at --
     /// see `crate::document`'s module docs); [`ButlerError::Document`] on
-    /// a parse failure; [`ButlerError::Check`] when the document fails
-    /// `check`; [`ButlerError::Input`] when `inputs` does not resolve;
-    /// [`ButlerError::Plan`] when planning fails; [`ButlerError::Journal`]
-    /// if recording the plan fails.
+    /// a parse failure; [`ButlerError::Check`] when the document fails to
+    /// *link* (an unknown or unparsable `uses:` child, a cycle, a boundary
+    /// refusal) or to `check`; [`ButlerError::Input`] when `inputs` does
+    /// not resolve; [`ButlerError::Plan`] when planning fails;
+    /// [`ButlerError::Journal`] if recording the plan fails.
     pub fn plan(
         &self,
         workflow: WorkflowName,
@@ -600,7 +609,20 @@ impl Butler {
                 }
             };
 
-        let checked = willikins_core::check(&doc_workflow, &self.catalog)
+        // Milestone 2b, decision (d8) and trust boundary 5: link against
+        // this `Butler`'s own trusted directory before `check` ever sees
+        // the document (a non-empty `uses:` reaching `check` unlinked is
+        // `CheckError::Unlinked`), and keep the resolver's own recorded
+        // closure -- every document `link` actually resolved, by name --
+        // to fill `PlanRecorded.used` below. A document with no `uses:`
+        // step links to itself unchanged and resolves nothing, so `used`
+        // stays empty exactly as it did before this task.
+        let mut link_resolver = document::TrustedResolver::new(&self.workflows_dir);
+        let linked = willikins_core::link(&doc_workflow, &mut |name| link_resolver.resolve(name))
+            .map_err(|errors| ButlerError::Check { errors })?;
+        let used = link_resolver.shas().clone();
+
+        let checked = willikins_core::check(&linked.workflow, &self.catalog)
             .map_err(|errors| ButlerError::Check { errors })?;
 
         let description = willikins_core::describe(&checked, inputs);
@@ -634,12 +656,10 @@ impl Butler {
             class,
             requires_approval,
             principal: Some(principal.clone()),
-            // Milestone 2b, decision (d10): a real closure is recorded by
-            // S2, once `plan_inner` links a composite. This root-only
-            // plan never resolves a `uses:` step yet, so the closure is
-            // empty here -- never a placeholder guess at what S2 will
-            // fill in.
-            used: std::collections::BTreeMap::new(),
+            // Milestone 2b, decision (d10): the content hash, at plan
+            // time, of every document the `link` call above actually
+            // resolved -- empty for a document with no `uses:` step.
+            used,
         })?;
 
         let (approval, expires_at) = if requires_approval {
@@ -1080,19 +1100,39 @@ impl Butler {
     }
 
     /// Reload the document `record.workflow` names, verify its bytes and
-    /// internal name still match what was recorded, and re-`check` it.
+    /// internal name still match what was recorded, re-link it against
+    /// this `Butler`'s own trusted directory, verify the freshly resolved
+    /// closure still matches `record.used` exactly, and re-`check` the
+    /// linked graph.
+    ///
+    /// **Trust boundary 5:** a plan is bound to every document it was
+    /// built from. The closure comparison is a plain `BTreeMap` equality
+    /// against `record.used` (milestone 2b, decision (d10)), which
+    /// catches every way it can differ: a used document's bytes changed
+    /// (same name, different sha), the *set* of used names changed (a
+    /// child added, removed, or resolved to a different document under
+    /// the same name -- a `.yaml`/`.yml` swap, say), all while the root's
+    /// own bytes stayed byte-identical and so passed the sha check right
+    /// above this one.
+    ///
     /// `Err(())` covers every way that can fail: `apply` reports all of
     /// them as `ButlerError::DocumentChanged`, since a document that no
-    /// longer parses or checks the way it did at `plan` time is, from an
-    /// approved plan's point of view, exactly as changed as one whose
-    /// bytes differ.
+    /// longer parses, links, or checks the way it did at `plan` time is,
+    /// from an approved plan's point of view, exactly as changed as one
+    /// whose bytes differ.
     fn reload_and_check(&self, record: &PlanRecord) -> Result<willikins_core::Checked, ()> {
         let (document_sha256, workflow) =
             document::load_named_document(&self.workflows_dir, &record.workflow).map_err(|_| ())?;
         if document_sha256 != record.document_sha256 {
             return Err(());
         }
-        willikins_core::check(&workflow, &self.catalog).map_err(|_| ())
+        let mut resolver = document::TrustedResolver::new(&self.workflows_dir);
+        let linked =
+            willikins_core::link(&workflow, &mut |name| resolver.resolve(name)).map_err(|_| ())?;
+        if resolver.shas() != &record.used {
+            return Err(());
+        }
+        willikins_core::check(&linked.workflow, &self.catalog).map_err(|_| ())
     }
 
     // -------------------------------------------------------------

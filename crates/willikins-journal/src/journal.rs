@@ -3,6 +3,8 @@
 //! and [`crate::FileJournal`] share identical behaviour rather than each
 //! reimplementing the same reconstruction.
 
+use std::collections::BTreeMap;
+
 use indexmap::IndexMap;
 
 use willikins_core::{
@@ -79,6 +81,22 @@ pub struct PlanRecord {
     /// died mid-way still makes a second `apply` of the same plan refuse
     /// as `AlreadyApplied` rather than racing a live run.
     pub applied: Option<RunId>,
+    /// The content hash, at plan time, of every document a `uses:` step
+    /// resolved (milestone 2b decision (d10)), folded straight from
+    /// [`Event::PlanRecorded::used`] -- never the root, which
+    /// `document_sha256` above already names. Empty for a plan with no
+    /// `uses:` step, and for every line written before this field
+    /// existed, which is why it is `#[serde(default)]` and omitted from
+    /// the wire entirely when empty: every journal written before
+    /// milestone 2b replays unchanged, byte for byte.
+    ///
+    /// `willikins-server`'s `Butler::apply` (task S2) compares this
+    /// against a fresh re-link at apply time and refuses
+    /// `DocumentChanged` on any difference (trust boundary 5) -- the same
+    /// refusal a changed root already gets, now covering every document
+    /// the plan depends on.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub used: BTreeMap<WorkflowName, DocumentSha256>,
 }
 
 /// [`RunRecord::next_step`]'s fixed text for a [`RunState::Blocked`] run
@@ -321,11 +339,7 @@ fn fold_plan_recorded(plans: &mut IndexMap<PlanId, PlanRecord>, entry: &Entry) {
         class,
         requires_approval,
         principal,
-        // Not yet folded into `PlanRecord`: that is milestone 2b's S2/S3
-        // surface work, once `apply` has a closure to compare against.
-        // This task only adds the wire field and fills it (empty) at
-        // every construction site.
-        used: _,
+        used,
     } = &entry.event
     else {
         unreachable!("fold_plan_recorded is only called for Event::PlanRecorded");
@@ -359,6 +373,7 @@ fn fold_plan_recorded(plans: &mut IndexMap<PlanId, PlanRecord>, entry: &Entry) {
             recorded_at: entry.at,
             approval: ApprovalState::Pending,
             applied: None,
+            used: used.clone(),
         },
     );
 }
@@ -540,6 +555,7 @@ fn finish_runs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use willikins_types::DomainType;
 
     /// `PlanRecord` and `RunRecord` both derive `JsonSchema` because
     /// `willikins-server` (task 7) publishes them over MCP; this pins
@@ -570,12 +586,56 @@ mod tests {
             "recorded_at",
             "approval",
             "applied",
+            "used",
         ] {
             assert!(
                 properties.contains_key(field),
                 "PlanRecord schema is missing `{field}`: {schema}"
             );
         }
+    }
+
+    /// Milestone 2b, task S2 (decision (d10)): `fold_plan_recorded`
+    /// copies `Event::PlanRecorded.used` straight into `PlanRecord.used`
+    /// rather than discarding it -- the fold change this task makes, as
+    /// opposed to the wire field itself (J1's own job). A line with a
+    /// non-empty closure replays with that same closure on the record a
+    /// caller actually reads.
+    #[test]
+    fn fold_plan_recorded_copies_a_non_empty_used_onto_the_record() {
+        let mut used = BTreeMap::new();
+        used.insert(
+            WorkflowName::parse("child").unwrap(),
+            DocumentSha256::compute(b"child bytes"),
+        );
+        let entry = Entry {
+            seq: 1,
+            at: Timestamp::parse("2026-10-06T00:00:00+00:00").unwrap(),
+            event: Event::PlanRecorded {
+                plan_id: PlanId::new(),
+                workflow: WorkflowName::parse("root").unwrap(),
+                document_sha256: DocumentSha256::compute(b"root bytes"),
+                inputs: Redacted::from(&IndexMap::<willikins_core::InputName, Value>::new()),
+                plan: Redacted::from(&willikins_core::Plan {
+                    workflow: WorkflowName::parse("root").unwrap(),
+                    nodes: Vec::new(),
+                    outputs: IndexMap::new(),
+                    class: Class::Reversible,
+                    requires_approval: false,
+                    blocked: Vec::new(),
+                    replacing: Vec::new(),
+                }),
+                fingerprint: Vec::new(),
+                class: Class::Reversible,
+                requires_approval: false,
+                principal: None,
+                used: used.clone(),
+            },
+        };
+        let mut plans = IndexMap::new();
+        fold_plan_recorded(&mut plans, &entry);
+        let record = plans.values().next().expect("one record was folded");
+        assert_eq!(record.used, used);
     }
 
     #[test]
