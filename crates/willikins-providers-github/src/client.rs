@@ -701,6 +701,53 @@ impl GitHubClient {
     pub(crate) fn pause(&self, duration: Duration) {
         self.sleeper.sleep(duration);
     }
+
+    /// `GET /repos/{owner}/{name}/rules/branches/{branch}` (milestone 3l,
+    /// SHARED VALUES "Rules call (S4)", decision (e)): "The branch does
+    /// not need to exist; rules that would apply to a branch with that
+    /// name will be returned." Reports only the recognised rule `type`
+    /// strings in force, so `github.scaffold.ensure`'s own refusal
+    /// messages (task S4) can name them without ever reading, or being
+    /// able to read, any other field of the response.
+    ///
+    /// Each element's `type` is kept only when it matches
+    /// [`is_recognised_rule_type`] (`^[a-z_]{1,40}$`); a missing or
+    /// non-string `type`, or one outside that shape, counts once as the
+    /// fixed label `"unrecognised"` instead — trust boundary 4 of this
+    /// milestone's plan ("the ruleset diagnostic reports rule type
+    /// strings only ... never a body") applies to a rule type exactly as
+    /// it applies to a response body elsewhere in this client. The
+    /// result is deduplicated and sorted, so the caller's suffix (SHARED
+    /// VALUES "Rule suffix (S4)") is deterministic regardless of the
+    /// order GitHub lists rules in.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_repo`].
+    pub(crate) fn branch_rule_types(
+        &self,
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+    ) -> Result<Vec<String>, ProviderError> {
+        let path = format!("{}/rules/branches/{branch}", repo_path(repo));
+        let rules: Vec<serde_json::Value> = self.retry_secondary_limit(|| self.http.get(&path))?;
+        let mut types: Vec<String> = Vec::new();
+        let mut saw_unrecognised = false;
+        for rule in &rules {
+            match rule.get("type").and_then(serde_json::Value::as_str) {
+                Some(rule_type) if is_recognised_rule_type(rule_type) => {
+                    types.push(rule_type.to_string());
+                }
+                _ => saw_unrecognised = true,
+            }
+        }
+        if saw_unrecognised {
+            types.push("unrecognised".to_string());
+        }
+        types.sort();
+        types.dedup();
+        Ok(types)
+    }
 }
 
 /// The label a bound `token` port's minted [`Credential`] carries in its
@@ -1134,6 +1181,22 @@ fn suppress_first_file_response_body(err: ProviderError) -> ProviderError {
             ..err
         },
     }
+}
+
+/// Milestone 3l, SHARED VALUES "Rules call (S4)": a branch rule's own
+/// `type` string is kept by [`GitHubClient::branch_rule_types`] only
+/// when it matches `^[a-z_]{1,40}$` — lowercase ASCII letters and
+/// underscores only, one to forty of them. GitHub's own schema lists
+/// shapes like `pull_request` and `required_signatures`; anything wider
+/// (a future type this client does not expect, or a deliberately
+/// hostile body) is turned into the fixed `"unrecognised"` label
+/// instead of being echoed verbatim into a `ToolError` message.
+fn is_recognised_rule_type(candidate: &str) -> bool {
+    !candidate.is_empty()
+        && candidate.len() <= 40
+        && candidate
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
 }
 
 #[cfg(test)]
@@ -1844,5 +1907,89 @@ mod tests {
             recorder.0.lock().unwrap().as_slice(),
             [Duration::from_millis(300)]
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3l, task S4: `branch_rule_types`.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn branch_rule_types_issues_the_exact_request_line() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let mock = provider
+            .mock("GET", "/repos/acme/widget/rules/branches/main")
+            .with_status(200)
+            .with_body("[]")
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let branch = GitBranchName::parse("main").unwrap();
+        assert_eq!(
+            client.branch_rule_types(&repo(), &branch).unwrap(),
+            Vec::<String>::new()
+        );
+        mock.assert();
+    }
+
+    #[test]
+    fn branch_rule_types_keeps_only_recognised_types_deduplicated_and_sorted_with_one_unrecognised()
+    {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let mock = provider
+            .mock("GET", "/repos/acme/widget/rules/branches/main")
+            .with_status(200)
+            .with_body(
+                serde_json::json!([
+                    {"type": "pull_request", "parameters": {"secret": "sh"}},
+                    {"type": "required_signatures"},
+                    {"type": "Pull Request!"},
+                    {"type": "pull_request"},
+                ])
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let branch = GitBranchName::parse("main").unwrap();
+        let types = client.branch_rule_types(&repo(), &branch).unwrap();
+        assert_eq!(
+            types,
+            vec!["pull_request", "required_signatures", "unrecognised"]
+        );
+        mock.assert();
+    }
+
+    #[test]
+    fn branch_rule_types_counts_a_missing_or_non_string_type_as_unrecognised_once() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let mock = provider
+            .mock("GET", "/repos/acme/widget/rules/branches/main")
+            .with_status(200)
+            .with_body(serde_json::json!([{"ruleset_id": 1}, {"type": 42}]).to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let branch = GitBranchName::parse("main").unwrap();
+        assert_eq!(
+            client.branch_rule_types(&repo(), &branch).unwrap(),
+            vec!["unrecognised"]
+        );
+        mock.assert();
+    }
+
+    #[test]
+    fn branch_rule_types_404_is_err_with_the_status() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let mock = provider
+            .mock("GET", "/repos/acme/widget/rules/branches/main")
+            .with_status(404)
+            .with_body(serde_json::json!({"message": "Not Found"}).to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let branch = GitBranchName::parse("main").unwrap();
+        let err = client.branch_rule_types(&repo(), &branch).unwrap_err();
+        assert_eq!(err.status, Some(404));
+        mock.assert();
     }
 }

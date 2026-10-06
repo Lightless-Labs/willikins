@@ -60,6 +60,17 @@
 //! plans `Create` and fails only at apply, with `NotFound`, rather than
 //! at plan. Binding `repo` from `github.repo.get`'s own output (which
 //! fails at plan on a `404`) catches this earlier.
+//!
+//! **Naming the rules in force on a refusal (milestone 3l, task S4,
+//! decision (e)).** A refused `createCommitOnBranch` whose re-observe
+//! shows an unmoved head, and a refused first-file `PUT` that was not a
+//! `409`, both append [`GitHubClient::branch_rule_types`]'s own answer
+//! to their message via [`GitHubScaffoldEnsure::with_rule_suffix`]: the
+//! branch's active rule `type`s, sorted and deduplicated, each kept only
+//! if it matches `^[a-z_]{1,40}$` (anything else counts once as
+//! `unrecognised`). The suffix is appended, never substituted, and is
+//! silently omitted -- never replacing the original refusal -- when the
+//! rules read itself fails or reports nothing.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -440,6 +451,36 @@ impl GitHubScaffoldEnsure {
         }
     }
 
+    /// Milestone 3l, task S4, SHARED VALUES "Rule suffix (S4)": append
+    /// the branch rule types in force on `branch` to `error`'s own
+    /// message, when a write was refused and the re-observe that
+    /// followed showed nothing had landed (decision (e)). Reads
+    /// [`GitHubClient::branch_rule_types`] purely as a diagnostic: when
+    /// that read itself fails, or answers no rules at all, `error` is
+    /// returned completely unchanged -- the suffix is informational,
+    /// never load-bearing, so its own failure must never mask or replace
+    /// the original refusal (trust boundary 4). The suffix is appended,
+    /// never substituted, so the original message is always a prefix of
+    /// the result.
+    fn with_rule_suffix(
+        mut error: ToolError,
+        client: &GitHubClient,
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+    ) -> ToolError {
+        if let Ok(types) = client.branch_rule_types(repo, branch)
+            && !types.is_empty()
+        {
+            use std::fmt::Write as _;
+            let _ = write!(
+                error.message,
+                "; rules in force on `{branch}`: {}",
+                types.join(", ")
+            );
+        }
+        error
+    }
+
     /// Decision (b)'s table for when `get_branch_head` failed `404` or
     /// `409`: resolves whether the repository itself is absent, empty
     /// (and if so whether `branch` names its own default), or exists
@@ -744,9 +785,20 @@ impl GitHubScaffoldEnsure {
                 client.pause(UNAVAILABLE_WAIT);
                 continue;
             }
-            return Err(to_tool_error(put_result.expect_err(
-                "put_result is Err here: put_was_ok would have returned Ok above",
-            )));
+            let tool_error = to_tool_error(
+                put_result
+                    .expect_err("put_result is Err here: put_was_ok would have returned Ok above"),
+            );
+            // Milestone 3l, task S4: a `409` here has already exhausted
+            // every retry decision (a) allows, so it is reported as-is;
+            // the rule suffix is for a refused first-file `PUT` that was
+            // never about availability at all (SHARED VALUES "Rule
+            // suffix (S4)" names "a refused first-file `PUT` (non-409)").
+            return Err(if put_was_409 {
+                tool_error
+            } else {
+                Self::with_rule_suffix(tool_error, client, repo, branch)
+            });
         }
     }
 }
@@ -869,9 +921,17 @@ impl Tool for GitHubScaffoldEnsure {
                             // attempt could have landed, and re-trying
                             // against the same head would fail the same
                             // way, so the original failure is reported
-                            // as-is.
+                            // as-is, with the rule types in force on
+                            // `branch` appended when the diagnostic read
+                            // succeeds (milestone 3l, task S4, SHARED
+                            // VALUES "Rule suffix (S4)").
                             let _ = new_already_equal;
-                            return Err(to_tool_error(original_err));
+                            return Err(Self::with_rule_suffix(
+                                to_tool_error(original_err),
+                                &client,
+                                &repo,
+                                &branch,
+                            ));
                         }
                         ScaffoldState::Absent {
                             head: new_head,

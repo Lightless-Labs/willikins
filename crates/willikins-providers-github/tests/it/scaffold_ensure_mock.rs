@@ -1940,6 +1940,183 @@ fn ensure_a_same_head_failure_is_reported_as_provider_with_one_attempt() {
     commit.assert();
 }
 
+// -----------------------------------------------------------------------
+// `ensure`: acceptance 11, milestone 3l, task S4, "Rule suffix (S4)" --
+// a refused commit with an unmoved head, or a refused first-file `PUT`
+// (non-409), names the branch rule types in force.
+// -----------------------------------------------------------------------
+
+/// Acceptance 11: a refused `createCommitOnBranch` whose re-read shows an
+/// unmoved head gets the rule types in force on `branch` appended to its
+/// message, sorted, deduplicated, with every non-`^[a-z_]{1,40}$` element
+/// (including a shape outside the regex) folded into one `unrecognised`.
+/// The rules body's other fields (`parameters`, an unused `ruleset_id`)
+/// never appear in the message.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_a_same_head_failure_names_the_rules_in_force() {
+    let mut provider = MockProvider::start();
+    let files = seed_files();
+    provider
+        .mock("GET", "/repos/acme/widget/git/ref/heads/main")
+        .with_status(200)
+        .with_body(serde_json::json!({"object": {"sha": "head-1"}}).to_string())
+        .expect(2)
+        .create();
+    provider
+        .mock("GET", "/repos/acme/widget/git/commits/head-1")
+        .with_status(200)
+        .with_body(serde_json::json!({"tree": {"sha": "root-tree"}}).to_string())
+        .expect(2)
+        .create();
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry("ios", "040000", "tree", "ios-tree")],
+    );
+    provider
+        .mock("GET", "/repos/acme/widget/git/trees/ios-tree")
+        .match_query(mockito::Matcher::Missing)
+        .with_status(200)
+        .with_body(serde_json::json!({"sha": "ios-tree", "tree": []}).to_string())
+        .expect(2)
+        .create();
+    let commit = provider
+        .mock("POST", "/graphql")
+        .with_status(502)
+        .expect(1)
+        .create();
+    let rules = provider
+        .mock("GET", "/repos/acme/widget/rules/branches/main")
+        .with_status(200)
+        .with_body(
+            serde_json::json!([
+                {"type": "pull_request", "parameters": {"secret": "wlkn-test-marker-rule-body"}},
+                {"type": "required_signatures", "ruleset_id": 99},
+                {"type": "Pull Request!"},
+            ])
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let token = SinkToken::new();
+    let err = tool.ensure(&scaffold_inputs(files), &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    assert_eq!(
+        err.message,
+        "GitHub's GraphQL API did not report the commit as successful; rules in force on \
+         `main`: pull_request, required_signatures, unrecognised"
+    );
+    assert!(!err.message.contains("wlkn-test-marker-rule-body"));
+    assert!(!err.message.contains("ruleset_id"));
+    commit.assert();
+    rules.assert();
+}
+
+/// Acceptance 11: when the rules read itself fails, the original
+/// refusal is reported alone -- the diagnostic never masks or replaces
+/// it.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_a_same_head_failure_with_a_failing_rules_read_reports_the_original_message_alone() {
+    let mut provider = MockProvider::start();
+    let files = seed_files();
+    provider
+        .mock("GET", "/repos/acme/widget/git/ref/heads/main")
+        .with_status(200)
+        .with_body(serde_json::json!({"object": {"sha": "head-1"}}).to_string())
+        .expect(2)
+        .create();
+    provider
+        .mock("GET", "/repos/acme/widget/git/commits/head-1")
+        .with_status(200)
+        .with_body(serde_json::json!({"tree": {"sha": "root-tree"}}).to_string())
+        .expect(2)
+        .create();
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry("ios", "040000", "tree", "ios-tree")],
+    );
+    provider
+        .mock("GET", "/repos/acme/widget/git/trees/ios-tree")
+        .match_query(mockito::Matcher::Missing)
+        .with_status(200)
+        .with_body(serde_json::json!({"sha": "ios-tree", "tree": []}).to_string())
+        .expect(2)
+        .create();
+    let commit = provider
+        .mock("POST", "/graphql")
+        .with_status(502)
+        .expect(1)
+        .create();
+    let rules = provider
+        .mock("GET", "/repos/acme/widget/rules/branches/main")
+        .with_status(404)
+        .expect(1)
+        .create();
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let token = SinkToken::new();
+    let err = tool.ensure(&scaffold_inputs(files), &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    assert_eq!(
+        err.message,
+        "GitHub's GraphQL API did not report the commit as successful"
+    );
+    commit.assert();
+    rules.assert();
+}
+
+/// Acceptance 11: a refused first-file `PUT` (non-409) -- the repository
+/// stays empty after it -- gets the same suffix. The persistent-`409`
+/// case (`ensure_gives_up_after_max_unavailable_attempts_on_persistent_409s`,
+/// above) deliberately keeps its unsuffixed message: SHARED VALUES names
+/// only "a refused first-file `PUT` (non-409)".
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_a_non_409_first_file_put_failure_names_the_rules_in_force() {
+    let mut provider = MockProvider::start();
+    let files = three_files();
+    let (ref_mock, repo_mock, branches_mock) = mock_empty_repository(&mut provider, 2);
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .with_status(422)
+        .expect(1)
+        .create();
+    let commit = provider.mock("POST", "/graphql").expect(0).create();
+    let rules = provider
+        .mock("GET", "/repos/acme/widget/rules/branches/main")
+        .with_status(200)
+        .with_body(
+            serde_json::json!([
+                {"type": "pull_request"},
+                {"type": "required_signatures"},
+                {"type": "Pull Request!"},
+            ])
+            .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let token = SinkToken::new();
+    let err = tool.ensure(&scaffold_inputs(files), &token).unwrap_err();
+    assert_eq!(
+        err.message,
+        "GitHub refused to create the first file of an empty repository; rules in force on \
+         `main`: pull_request, required_signatures, unrecognised"
+    );
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
+    put_mock.assert();
+    commit.assert();
+    rules.assert();
+}
+
 /// The branch moved under us: retried against the new head, then
 /// succeeds. At most three attempts in all; this one needs two.
 #[test]
