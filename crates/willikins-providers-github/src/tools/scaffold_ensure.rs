@@ -1,5 +1,9 @@
 //! `github.scaffold.ensure`: milestone 3g, task G2, decisions (b) and (c)
-//! of `docs/plans/2026-09-30-milestone-3g-file-writing.md`.
+//! of `docs/plans/2026-09-30-milestone-3g-file-writing.md`; extended by
+//! milestone 3l, task S2, decision (b) of
+//! `docs/plans/2026-10-05-milestone-3l-new-repositories.md`, for a
+//! repository that does not exist yet or exists but is empty (no
+//! branches).
 //!
 //! The resource this tool ensures is "this scaffold has landed on this
 //! branch", keyed by `(repo, branch, marker)` -- `files` is the content,
@@ -9,6 +13,42 @@
 //! holds different content is a refusal naming that path, never an
 //! overwrite. See [`GitHubScaffoldEnsure::observe`] for the read table and
 //! [`Tool::ensure`]'s impl for the bounded retry against a moving head.
+//!
+//! **A repository that does not exist, or exists but is empty.**
+//! `get_branch_head` stays the first call, so a repository whose branch
+//! already exists issues exactly the same requests it always has. Only
+//! when that call fails `404` or `409` does this tool ask more: `GET
+//! /repos/{owner}/{name}` tells apart "no repository at all" (`404`,
+//! mapped to [`ScaffoldState::RepositoryAbsent`]) from one that exists,
+//! and `GET .../branches?per_page=1` tells apart "no branches at all"
+//! (empty, GitHub's own definition) from "the named branch alone is
+//! missing". `read` maps both `RepositoryAbsent` and an empty repository
+//! whose `branch` matches the organisation's default to
+//! [`Observation::Absent`] (milestone 3l decision (b): a plan-time error
+//! for a repository `github.repo.ensure` would create in the same plan
+//! makes every new-repository document unplannable, the same call
+//! milestone 3j made for Doppler). `ensure` tells them apart: a missing
+//! repository is `NotFound` naming `github.repo.ensure` as the tool that
+//! creates one; an empty repository whose branch matches the default is
+//! [`ScaffoldState::Empty`], handled by milestone 3l's task S3 (until then,
+//! a temporary `NotFound` naming that task). An empty repository whose
+//! `branch` does *not* match the default is a `Conflict` naming both
+//! names, at `read` and at `ensure` alike -- this tool has no way to
+//! create a branch other than the organisation's default on an empty
+//! repository (decision (c)). A non-empty repository still missing the
+//! named branch keeps today's unchanged `NotFound` message; the same
+//! case surfacing as a `409` instead of a `404` (the branch not yet
+//! visible right after the repository's own creation) is reported as a
+//! `Provider` "not available yet" error instead, since the branch may
+//! simply not have propagated yet. Any other failure -- including a
+//! `301` from `GET /repos` (the repository was renamed away) -- is
+//! [`to_tool_error`], failing loudly, never `Absent`.
+//!
+//! **Mitigation for a typo'd, already-existing repository.** Decision
+//! (b)'s cost: a document naming an existing repository with a typo now
+//! plans `Create` and fails only at apply, with `NotFound`, rather than
+//! at plan. Binding `repo` from `github.repo.get`'s own output (which
+//! fails at plan on a `404`) catches this earlier.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -21,9 +61,11 @@ use willikins_core::tool::helpers::{
 };
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, PortSpec, PortType, SinkToken, Tool, ToolError,
-    ToolSpec, Value,
+    ToolErrorKind, ToolSpec, Value,
 };
-use willikins_types::{CommitHeadline, GitBranchName, GitHubRepo, GitHubToken, RepoFile, RepoPath};
+use willikins_types::{
+    CommitHeadline, DomainType, GitBranchName, GitHubRepo, GitHubToken, RepoFile, RepoPath,
+};
 
 use crate::client::{GitHubClient, PathEntry, ScopedClient, git_blob_sha, to_tool_error};
 
@@ -74,6 +116,29 @@ enum ScaffoldState {
         /// templates still converges.
         already_equal: HashSet<String>,
     },
+    /// Milestone 3l, task S2: the repository exists but has no branches
+    /// at all (GitHub's own definition of "empty"), and `branch` names
+    /// its default branch. `read` maps this to [`Observation::Absent`];
+    /// `ensure` does not yet write anything here -- milestone 3l's task
+    /// S3 turns this into the scaffold's own first write (decision (a)).
+    Empty {
+        /// The repository's reported default branch -- always equal to
+        /// the `branch` input when this state is produced; see
+        /// [`GitHubScaffoldEnsure::observe_without_branch`]. Not yet read
+        /// by `ensure`: milestone 3l's task S3, which lands the scaffold's
+        /// own first write, is where that starts.
+        // Not yet read: milestone 3l's task S3 starts consulting it.
+        #[allow(dead_code)]
+        default_branch: GitBranchName,
+    },
+    /// Milestone 3l, task S2: no repository exists at this key that this
+    /// credential can see -- GitHub's `404` on `GET /repos/{owner}/{name}`
+    /// cannot tell "does not exist" apart from "exists but invisible to
+    /// us", the same conflation `github.repo.ensure` already lives with.
+    /// `read` maps this to [`Observation::Absent`]; `ensure` reports the
+    /// repository-absent `NotFound`, since this tool never creates a
+    /// repository.
+    RepositoryAbsent,
 }
 
 impl GitHubScaffoldEnsure {
@@ -249,6 +314,112 @@ impl GitHubScaffoldEnsure {
         ))
     }
 
+    /// The `NotFound` `ensure` reports for [`ScaffoldState::RepositoryAbsent`]
+    /// (milestone 3l, SHARED VALUES "Repository-absent message (S3,
+    /// `NotFound`)" -- named for the task that documents the value, not
+    /// the one that returns it here).
+    fn repository_absent_error(repo: &GitHubRepo) -> ToolError {
+        not_found(format!(
+            "`{repo}` does not exist; this tool never creates a repository (github.repo.ensure \
+             does)"
+        ))
+    }
+
+    /// The temporary `NotFound` `ensure` reports for
+    /// [`ScaffoldState::Empty`] until milestone 3l's task S3 replaces it
+    /// with the scaffold's own first write (decision (a)).
+    fn empty_repository_not_yet_handled(repo: &GitHubRepo) -> ToolError {
+        not_found(format!(
+            "`{repo}` is empty; this tool does not yet create a repository's first branch \
+             (milestone 3l task S3 adds that)"
+        ))
+    }
+
+    /// The `Conflict` [`Self::observe_without_branch`] produces when an
+    /// empty repository's own default branch does not match the
+    /// requested `branch` (milestone 3l, SHARED VALUES "Default-branch
+    /// mismatch (S2, `Conflict`)").
+    fn default_branch_mismatch(
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+        default_branch: &GitBranchName,
+    ) -> ToolError {
+        conflict(format!(
+            "`{repo}` is empty, and its first commit can only land on its default branch \
+             `{default_branch}`, not `{branch}`; name `{default_branch}` in this document, or \
+             change the organisation's default branch name before the repository is created"
+        ))
+    }
+
+    /// The `Provider` [`Self::observe_without_branch`] produces when an
+    /// otherwise-empty repository is still unavailable right after
+    /// creation (milestone 3l, SHARED VALUES "Unavailable (S2,
+    /// `Provider`)").
+    fn repository_unavailable(repo: &GitHubRepo) -> ToolError {
+        ToolError {
+            kind: ToolErrorKind::Provider,
+            message: format!(
+                "`{repo}` is not available yet (GitHub may still be creating it); re-run this \
+                 document"
+            ),
+        }
+    }
+
+    /// The `Provider` [`Self::observe_without_branch`] produces when
+    /// `GET /repos` reported a `default_branch` this tool cannot use at
+    /// all -- absent, or not a valid [`GitBranchName`]. Static (never
+    /// echoes GitHub's own string): milestone 3l, SHARED VALUES
+    /// "`404`/`409` then repo `200` with `default_branch` absent or not a
+    /// `GitBranchName` -> `Provider` (static message naming `repo`)".
+    fn repository_default_branch_unusable(repo: &GitHubRepo) -> ToolError {
+        ToolError {
+            kind: ToolErrorKind::Provider,
+            message: format!("`{repo}` did not report a usable default branch"),
+        }
+    }
+
+    /// Decision (b)'s table for when `get_branch_head` failed `404` or
+    /// `409`: resolves whether the repository itself is absent, empty
+    /// (and if so whether `branch` names its own default), or exists
+    /// with some other branch -- in which case `branch_was_404` decides
+    /// between the unchanged missing-branch message and the "not
+    /// available yet" one, since a `409` there means GitHub may simply
+    /// not have made the branch visible yet, not that it never will
+    /// exist.
+    fn observe_without_branch(
+        client: &GitHubClient,
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+        branch_was_404: bool,
+    ) -> Result<ScaffoldState, ToolError> {
+        let repo_body = match client.get_repo(repo) {
+            Ok(body) => body,
+            Err(err) if err.status == Some(404) => return Ok(ScaffoldState::RepositoryAbsent),
+            Err(err) => return Err(to_tool_error(err)),
+        };
+        let default_branch = repo_body
+            .default_branch
+            .as_deref()
+            .and_then(|name| GitBranchName::parse(name).ok());
+        let Some(default_branch) = default_branch else {
+            return Err(Self::repository_default_branch_unusable(repo));
+        };
+        if client.has_any_branch(repo).map_err(to_tool_error)? {
+            return Err(if branch_was_404 {
+                not_found(format!(
+                    "branch `{branch}` does not exist on `{repo}`; this tool never creates one"
+                ))
+            } else {
+                Self::repository_unavailable(repo)
+            });
+        }
+        if default_branch == *branch {
+            Ok(ScaffoldState::Empty { default_branch })
+        } else {
+            Err(Self::default_branch_mismatch(repo, branch, &default_branch))
+        }
+    }
+
     /// Resolve the current head, the marker's state, and -- only when the
     /// marker is absent -- every seed path's state, exactly as decision
     /// (b)'s read table describes. Never downloads a seed file's content;
@@ -270,10 +441,8 @@ impl GitHubScaffoldEnsure {
     ) -> Result<ScaffoldState, ToolError> {
         let head = match client.get_branch_head(repo, branch) {
             Ok(head) => head,
-            Err(err) if err.status == Some(404) => {
-                return Err(not_found(format!(
-                    "branch `{branch}` does not exist on `{repo}`; this tool never creates one"
-                )));
+            Err(err) if err.status == Some(404) || err.status == Some(409) => {
+                return Self::observe_without_branch(client, repo, branch, err.status == Some(404));
             }
             Err(err) => return Err(to_tool_error(err)),
         };
@@ -361,7 +530,9 @@ impl Tool for GitHubScaffoldEnsure {
                 &repo, &branch, &marker,
             ))),
             ScaffoldState::Foreign => Ok(Observation::Foreign),
-            ScaffoldState::Absent { .. } => Ok(Observation::Absent {
+            ScaffoldState::Absent { .. }
+            | ScaffoldState::Empty { .. }
+            | ScaffoldState::RepositoryAbsent => Ok(Observation::Absent {
                 predicted: Self::outputs_for(&repo, &branch, &marker),
             }),
         }
@@ -393,6 +564,12 @@ impl Tool for GitHubScaffoldEnsure {
                 }
                 ScaffoldState::Foreign => {
                     return Err(Self::foreign_conflict(&repo, &branch, &marker));
+                }
+                ScaffoldState::RepositoryAbsent => {
+                    return Err(Self::repository_absent_error(&repo));
+                }
+                ScaffoldState::Empty { .. } => {
+                    return Err(Self::empty_repository_not_yet_handled(&repo));
                 }
                 ScaffoldState::Absent {
                     head,
@@ -436,6 +613,18 @@ impl Tool for GitHubScaffoldEnsure {
                         }
                         ScaffoldState::Foreign => {
                             return Err(Self::foreign_conflict(&repo, &branch, &marker));
+                        }
+                        // Both only reachable if the branch this attempt
+                        // targeted was deleted, and the repository
+                        // emptied or vanished outright, between the
+                        // first observe and this re-read -- not a case
+                        // the original commit failure can explain, so
+                        // these take priority over it.
+                        ScaffoldState::RepositoryAbsent => {
+                            return Err(Self::repository_absent_error(&repo));
+                        }
+                        ScaffoldState::Empty { .. } => {
+                            return Err(Self::empty_repository_not_yet_handled(&repo));
                         }
                         ScaffoldState::Absent {
                             head: new_head,

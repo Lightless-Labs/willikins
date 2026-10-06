@@ -407,14 +407,13 @@ impl GitHubClient {
     /// SHARED VALUES "Branches call (S1)"): GitHub's own definition of an
     /// empty repository is "repositories without branches", so a
     /// one-element listing settles the question without ever asking for
-    /// more branches than that.
+    /// more branches than that. Called by `github.scaffold.ensure`'s
+    /// `observe_without_branch` (milestone 3l, task S2) once
+    /// `get_branch_head` has already failed `404` or `409`.
     ///
     /// # Errors
     ///
     /// See [`Self::get_repo`].
-    // Not yet called by any tool: `github.scaffold.ensure` starts using
-    // this in milestone 3l's task S2.
-    #[allow(dead_code)]
     pub(crate) fn has_any_branch(&self, repo: &GitHubRepo) -> Result<bool, ProviderError> {
         let path = format!("{}/branches?per_page=1", repo_path(repo));
         let branches: Vec<serde::de::IgnoredAny> =
@@ -824,12 +823,10 @@ pub(crate) struct RepoBody {
     pub(crate) archived: bool,
     /// The repository's default branch name (milestone 3l, SHARED VALUES
     /// "`RepoBody` (S1)"). Absent on every mock fixture that predates this
-    /// field, so it defaults to `None` rather than failing their parse;
-    /// not yet read by any tool in this crate (task S2 is where
-    /// `github.scaffold.ensure` starts consulting it).
-    // Not yet read by any tool: milestone 3l's task S2 is where
-    // `github.scaffold.ensure` starts consulting it.
-    #[allow(dead_code)]
+    /// field, so it defaults to `None` rather than failing their parse.
+    /// Read by `github.scaffold.ensure`'s `observe_without_branch`
+    /// (milestone 3l, task S2) once `get_branch_head` has already failed
+    /// `404` or `409`; `github.repo.ensure` never reads it.
     #[serde(default)]
     pub(crate) default_branch: Option<String>,
 }
