@@ -1,0 +1,24 @@
+# Milestone 2b, decision (d7) and acceptance 4
+# (docs/plans/2026-10-05-milestone-2b-composition.md): when the bad
+# reference sits inside another `uses:` step's own `with:`,
+# UnknownUsesOutput's `site` is `Site::Port`, naming that `uses:` step
+# (here, `a`) as `node` and the child input (`x`) as `port` -- not `b`,
+# which is the *referenced* step (reported separately as `node`). Pinned
+# by
+# `an_unknown_uses_output_referenced_from_inside_another_uses_steps_with_is_sited_there`
+# (crates/willikins-dsl/tests/it/composition.rs), together with its
+# shared children `nested-site-achild.yaml` and
+# `nested-site-bchild.yaml`. Linking must fail with exactly:
+#   CheckError::UnknownUsesOutput {
+#       site: Site::Port { node: NodeName("a"), port: PortName("x") },
+#       node: NodeName("b"),
+#       output: OutputName("missing"),
+#   }
+name: nested-site-unknown-uses-output-root
+steps:
+  a:
+    uses: nested-site-achild
+    with:
+      x: ${{ steps.b.missing }}
+  b:
+    uses: nested-site-bchild

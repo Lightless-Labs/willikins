@@ -1912,4 +1912,98 @@ mod tests {
             }]
         );
     }
+
+    /// A workflow with one declared input `x` (`Text`, defaulted).
+    fn child_with_x_input(name: &str) -> Workflow {
+        Workflow::new(wf_name(name)).input(
+            input("x"),
+            InputSpec::new(ty("Text")).with_default(Value::parse(&ty("Text"), "x").unwrap()),
+        )
+    }
+
+    /// `root` with two `uses:` steps, `a` and `b`: `a`'s `with:` binds
+    /// its own child's declared input `x` to `reference` (a reference
+    /// onto `b`) -- the "sits inside another `uses:` step's `with:`"
+    /// case the module docs' `Site` note covers, for either
+    /// `UnknownUsesOutput` or `KeyedOnUses`.
+    fn root_referencing_b_from_as_with(reference: Binding) -> Workflow {
+        let mut a_with = IndexMap::new();
+        a_with.insert(input("x"), reference);
+        Workflow::new(wf_name("root"))
+            .uses(
+                node("a"),
+                Uses {
+                    workflow: wf_name("achild"),
+                    with: a_with,
+                    position: 0,
+                },
+            )
+            .uses(
+                node("b"),
+                Uses {
+                    workflow: wf_name("bchild"),
+                    with: IndexMap::new(),
+                    position: 1,
+                },
+            )
+    }
+
+    // `Result` is never actually `Err` here -- the signature matches
+    // `link`'s own `resolve` parameter type, which this is passed as.
+    #[allow(clippy::unnecessary_wraps)]
+    fn resolve_a_and_b(name: &WorkflowName) -> Result<Workflow, ResolveFailure> {
+        match name.as_str() {
+            "achild" => Ok(child_with_x_input("achild")),
+            "bchild" => Ok(child_with_one_input("bchild", true)),
+            other => panic!("resolver asked for an unexpected workflow: {other}"),
+        }
+    }
+
+    /// Acceptance 4, the module docs' `Site` note: when the bad
+    /// reference sits inside another `uses:` step's own `with:`,
+    /// `UnknownUsesOutput`'s `site` is `Site::Port` naming that `uses:`
+    /// step (`a`) as `node` and the child input (`x`) as `port` -- not
+    /// `b`, which is the *referenced* step (reported separately as
+    /// `node`).
+    #[test]
+    fn an_unknown_uses_output_referenced_from_inside_another_uses_steps_with_is_sited_there() {
+        let root = root_referencing_b_from_as_with(Binding::Step {
+            node: node("b"),
+            port: port("missing"),
+        });
+        let err = link(&root, &mut resolve_a_and_b).unwrap_err();
+        assert_eq!(
+            err,
+            vec![CheckError::UnknownUsesOutput {
+                site: Site::Port {
+                    node: node("a"),
+                    port: port("x"),
+                },
+                node: node("b"),
+                output: output("missing"),
+            }]
+        );
+    }
+
+    /// Acceptance 4, the module docs' `Site` note: the same "inside
+    /// another `uses:` step's `with:`" site, for `KeyedOnUses`.
+    #[test]
+    fn a_keyed_reference_from_inside_another_uses_steps_with_is_sited_there() {
+        let root = root_referencing_b_from_as_with(Binding::Keyed {
+            node: node("b"),
+            key: "k".to_string(),
+            port: port("out"),
+        });
+        let err = link(&root, &mut resolve_a_and_b).unwrap_err();
+        assert_eq!(
+            err,
+            vec![CheckError::KeyedOnUses {
+                site: Site::Port {
+                    node: node("a"),
+                    port: port("x"),
+                },
+                node: node("b"),
+            }]
+        );
+    }
 }

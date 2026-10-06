@@ -1,0 +1,6 @@
+# Shared child of nested-site-unknown-uses-output-root.yaml and
+# nested-site-keyed-on-uses-root.yaml; see those files' headers
+# (docs/plans/2026-10-05-milestone-2b-composition.md, decision (d7) and
+# acceptance 4). Declares no outputs at all.
+name: nested-site-bchild
+steps: {}

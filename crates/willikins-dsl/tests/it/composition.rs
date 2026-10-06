@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use willikins_core::{
-    CheckError, InputName, NodeName, OutputName, ResolveFailure, Site, Workflow, link,
+    CheckError, InputName, NodeName, OutputName, PortName, ResolveFailure, Site, Workflow, link,
 };
 use willikins_dsl::{DocumentErrorKind, load_document};
 use willikins_types::{DomainType, WorkflowName};
@@ -23,6 +23,10 @@ fn input(name: &str) -> InputName {
 
 fn output(name: &str) -> OutputName {
     OutputName::parse(name).unwrap()
+}
+
+fn port(name: &str) -> PortName {
+    PortName::parse(name).unwrap()
 }
 
 fn fixture_path(relative: &str) -> String {
@@ -322,4 +326,41 @@ fn an_alias_cycle_between_two_uses_steps_outputs_is_refused() {
         }
         other => panic!("expected exactly one UsesOutputCycle, got {other:?}"),
     }
+}
+
+/// `workflows/fixtures/composition/nested-site-unknown-uses-output-root.yaml`'s
+/// header (with its shared children `nested-site-achild.yaml` and
+/// `nested-site-bchild.yaml`).
+#[test]
+fn an_unknown_uses_output_referenced_from_inside_another_uses_steps_with_is_sited_there() {
+    let errors = link_fixture("nested-site-unknown-uses-output-root.yaml");
+    assert_eq!(
+        errors,
+        vec![CheckError::UnknownUsesOutput {
+            site: Site::Port {
+                node: node("a"),
+                port: port("x"),
+            },
+            node: node("b"),
+            output: output("missing"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/nested-site-keyed-on-uses-root.yaml`'s
+/// header (with its shared children `nested-site-achild.yaml` and
+/// `nested-site-bchild.yaml`).
+#[test]
+fn a_keyed_reference_from_inside_another_uses_steps_with_is_sited_there() {
+    let errors = link_fixture("nested-site-keyed-on-uses-root.yaml");
+    assert_eq!(
+        errors,
+        vec![CheckError::KeyedOnUses {
+            site: Site::Port {
+                node: node("a"),
+                port: port("x"),
+            },
+            node: node("b"),
+        }]
+    );
 }
