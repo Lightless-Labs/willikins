@@ -1,6 +1,7 @@
 # Milestone 2b: composition, a document uses another document
 
 **Created:** 2026-10-05 (the composition lane of the operator's "what's next? We can explore multiple lanes in
+**Completed:** 2026-10-06 — documents compose through `uses:`; the operator's iOS app document is split into an organisation document and the app document (private), and a real run of the split reads every node NoOp (19 NoOp, 62 Compute).
 parallel")
 **Reviewed:** 2026-10-05 (portfolio review of the five plans of 2026-10-05: 3k, 2b, 3l, 3m, 3n)
 **Addendum:** 2026-10-05 — portfolio review. Order: 3k, then 3n F1–F3, then 3l, then this milestone, then 3n's S and
@@ -751,3 +752,5 @@ Nothing blocks this milestone. O2 shows the operator the split document's live p
 earlier real runs did.
 
 **Addendum:** 2026-10-06 (coordinator) — the independent adversarial pass's two decisions. (1) RATIFIED: `MAX_LINKED_NODES` counts `uses:` steps as well as tool nodes (6058036); the bound limits the linker's work, and a step that expands to no tool node is still work, so a fan-out of node-free documents is refused like any other. The SHARED VALUES row now means "tool nodes and `uses:` steps after expansion". (2) FIXED in this milestone, not banked: `load_named_document` hashed a second read of a document it had parsed from a first; `willikins-dsl::load_document_with_bytes` returns the parsed bytes and the server hashes those. Full gate after both: 49 suites, 3466 tests, 0 failed. Task O1 (the operator's split, gitignored, no commit) follows, then the coordinator's O2.
+
+**Addendum:** 2026-10-06 (coordinator, O2 and D1) — O1 split the operator's document in gitignored paths only (an independent opus check confirmed the baseline byte-identical to the converged monolith, matching the journal's recorded digest, and the split's fake plan equal apart from node names). O2: a read-only `plan --live` of the split root read 19 NoOp, 62 Compute, nothing blocked, seven nodes under `org/`; the all-NoOp apply with the real journal reported 62 Computed and 19 Unchanged and wrote nothing. D1: the design doc's addendum and milestone line, the CLAUDE.md/AGENTS.md invariant, the README's `uses:` section, the reusable-ios-app-document todo, and the HANDOFF update.
