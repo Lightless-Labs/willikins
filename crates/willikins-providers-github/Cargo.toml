@@ -9,10 +9,11 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-# Compiles `tests/live_scaffold_cycle.rs`, and nothing else -- mirrors
+# Compiles `tests/live_scaffold_cycle.rs` and `tests/live_new_repository_cycle.rs`
+# (milestone 3l, task L1), and nothing else -- mirrors
 # `willikins-providers-doppler`'s own `live-tests` feature exactly, for
 # exactly the same reason: a plain `cargo test --workspace` must never
-# provision or delete anything against a real GitHub org. The test is
+# provision or delete anything against a real GitHub org. Each test is
 # `#[ignore]`d and needs `WILLIKINS_LIVE_TESTS=1` on top of the feature
 # before it makes a call. This crate's two older live tests
 # (`tests/live_write_cycle.rs`, `tests/live_probe.rs`) predate this
@@ -22,6 +23,10 @@ live-tests = []
 
 [[test]]
 name = "live_scaffold_cycle"
+required-features = ["live-tests"]
+
+[[test]]
+name = "live_new_repository_cycle"
 required-features = ["live-tests"]
 
 [dependencies]
