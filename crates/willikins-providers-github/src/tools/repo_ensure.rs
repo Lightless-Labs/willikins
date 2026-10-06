@@ -96,6 +96,7 @@ impl GitHubRepoEnsure {
                 visibility,
                 topics,
                 archived: _,
+                default_branch: _,
             }) => {
                 if !topics.iter().any(|topic| topic == crate::MANAGED_TOPIC) {
                     return Ok(Observation::Foreign);

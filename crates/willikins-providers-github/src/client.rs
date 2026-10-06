@@ -402,6 +402,26 @@ impl GitHubClient {
             .map(|body| body.object.sha)
     }
 
+    /// `GET /repos/{owner}/{name}/branches?per_page=1`, reporting only
+    /// whether the repository has any branch at all (milestone 3l,
+    /// SHARED VALUES "Branches call (S1)"): GitHub's own definition of an
+    /// empty repository is "repositories without branches", so a
+    /// one-element listing settles the question without ever asking for
+    /// more branches than that.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_repo`].
+    // Not yet called by any tool: `github.scaffold.ensure` starts using
+    // this in milestone 3l's task S2.
+    #[allow(dead_code)]
+    pub(crate) fn has_any_branch(&self, repo: &GitHubRepo) -> Result<bool, ProviderError> {
+        let path = format!("{}/branches?per_page=1", repo_path(repo));
+        let branches: Vec<serde::de::IgnoredAny> =
+            self.retry_secondary_limit(|| self.http.get(&path))?;
+        Ok(!branches.is_empty())
+    }
+
     /// `GET /repos/{owner}/{repo}/git/commits/{commit_sha}`, returning the
     /// root tree sha that commit points to.
     ///
@@ -631,6 +651,64 @@ impl GitHubClient {
             .map(|payload| payload.commit.oid)
             .ok_or_else(|| ProviderError::new(Some(200), GRAPHQL_FAILURE_MESSAGE))
     }
+
+    /// `PUT /repos/{owner}/{name}/contents/{encoded path}`, the one route
+    /// GitHub documents to initialise an empty repository (milestone 3l,
+    /// SHARED VALUES "First-file call (S1)"). The body is exactly
+    /// `message`, `content` (standard base64 of `file`'s bytes), and
+    /// `branch` — never `sha` (which this endpoint, undocumented here,
+    /// treats as "I am replacing an existing file"; omitting it is what
+    /// lets this call only ever create), never `committer` or `author`
+    /// (GitHub defaults both to the authenticated identity). `file`'s path
+    /// is percent-encoded per [`encode_contents_path`]. The response is
+    /// discarded entirely — [`Self::ensure`](crate::tools::scaffold_ensure)
+    /// re-reads instead of trusting it (decision (a) of the milestone's
+    /// plan).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] for any non-2xx response or a transport
+    /// failure. Every status but `401`/`403` (whose shared fixed messages
+    /// already carry no body text) and a transport failure (no status at
+    /// all) has its message replaced with [`FIRST_FILE_FAILURE_MESSAGE`] —
+    /// never GitHub's own body, which could otherwise carry a fragment of
+    /// the file this call just tried to write (the same reasoning as
+    /// [`suppress_graphql_response_body`]).
+    // Not yet called by any tool: milestone 3l's task S3 is where
+    // `github.scaffold.ensure` starts calling this.
+    #[allow(dead_code)]
+    pub(crate) fn create_first_file(
+        &self,
+        repo: &GitHubRepo,
+        branch: &GitBranchName,
+        file: &RepoFile,
+        message: &str,
+    ) -> Result<(), ProviderError> {
+        let path = format!(
+            "{}/contents/{}",
+            repo_path(repo),
+            encode_contents_path(file.path())
+        );
+        let body = FirstFileBody {
+            message: message.to_string(),
+            content: STANDARD.encode(file.content().as_bytes()),
+            branch: branch.as_str().to_string(),
+        };
+        self.retry_secondary_limit(|| self.http.put::<serde::de::IgnoredAny>(&path, &body))
+            .map(|_| ())
+            .map_err(suppress_first_file_response_body)
+    }
+
+    /// Delegate to this client's own [`Sleeper`] (milestone 3l, SHARED
+    /// VALUES "Pause hook (S3)"), so a mock test's recording sleeper
+    /// captures the wait instead of actually sleeping — the same seam
+    /// [`Self::retry_secondary_limit`] already uses for its own waits.
+    // Not yet called by any tool: milestone 3l's task S3 is where
+    // `github.scaffold.ensure` starts calling this.
+    #[allow(dead_code)]
+    pub(crate) fn pause(&self, duration: Duration) {
+        self.sleeper.sleep(duration);
+    }
 }
 
 /// The label a bound `token` port's minted [`Credential`] carries in its
@@ -745,6 +823,16 @@ pub(crate) struct RepoBody {
     /// archived") rather than failing every existing fixture's parse.
     #[serde(default)]
     pub(crate) archived: bool,
+    /// The repository's default branch name (milestone 3l, SHARED VALUES
+    /// "`RepoBody` (S1)"). Absent on every mock fixture that predates this
+    /// field, so it defaults to `None` rather than failing their parse;
+    /// not yet read by any tool in this crate (task S2 is where
+    /// `github.scaffold.ensure` starts consulting it).
+    // Not yet read by any tool: milestone 3l's task S2 is where
+    // `github.scaffold.ensure` starts consulting it.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub(crate) default_branch: Option<String>,
 }
 
 /// Deserialize `topics` treating an explicit `null` as an empty list.
@@ -985,6 +1073,89 @@ fn suppress_graphql_response_body(err: ProviderError) -> ProviderError {
         None | Some(401 | 403) => err,
         Some(_) => ProviderError {
             message: GRAPHQL_FAILURE_MESSAGE.to_string(),
+            ..err
+        },
+    }
+}
+
+/// [`GitHubClient::create_first_file`]'s request body: exactly `message`,
+/// `content`, `branch` — no `sha`, `committer` or `author` field exists
+/// on this type at all, so none can ever be added by accident at a call
+/// site.
+// Not yet constructed by any tool: milestone 3l's task S3 is where
+// `GitHubClient::create_first_file` starts being called.
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+struct FirstFileBody {
+    message: String,
+    content: String,
+    branch: String,
+}
+
+/// What every failure of [`GitHubClient::create_first_file`] says instead
+/// of GitHub's own response body (milestone 3l, SHARED VALUES "First-file
+/// failure message (S1)").
+// Not yet used by any tool: milestone 3l's task S3 is where
+// `GitHubClient::create_first_file` starts being called.
+#[allow(dead_code)]
+pub(crate) const FIRST_FILE_FAILURE_MESSAGE: &str =
+    "GitHub refused to create the first file of an empty repository";
+
+/// Percent-encode `path` for the Contents API's `{path}` route segment
+/// (milestone 3l, SHARED VALUES "Path encoding (S1)"): each `/`-separated
+/// segment is encoded on its own (`/` itself is kept, never encoded),
+/// every byte outside `[A-Za-z0-9._-]` becomes `%XX` in uppercase hex —
+/// which is how `+` becomes `%2B` and `@` becomes `%40`, the only other
+/// characters [`RepoPath`] admits, without either needing its own
+/// special case.
+// Not yet called by any tool: milestone 3l's task S3 is where
+// `GitHubClient::create_first_file` starts being called.
+#[allow(dead_code)]
+fn encode_contents_path(path: &RepoPath) -> String {
+    path.segments()
+        .map(encode_contents_path_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Percent-encode one `/`-free [`RepoPath`] segment, byte by byte: every
+/// byte in `[A-Za-z0-9._-]` is kept as itself, every other byte becomes
+/// `%XX` (uppercase hex). `RepoPath`'s own grammar admits only ASCII
+/// bytes in a segment, so iterating `str::bytes` (rather than `chars`)
+/// never splits a multi-byte character.
+// Not yet called by any tool: milestone 3l's task S3 is where
+// `GitHubClient::create_first_file` starts being called.
+#[allow(dead_code)]
+fn encode_contents_path_segment(segment: &str) -> String {
+    use std::fmt::Write as _;
+    let mut encoded = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-') {
+            encoded.push(byte as char);
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
+}
+
+/// Replace a [`ProviderError`] [`GitHubClient::create_first_file`] did not
+/// build itself (one `Http::put` produced from a non-2xx Contents API
+/// response) with [`FIRST_FILE_FAILURE_MESSAGE`], keeping its status and
+/// header-derived facts intact. `401`/`403` and a transport failure (no
+/// status at all) are left exactly as `Http::put` returned them: both are
+/// already body-free. Every other status could otherwise carry a
+/// fragment of the very file content this call just tried to write — the
+/// same reasoning as [`suppress_graphql_response_body`], applied to a
+/// REST body instead of a GraphQL one.
+// Not yet called by any tool: milestone 3l's task S3 is where
+// `GitHubClient::create_first_file` starts being called.
+#[allow(dead_code)]
+fn suppress_first_file_response_body(err: ProviderError) -> ProviderError {
+    match err.status {
+        None | Some(401 | 403) => err,
+        Some(_) => ProviderError {
+            message: FIRST_FILE_FAILURE_MESSAGE.to_string(),
             ..err
         },
     }
@@ -1512,5 +1683,210 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.status, Some(503));
         mock.assert();
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3l, task S1: `has_any_branch`, `get_repo`'s `default_branch`,
+    // and `create_first_file`.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn has_any_branch_issues_the_exact_request_line_and_reads_false_on_an_empty_list() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let mock = provider
+            .mock("GET", "/repos/acme/widget/branches?per_page=1")
+            .with_status(200)
+            .with_body("[]")
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        assert!(!client.has_any_branch(&repo()).unwrap());
+        mock.assert();
+    }
+
+    #[test]
+    fn has_any_branch_reads_true_on_a_nonempty_list() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let mock = provider
+            .mock("GET", "/repos/acme/widget/branches?per_page=1")
+            .with_status(200)
+            .with_body(serde_json::json!([{"name": "main"}]).to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        assert!(client.has_any_branch(&repo()).unwrap());
+        mock.assert();
+    }
+
+    #[test]
+    fn has_any_branch_404_is_err_with_the_status() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        provider
+            .mock("GET", "/repos/acme/widget/branches?per_page=1")
+            .with_status(404)
+            .with_body(serde_json::json!({"message": "Not Found"}).to_string())
+            .create();
+        let client = client_against(provider.url());
+        let err = client.has_any_branch(&repo()).unwrap_err();
+        assert_eq!(err.status, Some(404));
+    }
+
+    #[test]
+    fn get_repo_parses_a_body_with_default_branch() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        provider
+            .mock("GET", "/repos/acme/widget")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({"visibility": "private", "topics": [], "default_branch": "main"})
+                    .to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let body = client.get_repo(&repo()).unwrap();
+        assert_eq!(body.default_branch, Some("main".to_string()));
+    }
+
+    #[test]
+    fn get_repo_parses_a_body_without_default_branch() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        provider
+            .mock("GET", "/repos/acme/widget")
+            .with_status(200)
+            .with_body(serde_json::json!({"visibility": "private", "topics": []}).to_string())
+            .create();
+        let client = client_against(provider.url());
+        let body = client.get_repo(&repo()).unwrap();
+        assert_eq!(body.default_branch, None);
+    }
+
+    fn first_file_fixture() -> (GitBranchName, RepoFile) {
+        (
+            GitBranchName::parse("main").unwrap(),
+            RepoFile::new(RepoPath::parse("a+b/c@d.txt").unwrap(), "hello").unwrap(),
+        )
+    }
+
+    #[test]
+    fn create_first_file_puts_the_encoded_path_with_exactly_message_content_and_branch() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let (branch, file) = first_file_fixture();
+        let expected_body = serde_json::json!({
+            "message": "chore: seed",
+            "content": STANDARD.encode(b"hello"),
+            "branch": "main",
+        });
+        let mock = provider
+            .mock("PUT", "/repos/acme/widget/contents/a%2Bb/c%40d.txt")
+            .match_body(willikins_providers_http::testing::json_body(expected_body))
+            .with_status(201)
+            .with_body("{}")
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        client
+            .create_first_file(&repo(), &branch, &file, "chore: seed")
+            .unwrap();
+        mock.assert();
+    }
+
+    #[test]
+    fn create_first_file_extra_key_does_not_match_the_exact_body() {
+        // The same exact-match matcher `json_body` uses elsewhere: a
+        // request body carrying a key beyond `message`/`content`/`branch`
+        // (as would happen if a future edit smuggled in `sha`) would leave
+        // this mock unmatched and the call failing, proving the body is
+        // exactly those three keys, never a superset.
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let (branch, file) = first_file_fixture();
+        let mock = provider
+            .mock("PUT", "/repos/acme/widget/contents/a%2Bb/c%40d.txt")
+            .match_body(willikins_providers_http::testing::json_body(
+                serde_json::json!({
+                    "message": "chore: seed",
+                    "content": STANDARD.encode(b"hello"),
+                    "branch": "main",
+                    "sha": "unexpected",
+                }),
+            ))
+            .with_status(201)
+            .with_body("{}")
+            .expect(0)
+            .create();
+        let client = client_against(provider.url());
+        client
+            .create_first_file(&repo(), &branch, &file, "chore: seed")
+            .unwrap_err();
+        mock.assert();
+    }
+
+    #[test]
+    fn create_first_file_409_422_404_report_the_shared_failure_message_without_echoing_the_body() {
+        for status in [409u16, 422, 404] {
+            let mut provider = willikins_providers_http::testing::MockProvider::start();
+            let (branch, file) = first_file_fixture();
+            let marker = format!("wlkn-test-marker-first-file-{status}");
+            provider
+                .mock("PUT", "/repos/acme/widget/contents/a%2Bb/c%40d.txt")
+                .with_status(usize::from(status))
+                .with_body(
+                    serde_json::json!({"message": format!("conflict: {marker}")}).to_string(),
+                )
+                .create();
+            let client = client_against(provider.url());
+            let err = client
+                .create_first_file(&repo(), &branch, &file, "chore: seed")
+                .unwrap_err();
+            assert_eq!(err.status, Some(status));
+            assert_eq!(err.message, FIRST_FILE_FAILURE_MESSAGE);
+            assert!(!err.message.contains(&marker));
+            assert!(!format!("{err:?}").contains(&marker));
+        }
+    }
+
+    #[test]
+    fn create_first_file_401_and_403_keep_the_shared_fixed_messages() {
+        for (status, expected) in [
+            (401u16, willikins_providers_http::UNAUTHENTICATED),
+            (403u16, willikins_providers_http::MISSING_PERMISSION),
+        ] {
+            let mut provider = willikins_providers_http::testing::MockProvider::start();
+            let (branch, file) = first_file_fixture();
+            let marker = format!("wlkn-test-marker-first-file-{status}");
+            provider
+                .mock("PUT", "/repos/acme/widget/contents/a%2Bb/c%40d.txt")
+                .with_status(usize::from(status))
+                .with_body(serde_json::json!({"message": format!("denied: {marker}")}).to_string())
+                .create();
+            let client = client_against(provider.url());
+            let err = client
+                .create_first_file(&repo(), &branch, &file, "chore: seed")
+                .unwrap_err();
+            assert_eq!(err.message, expected);
+            assert!(!err.message.contains(&marker));
+        }
+    }
+
+    #[test]
+    fn pause_delegates_to_the_clients_own_sleeper() {
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct RecordingSleeper(Mutex<Vec<Duration>>);
+
+        impl Sleeper for RecordingSleeper {
+            fn sleep(&self, duration: Duration) {
+                self.0.lock().unwrap().push(duration);
+            }
+        }
+
+        let recorder = Arc::new(RecordingSleeper::default());
+        let sleeper: Arc<dyn Sleeper> = Arc::clone(&recorder) as Arc<dyn Sleeper>;
+        let client = client_against("http://127.0.0.1:1".to_string()).with_sleeper(sleeper);
+        client.pause(Duration::from_millis(300));
+        assert_eq!(
+            recorder.0.lock().unwrap().as_slice(),
+            [Duration::from_millis(300)]
+        );
     }
 }
