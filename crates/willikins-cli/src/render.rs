@@ -348,6 +348,43 @@ fn check_error_detail(error: &CheckError) -> String {
                 willikins_core::compose::MAX_LINKED_NODES
             )
         }
+        CheckError::UnknownWorkflow { node, workflow } => {
+            format!("{node}: unknown workflow `{workflow}`")
+        }
+        CheckError::UsedDocument {
+            node,
+            workflow,
+            reason,
+        } => {
+            format!(
+                "{node}: workflow `{workflow}` failed to load: {}",
+                single_line(reason)
+            )
+        }
+        CheckError::UnknownUsesInput { node, input } => {
+            format!("{node}: `with:` names undeclared input `{input}`")
+        }
+        CheckError::UnboundUsesInput { node, input } => {
+            format!("{node}: required input `{input}` is not bound and has no default")
+        }
+        CheckError::UnknownUsesOutput { site, node, output } => {
+            format!("{site}: node `{node}` has no declared output `{output}`")
+        }
+        CheckError::ItemInUses { node, input } => {
+            format!("{node}: input `{input}` cannot be bound to `item` inside a `uses:` step")
+        }
+        CheckError::KeyedOnUses { site, node } => {
+            format!("{site}: node `{node}` is a uses: step, not a for_each node")
+        }
+        CheckError::UsesOutputCycle { node, output } => {
+            format!("{node}.{output}: uses output alias cycle")
+        }
+        CheckError::PathInAuthoredName { name } => {
+            format!(
+                "name `{}`: an authored name may not contain `/`",
+                single_line(name)
+            )
+        }
     }
 }
 

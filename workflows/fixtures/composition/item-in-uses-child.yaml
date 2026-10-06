@@ -1,0 +1,9 @@
+# Child of item-in-uses-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, decision (d4) and
+# acceptance 4).
+name: item-in-uses-child
+inputs:
+  known:
+    type: Text
+    default: x
+steps: {}

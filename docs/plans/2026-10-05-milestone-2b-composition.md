@@ -11,6 +11,13 @@ snapshot, so those tasks regenerate it; J1's new `PlanRecorded` field has constr
 so J1 fills them. A general snapshot rule joins the Gates section, and acceptance 1's "dotted path" now says a
 `/`-separated path. After 3k, new integration tests live under `tests/it/` (Gates).
 
+**Addendum:** 2026-10-06 (task L2, commit 2) — the SHARED VALUES table names `UsedDocument`'s third field `message`.
+Implemented as `reason` instead: `willikins-core/src/check.rs`'s own test
+`every_check_error_variant_serializes_with_its_kind` enforces, for every existing `CheckError` variant, that none
+has a field literally named `message` (it would collide with `crate::Reported`'s own added field when a renderer
+wraps the error). `message` was never free to reuse here; the content and the variant name are otherwise exactly as
+specified.
+
 ## Goal
 
 1. **Part P (the document).** A step may say `uses: <workflow-name>` instead of `tool: <tool-name>`. It binds the

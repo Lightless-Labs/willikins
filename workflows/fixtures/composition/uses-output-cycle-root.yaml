@@ -1,0 +1,20 @@
+# Milestone 2b, decision (d7) and acceptance 4
+# (docs/plans/2026-10-05-milestone-2b-composition.md): two `uses:` steps
+# whose outputs alias into each other with no node in between -- the
+# decision's own worked example -- is refused as UsesOutputCycle before
+# the recursion that would otherwise overflow the stack. Pinned by
+# `an_alias_cycle_between_two_uses_steps_outputs_is_refused`
+# (crates/willikins-dsl/tests/it/composition.rs), together with its
+# child `uses-output-cycle-child.yaml` (shared by both steps). Linking
+# must fail with exactly one CheckError::UsesOutputCycle { node, output }
+# naming one of "a"/"b" and "out".
+name: uses-output-cycle-root
+steps:
+  a:
+    uses: uses-output-cycle-child
+    with:
+      x: ${{ steps.b.out }}
+  b:
+    uses: uses-output-cycle-child
+    with:
+      x: ${{ steps.a.out }}

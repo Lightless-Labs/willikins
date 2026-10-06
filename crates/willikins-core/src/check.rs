@@ -718,6 +718,139 @@ pub enum CheckError {
         /// (always greater than [`crate::compose::MAX_LINKED_NODES`]).
         nodes: usize,
     },
+    /// A `uses:` step's own workflow could not be found at all: the
+    /// linker's `resolve` callback returned
+    /// [`crate::compose::ResolveFailure::NotFound`] or
+    /// [`crate::compose::ResolveFailure::Refused`] (a symlink and a
+    /// name/file mismatch deliberately share this one variant -- see
+    /// that type's own docs).
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2.
+    UnknownWorkflow {
+        /// The `uses:` step whose target could not be found.
+        node: NodeName,
+        /// The workflow name it named.
+        workflow: WorkflowName,
+    },
+    /// A `uses:` step's own workflow was found and read, but failed to
+    /// parse or validate on its own terms
+    /// ([`crate::compose::ResolveFailure::Document`]).
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2.
+    /// The plan's SHARED VALUES table names this variant's third field
+    /// `message`; it is `reason` instead, because no `CheckError`
+    /// variant may have a field literally named `message` (it would
+    /// collide with [`crate::Reported`]'s own added field --
+    /// `tests::every_check_error_variant_serializes_with_its_kind`
+    /// enforces this for every existing variant). See this plan's
+    /// addendum.
+    UsedDocument {
+        /// The `uses:` step whose target failed.
+        node: NodeName,
+        /// The workflow name it named.
+        workflow: WorkflowName,
+        /// Why the document itself was refused.
+        reason: String,
+    },
+    /// A `uses:` step's `with:` names an input the used document never
+    /// declared.
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2,
+    /// decision (d4).
+    UnknownUsesInput {
+        /// The `uses:` step.
+        node: NodeName,
+        /// The undeclared input name it bound.
+        input: InputName,
+    },
+    /// A used document's required input (no default) was left both
+    /// unbound by the `uses:` step's `with:` and -- since it has no
+    /// default -- could not become a fixed input either.
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2,
+    /// decision (d4).
+    UnboundUsesInput {
+        /// The `uses:` step.
+        node: NodeName,
+        /// The required input left unbound.
+        input: InputName,
+    },
+    /// A reference to `${{ steps.<uses step>.<output> }}` names an
+    /// output the used document never declared.
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2,
+    /// decision (d7).
+    UnknownUsesOutput {
+        /// Where the bad reference was found: the referencing node's own
+        /// port, `for_each` binding, or the workflow output -- or, when
+        /// the reference sits inside another `uses:` step's `with:`,
+        /// [`Site::Port`] with that `uses:` step as `node` and the
+        /// child input (reparsed as a [`crate::tool::PortName`], which
+        /// shares [`InputName`]'s grammar) as `port`.
+        site: Site,
+        /// The `uses:` step the reference named.
+        node: NodeName,
+        /// The output name it named, which the used document never
+        /// declared.
+        output: OutputName,
+    },
+    /// A `uses:` step's `with:` bound a child input to `${{ item }}`
+    /// (bare, or inside a list element): after substitution this would
+    /// silently rebind to whichever `for_each` node inside the child
+    /// happens to consume that input, which is never what the document
+    /// meant.
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2,
+    /// decision (d4).
+    ItemInUses {
+        /// The `uses:` step.
+        node: NodeName,
+        /// The input bound to `item`.
+        input: InputName,
+    },
+    /// A [`Binding::Keyed`] reference named a `uses:` step: there are no
+    /// instances to key into (a `uses:` step may never have a
+    /// `for_each`, decision (d12)).
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2,
+    /// decision (d7).
+    KeyedOnUses {
+        /// Where the bad reference was found (see [`Self::UnknownUsesOutput`]'s
+        /// own doc for the "inside another `uses:` step's `with:`" case).
+        site: Site,
+        /// The `uses:` step that was keyed into.
+        node: NodeName,
+    },
+    /// Two or more `uses:` steps' outputs alias into each other with no
+    /// node in between, so the node-level cycle check never sees the
+    /// loop (decision (d7)'s worked example: `a.out = inputs.x`, `x`
+    /// bound to `steps.b.out`, `b.out = inputs.y`, `y` bound to
+    /// `steps.a.out`). The linker resolves aliases with a visiting set
+    /// and refuses the loop the moment it would re-enter a `uses:` step
+    /// still being resolved.
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2,
+    /// decision (d7).
+    UsesOutputCycle {
+        /// The `uses:` step the linker was about to re-enter.
+        node: NodeName,
+        /// The output it was being asked to read when the loop closed.
+        output: OutputName,
+    },
+    /// A workflow handed to the linker (root or a resolved child) has a
+    /// `/` in one of its own authored names -- a node, an input, or a
+    /// `uses:` step key. An authored name is always one segment; only
+    /// the linker itself ever produces a `/`-separated path
+    /// (`willikins-dsl` already refuses one at parse time, decision
+    /// (d3)), so this protects a hand-built [`Workflow`], which never
+    /// goes through the DSL.
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2,
+    /// decision (d3).
+    PathInAuthoredName {
+        /// The offending name, verbatim.
+        name: String,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -831,6 +964,44 @@ impl fmt::Display for CheckError {
                     f,
                     "linked graph has {nodes} nodes, more than the allowed maximum"
                 )
+            }
+            Self::UnknownWorkflow { node, workflow } => {
+                write!(f, "node `{node}`: unknown workflow `{workflow}`")
+            }
+            Self::UsedDocument {
+                node,
+                workflow,
+                reason,
+            } => write!(
+                f,
+                "node `{node}`: workflow `{workflow}` failed to load: {reason}"
+            ),
+            Self::UnknownUsesInput { node, input } => {
+                write!(f, "node `{node}`: `with:` names undeclared input `{input}`")
+            }
+            Self::UnboundUsesInput { node, input } => write!(
+                f,
+                "node `{node}`: required input `{input}` is not bound and has no default"
+            ),
+            Self::UnknownUsesOutput { site, node, output } => {
+                write!(f, "{site}: node `{node}` has no declared output `{output}`")
+            }
+            Self::ItemInUses { node, input } => write!(
+                f,
+                "node `{node}`: input `{input}` cannot be bound to `item` inside a `uses:` step"
+            ),
+            Self::KeyedOnUses { site, node } => {
+                write!(
+                    f,
+                    "{site}: node `{node}` is a uses: step, not a for_each node"
+                )
+            }
+            Self::UsesOutputCycle { node, output } => write!(
+                f,
+                "node `{node}`, output `{output}`: uses output alias cycle"
+            ),
+            Self::PathInAuthoredName { name } => {
+                write!(f, "name `{name}`: an authored name may not contain `/`")
             }
             Self::ListOnScalarPort { site, expected } => write!(
                 f,
@@ -956,6 +1127,15 @@ impl CheckError {
             Self::UsesCycle { .. } => "UsesCycle",
             Self::UsesTooDeep { .. } => "UsesTooDeep",
             Self::UsesTooLarge { .. } => "UsesTooLarge",
+            Self::UnknownWorkflow { .. } => "UnknownWorkflow",
+            Self::UsedDocument { .. } => "UsedDocument",
+            Self::UnknownUsesInput { .. } => "UnknownUsesInput",
+            Self::UnboundUsesInput { .. } => "UnboundUsesInput",
+            Self::UnknownUsesOutput { .. } => "UnknownUsesOutput",
+            Self::ItemInUses { .. } => "ItemInUses",
+            Self::KeyedOnUses { .. } => "KeyedOnUses",
+            Self::UsesOutputCycle { .. } => "UsesOutputCycle",
+            Self::PathInAuthoredName { .. } => "PathInAuthoredName",
         }
     }
 }
@@ -3213,6 +3393,43 @@ mod tests {
                 chain: vec![workflow_name("a"), workflow_name("b")],
             },
             CheckError::UsesTooLarge { nodes: 2049 },
+            CheckError::UnknownWorkflow {
+                node: node_name("n"),
+                workflow: workflow_name("ghost"),
+            },
+            CheckError::UsedDocument {
+                node: node_name("n"),
+                workflow: workflow_name("ghost"),
+                reason: "boom".to_string(),
+            },
+            CheckError::UnknownUsesInput {
+                node: node_name("n"),
+                input: input_name("i"),
+            },
+            CheckError::UnboundUsesInput {
+                node: node_name("n"),
+                input: input_name("i"),
+            },
+            CheckError::UnknownUsesOutput {
+                site: port_site("n", "p"),
+                node: node_name("n"),
+                output: OutputName::parse("o").unwrap(),
+            },
+            CheckError::ItemInUses {
+                node: node_name("n"),
+                input: input_name("i"),
+            },
+            CheckError::KeyedOnUses {
+                site: port_site("n", "p"),
+                node: node_name("n"),
+            },
+            CheckError::UsesOutputCycle {
+                node: node_name("n"),
+                output: OutputName::parse("o").unwrap(),
+            },
+            CheckError::PathInAuthoredName {
+                name: "a/b".to_string(),
+            },
         ]
     }
 
@@ -3253,6 +3470,15 @@ mod tests {
         UsesCycle,
         UsesTooDeep,
         UsesTooLarge,
+        UnknownWorkflow,
+        UsedDocument,
+        UnknownUsesInput,
+        UnboundUsesInput,
+        UnknownUsesOutput,
+        ItemInUses,
+        KeyedOnUses,
+        UsesOutputCycle,
+        PathInAuthoredName,
     );
 
     #[test]

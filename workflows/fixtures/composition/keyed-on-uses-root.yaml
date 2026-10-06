@@ -1,0 +1,17 @@
+# Milestone 2b, decision (d7) and acceptance 4
+# (docs/plans/2026-10-05-milestone-2b-composition.md): a keyed reference
+# (`${{ steps.<node>[<key>].<port> }}`) onto a `uses:` step is refused as
+# KeyedOnUses -- there are no instances to key into. Pinned by
+# `a_keyed_reference_onto_a_uses_step_is_refused`
+# (crates/willikins-dsl/tests/it/composition.rs), together with its
+# child `keyed-on-uses-child.yaml`. Linking must fail with exactly:
+#   CheckError::KeyedOnUses {
+#       site: Site::Output { name: OutputName("x") },
+#       node: NodeName("child"),
+#   }
+name: keyed-on-uses-root
+steps:
+  child:
+    uses: keyed-on-uses-child
+outputs:
+  x: ${{ steps.child[a].out }}

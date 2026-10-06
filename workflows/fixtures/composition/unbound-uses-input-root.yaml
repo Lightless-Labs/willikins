@@ -1,0 +1,16 @@
+# Milestone 2b, decision (d4) and acceptance 4
+# (docs/plans/2026-10-05-milestone-2b-composition.md): a used document's
+# required input, left both unbound and undefaulted, is refused as
+# UnboundUsesInput. Pinned by
+# `a_required_unbound_undefaulted_input_is_refused_as_unbound_uses_input`
+# (crates/willikins-dsl/tests/it/composition.rs), together with its
+# child `unbound-uses-input-child.yaml` (which declares `needed` with no
+# default). Linking must fail with exactly:
+#   CheckError::UnboundUsesInput {
+#       node: NodeName("child"),
+#       input: InputName("needed"),
+#   }
+name: unbound-uses-input-root
+steps:
+  child:
+    uses: unbound-uses-input-child

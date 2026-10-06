@@ -1,0 +1,9 @@
+# Child of unknown-uses-input-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, decision (d4) and
+# acceptance 4). Declares only `known` (defaulted), never `mystery`.
+name: unknown-uses-input-child
+inputs:
+  known:
+    type: Text
+    default: x
+steps: {}

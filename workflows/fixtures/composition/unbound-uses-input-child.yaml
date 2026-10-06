@@ -1,0 +1,8 @@
+# Child of unbound-uses-input-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, decision (d4) and
+# acceptance 4). `needed` is required and has no default.
+name: unbound-uses-input-child
+inputs:
+  needed:
+    type: Text
+steps: {}

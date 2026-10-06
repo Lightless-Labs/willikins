@@ -2302,6 +2302,218 @@ expression: snapshot
                 "nodes"
               ],
               "type": "object"
+            },
+            {
+              "description": "A `uses:` step's own workflow could not be found at all: the\nlinker's `resolve` callback returned\n[`crate::compose::ResolveFailure::NotFound`] or\n[`crate::compose::ResolveFailure::Refused`] (a symlink and a\nname/file mismatch deliberately share this one variant -- see\nthat type's own docs).\n\nNot one of the plan's variants; milestone 2b, part L, task L2.",
+              "properties": {
+                "kind": {
+                  "const": "UnknownWorkflow",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `uses:` step whose target could not be found."
+                },
+                "workflow": {
+                  "$ref": "#/$defs/WorkflowName",
+                  "description": "The workflow name it named."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "workflow"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `uses:` step's own workflow was found and read, but failed to\nparse or validate on its own terms\n([`crate::compose::ResolveFailure::Document`]).\n\nNot one of the plan's variants; milestone 2b, part L, task L2.\nThe plan's SHARED VALUES table names this variant's third field\n`message`; it is `reason` instead, because no `CheckError`\nvariant may have a field literally named `message` (it would\ncollide with [`crate::Reported`]'s own added field --\n`tests::every_check_error_variant_serializes_with_its_kind`\nenforces this for every existing variant). See this plan's\naddendum.",
+              "properties": {
+                "kind": {
+                  "const": "UsedDocument",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `uses:` step whose target failed."
+                },
+                "reason": {
+                  "description": "Why the document itself was refused.",
+                  "type": "string"
+                },
+                "workflow": {
+                  "$ref": "#/$defs/WorkflowName",
+                  "description": "The workflow name it named."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "workflow",
+                "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `uses:` step's `with:` names an input the used document never\ndeclared.\n\nNot one of the plan's variants; milestone 2b, part L, task L2,\ndecision (d4).",
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The undeclared input name it bound."
+                },
+                "kind": {
+                  "const": "UnknownUsesInput",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `uses:` step."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "input"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A used document's required input (no default) was left both\nunbound by the `uses:` step's `with:` and -- since it has no\ndefault -- could not become a fixed input either.\n\nNot one of the plan's variants; milestone 2b, part L, task L2,\ndecision (d4).",
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The required input left unbound."
+                },
+                "kind": {
+                  "const": "UnboundUsesInput",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `uses:` step."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "input"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A reference to `${{ steps.<uses step>.<output> }}` names an\noutput the used document never declared.\n\nNot one of the plan's variants; milestone 2b, part L, task L2,\ndecision (d7).",
+              "properties": {
+                "kind": {
+                  "const": "UnknownUsesOutput",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `uses:` step the reference named."
+                },
+                "output": {
+                  "$ref": "#/$defs/OutputName",
+                  "description": "The output name it named, which the used document never\ndeclared."
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "Where the bad reference was found: the referencing node's own\nport, `for_each` binding, or the workflow output -- or, when\nthe reference sits inside another `uses:` step's `with:`,\n[`Site::Port`] with that `uses:` step as `node` and the\nchild input (reparsed as a [`crate::tool::PortName`], which\nshares [`InputName`]'s grammar) as `port`."
+                }
+              },
+              "required": [
+                "kind",
+                "site",
+                "node",
+                "output"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `uses:` step's `with:` bound a child input to `${{ item }}`\n(bare, or inside a list element): after substitution this would\nsilently rebind to whichever `for_each` node inside the child\nhappens to consume that input, which is never what the document\nmeant.\n\nNot one of the plan's variants; milestone 2b, part L, task L2,\ndecision (d4).",
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The input bound to `item`."
+                },
+                "kind": {
+                  "const": "ItemInUses",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `uses:` step."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "input"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A [`Binding::Keyed`] reference named a `uses:` step: there are no\ninstances to key into (a `uses:` step may never have a\n`for_each`, decision (d12)).\n\nNot one of the plan's variants; milestone 2b, part L, task L2,\ndecision (d7).",
+              "properties": {
+                "kind": {
+                  "const": "KeyedOnUses",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `uses:` step that was keyed into."
+                },
+                "site": {
+                  "$ref": "#/$defs/Site",
+                  "description": "Where the bad reference was found (see [`Self::UnknownUsesOutput`]'s\nown doc for the \"inside another `uses:` step's `with:`\" case)."
+                }
+              },
+              "required": [
+                "kind",
+                "site",
+                "node"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Two or more `uses:` steps' outputs alias into each other with no\nnode in between, so the node-level cycle check never sees the\nloop (decision (d7)'s worked example: `a.out = inputs.x`, `x`\nbound to `steps.b.out`, `b.out = inputs.y`, `y` bound to\n`steps.a.out`). The linker resolves aliases with a visiting set\nand refuses the loop the moment it would re-enter a `uses:` step\nstill being resolved.\n\nNot one of the plan's variants; milestone 2b, part L, task L2,\ndecision (d7).",
+              "properties": {
+                "kind": {
+                  "const": "UsesOutputCycle",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `uses:` step the linker was about to re-enter."
+                },
+                "output": {
+                  "$ref": "#/$defs/OutputName",
+                  "description": "The output it was being asked to read when the loop closed."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "output"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A workflow handed to the linker (root or a resolved child) has a\n`/` in one of its own authored names -- a node, an input, or a\n`uses:` step key. An authored name is always one segment; only\nthe linker itself ever produces a `/`-separated path\n(`willikins-dsl` already refuses one at parse time, decision\n(d3)), so this protects a hand-built [`Workflow`], which never\ngoes through the DSL.\n\nNot one of the plan's variants; milestone 2b, part L, task L2,\ndecision (d3).",
+              "properties": {
+                "kind": {
+                  "const": "PathInAuthoredName",
+                  "type": "string"
+                },
+                "name": {
+                  "description": "The offending name, verbatim.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "name"
+              ],
+              "type": "object"
             }
           ]
         },

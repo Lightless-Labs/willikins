@@ -1,0 +1,11 @@
+# Child of uses-output-cycle-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, decision (d7) and
+# acceptance 4). One input `x`, one output `out` that is a bare
+# pass-through of it.
+name: uses-output-cycle-child
+inputs:
+  x:
+    type: Text
+steps: {}
+outputs:
+  out: ${{ inputs.x }}

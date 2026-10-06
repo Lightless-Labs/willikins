@@ -1,0 +1,16 @@
+# Milestone 2b, decision (d4) and acceptance 4
+# (docs/plans/2026-10-05-milestone-2b-composition.md): `${{ item }}`
+# bound to a `uses:` step's input is refused as ItemInUses. Pinned by
+# `item_bound_to_a_uses_input_is_refused_as_item_in_uses`
+# (crates/willikins-dsl/tests/it/composition.rs), together with its
+# child `item-in-uses-child.yaml`. Linking must fail with exactly:
+#   CheckError::ItemInUses {
+#       node: NodeName("child"),
+#       input: InputName("known"),
+#   }
+name: item-in-uses-root
+steps:
+  child:
+    uses: item-in-uses-child
+    with:
+      known: ${{ item }}

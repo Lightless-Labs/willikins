@@ -1,0 +1,5 @@
+# Child of keyed-on-uses-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, decision (d7) and
+# acceptance 4).
+name: keyed-on-uses-child
+steps: {}

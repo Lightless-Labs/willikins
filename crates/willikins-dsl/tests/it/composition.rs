@@ -7,9 +7,23 @@
 
 use std::path::Path;
 
-use willikins_core::{CheckError, ResolveFailure, Workflow, link};
+use willikins_core::{
+    CheckError, InputName, NodeName, OutputName, ResolveFailure, Site, Workflow, link,
+};
 use willikins_dsl::{DocumentErrorKind, load_document};
 use willikins_types::{DomainType, WorkflowName};
+
+fn node(name: &str) -> NodeName {
+    NodeName::parse(name).unwrap()
+}
+
+fn input(name: &str) -> InputName {
+    InputName::parse(name).unwrap()
+}
+
+fn output(name: &str) -> OutputName {
+    OutputName::parse(name).unwrap()
+}
 
 fn fixture_path(relative: &str) -> String {
     format!(
@@ -187,5 +201,125 @@ fn a_diamond_over_the_node_bound_is_refused_as_uses_too_large() {
             assert!(*nodes > 2048, "expected the bound to be crossed: {nodes}");
         }
         other => panic!("expected exactly one UsesTooLarge, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// L2 commit 2: the boundary and alias refusals (decisions (d4), (d7)).
+// `PathInAuthoredName` has no fixture here: the DSL already refuses a
+// `/` in an authored name at parse time (P1), so the linker's own
+// protection only ever reaches a hand-built `Workflow`, covered at the
+// core-unit level in `compose.rs`'s own tests.
+// ---------------------------------------------------------------------
+
+/// `workflows/fixtures/composition/unknown-child.yaml`'s header.
+#[test]
+fn an_unknown_child_is_refused_as_unknown_workflow() {
+    let errors = link_fixture("unknown-child.yaml");
+    assert_eq!(
+        errors,
+        vec![CheckError::UnknownWorkflow {
+            node: node("child"),
+            workflow: wf_name("ghost-child"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/used-document-root.yaml`'s header
+/// (with its child `used-document-child.yaml`).
+#[test]
+fn a_child_that_fails_to_parse_is_refused_as_used_document() {
+    let errors = link_fixture("used-document-root.yaml");
+    match errors.as_slice() {
+        [CheckError::UsedDocument { node, workflow, .. }] => {
+            assert_eq!(*node, self::node("child"));
+            assert_eq!(*workflow, wf_name("used-document-child"));
+        }
+        other => panic!("expected exactly one UsedDocument, got {other:?}"),
+    }
+}
+
+/// `workflows/fixtures/composition/unknown-uses-input-root.yaml`'s
+/// header (with its child `unknown-uses-input-child.yaml`).
+#[test]
+fn an_unknown_with_key_is_refused_as_unknown_uses_input() {
+    let errors = link_fixture("unknown-uses-input-root.yaml");
+    assert_eq!(
+        errors,
+        vec![CheckError::UnknownUsesInput {
+            node: node("child"),
+            input: input("mystery"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/unbound-uses-input-root.yaml`'s
+/// header (with its child `unbound-uses-input-child.yaml`).
+#[test]
+fn a_required_unbound_undefaulted_input_is_refused_as_unbound_uses_input() {
+    let errors = link_fixture("unbound-uses-input-root.yaml");
+    assert_eq!(
+        errors,
+        vec![CheckError::UnboundUsesInput {
+            node: node("child"),
+            input: input("needed"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/item-in-uses-root.yaml`'s header
+/// (with its child `item-in-uses-child.yaml`).
+#[test]
+fn item_bound_to_a_uses_input_is_refused_as_item_in_uses() {
+    let errors = link_fixture("item-in-uses-root.yaml");
+    assert_eq!(
+        errors,
+        vec![CheckError::ItemInUses {
+            node: node("child"),
+            input: input("known"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/unknown-uses-output-root.yaml`'s
+/// header (with its child `unknown-uses-output-child.yaml`).
+#[test]
+fn an_unknown_uses_output_reference_is_refused() {
+    let errors = link_fixture("unknown-uses-output-root.yaml");
+    assert_eq!(
+        errors,
+        vec![CheckError::UnknownUsesOutput {
+            site: Site::Output { name: output("x") },
+            node: node("child"),
+            output: output("missing"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/keyed-on-uses-root.yaml`'s header
+/// (with its child `keyed-on-uses-child.yaml`).
+#[test]
+fn a_keyed_reference_onto_a_uses_step_is_refused() {
+    let errors = link_fixture("keyed-on-uses-root.yaml");
+    assert_eq!(
+        errors,
+        vec![CheckError::KeyedOnUses {
+            site: Site::Output { name: output("x") },
+            node: node("child"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/uses-output-cycle-root.yaml`'s
+/// header (with its shared child `uses-output-cycle-child.yaml`).
+#[test]
+fn an_alias_cycle_between_two_uses_steps_outputs_is_refused() {
+    let errors = link_fixture("uses-output-cycle-root.yaml");
+    match errors.as_slice() {
+        [CheckError::UsesOutputCycle { node: n, output: o }] => {
+            assert!(*n == node("a") || *n == node("b"), "node: {n}");
+            assert_eq!(*o, output("out"));
+        }
+        other => panic!("expected exactly one UsesOutputCycle, got {other:?}"),
     }
 }
