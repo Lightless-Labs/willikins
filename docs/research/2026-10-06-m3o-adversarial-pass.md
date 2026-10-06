@@ -102,6 +102,22 @@ for milestone 3l, not for this plan.
 4. **The `Binding::List` boundary gap is refused only because the child references the input.**
    Restated from "Known gap" above.
 
+## Gates run
+
+`cargo fmt --all --check` was red once, on two sites inside the test module added here (both
+ordinary line-length wraps rustfmt prefers); `cargo fmt --all` fixed them and the committed file
+is formatted. `cargo clippy -p willikins-cli --all-targets -j 2 -- -D warnings` was clean.
+`cargo test -p willikins-cli --test it -j 2 -- agents_md` passed all 18. The plan's E1/E2 gate row
+also names `test_layout_guard` beside that same `willikins-cli` run; it actually lives in
+`willikins-core/tests/it/test_layout_guard.rs` (it walks the whole workspace tree, not one
+crate's own), so it was run there instead: `cargo test -p willikins-core --test it -j 2
+test_layout_guard`, 18 passed, including `the_real_workspace_tree_satisfies_the_layout_guard`
+against the tree with these fixtures already in it. `cargo test -p willikins-dsl --test it -j 2`
+passed all 60, `characterization_of_every_composition_document` unchanged. `cargo test -p
+willikins-server --test it -j 2 image_contents` passed all 7, including
+`the_image_workflows_directory_holds_exactly_the_seventeen_positive_documents` -- these fixtures
+live under `workflows/fixtures/agents-md/`, which that count does not scan.
+
 ## Mutations
 
 Each mutation was applied to a file saved beforehand under the scratchpad. The file was then
