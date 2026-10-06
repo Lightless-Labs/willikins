@@ -1,0 +1,44 @@
+# Milestone 2b, task K1 (acceptance 11)
+# (docs/plans/2026-10-05-milestone-2b-composition.md): the CLI acceptance
+# test's composite root. `uses: example-org` (its sibling in this
+# directory, trust boundary 1) supplies the Buildkite org and cluster, so
+# `describe`, `plan` and `apply <file>` must link `example-org` before
+# `check` ever sees this document -- a non-empty `uses:` reaching `check`
+# unlinked is `CheckError::Unlinked`. Because the pipeline node's `org` and
+# `cluster` bindings both come from `steps.org`, the only Buildkite node in
+# the *linked* graph is `org/buildkite_cluster`: `apply --live`'s
+# credential scan must walk the linked graph to require
+# `WILLIKINS_BUILDKITE_TOKEN`, since this root, read unlinked, calls no
+# Buildkite tool at all.
+name: new-rust-service-in-org
+description: Provision a GitHub repository, a Doppler project, and a Buildkite pipeline, with the organisation's Buildkite org and cluster supplied by a used document.
+inputs:
+  slug: { type: ProjectSlug, description: Canonical project slug }
+  visibility: { type: RepoVisibility, default: private }
+steps:
+  org:
+    uses: example-org
+  names:
+    tool: naming.v1
+    with:
+      org: Example-Org
+      slug: ${{ inputs.slug }}
+  repo:
+    tool: github.repo.ensure
+    with:
+      repo: ${{ steps.names.github_repo }}
+      visibility: ${{ inputs.visibility }}
+  doppler:
+    tool: doppler.project.ensure
+    with:
+      project: ${{ steps.names.doppler_project }}
+  pipeline:
+    tool: buildkite.pipeline.ensure
+    with:
+      org: ${{ steps.org.buildkite_org }}
+      slug: ${{ steps.names.buildkite_pipeline_slug }}
+      repo: ${{ steps.repo.repo }}
+      cluster: ${{ steps.org.cluster }}
+outputs:
+  repo_url: ${{ steps.repo.url }}
+  pipeline_url: ${{ steps.pipeline.url }}

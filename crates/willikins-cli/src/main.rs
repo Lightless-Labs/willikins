@@ -21,9 +21,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use willikins_core::describe::{InputArg, PartialInputs, RawInput};
-use willikins_core::{Catalog, Checked, Reported};
+use willikins_core::{Catalog, Checked, Linked, Reported, ResolveFailure};
 use willikins_dsl::DocumentError;
-use willikins_types::{Disclosure, DomainType};
+use willikins_types::{Disclosure, DomainType, WorkflowName};
 
 #[derive(Parser)]
 #[command(name = "willikins", version, about = "A provisioning butler")]
@@ -195,15 +195,16 @@ fn print_document_error(err: &DocumentError, json: bool) {
     }
 }
 
-/// Load and check `file` against `catalog`. On a [`DocumentError`], prints
-/// it to stderr and returns `Err(ExitCode::from(2))`. On [`CheckError`]s,
-/// prints them (text or JSON, per `json`) to stdout and returns
-/// `Err(ExitCode::from(1))`.
+/// Load, link, and check `file` against `catalog`. On a [`DocumentError`],
+/// prints it to stderr and returns `Err(ExitCode::from(2))`. On a linking
+/// or [`CheckError`] failure, prints it (text or JSON, per `json`) to
+/// stdout and returns `Err(ExitCode::from(1))`.
 ///
 /// `pub(crate)`: `commands::cmd_apply` shares this exact pipeline for the
-/// document/check half of `apply <file>`, so a document error or a check
-/// failure gives the same exit code and message whether it was hit by
-/// `plan`/`validate`/`describe` or by `apply`.
+/// document/link/check half of `apply <file>`, so a document error, a
+/// linking failure, or a check failure gives the same exit code and
+/// message whether it was hit by `plan`/`validate`/`describe` or by
+/// `apply`.
 pub(crate) fn load_and_check(
     file: &str,
     catalog: &Catalog,
@@ -211,7 +212,85 @@ pub(crate) fn load_and_check(
     disclosure: Disclosure,
 ) -> Result<Checked, ExitCode> {
     let workflow = load_workflow(file, json)?;
-    check_workflow(&workflow, catalog, json, disclosure)
+    let linked = link_workflow(file, &workflow, json, disclosure)?;
+    check_workflow(&linked.workflow, catalog, json, disclosure)
+}
+
+/// `<dir>/<name>.yaml`, or `<dir>/<name>.yml` if the former is not a plain
+/// file; a symlinked candidate is refused rather than followed. Mirrors
+/// `willikins_server::document::load_named_document`'s own rules (that
+/// module is private to its crate, so this one keeps a small copy of its
+/// own) -- milestone 2b, decision (d8): "CLI file mode: children resolve
+/// in `<file>`'s own parent directory, with the same trust rules; trust
+/// boundary 3 of milestone 2 holds: whoever runs the CLI already holds the
+/// machine."
+///
+/// `pub(crate)`: `commands::cmd_apply_file` reuses this to locate each used
+/// document it copies into `apply <file>`'s private temporary directory,
+/// rather than re-deriving the lookup rule a second time.
+pub(crate) fn sibling_file(
+    dir: &Path,
+    name: &WorkflowName,
+) -> Result<std::path::PathBuf, ResolveFailure> {
+    for ext in ["yaml", "yml"] {
+        let candidate = dir.join(format!("{name}.{ext}"));
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(ResolveFailure::Refused),
+            Ok(meta) if meta.is_file() => return Ok(candidate),
+            _ => {}
+        }
+    }
+    Err(ResolveFailure::NotFound)
+}
+
+/// [`willikins_core::link`]'s own `resolve` callback for CLI file mode:
+/// [`sibling_file`] under `dir`, parsed with [`willikins_dsl::load_document`],
+/// refused (collapsed with a symlink, deliberately not told apart -- see
+/// `sibling_file`'s own doc) when the loaded document's internal `name:`
+/// does not match `name`.
+fn resolve_sibling(
+    dir: &Path,
+    name: &WorkflowName,
+) -> Result<willikins_core::Workflow, ResolveFailure> {
+    let path = sibling_file(dir, name)?;
+    let workflow = willikins_dsl::load_document(&path).map_err(|err| ResolveFailure::Document {
+        message: err.to_string(),
+    })?;
+    if &workflow.name != name {
+        return Err(ResolveFailure::Refused);
+    }
+    Ok(workflow)
+}
+
+/// Link `workflow` (already parsed from `file`) against every `uses:` step
+/// it holds, resolving each used document as [`resolve_sibling`] does: by
+/// name, in `file`'s own parent directory (milestone 2b, decision (d8)).
+/// On a linking failure, prints the [`CheckError`](willikins_core::CheckError)s
+/// (text or JSON, per `json`) to stdout and returns `Err(ExitCode::from(1))`
+/// -- the same convention [`check_workflow`] uses for `check`'s own
+/// failures, since `link`'s errors already are `CheckError`s.
+///
+/// `pub(crate)`: `main::cmd_plan` and `commands::cmd_apply_file` both need
+/// the linked [`Linked`] value itself (its `used` list, for the apply
+/// closure copy, and its flat `workflow`, to scope a `--live` catalog to
+/// the *linked* graph -- verify item 7) before building a catalog, so they
+/// call this directly rather than through [`load_and_check`], which
+/// bundles this with a `check` against an already-built catalog.
+pub(crate) fn link_workflow(
+    file: &str,
+    workflow: &willikins_core::Workflow,
+    json: bool,
+    disclosure: Disclosure,
+) -> Result<Linked, ExitCode> {
+    let dir = Path::new(file).parent().unwrap_or_else(|| Path::new("."));
+    willikins_core::link(workflow, &mut |name| resolve_sibling(dir, name)).map_err(|errors| {
+        if json {
+            render::print_json(&render::check_errors_json(&errors), disclosure);
+        } else {
+            println!("{}", render::check_errors_text(&errors));
+        }
+        ExitCode::from(1)
+    })
 }
 
 /// [`load_and_check`]'s check-only half: `check` an already-parsed
@@ -314,7 +393,23 @@ fn cmd_describe(file: &str, inputs: &[InputArg], json: bool, disclosure: Disclos
         Ok(partial) => partial,
         Err(code) => return code,
     };
-    let description = willikins_core::describe(&checked, &partial);
+    let mut description = willikins_core::describe(&checked, &partial);
+    // Milestone 2b, decision (d6): `Description::resolved` deliberately
+    // *keeps* every fixed input (`cmd_plan` passes it straight to
+    // `willikins_core::plan`, which needs a fixed input's own value to
+    // bind every reference to it) -- but `describe`'s own printed output
+    // is the agent-facing surface that must hide one, since a caller can
+    // never set it anyway (R1: `describe` already reports `NotSettable`
+    // if it tries). `missing` and `awaiting` already exclude a fixed
+    // input on their own (it is always defaulted); only `resolved` needs
+    // filtering here. Mirrors `willikins_server::Butler::describe_inner`'s
+    // identical filter for the MCP surface.
+    description
+        .resolved
+        .retain(|name, _| match checked.workflow.inputs.get(name) {
+            Some(spec) => spec.fixed_by.is_none(),
+            None => true,
+        });
     let ok = description.errors.is_empty() && description.missing.is_empty();
     print_description(&description, json, disclosure);
     if ok {
@@ -342,17 +437,31 @@ fn cmd_plan(
         Ok(workflow) => workflow,
         Err(code) => return code,
     };
+    // Milestone 2b, decision (d8): link `file`'s siblings in before a
+    // `--live` catalog is scoped to this document -- verify item 7 says
+    // the credential scan reads `document.nodes`, so it must be handed
+    // the *linked* graph (a root whose only Buildkite node lives inside a
+    // used document must still require `WILLIKINS_BUILDKITE_TOKEN`).
+    let linked = match link_workflow(file, &workflow, json, disclosure) {
+        Ok(linked) => linked,
+        Err(code) => return code,
+    };
     // Shared with `apply`'s own catalog construction (task 11): the same
     // `--live`/`--fake-state` semantics, so the two subcommands can never
     // silently drift apart on which providers a given flag combination
     // selects. `plan` never seeds `--fake-state-out`, so the `FakeState`
     // handle this also returns is simply dropped here.
-    let (catalog, _fake_state) =
-        match commands::build_catalog_for_document(live, fake_state, &workflow, json, disclosure) {
-            Ok(built) => built,
-            Err(code) => return code,
-        };
-    let checked = match check_workflow(&workflow, &catalog, json, disclosure) {
+    let (catalog, _fake_state) = match commands::build_catalog_for_document(
+        live,
+        fake_state,
+        &linked.workflow,
+        json,
+        disclosure,
+    ) {
+        Ok(built) => built,
+        Err(code) => return code,
+    };
+    let checked = match check_workflow(&linked.workflow, &catalog, json, disclosure) {
         Ok(checked) => checked,
         Err(code) => return code,
     };

@@ -19,6 +19,7 @@ mod adversarial_pass_1_cli;
 mod apply_and_journal;
 mod appstore_profile_apply_redaction;
 mod cli;
+mod composition;
 mod identifier_masking;
 mod inherited_secret_gate_document;
 mod new_repository_scaffold_document;
