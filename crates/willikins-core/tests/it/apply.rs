@@ -1445,9 +1445,9 @@ mod conversions {
     use indexmap::IndexMap;
     use willikins_core::{
         ApplyError, Approval, Binding, Catalog, Checked, Class, ConversionMismatch, Ensured,
-        InputName, InputSpec, Inputs, Node, NodeName, Observation, Outputs, PlanError, PortName,
-        PortSpec, PortType, RecordingObserver, Site, Tool, ToolError, ToolName, ToolSpec, TypeName,
-        TypeRef, TypeRegistry, Value, Workflow, apply, check, plan,
+        InputName, InputSpec, Inputs, Node, NodeName, NodeStatus, Observation, Outputs, PlanError,
+        PortName, PortSpec, PortType, RecordingObserver, Site, Tool, ToolError, ToolErrorKind,
+        ToolName, ToolSpec, TypeName, TypeRef, TypeRegistry, Value, Workflow, apply, check, plan,
     };
     use willikins_types::registry::TypeEntry;
     use willikins_types::{DomainType, SinkToken};
@@ -2652,6 +2652,261 @@ mod conversions {
         );
     }
 
+    /// Decision (f2): a *pure* tool declaring `out: ConvA` whose `read`
+    /// reports a `ConvB` instead. Caught where produced, at plan time,
+    /// before any downstream tool is ever read.
+    struct LiarPure {
+        spec: ToolSpec,
+    }
+
+    impl Tool for LiarPure {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+            let mut outputs = Outputs::new();
+            outputs.insert(port("out"), Value::known(ConvB::parse("liar").unwrap()));
+            Ok(Observation::Present(outputs))
+        }
+        fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            let Observation::Present(outputs) = self.read(inputs)? else {
+                unreachable!("LiarPure always reads Present")
+            };
+            Ok(Ensured {
+                outputs,
+                changed: false,
+            })
+        }
+    }
+
+    /// Decision (f2): a *non-pure* tool declaring `out: ConvA` whose `read`
+    /// predicts it `Unknown` (so `plan` sees nothing wrong yet, like
+    /// [`UnknownAtPlan`]), but whose `ensure` returns a `ConvB` instead --
+    /// caught only once `ensure` actually runs, at apply time.
+    struct LiarEnsure {
+        spec: ToolSpec,
+    }
+
+    impl Tool for LiarEnsure {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+            let mut predicted = Outputs::new();
+            predicted.insert(port("out"), Value::unknown(scalar("ConvA")));
+            Ok(Observation::Absent { predicted })
+        }
+        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            let mut outputs = Outputs::new();
+            outputs.insert(port("out"), Value::known(ConvB::parse("liar").unwrap()));
+            Ok(Ensured {
+                outputs,
+                changed: true,
+            })
+        }
+    }
+
+    /// Decision (f2): a *pure* tool declaring `out: list<ConvA>` whose
+    /// `read` reports a list holding one element of
+    /// [`misnamed::conv_a`] -- a Rust type whose own `type_name()` is not
+    /// even a valid [`TypeName`]. `found` must fall back to the declared
+    /// name rather than panic while naming it.
+    struct LiarListPure {
+        spec: ToolSpec,
+    }
+
+    impl Tool for LiarListPure {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+            let mut outputs = Outputs::new();
+            outputs.insert(
+                port("out"),
+                Value::known_dyn_list(
+                    name("ConvA"),
+                    vec![Arc::new(misnamed::conv_a::parse("x").unwrap())
+                        as Arc<dyn willikins_types::DomainObject>],
+                ),
+            );
+            Ok(Observation::Present(outputs))
+        }
+        fn ensure(&self, inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            let Observation::Present(outputs) = self.read(inputs)? else {
+                unreachable!("LiarListPure always reads Present")
+            };
+            Ok(Ensured {
+                outputs,
+                changed: false,
+            })
+        }
+    }
+
+    /// Decision (f2), acceptance test 3, first case: a pure tool's own
+    /// wrong-typed output is refused where it is produced, at plan time,
+    /// before any downstream tool is read.
+    #[test]
+    fn a_pure_tools_wrong_typed_output_is_refused_at_plan_before_any_downstream_read() {
+        let mut fixture = fixture();
+        fixture
+            .catalog
+            .insert(Arc::new(LiarPure {
+                spec: spec("conv.liar_pure", &[], &[("out", "ConvA")], true),
+            }))
+            .unwrap();
+        let sink_a = Arc::new(Recorder {
+            spec: spec("conv.sink_a", &[("a", "ConvA")], &[], false),
+            reads: Mutex::new(Vec::new()),
+            ensures: Mutex::new(Vec::new()),
+        });
+        fixture
+            .catalog
+            .insert(Arc::clone(&sink_a) as Arc<dyn Tool>)
+            .unwrap();
+        let workflow = Workflow::new(workflow_name("conv-liar-pure"))
+            .node(
+                node("source"),
+                Node::new(ToolName::parse("conv.liar_pure").unwrap()),
+            )
+            .node(
+                node("sink"),
+                Node::new(ToolName::parse("conv.sink_a").unwrap()).port(
+                    port("a"),
+                    Binding::Step {
+                        node: node("source"),
+                        port: port("out"),
+                    },
+                ),
+            );
+        let checked = check(&workflow, &fixture.catalog).expect("A binds to A exactly");
+
+        let err = plan(&checked, &IndexMap::new(), &fixture.catalog)
+            .expect_err("the tool's own output disagrees with its spec");
+        match err {
+            PlanError::Tool {
+                node: got_node,
+                error,
+            } => {
+                assert_eq!(got_node, node("source"));
+                assert_eq!(error.kind, ToolErrorKind::Invalid);
+                assert_eq!(
+                    error.message,
+                    "returned output `out` as `ConvB`, but its spec declares `ConvA`"
+                );
+            }
+            other => panic!("expected PlanError::Tool, got {other:?}"),
+        }
+        assert!(
+            sink_a.reads.lock().unwrap().is_empty(),
+            "the downstream tool is never read"
+        );
+    }
+
+    /// Decision (f2), acceptance test 3, second case: `ensure`'s own
+    /// wrong-typed output fails the node at apply, with that instance
+    /// `Failed`.
+    #[test]
+    fn ensures_wrong_typed_output_fails_the_instance_at_apply() {
+        let mut fixture = fixture();
+        fixture
+            .catalog
+            .insert(Arc::new(LiarEnsure {
+                spec: spec("conv.liar_ensure", &[], &[("out", "ConvA")], false),
+            }))
+            .unwrap();
+        let workflow = Workflow::new(workflow_name("conv-liar-ensure")).node(
+            node("source"),
+            Node::new(ToolName::parse("conv.liar_ensure").unwrap()),
+        );
+        let checked = check(&workflow, &fixture.catalog).expect("one node, no sink");
+        let inputs = IndexMap::new();
+        let planned = plan(&checked, &inputs, &fixture.catalog)
+            .expect("plans: the predicted output is Unknown, so nothing is wrong yet");
+
+        let mut observer = RecordingObserver::new();
+        let err = apply(
+            &checked,
+            &inputs,
+            &fixture.catalog,
+            &planned,
+            &Approval::Auto,
+            &mut observer,
+        )
+        .expect_err("ensure's own output disagrees with its spec");
+        match err {
+            ApplyError::Tool {
+                node: got_node,
+                instance,
+                error,
+                applied,
+            } => {
+                assert_eq!(got_node, node("source"));
+                assert_eq!(instance, None);
+                assert_eq!(error.kind, ToolErrorKind::Invalid);
+                assert_eq!(
+                    error.message,
+                    "returned output `out` as `ConvB`, but its spec declares `ConvA`"
+                );
+                let last = applied
+                    .nodes
+                    .last()
+                    .expect("source's own attempt is recorded");
+                assert!(
+                    matches!(&last.status, NodeStatus::Failed { error: recorded } if recorded == &error),
+                    "the instance is recorded Failed with the same error: {:?}",
+                    last.status
+                );
+            }
+            other => panic!("expected ApplyError::Tool, got {other:?}"),
+        }
+    }
+
+    /// Decision (f2), acceptance test 3, fourth case: a list output
+    /// holding a misnamed object is refused with the declared-name
+    /// fallback, never a panic while naming it.
+    #[test]
+    fn a_list_outputs_misnamed_element_is_refused_with_the_declared_name_fallback() {
+        let mut fixture = fixture();
+        let liar = Arc::new(LiarListPure {
+            spec: ToolSpec {
+                name: ToolName::parse("conv.liar_list").unwrap(),
+                description: "Conversion test double `conv.liar_list`.".to_string(),
+                inputs: IndexMap::new(),
+                outputs: IndexMap::from([(port("out"), TypeRef::list_of(name("ConvA")))]),
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: true,
+            },
+        });
+        fixture
+            .catalog
+            .insert(Arc::clone(&liar) as Arc<dyn Tool>)
+            .unwrap();
+        let workflow = Workflow::new(workflow_name("conv-liar-list")).node(
+            node("source"),
+            Node::new(ToolName::parse("conv.liar_list").unwrap()),
+        );
+        let checked = check(&workflow, &fixture.catalog).expect("one node, no sink");
+
+        let err = plan(&checked, &IndexMap::new(), &fixture.catalog)
+            .expect_err("the list's own misnamed element must not panic while being named");
+        match err {
+            PlanError::Tool {
+                node: got_node,
+                error,
+            } => {
+                assert_eq!(got_node, node("source"));
+                assert_eq!(error.kind, ToolErrorKind::Invalid);
+                assert_eq!(
+                    error.message,
+                    "returned output `out` as a value of another Rust type declared as \
+                     `list<ConvA>`, but its spec declares `list<ConvA>`"
+                );
+            }
+            other => panic!("expected PlanError::Tool, got {other:?}"),
+        }
+    }
+
     /// A non-pure source whose `read` cannot predict its `out` (a
     /// `ConvA`), like `UnknownAtPlan`, but whose `ensure` returns a
     /// same-named *impostor* rather than a real `ConvA`. This is the one
@@ -2686,14 +2941,18 @@ mod conversions {
         }
     }
 
-    /// Advisor-identified gap, follow-up to milestone 3d, 2026-09-24:
-    /// `resolve_instance_inputs`'s own re-delivery, at apply time, is
-    /// otherwise unreached by any other test here -- `plan`'s opening
-    /// replan already refuses everything the tests above reach. Pins that
-    /// this second delivery point refuses the impostor too, loudly,
-    /// rather than delivering it to the sink's `ensure`.
+    /// Advisor-identified gap, follow-up to milestone 3d, 2026-09-24,
+    /// updated by milestone 3n's F2 (2026-10-05): `resolve_instance_inputs`'s
+    /// own re-delivery, at apply time, was the one route into the impostor
+    /// that `plan`'s opening replan could not see -- at plan time the value
+    /// is `Unknown`, and `Value::converted`'s `Unknown` arm never inspects
+    /// an object, so nothing was wrong yet. Once F2 checks a tool's own
+    /// output where it is produced, `source`'s `ensure` is refused the
+    /// moment it returns the impostor, before the value is ever delivered
+    /// to `sink`'s port at all: `ApplyError::Tool` at `source`, not
+    /// `ApplyError::Plan { EdgeTypeMismatch }` at `sink`'s delivery.
     #[test]
-    fn apply_refuses_a_same_named_impostor_from_ensure_that_plan_could_not_see() {
+    fn apply_refuses_a_same_named_impostor_from_ensure_where_it_is_produced() {
         let mut fixture = fixture();
         fixture
             .catalog
@@ -2736,25 +2995,22 @@ mod conversions {
         )
         .expect_err("ensure's impostor is not a real ConvA");
         match err {
-            ApplyError::Plan {
-                error:
-                    PlanError::EdgeTypeMismatch {
-                        site,
-                        expected,
-                        found,
-                    },
+            ApplyError::Tool {
+                node: got_node,
+                instance,
+                error,
+                ..
             } => {
+                assert_eq!(got_node, node("source"));
+                assert_eq!(instance, None);
+                assert_eq!(error.kind, ToolErrorKind::Invalid);
                 assert_eq!(
-                    site,
-                    Site::Port {
-                        node: node("sink"),
-                        port: port("b"),
-                    }
+                    error.message,
+                    "returned output `out` as a value of another Rust type declared as \
+                     `ConvA`, but its spec declares `ConvA`"
                 );
-                assert_eq!(expected, scalar("ConvA"));
-                assert_eq!(found, scalar("ConvA"));
             }
-            other => panic!("expected ApplyError::Plan{{EdgeTypeMismatch}}, got {other:?}"),
+            other => panic!("expected ApplyError::Tool, got {other:?}"),
         }
         assert!(
             fixture.sink_b.ensures.lock().unwrap().is_empty(),

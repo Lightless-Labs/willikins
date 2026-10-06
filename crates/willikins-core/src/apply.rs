@@ -322,7 +322,9 @@ pub enum ApplyError {
         /// The partial result.
         applied: Box<Applied>,
     },
-    /// `node`'s `ensure` returned an error.
+    /// `node`'s `ensure` returned an error, or (decision (f2)) its own
+    /// output disagreed with its spec where it was produced -- the same
+    /// position either way, since `ensure` has already run.
     Tool {
         /// The failed node.
         node: NodeName,
@@ -721,11 +723,21 @@ pub fn apply(
                     });
                     // Rule 4a: never run a replacement the approved plan
                     // did not show.
+                    //
+                    // Decision (f2): `ensure`'s own outputs are checked
+                    // against `spec` here, in the same chain as `ensure`
+                    // itself failing -- the position is the same either
+                    // way, `ensure` has already run, so a refused output is
+                    // reported exactly like a tool that failed outright
+                    // (never a panic, and `applied`'s partial result is
+                    // built the same way).
                     match refuse_unplanned_replacement(tool.as_ref(), planned, &resolved_inputs)
                         .and_then(|()| tool.ensure(&resolved_inputs, &token))
-                    {
-                        Ok(Ensured { outputs, changed }) => {
-                            let outputs = fill_outputs(spec, &outputs);
+                        .and_then(|Ensured { outputs, changed }| {
+                            fill_outputs(catalog.registry(), spec, &outputs)
+                                .map(|outputs| (outputs, changed))
+                        }) {
+                        Ok((outputs, changed)) => {
                             let status = if changed {
                                 NodeStatus::Created
                             } else {

@@ -70,7 +70,9 @@ use crate::catalog::Catalog;
 use crate::check::{Checked, Edge};
 use crate::class::Class;
 use crate::site::Site;
-use crate::tool::{Inputs, Observation, Outputs, PortName, Tool, ToolError, ToolName, ToolSpec};
+use crate::tool::{
+    Inputs, Observation, Outputs, PortName, Tool, ToolError, ToolErrorKind, ToolName, ToolSpec,
+};
 use crate::value::{PortType, TypeName, TypeRef, TypeRegistry, Value, reported_type_name_or};
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
 
@@ -453,7 +455,8 @@ pub enum PlanError {
         /// The mismatched port's location: the node and the port.
         site: Site,
     },
-    /// A tool's `read` itself failed.
+    /// A tool's `read` itself failed, or (decision (f2)) a tool's own
+    /// output disagreed with its spec where it was produced.
     Tool {
         /// The node whose tool failed.
         node: NodeName,
@@ -760,7 +763,7 @@ pub(crate) fn walk(
                 tool: spec.name.clone(),
                 action: Action::Skip,
                 inputs: Inputs::new(),
-                outputs: fill_outputs(spec, &Outputs::new()),
+                outputs: unknown_outputs(spec),
             });
             plan_items.push(None);
             results.insert(name.clone(), NodeResult::Skipped);
@@ -771,7 +774,8 @@ pub(crate) fn walk(
         let result = match &node.for_each {
             None => {
                 let bound = bind_ports(&ctx, name, node, spec, None)?;
-                let node_plan = plan_one(name, None, spec, tool.as_ref(), bound)?;
+                let node_plan =
+                    plan_one(name, None, spec, tool.as_ref(), bound, catalog.registry())?;
                 if node_plan.action == Action::Blocked {
                     gates.mark_blocked(
                         name.clone(),
@@ -820,7 +824,14 @@ pub(crate) fn walk(
                 let mut instances = Vec::with_capacity(keyed.len());
                 for (item_value, key) in keyed {
                     let bound = bind_ports(&ctx, name, node, spec, Some(&item_value))?;
-                    let node_plan = plan_one(name, Some(key.clone()), spec, tool.as_ref(), bound)?;
+                    let node_plan = plan_one(
+                        name,
+                        Some(key.clone()),
+                        spec,
+                        tool.as_ref(),
+                        bound,
+                        catalog.registry(),
+                    )?;
                     let blocked = node_plan.action == Action::Blocked;
                     if blocked {
                         gates.mark_blocked(
@@ -1447,6 +1458,7 @@ fn plan_one(
     spec: &ToolSpec,
     tool: &dyn Tool,
     inputs: Inputs,
+    registry: &TypeRegistry,
 ) -> Result<PlannedNode, PlanError> {
     for key_port in &spec.key {
         if !inputs.get(key_port).is_some_and(Value::is_known) {
@@ -1519,10 +1531,14 @@ fn plan_one(
     };
 
     let outputs = match &observation {
-        Observation::Absent { predicted } => fill_outputs(spec, predicted),
-        Observation::Present(present) => fill_outputs(spec, present),
+        Observation::Absent { predicted } => fill_outputs(registry, spec, predicted),
+        Observation::Present(present) => fill_outputs(registry, spec, present),
         Observation::Foreign | Observation::Mismatch { .. } => unreachable!("handled above"),
-    };
+    }
+    .map_err(|error| PlanError::Tool {
+        node: name.clone(),
+        error,
+    })?;
 
     Ok(PlannedNode {
         name: name.clone(),
@@ -1545,18 +1561,97 @@ fn restrict_to_key(inputs: &Inputs, key: &[PortName]) -> Inputs {
     restricted
 }
 
-/// Every one of `spec`'s declared output ports: `provided`'s value where it
-/// has one, [`Value::unknown`] otherwise.
-pub(crate) fn fill_outputs(spec: &ToolSpec, provided: &Outputs) -> Outputs {
+/// Every one of `spec`'s declared output ports, [`Value::unknown`]: the
+/// whole-node [`Action::Skip`] case, which never calls a tool at all and so
+/// has nothing to check -- unlike [`fill_outputs`], this cannot fail.
+pub(crate) fn unknown_outputs(spec: &ToolSpec) -> Outputs {
     let mut outputs = Outputs::new();
     for (port, ty) in &spec.outputs {
-        let value = provided
-            .get(port)
-            .cloned()
-            .unwrap_or_else(|| Value::unknown(ty.clone()));
-        outputs.insert(port.clone(), value);
+        outputs.insert(port.clone(), Value::unknown(ty.clone()));
     }
     outputs
+}
+
+/// Every one of `spec`'s declared output ports: `provided`'s value where it
+/// has one, [`Value::unknown`] otherwise.
+///
+/// Decision (f2): a value `provided` actually supplied is checked against
+/// its own declared port type first -- exactly the two-part test
+/// [`check_input_types`] runs on a caller's workflow input, now run on a
+/// tool's own output where it is produced. A port the tool left out is
+/// never checked, since [`Value::unknown`] cannot disagree with anything.
+/// An undeclared port `provided` holds (one not in `spec.outputs`) is still
+/// silently dropped, exactly as before.
+///
+/// # Errors
+///
+/// [`ToolError`] (kind [`ToolErrorKind::Invalid`]), naming the offending
+/// port and the two types but never a value's content, the moment the
+/// first mismatching port is found, in `spec.outputs`' own order.
+pub(crate) fn fill_outputs(
+    registry: &TypeRegistry,
+    spec: &ToolSpec,
+    provided: &Outputs,
+) -> Result<Outputs, ToolError> {
+    let mut outputs = Outputs::new();
+    for (port, ty) in &spec.outputs {
+        let value = match provided.get(port) {
+            None => Value::unknown(ty.clone()),
+            Some(value) => {
+                check_output_type(registry, port, ty, value)?;
+                value.clone()
+            }
+        };
+        outputs.insert(port.clone(), value);
+    }
+    Ok(outputs)
+}
+
+/// The check behind [`fill_outputs`] (f2): `value`'s own declared
+/// [`TypeRef`] must equal `expected` (name and list flag), and every known
+/// object it holds must pass `registry`'s `TypeId` test
+/// ([`TypeRegistry::type_matches`]). Mirrors [`check_input_types`]'s own
+/// per-object loop, for a tool's output instead of a caller's input.
+fn check_output_type(
+    registry: &TypeRegistry,
+    port: &PortName,
+    expected: &TypeRef,
+    value: &Value,
+) -> Result<(), ToolError> {
+    let mismatch = |found: &TypeRef| output_type_mismatch(port, expected, found);
+    if value.ty() != expected {
+        return Err(mismatch(value.ty()));
+    }
+    let scalar = value.as_scalar().into_iter();
+    let items = value.as_list().unwrap_or_default().iter().map(Arc::as_ref);
+    for object in scalar.chain(items) {
+        if registry.type_matches(&expected.name, object) != Some(true) {
+            return Err(mismatch(&TypeRef {
+                name: reported_type_name_or(object, &expected.name),
+                list: expected.list,
+            }));
+        }
+    }
+    Ok(())
+}
+
+/// The message for a tool's own output disagreeing with its spec (f2,
+/// SHARED VALUES). `found == expected` means the value is of another Rust
+/// type that merely shares the declared name -- the impostor wording, as
+/// [`PlanError::InputTypeMismatch`]'s `Display` also uses.
+fn output_type_mismatch(port: &PortName, expected: &TypeRef, found: &TypeRef) -> ToolError {
+    let message = if found == expected {
+        format!(
+            "returned output `{port}` as a value of another Rust type declared as `{found}`, \
+             but its spec declares `{expected}`"
+        )
+    } else {
+        format!("returned output `{port}` as `{found}`, but its spec declares `{expected}`")
+    };
+    ToolError {
+        kind: ToolErrorKind::Invalid,
+        message,
+    }
 }
 
 #[cfg(test)]

@@ -347,8 +347,12 @@ fn boundary_tampering_with_the_approved_plans_inputs_changes_nothing_that_runs()
 // 3. What the executor trusts a tool to return
 // ---------------------------------------------------------------------
 
-/// A tool whose `ensure` answers with ports it never declared, omits one
-/// it did, and returns a *secret* value on a port it declared non-secret.
+/// A tool whose `ensure` answers with ports it never declared and omits
+/// one it did. Milestone 3n's F2 (2026-10-05) added a third lie this tool
+/// used to tell -- a *secret* value on a port it declared non-secret --
+/// but F2 now refuses that one where it is produced, so it is pinned
+/// separately by [`SecretLeakEnsureTool`], and this tool's own `org` is a
+/// correctly-typed [`willikins_types::GitHubOrg`].
 struct LyingEnsureTool {
     spec: ToolSpec,
 }
@@ -385,11 +389,61 @@ impl Tool for LyingEnsureTool {
 
     fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
         let mut outputs = Outputs::new();
-        // A secret value on a port declared `GitHubOrg`.
-        outputs.insert(port("org"), Value::known(distinctive_token()));
+        // A correctly-typed `org`: this test's own lies are the
+        // undeclared `ghost` port and the missing declared `label`.
+        outputs.insert(
+            port("org"),
+            Value::known(willikins_types::GitHubOrg::parse("lightless-labs").unwrap()),
+        );
         // A port this tool never declared.
         outputs.insert(port("ghost"), Value::known(distinctive_token()));
         // `label`, which it did declare, is simply absent.
+        Ok(Ensured {
+            outputs,
+            changed: true,
+        })
+    }
+}
+
+/// Milestone 3n's F2 (2026-10-05): a tool that returns a *secret* value
+/// on a port it declared non-secret -- the lie [`LyingEnsureTool`] used to
+/// tell before F2 closed it.
+struct SecretLeakEnsureTool {
+    spec: ToolSpec,
+}
+
+impl SecretLeakEnsureTool {
+    fn new(name: &str) -> Self {
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("org"), ty("GitHubOrg"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name(name),
+                description: "Test tool: returns a secret on a non-secret port.".to_string(),
+                inputs: IndexMap::new(),
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+        }
+    }
+}
+
+impl Tool for SecretLeakEnsureTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Absent {
+            predicted: Outputs::new(),
+        })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        let mut outputs = Outputs::new();
+        outputs.insert(port("org"), Value::known(distinctive_token()));
         Ok(Ensured {
             outputs,
             changed: true,
@@ -500,23 +554,23 @@ fn undeclared_outputs_are_dropped_and_forgotten_ones_become_unknown() {
     );
 }
 
-/// A tool that returns a *secret* value on a port it declared non-secret
-/// breaks the static taint rule at run time -- `check` typed that port
-/// from the spec, so it let it bind to a non-secret sink, and the
-/// executor hands the sink the value the tool actually returned. No byte
-/// escapes (a `Value`'s redaction travels with the value, not with the
-/// port it sits in), but the guarantee "a secret output may only bind to
-/// a secret-accepting input" holds only as far as a tool tells the truth
-/// about its own output types. Neither `plan` nor `apply` re-checks a
-/// returned value against the declared port type; every tool in the
-/// workspace is our own code, which is why this is pinned rather than
-/// fixed here (see the pass-1 note's "Handed to pass 2").
+/// Superseded by milestone 3n's F2 (2026-10-05). Before F2, a tool that
+/// returned a *secret* value on a port it declared non-secret broke the
+/// static taint rule at run time -- `check` typed that port from the
+/// spec, so it let it bind to a non-secret sink, and the executor handed
+/// the sink the value the tool actually returned; this test used to pin
+/// exactly that (see the pass-1 note's "Handed to pass 2"). F2 checks a
+/// tool's own output against its spec where it is produced, so the lie is
+/// now refused before the value ever reaches the sink at all: the
+/// guarantee "a secret output may only bind to a secret-accepting input"
+/// no longer depends on every tool telling the truth about its own output
+/// types.
 #[test]
-fn boundary_a_secret_returned_on_a_non_secret_port_flows_on_but_never_prints() {
+fn a_secret_returned_on_a_non_secret_port_is_refused_before_it_reaches_a_sink() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mut catalog = Catalog::new(willikins_types::registry());
     catalog
-        .insert(Arc::new(LyingEnsureTool::new("test.lies")))
+        .insert(Arc::new(SecretLeakEnsureTool::new("test.lies_secret")))
         .unwrap();
     catalog
         .insert(Arc::new(RecordingSinkTool::new(
@@ -525,8 +579,8 @@ fn boundary_a_secret_returned_on_a_non_secret_port_flows_on_but_never_prints() {
         )))
         .unwrap();
 
-    let workflow = Workflow::new(workflow_name("lying-tool-sink"))
-        .node(node("liar"), Node::new(tool_name("test.lies")))
+    let workflow = Workflow::new(workflow_name("lying-tool-secret-sink"))
+        .node(node("liar"), Node::new(tool_name("test.lies_secret")))
         .node(
             node("sink"),
             Node::new(tool_name("test.sink")).port(
@@ -539,10 +593,11 @@ fn boundary_a_secret_returned_on_a_non_secret_port_flows_on_but_never_prints() {
         );
     let checked = check(&workflow, &catalog).expect("check types `value` from the spec: GitHubOrg");
     let inputs = IndexMap::new();
-    let approved = plan(&checked, &inputs, &catalog).expect("plans");
+    let approved = plan(&checked, &inputs, &catalog)
+        .expect("plans: the liar's `read` predicts nothing, so the lie is Unknown at plan time");
 
     let mut observer = RecordingObserver::new();
-    let applied = apply(
+    let err = apply(
         &checked,
         &inputs,
         &catalog,
@@ -550,25 +605,33 @@ fn boundary_a_secret_returned_on_a_non_secret_port_flows_on_but_never_prints() {
         &Approval::Auto,
         &mut observer,
     )
-    .expect("runs");
+    .expect_err("the liar's own output disagrees with its spec");
 
-    let handed = seen.lock().unwrap();
-    assert_eq!(handed.len(), 1);
+    match &err {
+        ApplyError::Tool {
+            node: got_node,
+            error,
+            ..
+        } => {
+            assert_eq!(got_node, &node("liar"));
+            assert_eq!(
+                error.message,
+                "returned output `org` as `DopplerServiceToken`, but its spec declares \
+                 `GitHubOrg`"
+            );
+        }
+        other => panic!("expected ApplyError::Tool, got {other:?}"),
+    }
     assert!(
-        handed[0]
-            .get(&port("value"))
-            .expect("the sink's port was bound")
-            .is_secret(),
-        "the sink was handed a secret value on a non-secret port"
+        seen.lock().unwrap().is_empty(),
+        "the sink is never called: the secret never reaches it"
     );
 
-    // ... and still nothing prints it.
+    // ... and nothing prints it either.
     for rendering in [
-        serde_json::to_string(&applied).expect("Applied serializes"),
-        format!("{applied:?}"),
+        format!("{err:?}"),
         format!("{:?}", observer.events),
         serde_json::to_string(&observer.events).expect("events serialize"),
-        format!("{:?}", handed[0]),
     ] {
         assert!(
             !rendering.contains(TOKEN_MARKER_BYTES),

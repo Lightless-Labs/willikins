@@ -11,6 +11,24 @@ workspace commit with no shim, because Rust has no overloading and a `#[deprecat
 caller under `-D warnings`; the gitignored `operator_*` tests call the three-argument `plan` (16 sites) and `apply`
 (8 sites), so B2 migrates them locally, uncommitted (Needs the operator); a trybuild fixture directory sits beside
 `tests/it/`, never inside it. If 3m lands first after all, G3, G7 and B2 carry `rollback.rs`.
+**Addendum:** 2026-10-06 — F2 landed as one commit, not the table's two. `fill_outputs` is one shared function
+between `plan_one` and `apply`'s post-`ensure` site; changing its signature (checked, registry-taking) without
+updating both call sites in the same commit does not compile, so "green alone" forces a single commit covering
+`plan.rs`, `apply.rs` and their tests — the two call sites are two production sites of one check, not two
+behaviours. Also fixed in the same commit, discovered by the full-crate runs verify item 5 calls for: the
+Skip-path `fill_outputs` call (plan.rs) would have added a 31st non-test `unreachable!` against the plan's own
+ratchet baseline (30), so it now calls a new infallible `unknown_outputs` helper instead. Two pre-existing
+`willikins-core` tests documented the exact gap F2 closes and are evidence of red: `apply_adversarial.rs`'s
+`boundary_a_secret_returned_on_a_non_secret_port_flows_on_but_never_prints` asserted the old flow-through (its own
+doc comment said "pinned rather than fixed here... Handed to pass 2"), and
+`undeclared_outputs_are_dropped_and_forgotten_ones_become_unknown`'s `LyingEnsureTool` carried a wrong-typed `org`
+that the old unchecked fill silently accepted. Both are rewritten to assert the new refusal (the first renamed to
+`a_secret_returned_on_a_non_secret_port_is_refused_before_it_reaches_a_sink`); `LyingEnsureTool`'s `org` is now
+correctly typed so it isolates only the undeclared/missing-port behaviour it was otherwise meant to pin, and the
+secret-on-non-secret lie moved to a new `SecretLeakEnsureTool`. `docs/research/2026-09-14-executor-journal-adversarial-pass-1.md`'s
+"Handed to pass 2" entry is now closed; flagged for D1 to update (names the superseded test). Verify item 5: zero
+in-tree tools (willikins-providers-fake and all six provider crates) returned a wrong-typed output on any existing
+test, so no provider-crate fix commits were needed.
 
 ## Goal
 
