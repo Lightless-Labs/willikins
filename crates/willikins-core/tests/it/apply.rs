@@ -2907,6 +2907,108 @@ mod conversions {
         }
     }
 
+    /// Milestone 3n's F-slice adversarial pass (2026-10-06): a source
+    /// that reports exactly `outputs` -- `Present` when `pure`, `Absent`
+    /// with `outputs` as its prediction otherwise. Its values may be
+    /// shaped wrong in ways the `TypeId` loop alone cannot see: a scalar
+    /// on a `list<…>` port (or the reverse), or an `Unknown` declared as
+    /// another type. Only `fill_outputs`' `ty()` equality refuses those,
+    /// and deleting that equality left every earlier test green.
+    struct Emits {
+        spec: ToolSpec,
+        outputs: Outputs,
+    }
+
+    impl Tool for Emits {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+            let outputs = self.outputs.clone();
+            if self.spec.pure {
+                Ok(Observation::Present(outputs))
+            } else {
+                Ok(Observation::Absent { predicted: outputs })
+            }
+        }
+        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            Ok(Ensured {
+                outputs: self.outputs.clone(),
+                changed: !self.spec.pure,
+            })
+        }
+    }
+
+    /// Plan a one-node document whose only node is an [`Emits`] declaring
+    /// `out: declared` and reporting `out` as `emitted`; return the
+    /// refusal's message, asserting it is `PlanError::Tool`, `Invalid`.
+    fn plan_refusal_for(declared: TypeRef, emitted: Value, pure: bool) -> String {
+        let mut fixture = fixture();
+        let mut outputs = Outputs::new();
+        outputs.insert(port("out"), emitted);
+        fixture
+            .catalog
+            .insert(Arc::new(Emits {
+                spec: ToolSpec {
+                    name: ToolName::parse("conv.emits").unwrap(),
+                    description: "Conversion test double `conv.emits`.".to_string(),
+                    inputs: IndexMap::new(),
+                    outputs: IndexMap::from([(port("out"), declared)]),
+                    key: Vec::new(),
+                    class: Class::Reversible,
+                    pure,
+                },
+                outputs,
+            }))
+            .unwrap();
+        let workflow = Workflow::new(workflow_name("conv-emits")).node(
+            node("source"),
+            Node::new(ToolName::parse("conv.emits").unwrap()),
+        );
+        let checked = check(&workflow, &fixture.catalog).expect("one node, no sink");
+        match plan(&checked, &IndexMap::new(), &fixture.catalog) {
+            Err(PlanError::Tool {
+                node: got_node,
+                error,
+            }) => {
+                assert_eq!(got_node, node("source"));
+                assert_eq!(error.kind, ToolErrorKind::Invalid);
+                error.message
+            }
+            other => panic!("expected PlanError::Tool, got {other:?}"),
+        }
+    }
+
+    /// A known scalar `ConvA` on a port declared `list<ConvA>`: its one
+    /// object passes the `TypeId` test, so only the list flag tells.
+    #[test]
+    fn a_scalar_output_on_a_list_port_is_refused_where_produced() {
+        assert_eq!(
+            plan_refusal_for(TypeRef::list_of(name("ConvA")), Value::known(a("x")), true),
+            "returned output `out` as `ConvA`, but its spec declares `list<ConvA>`"
+        );
+    }
+
+    /// The reverse: a known `list<ConvA>` on a port declared `ConvA`.
+    #[test]
+    fn a_list_output_on_a_scalar_port_is_refused_where_produced() {
+        assert_eq!(
+            plan_refusal_for(scalar("ConvA"), Value::known_list(vec![a("x")]), true),
+            "returned output `out` as `list<ConvA>`, but its spec declares `ConvA`"
+        );
+    }
+
+    /// A non-pure tool's `read` predicting its `out: ConvA` as
+    /// `Unknown(ConvB)`: there is no object to test by `TypeId`, so only
+    /// the declared type tells.
+    #[test]
+    fn an_unknown_prediction_of_another_type_is_refused_where_produced() {
+        assert_eq!(
+            plan_refusal_for(scalar("ConvA"), Value::unknown(scalar("ConvB")), false),
+            "returned output `out` as `ConvB`, but its spec declares `ConvA`"
+        );
+    }
+
     /// A non-pure source whose `read` cannot predict its `out` (a
     /// `ConvA`), like `UnknownAtPlan`, but whose `ensure` returns a
     /// same-named *impostor* rather than a real `ConvA`. This is the one
