@@ -102,6 +102,17 @@ instead of discarding it (`used: _`). Gates widen to match: `-p willikins-server
 and test, and the journal's own `plan_record_schema_generates` insta snapshot is regenerated (additions only) and
 reviewed as part of this commit, per the plan's "Published shapes" gate rule.
 
+**Addendum:** 2026-10-06 (task K1) — acceptance 11 names
+`workflows/fixtures/composition/new-rust-service-in-org.yaml`, which the SHARED VALUES table
+reserves for task F1's "Public positive pair", but the task order puts K1 before F1, so neither
+file existed when K1 ran. K1 created both (`cf81d0d`, widened to F1's own row's signature in
+`3a45497`: defaulted `github_org`, `buildkite_org`, `cluster`, `environments`; the cluster lookup;
+pass-through outputs; the root's node set equals the buildkite document's). **F1's commit 1 is
+therefore already landed; F1 starts at its commit 2** (the equivalence test and the composition
+characterization snapshot). Also: the row's "`--plan-id` links in `--workflows-dir`" needed no
+change in `cmd_apply_plan_id` — `Butler::start`/`Butler::apply` already link (S1/S2) — and is not
+separately tested at the CLI level; `tests/it/composition.rs`'s closing comment records why.
+
 ## Goal
 
 1. **Part P (the document).** A step may say `uses: <workflow-name>` instead of `tool: <tool-name>`. It binds the
