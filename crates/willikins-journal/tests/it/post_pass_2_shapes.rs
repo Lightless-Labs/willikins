@@ -261,6 +261,7 @@ fn regenerate_the_frozen_fixture() {
             class: Class::Reversible,
             requires_approval: false,
             principal: Some(agent.clone()),
+            used: std::collections::BTreeMap::new(),
         },
         Event::ApplyRefused {
             plan_id: plan_a,

@@ -543,6 +543,12 @@ impl Butler {
             class,
             requires_approval,
             principal: Some(principal.clone()),
+            // Milestone 2b, decision (d10): a real closure is recorded by
+            // S2, once `plan_inner` links a composite. This root-only
+            // plan never resolves a `uses:` step yet, so the closure is
+            // empty here -- never a placeholder guess at what S2 will
+            // fill in.
+            used: std::collections::BTreeMap::new(),
         })?;
 
         let (approval, expires_at) = if requires_approval {

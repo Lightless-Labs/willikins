@@ -42,6 +42,17 @@ fixture: every real tool that outputs `AppleBundleIdentifier` in `willikins-prov
 siblings) requires a full App Store Connect credential chain (`issuer_id`/`key_id`/`key`), which would make the
 fixture about credential resolution rather than the boundary rule it exists to pin.
 
+**Addendum:** 2026-10-06 (task J1) — `PlanRecorded.used: BTreeMap<WorkflowName, DocumentSha256>` (SHARED VALUES)
+needs `WorkflowName: Ord` for the map key, and `#[derive(DomainType)]` emits `Clone`/`PartialEq`/`Eq`/`Debug` only
+(deliberately: the macro must not hand `Ord` to a secret storage, where even a constant-time comparison would leak
+length through timing). Resolved with a one-commit prerequisite, `willikins-types/src/workflow_name.rs`: a hand-written
+`PartialOrd`/`Ord` on `WorkflowName` itself (never secret), delegating to the same field `PartialEq` already compares.
+Committed alone, ahead of J1's own commit, with its own test and gates (`cargo check -p willikins-types` joins J1's
+scoped gates for this reason). `PlanRecorded.used` itself is filled empty at every construction site this task
+touches (`willikins-server/src/butler.rs`'s `plan_inner`, and every `willikins-journal` test that builds a
+`PlanRecorded`); `PlanRecord` (the replay-view struct, distinct from the `Event` variant) does not gain a `used`
+field here — S2/S3 fold it once `apply`'s drift check has a closure to compare against.
+
 **Addendum:** 2026-10-06 (task R1, commit 1) — the SHARED VALUES line "`InputError::NotSettable { input }` (the
 exact shape follows `InputError`'s existing variants)" cannot be taken literally: `InputError` has no existing
 variants today, because it is a plain struct (`{ input, error: ParseError }`), not a `#[serde(tag = "kind")]` enum

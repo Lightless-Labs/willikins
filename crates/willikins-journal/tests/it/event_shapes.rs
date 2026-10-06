@@ -92,6 +92,7 @@ fn event_samples() -> Vec<Event> {
             class: Class::Reversible,
             requires_approval: false,
             principal: Some(principal("agent-0123456789ab")),
+            used: BTreeMap::from([(workflow_name("example-org"), common::document_sha256("org"))]),
         },
         Event::ApprovalAutomatic {
             plan_id,
@@ -274,6 +275,76 @@ fn a_plan_recorded_line_without_a_principal_still_deserializes() {
         json.get("principal").is_none(),
         "an absent principal is omitted, not written as null: {json}"
     );
+}
+
+/// `PlanRecorded.used` (milestone 2b, decision (d10)) is additive the
+/// same way `principal` (adversarial pass 2) was: a line written before
+/// it existed -- here, a pre-2b line that already carries `principal`,
+/// since that is what every binary between pass 2 and 2b wrote -- has no
+/// `used` key at all and folds to an empty map, and the wire shape it
+/// reserializes to is byte-identical to the line as written: no `used`
+/// key appears, not even as `{}`.
+#[test]
+fn a_plan_recorded_line_without_used_still_deserializes() {
+    let pre_2b = concat!(
+        r#"{"kind":"plan_recorded","plan_id":"018f0000-0000-7000-8000-000000000000","#,
+        r#""workflow":"wf","#,
+        r#""document_sha256":"da493aba2ef6940ca1291c898f67e943af4d757017f62dc2eade863bda5713aa","#,
+        r#""inputs":{},"#,
+        r#""plan":{"workflow":"wf","nodes":[],"outputs":{},"class":"reversible","#,
+        r#""requires_approval":false},"#,
+        r#""fingerprint":[],"class":"reversible","requires_approval":false,"#,
+        r#""principal":"agent-0123456789ab"}"#,
+    );
+    let event: Event = serde_json::from_str(pre_2b).expect("a pre-2b line still replays");
+    let Event::PlanRecorded { used, .. } = &event else {
+        panic!("expected PlanRecorded");
+    };
+    assert!(used.is_empty(), "a pre-2b line names no used document");
+    let json = serde_json::to_value(&event).unwrap();
+    assert!(
+        json.get("used").is_none(),
+        "an empty used is omitted, not written as null or {{}}: {json}"
+    );
+    // The line reserializes byte-identically to what a pre-2b binary
+    // wrote: no new key appears anywhere in the text.
+    let reserialized = serde_json::to_string(&event).unwrap();
+    assert!(
+        !reserialized.contains("\"used\""),
+        "reserializing a pre-2b line must not introduce a `used` key: {reserialized}"
+    );
+}
+
+/// The other half: a `PlanRecorded` carrying a non-empty `used` map
+/// round-trips, and the wire shape is the plain object the SHARED VALUES
+/// type implies (`WorkflowName` -> hex sha string), not some wrapper.
+#[test]
+fn a_plan_recorded_line_with_used_round_trips() {
+    let event = Event::PlanRecorded {
+        plan_id: PlanId::new(),
+        workflow: workflow_name("new-rust-service-in-org"),
+        document_sha256: common::document_sha256("new-rust-service-in-org"),
+        inputs: Redacted::from(&indexmap::IndexMap::new()),
+        plan: Redacted::from(&empty_plan()),
+        fingerprint: Vec::<InstanceFingerprint>::new(),
+        class: Class::Reversible,
+        requires_approval: false,
+        principal: None,
+        used: BTreeMap::from([(
+            workflow_name("example-org"),
+            common::document_sha256("example-org"),
+        )]),
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(
+        json["used"]["example-org"],
+        common::document_sha256("example-org").to_string(),
+        "used is a plain WorkflowName -> sha map: {json}"
+    );
+    let round_tripped: Event = serde_json::from_str(&serde_json::to_string(&event).unwrap())
+        .expect("a PlanRecorded with a non-empty used must round-trip");
+    let back_json = serde_json::to_value(&round_tripped).unwrap();
+    assert_eq!(json, back_json, "round trip changed the wire shape");
 }
 
 #[test]

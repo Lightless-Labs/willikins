@@ -321,6 +321,11 @@ fn fold_plan_recorded(plans: &mut IndexMap<PlanId, PlanRecord>, entry: &Entry) {
         class,
         requires_approval,
         principal,
+        // Not yet folded into `PlanRecord`: that is milestone 2b's S2/S3
+        // surface work, once `apply` has a closure to compare against.
+        // This task only adds the wire field and fills it (empty) at
+        // every construction site.
+        used: _,
     } = &entry.event
     else {
         unreachable!("fold_plan_recorded is only called for Event::PlanRecorded");

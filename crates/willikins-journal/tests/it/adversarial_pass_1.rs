@@ -112,6 +112,7 @@ fn record_plan<J: Journal>(
             class: approved.class,
             requires_approval: approved.requires_approval,
             principal: None,
+            used: std::collections::BTreeMap::new(),
         })
         .expect("PlanRecorded must append");
     if approved.requires_approval {
@@ -575,6 +576,7 @@ fn plan_recorded(plan_id: PlanId, requires_approval: bool, sha: &str) -> Event {
         },
         requires_approval,
         principal: None,
+        used: std::collections::BTreeMap::new(),
     }
 }
 

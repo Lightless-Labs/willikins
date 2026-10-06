@@ -99,6 +99,7 @@ fn record_plan(
             class: approved.class,
             requires_approval: approved.requires_approval,
             principal: None,
+            used: std::collections::BTreeMap::new(),
         })
         .expect("PlanRecorded must append");
     // Both fixtures this test drives are `Class::Reversible`

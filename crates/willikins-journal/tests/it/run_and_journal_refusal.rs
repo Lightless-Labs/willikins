@@ -82,6 +82,7 @@ fn approval_required_refuses_without_journaling_run_started() {
             class: approved.class,
             requires_approval: approved.requires_approval,
             principal: None,
+            used: std::collections::BTreeMap::new(),
         })
         .unwrap();
 
@@ -188,6 +189,7 @@ fn a_replan_failure_refuses_without_journaling_a_run() {
             class: willikins_core::Class::Reversible,
             requires_approval: false,
             principal: None,
+            used: std::collections::BTreeMap::new(),
         })
         .unwrap();
 
@@ -272,6 +274,7 @@ fn an_apply_refused_plan_failed_event_round_trips_through_a_file_journal() {
                 class: willikins_core::Class::Reversible,
                 requires_approval: false,
                 principal: None,
+                used: std::collections::BTreeMap::new(),
             })
             .unwrap();
         let (result, _run_id, journal_error) = run_and_journal(

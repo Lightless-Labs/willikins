@@ -337,6 +337,7 @@ fn regenerate_the_frozen_fixture() {
         class: Class::Reversible,
         requires_approval,
         principal: None,
+        used: std::collections::BTreeMap::new(),
     };
 
     let tool_error = ToolError {

@@ -98,6 +98,7 @@ fn events_carrying_the_secret() -> Vec<Event> {
             class: Class::Irreversible,
             requires_approval: true,
             principal: None,
+            used: std::collections::BTreeMap::new(),
         },
         Event::NodeStarted {
             run_id,

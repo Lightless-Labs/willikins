@@ -340,6 +340,27 @@ pub enum Event {
         /// why the plan is what is fixed, not the applier).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         principal: Option<PrincipalId>,
+        /// The content hash, at plan time, of every document a `uses:`
+        /// step resolved (milestone 2b decision (d10)) -- never the root,
+        /// which `document_sha256` above already names. Keyed by the
+        /// document's own `WorkflowName`, one entry per distinct name in
+        /// the linked closure (`willikins_core::compose::Linked::used`).
+        /// Empty for a plan with no `uses:` step, and for every line
+        /// written before this field existed, which is why it is
+        /// `#[serde(default)]` and omitted from the wire entirely when
+        /// empty: every journal written before milestone 2b replays
+        /// unchanged, byte for byte
+        /// (`willikins-journal/tests/it/pre_pass_2_replay.rs`).
+        ///
+        /// `apply` (a later milestone 2b task) compares this map against
+        /// a fresh re-link at apply time and refuses `DocumentChanged` on
+        /// any difference (trust boundary 5) -- the same refusal a
+        /// changed root already gets, now covering every document the
+        /// plan depends on. This task only adds the field and fills it;
+        /// `willikins-server::butler::plan_inner` fills it with an empty
+        /// map today, because it does not yet link a composite.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        used: BTreeMap<WorkflowName, DocumentSha256>,
     },
     /// A plan below the approval threshold was auto-approved.
     ApprovalAutomatic {
