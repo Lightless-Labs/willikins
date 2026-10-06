@@ -23,13 +23,34 @@
 //!    in node declaration order. A node whose tool is unknown is skipped
 //!    for every later step (its ports cannot be checked against a spec
 //!    that does not exist).
-//! 3. For every node whose tool *is* known, in node declaration order:
+//! 3. Boundary errors (milestone 2b task C1, decision (d4)), one per
+//!    entry of [`Workflow::boundaries`], in that order, skipping a
+//!    boundary the linker left unbound (`binding` is `None`): that one
+//!    became a *fixed* input instead (decision (d6)) and was already
+//!    checked by stage 1, under this very same combined name, so
+//!    checking it again here would only report it twice. For the rest,
+//!    the same five rules stage 1 runs over a root input, over the used
+//!    document's own declared [`crate::compose::Boundary::spec`] instead
+//!    (`SecretWorkflowInput`, `UnregisteredInputType`,
+//!    `DisallowedInputType`, `AcknowledgementDefault`,
+//!    `DefaultTypeMismatch`) — reported under the combined
+//!    `<uses step>/<child input>` name
+//!    ([`crate::compose::prefixed_input`]), which doubles as naming the
+//!    `uses:` step, since every one of these five variants' `input`
+//!    field is an [`InputName`] and that type already accepts a
+//!    `/`-separated path (decision (d3)); then, only when none of those
+//!    five fired, an exact match between the binding `check` resolves
+//!    the same way it resolves a node's own port binding and the
+//!    boundary's declared type, with no conversion probe
+//!    ([`CheckError::UsesInputTypeMismatch`]; decision (d4), "exact type
+//!    at the boundary, no conversion").
+//! 4. For every node whose tool *is* known, in node declaration order:
 //!    its `for_each` binding's errors, then its input ports in the order
 //!    the tool spec declares them (an unbound required port, or a bound
 //!    port's own errors), then any `with` keys that are not one of the
 //!    tool's ports, in `with` declaration order.
-//! 4. Workflow outputs' errors, in declaration order.
-//! 5. [`CheckError::Cycle`], one per cyclic strongly-connected component,
+//! 5. Workflow outputs' errors, in declaration order.
+//! 6. [`CheckError::Cycle`], one per cyclic strongly-connected component,
 //!    ordered by the lowest declaration index among its nodes.
 //!
 //! # Cascade suppression
@@ -69,6 +90,21 @@
 //!   way unchecked) and [`CheckError::NestedList`] (`Step` on a `for_each`
 //!   node whose own output port is *already* list-typed, which would need
 //!   a `list<list<T>>` the type model cannot represent).
+//! - [`Resolver::check_boundaries`] (milestone 2b task C1) does not check
+//!   a `uses:` step's own `with:` binding when it is a
+//!   [`Binding::List`]: every element, literal or reference, is copied
+//!   unchanged by the linker's substitution (decision (d4)) and so
+//!   reaches a real node port downstream with a real expected type of
+//!   its own -- *unless* the used document never references that
+//!   declared input anywhere in its own body, in which case nothing
+//!   ever types that particular list. A document that writes such an
+//!   input only to re-export it (`outputs: x: ${{ inputs.x }}`,
+//!   decision (d6)'s addendum) is exactly the pass-through case this
+//!   misses; closing it needs the same per-element machinery
+//!   [`Self::check_list_port`] already has, mirrored to forbid the
+//!   one-hop conversion it otherwise allows. Not needed by any
+//!   acceptance test this milestone pins; left as a gap rather than
+//!   risked under time pressure.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -79,12 +115,13 @@ use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::catalog::Catalog;
 use crate::class::Class;
+use crate::compose::prefixed_input;
 use crate::site::Site;
 use crate::tool::{PortName, PortSpec, ToolName, ToolSpec};
 use crate::value::{
     Conversion, ConversionMismatch, PortType, TypeRef, TypeRegistry, Value, reported_type_name_or,
 };
-use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
+use crate::workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};
 use willikins_types::{ParseError, WorkflowName};
 
 /// A workflow that has passed [`check`]: its topological execution order,
@@ -851,6 +888,29 @@ pub enum CheckError {
         /// The offending name, verbatim.
         name: String,
     },
+    /// A `uses:` step's `with:` bound a used document's declared input to
+    /// a value whose own resolved type is not *exactly* the input's
+    /// declared type: `check` resolves the binding the same way it
+    /// resolves a node's own port binding, then requires equality with
+    /// [`crate::compose::Boundary::spec`]'s declared type, with no
+    /// one-hop conversion probe (decision (d4), "exact type at the
+    /// boundary, no conversion" -- substitution moves the *unconverted*
+    /// binding inside, so a converted-at-the-boundary value would reach
+    /// the child's own ports unconverted).
+    ///
+    /// Not one of the plan's variants; milestone 2b, part C, task C1,
+    /// decision (d4).
+    UsesInputTypeMismatch {
+        /// The `uses:` step.
+        node: NodeName,
+        /// The used document's own input name the binding does not
+        /// match.
+        input: InputName,
+        /// The input's declared type.
+        expected: TypeRef,
+        /// The binding's own resolved type.
+        found: TypeRef,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -1003,6 +1063,15 @@ impl fmt::Display for CheckError {
             Self::PathInAuthoredName { name } => {
                 write!(f, "name `{name}`: an authored name may not contain `/`")
             }
+            Self::UsesInputTypeMismatch {
+                node,
+                input,
+                expected,
+                found,
+            } => write!(
+                f,
+                "node `{node}`, input `{input}`: expected {expected}, found `{found}`"
+            ),
             Self::ListOnScalarPort { site, expected } => write!(
                 f,
                 "{site}: a list binding cannot be delivered to a port of type {expected}"
@@ -1136,6 +1205,7 @@ impl CheckError {
             Self::KeyedOnUses { .. } => "KeyedOnUses",
             Self::UsesOutputCycle { .. } => "UsesOutputCycle",
             Self::PathInAuthoredName { .. } => "PathInAuthoredName",
+            Self::UsesInputTypeMismatch { .. } => "UsesInputTypeMismatch",
         }
     }
 }
@@ -1182,6 +1252,8 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         output_types: IndexMap::new(),
     };
 
+    resolver.check_boundaries(&mut errors);
+
     for (name, node) in &workflow.nodes {
         let Some(Some(spec)) = specs.get(name) else {
             continue;
@@ -1217,10 +1289,22 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
     })
 }
 
-/// Check every declared input: [`CheckError::SecretWorkflowInput`] when
-/// its type is secret, [`CheckError::UnregisteredInputType`] when its type
-/// is not in the registry at all,
-/// [`CheckError::DisallowedInputType`] when its type is
+/// Check every declared root input, in declaration order, through
+/// [`check_input_spec`].
+fn check_workflow_inputs(
+    workflow: &Workflow,
+    registry: &TypeRegistry,
+    errors: &mut Vec<CheckError>,
+) {
+    for (name, spec) in &workflow.inputs {
+        check_input_spec(name, spec, registry, errors);
+    }
+}
+
+/// Check one declared input's own shape, independent of anything bound
+/// to it: [`CheckError::SecretWorkflowInput`] when its type is secret,
+/// [`CheckError::UnregisteredInputType`] when its type is not in the
+/// registry at all, [`CheckError::DisallowedInputType`] when its type is
 /// [`willikins_types::TemplateSource`] or [`willikins_types::RepoFile`]
 /// (milestone 3g decision (e) -- whether or not a default is also present),
 /// [`CheckError::AcknowledgementDefault`] when its type is
@@ -1234,79 +1318,95 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
 /// default at all; an unregistered type has nothing to check the default
 /// against; `TemplateSource` and `RepoFile` may never be defaulted either,
 /// same as they may never be the type at all).
-fn check_workflow_inputs(
-    workflow: &Workflow,
+///
+/// `name` is the name every pushed error is reported under:
+/// [`check_workflow_inputs`] passes a root input's own authored name;
+/// [`Resolver::check_boundaries`] (milestone 2b task C1, decision (d4))
+/// passes a used document's declared input instead, reported as
+/// `<uses step>/<child input>` ([`crate::compose::prefixed_input`]) --
+/// [`InputName`] already accepts that `/`-separated form (decision
+/// (d3)), so this same type of error names the `uses:` step and the
+/// child input with no new field on any of the five variants above.
+/// Returns whether an error was pushed, so a caller resolving a *bound*
+/// boundary's own binding can skip that check once this declared shape
+/// is already broken -- the same cascade-suppression rule the module
+/// docs describe elsewhere, applied here across these five rules rather
+/// than within one of them.
+fn check_input_spec(
+    name: &InputName,
+    spec: &InputSpec,
     registry: &TypeRegistry,
     errors: &mut Vec<CheckError>,
-) {
-    for (name, spec) in &workflow.inputs {
-        match registry.is_secret(&spec.ty.name) {
-            Some(true) => {
-                errors.push(CheckError::SecretWorkflowInput {
-                    input: name.clone(),
-                    ty: spec.ty.clone(),
-                });
-                continue;
-            }
-            None => {
-                errors.push(CheckError::UnregisteredInputType {
-                    input: name.clone(),
-                    ty: spec.ty.clone(),
-                });
-                continue;
-            }
-            Some(false) => {}
-        }
-        if crate::value::is_operator_acknowledgement(registry, &spec.ty.name) {
-            if spec.default.is_some() {
-                errors.push(CheckError::AcknowledgementDefault {
-                    input: name.clone(),
-                });
-            }
-            continue;
-        }
-        if crate::value::is_template_source(registry, &spec.ty.name)
-            || crate::value::is_repo_file(registry, &spec.ty.name)
-        {
-            // One error whether or not `spec.default` is set: this is the
-            // root cause, and checking the default further (below) could
-            // only repeat it. Milestone 3g decision (e)'s two refusals
-            // ("as a workflow input type" and "as an input default")
-            // collapse into this one branch.
-            errors.push(CheckError::DisallowedInputType {
+) -> bool {
+    match registry.is_secret(&spec.ty.name) {
+        Some(true) => {
+            errors.push(CheckError::SecretWorkflowInput {
                 input: name.clone(),
                 ty: spec.ty.clone(),
             });
-            continue;
+            return true;
         }
-        let Some(default) = &spec.default else {
-            continue;
-        };
-        let found = if default.ty() == &spec.ty {
-            let scalar = default.as_scalar().into_iter();
-            let items = default
-                .as_list()
-                .unwrap_or_default()
-                .iter()
-                .map(Arc::as_ref);
-            scalar
-                .chain(items)
-                .find(|object| registry.type_matches(&spec.ty.name, *object) != Some(true))
-                .map(|object| TypeRef {
-                    name: reported_type_name_or(object, &spec.ty.name),
-                    list: spec.ty.list,
-                })
-        } else {
-            Some(default.ty().clone())
-        };
-        if let Some(found) = found {
-            errors.push(CheckError::DefaultTypeMismatch {
+        None => {
+            errors.push(CheckError::UnregisteredInputType {
                 input: name.clone(),
-                expected: spec.ty.clone(),
-                found,
+                ty: spec.ty.clone(),
             });
+            return true;
         }
+        Some(false) => {}
     }
+    if crate::value::is_operator_acknowledgement(registry, &spec.ty.name) {
+        if spec.default.is_some() {
+            errors.push(CheckError::AcknowledgementDefault {
+                input: name.clone(),
+            });
+            return true;
+        }
+        return false;
+    }
+    if crate::value::is_template_source(registry, &spec.ty.name)
+        || crate::value::is_repo_file(registry, &spec.ty.name)
+    {
+        // One error whether or not `spec.default` is set: this is the
+        // root cause, and checking the default further (below) could
+        // only repeat it. Milestone 3g decision (e)'s two refusals
+        // ("as a workflow input type" and "as an input default")
+        // collapse into this one branch.
+        errors.push(CheckError::DisallowedInputType {
+            input: name.clone(),
+            ty: spec.ty.clone(),
+        });
+        return true;
+    }
+    let Some(default) = &spec.default else {
+        return false;
+    };
+    let found = if default.ty() == &spec.ty {
+        let scalar = default.as_scalar().into_iter();
+        let items = default
+            .as_list()
+            .unwrap_or_default()
+            .iter()
+            .map(Arc::as_ref);
+        scalar
+            .chain(items)
+            .find(|object| registry.type_matches(&spec.ty.name, *object) != Some(true))
+            .map(|object| TypeRef {
+                name: reported_type_name_or(object, &spec.ty.name),
+                list: spec.ty.list,
+            })
+    } else {
+        Some(default.ty().clone())
+    };
+    if let Some(found) = found {
+        errors.push(CheckError::DefaultTypeMismatch {
+            input: name.clone(),
+            expected: spec.ty.clone(),
+            found,
+        });
+        return true;
+    }
+    false
 }
 
 /// Build one graph node per workflow node, in declaration order.
@@ -1833,6 +1933,111 @@ impl<'a> Resolver<'a> {
                 }
             }
             Binding::Item | Binding::Literal(_) => {}
+        }
+    }
+
+    /// Check every `uses:` step's input boundary (milestone 2b task C1,
+    /// decision (d4); module docs' "Error ordering", stage 3), in
+    /// [`Workflow::boundaries`]'s own order. A boundary the linker left
+    /// unbound (`binding` is `None`) is skipped: it became a *fixed*
+    /// input instead (decision (d6)), already inserted into
+    /// `workflow.inputs` under this exact combined name, so
+    /// [`check_workflow_inputs`] already checked it -- checking it again
+    /// here would only report the same declaration twice.
+    ///
+    /// For a *bound* boundary: first, the same five rules
+    /// [`check_input_spec`] runs over a root input, over the used
+    /// document's own declared [`crate::compose::Boundary::spec`] instead, reported
+    /// under the combined `<uses step>/<child input>` name
+    /// ([`prefixed_input`]) -- this is the only place any of those five
+    /// errors can ever come from for an input the parent actually bound,
+    /// because substitution erased it from `workflow.inputs` entirely
+    /// (it was never a fixed input to begin with). When that declared
+    /// shape is already broken, resolving the binding below could only
+    /// cascade from it, so this is skipped the same way a broken
+    /// declaration suppresses its own default check.
+    ///
+    /// Otherwise: an exact match, with no conversion probe, between the
+    /// binding's own type and [`crate::compose::Boundary::spec`]'s declared one
+    /// (decision (d4), "exact type at the boundary, no conversion"):
+    ///
+    /// - [`Binding::Literal`] is parsed directly against the declared
+    ///   type by [`check_literal`] (the same function a node's own
+    ///   literal binding goes through), which can only ever report
+    ///   [`CheckError::InvalidLiteral`] or one of its secret/acknowledgement/
+    ///   repo-file refusals -- never a type *mismatch*, since a literal
+    ///   that parses at all parses as the very type it was parsed
+    ///   against.
+    /// - [`Binding::List`] is left unchecked here: milestone 2b's own
+    ///   known gap (see the module docs). Every element -- literal or
+    ///   reference alike -- is copied unchanged by substitution
+    ///   (decision (d4)) and so reaches a real port downstream with a
+    ///   real expected type of its own, *unless* the used document never
+    ///   references this input anywhere, in which case nothing types it
+    ///   at all. [`Binding::Item`] can never reach here: the linker
+    ///   refuses `${{ item }}` in a `uses:` step's `with:` before `link`
+    ///   ever returns ([`CheckError::ItemInUses`]).
+    /// - [`Binding::Input`], [`Binding::Step`], and [`Binding::Keyed`] are
+    ///   resolved exactly as [`Self::check_with_port`] resolves a node's
+    ///   own binding ([`Self::resolve`], with `site_idx: None` so no
+    ///   graph edge is added here -- the real one, if any, was already
+    ///   added wherever this same binding was substituted into an actual
+    ///   node port or `for_each` source), then compared to
+    ///   [`crate::compose::Boundary::spec`]'s declared type by [`TypeRef`] equality,
+    ///   never [`PortType::accepts`] and never
+    ///   [`TypeRegistry::probe_conversion`]: [`CheckError::UsesInputTypeMismatch`]
+    ///   on a mismatch.
+    fn check_boundaries(&mut self, errors: &mut Vec<CheckError>) {
+        let workflow = self.workflow;
+        let not_in_for_each = ItemContext::NotInForEach;
+        for boundary in &workflow.boundaries {
+            let Some(binding) = &boundary.binding else {
+                continue;
+            };
+            let name = prefixed_input(&boundary.uses, &boundary.input);
+            if check_input_spec(&name, &boundary.spec, self.registry, errors) {
+                continue;
+            }
+            let port = PortName::parse(boundary.input.as_str()).unwrap_or_else(|err| {
+                unreachable!(
+                    "InputName and PortName share one grammar, so a valid InputName is \
+                     always a valid PortName: {err}"
+                )
+            });
+            match binding {
+                Binding::Literal(text) => {
+                    check_literal(
+                        &boundary.uses,
+                        &port,
+                        text,
+                        &PortType::Exact(boundary.spec.ty.clone()),
+                        self.registry,
+                        errors,
+                    );
+                }
+                Binding::List(_) => {}
+                Binding::Item => unreachable!(
+                    "the linker refuses `${{ item }}` in a `uses:` step's `with:` \
+                     (CheckError::ItemInUses) before `link` ever returns a boundary"
+                ),
+                Binding::Input(_) | Binding::Step { .. } | Binding::Keyed { .. } => {
+                    let site = Site::Port {
+                        node: boundary.uses.clone(),
+                        port,
+                    };
+                    if let Some((found, _source)) =
+                        self.resolve(None, &site, &not_in_for_each, binding, errors)
+                        && found != boundary.spec.ty
+                    {
+                        errors.push(CheckError::UsesInputTypeMismatch {
+                            node: boundary.uses.clone(),
+                            input: boundary.input.clone(),
+                            expected: boundary.spec.ty.clone(),
+                            found,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -2461,11 +2666,271 @@ mod tests {
                 Class::Reversible,
                 true,
             ),
+            // A pure passthrough, not a mirror of any real tool: the
+            // boundary-pass tests (milestone 2b task C1) need an
+            // `AppleBundleIdentifier`-typed step output, to exercise the
+            // registered `AppleBundleIdentifier => TemplateValue`
+            // conversion row (`willikins_types::conversion_rows`)
+            // against the boundary's own "no conversion, ever" rule,
+            // without a real ASC tool's credential inputs.
+            spec_of(
+                "fake.identifier.get",
+                &[("identifier", exact("AppleBundleIdentifier"), true)],
+                &[("identifier", ty("AppleBundleIdentifier"))],
+                &[],
+                Class::Reversible,
+                true,
+            ),
         ];
         for spec in specs {
             catalog.insert(Arc::new(DummyTool { spec })).unwrap();
         }
         catalog
+    }
+
+    /// A linked composite's own `Boundary`, built directly rather than
+    /// through [`crate::compose::link`] (`Workflow::boundaries` and
+    /// `Boundary`'s own fields are all `pub`, exactly like a hand-built
+    /// `Workflow` itself): the mechanism these tests pin is `check`'s
+    /// own boundary pass, not the linker's output, and these cases need
+    /// no used-document resolution at all.
+    fn boundary(
+        uses: NodeName,
+        input: InputName,
+        spec: InputSpec,
+        binding: Option<Binding>,
+    ) -> crate::compose::Boundary {
+        crate::compose::Boundary {
+            uses,
+            workflow: workflow_name("child-doc"),
+            input,
+            spec,
+            binding,
+        }
+    }
+
+    /// Milestone 2b task C1, decision (d4), acceptance 5: a parent
+    /// binding a `GitHubRepo` step output to a child's `DopplerProject`
+    /// input gives `UsesInputTypeMismatch`, naming the `uses:` step and
+    /// the child input -- `check` never probes the conversion table for
+    /// this edge (there is no row between these two types anyway, but
+    /// the boundary pass does not even try).
+    #[test]
+    fn a_boundary_bound_to_the_wrong_type_gives_uses_input_type_mismatch() {
+        let mut workflow = Workflow::new(workflow_name("w")).node(
+            node_name("names"),
+            Node::new(tool_name("naming.v1"))
+                .port(port("org"), Binding::Literal("example-org".to_string()))
+                .port(port("slug"), Binding::Literal("example-repo".to_string())),
+        );
+        workflow.boundaries = vec![boundary(
+            node_name("child"),
+            input_name("project"),
+            InputSpec::new(ty("DopplerProject")),
+            Some(Binding::Step {
+                node: node_name("names"),
+                port: port("github_repo"),
+            }),
+        )];
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::UsesInputTypeMismatch {
+                node: node_name("child"),
+                input: input_name("project"),
+                expected: ty("DopplerProject"),
+                found: ty("GitHubRepo"),
+            }]
+        );
+        assert_eq!(
+            errors[0].to_string(),
+            "node `child`, input `project`: expected DopplerProject, found `GitHubRepo`"
+        );
+    }
+
+    /// Acceptance 5: a parent binding a type that only *converts* to a
+    /// child's declared type -- here, the registered
+    /// `AppleBundleIdentifier => TemplateValue` row -- still gives
+    /// `UsesInputTypeMismatch`. Substitution moves the *unconverted*
+    /// binding inside (decision (d4)): a node that actually consumes
+    /// `value` would see the conversion applied at its own port, exactly
+    /// as it would for any other edge, but the boundary itself never
+    /// probes the table.
+    #[test]
+    fn a_boundary_binding_that_only_converts_to_the_declared_type_still_mismatches() {
+        let mut workflow = Workflow::new(workflow_name("w")).node(
+            node_name("app"),
+            Node::new(tool_name("fake.identifier.get")).port(
+                port("identifier"),
+                Binding::Literal("com.example.app".to_string()),
+            ),
+        );
+        workflow.boundaries = vec![boundary(
+            node_name("child"),
+            input_name("value"),
+            InputSpec::new(ty("TemplateValue")),
+            Some(Binding::Step {
+                node: node_name("app"),
+                port: port("identifier"),
+            }),
+        )];
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::UsesInputTypeMismatch {
+                node: node_name("child"),
+                input: input_name("value"),
+                expected: ty("TemplateValue"),
+                found: ty("AppleBundleIdentifier"),
+            }]
+        );
+    }
+
+    /// Acceptance 5: a child declaring a secret input that the parent
+    /// binds to a secret step output of the same type gives
+    /// `SecretWorkflowInput` (the existing signature rule, reported
+    /// under the combined `<uses step>/<child input>` name), and exactly
+    /// that one error -- not also `UsesInputTypeMismatch`, even though
+    /// nothing here would have mismatched anyway: the declared shape
+    /// being broken already suppresses the type check (the same cascade
+    /// [`check_input_spec`]'s own doc describes).
+    #[test]
+    fn a_secret_boundary_input_gives_exactly_one_secret_workflow_input_error() {
+        let mut workflow = Workflow::new(workflow_name("w")).node(
+            node_name("secret"),
+            Node::new(tool_name("doppler.secret.get"))
+                .port(
+                    port("config"),
+                    Binding::Literal("example-org/prd".to_string()),
+                )
+                .port(port("name"), Binding::Literal("EXAMPLE_SECRET".to_string())),
+        );
+        workflow.boundaries = vec![boundary(
+            node_name("child"),
+            input_name("token"),
+            InputSpec::new(ty("DopplerSecretValue")),
+            Some(Binding::Step {
+                node: node_name("secret"),
+                port: port("value"),
+            }),
+        )];
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::SecretWorkflowInput {
+                input: input_name("child/token"),
+                ty: ty("DopplerSecretValue"),
+            }]
+        );
+    }
+
+    /// Acceptance 5: an unbound (fixed) boundary is never re-checked by
+    /// the boundary pass -- it is already a fixed input of the flat
+    /// `workflow.inputs`, under this exact combined name, so
+    /// [`check_workflow_inputs`] already covers it there. A boundary
+    /// whose `spec` is itself broken (here, a secret type) but whose
+    /// `binding` is `None` must therefore give exactly one error, not
+    /// two.
+    #[test]
+    fn an_unbound_boundary_is_not_double_checked_against_its_already_fixed_input() {
+        let mut workflow = Workflow::new(workflow_name("w")).input(
+            input_name("child/token"),
+            InputSpec::new(ty("DopplerSecretValue")),
+        );
+        workflow.boundaries = vec![boundary(
+            node_name("child"),
+            input_name("token"),
+            InputSpec::new(ty("DopplerSecretValue")),
+            None,
+        )];
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::SecretWorkflowInput {
+                input: input_name("child/token"),
+                ty: ty("DopplerSecretValue"),
+            }]
+        );
+    }
+
+    /// Acceptance 5: a secret child output bound to a parent port that
+    /// does not accept secrets gives the existing
+    /// `SecretToNonSecretSink`, on the flat edge, exactly as it would for
+    /// two nodes authored directly in the root -- composition changes
+    /// nothing about this rule (decision (d5), "outwards... the existing
+    /// sink check decides that on the flat edge").
+    #[test]
+    fn a_secret_child_output_into_a_non_secret_port_gives_the_existing_taint_error() {
+        let workflow = Workflow::new(workflow_name("w"))
+            .node(
+                node_name("child/secret"),
+                Node::new(tool_name("doppler.secret.get"))
+                    .port(
+                        port("config"),
+                        Binding::Literal("example-org/prd".to_string()),
+                    )
+                    .port(port("name"), Binding::Literal("EXAMPLE_SECRET".to_string())),
+            )
+            .node(
+                node_name("render"),
+                Node::new(tool_name("template.render"))
+                    .port(port("template"), Binding::Literal("tpl".to_string()))
+                    .port(
+                        port("value"),
+                        Binding::Step {
+                            node: node_name("child/secret"),
+                            port: port("value"),
+                        },
+                    ),
+            );
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::SecretToNonSecretSink {
+                from: (node_name("child/secret"), port("value")),
+                to: port_site("render", "value"),
+            }]
+        );
+    }
+
+    /// Acceptance 5's last case: a secret child output bound to a
+    /// secret-accepting parent port checks clean -- composition changes
+    /// nothing here either.
+    #[test]
+    fn a_secret_child_output_into_a_secret_accepting_port_checks_clean() {
+        let workflow = Workflow::new(workflow_name("w"))
+            .node(
+                node_name("child/secret"),
+                Node::new(tool_name("doppler.secret.get"))
+                    .port(
+                        port("config"),
+                        Binding::Literal("example-org/prd".to_string()),
+                    )
+                    .port(port("name"), Binding::Literal("EXAMPLE_SECRET".to_string())),
+            )
+            .node(
+                node_name("secret_out"),
+                Node::new(tool_name("github.actions_secret.ensure"))
+                    .port(
+                        port("repo"),
+                        Binding::Literal("example-org/example-repo".to_string()),
+                    )
+                    .port(port("name"), Binding::Literal("EXAMPLE_SECRET".to_string()))
+                    .port(
+                        port("value"),
+                        Binding::Step {
+                            node: node_name("child/secret"),
+                            port: port("value"),
+                        },
+                    ),
+            );
+        let catalog = test_catalog();
+        check(&workflow, &catalog).expect("a secret flowing into a secret-accepting port is clean");
     }
 
     #[test]
@@ -3430,6 +3895,12 @@ mod tests {
             CheckError::PathInAuthoredName {
                 name: "a/b".to_string(),
             },
+            CheckError::UsesInputTypeMismatch {
+                node: node_name("n"),
+                input: input_name("i"),
+                expected: ty("DopplerProject"),
+                found: ty("GitHubRepo"),
+            },
         ]
     }
 
@@ -3479,6 +3950,7 @@ mod tests {
         KeyedOnUses,
         UsesOutputCycle,
         PathInAuthoredName,
+        UsesInputTypeMismatch,
     );
 
     #[test]

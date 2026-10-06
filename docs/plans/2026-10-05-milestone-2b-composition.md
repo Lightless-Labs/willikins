@@ -18,6 +18,30 @@ has a field literally named `message` (it would collide with `crate::Reported`'s
 wraps the error). `message` was never free to reuse here; the content and the variant name are otherwise exactly as
 specified.
 
+**Addendum:** 2026-10-06 (task C1) — three readings and one narrowing, recorded since the SHARED VALUES line
+"Plus the existing signature variants, reported with the node path" does not spell any of them out. (1) "Reported
+with the node path" means exactly: `SecretWorkflowInput`, `UnregisteredInputType`, `DisallowedInputType`,
+`AcknowledgementDefault`, and `DefaultTypeMismatch` need no new field at all, because each already carries an
+`input: InputName`, and `InputName` already accepts the `/`-separated form (decision (d3)); `check` simply passes
+`<uses step>/<child input>` (`crate::compose::prefixed_input`, widened to `pub(crate)` for this) as that field
+where it would otherwise pass a root input's own authored name. (2) This rerun covers only a *bound* boundary
+(`Boundary::binding.is_some()`): an unbound one is already a fixed input of the flat `workflow.inputs` under this
+same combined name (decision (d6)), and `check_workflow_inputs` already walks every one of those — rerunning the
+same five rules over its `Boundary` entry too would report the identical declaration twice. (3) `check_input_spec`
+(the five rules, extracted from `check_workflow_inputs` so both callers share one body) returns whether it pushed
+an error, and `Resolver::check_boundaries` skips the exact-type check for that boundary when it did — the same
+cascade-suppression the module docs already describe for the default check, now applied across the five rules as
+a group rather than only within one of them. **Narrowing:** `check_boundaries` does not type-check a `Binding::List`
+boundary binding at all (recorded in check.rs's own "Known gaps"): every list element is copied unchanged by
+substitution and so reaches a real node port downstream with a real expected type, unless the child never
+references that input anywhere, a pass-through case no acceptance test here exercises. Also: the
+`AppleBundleIdentifier => TemplateValue` conversion-blocked case (acceptance 5) is a hand-built `check.rs` unit
+test (`a_boundary_binding_that_only_converts_to_the_declared_type_still_mismatches`, with a trivial
+`fake.identifier.get` added to `check.rs`'s own `test_catalog`), not a `workflows/fixtures/composition/` DSL
+fixture: every real tool that outputs `AppleBundleIdentifier` in `willikins-providers-fake` (`appstore.app.get` and
+siblings) requires a full App Store Connect credential chain (`issuer_id`/`key_id`/`key`), which would make the
+fixture about credential resolution rather than the boundary rule it exists to pin.
+
 ## Goal
 
 1. **Part P (the document).** A step may say `uses: <workflow-name>` instead of `tool: <tool-name>`. It binds the

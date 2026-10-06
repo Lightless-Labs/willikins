@@ -1,0 +1,9 @@
+# Child of uses-disallowed-input-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, milestone 3g
+# decision (e), and acceptance 5). Declares `template` as
+# `TemplateSource` -- a privileged, trusted-ref document literal, never a
+# workflow input, caller-bound or not.
+name: uses-disallowed-input-child
+inputs:
+  template: { type: TemplateSource }
+steps: {}

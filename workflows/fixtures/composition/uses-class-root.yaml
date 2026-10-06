@@ -1,0 +1,23 @@
+# Milestone 2b, task C1, decision (d11) and acceptance 6
+# (docs/plans/2026-10-05-milestone-2b-composition.md): a root of only
+# pure nodes using a child with one `Irreversible` node has class
+# `Irreversible` and requires approval -- `Checked.class` is the maximum
+# over the flat graph's non-pure nodes, with no extra code: a composite
+# has no class of its own. Pinned by
+# `a_root_of_only_pure_nodes_using_an_irreversible_child_has_class_irreversible`
+# (crates/willikins-dsl/tests/it/composition.rs), together with its
+# child `uses-class-child.yaml`.
+name: uses-class-root
+inputs:
+  org: { type: GitHubOrg }
+  slug: { type: ProjectSlug }
+steps:
+  names:
+    tool: naming.v1
+    with:
+      org: ${{ inputs.org }}
+      slug: ${{ inputs.slug }}
+  child:
+    uses: uses-class-child
+    with:
+      key: ${{ inputs.slug }}

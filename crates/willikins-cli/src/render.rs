@@ -385,6 +385,12 @@ fn check_error_detail(error: &CheckError) -> String {
                 single_line(name)
             )
         }
+        CheckError::UsesInputTypeMismatch {
+            node,
+            input,
+            expected,
+            found,
+        } => format!("{node}/{input}: expected {expected}, found `{found}`"),
     }
 }
 

@@ -1,0 +1,12 @@
+# Child of uses-class-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, decision (d11) and
+# acceptance 6). One `Irreversible` node, the unit this fixture pair
+# proves the class carries up through.
+name: uses-class-child
+inputs:
+  key: { type: ProjectSlug }
+steps:
+  boom:
+    tool: fake.irreversible.ensure
+    with:
+      key: ${{ inputs.key }}

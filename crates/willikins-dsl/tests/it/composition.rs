@@ -8,7 +8,8 @@
 use std::path::Path;
 
 use willikins_core::{
-    CheckError, InputName, NodeName, OutputName, PortName, ResolveFailure, Site, Workflow, link,
+    CheckError, Checked, InputName, NodeName, OutputName, PortName, ResolveFailure, Site, TypeName,
+    TypeRef, Workflow, check, link,
 };
 use willikins_dsl::{DocumentErrorKind, load_document};
 use willikins_types::{DomainType, WorkflowName};
@@ -40,6 +41,10 @@ fn wf_name(name: &str) -> WorkflowName {
     WorkflowName::parse(name).unwrap()
 }
 
+fn ty(name: &str) -> TypeRef {
+    TypeRef::scalar(TypeName::parse(name).unwrap())
+}
+
 /// `link`'s `resolve` callback, for a root fixture whose children sit
 /// beside it in `workflows/fixtures/composition/`: `<name>.yaml` loaded
 /// with [`load_document`], [`ResolveFailure::NotFound`] when no such
@@ -64,6 +69,20 @@ fn link_fixture(fixture: &str) -> Vec<CheckError> {
     let workflow = load_document(Path::new(&fixture_path(fixture)))
         .unwrap_or_else(|err| panic!("{fixture}: expected to load, got {err:?}"));
     link(&workflow, &mut directory_resolver()).unwrap_err()
+}
+
+/// Load `fixture` (a root), link it through [`directory_resolver`] (must
+/// succeed -- these fixtures are for `check`'s own boundary errors, task
+/// C1, never the linker's), then `check` the flat graph against
+/// `willikins_providers_fake`'s real catalog, exactly as `acceptance.rs`
+/// does for a root-level fixture.
+fn check_fixture(fixture: &str) -> Result<Checked, Vec<CheckError>> {
+    let workflow = load_document(Path::new(&fixture_path(fixture)))
+        .unwrap_or_else(|err| panic!("{fixture}: expected to load, got {err:?}"));
+    let linked = link(&workflow, &mut directory_resolver())
+        .unwrap_or_else(|errs| panic!("{fixture}: expected to link, got {errs:?}"));
+    let (_state, catalog) = willikins_providers_fake::empty();
+    check(&linked.workflow, &catalog)
 }
 
 /// Load `fixture` and return the `(path, message)` of the
@@ -363,4 +382,81 @@ fn a_keyed_reference_from_inside_another_uses_steps_with_is_sited_there() {
             node: node("b"),
         }]
     );
+}
+
+// ---------------------------------------------------------------------
+// Task C1 (`check` at the boundary), acceptance 5 and 6.
+// ---------------------------------------------------------------------
+
+/// `workflows/fixtures/composition/uses-input-type-mismatch-root.yaml`'s
+/// header (with its child `uses-input-type-mismatch-child.yaml`).
+#[test]
+fn a_github_repo_output_bound_to_a_doppler_project_input_gives_uses_input_type_mismatch() {
+    let errors = check_fixture("uses-input-type-mismatch-root.yaml").expect_err("must fail check");
+    assert_eq!(
+        errors,
+        vec![CheckError::UsesInputTypeMismatch {
+            node: node("child"),
+            input: input("project"),
+            expected: ty("DopplerProject"),
+            found: ty("GitHubRepo"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/uses-secret-input.yaml`'s header
+/// (with its child `uses-secret-input-child.yaml`): a secret-typed
+/// child input gives `SecretWorkflowInput`, under the combined
+/// `<uses step>/<child input>` name, and `check` fails -- it never
+/// reaches `plan`.
+#[test]
+fn a_secret_typed_child_input_gives_secret_workflow_input_and_never_reaches_plan() {
+    let errors = check_fixture("uses-secret-input.yaml").expect_err("must fail check");
+    assert_eq!(
+        errors,
+        vec![CheckError::SecretWorkflowInput {
+            input: input("child/token"),
+            ty: ty("DopplerSecretValue"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/uses-disallowed-input-root.yaml`'s
+/// header (with its child `uses-disallowed-input-child.yaml`).
+#[test]
+fn a_child_declaring_template_source_gives_disallowed_input_type() {
+    let errors = check_fixture("uses-disallowed-input-root.yaml").expect_err("must fail check");
+    assert_eq!(
+        errors,
+        vec![CheckError::DisallowedInputType {
+            input: input("child/template"),
+            ty: ty("TemplateSource"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/uses-acknowledgement-default-root.yaml`'s
+/// header (with its child `uses-acknowledgement-default-child.yaml`).
+#[test]
+fn a_child_declaring_a_defaulted_acknowledgement_gives_acknowledgement_default() {
+    let errors =
+        check_fixture("uses-acknowledgement-default-root.yaml").expect_err("must fail check");
+    assert_eq!(
+        errors,
+        vec![CheckError::AcknowledgementDefault {
+            input: input("child/ack"),
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/uses-class-root.yaml`'s header (with
+/// its child `uses-class-child.yaml`): a root of only pure nodes using a
+/// child with one `Irreversible` node has class `Irreversible` and
+/// requires approval -- `Checked.class` is the maximum over the flat
+/// graph's non-pure nodes, with no extra code for composition.
+#[test]
+fn a_root_of_only_pure_nodes_using_an_irreversible_child_has_class_irreversible() {
+    let checked = check_fixture("uses-class-root.yaml").expect("must check cleanly");
+    assert_eq!(checked.class, willikins_core::Class::Irreversible);
+    assert!(checked.class.requires_approval());
 }

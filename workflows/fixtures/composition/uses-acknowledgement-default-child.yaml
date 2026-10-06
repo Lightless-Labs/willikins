@@ -1,0 +1,9 @@
+# Child of uses-acknowledgement-default-root.yaml; see that file's
+# header (docs/plans/2026-10-05-milestone-2b-composition.md, milestone
+# 3e decision (j) point 6, and acceptance 5). `ack` is declared
+# `OperatorAcknowledgement` with a default -- never allowed, since a
+# default would let a gate pass without anyone acting.
+name: uses-acknowledgement-default-child
+inputs:
+  ack: { type: OperatorAcknowledgement, default: done }
+steps: {}

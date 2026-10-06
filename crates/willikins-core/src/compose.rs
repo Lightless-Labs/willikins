@@ -734,8 +734,17 @@ fn prefixed_node(step: &NodeName, name: &NodeName) -> NodeName {
     })
 }
 
-/// `<step>/<name>`, as an [`InputName`] -- see [`prefixed_node`].
-fn prefixed_input(step: &NodeName, name: &InputName) -> InputName {
+/// `<step>/<name>`, as an [`InputName`] -- always valid, for the same
+/// reason [`prefixed_node`] is: concatenating two already-valid
+/// `/`-separated paths with one more `/` between them still matches the
+/// shared grammar, whether `step` is itself a single authored segment or
+/// (milestone 2b task C1, [`crate::check::Resolver::check_boundaries`])
+/// already a bubbled-up path such as `mid/leafstep`. `pub(crate)`: `check`
+/// reports a bound boundary's signature errors and
+/// [`crate::check::CheckError::UsesInputTypeMismatch`] under this same
+/// combined name (decision (d4), "reported with the node path"), rather
+/// than duplicating this one-line format.
+pub(crate) fn prefixed_input(step: &NodeName, name: &InputName) -> InputName {
     InputName::parse(&format!("{step}/{name}")).unwrap_or_else(|err| {
         unreachable!("an InputName prefixed with a valid step name is always valid: {err}")
     })

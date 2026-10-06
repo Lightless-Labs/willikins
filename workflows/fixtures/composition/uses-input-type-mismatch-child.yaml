@@ -1,0 +1,9 @@
+# Child of uses-input-type-mismatch-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, decision (d4) and
+# acceptance 5). Declares `project` as `DopplerProject` and never
+# references it anywhere -- the point of this fixture is the boundary
+# check itself, not anything downstream.
+name: uses-input-type-mismatch-child
+inputs:
+  project: { type: DopplerProject }
+steps: {}
