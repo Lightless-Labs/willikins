@@ -38,8 +38,8 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use willikins_core::Reported;
 use willikins_core::describe::InputArg;
+use willikins_core::{Linked, Reported};
 use willikins_journal::{
     Clock, FileJournal, MemoryJournal, PlanId, PrincipalId, Reason, RunId, RunRecord, RunState,
     SystemClock,
@@ -583,6 +583,103 @@ pub fn cmd_apply(args: &ApplyArgs, json: bool, disclosure: Disclosure) -> ExitCo
     }
 }
 
+/// Copy every document named in `used` (milestone 2b, decision (d8):
+/// `apply <file>`'s linked closure, in first-resolution order) from
+/// `source_dir` -- `<file>`'s own parent directory, the same one
+/// [`crate::link_workflow`] just resolved each of them in -- into
+/// `temp_dir`, each as `<name>.yaml`. A byte-identical file copy, never a
+/// re-serialization of the parsed [`willikins_core::Workflow`], the same
+/// fidelity `cmd_apply_file`'s own root copy keeps.
+///
+/// `Butler::start`'s own scan of `temp_dir` will re-link every document
+/// it finds there (exactly as it does for a real trusted directory), so
+/// every used document must be sitting right beside the root by the time
+/// that scan runs -- otherwise it refuses, naming the unresolved `uses:`
+/// child, even though linking just succeeded moments ago against the
+/// original `source_dir`.
+///
+/// # Errors
+///
+/// `Err(ExitCode::from(2))`, already printed through [`fail_config`], on
+/// any I/O failure -- including a used document vanishing between
+/// `link_workflow` resolving it and this copying it, which should not
+/// happen outside a hostile or racing filesystem, but is reported rather
+/// than panicked on.
+fn copy_used_closure(
+    source_dir: &Path,
+    used: &[WorkflowName],
+    temp_dir: &Path,
+    json: bool,
+    disclosure: Disclosure,
+) -> Result<(), ExitCode> {
+    for name in used {
+        let Ok(source) = crate::sibling_file(source_dir, name) else {
+            return Err(fail_config(
+                &CliError::Io {
+                    error: format!("{name}: used document disappeared between linking and copying"),
+                },
+                json,
+                disclosure,
+            ));
+        };
+        let dest = temp_dir.join(format!("{name}.yaml"));
+        if let Err(error) = std::fs::copy(&source, &dest) {
+            return Err(fail_config(
+                &CliError::Io {
+                    error: format!(
+                        "{}: failed to copy into a temporary directory: {error}",
+                        source.display()
+                    ),
+                },
+                json,
+                disclosure,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Build `apply <file>`'s private temporary directory: the root (copied
+/// as `<workflow_name>.yaml`, from `file`'s own original bytes, exactly
+/// as before milestone 2b) plus every document `linked.used` names (via
+/// [`copy_used_closure`]), so `Butler::start`'s scan of this directory
+/// links the same way `file`'s own parent directory just did a moment
+/// ago (decision (d8)).
+///
+/// Split out of [`cmd_apply_file`] only to keep that function under
+/// clippy's line limit; carries no behaviour of its own beyond the two
+/// steps [`copy_used_closure`]'s doc and this one already describe.
+fn stage_apply_closure(
+    file: &str,
+    workflow_name: &WorkflowName,
+    linked: &Linked,
+    json: bool,
+    disclosure: Disclosure,
+) -> Result<tempfile::TempDir, ExitCode> {
+    let temp_dir = tempfile::tempdir().map_err(|error| {
+        fail_config(
+            &CliError::Io {
+                error: format!("failed to create a temporary directory: {error}"),
+            },
+            json,
+            disclosure,
+        )
+    })?;
+    let dest = temp_dir.path().join(format!("{workflow_name}.yaml"));
+    if let Err(error) = std::fs::copy(file, &dest) {
+        return Err(fail_config(
+            &CliError::Io {
+                error: format!("{file}: failed to copy into a temporary directory: {error}"),
+            },
+            json,
+            disclosure,
+        ));
+    }
+    let source_dir = Path::new(file).parent().unwrap_or_else(|| Path::new("."));
+    copy_used_closure(source_dir, &linked.used, temp_dir.path(), json, disclosure)?;
+    Ok(temp_dir)
+}
+
 fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool, disclosure: Disclosure) -> ExitCode {
     if args.workflows_dir.is_some() {
         return usage_error("apply: --workflows-dir only applies with --plan-id");
@@ -602,10 +699,19 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool, disclosure: Disclosu
         Ok(workflow) => workflow,
         Err(code) => return code,
     };
+    // Milestone 2b, decision (d8): link `file`'s siblings in, in its own
+    // parent directory, before a `--live` catalog is scoped to this
+    // document -- verify item 7 says the credential scan reads
+    // `document.nodes`, so a root whose only Buildkite node lives inside
+    // a used document must still require `WILLIKINS_BUILDKITE_TOKEN`.
+    let linked = match crate::link_workflow(file, &workflow, json, disclosure) {
+        Ok(linked) => linked,
+        Err(code) => return code,
+    };
     let (catalog, fake_state) = match build_catalog_for_document(
         args.live,
         args.fake_state.as_deref(),
-        &workflow,
+        &linked.workflow,
         json,
         disclosure,
     ) {
@@ -616,7 +722,7 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool, disclosure: Disclosu
         return usage_error("apply: --fake-state-out needs the fake providers (drop --live)");
     }
 
-    let checked = match crate::check_workflow(&workflow, &catalog, json, disclosure) {
+    let checked = match crate::check_workflow(&linked.workflow, &catalog, json, disclosure) {
         Ok(checked) => checked,
         Err(code) => return code,
     };
@@ -626,28 +732,13 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool, disclosure: Disclosu
     };
     let workflow_name = checked.workflow.name.clone();
 
-    let temp_dir = match tempfile::tempdir() {
+    // Milestone 2b, decision (d8): the root, plus the whole linked
+    // closure `linked.used` names, each copied in -- see
+    // `stage_apply_closure`'s own doc.
+    let temp_dir = match stage_apply_closure(file, &workflow_name, &linked, json, disclosure) {
         Ok(dir) => dir,
-        Err(error) => {
-            return fail_config(
-                &CliError::Io {
-                    error: format!("failed to create a temporary directory: {error}"),
-                },
-                json,
-                disclosure,
-            );
-        }
+        Err(code) => return code,
     };
-    let dest = temp_dir.path().join(format!("{workflow_name}.yaml"));
-    if let Err(error) = std::fs::copy(file, &dest) {
-        return fail_config(
-            &CliError::Io {
-                error: format!("{file}: failed to copy into a temporary directory: {error}"),
-            },
-            json,
-            disclosure,
-        );
-    }
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let journal = match open_journal(

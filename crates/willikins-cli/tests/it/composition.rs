@@ -3,10 +3,6 @@
 //! `uses:` step's sibling, in `<file>`'s own parent directory, before
 //! `describe`/`plan`/`apply <file>` ever reaches `check` (decision (d8)).
 //!
-//! This commit covers `describe` and `plan`'s own linking (`main.rs`);
-//! `apply <file>`'s closure copy (`commands.rs`) is this task's second
-//! commit and gets its own test there.
-//!
 //! `workflows/fixtures/composition/new-rust-service-in-org.yaml` and its
 //! sibling `example-org.yaml` are this test's own fixtures (headers name
 //! this file as their acceptance test): the organisation document holds
@@ -70,6 +66,18 @@ fn stderr(output: &Output) -> String {
 
 fn exit_code(output: &Output) -> i32 {
     output.status.code().expect("process was not signalled")
+}
+
+/// `stdout` split into top-level JSON documents, mirroring
+/// `tests/common/mod.rs`'s own `json_documents` (kept local: this file
+/// does not otherwise need that module's fixture-specific constants).
+fn json_documents(text: &str) -> Vec<serde_json::Value> {
+    let mut docs = Vec::new();
+    for next in serde_json::Deserializer::from_str(text).into_iter::<serde_json::Value>() {
+        let Ok(doc) = next else { break };
+        docs.push(doc);
+    }
+    docs
 }
 
 /// A Doppler service-account token, correctly shaped
@@ -164,6 +172,52 @@ fn plan_links_the_sibling_and_shows_the_flattened_child_node() {
         "the linked child node is missing from the plan: {json}"
     );
     assert_eq!(json["outputs"]["pipeline_url"]["state"], "known", "{json}");
+}
+
+/// Acceptance 11, second clause: `apply <file> --fake-state` succeeds --
+/// which is only possible because `apply` copied the whole linked
+/// closure (the root *and* `example-org.yaml`) into its private
+/// temporary directory, so `Butler::start`'s own scan-and-link of that
+/// directory finds the child right beside the root and succeeds exactly
+/// as the real trusted directory would. Had only the root been copied
+/// (the pre-2b behaviour), `Butler::start` would refuse at startup,
+/// naming the unresolved `uses:` child.
+#[test]
+fn apply_with_fake_state_succeeds_by_copying_the_linked_closure() {
+    let output = run(
+        &[
+            "--json",
+            "apply",
+            root().to_str().unwrap(),
+            "--input",
+            "slug=k1-apply-test",
+            "--fake-state",
+            state_fixture("buildkite-cluster.json").to_str().unwrap(),
+            "--approve",
+        ],
+        &[],
+    );
+    assert_eq!(
+        exit_code(&output),
+        0,
+        "stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let docs = json_documents(&stdout(&output));
+    let run_record = docs
+        .iter()
+        .rev()
+        .find(|doc| doc.get("run_id").is_some())
+        .unwrap_or_else(|| panic!("no run record in: {}", stdout(&output)));
+    assert_eq!(run_record["state"], "succeeded", "{run_record}");
+    let nodes = run_record["nodes"].as_array().expect("a nodes array");
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node["node"] == "org/buildkite_cluster"),
+        "the linked child node is missing from the run, so the closure copy did not take effect: {run_record}"
+    );
 }
 
 /// Acceptance 11, third clause: a composite whose only `uses:` child
