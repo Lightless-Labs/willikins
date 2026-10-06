@@ -2240,6 +2240,68 @@ expression: snapshot
                 "node"
               ],
               "type": "object"
+            },
+            {
+              "description": "The linker (`willikins_core::compose::link`) found a `uses:` step\nwhose own target workflow is already on the depth-first stack of\nworkflows being resolved -- a self-use (one entry) or a cycle\nacross two or more documents. `chain` is the cycle itself, from\nthe first occurrence of the repeated name to the repeat (milestone\n2b decision (d9)), so `[a, b, a]` reads as \"`a` uses `b`, which\nuses `a` again\".\n\nNot one of the plan's variants; milestone 2b, part L, task L2.",
+              "properties": {
+                "chain": {
+                  "description": "The cycle, from its first occurrence to its repeat.",
+                  "items": {
+                    "$ref": "#/$defs/WorkflowName"
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "const": "UsesCycle",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "chain"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `uses:` step was found in a document already at\n[`crate::compose::MAX_USES_DEPTH`] (root is depth 0): resolving it\nwould nest a document one level deeper than the linker allows.\n`chain` is every workflow name from the root down to (and\nincluding) the document holding the refused step, so its length\nis always [`crate::compose::MAX_USES_DEPTH`] `+ 1`.\n\nNot one of the plan's variants; milestone 2b, part L, task L2,\ndecision (d9).",
+              "properties": {
+                "chain": {
+                  "description": "The nesting chain, from the root to the document that held\nthe refused `uses:` step.",
+                  "items": {
+                    "$ref": "#/$defs/WorkflowName"
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "const": "UsesTooDeep",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "chain"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Linking produced more than [`crate::compose::MAX_LINKED_NODES`]\ntool nodes (counted before any `for_each` expansion). Raised as\nsoon as the running total crosses the bound -- while the document\nthat pushed it over is being entered, before any of *its own*\n`uses:` steps are resolved -- so an exponential diamond is refused\nlong before it would be fully materialised; see the precedent in\n`docs/research/2026-09-12-e2e-adversarial-pass-2.md`.\n\nNot one of the plan's variants; milestone 2b, part L, task L2,\ndecision (d9).",
+              "properties": {
+                "kind": {
+                  "const": "UsesTooLarge",
+                  "type": "string"
+                },
+                "nodes": {
+                  "description": "The running node count at the moment the bound was crossed\n(always greater than [`crate::compose::MAX_LINKED_NODES`]).",
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "nodes"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -2444,6 +2506,15 @@ expression: snapshot
         },
         "TypeRef": {
           "pattern": "^(?:[A-Z][A-Za-z0-9]*|list<[A-Z][A-Za-z0-9]*>)$",
+          "type": "string"
+        },
+        "WorkflowName": {
+          "description": "A workflow's name: lowercase, hyphen-separated, at most 64 characters.",
+          "examples": [
+            "new-rust-service"
+          ],
+          "maxLength": 64,
+          "pattern": "^(?:[a-z][a-z0-9]*(-[a-z0-9]+)*)$",
           "type": "string"
         }
       },

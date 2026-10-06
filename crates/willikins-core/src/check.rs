@@ -85,7 +85,7 @@ use crate::value::{
     Conversion, ConversionMismatch, PortType, TypeRef, TypeRegistry, Value, reported_type_name_or,
 };
 use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
-use willikins_types::ParseError;
+use willikins_types::{ParseError, WorkflowName};
 
 /// A workflow that has passed [`check`]: its topological execution order,
 /// its approval class, any non-fatal warnings, and the resolved type of
@@ -676,6 +676,48 @@ pub enum CheckError {
         /// The `uses:` step that was never linked.
         node: NodeName,
     },
+    /// The linker (`willikins_core::compose::link`) found a `uses:` step
+    /// whose own target workflow is already on the depth-first stack of
+    /// workflows being resolved -- a self-use (one entry) or a cycle
+    /// across two or more documents. `chain` is the cycle itself, from
+    /// the first occurrence of the repeated name to the repeat (milestone
+    /// 2b decision (d9)), so `[a, b, a]` reads as "`a` uses `b`, which
+    /// uses `a` again".
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2.
+    UsesCycle {
+        /// The cycle, from its first occurrence to its repeat.
+        chain: Vec<WorkflowName>,
+    },
+    /// A `uses:` step was found in a document already at
+    /// [`crate::compose::MAX_USES_DEPTH`] (root is depth 0): resolving it
+    /// would nest a document one level deeper than the linker allows.
+    /// `chain` is every workflow name from the root down to (and
+    /// including) the document holding the refused step, so its length
+    /// is always [`crate::compose::MAX_USES_DEPTH`] `+ 1`.
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2,
+    /// decision (d9).
+    UsesTooDeep {
+        /// The nesting chain, from the root to the document that held
+        /// the refused `uses:` step.
+        chain: Vec<WorkflowName>,
+    },
+    /// Linking produced more than [`crate::compose::MAX_LINKED_NODES`]
+    /// tool nodes (counted before any `for_each` expansion). Raised as
+    /// soon as the running total crosses the bound -- while the document
+    /// that pushed it over is being entered, before any of *its own*
+    /// `uses:` steps are resolved -- so an exponential diamond is refused
+    /// long before it would be fully materialised; see the precedent in
+    /// `docs/research/2026-09-12-e2e-adversarial-pass-2.md`.
+    ///
+    /// Not one of the plan's variants; milestone 2b, part L, task L2,
+    /// decision (d9).
+    UsesTooLarge {
+        /// The running node count at the moment the bound was crossed
+        /// (always greater than [`crate::compose::MAX_LINKED_NODES`]).
+        nodes: usize,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -768,6 +810,28 @@ impl fmt::Display for CheckError {
                 f,
                 "node `{node}`: a `uses:` step reached check without being linked first"
             ),
+            Self::UsesCycle { chain } => {
+                let joined = chain
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" -> ");
+                write!(f, "uses cycle: {joined}")
+            }
+            Self::UsesTooDeep { chain } => {
+                let joined = chain
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" -> ");
+                write!(f, "uses nesting too deep: {joined}")
+            }
+            Self::UsesTooLarge { nodes } => {
+                write!(
+                    f,
+                    "linked graph has {nodes} nodes, more than the allowed maximum"
+                )
+            }
             Self::ListOnScalarPort { site, expected } => write!(
                 f,
                 "{site}: a list binding cannot be delivered to a port of type {expected}"
@@ -889,6 +953,9 @@ impl CheckError {
             Self::DisallowedInputType { .. } => "DisallowedInputType",
             Self::RepoFileLiteral { .. } => "RepoFileLiteral",
             Self::Unlinked { .. } => "Unlinked",
+            Self::UsesCycle { .. } => "UsesCycle",
+            Self::UsesTooDeep { .. } => "UsesTooDeep",
+            Self::UsesTooLarge { .. } => "UsesTooLarge",
         }
     }
 }
@@ -3139,6 +3206,13 @@ mod tests {
             CheckError::Unlinked {
                 node: node_name("n"),
             },
+            CheckError::UsesCycle {
+                chain: vec![workflow_name("a"), workflow_name("b"), workflow_name("a")],
+            },
+            CheckError::UsesTooDeep {
+                chain: vec![workflow_name("a"), workflow_name("b")],
+            },
+            CheckError::UsesTooLarge { nodes: 2049 },
         ]
     }
 
@@ -3176,6 +3250,9 @@ mod tests {
         DisallowedInputType,
         RepoFileLiteral,
         Unlinked,
+        UsesCycle,
+        UsesTooDeep,
+        UsesTooLarge,
     );
 
     #[test]

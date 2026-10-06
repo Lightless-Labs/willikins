@@ -12,39 +12,60 @@
 //! a used document's outputs resolves, at link time, to that output's own
 //! binding, rewritten into the flat namespace (decision (d7)).
 //!
-//! # Scope (task L1: "the linker, structure")
+//! # Scope (task L1: "the linker, structure"; task L2: "the linker,
+//! refusals")
 //!
-//! This module implements the *structure* of linking: flattening,
-//! substitution, fixed inputs, and output aliasing, each exercised only
-//! along a happy path (an in-memory resolver that always succeeds, a
-//! document whose boundaries are all legitimately bound or legitimately
-//! defaulted). It deliberately does **not** implement the linker's own
-//! refusals (milestone 2b task L2) or the boundary's type-checking rules
-//! (task C1): a site this module cannot yet handle correctly calls
-//! [`unimplemented!`] instead of fabricating a [`crate::check::CheckError`]
-//! variant that does not exist yet (adding one here would need a
-//! `render.rs` match arm in `willikins-cli`, outside this task's scope —
-//! see the plan's Gates section). Every such site is listed below so L2
-//! can find them:
+//! L1 implemented the *structure* of linking: flattening, substitution,
+//! fixed inputs, and output aliasing, each exercised only along a happy
+//! path. L2 adds the linker's own refusals, in two commits:
 //!
-//! - [`ResolveFailure`] returned by the caller's `resolve` closure
-//!   (`UnknownWorkflow` / `UsedDocument`).
-//! - A used document's required input left both unbound and undefaulted
-//!   (`UnboundUsesInput`).
-//! - A `uses:` step's `with:` naming an input the used document never
-//!   declared (`UnknownUsesInput`) — silently ignored rather than panicking,
-//!   since a document that reaches here has already gone through the DSL
-//!   (or, in a unit test, is assumed well-formed); L2 adds the refusal.
-//! - A reference to a used document's output it never declared
-//!   (`UnknownUsesOutput`).
-//! - A `Keyed` reference onto a `uses:` step (`KeyedOnUses`).
-//! - An alias cycle between two `uses:` steps' outputs (`UsesOutputCycle`):
-//!   [`ensure_local_subst`] recurses with no visiting set, so a genuine
-//!   cycle overflows the stack instead of being refused.
+//! - **Commit 1 (cycle, depth, and size bounds; decision (d9)).**
+//!   [`flatten`] now walks with a `stack` of workflow names (the
+//!   depth-first path from the root to the document currently being
+//!   entered), a `depth` counter (root is depth 0), and a shared
+//!   `node_count` (every linked tool node, counted once per occurrence —
+//!   a diamond's second occurrence counts again). A `uses:` step whose
+//!   target is already on `stack` is [`crate::check::CheckError::UsesCycle`];
+//!   one found in a document already at [`MAX_USES_DEPTH`] is
+//!   [`crate::check::CheckError::UsesTooDeep`]; crossing
+//!   [`MAX_LINKED_NODES`] is [`crate::check::CheckError::UsesTooLarge`],
+//!   raised the moment a document's own node count tips the running total
+//!   over the bound — *before* that document's own `uses:` steps (if any)
+//!   are resolved, so an exponential diamond is refused long before it
+//!   would be fully materialised (the precedent is the YAML
+//!   alias-amplification refusal,
+//!   `docs/research/2026-09-12-e2e-adversarial-pass-2.md`). Each of these
+//!   three is a first-error-wins short circuit: [`flatten`] returns as
+//!   soon as it finds one, with no further sibling `uses:` step resolved
+//!   and no accumulation of several errors at once (unlike
+//!   [`crate::check::check`], which deliberately walks every node).
+//! - **Commit 2 (the boundary and alias refusals, and
+//!   `PathInAuthoredName`)** is not implemented yet. The sites below still
+//!   call [`unimplemented!`] instead of returning a
+//!   [`crate::check::CheckError`] variant that does not exist until that
+//!   commit adds it:
+//!   - [`ResolveFailure`] returned by the caller's `resolve` closure
+//!     (`UnknownWorkflow` / `UsedDocument`).
+//!   - A used document's required input left both unbound and undefaulted
+//!     (`UnboundUsesInput`).
+//!   - A `uses:` step's `with:` naming an input the used document never
+//!     declared (`UnknownUsesInput`) — silently ignored rather than
+//!     panicking, since a document that reaches here has already gone
+//!     through the DSL (or, in a unit test, is assumed well-formed).
+//!   - A reference to a used document's output it never declared
+//!     (`UnknownUsesOutput`).
+//!   - A `Keyed` reference onto a `uses:` step (`KeyedOnUses`).
+//!   - An alias cycle between two `uses:` steps' outputs
+//!     (`UsesOutputCycle`): [`ensure_local_subst`] recurses with no
+//!     visiting set, so a genuine cycle overflows the stack instead of
+//!     being refused.
+//!   - A `/` in any name a workflow handed to the linker authored itself
+//!     (`PathInAuthoredName`) — never checked for yet.
 //!
 //! None of these are reachable from this module's own tests, which use
 //! only an always-succeeding in-memory resolver over well-formed
-//! documents.
+//! documents that never cycle, nest past [`MAX_USES_DEPTH`], or expand
+//! past [`MAX_LINKED_NODES`].
 
 use std::collections::HashMap;
 
@@ -53,6 +74,18 @@ use indexmap::IndexMap;
 use crate::check::CheckError;
 use crate::workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};
 use willikins_types::WorkflowName;
+
+/// The greatest nesting depth [`link`] will resolve: the root document is
+/// depth 0, and a `uses:` step found in a document already at this depth
+/// is refused with [`CheckError::UsesTooDeep`] rather than resolved — see
+/// the module docs' "Scope" section and milestone 2b decision (d9).
+pub const MAX_USES_DEPTH: usize = 8;
+
+/// The greatest number of tool nodes [`link`] will produce, counted
+/// before any `for_each` expansion. Crossing it is
+/// [`CheckError::UsesTooLarge`] — see the module docs' "Scope" section and
+/// milestone 2b decision (d9).
+pub const MAX_LINKED_NODES: usize = 2048;
 
 /// Why a `uses:` step's referenced workflow could not be resolved; the
 /// linker's `resolve` callback returns this instead of a `Workflow`
@@ -116,19 +149,20 @@ pub struct Linked {
 ///
 /// # Errors
 ///
-/// Structurally returns `Result` to match the shape `check` and the rest
-/// of the crate use, but this task (L1, "the linker, structure") never
-/// actually produces the `Err` case — see the module docs' "Scope"
-/// section for exactly which sites are deferred to task L2, which is
-/// where a resolve failure or a boundary refusal turns into a real
-/// [`CheckError`].
+/// A cycle, an excessive nesting depth, or an excessive linked node count
+/// (task L2 commit 1; see the module docs' "Scope" section) is returned as
+/// a single-element `Vec`, with no further `uses:` step resolved once
+/// found. Every other refusal listed in the module docs' "Scope" section
+/// (task L2 commit 2) is not implemented yet and panics instead.
 #[allow(clippy::missing_panics_doc)] // every panic site is the module docs' "Scope" list, by design
 pub fn link(
     root: &Workflow,
     resolve: &mut dyn FnMut(&WorkflowName) -> Result<Workflow, ResolveFailure>,
 ) -> Result<Linked, Vec<CheckError>> {
     let mut used = Vec::new();
-    let flat = flatten(root, resolve, &mut used);
+    let mut stack = vec![root.name.clone()];
+    let mut node_count = 0usize;
+    let flat = flatten(root, resolve, &mut used, &mut stack, 0, &mut node_count)?;
 
     let mut workflow = Workflow::new(root.name.clone());
     if let Some(description) = &root.description {
@@ -160,7 +194,27 @@ fn flatten(
     wf: &Workflow,
     resolve: &mut dyn FnMut(&WorkflowName) -> Result<Workflow, ResolveFailure>,
     used: &mut Vec<WorkflowName>,
-) -> Flat {
+    stack: &mut Vec<WorkflowName>,
+    depth: usize,
+    node_count: &mut usize,
+) -> Result<Flat, Vec<CheckError>> {
+    // Size bound (decision (d9)), checked pre-order, as `wf` itself is
+    // entered -- before any of `wf`'s own `uses:` steps are resolved. A
+    // diamond's second occurrence of the same child is a second `flatten`
+    // call (no memoization across siblings), so it adds to `node_count`
+    // again, which is exactly what "counted before for_each" means: each
+    // *occurrence* of a tool node in the linked graph counts once,
+    // regardless of how many for_each instances it later expands into.
+    // Raising this here, rather than after Phase 1 finishes resolving
+    // `wf`'s own children, is what keeps an exponential diamond from
+    // being materialised past the bound: the first document whose own
+    // node count tips the running total over `MAX_LINKED_NODES` is
+    // refused before *its* children are ever resolved.
+    *node_count += wf.nodes.len();
+    if *node_count > MAX_LINKED_NODES {
+        return Err(vec![CheckError::UsesTooLarge { nodes: *node_count }]);
+    }
+
     // Phase 1: resolve and recursively flatten every `uses:` step's own
     // child, independent of this level's own step order -- a sibling's
     // `with:` may reference another sibling's output regardless of which
@@ -170,16 +224,42 @@ fn flatten(
         if !used.iter().any(|w| w == &uses.workflow) {
             used.push(uses.workflow.clone());
         }
+
+        // Cycle bound (decision (d9)): a target already on the
+        // depth-first stack -- the path of workflow names from the root
+        // down to the document we are currently inside -- is a cycle
+        // (one entry is a self-use). Checked before depth, and before
+        // ever calling `resolve` again for the repeated name.
+        if let Some(i) = stack.iter().position(|w| w == &uses.workflow) {
+            let mut chain = stack[i..].to_vec();
+            chain.push(uses.workflow.clone());
+            return Err(vec![CheckError::UsesCycle { chain }]);
+        }
+
+        // Depth bound (decision (d9)): a `uses:` step found in a document
+        // already at `MAX_USES_DEPTH` would nest one level past it.
+        // `chain` is every name from the root to this document
+        // (`stack`), which is why it is cloned before the step that
+        // would have extended it.
+        if depth >= MAX_USES_DEPTH {
+            return Err(vec![CheckError::UsesTooDeep {
+                chain: stack.clone(),
+            }]);
+        }
+
         let child_wf = match resolve(&uses.workflow) {
             Ok(child_wf) => child_wf,
             Err(_failure) => unimplemented!(
-                "milestone 2b task L2: a uses: step's workflow failed to resolve \
+                "milestone 2b task L2 commit 2: a uses: step's workflow failed to resolve \
                  (CheckError::UnknownWorkflow / UsedDocument); step `{step}`, workflow \
                  `{}`",
                 uses.workflow
             ),
         };
-        children.insert(step.clone(), flatten(&child_wf, resolve, used));
+        stack.push(uses.workflow.clone());
+        let child_flat = flatten(&child_wf, resolve, used, stack, depth + 1, node_count)?;
+        stack.pop();
+        children.insert(step.clone(), child_flat);
     }
 
     // Phase 2: every step's own substitution map for its child's authored
@@ -315,12 +395,12 @@ fn flatten(
         );
     }
 
-    Flat {
+    Ok(Flat {
         inputs,
         nodes,
         outputs,
         boundaries,
-    }
+    })
 }
 
 /// Rewrite a binding authored at `wf`'s own level (one of `wf`'s own
@@ -1132,6 +1212,240 @@ mod tests {
                 node: node("footer"),
                 port: port("value"),
             }
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Task L2 commit 1: cycle, depth, and size bounds (decision (d9)).
+    // -----------------------------------------------------------------
+
+    /// `loop`: one `uses:` step, `again`, naming itself.
+    fn self_using() -> Workflow {
+        Workflow::new(wf_name("loop")).uses(
+            node("again"),
+            Uses {
+                workflow: wf_name("loop"),
+                with: IndexMap::new(),
+                position: 0,
+            },
+        )
+    }
+
+    /// Acceptance 4: a self-use is `CheckError::UsesCycle` with a
+    /// two-entry chain (the name, then its repeat) -- and `resolve` is
+    /// never called for it, because the cycle is caught against the
+    /// stack before any further resolution is attempted.
+    #[test]
+    fn a_self_use_is_refused_as_a_one_entry_cycle() {
+        let err = link(&self_using(), &mut |name| {
+            panic!("resolve must not be called for a self-use, got `{name}`")
+        })
+        .unwrap_err();
+        assert_eq!(
+            err,
+            vec![CheckError::UsesCycle {
+                chain: vec![wf_name("loop"), wf_name("loop")],
+            }]
+        );
+    }
+
+    /// `a` uses `b`; `b` uses `a`.
+    fn cyclic_a() -> Workflow {
+        Workflow::new(wf_name("a")).uses(
+            node("to_b"),
+            Uses {
+                workflow: wf_name("b"),
+                with: IndexMap::new(),
+                position: 0,
+            },
+        )
+    }
+
+    fn cyclic_b() -> Workflow {
+        Workflow::new(wf_name("b")).uses(
+            node("to_a"),
+            Uses {
+                workflow: wf_name("a"),
+                with: IndexMap::new(),
+                position: 0,
+            },
+        )
+    }
+
+    /// Acceptance 4: a two-document cycle is `UsesCycle` with the chain
+    /// `[a, b, a]`, and `resolve` is called exactly once (for `b`) --
+    /// never again for `a`, since that is the name already on the stack
+    /// that completes the cycle.
+    #[test]
+    fn a_two_document_cycle_is_refused_with_its_chain() {
+        let mut calls = 0;
+        let err = link(&cyclic_a(), &mut |name| {
+            calls += 1;
+            match name.as_str() {
+                "b" => Ok(cyclic_b()),
+                other => panic!("resolver asked for an unexpected workflow: {other}"),
+            }
+        })
+        .unwrap_err();
+        assert_eq!(
+            err,
+            vec![CheckError::UsesCycle {
+                chain: vec![wf_name("a"), wf_name("b"), wf_name("a")],
+            }]
+        );
+        assert_eq!(
+            calls, 1,
+            "resolve must not be called again for the name that completes the cycle"
+        );
+    }
+
+    /// `root` at index 0, `w1` at index 1, ... `w<i>` at index `i`.
+    fn chain_name(i: usize) -> String {
+        if i == 0 {
+            "root".to_string()
+        } else {
+            format!("w{i}")
+        }
+    }
+
+    /// A linear chain of `len` workflows, `root -> w1 -> w2 -> ... ->
+    /// w<len-1>`: the last one has no `uses:` step when `leaf` is `true`,
+    /// or one more (naming a workflow absent from the returned map, which
+    /// must therefore never be resolved) when it is `false`. Shared by
+    /// the `MAX_USES_DEPTH` boundary test and its positive neighbour.
+    fn linear_chain(len: usize, leaf: bool) -> (Workflow, IndexMap<String, Workflow>) {
+        let mut docs = IndexMap::new();
+        for i in 0..len {
+            let is_last = i == len - 1;
+            let mut wf = Workflow::new(wf_name(&chain_name(i)));
+            if !is_last || !leaf {
+                let next = chain_name(i + 1);
+                wf = wf.uses(
+                    node("next"),
+                    Uses {
+                        workflow: wf_name(&next),
+                        with: IndexMap::new(),
+                        position: 0,
+                    },
+                );
+            }
+            docs.insert(chain_name(i), wf);
+        }
+        let root = docs.get(&chain_name(0)).unwrap().clone();
+        (root, docs)
+    }
+
+    fn resolve_from(
+        docs: &IndexMap<String, Workflow>,
+    ) -> impl FnMut(&WorkflowName) -> Result<Workflow, ResolveFailure> + '_ {
+        move |name: &WorkflowName| {
+            docs.get(name.as_str())
+                .cloned()
+                .ok_or(ResolveFailure::NotFound)
+        }
+    }
+
+    /// Acceptance 4: a chain nine documents deep (root at depth 0,
+    /// through the ninth document at depth 8) whose own `uses:` step
+    /// would nest a tenth is refused as `UsesTooDeep`, naming all nine
+    /// in the chain, and never resolves the tenth.
+    #[test]
+    fn a_nine_deep_chain_is_refused_as_uses_too_deep() {
+        let (root, docs) = linear_chain(9, false);
+        let err = link(&root, &mut resolve_from(&docs)).unwrap_err();
+        let expected_chain: Vec<WorkflowName> = (0..9).map(|i| wf_name(&chain_name(i))).collect();
+        assert_eq!(
+            err,
+            vec![CheckError::UsesTooDeep {
+                chain: expected_chain,
+            }]
+        );
+    }
+
+    /// The boundary's other side: the same nine documents, but the ninth
+    /// (depth 8) has no further `uses:` step -- it links cleanly, which
+    /// is what proves the refusal above is about depth 8's own `uses:`
+    /// step, not about merely reaching depth 8.
+    #[test]
+    fn a_chain_with_a_leaf_at_depth_eight_links_cleanly() {
+        let (root, docs) = linear_chain(9, true);
+        let linked = link(&root, &mut resolve_from(&docs)).unwrap();
+        assert_eq!(linked.used.len(), 8, "w1 through w8, each used once");
+    }
+
+    /// `leaf`: `count` plain tool nodes, no `uses:` steps.
+    fn counting_leaf(count: usize) -> Workflow {
+        let mut wf = Workflow::new(wf_name("leaf"));
+        for i in 0..count {
+            wf = wf.node(node(&format!("n{i}")), Node::new(tool("noop.tool")));
+        }
+        wf
+    }
+
+    /// A workflow with `fanout` `uses:` steps, `u0..u<fanout-1>`, each
+    /// naming `child`.
+    fn fan(name: &str, child: &str, fanout: usize) -> Workflow {
+        let mut wf = Workflow::new(wf_name(name));
+        for i in 0..fanout {
+            wf = wf.uses(
+                node(&format!("u{i}")),
+                Uses {
+                    workflow: wf_name(child),
+                    with: IndexMap::new(),
+                    position: i,
+                },
+            );
+        }
+        wf
+    }
+
+    /// Acceptance 4: a diamond whose full expansion would be `1 * 8 * 8 *
+    /// 64 = 4096` nodes -- `leaf` (64 nodes), `mid1` (8 `uses: leaf`
+    /// steps), `mid2` (8 `uses: mid1` steps), `root` (one `uses: mid2`
+    /// step) -- is refused as `UsesTooLarge` the moment the running count
+    /// first crosses `MAX_LINKED_NODES`, well before `resolve` has been
+    /// called the 73 times (1 for `mid2`, 8 for `mid1`, 64 for `leaf`)
+    /// a full expansion would need: the bound is caught mid-expansion,
+    /// not after the whole diamond is materialised.
+    #[test]
+    fn an_exponential_diamond_is_refused_before_full_expansion() {
+        let leaf = counting_leaf(64);
+        let mid1 = fan("mid1", "leaf", 8);
+        let mid2 = fan("mid2", "mid1", 8);
+        let root = fan("root", "mid2", 1);
+
+        let mut calls = 0usize;
+        let err = link(&root, &mut |name| {
+            calls += 1;
+            match name.as_str() {
+                "mid2" => Ok(mid2.clone()),
+                "mid1" => Ok(mid1.clone()),
+                "leaf" => Ok(leaf.clone()),
+                other => panic!("resolver asked for an unexpected workflow: {other}"),
+            }
+        })
+        .unwrap_err();
+
+        match err.as_slice() {
+            [CheckError::UsesTooLarge { nodes }] => {
+                assert!(
+                    *nodes > MAX_LINKED_NODES,
+                    "the reported count must be the one that actually crossed the bound: \
+                     got {nodes}"
+                );
+                assert!(
+                    *nodes <= MAX_LINKED_NODES + 64,
+                    "the overshoot is bounded by the one document that tipped it over \
+                     (leaf, 64 nodes), not by however much more a full expansion would add: \
+                     got {nodes}"
+                );
+            }
+            other => panic!("expected exactly one UsesTooLarge, got {other:?}"),
+        }
+        assert!(
+            calls < 73,
+            "a full expansion would call resolve 73 times (1 + 8 + 64); the bound must be \
+             caught before that: got {calls}"
         );
     }
 }

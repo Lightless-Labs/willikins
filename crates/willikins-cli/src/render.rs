@@ -323,6 +323,31 @@ fn check_error_detail(error: &CheckError) -> String {
         CheckError::Unlinked { node } => {
             format!("{node}: a `uses:` step reached check without being linked first")
         }
+        CheckError::UsesCycle { chain } => {
+            let joined = chain
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            format!("uses cycle: {joined}")
+        }
+        CheckError::UsesTooDeep { chain } => {
+            let joined = chain
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            format!(
+                "uses nesting too deep (max {}): {joined}",
+                willikins_core::compose::MAX_USES_DEPTH
+            )
+        }
+        CheckError::UsesTooLarge { nodes } => {
+            format!(
+                "linked graph has {nodes} nodes, more than the allowed maximum of {}",
+                willikins_core::compose::MAX_LINKED_NODES
+            )
+        }
     }
 }
 

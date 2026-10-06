@@ -1,0 +1,24 @@
+# Child of diamond-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, decision (d9) and
+# acceptance 4). 9 `uses: diamond-mid1` steps -- one fan-out level of
+# the diamond.
+name: diamond-mid2
+steps:
+  u0:
+    uses: diamond-mid1
+  u1:
+    uses: diamond-mid1
+  u2:
+    uses: diamond-mid1
+  u3:
+    uses: diamond-mid1
+  u4:
+    uses: diamond-mid1
+  u5:
+    uses: diamond-mid1
+  u6:
+    uses: diamond-mid1
+  u7:
+    uses: diamond-mid1
+  u8:
+    uses: diamond-mid1

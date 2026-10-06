@@ -1,0 +1,7 @@
+# Child of too-deep-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, decision (d9) and
+# acceptance 4). Depth 1 of the nine-document chain.
+name: too-deep-1
+steps:
+  next:
+    uses: too-deep-2

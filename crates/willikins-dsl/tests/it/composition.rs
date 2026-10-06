@@ -7,13 +7,45 @@
 
 use std::path::Path;
 
+use willikins_core::{CheckError, ResolveFailure, Workflow, link};
 use willikins_dsl::{DocumentErrorKind, load_document};
+use willikins_types::{DomainType, WorkflowName};
 
 fn fixture_path(relative: &str) -> String {
     format!(
         concat!(env!("CARGO_MANIFEST_DIR"), "/../../{}"),
         format!("workflows/fixtures/composition/{relative}")
     )
+}
+
+fn wf_name(name: &str) -> WorkflowName {
+    WorkflowName::parse(name).unwrap()
+}
+
+/// `link`'s `resolve` callback, for a root fixture whose children sit
+/// beside it in `workflows/fixtures/composition/`: `<name>.yaml` loaded
+/// with [`load_document`], [`ResolveFailure::NotFound`] when no such
+/// file exists (never [`ResolveFailure::Refused`] -- no fixture here is
+/// a symlink or a name mismatch), and [`ResolveFailure::Document`] when
+/// the file exists but fails to parse.
+fn directory_resolver() -> impl FnMut(&WorkflowName) -> Result<Workflow, ResolveFailure> {
+    move |name: &WorkflowName| {
+        let path = Path::new(&fixture_path(&format!("{name}.yaml"))).to_path_buf();
+        if !path.is_file() {
+            return Err(ResolveFailure::NotFound);
+        }
+        load_document(&path).map_err(|err| ResolveFailure::Document {
+            message: err.to_string(),
+        })
+    }
+}
+
+/// Load `fixture` (a root) and link it through [`directory_resolver`],
+/// returning the [`CheckError`]s linking failed with.
+fn link_fixture(fixture: &str) -> Vec<CheckError> {
+    let workflow = load_document(Path::new(&fixture_path(fixture)))
+        .unwrap_or_else(|err| panic!("{fixture}: expected to load, got {err:?}"));
+    link(&workflow, &mut directory_resolver()).unwrap_err()
 }
 
 /// Load `fixture` and return the `(path, message)` of the
@@ -94,5 +126,66 @@ steps:
             assert!(message.contains('/'), "{message}");
         }
         other => panic!("expected a Semantic error, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// L2 commit 1: cycle, depth, and size bounds (decision (d9)), each
+// expressed as a document and linked with `directory_resolver`.
+// ---------------------------------------------------------------------
+
+/// `workflows/fixtures/composition/self-use.yaml`'s header.
+#[test]
+fn a_self_use_is_refused_as_uses_cycle() {
+    let errors = link_fixture("self-use.yaml");
+    assert_eq!(
+        errors,
+        vec![CheckError::UsesCycle {
+            chain: vec![wf_name("self-use"), wf_name("self-use")],
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/cycle-a.yaml`'s header (with its
+/// child `cycle-b.yaml`).
+#[test]
+fn a_two_document_cycle_is_refused_as_uses_cycle() {
+    let errors = link_fixture("cycle-a.yaml");
+    assert_eq!(
+        errors,
+        vec![CheckError::UsesCycle {
+            chain: vec![wf_name("cycle-a"), wf_name("cycle-b"), wf_name("cycle-a")],
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/too-deep-root.yaml`'s header (with
+/// its children `too-deep-1.yaml`..`too-deep-8.yaml`).
+#[test]
+fn a_nine_deep_chain_of_documents_is_refused_as_uses_too_deep() {
+    let errors = link_fixture("too-deep-root.yaml");
+    let expected_chain: Vec<WorkflowName> = std::iter::once("too-deep-root".to_string())
+        .chain((1..=8).map(|i| format!("too-deep-{i}")))
+        .map(|name| wf_name(&name))
+        .collect();
+    assert_eq!(
+        errors,
+        vec![CheckError::UsesTooDeep {
+            chain: expected_chain,
+        }]
+    );
+}
+
+/// `workflows/fixtures/composition/diamond-root.yaml`'s header (with
+/// its children `diamond-mid2.yaml`, `diamond-mid1.yaml`,
+/// `diamond-leaf.yaml`).
+#[test]
+fn a_diamond_over_the_node_bound_is_refused_as_uses_too_large() {
+    let errors = link_fixture("diamond-root.yaml");
+    match errors.as_slice() {
+        [CheckError::UsesTooLarge { nodes }] => {
+            assert!(*nodes > 2048, "expected the bound to be crossed: {nodes}");
+        }
+        other => panic!("expected exactly one UsesTooLarge, got {other:?}"),
     }
 }
