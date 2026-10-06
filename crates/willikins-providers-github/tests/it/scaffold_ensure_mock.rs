@@ -874,6 +874,86 @@ fn ensure_on_a_fresh_empty_repository_puts_the_root_file_then_commits_the_rest()
     commit.assert();
 }
 
+/// Milestone 3l, task X1 (adversarial pass): decision (a) step 3 says
+/// `ensure` decides what the first-file `PUT` accomplished only from a
+/// fresh re-observe, "never ... from the `PUT`'s own body". A mutant that
+/// trusted a `2xx` `PUT` response directly -- skipping the re-observe and
+/// synthesizing a head instead of reading one -- passed every other
+/// acceptance 4 assertion in this file (the commit's `additions` still
+/// excluded the root file, since the mutant also knew the root path by
+/// construction) and was caught only by the ref-visibility tests below,
+/// never by this scenario's own happy path. This test closes that gap
+/// directly: it plants a second `POST /graphql` mock that would only ever
+/// match a commit compare-and-swapped on an **empty** `expectedHeadOid`
+/// (what a `PUT`-trusting implementation has nothing real to put there)
+/// and pins it `.expect(0)`, alongside the real mock keyed on the
+/// re-observed head.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_decides_the_first_write_landed_from_a_re_observe_never_from_the_puts_own_body() {
+    let mut provider = MockProvider::start();
+    let files = three_files();
+    let (ref_mock, repo_mock, branches_mock) = mock_empty_repository(&mut provider, 1);
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/.editorconfig")
+        .with_status(201)
+        .with_body("{}")
+        .expect(1)
+        .create();
+
+    let editorconfig_sha = blob_sha(files[0].content().as_bytes());
+    mock_ref_and_commit(&mut provider, "root-head", "root-tree");
+    mock_tree(
+        &mut provider,
+        "root-tree",
+        vec![tree_entry(
+            ".editorconfig",
+            "100644",
+            "blob",
+            &editorconfig_sha,
+        )],
+    );
+
+    // Never hit by a conforming implementation: nothing here read an
+    // `expectedHeadOid` of `""`, since the only way to reach `ensure`'s
+    // commit step is through a re-observe that reports a real sha.
+    let poisoned_commit = provider
+        .mock("POST", "/graphql")
+        .match_body(partial_json_body(serde_json::json!({
+            "variables": {"input": {"expectedHeadOid": ""}},
+        })))
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": {"createCommitOnBranch": {"commit": {"oid": "poison"}}}})
+                .to_string(),
+        )
+        .expect(0)
+        .create();
+    let real_commit = provider
+        .mock("POST", "/graphql")
+        .match_body(partial_json_body(serde_json::json!({
+            "variables": {"input": {"expectedHeadOid": "root-head"}},
+        })))
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"data": {"createCommitOnBranch": {"commit": {"oid": "new-sha"}}}})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let token = SinkToken::new();
+    let ensured = tool.ensure(&scaffold_inputs(files), &token).unwrap();
+    assert!(ensured.changed);
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
+    put_mock.assert();
+    poisoned_commit.assert();
+    real_commit.assert();
+}
+
 /// Acceptance 5, "Resume after the root commit": the repository already
 /// holds only the root file, byte-equal, no marker -- no `PUT` at all; one
 /// `createCommitOnBranch` without the root file. `changed: true`. This
@@ -2255,6 +2335,110 @@ fn ensure_gives_up_after_three_attempts_on_a_persistently_moving_head() {
     let err = tool.ensure(&scaffold_inputs(files), &token).unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::Provider);
     commit.assert();
+}
+
+/// Milestone 3l, 2026-10-06 plan addendum (task S3): decisions (a)/(b)
+/// are silent on what happens when `ensure`'s own commit-retry loop takes
+/// a `createCommitOnBranch` failure, re-observes to decide what to do
+/// next, and that re-observe reads `ScaffoldState::Empty` -- the branch's
+/// head it just compared against has vanished, and the repository has
+/// reverted to having no branches at all, between the first observe and
+/// this re-read. The addendum decided this the same way the loop already
+/// treats an unmoved head: report the original commit failure, never
+/// re-enter task S3's own initialisation a second time from inside this
+/// loop. Flagged there for X1's attack pass; this is that test. Also the
+/// strongest form of "a second root commit on resume": a mutant that
+/// re-entered `initialize_empty_repository` here would issue a `PUT` and
+/// a second `createCommitOnBranch`, both pinned `.expect(0)` below, and
+/// the rules diagnostic (task S4) is pinned `.expect(0)` too -- this path
+/// returns the original error directly, never through
+/// [`with_rule_suffix`]'s own call to `branch_rule_types`, unlike the
+/// unmoved-head case right above.
+#[test]
+#[allow(clippy::disallowed_methods)] // a test mints its own token
+fn ensure_reports_the_original_commit_failure_when_a_post_failure_reobserve_finds_the_repository_newly_empty()
+ {
+    let mut provider = MockProvider::start();
+    let files =
+        vec![RepoFile::new(RepoPath::parse("BUILD.bazel").unwrap(), "# reserve\n").unwrap()];
+
+    // First observe: an ordinary non-empty repository with a head.
+    let ref_mock_1 = provider
+        .mock("GET", "/repos/acme/widget/git/ref/heads/main")
+        .with_status(200)
+        .with_body(serde_json::json!({"object": {"sha": "head-1"}}).to_string())
+        .expect(1)
+        .create();
+    provider
+        .mock("GET", "/repos/acme/widget/git/commits/head-1")
+        .with_status(200)
+        .with_body(serde_json::json!({"tree": {"sha": "root-tree"}}).to_string())
+        .create();
+    mock_tree(&mut provider, "root-tree", vec![]);
+
+    let commit = provider
+        .mock("POST", "/graphql")
+        .match_body(partial_json_body(
+            serde_json::json!({"variables": {"input": {"expectedHeadOid": "head-1"}}}),
+        ))
+        .with_status(502)
+        .expect(1)
+        .create();
+
+    // The re-observe after that failure: the branch itself is gone, and
+    // the repository now reads as empty -- `ScaffoldState::Empty`, not
+    // `ScaffoldState::Absent` with a moved or unmoved head.
+    let ref_mock_2 = provider
+        .mock("GET", "/repos/acme/widget/git/ref/heads/main")
+        .with_status(404)
+        .expect(1)
+        .create();
+    let repo_mock = provider
+        .mock("GET", "/repos/acme/widget")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({"visibility": "private", "topics": [], "default_branch": "main"})
+                .to_string(),
+        )
+        .expect(1)
+        .create();
+    let branches_mock = provider
+        .mock("GET", "/repos/acme/widget/branches?per_page=1")
+        .with_status(200)
+        .with_body("[]")
+        .expect(1)
+        .create();
+
+    // Never reached: `ensure` must not re-enter task S3's initialisation
+    // from inside the commit-retry loop.
+    let put_mock = provider
+        .mock("PUT", "/repos/acme/widget/contents/BUILD.bazel")
+        .with_status(201)
+        .with_body("{}")
+        .expect(0)
+        .create();
+    let rules_mock = provider
+        .mock("GET", "/repos/acme/widget/rules/branches/main")
+        .with_status(200)
+        .with_body("[]")
+        .expect(0)
+        .create();
+
+    let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
+    let token = SinkToken::new();
+    let err = tool.ensure(&scaffold_inputs(files), &token).unwrap_err();
+    assert_eq!(err.kind, ToolErrorKind::Provider);
+    assert_eq!(
+        err.message,
+        "GitHub's GraphQL API did not report the commit as successful"
+    );
+    ref_mock_1.assert();
+    commit.assert();
+    ref_mock_2.assert();
+    repo_mock.assert();
+    branches_mock.assert();
+    put_mock.assert();
+    rules_mock.assert();
 }
 
 /// The spec's `token` port is optional, exactly like the other GitHub
