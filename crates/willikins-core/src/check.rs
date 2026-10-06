@@ -9,6 +9,11 @@
 //! Errors accumulate in this fixed sequence, so a workflow with many
 //! problems reports them the same way every run:
 //!
+//! 0. [`CheckError::Unlinked`], one per `uses:` step still on
+//!    [`Workflow::uses`], the first thing [`check`] looks at. A composite
+//!    must go through the linker (milestone 2b, `willikins_core::compose`)
+//!    before it reaches `check` at all, so a non-empty `uses` map is
+//!    always a caller defect; nothing past this point is evaluated.
 //! 1. Workflow input errors, one per declared input, in declaration
 //!    order: [`CheckError::SecretWorkflowInput`] for a secret declared
 //!    type, [`CheckError::UnregisteredInputType`] for a declared type the
@@ -661,6 +666,16 @@ pub enum CheckError {
         /// The port it was bound to.
         port: PortName,
     },
+    /// A `uses:` step on [`Workflow::uses`] reached [`check`] without
+    /// first going through the linker (milestone 2b,
+    /// `willikins_core::compose::link`). The first thing [`check`] does:
+    /// see the module docs' "Error ordering", step 0.
+    ///
+    /// Not one of the plan's variants; milestone 2b, part P.
+    Unlinked {
+        /// The `uses:` step that was never linked.
+        node: NodeName,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -748,6 +763,10 @@ impl fmt::Display for CheckError {
             Self::RepoFileLiteral { node, port } => write!(
                 f,
                 "node `{node}`, port `{port}`: a literal cannot supply a repository file"
+            ),
+            Self::Unlinked { node } => write!(
+                f,
+                "node `{node}`: a `uses:` step reached check without being linked first"
             ),
             Self::ListOnScalarPort { site, expected } => write!(
                 f,
@@ -869,6 +888,7 @@ impl CheckError {
             Self::SequenceNotAllowedHere { .. } => "SequenceNotAllowedHere",
             Self::DisallowedInputType { .. } => "DisallowedInputType",
             Self::RepoFileLiteral { .. } => "RepoFileLiteral",
+            Self::Unlinked { .. } => "Unlinked",
         }
     }
 }
@@ -882,6 +902,20 @@ impl std::error::Error for CheckError {}
 /// Returns every [`CheckError`] found, in the order documented on the
 /// module.
 pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<CheckError>> {
+    // Step 0 (module docs' "Error ordering"): a `uses:` step that reached
+    // `check` unlinked is always a caller defect -- a composite must go
+    // through the linker first. Short-circuit before anything else is
+    // evaluated, rather than mixing `Unlinked` into a wall of errors about
+    // a workflow whose nodes do not even exist yet.
+    if !workflow.uses.is_empty() {
+        return Err(workflow
+            .uses
+            .keys()
+            .cloned()
+            .map(|node| CheckError::Unlinked { node })
+            .collect());
+    }
+
     let registry = catalog.registry();
     let mut errors = Vec::new();
 
@@ -1963,7 +1997,7 @@ mod tests {
 
     use crate::tool::{Ensured, Inputs, Observation, Outputs, Tool, ToolError};
     use crate::value::TypeName;
-    use crate::workflow::InputSpec;
+    use crate::workflow::{InputSpec, Uses};
     use willikins_types::{DomainType, SinkToken};
 
     fn ty(name: &str) -> TypeRef {
@@ -2203,6 +2237,75 @@ mod tests {
         assert_eq!(
             errors[0].to_string(),
             "node `mystery`: unknown tool `no.such.tool`"
+        );
+    }
+
+    /// Milestone 2b, decision (d1) and acceptance 2: a [`Workflow`] whose
+    /// `uses` map is non-empty reaches `check` unlinked and returns
+    /// exactly [`CheckError::Unlinked`], naming the step -- before
+    /// anything else is evaluated. Two unknown-tool nodes sit alongside
+    /// the `uses:` step to prove it short-circuits rather than reporting
+    /// `Unlinked` mixed in with every other error the workflow has.
+    #[test]
+    fn a_workflow_reaching_check_with_an_unlinked_uses_step_returns_exactly_unlinked() {
+        let workflow = Workflow::new(workflow_name("w"))
+            .node(node_name("mystery"), Node::new(tool_name("no.such.tool")))
+            .uses(
+                node_name("org"),
+                Uses {
+                    workflow: workflow_name("example-org"),
+                    with: IndexMap::new(),
+                    position: 0,
+                },
+            );
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::Unlinked {
+                node: node_name("org"),
+            }]
+        );
+        assert_eq!(
+            errors[0].to_string(),
+            "node `org`: a `uses:` step reached check without being linked first"
+        );
+    }
+
+    /// Two `uses:` steps reaching `check` unlinked each get their own
+    /// [`CheckError::Unlinked`], in declaration order -- not just the
+    /// first.
+    #[test]
+    fn two_unlinked_uses_steps_each_get_their_own_unlinked_error() {
+        let workflow = Workflow::new(workflow_name("w"))
+            .uses(
+                node_name("org"),
+                Uses {
+                    workflow: workflow_name("example-org"),
+                    with: IndexMap::new(),
+                    position: 0,
+                },
+            )
+            .uses(
+                node_name("app"),
+                Uses {
+                    workflow: workflow_name("ios-app"),
+                    with: IndexMap::new(),
+                    position: 1,
+                },
+            );
+        let catalog = test_catalog();
+        let errors = check(&workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![
+                CheckError::Unlinked {
+                    node: node_name("org"),
+                },
+                CheckError::Unlinked {
+                    node: node_name("app"),
+                },
+            ]
         );
     }
 
@@ -3033,6 +3136,9 @@ mod tests {
                 node: node_name("n"),
                 port: port("p"),
             },
+            CheckError::Unlinked {
+                node: node_name("n"),
+            },
         ]
     }
 
@@ -3069,6 +3175,7 @@ mod tests {
         SequenceNotAllowedHere,
         DisallowedInputType,
         RepoFileLiteral,
+        Unlinked,
     );
 
     #[test]

@@ -320,6 +320,9 @@ fn check_error_detail(error: &CheckError) -> String {
         CheckError::RepoFileLiteral { node, port } => {
             format!("{node}.{port}: a literal cannot supply a repository file")
         }
+        CheckError::Unlinked { node } => {
+            format!("{node}: a `uses:` step reached check without being linked first")
+        }
     }
 }
 

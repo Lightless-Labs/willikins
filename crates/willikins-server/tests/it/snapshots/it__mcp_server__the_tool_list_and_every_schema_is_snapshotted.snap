@@ -2222,6 +2222,24 @@ expression: snapshot
                 "port"
               ],
               "type": "object"
+            },
+            {
+              "description": "A `uses:` step on [`Workflow::uses`] reached [`check`] without\nfirst going through the linker (milestone 2b,\n`willikins_core::compose::link`). The first thing [`check`] does:\nsee the module docs' \"Error ordering\", step 0.\n\nNot one of the plan's variants; milestone 2b, part P.",
+              "properties": {
+                "kind": {
+                  "const": "Unlinked",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `uses:` step that was never linked."
+                }
+              },
+              "required": [
+                "kind",
+                "node"
+              ],
+              "type": "object"
             }
           ]
         },

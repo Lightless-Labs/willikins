@@ -54,7 +54,7 @@ pub use value::{
     ConversionMismatch, Known, ObjectTypeMismatch, PortType, TypeName, TypeRef, TypeRegistry,
     Value, ValueState,
 };
-pub use workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};
+pub use workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Uses, Workflow};
 
 /// Capability token gating access to secret values; see `willikins_types::sink::SinkToken`.
 pub use willikins_types::SinkToken;

@@ -271,6 +271,30 @@ impl Node {
     }
 }
 
+/// One `uses:` step: a reference to another document's workflow, not yet
+/// linked into the graph (milestone 2b, part P).
+///
+/// A `uses:` step is not a node at run time: [`crate::check::check`]
+/// refuses a [`Workflow`] whose `uses` map is non-empty
+/// ([`crate::check::CheckError::Unlinked`]), before anything else, so a
+/// composite must first go through the linker (`willikins_core::compose`,
+/// added by milestone 2b task L1), which replaces every `uses:` step with
+/// the used document's own nodes and clears this map.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Uses {
+    /// The name of the workflow this step uses.
+    pub workflow: willikins_types::WorkflowName,
+    /// This step's input bindings, keyed by the used document's own
+    /// [`InputName`]s (not [`crate::tool::PortName`]s — a used document
+    /// has no ports of its own; its *declared inputs* are what a `with:`
+    /// binds here).
+    pub with: IndexMap<InputName, Binding>,
+    /// This step's position among the document's `steps:` entries: where
+    /// the used document's nodes are inserted once linked (SHARED VALUES,
+    /// "Step order", milestone 2b plan).
+    pub position: usize,
+}
+
 /// A provisioning workflow: named inputs, a graph of tool-calling nodes,
 /// and named outputs. Checked by [`crate::check::check`] before it can be
 /// described or planned.
@@ -285,13 +309,20 @@ pub struct Workflow {
     pub inputs: IndexMap<InputName, InputSpec>,
     /// The workflow's nodes, in declaration order.
     pub nodes: IndexMap<NodeName, Node>,
+    /// The workflow's `uses:` steps, not yet linked into `nodes`, in
+    /// declaration order. Empty for every workflow that has gone through
+    /// the linker, or that never had a `uses:` step — and so, by
+    /// `#[serde(skip_serializing_if)]`, a document without `uses:`
+    /// serializes byte-identically to before milestone 2b.
+    #[serde(skip_serializing_if = "IndexMap::is_empty")]
+    pub uses: IndexMap<NodeName, Uses>,
     /// The workflow's outputs, in declaration order.
     pub outputs: IndexMap<OutputName, Binding>,
 }
 
 impl Workflow {
-    /// An empty workflow named `name`, with no description, inputs, nodes,
-    /// or outputs.
+    /// An empty workflow named `name`, with no description, inputs,
+    /// nodes, `uses:` steps, or outputs.
     #[must_use]
     pub fn new(name: willikins_types::WorkflowName) -> Self {
         Self {
@@ -299,6 +330,7 @@ impl Workflow {
             description: None,
             inputs: IndexMap::new(),
             nodes: IndexMap::new(),
+            uses: IndexMap::new(),
             outputs: IndexMap::new(),
         }
     }
@@ -321,6 +353,13 @@ impl Workflow {
     #[must_use]
     pub fn node(mut self, name: NodeName, node: Node) -> Self {
         self.nodes.insert(name, node);
+        self
+    }
+
+    /// Add a `uses:` step, unlinked.
+    #[must_use]
+    pub fn uses(mut self, name: NodeName, uses: Uses) -> Self {
+        self.uses.insert(name, uses);
         self
     }
 
@@ -487,6 +526,39 @@ mod tests {
         assert_eq!(json["inputs"]["org"]["ty"], "GitHubOrg");
         assert_eq!(json["nodes"]["names"]["tool"], "naming.v1");
         assert_eq!(json["outputs"]["repo"]["kind"], "step");
+    }
+
+    /// Milestone 2b, decision (d1): `Workflow.uses` is skipped when empty,
+    /// so a document without `uses:` serializes with no `uses` key at
+    /// all -- the byte-identity claim the plan's Gates section pins for
+    /// every pre-2b document. A workflow with one `uses:` step serializes
+    /// its `workflow`, `with`, and `position` fields.
+    #[test]
+    fn workflow_uses_is_omitted_when_empty_and_present_when_not() {
+        let empty = Workflow::new(workflow_name("demo"));
+        let json = serde_json::to_value(&empty).unwrap();
+        assert!(
+            json.as_object().unwrap().get("uses").is_none(),
+            "a uses-less workflow must not serialize a `uses` key: {json}"
+        );
+
+        let mut with = IndexMap::new();
+        with.insert(
+            InputName::parse("slug").unwrap(),
+            Binding::Literal("example-app".to_string()),
+        );
+        let with_uses = empty.uses(
+            NodeName::parse("org").unwrap(),
+            Uses {
+                workflow: workflow_name("example-org"),
+                with,
+                position: 0,
+            },
+        );
+        let json = serde_json::to_value(&with_uses).unwrap();
+        assert_eq!(json["uses"]["org"]["workflow"], "example-org");
+        assert_eq!(json["uses"]["org"]["with"]["slug"]["kind"], "literal");
+        assert_eq!(json["uses"]["org"]["position"], 0);
     }
 
     #[test]
