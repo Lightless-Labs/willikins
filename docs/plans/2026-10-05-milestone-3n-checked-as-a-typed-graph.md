@@ -47,6 +47,17 @@ failure inside a generic function body — the assertion is only evaluated at mo
 reaches and type-checking does not — while `cargo build` and a rustdoc `compile_fail` doctest both catch it. F3
 therefore places the compile-fail proof as a doctest on `Value::known`, exactly as the plan's own fallback
 anticipated, and does not add a trybuild case for this acceptance test.
+**Addendum:** 2026-10-06. An independent adversarial pass on F1–F3 only, recorded in
+`docs/research/2026-10-06-m3n-f-slice-adversarial-pass.md`. It is named apart from X1's whole-milestone record. It ran
+nine mutations, each restored and `cmp`-identical. Seven were killed, including both F1 panics, which came back with
+exactly the predicted messages. The M8 mutation reproduced the evidence for F3's registry parameter: testing the
+keying against the global registry fails `keyed_and_item_edges_deliver_known_b`. The two survivors were test gaps, and
+both are now closed by test-only commits. First, `Value::known_list`'s `const` assertion had no proof, so it now has
+its own `compile_fail` doctest (`5ed0c45`). Second, `fill_outputs`' `TypeRef` equality was unpinned, because every F2
+test was also refused by the `TypeId` loop. Three plan-time cases now pin it (`e02d28d`): a scalar on a list port, a
+list on a scalar port, and an `Unknown` predicted as another type. Acceptance 3 is extended by these three, and
+acceptance 4 by the `known_list` doctest. No production code changed. The characterization, the dsl acceptance target
+and the private fake-backed `operator_*` targets stayed green.
 
 ## Goal
 
