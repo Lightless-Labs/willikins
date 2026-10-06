@@ -2,8 +2,8 @@
 title: Provision a project's AGENTS.md
 created: 2026-10-06
 status: pending
-priority: high
-area: tools, documents
+priority: medium
+area: documents
 related:
   - docs/plans/2026-10-05-milestone-2b-composition.md
   - docs/plans/2026-09-30-milestone-3g-file-writing.md
@@ -19,27 +19,24 @@ provisioning a project on the user's behalf)." AGENTS.md only, no CLAUDE.md.
 
 ## What it means
 
-- **A file write, nothing more.** Write `AGENTS.md` where the project lives if it is absent;
-  never overwrite it, never track edits afterwards. Re-running converges: present means done.
+- **Document work, no new tool.** The operator, 2026-10-06: "No need to make a dedicated tool or
+  anything." `AGENTS.md` is one more file a document renders and writes with the tools that exist:
+  a `repo.file.render` node and the scaffold's file list.
 - **The content comes from the document.** The operator, 2026-10-06: "the content would have to
   come from the document. It's just file writing, with limited text-only templating capability."
-  The whole file is a template in the document (the organisation's and monorepo's part in the
-  organisation document, through milestone 2b's `uses:`; the project's part in the project's
-  document), rendered by `repo.file.render`. Inputs only fill placeholders; no input supplies a
-  template or a free-form section.
-- **Projects already scaffolded.** A scaffold is a seed: once its marker exists it never writes
-  again, so a document that adds AGENTS.md to an already-landed scaffold would never write it. This
-  needs a small write-if-absent file tool (one file, no marker), usable for any later file.
+  The whole file is a template in the document: the organisation's and monorepo's part in the
+  organisation document (milestone 2b's `uses:`), the project's part in the project's document.
+  Inputs only fill placeholders (`TemplateValue`, as today); prose lives in the template itself.
+- **New projects:** `AGENTS.md` joins the scaffold's `files`. **A project already scaffolded**
+  (the operator's iOS app): a scaffold never writes again once its marker exists, so the document
+  adds a second `github.scaffold.ensure` node with its own marker whose only file is `AGENTS.md`.
+- Written once, never owned: the seed semantics already mean willikins never overwrites it.
 
-## Design points for the plan
+## Design points
 
-- Placeholders today take `TemplateValue`, an identifier-like grammar with no spaces. Prose values
-  (a project's one-line description, say) need a text placeholder kind. Decide whether that kind is
-  admitted only in Markdown files, how it is bounded (length, no control characters, no fence or
-  heading injection), and that a secret type can never fill it.
-- The rendered file is shown in full in the plan, so approving the plan approves the words.
-- Which repository and path: a monorepo app writes `apps/<slug>/AGENTS.md`; a standalone repository
-  writes `AGENTS.md` at its root (milestone 3l's new repositories).
+- The rendered file shows in the plan, so approving the plan approves the words.
+- Path: a monorepo app writes `apps/<slug>/AGENTS.md`; a standalone repository writes `AGENTS.md`
+  at its root (milestone 3l's new repositories).
 
 ## When
 
