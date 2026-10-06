@@ -1132,16 +1132,23 @@ fn step_10_rules_length_only(
     default_branch: &GitBranchName,
 ) {
     let path = format!("{}/rules/branches/{default_branch}", repo_path(repo_a));
-    let rules: Vec<Json> = cycle.raw.get(&path).unwrap_or_else(|err| {
-        panic!(
+    // A private repository in an organisation on GitHub's free plan cannot
+    // read rules at all: GitHub answers 403 ("Upgrade to GitHub Pro or make
+    // this repository public"). Seen live on 2026-10-06; recorded, not a
+    // failure, since the scaffold reads rules only to explain a refused write.
+    match cycle.raw.get::<Vec<Json>>(&path) {
+        Ok(rules) => cycle.say(&format!(
+            "step 10 (rules in force on `-a`@`{default_branch}`): {} rule(s)",
+            rules.len()
+        )),
+        Err(err) if err.status == Some(403) => cycle.say(
+            "step 10 (rules on `-a` are not readable on this plan: 403; recorded, not asserted)",
+        ),
+        Err(err) => panic!(
             "step 10: GET of `-a`'s branch rules failed (status {:?})",
             err.status
-        )
-    });
-    cycle.say(&format!(
-        "step 10 (rules in force on `-a`@`{default_branch}`): {} rule(s)",
-        rules.len()
-    ));
+        ),
+    }
 }
 
 /// Step 11: delete `-a`, `-b`, `-c`; each re-reads `404`; the repository
