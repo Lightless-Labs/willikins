@@ -1,0 +1,14 @@
+# Milestone 2b, decision (d1) and acceptance 2
+# (docs/plans/2026-10-05-milestone-2b-composition.md): `uses:` must parse
+# as a WorkflowName -- lowercase, hyphen-separated. Pinned by
+# `uses_bad_name_fails_to_load_with_one_located_error`
+# (crates/willikins-dsl/tests/it/composition.rs). Must fail to load with
+# exactly:
+#   DocumentErrorKind::Semantic {
+#       path: "steps.a.uses",
+#       message: "does not match the required pattern",
+#   }
+name: uses-bad-name
+steps:
+  a:
+    uses: New_Rust_Service

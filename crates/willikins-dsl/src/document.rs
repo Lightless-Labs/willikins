@@ -122,22 +122,73 @@ pub enum DefaultValue {
     List(Vec<String>),
 }
 
-/// One declared workflow node (a `steps.<name>` entry).
+/// One declared workflow node (a `steps.<name>` entry): a call to one
+/// tool (`tool:`), or a reference to another document's workflow
+/// (`uses:`, milestone 2b decision (d1)) -- exactly one of the two.
+///
+/// `document_to_workflow` enforces "exactly one", not `serde`: a plain
+/// `#[serde(flatten)]` untagged enum would only ever give a generic "data
+/// did not match any variant" message (the same reason [`WithValue`]'s
+/// `Deserialize` is hand-written), so both fields stay `Option` here and
+/// the located `Semantic` error is built once the whole step has
+/// deserialized.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(transform = step_decl_exactly_one_of_tool_or_uses)]
 pub struct StepDecl {
-    /// The tool this step calls, such as `github.repo.ensure`.
-    pub tool: String,
+    /// The tool this step calls, such as `github.repo.ensure`. Exactly
+    /// one of `tool` or `uses` must be set.
+    #[serde(default)]
+    pub tool: Option<String>,
+    /// The name of another document's workflow this step uses, instead
+    /// of calling a tool directly (milestone 2b decision (d1)). Exactly
+    /// one of `tool` or `uses` must be set. A `uses:` step may not have a
+    /// `for_each:` (decision (d12)).
+    #[serde(default)]
+    pub uses: Option<String>,
     /// When set, this step runs once per item of the bound list. Must be
     /// a reference (the same grammar as a `with` value), never a literal.
+    /// Never set together with `uses:`.
     #[serde(default)]
     pub for_each: Option<String>,
-    /// This step's input port bindings, keyed by port name. Each value is
-    /// a reference or a literal string ([`WithValue::Scalar`]), or a YAML
-    /// sequence of the same ([`WithValue::List`], milestone 3g decision
-    /// (a)).
+    /// This step's input bindings, keyed by port name for a `tool:` step
+    /// or by the used document's own input name for a `uses:` step. Each
+    /// value is a reference or a literal string ([`WithValue::Scalar`]),
+    /// or a YAML sequence of the same ([`WithValue::List`], milestone 3g
+    /// decision (a)).
     #[serde(default, deserialize_with = "deserialize_with_map")]
     pub with: IndexMap<String, WithValue>,
+}
+
+/// Adds the `oneOf` milestone 2b decision (d1) requires to [`StepDecl`]'s
+/// derived schema: exactly one of `tool` or `uses` is required, so an
+/// agent validating a document locally learns the rule before it ever
+/// calls `validate`. A plain JSON Schema object validates against every
+/// keyword present at its own level (`type`, `properties`, `required`,
+/// and this `oneOf` all apply at once), so adding the key here combines
+/// with the schema the derive already produced rather than replacing it
+/// -- the same technique [`description_schema`] uses for a single field,
+/// lifted to the whole container via `#[schemars(transform = ...)]`
+/// (a post-mutator: it runs after the derive's own fields and
+/// descriptions are in place, so neither is lost).
+///
+/// Each branch pins its own field's type to `"string"`, narrower than the
+/// derived schema's `["string", "null"]`: `required` alone only checks
+/// key *presence*, so without this, `{tool: null, uses: x}` would match
+/// both branches (`tool` is present, if `null`) and the schema would
+/// refuse a step `document_to_workflow` accepts (`serde` reads a `null`
+/// scalar the same as an absent key for an `Option<String>`). With it,
+/// the branch for a `null` field fails on type instead of passing on
+/// presence, so the schema agrees with the parser on every case: neither
+/// set, either `null`, or both set as strings.
+fn step_decl_exactly_one_of_tool_or_uses(schema: &mut schemars::Schema) {
+    schema.insert(
+        "oneOf".to_string(),
+        serde_json::json!([
+            { "required": ["tool"], "properties": { "tool": { "type": "string" } } },
+            { "required": ["uses"], "properties": { "uses": { "type": "string" } } },
+        ]),
+    );
 }
 
 /// One `with:` map value: a single reference-or-literal string
@@ -356,7 +407,8 @@ steps:
         assert!(document.outputs.is_empty());
         assert_eq!(document.steps.len(), 1);
         let step = &document.steps["a"];
-        assert_eq!(step.tool, "naming.v1");
+        assert_eq!(step.tool.as_deref(), Some("naming.v1"));
+        assert!(step.uses.is_none());
         assert!(matches!(&step.with["org"], WithValue::Scalar(value) if value == "literal-org"));
         assert!(step.for_each.is_none());
     }

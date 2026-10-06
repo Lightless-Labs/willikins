@@ -112,11 +112,11 @@ expression: json
       ]
     },
     "StepDecl": {
-      "description": "One declared workflow node (a `steps.<name>` entry).",
+      "description": "One declared workflow node (a `steps.<name>` entry): a call to one\ntool (`tool:`), or a reference to another document's workflow\n(`uses:`, milestone 2b decision (d1)) -- exactly one of the two.\n\n`document_to_workflow` enforces \"exactly one\", not `serde`: a plain\n`#[serde(flatten)]` untagged enum would only ever give a generic \"data\ndid not match any variant\" message (the same reason [`WithValue`]'s\n`Deserialize` is hand-written), so both fields stay `Option` here and\nthe located `Semantic` error is built once the whole step has\ndeserialized.",
       "type": "object",
       "properties": {
         "for_each": {
-          "description": "When set, this step runs once per item of the bound list. Must be\na reference (the same grammar as a `with` value), never a literal.",
+          "description": "When set, this step runs once per item of the bound list. Must be\na reference (the same grammar as a `with` value), never a literal.\nNever set together with `uses:`.",
           "type": [
             "string",
             "null"
@@ -124,11 +124,23 @@ expression: json
           "default": null
         },
         "tool": {
-          "description": "The tool this step calls, such as `github.repo.ensure`.",
-          "type": "string"
+          "description": "The tool this step calls, such as `github.repo.ensure`. Exactly\none of `tool` or `uses` must be set.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "uses": {
+          "description": "The name of another document's workflow this step uses, instead\nof calling a tool directly (milestone 2b decision (d1)). Exactly\none of `tool` or `uses` must be set. A `uses:` step may not have a\n`for_each:` (decision (d12)).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "with": {
-          "description": "This step's input port bindings, keyed by port name. Each value is\na reference or a literal string ([`WithValue::Scalar`]), or a YAML\nsequence of the same ([`WithValue::List`], milestone 3g decision\n(a)).",
+          "description": "This step's input bindings, keyed by port name for a `tool:` step\nor by the used document's own input name for a `uses:` step. Each\nvalue is a reference or a literal string ([`WithValue::Scalar`]),\nor a YAML sequence of the same ([`WithValue::List`], milestone 3g\ndecision (a)).",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/WithValue"
@@ -136,8 +148,27 @@ expression: json
         }
       },
       "additionalProperties": false,
-      "required": [
-        "tool"
+      "oneOf": [
+        {
+          "properties": {
+            "tool": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool"
+          ]
+        },
+        {
+          "properties": {
+            "uses": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "uses"
+          ]
+        }
       ]
     },
     "WithValue": {

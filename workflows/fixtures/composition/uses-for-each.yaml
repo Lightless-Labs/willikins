@@ -1,0 +1,16 @@
+# Milestone 2b, decision (d12) and acceptance 2
+# (docs/plans/2026-10-05-milestone-2b-composition.md): a `uses:` step may
+# not have a `for_each`; one root document per item covers the multi-item
+# case instead. Pinned by
+# `uses_for_each_fails_to_load_with_one_located_error`
+# (crates/willikins-dsl/tests/it/composition.rs). Must fail to load with
+# exactly:
+#   DocumentErrorKind::Semantic {
+#       path: "steps.a.for_each",
+#       message: "a `uses:` step may not have a `for_each` (milestone 2b decision (d12)); use a separate root document per item instead",
+#   }
+name: uses-for-each
+steps:
+  a:
+    uses: example-org
+    for_each: ${{ inputs.environments }}

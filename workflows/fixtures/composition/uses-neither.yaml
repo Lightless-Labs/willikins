@@ -1,0 +1,14 @@
+# Milestone 2b, decision (d1) and acceptance 2
+# (docs/plans/2026-10-05-milestone-2b-composition.md): a step must declare
+# exactly one of `tool` or `uses`; neither is refused. Pinned by
+# `uses_neither_fails_to_load_with_one_located_error`
+# (crates/willikins-dsl/tests/it/composition.rs). Must fail to load with
+# exactly:
+#   DocumentErrorKind::Semantic {
+#       path: "steps.a",
+#       message: "a step must declare exactly one of `tool` or `uses`",
+#   }
+name: uses-neither
+steps:
+  a:
+    with: {}

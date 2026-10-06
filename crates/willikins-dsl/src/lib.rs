@@ -47,9 +47,10 @@ mod reference;
 use std::fmt;
 use std::path::Path;
 
+use indexmap::IndexMap;
 use willikins_core::{
-    Binding, InputName, InputSpec, Node, NodeName, OutputName, PortName, ToolName, TypeRef, Value,
-    Workflow,
+    Binding, InputName, InputSpec, Node, NodeName, OutputName, PortName, ToolName, TypeRef, Uses,
+    Value, Workflow,
 };
 use willikins_types::DomainType;
 
@@ -419,30 +420,30 @@ fn document_to_workflow(document: &Document) -> Result<Workflow, DocumentError> 
         workflow = workflow.input(name, spec);
     }
 
-    for (raw_name, decl) in &document.steps {
+    for (position, (raw_name, decl)) in document.steps.iter().enumerate() {
         let path = format!("steps.{raw_name}");
         refuse_authored_slash(&path, raw_name)?;
         let name = NodeName::parse(raw_name)
             .map_err(|err| DocumentError::semantic(path.clone(), err.to_string()))?;
-        let tool = ToolName::parse(&decl.tool)
-            .map_err(|err| DocumentError::semantic(format!("{path}.tool"), err.to_string()))?;
-        let mut node = Node::new(tool);
 
-        if let Some(raw) = &decl.for_each {
-            let binding = reference::parse_for_each_value(raw)
-                .map_err(|message| DocumentError::semantic(format!("{path}.for_each"), message))?;
-            node = node.for_each(binding);
-        }
-
-        for (raw_port, raw_value) in &decl.with {
-            let port_path = format!("{path}.with.{raw_port}");
-            let port = PortName::parse(raw_port)
-                .map_err(|err| DocumentError::semantic(port_path.clone(), err.to_string()))?;
-            let binding = parse_with_binding(raw_value, &port_path)?;
-            node = node.port(port, binding);
-        }
-
-        workflow = workflow.node(name, node);
+        workflow = match (&decl.tool, &decl.uses) {
+            (Some(_), Some(_)) => {
+                return Err(DocumentError::semantic(
+                    path,
+                    "a step may declare exactly one of `tool` or `uses`, not both",
+                ));
+            }
+            (None, None) => {
+                return Err(DocumentError::semantic(
+                    path,
+                    "a step must declare exactly one of `tool` or `uses`",
+                ));
+            }
+            (Some(raw_tool), None) => add_tool_step(workflow, name, &path, raw_tool, decl)?,
+            (None, Some(raw_workflow)) => {
+                add_uses_step(workflow, name, &path, raw_workflow, position, decl)?
+            }
+        };
     }
 
     for (raw_name, raw_value) in &document.outputs {
@@ -454,6 +455,85 @@ fn document_to_workflow(document: &Document) -> Result<Workflow, DocumentError> 
     }
 
     Ok(workflow)
+}
+
+/// Add a `tool:` step: parse its tool name, its optional `for_each`, and
+/// every `with` port binding, then attach the resulting [`Node`] to
+/// `workflow`. Split out of [`document_to_workflow`]'s step loop, which
+/// also has `uses:`'s branch ([`add_uses_step`]) to make room for.
+fn add_tool_step(
+    workflow: Workflow,
+    name: NodeName,
+    path: &str,
+    raw_tool: &str,
+    decl: &StepDecl,
+) -> Result<Workflow, DocumentError> {
+    let tool = ToolName::parse(raw_tool)
+        .map_err(|err| DocumentError::semantic(format!("{path}.tool"), err.to_string()))?;
+    let mut node = Node::new(tool);
+
+    if let Some(raw) = &decl.for_each {
+        let binding = reference::parse_for_each_value(raw)
+            .map_err(|message| DocumentError::semantic(format!("{path}.for_each"), message))?;
+        node = node.for_each(binding);
+    }
+
+    for (raw_port, raw_value) in &decl.with {
+        let port_path = format!("{path}.with.{raw_port}");
+        let port = PortName::parse(raw_port)
+            .map_err(|err| DocumentError::semantic(port_path.clone(), err.to_string()))?;
+        let binding = parse_with_binding(raw_value, &port_path)?;
+        node = node.port(port, binding);
+    }
+
+    Ok(workflow.node(name, node))
+}
+
+/// Add a `uses:` step (milestone 2b decision (d1)): refuse a `for_each`
+/// (decision (d12)), parse the used workflow's name, and parse every
+/// `with` entry keyed by the used document's own [`InputName`] (not a
+/// [`crate::document::StepDecl`]'s `PortName`s -- a used document has no
+/// ports of its own). Split out of [`document_to_workflow`]'s step loop
+/// alongside [`add_tool_step`].
+fn add_uses_step(
+    workflow: Workflow,
+    name: NodeName,
+    path: &str,
+    raw_workflow: &str,
+    position: usize,
+    decl: &StepDecl,
+) -> Result<Workflow, DocumentError> {
+    // Checked before the name itself parses, so a well-formed `uses:`
+    // value proves this is decision (d12)'s refusal, not a parse error on
+    // the workflow name.
+    if decl.for_each.is_some() {
+        return Err(DocumentError::semantic(
+            format!("{path}.for_each"),
+            "a `uses:` step may not have a `for_each` (milestone 2b decision (d12)); use a \
+             separate root document per item instead",
+        ));
+    }
+    let used_workflow = willikins_types::WorkflowName::parse(raw_workflow)
+        .map_err(|err| DocumentError::semantic(format!("{path}.uses"), err.reason))?;
+
+    let mut with = IndexMap::new();
+    for (raw_input, raw_value) in &decl.with {
+        let input_path = format!("{path}.with.{raw_input}");
+        refuse_authored_slash(&input_path, raw_input)?;
+        let input = InputName::parse(raw_input)
+            .map_err(|err| DocumentError::semantic(input_path.clone(), err.to_string()))?;
+        let binding = parse_with_binding(raw_value, &input_path)?;
+        with.insert(input, binding);
+    }
+
+    Ok(workflow.uses(
+        name,
+        Uses {
+            workflow: used_workflow,
+            with,
+            position,
+        },
+    ))
 }
 
 /// Parse one `with` or output value into a [`Binding`], reporting a

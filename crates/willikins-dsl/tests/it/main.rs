@@ -2,6 +2,7 @@
 //! `docs/plans/2026-10-05-milestone-3k-faster-gates.md`).
 
 mod acceptance;
+mod composition;
 mod doppler_provisioning;
 mod property;
 mod site;
