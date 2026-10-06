@@ -12,6 +12,7 @@
 **Addendum:** 2026-09-12 — milestone 2 plan: two kinds of secret (graph secrets behind `SinkToken`, execution-context credentials behind one `authorize` function and a clippy entry); TLS terminated at the platform edge; the remote server plans and applies by workflow name only; a tool refuses rather than reconciles a non-key attribute it should not change; composition split out of milestone 2 into its own plan. See "Milestone 2 decisions".
 **Addendum:** 2026-09-23 — total conversions (milestone 3d): a port of type B accepts a scalar A iff A = B or a registered row A → B exists; one hop, no transitive search; secrecy only goes up, checked at compile time; check records the chosen conversion in Checked, and plan and apply apply it without the table. See `docs/plans/2026-09-23-milestone-3d-conversions.md`.
 **Addendum:** 2026-10-02 — milestone 3i: a Buildkite pipeline's stored configuration is written from a document-rendered RepoFile; identifier types print as prefixes on every output surface. See docs/plans/2026-10-02-milestone-3i-bootstrap-writer-and-identifier-masking.md.
+**Addendum:** 2026-10-06 — milestone 2b: composition. A step may `uses:` another document by name; the "one abstraction" survives at the signature (a document's typed inputs and outputs are what a caller binds), while execution is flattened: a linker inlines the used document's nodes as `<step>/<node>` before `check`, so check, plan, apply, the journal and approvals see one graph. See docs/plans/2026-10-05-milestone-2b-composition.md.
 
 Willikins is an open-source provisioning butler. An agent, over MCP or the CLI, authors and
 runs reusable, composable project-provisioning workflows against GitHub, Doppler, Buildkite,
@@ -426,8 +427,9 @@ These came up from memory during the conversation and have not been checked.
    **Completed:** 2026-09-12.
 2. Real GitHub and Doppler providers, `apply`, run ledger, approval gate, MCP server over
    stdio and Streamable HTTP. Plan: `docs/plans/2026-09-12-milestone-2-providers-apply-mcp.md`.
-2b. Composition: `Workflow` implements `Tool` with typed composite output ports. Plan to be
-   written when milestone 2 completes.
+2b. Composition: a step `uses:` another document by name, with typed inputs and outputs; the
+   linker flattens it into one graph (`<step>/<node>`). Plan:
+   `docs/plans/2026-10-05-milestone-2b-composition.md` (completed 2026-10-06).
 2c. Authorization: OAuth 2.1 on the MCP transport (the server as an OAuth resource server
    with protected-resource metadata, tokens validated against the operator's identity
    provider) and a browser login on the approvals page in place of Basic auth; short-lived
