@@ -94,6 +94,29 @@ Run these 4 gates before each commit:
 - `cargo test --workspace`
 - `cargo check -p willikins-types`
 
+## Documents compose
+
+A step can use another document instead of a tool. The used document is found by name in the same
+trusted directory, its typed inputs are bound like a tool's ports, and its declared outputs are read
+back like a tool's:
+
+```yaml
+steps:
+  org: { uses: example-org }
+  repo:
+    tool: github.repo.ensure
+    with:
+      org: ${{ steps.org.github_org }}
+      name: ${{ inputs.slug }}
+```
+
+Before `check`, a linker inlines the used document's nodes, renamed `<step>/<node>` (here
+`org/...`), so check, plan, apply, the journal and the approvals page all see one flat graph. No
+secret may be bound into a used document; an input the used document fixes with a default cannot be
+set by the caller. Cycles, nesting deeper than 8 and graphs over 2048 linked nodes are refused, and a
+plan records the hash of every used document, so applying an approved plan after any of them changed
+is refused. Examples: `workflows/fixtures/composition/`.
+
 ## Deploy
 
 Willikins runs as one Docker image. The `Dockerfile` at the repository root builds it.
