@@ -916,6 +916,8 @@ fn a_drift_refusal_carries_no_partial_result_and_a_tool_failure_does() {
             visibility: RepoVisibility::Private,
             ours: true,
             archived: false,
+            branches: None,
+            default_branch: None,
         },
     );
     let mut observer = RecordingObserver::new();
