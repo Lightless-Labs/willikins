@@ -70,6 +70,27 @@ running both), and the `mcp_server` snapshot's only diff is catching up task C1'
 to touch that snapshot. A caller discriminates `NotSettable` by `error.error.type_name == "NotSettable"`, not by a
 `kind` tag.
 
+**Addendum:** 2026-10-06 (task S1) — four points not spelled out by the task row. (1) **`catalog.rs` gets no
+functional change.** `live_catalog_for_document`'s own credential computation is never called from anywhere inside
+`willikins-server` itself — its only caller is `willikins-cli/src/commands.rs` (task K1), outside S1's gates — so
+there is no server-internal call site for S1 to hand the linked graph to. S1's actual contribution is the contract,
+stated on that function's own doc comment, plus a pinning test pair (`catalog.rs`'s own
+`an_unlinked_composite_hides_a_childs_node_from_the_credential_scan` /
+`the_linked_graph_surfaces_the_childs_node_under_its_renamed_path`) proving the unlinked root hides a used document's
+own node from the scan while the linked graph surfaces it under its renamed path — the exact failure K1 must avoid.
+(2) **`startup::Loaded.workflow` stays the authored, unlinked document**; only `Loaded.checked` is built from the
+*linked* graph (`check` refuses outright on an unlinked `uses:` step). This is deliberate, not an oversight:
+`WorkflowSummary::from(Loaded)` already reads only `loaded.workflow.inputs`/`.uses`, which are therefore already a
+composite's own authored surface, never a used document's fixed inputs or renamed nodes — task S3 should filter
+`WorkflowSummary` from `loaded.workflow`, not from `loaded.checked.workflow`. (3) **`Butler::validate` folds a
+linking failure into a normal `ok: false` response**, exactly as it already folds a `check` failure (both are
+`Vec<CheckError>` — `link`'s errors already are `CheckError`s); `Butler::describe` instead wraps the identical list
+as `ButlerError::Check`, exactly as it already does for its own `check` call. Each method keeps its own pre-existing
+success/error split; linking adds no new one. (4) **`Butler::describe` filters `Description::resolved`** to drop
+every fixed input before returning (ties to R1; acceptance 7's "the MCP `describe` response ... do not show it").
+`willikins_core::Description` itself is untouched — core is outside S1's gates, and changing it would regenerate the
+server's `mcp_server` snapshot, which is not this task's to touch.
+
 ## Goal
 
 1. **Part P (the document).** A step may say `uses: <workflow-name>` instead of `tool: <tool-name>`. It binds the

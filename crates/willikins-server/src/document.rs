@@ -20,9 +20,11 @@
 //! `docs/research/2026-09-14-executor-journal-adversarial-pass-1.md`'s
 //! plan-identity attack needs caught.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use willikins_core::Workflow;
+use willikins_core::compose::ResolveFailure;
 use willikins_dsl::DocumentError;
 use willikins_journal::DocumentSha256;
 use willikins_types::WorkflowName;
@@ -117,6 +119,81 @@ pub fn load_named_document(
     Ok((DocumentSha256::compute(&bytes), workflow))
 }
 
+/// A [`willikins_core::compose::link`] resolver rooted at one trusted
+/// directory -- milestone 2b decision (d8): "children resolve in the
+/// trusted directory through `load_named_document`". Every `uses:` step
+/// `link` asks this to resolve goes through [`load_named_document`]
+/// against [`Self`]'s own `dir`, so a child is found exactly where trust
+/// boundary 1 says it must be: by name, in the parent's own directory,
+/// never a path, a symlink, or a body-supplied document.
+///
+/// Every document this resolver successfully loads is recorded by name in
+/// [`Self::shas`] -- the running closure a `link` call built up so far.
+/// `Butler::plan` (task S2) reads it once `link` returns `Ok`, to fill
+/// `PlanRecorded.used` (decision (d10)); this task's own callers
+/// ([`crate::startup::scan_directory`], `Butler::validate`/`describe`)
+/// only care that `link` itself succeeded or failed, and do not read it
+/// yet.
+pub struct TrustedResolver<'a> {
+    dir: &'a Path,
+    shas: BTreeMap<WorkflowName, DocumentSha256>,
+}
+
+impl<'a> TrustedResolver<'a> {
+    /// A fresh resolver rooted at `dir`, having resolved nothing yet.
+    #[must_use]
+    pub fn new(dir: &'a Path) -> Self {
+        Self {
+            dir,
+            shas: BTreeMap::new(),
+        }
+    }
+
+    /// Resolve `name` the way [`willikins_core::compose::link`]'s own
+    /// `resolve` callback expects: [`load_named_document`] under this
+    /// resolver's directory, recording the loaded document's sha on
+    /// success.
+    ///
+    /// # Errors
+    ///
+    /// [`ResolveFailure::NotFound`] when no such document exists;
+    /// [`ResolveFailure::Refused`] for a symlinked or internally
+    /// name-mismatched one -- deliberately not told apart, matching
+    /// [`LoadError`]'s own docs, so a caller probing for either learns
+    /// nothing a legitimate lookup would not; or [`ResolveFailure::Document`]
+    /// when the named document exists but fails to parse.
+    pub fn resolve(&mut self, name: &WorkflowName) -> Result<Workflow, ResolveFailure> {
+        match load_named_document(self.dir, name) {
+            Ok((sha, workflow)) => {
+                self.shas.insert(name.clone(), sha);
+                Ok(workflow)
+            }
+            Err(LoadError::NotFound) => Err(ResolveFailure::NotFound),
+            Err(LoadError::Symlink(_) | LoadError::NameMismatch { .. }) => {
+                Err(ResolveFailure::Refused)
+            }
+            Err(LoadError::Document(error)) => Err(ResolveFailure::Document {
+                message: error.to_string(),
+            }),
+        }
+    }
+
+    /// Every document this resolver has loaded so far, by name -- the
+    /// closure a `link` call actually used.
+    ///
+    /// Not read by any caller yet: this task (S1) only needs `link`
+    /// itself to succeed or fail. `#[allow(dead_code)]` rather than
+    /// deleting it, the same way [`LoadError::Symlink`]'s own unread
+    /// field is kept, since task S2 (`Butler::plan` filling
+    /// `PlanRecorded.used`, decision (d10)) is this method's documented
+    /// future reader, and this module's own tests already exercise it.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn shas(&self) -> &BTreeMap<WorkflowName, DocumentSha256> {
+        &self.shas
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +286,79 @@ mod tests {
             load_named_document(dir.path(), &wf("foo")),
             Err(LoadError::Document(_))
         ));
+    }
+
+    // -------------------------------------------------------------
+    // TrustedResolver (milestone 2b, task S1, decision (d8))
+    // -------------------------------------------------------------
+
+    #[test]
+    fn trusted_resolver_resolves_a_sibling_and_records_its_sha() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "child.yaml", &doc_named("child"));
+        let mut resolver = TrustedResolver::new(dir.path());
+        let workflow = resolver.resolve(&wf("child")).unwrap();
+        assert_eq!(workflow.name.as_str(), "child");
+        assert_eq!(
+            resolver.shas().get(&wf("child")),
+            Some(&DocumentSha256::compute(doc_named("child").as_bytes()))
+        );
+    }
+
+    #[test]
+    fn trusted_resolver_reports_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut resolver = TrustedResolver::new(dir.path());
+        assert_eq!(
+            resolver.resolve(&wf("missing")).unwrap_err(),
+            ResolveFailure::NotFound
+        );
+        assert!(resolver.shas().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trusted_resolver_refuses_a_symlinked_child_without_recording_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write(outside.path(), "real.yaml", &doc_named("child"));
+        std::os::unix::fs::symlink(
+            outside.path().join("real.yaml"),
+            dir.path().join("child.yaml"),
+        )
+        .unwrap();
+        let mut resolver = TrustedResolver::new(dir.path());
+        assert_eq!(
+            resolver.resolve(&wf("child")).unwrap_err(),
+            ResolveFailure::Refused
+        );
+        assert!(resolver.shas().is_empty());
+    }
+
+    #[test]
+    fn trusted_resolver_refuses_a_name_mismatched_child_as_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "child.yaml", &doc_named("other"));
+        let mut resolver = TrustedResolver::new(dir.path());
+        assert_eq!(
+            resolver.resolve(&wf("child")).unwrap_err(),
+            ResolveFailure::Refused
+        );
+        assert!(resolver.shas().is_empty());
+    }
+
+    #[test]
+    fn trusted_resolver_reports_a_malformed_child_as_document() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "child.yaml", "not: [valid, workflow");
+        let mut resolver = TrustedResolver::new(dir.path());
+        match resolver.resolve(&wf("child")) {
+            Err(ResolveFailure::Document { .. }) => {}
+            other => panic!("expected Document, got {other:?}"),
+        }
+    }
+
+    fn doc_named(name: &str) -> String {
+        format!("name: {name}\ndescription: a workflow\nsteps: {{}}\n")
     }
 }

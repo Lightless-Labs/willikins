@@ -265,20 +265,70 @@ impl Butler {
         }
     }
 
+    /// Link `workflow`'s own `uses:` tree against this `Butler`'s trusted
+    /// workflow directory (milestone 2b, decision (d8); trust boundary 2:
+    /// "a body never supplies a child" -- `workflow` may itself have come
+    /// from a caller-supplied body ([`DocumentSource::Body`]), but every
+    /// document *it* `uses:` is always resolved here, by name, in
+    /// [`Self::workflows_dir`], never from anything the body carried).
+    ///
+    /// Used by [`Self::validate_inner`] and [`Self::describe_inner`],
+    /// which both need a flat graph before calling
+    /// [`willikins_core::check`] (a non-empty `Workflow::uses` reaching
+    /// `check` unlinked is refused outright, `CheckError::Unlinked`).
+    /// [`Self::plan_inner`] and [`Self::reload_and_check`] do **not** go
+    /// through this yet -- recording the linked closure
+    /// (`PlanRecorded.used`) and comparing it across `plan`/`apply` is
+    /// task S2's own job, not this one's.
+    ///
+    /// Returns the raw [`willikins_core::CheckError`]s rather than
+    /// already wrapping them in a [`ButlerError`]: `validate_inner` folds
+    /// a link failure into a normal (`ok: false`) [`ValidateResponse`],
+    /// the same way it already folds a `check` failure, while
+    /// `describe_inner` wraps the identical list as [`ButlerError::Check`]
+    /// -- exactly as it already does for its own `check` call. Each
+    /// caller's own choice, not this method's.
+    ///
+    /// # Errors
+    ///
+    /// Whichever [`CheckError`](willikins_core::CheckError)s
+    /// [`willikins_core::link`] returned -- a cycle, an unknown or
+    /// unparsable child, or a boundary refusal.
+    fn link_source(
+        &self,
+        workflow: &willikins_core::Workflow,
+    ) -> Result<willikins_core::Workflow, Vec<willikins_core::CheckError>> {
+        let mut resolver = document::TrustedResolver::new(&self.workflows_dir);
+        willikins_core::link(workflow, &mut |name| resolver.resolve(name))
+            .map(|linked| linked.workflow)
+    }
+
     // -------------------------------------------------------------
     // read operations: validate, describe, list_tools, propose_slug
     // -------------------------------------------------------------
 
-    /// Parse and statically `check` `source`, with no provider call.
+    /// Parse, link, and statically `check` `source`, with no provider
+    /// call.
     ///
     /// A [`DocumentSource::Body`] over the DSL's byte cap, or carrying a
     /// YAML anchor or alias, is refused as [`ButlerError::Document`] --
     /// the DSL's own error, never folded into a fabricated `check`
     /// failure -- because `parse_document` runs those checks before a
     /// [`willikins_core::Workflow`] exists to `check` at all. A document
-    /// that parses but fails `check` is reported as a normal (`ok: false`)
-    /// [`ValidateResponse`], not an `Err`: `check` failures are exactly
-    /// what a caller is asking to see.
+    /// that parses but fails to *link* or to `check` is reported as a
+    /// normal (`ok: false`) [`ValidateResponse`], not an `Err`: both kinds
+    /// of failure are exactly what a caller is asking to see, and both
+    /// report through the same [`willikins_core::CheckError`] shape
+    /// (`link`'s own errors already are one -- milestone 2b, decision
+    /// (d8)).
+    ///
+    /// **Trust boundary 2: a body never supplies a child.** `source` may
+    /// itself be a caller-supplied body ([`DocumentSource::Body`]), but
+    /// every document it `uses:` is always resolved in this `Butler`'s
+    /// own trusted workflow directory, by name, through
+    /// [`Self::link_source`] -- never from anything the body carried, and
+    /// never a different directory than a trusted-name `source` would
+    /// use.
     ///
     /// Rate-limited: shares the combined `describe`/`validate` bucket
     /// (see `crate::rate_limit`).
@@ -310,6 +360,16 @@ impl Butler {
 
     fn validate_inner(&self, source: &DocumentSource) -> Result<ValidateResponse, ButlerError> {
         let workflow = self.load_source(source)?;
+        let workflow = match self.link_source(&workflow) {
+            Ok(workflow) => workflow,
+            Err(errors) => {
+                return Ok(ValidateResponse {
+                    ok: false,
+                    errors,
+                    warnings: Vec::new(),
+                });
+            }
+        };
         Ok(match willikins_core::check(&workflow, &self.catalog) {
             Ok(checked) => ValidateResponse {
                 ok: true,
@@ -324,16 +384,26 @@ impl Butler {
         })
     }
 
-    /// Load, `check`, and [`willikins_core::describe`] `source` against
-    /// `partial`'s raw inputs, with no provider call.
+    /// Load, link, `check`, and [`willikins_core::describe`] `source`
+    /// against `partial`'s raw inputs, with no provider call. See
+    /// [`Self::validate`]'s doc for linking and trust boundary 2 ("a body
+    /// never supplies a child"), which apply here identically.
     ///
     /// The returned [`willikins_core::Description`] carries its own
     /// `errors` (rejected raw values) and `missing` (undeclared inputs)
     /// fields *inside* a successful result -- `describe` itself never
-    /// fails on bad inputs, only on a document that will not even parse
-    /// or `check` (see `todos/2026-09-12-error-json-uniformity-gaps.md`
+    /// fails on bad inputs, only on a document that will not even parse,
+    /// link, or `check` (see `todos/2026-09-12-error-json-uniformity-gaps.md`
     /// item 1: this is the "result field, not an error" answer that todo
     /// asked task 10a to pin).
+    ///
+    /// **Omits every fixed input** (milestone 2b, decision (d6)) from
+    /// `Description::resolved` -- the one field
+    /// [`willikins_core::describe`] itself deliberately still fills for a
+    /// fixed input, since `Butler::plan_inner` needs it unfiltered. This
+    /// method is the agent-facing surface (the MCP `describe` response,
+    /// and, through the same type, the CLI's own) that hides it instead,
+    /// since a caller can never set one anyway.
     ///
     /// Rate-limited: shares the combined `describe`/`validate` bucket.
     ///
@@ -369,9 +439,30 @@ impl Butler {
         partial: &PartialInputs,
     ) -> Result<willikins_core::Description, ButlerError> {
         let workflow = self.load_source(source)?;
+        let workflow = self
+            .link_source(&workflow)
+            .map_err(|errors| ButlerError::Check { errors })?;
         let checked = willikins_core::check(&workflow, &self.catalog)
             .map_err(|errors| ButlerError::Check { errors })?;
-        Ok(willikins_core::describe(&checked, partial))
+        let mut description = willikins_core::describe(&checked, partial);
+        // Milestone 2b, decision (d6): `willikins_core::Description::resolved`
+        // deliberately *keeps* every fixed input (`Butler::plan_inner`
+        // passes it straight to `willikins_core::plan`, which needs a
+        // fixed input's own value to bind every reference to it). This
+        // method is the agent-facing surface `Description`'s own doc says
+        // must hide one instead -- the MCP `describe` response and (through
+        // the same `Description`) the CLI's `describe` output (K1's own
+        // pin) -- since a caller can never set a fixed input anyway (R1:
+        // `describe` already reports `NotSettable` if it tries). `missing`
+        // and `awaiting` already exclude a fixed input on their own (it is
+        // always defaulted); only `resolved` needs filtering here.
+        description
+            .resolved
+            .retain(|name, _| match checked.workflow.inputs.get(name) {
+                Some(spec) => spec.fixed_by.is_none(),
+                None => true,
+            });
+        Ok(description)
     }
 
     /// The full tool and type catalog, as

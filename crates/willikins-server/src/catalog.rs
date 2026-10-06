@@ -739,6 +739,19 @@ impl std::error::Error for DocumentCredentialError {}
 /// is known exactly, so the requirement is computed from `document.nodes`
 /// here rather than guessed or demanded wholesale.
 ///
+/// **`document` must already be the *linked*, flattened graph** when it
+/// may hold a `uses:` step (milestone 2b, `willikins_core::link`; verify
+/// item 7 of `docs/plans/2026-10-05-milestone-2b-composition.md`): this
+/// function only ever scans `document.nodes`, which does not include a
+/// used document's own nodes until linking has renamed and inlined them.
+/// Handed the *unlinked* root of a composite whose only Buildkite (or
+/// GitHub) node sits inside a used document, this would silently compute
+/// "no Buildkite credential needed" for a document that very much does.
+/// This function's own caller (`willikins-cli`'s `commands.rs`, task K1)
+/// is the one that must link before calling it; nothing here does so
+/// itself, since this module has no trusted directory to resolve a child
+/// in.
+///
 /// `willikins-tools`' pure tools are always inserted (no provider, no
 /// credential). Each of GitHub/Doppler/Buildkite/`SigNoz` is inserted
 /// whenever `document` has at least one node calling one of that
@@ -1151,6 +1164,64 @@ mod tests {
         let tool =
             first_tool_for(&workflow, Provider::GitHub).expect("the document has a github node");
         assert_eq!(tool.as_str(), "github.repo.ensure");
+    }
+
+    // -------------------------------------------------------------
+    // Milestone 2b, task S1, verify item 7: `live_catalog_for_document`'s
+    // own credential computation reads `document.nodes`, which does not
+    // include a used document's own nodes until `willikins_core::link`
+    // has flattened them in. Pins the contract this module's doc comment
+    // states: a caller (K1) must hand this function the *linked* graph.
+    // -------------------------------------------------------------
+
+    /// A trivial document whose one node calls a Buildkite tool.
+    fn buildkite_child() -> Workflow {
+        Workflow::new(willikins_types::WorkflowName::parse("bk-child").unwrap()).node(
+            willikins_core::NodeName::parse("bk").unwrap(),
+            willikins_core::Node::new(ToolName::parse("buildkite.cluster.get").unwrap()),
+        )
+    }
+
+    /// A root with no nodes of its own, `uses: bk-child` at step `c`.
+    fn root_using_buildkite_child() -> Workflow {
+        Workflow::new(willikins_types::WorkflowName::parse("root").unwrap()).uses(
+            willikins_core::NodeName::parse("c").unwrap(),
+            willikins_core::Uses {
+                workflow: willikins_types::WorkflowName::parse("bk-child").unwrap(),
+                with: indexmap::IndexMap::new(),
+                position: 0,
+            },
+        )
+    }
+
+    #[test]
+    fn an_unlinked_composite_hides_a_childs_node_from_the_credential_scan() {
+        let root = root_using_buildkite_child();
+        // `root.nodes` is empty: the child's own node has not been
+        // inlined yet, so scanning the unlinked root sees no Buildkite
+        // node at all -- exactly the silent undercounting this module's
+        // own doc now warns against.
+        assert!(first_tool_for(&root, Provider::Buildkite).is_none());
+        assert!(first_unbound_node_for(&root, Provider::Buildkite).is_none());
+    }
+
+    #[test]
+    fn the_linked_graph_surfaces_the_childs_node_under_its_renamed_path() {
+        let root = root_using_buildkite_child();
+        let child = buildkite_child();
+        let linked = willikins_core::link(&root, &mut |name| {
+            if name.as_str() == "bk-child" {
+                Ok(child.clone())
+            } else {
+                Err(willikins_core::ResolveFailure::NotFound)
+            }
+        })
+        .expect("a trivial, acyclic composite links cleanly");
+
+        let (node_name, tool) = first_unbound_node_for(&linked.workflow, Provider::Buildkite)
+            .expect("the linked graph has the child's own buildkite node");
+        assert_eq!(node_name.as_str(), "c/bk");
+        assert_eq!(tool.as_str(), "buildkite.cluster.get");
     }
 
     // -------------------------------------------------------------

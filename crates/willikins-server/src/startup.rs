@@ -27,10 +27,12 @@
 
 use std::path::{Path, PathBuf};
 
-use willikins_core::{Catalog, CheckError, Checked, Workflow, check};
+use willikins_core::{Catalog, CheckError, Checked, Workflow, check, link};
 use willikins_dsl::DocumentError;
 use willikins_journal::DocumentSha256;
 use willikins_types::{DomainType, WorkflowName};
+
+use crate::document::TrustedResolver;
 
 /// Why [`scan_directory`] (and so [`crate::Butler::start`] or
 /// [`crate::Butler::list_workflows`]) refused, naming the file.
@@ -79,6 +81,23 @@ pub enum StartupError {
         /// The parse failure.
         error: DocumentError,
     },
+    /// The file parsed, but linking its `uses:` tree (milestone 2b,
+    /// `willikins_core::compose::link`) failed -- a cycle, an unknown or
+    /// unparsable child, or a boundary refusal, each resolved against
+    /// this same trusted directory (decision (d8): "children resolve in
+    /// the trusted directory"; §2.3: "a cycle refuses startup"). Checked
+    /// before `check` itself, since `check` refuses outright
+    /// ([`CheckError::Unlinked`]) on a document that still has an
+    /// unlinked `uses:` step.
+    Compose {
+        /// The top-level document whose own `link` call failed -- always
+        /// one of this scan's own candidates, even when the actual
+        /// defect sits inside a transitively-resolved child (the linker
+        /// walks the whole tree from this document down).
+        path: PathBuf,
+        /// Every error the linker returned.
+        errors: Vec<CheckError>,
+    },
     /// The file parsed but failed `check` against the catalog.
     Check {
         /// The file.
@@ -113,6 +132,22 @@ impl std::fmt::Display for StartupError {
                 path.display()
             ),
             Self::Document { path, error } => write!(f, "{}: {error}", path.display()),
+            Self::Compose { path, errors } => {
+                // `link` is first-error-wins (milestone 2b, task L2's own
+                // doc), so this is normally exactly one error -- but every
+                // one is joined, never only the count, so a cycle's own
+                // `CheckError::UsesCycle` Display (which names the chain)
+                // actually reaches whoever reads this message, matching
+                // acceptance 9's "refuses startup, naming the chain".
+                write!(f, "{}: fails to link: ", path.display())?;
+                for (index, error) in errors.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, "; ")?;
+                    }
+                    write!(f, "{error}")?;
+                }
+                Ok(())
+            }
             Self::Check { path, errors } => {
                 write!(
                     f,
@@ -137,9 +172,18 @@ pub struct Loaded {
     pub name: WorkflowName,
     /// The document bytes' content hash.
     pub document_sha256: DocumentSha256,
-    /// The parsed document.
+    /// The parsed document, exactly as authored -- unlinked: its own
+    /// `uses:` steps (if any) are still on [`Workflow::uses`], never
+    /// expanded. Kept this way (rather than the flattened graph
+    /// [`Self::checked`] holds) so a caller reading `workflow.inputs` or
+    /// `workflow.uses` sees only this document's own authored surface,
+    /// never a used document's fixed inputs or renamed nodes.
     pub workflow: Workflow,
-    /// The result of `check`ing it against the catalog.
+    /// The result of `check`ing this document's *linked* graph (milestone
+    /// 2b, decision (d8)): [`Checked::workflow`] is the flattened
+    /// workflow [`willikins_core::link`] produced, not [`Self::workflow`]
+    /// unchanged -- `check` refuses outright on one that still has an
+    /// unlinked `uses:` step.
     pub checked: Checked,
 }
 
@@ -218,7 +262,24 @@ pub fn scan_directory(dir: &Path, catalog: &Catalog) -> Result<Vec<Loaded>, Star
             message: err.to_string(),
         })?;
 
-        let checked = check(&workflow, catalog).map_err(|errors| StartupError::Check {
+        // Milestone 2b, decision (d8): link this document's own `uses:`
+        // tree against the trusted directory itself (every document a
+        // root names resolves right here, by name, in this same `dir`)
+        // before `check` ever sees it -- `check` refuses outright
+        // (`CheckError::Unlinked`) on a document that still has one.
+        // This is what makes a cross-document cycle, an unknown or
+        // unparsable child, or a boundary refusal fail *startup*, naming
+        // this top-level document, rather than surfacing only once
+        // something later tries to `plan`/`apply` it.
+        let mut resolver = TrustedResolver::new(dir);
+        let linked = link(&workflow, &mut |used| resolver.resolve(used)).map_err(|errors| {
+            StartupError::Compose {
+                path: path.clone(),
+                errors,
+            }
+        })?;
+
+        let checked = check(&linked.workflow, catalog).map_err(|errors| StartupError::Check {
             path: path.clone(),
             errors,
         })?;
@@ -399,6 +460,99 @@ mod tests {
             scan_directory(dir.path(), &empty_catalog()),
             Err(StartupError::Check { .. })
         ));
+    }
+
+    // -------------------------------------------------------------
+    // Composition (milestone 2b, task S1, decision (d8)): `scan_directory`
+    // links every top-level document against the directory itself before
+    // `check`ing it.
+    // -------------------------------------------------------------
+
+    #[test]
+    fn a_cross_document_cycle_refuses_startup_naming_the_document_and_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.yaml",
+            "name: a\nsteps:\n  to_b:\n    uses: b\n",
+        );
+        write(
+            dir.path(),
+            "b.yaml",
+            "name: b\nsteps:\n  to_a:\n    uses: a\n",
+        );
+        // `scan_directory`'s `Ok` side (`Vec<Loaded>`) has no `Debug`, so
+        // this is matched directly rather than through `.unwrap_err()`
+        // (which needs one even on the never-taken `Ok` arm).
+        let Err(error) = scan_directory(dir.path(), &empty_catalog()) else {
+            panic!("a cross-document cycle must refuse the scan");
+        };
+        // The chain itself must actually reach whoever reads the message
+        // -- acceptance 9's "refuses startup, naming the chain" -- not
+        // just a count of how many errors `link` returned.
+        let message = error.to_string();
+        assert!(message.contains("a -> b -> a"), "{message}");
+        match error {
+            StartupError::Compose { path, errors } => {
+                assert_eq!(path.file_name().unwrap(), "a.yaml");
+                match errors.as_slice() {
+                    [CheckError::UsesCycle { chain }] => {
+                        let names: Vec<&str> = chain.iter().map(WorkflowName::as_str).collect();
+                        assert_eq!(names, ["a", "b", "a"]);
+                    }
+                    other => panic!("expected exactly one UsesCycle, got {other:?}"),
+                }
+            }
+            other => panic!("expected Compose/UsesCycle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unknown_child_refuses_startup_naming_the_document() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "root.yaml",
+            "name: root\nsteps:\n  child:\n    uses: ghost\n",
+        );
+        match scan_directory(dir.path(), &empty_catalog()) {
+            Err(StartupError::Compose { path, errors }) => {
+                assert_eq!(path.file_name().unwrap(), "root.yaml");
+                assert!(
+                    matches!(errors.as_slice(), [CheckError::UnknownWorkflow { .. }]),
+                    "{errors:?}"
+                );
+            }
+            other => panic!(
+                "expected Compose/UnknownWorkflow, got {}",
+                debug_kind(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn a_document_using_a_trusted_sibling_links_before_check() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "child.yaml", "name: child\nsteps: {}\n");
+        write(
+            dir.path(),
+            "root.yaml",
+            "name: root\nsteps:\n  c:\n    uses: child\n",
+        );
+        let loaded = scan_directory(dir.path(), &empty_catalog()).unwrap();
+        let names: Vec<&str> = loaded.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, ["child", "root"]);
+
+        let root = loaded
+            .iter()
+            .find(|entry| entry.name.as_str() == "root")
+            .unwrap();
+        // The root's own authored document still names its `uses:` step
+        // unexpanded (`Loaded::workflow`'s own doc).
+        assert!(!root.workflow.uses.is_empty());
+        // ...but `check` ran against the *linked*, flattened graph, which
+        // has no `uses:` left at all.
+        assert!(root.checked.workflow.uses.is_empty());
     }
 
     #[cfg(unix)]
