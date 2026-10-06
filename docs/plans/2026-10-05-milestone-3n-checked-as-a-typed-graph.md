@@ -29,6 +29,24 @@ secret-on-non-secret lie moved to a new `SecretLeakEnsureTool`. `docs/research/2
 "Handed to pass 2" entry is now closed; flagged for D1 to update (names the superseded test). Verify item 5: zero
 in-tree tools (willikins-providers-fake and all six provider crates) returned a wrong-typed output on any existing
 test, so no provider-crate fix commits were needed.
+**Addendum:** 2026-10-06 — F3, two corrections found landing it. First, decision (f3) says `known_dyn_as` tests the
+object "through the global registry", and SHARED VALUES' signature carries no registry parameter; that cannot be
+right once a caller's `Catalog` is not built over the global registry, which is exactly what every 3d conversion
+fixture does (`tests/it/apply.rs`'s `registry()` leaks its own `TypeRegistry` holding only its local `ConvA`/`ConvB`
+types). `plan`'s `for_each` keying, tested against the global registry, raised a spurious `EdgeTypeMismatch` on the
+otherwise untouched, currently-green `apply::conversions::keyed_and_item_edges_deliver_known_b` — acceptance test 6
+forbids breaking it, and it is real evidence, not a hypothetical. `known_dyn_as` gained a leading
+`registry: &TypeRegistry` parameter, the same shape `is_operator_acknowledgement`'s and `is_template_source`'s own
+doc comments already justify for the identical reason; `plan`'s keying passes `catalog.registry()` (the same
+registry `check_input_types` already validated the source's declared element type against, immediately before any
+node is planned); the three test-only callers (`value.rs`, `disclosure.rs`, `willikins-server/src/mcp.rs`) pass
+`willikins_types::registry()`. Second, verify item 3 is now settled empirically rather than left open: a minimal
+two-crate probe outside this workspace (not committed) confirmed that both `cargo check` and trybuild's
+`compile_fail` (which compiles in a `cargo check`-equivalent, no-codegen mode) miss a `const { assert!(...) }`
+failure inside a generic function body — the assertion is only evaluated at monomorphization, which codegen
+reaches and type-checking does not — while `cargo build` and a rustdoc `compile_fail` doctest both catch it. F3
+therefore places the compile-fail proof as a doctest on `Value::known`, exactly as the plan's own fallback
+anticipated, and does not add a trybuild case for this acceptance test.
 
 ## Goal
 
