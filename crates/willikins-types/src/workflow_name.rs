@@ -18,6 +18,28 @@
 )]
 pub struct WorkflowName(String);
 
+// `#[derive(DomainType)]` emits `Clone`/`PartialEq`/`Eq`/`Debug` only (see
+// `willikins-derive`'s `structural_eq_and_clone`), never an ordering --
+// most domain types have no use for one, and the macro must not hand
+// `Ord` to a *secret* storage, where even a constant-time comparison
+// would leak length through timing. `WorkflowName` is never secret (it
+// names a document, not a value), and milestone 2b's `PlanRecorded.used`
+// (decision (d10), willikins-journal) is keyed on it in a `BTreeMap`,
+// which needs `Ord` on the key. Implemented here by hand, delegating to
+// the same field `PartialEq` already compares, rather than widening the
+// macro for every domain type at once.
+impl PartialOrd for WorkflowName {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for WorkflowName {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +161,20 @@ mod tests {
     #[test]
     fn example_parses() {
         crate::assert_example_parses::<WorkflowName>();
+    }
+
+    #[test]
+    fn orders_by_its_text_so_a_btreemap_can_key_on_it() {
+        let a = WorkflowName::parse("example-org").unwrap();
+        let b = WorkflowName::parse("new-rust-service").unwrap();
+        assert!(a < b, "lexicographic order must hold on the inner string");
+
+        let map = std::collections::BTreeMap::from([(b.clone(), 2), (a.clone(), 1)]);
+        let names: Vec<&WorkflowName> = map.keys().collect();
+        assert_eq!(
+            names,
+            vec![&a, &b],
+            "a BTreeMap keyed on it iterates sorted"
+        );
     }
 }
