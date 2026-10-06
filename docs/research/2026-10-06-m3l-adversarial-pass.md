@@ -1,8 +1,10 @@
 # Milestone 3l, task X1: adversarial pass on the new-repository scaffold
 
 **Date:** 2026-10-06
-**Run as:** this session (delegate: opus, per the plan's task table; run under whichever
-model the harness dispatched this task to -- see the session's own `notes`).
+**Run as:** Sonnet 5. The plan's task table delegates X1 to opus; the harness dispatched this
+session to run it anyway. The `Co-Authored-By` trailers on `5d96227` and `e0d9114` record the
+same. Whether the coordinator wants a second, independent pass before marking the plan Completed
+is theirs to decide.
 **Scope:** `crates/willikins-providers-github/src/client.rs`,
 `crates/willikins-providers-github/src/tools/scaffold_ensure.rs`, their mock tests under
 `crates/willikins-providers-github/tests/it/`, and the fake's mirror in
@@ -33,8 +35,8 @@ new test -- none did, once the two gaps below were closed.
 | 7 | `client.rs`, `suppress_first_file_response_body` | Added `422` to the `401`/`403` allowlist that is let through with its response body intact | "a body fragment leaking into any error (violates trust boundary 4...)" | `create_first_file_409_422_404_report_the_shared_failure_message_without_echoing_the_body` |
 
 All seven mutations were caught. Five by tests that already existed; two (5 and 6) needed a new
-test, both now landed in the same commit as this document
-(`crates/willikins-providers-github/tests/it/scaffold_ensure_mock.rs`).
+test, both landed in the commit immediately preceding this document's (`5d96227`, in
+`crates/willikins-providers-github/tests/it/scaffold_ensure_mock.rs`).
 
 ## Findings
 
@@ -110,10 +112,10 @@ unmoved-head case right above it in the same file).
 
 ## Verdict
 
-Zero bypasses survive. Two real coverage gaps found and closed, both as new tests in the same
-commit as this document (`crates/willikins-providers-github/tests/it/scaffold_ensure_mock.rs`,
-commit `5d96227`). No source file was left mutated; every mutation above was restored and
-confirmed byte-identical to the pre-mutation copy before the next one began.
+Zero bypasses survive. Two real coverage gaps found and closed, both as new tests in commit
+`5d96227` (`crates/willikins-providers-github/tests/it/scaffold_ensure_mock.rs`), immediately
+preceding this document's own commit. No source file was left mutated; every mutation above was
+restored and confirmed byte-identical to the pre-mutation copy before the next one began.
 
 ## Gates run (scoped, this task only)
 
