@@ -21,6 +21,7 @@ mod appstore_profile_apply_redaction;
 mod cli;
 mod identifier_masking;
 mod inherited_secret_gate_document;
+mod new_repository_scaffold_document;
 mod no_gh_writes_guard;
 mod prerendered_identifier_guards;
 mod serve_and_live;

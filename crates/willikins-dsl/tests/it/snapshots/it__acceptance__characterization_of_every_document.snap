@@ -575,6 +575,26 @@ CHECK ERRORS:
 CHECK ERRORS:
 - kind=UnknownPort display=names.for_each (tool `naming.v1`): no such port json={"kind":"UnknownPort","site":{"kind":"port","node":"names","port":"for_each"},"tool":"naming.v1"}
 
+=== workflows/github-new-repository-scaffold.yaml ===
+WARNINGS:
+TYPES:
+repo.repo: GitHubRepo
+repo.visibility: RepoVisibility
+editorconfig_file.path: RepoPath
+editorconfig_file.template: TemplateSource
+readme_file.path: RepoPath
+readme_file.template: TemplateSource
+scaffold.repo: GitHubRepo
+scaffold.branch: GitBranchName
+scaffold.marker: RepoPath
+scaffold.files: RepoFile
+scaffold.message: CommitHeadline
+OUTPUTS:
+repo_url: HttpsUrl
+PLAN:
+plan_json: {"workflow":"github-new-repository-scaffold","nodes":[{"name":"repo","instance":null,"tool":"github.repo.ensure","action":"create","inputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"visibility":{"type":"RepoVisibility","list":false,"state":"known","value":"private"}},"outputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"url":{"type":"HttpsUrl","list":false,"state":"known","value":"https://github.com/lightless-labs/third-thoughts"}}},{"name":"editorconfig_file","instance":null,"tool":"repo.file.render","action":"compute","inputs":{"path":{"type":"RepoPath","list":false,"state":"known","value":".editorconfig"},"template":{"type":"TemplateSource","list":false,"state":"known","value":"root = true\n"}},"outputs":{"file":{"type":"RepoFile","list":false,"state":"known","value":".editorconfig\nroot = true\n"}}},{"name":"readme_file","instance":null,"tool":"repo.file.render","action":"compute","inputs":{"path":{"type":"RepoPath","list":false,"state":"known","value":"README.md"},"template":{"type":"TemplateSource","list":false,"state":"known","value":"# Scaffolded by willikins\n"}},"outputs":{"file":{"type":"RepoFile","list":false,"state":"known","value":"README.md\n# Scaffolded by willikins\n"}}},{"name":"scaffold","instance":null,"tool":"github.scaffold.ensure","action":"create","inputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"branch":{"type":"GitBranchName","list":false,"state":"known","value":"main"},"marker":{"type":"RepoPath","list":false,"state":"known","value":".willikins-scaffold"},"files":{"type":"RepoFile","list":true,"state":"known","value":[".editorconfig\nroot = true\n","README.md\n# Scaffolded by willikins\n"]},"message":{"type":"CommitHeadline","list":false,"state":"known","value":"chore: scaffold the repository"}},"outputs":{"repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"branch":{"type":"GitBranchName","list":false,"state":"known","value":"main"},"marker":{"type":"RepoPath","list":false,"state":"known","value":".willikins-scaffold"}}}],"outputs":{"repo_url":{"type":"HttpsUrl","list":false,"state":"known","value":"https://github.com/lightless-labs/third-thoughts"}},"class":"irreversible","requires_approval":true}
+fingerprint: [{"name":"repo","instance":null,"action":"create","outputs":[["repo","lightless-labs/third-thoughts"],["url","https://github.com/lightless-labs/third-thoughts"]]},{"name":"editorconfig_file","instance":null,"action":"compute","outputs":[["file",".editorconfig\nroot = true\n"]]},{"name":"readme_file","instance":null,"action":"compute","outputs":[["file","README.md\n# Scaffolded by willikins\n"]]},{"name":"scaffold","instance":null,"action":"create","outputs":[["repo","lightless-labs/third-thoughts"],["branch","main"],["marker",".willikins-scaffold"]]}]
+
 === workflows/github-repo-token-from-doppler.yaml ===
 WARNINGS:
 TYPES:

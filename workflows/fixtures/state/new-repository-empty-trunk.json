@@ -1,0 +1,10 @@
+{
+  "github_repos": {
+    "example-org/example-repo": {
+      "visibility": "private",
+      "ours": true,
+      "branches": [],
+      "default_branch": "trunk"
+    }
+  }
+}
