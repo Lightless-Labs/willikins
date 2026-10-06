@@ -654,6 +654,44 @@ impl ResolveCtx<'_> {
     }
 }
 
+/// Key `items`, a `for_each` node's source items, naming every one by
+/// `element` -- the source's own declared element type -- through
+/// [`Value::known_dyn_as`]'s `TypeId` test against `registry` (the same
+/// catalog `plan` was given, never a different one), rather than
+/// trusting what the item itself reports (milestone 3n, decision (f3)).
+/// Pairs each item's `Value` with the canonical string a
+/// [`Binding::Keyed`] reference matches against.
+///
+/// # Errors
+///
+/// Returns [`PlanError::EdgeTypeMismatch`] at [`Site::ForEach`] when an
+/// item is not, by `TypeId`, a value of the Rust type `registry` has
+/// registered as `element`. Unreachable for any document once decision
+/// (f2) has landed: a `for_each` source is either a declared workflow
+/// input (type-checked before planning, against this same `registry`)
+/// or a tool's own output (checked where produced), so this is the
+/// backstop for a list built some other way.
+fn key_for_each_items(
+    node: &NodeName,
+    element: &TypeName,
+    items: &[Arc<dyn willikins_types::DomainObject>],
+    registry: &TypeRegistry,
+) -> Result<Vec<(Value, String)>, PlanError> {
+    items
+        .iter()
+        .map(|object| {
+            let value = Value::known_dyn_as(registry, element.clone(), Arc::clone(object))
+                .map_err(|mismatch| PlanError::EdgeTypeMismatch {
+                    site: Site::ForEach { node: node.clone() },
+                    expected: mismatch.expected,
+                    found: mismatch.found,
+                })?;
+            let key = value.render().to_string();
+            Ok((value, key))
+        })
+        .collect()
+}
+
 /// Plan `checked` against `catalog`, resolving its workflow inputs from
 /// `inputs`.
 ///
@@ -804,14 +842,8 @@ pub(crate) fn walk(
                 // reading anything: two instances sharing a key would be
                 // indistinguishable both to a `Keyed` reference and in the
                 // finished plan.
-                let keyed: Vec<(Value, String)> = items
-                    .iter()
-                    .map(|object| {
-                        let value = Value::known_dyn(Arc::clone(object));
-                        let key = value.render().to_string();
-                        (value, key)
-                    })
-                    .collect();
+                let element = source_value.ty().element().name;
+                let keyed = key_for_each_items(name, &element, items, catalog.registry())?;
                 let mut seen: HashSet<&str> = HashSet::with_capacity(keyed.len());
                 for (_, key) in &keyed {
                     if !seen.insert(key.as_str()) {
@@ -1679,6 +1711,41 @@ mod tests {
 
     fn workflow_name(name: &str) -> willikins_types::WorkflowName {
         willikins_types::WorkflowName::parse(name).unwrap()
+    }
+
+    /// Milestone 3n, decision (f3), acceptance test 4: the `for_each`
+    /// keying backstop. `key_for_each_items` is given a forged list (only
+    /// possible with `Value::known_dyn_list`, the test-only escape hatch)
+    /// whose second item is not, by `TypeId`, a value of the source's
+    /// declared element type -- unreachable from any document once
+    /// decision (f2) has landed, but still refused loudly rather than
+    /// mis-keyed or silently accepted.
+    #[test]
+    fn key_for_each_items_refuses_an_impostor_by_type_id() {
+        let matching = willikins_types::GitHubOrg::parse("lightless-labs").unwrap();
+        let impostor = willikins_types::EnvironmentSlug::parse("prd").unwrap();
+        let items: Vec<Arc<dyn willikins_types::DomainObject>> =
+            vec![Arc::new(matching), Arc::new(impostor)];
+        let element = TypeName::parse("GitHubOrg").unwrap();
+
+        let err = key_for_each_items(&node("loop"), &element, &items, willikins_types::registry())
+            .unwrap_err();
+
+        match err {
+            PlanError::EdgeTypeMismatch {
+                site,
+                expected,
+                found,
+            } => {
+                assert_eq!(site, Site::ForEach { node: node("loop") });
+                assert_eq!(expected, TypeRef::scalar(element));
+                assert_eq!(
+                    found,
+                    TypeRef::scalar(TypeName::parse("EnvironmentSlug").unwrap())
+                );
+            }
+            other => panic!("expected EdgeTypeMismatch, got {other:?}"),
+        }
     }
 
     /// A one-node plan whose single output port (`url`, a non-secret

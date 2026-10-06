@@ -51,7 +51,8 @@ pub use tool::{
     ToolError, ToolErrorKind, ToolName, ToolSpec,
 };
 pub use value::{
-    ConversionMismatch, Known, PortType, TypeName, TypeRef, TypeRegistry, Value, ValueState,
+    ConversionMismatch, Known, ObjectTypeMismatch, PortType, TypeName, TypeRef, TypeRegistry,
+    Value, ValueState,
 };
 pub use workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};
 

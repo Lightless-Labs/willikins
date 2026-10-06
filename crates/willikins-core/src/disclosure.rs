@@ -142,7 +142,14 @@ mod tests {
                             entry.info.example
                         )
                     });
-                let scalar_value = Value::known_dyn(scalar.clone());
+                let scalar_value = Value::known_dyn_as(
+                    willikins_types::registry(),
+                    TypeName::parse(&name).unwrap(),
+                    scalar.clone(),
+                )
+                .unwrap_or_else(|err| {
+                    panic!("{name}'s own example must match its own registered type: {err:?}")
+                });
                 let list_value = crate::value::Value::known_dyn_list(
                     TypeName::parse(&name).unwrap(),
                     vec![scalar.clone(), scalar],

@@ -897,7 +897,8 @@ mod tests {
     fn apple_certificate_id(text: &str) -> willikins_core::value::Value {
         let type_name = willikins_types::TypeName::parse("AppleCertificateId").unwrap();
         let object = willikins_types::registry().parse(&type_name, text).unwrap();
-        willikins_core::value::Value::known_dyn(object)
+        willikins_core::value::Value::known_dyn_as(willikins_types::registry(), type_name, object)
+            .unwrap()
     }
 
     /// Milestone 3i, decision (b6), acceptance 17: a domain error whose

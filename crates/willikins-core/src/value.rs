@@ -32,17 +32,10 @@ fn type_name_of<T: DomainType>() -> TypeName {
         .unwrap_or_else(|err| unreachable!("DomainType::TYPE_NAME must be a TypeName: {err}"))
 }
 
-/// Build the [`TypeName`] for an object-safe [`DomainObject`], the same way
-/// [`type_name_of`] does for a statically known `T`.
-fn type_name_of_object(obj: &dyn DomainObject) -> TypeName {
-    TypeName::parse(obj.type_name())
-        .unwrap_or_else(|err| unreachable!("DomainObject::type_name must be a TypeName: {err}"))
-}
-
 /// The [`TypeName`] `obj` reports, or `fallback` when what it reports is
 /// not a valid type name. Used only to name an object that already failed
-/// a `TypeId` test, in [`ConversionMismatch`], in `plan`'s
-/// `PlanError::InputTypeMismatch` and in `check`'s
+/// a `TypeId` test, in [`ConversionMismatch`], in [`ObjectTypeMismatch`],
+/// in `plan`'s `PlanError::InputTypeMismatch` and in `check`'s
 /// `CheckError::DefaultTypeMismatch`: nothing checks a derived type's
 /// `TYPE_NAME` (it is `stringify!` of the struct's name), so an object
 /// that is already being refused must not panic while it is named.
@@ -214,6 +207,21 @@ pub struct ConversionMismatch {
     pub found: TypeRef,
 }
 
+/// Why [`Value::known_dyn_as`] refused to name a value: the object it was
+/// given is not, by `TypeId`, a value of the Rust type the registry has
+/// registered under the requested name — the same `TypeId`-not-name rule
+/// as [`ConversionMismatch`], at a different site (milestone 3n, decision
+/// (f3)). Carries type names only, never the object's own content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectTypeMismatch {
+    /// The type the caller asked the object to be named as.
+    pub expected: TypeRef,
+    /// The best type reference available for the object: its own reported
+    /// name when that disagreed, or the registry's fallback (`expected`)
+    /// when the object cannot even report a valid type name.
+    pub found: TypeRef,
+}
+
 /// The content of a [`ValueState::Known`] value.
 #[derive(Clone)]
 pub enum Known {
@@ -236,7 +244,40 @@ pub struct Value {
 
 impl Value {
     /// A known scalar value of domain type `T`.
+    ///
+    /// # Compile error
+    ///
+    /// Fails to compile when `T::TYPE_NAME` is not a valid [`TypeName`]
+    /// (an uppercase ASCII letter, then any number of letters or digits):
+    /// a misnamed `T` is refused by a `const` assertion at this call
+    /// site, at monomorphization, rather than by a run-time panic. A
+    /// hand-written `#[derive(DomainType)]` type whose Rust name is not
+    /// itself a `TypeName` is exactly this case — the derive checks
+    /// nothing about its own name (milestone 3n, decision (b3)):
+    ///
+    /// ```compile_fail
+    /// use willikins_types::DomainType;
+    ///
+    /// #[derive(willikins_types::DomainType)]
+    /// #[domain(
+    ///     pattern = "[a-z.]+",
+    ///     description = "A type whose Rust name is not a TypeName.",
+    ///     example = "x"
+    /// )]
+    /// #[allow(non_camel_case_types)]
+    /// struct not_a_type_name(String);
+    ///
+    /// let value = not_a_type_name::parse("x").unwrap();
+    /// willikins_core::Value::known(value);
+    /// ```
     pub fn known<T: DomainType + DomainObject + 'static>(value: T) -> Self {
+        const {
+            assert!(
+                willikins_types::registry::is_type_name(T::TYPE_NAME),
+                "DomainType::TYPE_NAME must be a valid TypeName: an uppercase ASCII letter, \
+                 then any number of ASCII letters or digits"
+            );
+        }
         Self {
             ty: TypeRef::scalar(type_name_of::<T>()),
             state: ValueState::Known(Known::Scalar(Arc::new(value))),
@@ -244,7 +285,20 @@ impl Value {
     }
 
     /// A known list of domain type `T`, empty or not.
+    ///
+    /// # Compile error
+    ///
+    /// Fails to compile for a misnamed `T`, exactly as [`Self::known`]
+    /// does; see that method's own doc for why and for the compile-fail
+    /// example.
     pub fn known_list<T: DomainType + DomainObject + 'static>(values: Vec<T>) -> Self {
+        const {
+            assert!(
+                willikins_types::registry::is_type_name(T::TYPE_NAME),
+                "DomainType::TYPE_NAME must be a valid TypeName: an uppercase ASCII letter, \
+                 then any number of ASCII letters or digits"
+            );
+        }
         let items = values
             .into_iter()
             .map(|value| Arc::new(value) as Arc<dyn DomainObject>)
@@ -255,14 +309,50 @@ impl Value {
         }
     }
 
-    /// A known scalar value already behind a type-erased [`DomainObject`].
-    #[must_use]
-    pub fn known_dyn(object: Arc<dyn DomainObject>) -> Self {
-        let ty = TypeRef::scalar(type_name_of_object(object.as_ref()));
-        Self {
-            ty,
-            state: ValueState::Known(Known::Scalar(object)),
+    /// A known scalar value of `ty`, built from an already type-erased
+    /// [`DomainObject`] whose identity is tested against `ty` through
+    /// `registry`'s `TypeId` test ([`TypeRegistry::type_matches`]) — never
+    /// by asking the object what it calls itself
+    /// ([`DomainObject::type_name`]), which a misnamed or impostor object
+    /// can misreport. Replaces the removed `known_dyn`, which named the
+    /// value by the object's own report and panicked on a misnamed one;
+    /// its one production caller, `plan`'s `for_each` keying, now names
+    /// each item by the source's declared element type instead, tested
+    /// against the same catalog `plan` was given (milestone 3n, decision
+    /// (f3); registry parameter: 2026-10-06 addendum).
+    ///
+    /// `registry` is taken explicitly, not read from the global
+    /// `willikins_types::registry()`, for the same reason
+    /// [`crate::value::is_operator_acknowledgement`] does: a caller that
+    /// built its own [`crate::catalog::Catalog`] over a non-global
+    /// registry (every conversion test in this crate does) must be
+    /// tested against *that* registry, the one `check` and `plan` were
+    /// actually given — never a different one that happens to be the
+    /// global default.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ObjectTypeMismatch`] when `object` is not, by `TypeId`, a
+    /// value of the Rust type `registry` has registered under `ty` —
+    /// whether `ty` is unregistered there, a different Rust type shares
+    /// its name, or `object` reports some other name outright. Carries
+    /// type names only, never the object's content; `found` falls back to
+    /// `ty` itself when `object` cannot even report a valid type name.
+    pub fn known_dyn_as(
+        registry: &TypeRegistry,
+        ty: TypeName,
+        object: Arc<dyn DomainObject>,
+    ) -> Result<Self, ObjectTypeMismatch> {
+        if registry.type_matches(&ty, object.as_ref()) != Some(true) {
+            return Err(ObjectTypeMismatch {
+                expected: TypeRef::scalar(ty.clone()),
+                found: TypeRef::scalar(reported_type_name_or(object.as_ref(), &ty)),
+            });
         }
+        Ok(Self {
+            ty: TypeRef::scalar(ty),
+            state: ValueState::Known(Known::Scalar(object)),
+        })
     }
 
     /// A value whose type is declared but whose content is not known.
@@ -838,10 +928,65 @@ mod tests {
     }
 
     #[test]
-    fn known_dyn_recovers_the_type_name_from_the_object() {
+    fn known_dyn_as_accepts_an_object_matching_the_requested_type() {
         let object: Arc<dyn DomainObject> = Arc::new(github_org("lightless-labs"));
-        let value = Value::known_dyn(object);
+        let value = Value::known_dyn_as(
+            willikins_types::registry(),
+            TypeName::parse("GitHubOrg").unwrap(),
+            object,
+        )
+        .unwrap();
         assert_eq!(value.ty().to_string(), "GitHubOrg");
+    }
+
+    /// A same-named impostor (another Rust type deriving the same
+    /// `TYPE_NAME`) is refused by `TypeId`, never silently accepted
+    /// because the names happened to match.
+    #[test]
+    fn known_dyn_as_refuses_a_same_named_impostor() {
+        let identifier = TypeName::parse("AppleBundleIdentifier").unwrap();
+        let object: Arc<dyn DomainObject> =
+            Arc::new(impostor::AppleBundleIdentifier::parse("com.example").unwrap());
+        assert_eq!(
+            Value::known_dyn_as(willikins_types::registry(), identifier.clone(), object),
+            Err(ObjectTypeMismatch {
+                expected: TypeRef::scalar(identifier.clone()),
+                found: TypeRef::scalar(identifier),
+            })
+        );
+    }
+
+    /// An object whose own reported type name is not even a valid
+    /// `TypeName` (a hand-derived type whose Rust name is not
+    /// `PascalCase`) is refused without panicking while it is named:
+    /// `found` falls back to `expected`.
+    #[test]
+    fn known_dyn_as_refuses_a_misnamed_object_without_a_panic() {
+        let identifier = TypeName::parse("AppleBundleIdentifier").unwrap();
+        let object: Arc<dyn DomainObject> =
+            Arc::new(misnamed::apple_bundle_identifier::parse("com.example").unwrap());
+        assert_eq!(
+            Value::known_dyn_as(willikins_types::registry(), identifier.clone(), object),
+            Err(ObjectTypeMismatch {
+                expected: TypeRef::scalar(identifier.clone()),
+                found: TypeRef::scalar(identifier),
+            })
+        );
+    }
+
+    /// An unregistered type name is refused too, rather than reporting a
+    /// match on nothing.
+    #[test]
+    fn known_dyn_as_refuses_an_unregistered_type_name() {
+        let unregistered = TypeName::parse("NoSuchType").unwrap();
+        let object: Arc<dyn DomainObject> = Arc::new(github_org("lightless-labs"));
+        assert_eq!(
+            Value::known_dyn_as(willikins_types::registry(), unregistered.clone(), object),
+            Err(ObjectTypeMismatch {
+                expected: TypeRef::scalar(unregistered.clone()),
+                found: TypeRef::scalar(TypeName::parse("GitHubOrg").unwrap()),
+            })
+        );
     }
 
     #[test]
