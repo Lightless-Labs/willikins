@@ -115,6 +115,25 @@ allowance anticipates. No fixture under `workflows/fixtures/composition/` was ad
 record, including four restored mutations and every priority target traced to a held-or-fixed
 verdict, is `docs/research/2026-10-06-m2b-adversarial-pass.md`.
 
+**Addendum:** 2026-10-06 (independent adversarial pass, opus) — four linker defects, fixed test first
+in `willikins-core/src/compose.rs`; record: `docs/research/2026-10-06-m2b-adversarial-pass-independent.md`.
+(1) `fb42e56`: a used document's reference to an input it never declared panicked `embed` (the
+DSL has no undeclared-input refusal). It now links to `<step>/<x>`, and `check` reports
+`UndeclaredInput` as for a monolith; fixture pair `undeclared-input-{root,child}.yaml`. The
+composition characterization gains those two entries, additions only. (2) `6058036`:
+**`MAX_LINKED_NODES` now counts every `uses:` step as well as every tool node, each once per
+occurrence** (SHARED VALUES said "tool nodes"). A tree of zero-node documents was otherwise
+unbounded (`8^8` flattens). The public diamond fixture still tips at 2049. (3) `df89f86`: the
+alias-cycle guard was per step, so two `uses:` steps feeding each other through node outputs were
+refused as `UsesOutputCycle`, contrary to decision (d7). It is now per `(step, input)`, and each
+step's `with:` is validated whole first. (4) `da38af7`: resolving a long chain of `uses:` steps
+recursed once per link, so 2000 steps overflowed a 2 MiB `spawn_blocking` stack and aborted the
+process. The resolution order now comes from an iterative walk. The pass also proved four existing
+defences by mutation. It recorded these without fixing them: the two-read hash in
+`load_named_document`; the `Binding::List` boundary's conversion and `for_each` divergences (not a
+secrecy bypass); and three hand-built-only gaps. Acceptance 13 (O1) cannot be checked yet, because
+`private/workflows/` holds only the monolith.
+
 **Addendum:** 2026-10-06 (task K1) — acceptance 11 names
 `workflows/fixtures/composition/new-rust-service-in-org.yaml`, which the SHARED VALUES table
 reserves for task F1's "Public positive pair", but the task order puts K1 before F1, so neither
