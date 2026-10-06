@@ -10,6 +10,7 @@ P1 extends the same `RepoBody` and the same exhaustive destructure in `repo_ensu
 field stays `#[serde(default)]` so 3m's fixtures keep parsing. After 3k, new integration tests live under `tests/it/`
 (Gates).
 **Addendum:** 2026-10-05 (operator's decision) — no new credential mechanism: repositories in a real organisation are created with an org-scoped PAT stored in Doppler, as every other provider credential already is ("We already use a PAT for everything for now. Don't start making up new requirements."). The GitHub App option is dropped from this plan.
+**Addendum:** 2026-10-06 (task S3 implementation) — a case decision (a)/(b) are silent on: after `ensure`'s existing commit-retry loop (3g) gets a `createCommitOnBranch` failure and re-observes to decide what to do next, that re-observe can in principle read `ScaffoldState::Empty` again (the branch's head it just compared against vanished, and the repository reverted to having no branches at all, between the first observe and this re-read). Decided the same way the loop already treats an unmoved head: report the original commit failure, rather than re-entering S3's own initialisation a second time from inside the 3g retry loop. Not covered by an acceptance test (no scenario in this milestone's table reaches it); flagged for X1's attack pass.
 
 ## Goal
 
