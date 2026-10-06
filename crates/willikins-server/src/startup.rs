@@ -531,6 +531,34 @@ mod tests {
     }
 
     #[test]
+    fn a_child_that_fails_to_parse_refuses_startup_as_used_document() {
+        let dir = tempfile::tempdir().unwrap();
+        // "root" sorts before "z-broken", so `root.yaml` is scanned (and
+        // linked) first -- the resolver's own attempt to load `z-broken`
+        // is what must fail here, not `scan_directory`'s own top-level
+        // parse of `z-broken.yaml` as a candidate in its own right (which
+        // would report a plain `StartupError::Document` instead, naming
+        // the wrong thing and never exercising the linker's own
+        // `ResolveFailure::Document` -> `CheckError::UsedDocument` path).
+        write(dir.path(), "z-broken.yaml", "not: [valid");
+        write(
+            dir.path(),
+            "root.yaml",
+            "name: root\nsteps:\n  child:\n    uses: z-broken\n",
+        );
+        match scan_directory(dir.path(), &empty_catalog()) {
+            Err(StartupError::Compose { path, errors }) => {
+                assert_eq!(path.file_name().unwrap(), "root.yaml");
+                assert!(
+                    matches!(errors.as_slice(), [CheckError::UsedDocument { .. }]),
+                    "{errors:?}"
+                );
+            }
+            other => panic!("expected Compose/UsedDocument, got {}", debug_kind(&other)),
+        }
+    }
+
+    #[test]
     fn a_document_using_a_trusted_sibling_links_before_check() {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), "child.yaml", "name: child\nsteps: {}\n");
