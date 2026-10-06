@@ -7,9 +7,10 @@
 
 use std::path::Path;
 
+use indexmap::IndexMap;
 use willikins_core::{
     CheckError, Checked, InputName, NodeName, OutputName, PortName, ResolveFailure, Site, TypeName,
-    TypeRef, Workflow, check, link,
+    TypeRef, Value, Workflow, check, link, plan,
 };
 use willikins_dsl::{DocumentErrorKind, load_document};
 use willikins_types::{DomainType, WorkflowName};
@@ -459,4 +460,194 @@ fn a_root_of_only_pure_nodes_using_an_irreversible_child_has_class_irreversible(
     let checked = check_fixture("uses-class-root.yaml").expect("must check cleanly");
     assert_eq!(checked.class, willikins_core::Class::Irreversible);
     assert!(checked.class.requires_approval());
+}
+
+// ---------------------------------------------------------------------
+// Task F1, commit 2 (acceptance 12's closing clause): a characterization
+// snapshot over every document under `workflows/fixtures/composition/`,
+// mirroring `tests/it/acceptance.rs`'s own
+// `characterization_of_every_document` (load, check, plan), with a
+// `link` step inserted before `check` -- any fixture here may itself
+// declare `uses:`, and a non-empty `uses:` reaching `check` unlinked is
+// exactly `CheckError::Unlinked`, not a useful characterization. This is
+// a separate snapshot from that one: the plan's SHARED VALUES row
+// ("Fixture directory (P2 on)") says this directory "is not scanned by
+// the existing characterization, which stays byte-identical", so
+// composition fixtures are deliberately never added to it.
+// ---------------------------------------------------------------------
+
+/// Every `workflows/fixtures/composition/*.yaml` path, relative to the
+/// workspace root, sorted by file name (`read_dir`'s own order is not
+/// stable -- the same reason `tests/it/acceptance.rs`'s own
+/// `every_document_path` sorts).
+fn every_composition_document_path() -> Vec<String> {
+    let full = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("workflows/fixtures/composition");
+    let mut names: Vec<String> = std::fs::read_dir(&full)
+        .unwrap_or_else(|err| panic!("{}: {err}", full.display()))
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "yaml"))
+        .map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .expect("utf8 file name")
+                .to_string()
+        })
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .map(|name| format!("workflows/fixtures/composition/{name}"))
+        .collect()
+}
+
+/// Synthesize a value for a declared workflow input that has no
+/// default: its type's registry example, parsed the same way a literal
+/// is. Mirrors `tests/it/acceptance.rs`'s own `synthesized_input`, kept
+/// local on purpose -- that module's copy is private to it, and this
+/// file already keeps its own helpers local throughout.
+fn synthesized_input(ty: &TypeRef) -> Value {
+    let entry = willikins_types::registry()
+        .get(&ty.name)
+        .unwrap_or_else(|| panic!("{ty}: declared input type is not registered"));
+    if ty.list {
+        Value::parse_list(ty, &[entry.info.example])
+            .unwrap_or_else(|err| panic!("{ty}: example does not parse as a list element: {err}"))
+    } else {
+        Value::parse(ty, entry.info.example)
+            .unwrap_or_else(|err| panic!("{ty}: own example does not parse as itself: {err}"))
+    }
+}
+
+/// Every declared input of the *linked* `workflow` (so a fixed input,
+/// decision (d6), is included -- it always carries its own default),
+/// resolved from its default when it has one, else synthesized.
+fn synthesized_inputs(workflow: &Workflow) -> IndexMap<InputName, Value> {
+    workflow
+        .inputs
+        .iter()
+        .map(|(name, spec)| {
+            let value = spec
+                .default
+                .clone()
+                .unwrap_or_else(|| synthesized_input(&spec.ty));
+            (name.clone(), value)
+        })
+        .collect()
+}
+
+/// One composition document's whole characterization: its load result,
+/// then its *link* result (against the same [`directory_resolver`] the
+/// rest of this file uses, so a document's children are its siblings in
+/// this same directory), then its check result, then a plan against
+/// synthesized inputs. Rendered as plain text so an insta diff reads
+/// directly as what changed.
+fn characterize_composition(path: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut report = String::new();
+    writeln!(report, "=== {path} ===").unwrap();
+
+    let full = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(path);
+    let workflow = match load_document(&full) {
+        Ok(workflow) => workflow,
+        Err(err) => {
+            writeln!(report, "LOAD ERROR: {err}").unwrap();
+            return report;
+        }
+    };
+
+    let linked = match link(&workflow, &mut directory_resolver()) {
+        Ok(linked) => linked,
+        Err(errors) => {
+            writeln!(report, "LINK ERRORS:").unwrap();
+            for error in &errors {
+                let json = serde_json::to_string(error).unwrap();
+                writeln!(
+                    report,
+                    "- kind={} display={error} json={json}",
+                    error.kind()
+                )
+                .unwrap();
+            }
+            return report;
+        }
+    };
+    let used: Vec<String> = linked.used.iter().map(ToString::to_string).collect();
+    writeln!(report, "USED: {}", used.join(", ")).unwrap();
+
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let checked = match check(&linked.workflow, &catalog) {
+        Err(errors) => {
+            writeln!(report, "CHECK ERRORS:").unwrap();
+            for error in &errors {
+                let json = serde_json::to_string(error).unwrap();
+                writeln!(
+                    report,
+                    "- kind={} display={error} json={json}",
+                    error.kind()
+                )
+                .unwrap();
+            }
+            return report;
+        }
+        Ok(checked) => checked,
+    };
+
+    writeln!(report, "WARNINGS:").unwrap();
+    for warning in &checked.warnings {
+        writeln!(report, "- {warning}").unwrap();
+    }
+
+    writeln!(report, "TYPES:").unwrap();
+    for (node, ports) in &checked.types {
+        for (port, edge) in ports {
+            let ty = edge.ty();
+            match edge.conversion() {
+                None => writeln!(report, "{node}.{port}: {ty}").unwrap(),
+                Some(conversion) => {
+                    writeln!(report, "{node}.{port}: {ty} -> {}", conversion.to()).unwrap();
+                }
+            }
+        }
+    }
+
+    writeln!(report, "OUTPUTS:").unwrap();
+    for (name, ty) in &checked.output_types {
+        writeln!(report, "{name}: {ty}").unwrap();
+    }
+
+    writeln!(report, "PLAN:").unwrap();
+    let inputs = synthesized_inputs(&linked.workflow);
+    match plan(&checked, &inputs, &catalog) {
+        Err(err) => {
+            writeln!(report, "PLAN ERROR: {err}").unwrap();
+        }
+        Ok(plan) => {
+            let plan_json = serde_json::to_string(&plan).unwrap();
+            let fingerprint_json = serde_json::to_string(&plan.fingerprint()).unwrap();
+            writeln!(report, "plan_json: {plan_json}").unwrap();
+            writeln!(report, "fingerprint: {fingerprint_json}").unwrap();
+        }
+    }
+
+    report
+}
+
+/// The full characterization of every document under
+/// `workflows/fixtures/composition/`, one at a time in sorted path
+/// order -- every fixture under the public positive pair's own
+/// directory, children included.
+#[test]
+fn characterization_of_every_composition_document() {
+    let mut report = String::new();
+    for path in every_composition_document_path() {
+        report.push_str(&characterize_composition(&path));
+        report.push('\n');
+    }
+    insta::assert_snapshot!(report);
 }

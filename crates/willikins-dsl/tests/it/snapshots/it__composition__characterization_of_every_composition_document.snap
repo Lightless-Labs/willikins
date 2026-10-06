@@ -1,0 +1,576 @@
+---
+source: crates/willikins-dsl/tests/it/composition.rs
+expression: report
+---
+=== workflows/fixtures/composition/cycle-a.yaml ===
+LINK ERRORS:
+- kind=UsesCycle display=uses cycle: cycle-a -> cycle-b -> cycle-a json={"kind":"UsesCycle","chain":["cycle-a","cycle-b","cycle-a"]}
+
+=== workflows/fixtures/composition/cycle-b.yaml ===
+LINK ERRORS:
+- kind=UsesCycle display=uses cycle: cycle-b -> cycle-a -> cycle-b json={"kind":"UsesCycle","chain":["cycle-b","cycle-a","cycle-b"]}
+
+=== workflows/fixtures/composition/diamond-leaf.yaml ===
+USED: 
+CHECK ERRORS:
+- kind=UnknownTool display=node `n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"n2","tool":"noop.tool"}
+
+=== workflows/fixtures/composition/diamond-mid1.yaml ===
+USED: diamond-leaf
+CHECK ERRORS:
+- kind=UnknownTool display=node `u0/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/n2","tool":"noop.tool"}
+
+=== workflows/fixtures/composition/diamond-mid2.yaml ===
+USED: diamond-mid1, diamond-leaf
+CHECK ERRORS:
+- kind=UnknownTool display=node `u0/u0/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u0/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u0/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u0/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u0/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u0/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u1/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u1/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u1/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u1/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u1/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u1/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u2/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u2/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u2/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u2/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u2/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u2/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u3/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u3/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u3/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u3/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u3/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u3/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u4/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u4/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u4/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u4/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u4/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u4/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u5/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u5/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u5/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u5/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u5/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u5/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u6/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u6/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u6/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u6/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u6/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u6/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u7/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u7/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u7/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u7/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u7/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u7/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u8/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u8/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u8/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u8/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u0/u8/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u0/u8/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u0/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u0/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u0/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u0/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u0/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u0/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u1/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u1/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u1/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u1/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u1/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u1/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u2/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u2/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u2/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u2/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u2/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u2/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u3/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u3/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u3/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u3/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u3/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u3/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u4/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u4/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u4/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u4/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u4/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u4/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u5/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u5/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u5/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u5/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u5/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u5/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u6/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u6/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u6/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u6/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u6/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u6/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u7/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u7/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u7/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u7/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u7/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u7/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u8/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u8/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u8/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u8/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u1/u8/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u1/u8/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u0/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u0/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u0/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u0/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u0/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u0/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u1/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u1/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u1/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u1/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u1/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u1/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u2/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u2/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u2/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u2/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u2/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u2/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u3/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u3/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u3/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u3/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u3/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u3/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u4/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u4/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u4/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u4/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u4/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u4/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u5/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u5/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u5/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u5/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u5/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u5/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u6/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u6/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u6/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u6/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u6/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u6/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u7/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u7/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u7/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u7/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u7/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u7/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u8/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u8/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u8/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u8/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u2/u8/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u2/u8/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u0/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u0/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u0/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u0/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u0/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u0/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u1/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u1/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u1/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u1/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u1/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u1/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u2/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u2/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u2/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u2/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u2/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u2/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u3/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u3/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u3/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u3/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u3/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u3/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u4/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u4/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u4/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u4/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u4/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u4/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u5/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u5/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u5/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u5/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u5/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u5/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u6/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u6/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u6/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u6/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u6/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u6/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u7/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u7/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u7/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u7/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u7/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u7/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u8/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u8/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u8/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u8/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u3/u8/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u3/u8/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u0/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u0/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u0/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u0/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u0/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u0/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u1/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u1/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u1/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u1/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u1/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u1/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u2/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u2/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u2/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u2/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u2/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u2/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u3/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u3/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u3/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u3/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u3/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u3/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u4/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u4/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u4/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u4/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u4/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u4/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u5/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u5/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u5/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u5/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u5/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u5/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u6/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u6/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u6/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u6/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u6/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u6/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u7/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u7/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u7/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u7/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u7/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u7/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u8/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u8/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u8/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u8/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u4/u8/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u4/u8/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u0/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u0/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u0/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u0/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u0/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u0/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u1/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u1/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u1/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u1/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u1/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u1/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u2/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u2/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u2/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u2/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u2/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u2/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u3/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u3/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u3/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u3/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u3/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u3/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u4/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u4/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u4/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u4/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u4/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u4/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u5/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u5/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u5/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u5/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u5/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u5/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u6/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u6/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u6/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u6/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u6/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u6/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u7/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u7/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u7/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u7/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u7/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u7/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u8/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u8/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u8/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u8/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u5/u8/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u5/u8/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u0/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u0/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u0/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u0/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u0/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u0/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u1/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u1/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u1/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u1/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u1/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u1/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u2/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u2/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u2/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u2/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u2/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u2/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u3/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u3/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u3/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u3/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u3/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u3/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u4/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u4/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u4/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u4/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u4/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u4/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u5/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u5/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u5/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u5/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u5/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u5/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u6/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u6/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u6/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u6/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u6/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u6/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u7/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u7/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u7/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u7/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u7/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u7/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u8/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u8/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u8/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u8/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u6/u8/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u6/u8/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u0/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u0/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u0/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u0/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u0/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u0/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u1/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u1/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u1/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u1/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u1/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u1/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u2/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u2/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u2/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u2/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u2/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u2/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u3/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u3/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u3/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u3/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u3/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u3/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u4/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u4/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u4/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u4/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u4/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u4/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u5/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u5/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u5/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u5/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u5/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u5/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u6/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u6/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u6/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u6/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u6/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u6/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u7/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u7/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u7/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u7/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u7/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u7/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u8/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u8/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u8/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u8/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u7/u8/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u7/u8/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u0/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u0/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u0/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u0/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u0/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u0/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u1/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u1/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u1/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u1/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u1/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u1/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u2/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u2/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u2/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u2/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u2/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u2/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u3/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u3/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u3/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u3/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u3/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u3/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u4/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u4/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u4/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u4/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u4/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u4/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u5/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u5/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u5/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u5/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u5/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u5/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u6/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u6/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u6/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u6/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u6/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u6/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u7/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u7/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u7/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u7/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u7/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u7/n2","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u8/n0`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u8/n0","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u8/n1`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u8/n1","tool":"noop.tool"}
+- kind=UnknownTool display=node `u8/u8/n2`: unknown tool `noop.tool` json={"kind":"UnknownTool","node":"u8/u8/n2","tool":"noop.tool"}
+
+=== workflows/fixtures/composition/diamond-root.yaml ===
+LINK ERRORS:
+- kind=UsesTooLarge display=linked graph has 2049 nodes, more than the allowed maximum json={"kind":"UsesTooLarge","nodes":2049}
+
+=== workflows/fixtures/composition/example-org.yaml ===
+USED: 
+WARNINGS:
+TYPES:
+buildkite_cluster.org: BuildkiteOrg
+buildkite_cluster.name: BuildkiteClusterName
+OUTPUTS:
+github_org: GitHubOrg
+buildkite_org: BuildkiteOrg
+cluster: BuildkiteClusterId
+environments: list<EnvironmentSlug>
+PLAN:
+PLAN ERROR: node `buildkite_cluster`: NotFound: no Buildkite cluster named `Default cluster`
+
+=== workflows/fixtures/composition/item-in-uses-child.yaml ===
+USED: 
+WARNINGS:
+- input `known` is declared but never used
+TYPES:
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"item-in-uses-child","nodes":[],"outputs":{},"class":"reversible","requires_approval":false}
+fingerprint: []
+
+=== workflows/fixtures/composition/item-in-uses-root.yaml ===
+LINK ERRORS:
+- kind=ItemInUses display=node `child`: input `known` cannot be bound to `item` inside a `uses:` step json={"kind":"ItemInUses","node":"child","input":"known"}
+
+=== workflows/fixtures/composition/keyed-on-uses-child.yaml ===
+USED: 
+WARNINGS:
+TYPES:
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"keyed-on-uses-child","nodes":[],"outputs":{},"class":"reversible","requires_approval":false}
+fingerprint: []
+
+=== workflows/fixtures/composition/keyed-on-uses-root.yaml ===
+LINK ERRORS:
+- kind=KeyedOnUses display=workflow.outputs.x: node `child` is a uses: step, not a for_each node json={"kind":"KeyedOnUses","site":{"kind":"output","name":"x"},"node":"child"}
+
+=== workflows/fixtures/composition/nested-site-achild.yaml ===
+USED: 
+WARNINGS:
+- input `x` is declared but never used
+TYPES:
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"nested-site-achild","nodes":[],"outputs":{},"class":"reversible","requires_approval":false}
+fingerprint: []
+
+=== workflows/fixtures/composition/nested-site-bchild.yaml ===
+USED: 
+WARNINGS:
+TYPES:
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"nested-site-bchild","nodes":[],"outputs":{},"class":"reversible","requires_approval":false}
+fingerprint: []
+
+=== workflows/fixtures/composition/nested-site-keyed-on-uses-root.yaml ===
+LINK ERRORS:
+- kind=KeyedOnUses display=a.x: node `b` is a uses: step, not a for_each node json={"kind":"KeyedOnUses","site":{"kind":"port","node":"a","port":"x"},"node":"b"}
+
+=== workflows/fixtures/composition/nested-site-unknown-uses-output-root.yaml ===
+LINK ERRORS:
+- kind=UnknownUsesOutput display=a.x: node `b` has no declared output `missing` json={"kind":"UnknownUsesOutput","site":{"kind":"port","node":"a","port":"x"},"node":"b","output":"missing"}
+
+=== workflows/fixtures/composition/new-rust-service-in-org.yaml ===
+USED: example-org
+WARNINGS:
+TYPES:
+org/buildkite_cluster.org: BuildkiteOrg
+org/buildkite_cluster.name: BuildkiteClusterName
+names.org: GitHubOrg
+names.slug: ProjectSlug
+repo.repo: GitHubRepo
+repo.visibility: RepoVisibility
+doppler.project: DopplerProject
+configs.project: DopplerProject
+configs.environment: EnvironmentSlug
+pipeline.org: BuildkiteOrg
+pipeline.slug: BuildkitePipelineSlug
+pipeline.repo: GitHubRepo
+pipeline.cluster: BuildkiteClusterId
+OUTPUTS:
+repo_url: HttpsUrl
+pipeline_url: HttpsUrl
+PLAN:
+PLAN ERROR: node `org/buildkite_cluster`: NotFound: no Buildkite cluster named `Default cluster`
+
+=== workflows/fixtures/composition/self-use.yaml ===
+LINK ERRORS:
+- kind=UsesCycle display=uses cycle: self-use -> self-use json={"kind":"UsesCycle","chain":["self-use","self-use"]}
+
+=== workflows/fixtures/composition/too-deep-1.yaml ===
+LINK ERRORS:
+- kind=UnknownWorkflow display=node `next`: unknown workflow `too-deep-9` json={"kind":"UnknownWorkflow","node":"next","workflow":"too-deep-9"}
+
+=== workflows/fixtures/composition/too-deep-2.yaml ===
+LINK ERRORS:
+- kind=UnknownWorkflow display=node `next`: unknown workflow `too-deep-9` json={"kind":"UnknownWorkflow","node":"next","workflow":"too-deep-9"}
+
+=== workflows/fixtures/composition/too-deep-3.yaml ===
+LINK ERRORS:
+- kind=UnknownWorkflow display=node `next`: unknown workflow `too-deep-9` json={"kind":"UnknownWorkflow","node":"next","workflow":"too-deep-9"}
+
+=== workflows/fixtures/composition/too-deep-4.yaml ===
+LINK ERRORS:
+- kind=UnknownWorkflow display=node `next`: unknown workflow `too-deep-9` json={"kind":"UnknownWorkflow","node":"next","workflow":"too-deep-9"}
+
+=== workflows/fixtures/composition/too-deep-5.yaml ===
+LINK ERRORS:
+- kind=UnknownWorkflow display=node `next`: unknown workflow `too-deep-9` json={"kind":"UnknownWorkflow","node":"next","workflow":"too-deep-9"}
+
+=== workflows/fixtures/composition/too-deep-6.yaml ===
+LINK ERRORS:
+- kind=UnknownWorkflow display=node `next`: unknown workflow `too-deep-9` json={"kind":"UnknownWorkflow","node":"next","workflow":"too-deep-9"}
+
+=== workflows/fixtures/composition/too-deep-7.yaml ===
+LINK ERRORS:
+- kind=UnknownWorkflow display=node `next`: unknown workflow `too-deep-9` json={"kind":"UnknownWorkflow","node":"next","workflow":"too-deep-9"}
+
+=== workflows/fixtures/composition/too-deep-8.yaml ===
+LINK ERRORS:
+- kind=UnknownWorkflow display=node `next`: unknown workflow `too-deep-9` json={"kind":"UnknownWorkflow","node":"next","workflow":"too-deep-9"}
+
+=== workflows/fixtures/composition/too-deep-root.yaml ===
+LINK ERRORS:
+- kind=UsesTooDeep display=uses nesting too deep: too-deep-root -> too-deep-1 -> too-deep-2 -> too-deep-3 -> too-deep-4 -> too-deep-5 -> too-deep-6 -> too-deep-7 -> too-deep-8 json={"kind":"UsesTooDeep","chain":["too-deep-root","too-deep-1","too-deep-2","too-deep-3","too-deep-4","too-deep-5","too-deep-6","too-deep-7","too-deep-8"]}
+
+=== workflows/fixtures/composition/unbound-uses-input-child.yaml ===
+USED: 
+WARNINGS:
+- input `needed` is declared but never used
+TYPES:
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"unbound-uses-input-child","nodes":[],"outputs":{},"class":"reversible","requires_approval":false}
+fingerprint: []
+
+=== workflows/fixtures/composition/unbound-uses-input-root.yaml ===
+LINK ERRORS:
+- kind=UnboundUsesInput display=node `child`: required input `needed` is not bound and has no default json={"kind":"UnboundUsesInput","node":"child","input":"needed"}
+
+=== workflows/fixtures/composition/unknown-child.yaml ===
+LINK ERRORS:
+- kind=UnknownWorkflow display=node `child`: unknown workflow `ghost-child` json={"kind":"UnknownWorkflow","node":"child","workflow":"ghost-child"}
+
+=== workflows/fixtures/composition/unknown-uses-input-child.yaml ===
+USED: 
+WARNINGS:
+- input `known` is declared but never used
+TYPES:
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"unknown-uses-input-child","nodes":[],"outputs":{},"class":"reversible","requires_approval":false}
+fingerprint: []
+
+=== workflows/fixtures/composition/unknown-uses-input-root.yaml ===
+LINK ERRORS:
+- kind=UnknownUsesInput display=node `child`: `with:` names undeclared input `mystery` json={"kind":"UnknownUsesInput","node":"child","input":"mystery"}
+
+=== workflows/fixtures/composition/unknown-uses-output-child.yaml ===
+USED: 
+WARNINGS:
+TYPES:
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"unknown-uses-output-child","nodes":[],"outputs":{},"class":"reversible","requires_approval":false}
+fingerprint: []
+
+=== workflows/fixtures/composition/unknown-uses-output-root.yaml ===
+LINK ERRORS:
+- kind=UnknownUsesOutput display=workflow.outputs.x: node `child` has no declared output `missing` json={"kind":"UnknownUsesOutput","site":{"kind":"output","name":"x"},"node":"child","output":"missing"}
+
+=== workflows/fixtures/composition/used-document-child.yaml ===
+LOAD ERROR: 6:8: steps: invalid type: string "not a mapping", expected a mapping with unique keys
+
+=== workflows/fixtures/composition/used-document-root.yaml ===
+LINK ERRORS:
+- kind=UsedDocument display=node `child`: workflow `used-document-child` failed to load: 6:8: steps: invalid type: string "not a mapping", expected a mapping with unique keys json={"kind":"UsedDocument","node":"child","workflow":"used-document-child","reason":"6:8: steps: invalid type: string \"not a mapping\", expected a mapping with unique keys"}
+
+=== workflows/fixtures/composition/uses-acknowledgement-default-child.yaml ===
+USED: 
+CHECK ERRORS:
+- kind=AcknowledgementDefault display=input `ack`: an operator acknowledgement input may not have a default json={"kind":"AcknowledgementDefault","input":"ack"}
+
+=== workflows/fixtures/composition/uses-acknowledgement-default-root.yaml ===
+USED: uses-acknowledgement-default-child
+CHECK ERRORS:
+- kind=AcknowledgementDefault display=input `child/ack`: an operator acknowledgement input may not have a default json={"kind":"AcknowledgementDefault","input":"child/ack"}
+
+=== workflows/fixtures/composition/uses-and-tool.yaml ===
+LOAD ERROR: steps.a: a step may declare exactly one of `tool` or `uses`, not both
+
+=== workflows/fixtures/composition/uses-bad-name.yaml ===
+LOAD ERROR: steps.a.uses: does not match the required pattern
+
+=== workflows/fixtures/composition/uses-class-child.yaml ===
+USED: 
+WARNINGS:
+TYPES:
+boom.key: ProjectSlug
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"uses-class-child","nodes":[{"name":"boom","instance":null,"tool":"fake.irreversible.ensure","action":"create","inputs":{"key":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{}}],"outputs":{},"class":"irreversible","requires_approval":true}
+fingerprint: [{"name":"boom","instance":null,"action":"create","outputs":[]}]
+
+=== workflows/fixtures/composition/uses-class-root.yaml ===
+USED: uses-class-child
+WARNINGS:
+TYPES:
+names.org: GitHubOrg
+names.slug: ProjectSlug
+child/boom.key: ProjectSlug
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"uses-class-root","nodes":[{"name":"names","instance":null,"tool":"naming.v1","action":"compute","inputs":{"org":{"type":"GitHubOrg","list":false,"state":"known","value":"lightless-labs"},"slug":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{"github_repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"doppler_project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"buildkite_pipeline_slug":{"type":"BuildkitePipelineSlug","list":false,"state":"known","value":"third-thoughts"}}},{"name":"child/boom","instance":null,"tool":"fake.irreversible.ensure","action":"create","inputs":{"key":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{}}],"outputs":{},"class":"irreversible","requires_approval":true}
+fingerprint: [{"name":"names","instance":null,"action":"compute","outputs":[["github_repo","lightless-labs/third-thoughts"],["doppler_project","third-thoughts"],["buildkite_pipeline_slug","third-thoughts"]]},{"name":"child/boom","instance":null,"action":"create","outputs":[]}]
+
+=== workflows/fixtures/composition/uses-disallowed-input-child.yaml ===
+USED: 
+CHECK ERRORS:
+- kind=DisallowedInputType display=input `template`: declared type `TemplateSource` may never be a workflow input or a default; it is privileged, trusted-ref document content json={"kind":"DisallowedInputType","input":"template","ty":"TemplateSource"}
+
+=== workflows/fixtures/composition/uses-disallowed-input-root.yaml ===
+USED: uses-disallowed-input-child
+CHECK ERRORS:
+- kind=DisallowedInputType display=input `child/template`: declared type `TemplateSource` may never be a workflow input or a default; it is privileged, trusted-ref document content json={"kind":"DisallowedInputType","input":"child/template","ty":"TemplateSource"}
+
+=== workflows/fixtures/composition/uses-for-each.yaml ===
+LOAD ERROR: steps.a.for_each: a `uses:` step may not have a `for_each` (milestone 2b decision (d12)); use a separate root document per item instead
+
+=== workflows/fixtures/composition/uses-input-type-mismatch-child.yaml ===
+USED: 
+WARNINGS:
+- input `project` is declared but never used
+TYPES:
+OUTPUTS:
+PLAN:
+plan_json: {"workflow":"uses-input-type-mismatch-child","nodes":[],"outputs":{},"class":"reversible","requires_approval":false}
+fingerprint: []
+
+=== workflows/fixtures/composition/uses-input-type-mismatch-root.yaml ===
+USED: uses-input-type-mismatch-child
+CHECK ERRORS:
+- kind=UsesInputTypeMismatch display=node `child`, input `project`: expected DopplerProject, found `GitHubRepo` json={"kind":"UsesInputTypeMismatch","node":"child","input":"project","expected":"DopplerProject","found":"GitHubRepo"}
+
+=== workflows/fixtures/composition/uses-neither.yaml ===
+LOAD ERROR: steps.a: a step must declare exactly one of `tool` or `uses`
+
+=== workflows/fixtures/composition/uses-output-cycle-child.yaml ===
+USED: 
+WARNINGS:
+TYPES:
+OUTPUTS:
+out: Text
+PLAN:
+plan_json: {"workflow":"uses-output-cycle-child","nodes":[],"outputs":{"out":{"type":"Text","list":false,"state":"known","value":"Third Thoughts"}},"class":"reversible","requires_approval":false}
+fingerprint: []
+
+=== workflows/fixtures/composition/uses-output-cycle-root.yaml ===
+LINK ERRORS:
+- kind=UsesOutputCycle display=node `a`, output `out`: uses output alias cycle json={"kind":"UsesOutputCycle","node":"a","output":"out"}
+
+=== workflows/fixtures/composition/uses-secret-input-child.yaml ===
+USED: 
+CHECK ERRORS:
+- kind=SecretWorkflowInput display=input `token` has secret type `DopplerSecretValue`; a workflow input may not be secret json={"kind":"SecretWorkflowInput","input":"token","ty":"DopplerSecretValue"}
+
+=== workflows/fixtures/composition/uses-secret-input.yaml ===
+USED: uses-secret-input-child
+CHECK ERRORS:
+- kind=SecretWorkflowInput display=input `child/token` has secret type `DopplerSecretValue`; a workflow input may not be secret json={"kind":"SecretWorkflowInput","input":"child/token","ty":"DopplerSecretValue"}
