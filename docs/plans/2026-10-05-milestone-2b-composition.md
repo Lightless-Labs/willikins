@@ -102,6 +102,19 @@ instead of discarding it (`used: _`). Gates widen to match: `-p willikins-server
 and test, and the journal's own `plan_record_schema_generates` insta snapshot is regenerated (additions only) and
 reviewed as part of this commit, per the plan's "Published shapes" gate rule.
 
+**Addendum:** 2026-10-06 (task X1) — acceptance 15 reads "each bypass becomes a fixture under
+`workflows/fixtures/composition/` plus a test," written with a document-level bypass in mind. The
+two real bypasses this pass found are not document properties at all: one is a hand-built
+`Workflow`'s binding target (`compose.rs`'s `PathInAuthoredName` scan covered keys but not
+`Step`/`Keyed` targets — the DSL itself cannot author a path-shaped target, so no fixture can
+express the bypass), and the other is `TrustedResolver`'s own call-count behaviour (no memoization
+across occurrences of the same name, letting a caller-controlled root force repeated re-reads of a
+real trusted document). Both are pinned by unit tests in the module each fixed instead
+(`compose.rs`, `document.rs`), which this task's own "hand-built probes: `compose.rs` unit tests"
+allowance anticipates. No fixture under `workflows/fixtures/composition/` was added; the full
+record, including four restored mutations and every priority target traced to a held-or-fixed
+verdict, is `docs/research/2026-10-06-m2b-adversarial-pass.md`.
+
 **Addendum:** 2026-10-06 (task K1) — acceptance 11 names
 `workflows/fixtures/composition/new-rust-service-in-org.yaml`, which the SHARED VALUES table
 reserves for task F1's "Public positive pair", but the task order puts K1 before F1, so neither
