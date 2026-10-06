@@ -1,23 +1,28 @@
-# Milestone 2b, task K1 (acceptance 11)
-# (docs/plans/2026-10-05-milestone-2b-composition.md): a minimal
-# organisation document, `new-rust-service-in-org.yaml`'s sibling and only
-# `uses:` child. It holds the Buildkite org/cluster lookup, so the only
-# Buildkite node in the whole linked graph lives *inside* this used
-# document -- the shape acceptance 11's final clause needs: "a root whose
-# only Buildkite node is inside the child still requires the Buildkite
-# token" for `apply --live`. Modelled on decision (o1)'s sketch, trimmed to
-# what this CLI test needs.
+# Milestone 2b, task K1 (acceptance 11), shaped to the exact signature
+# task F1's own row reserves for it ("defaulted `github_org`,
+# `buildkite_org`, `cluster`, `environments`; the cluster lookup;
+# pass-through outputs") so F1 can build its equivalence test
+# (acceptance 12, comparing against `workflows/new-rust-service-
+# buildkite.yaml`) on top of this pair without rewriting it.
+# `new-rust-service-in-org.yaml`'s sibling and only `uses:` child: every
+# organisation-level fact that document's buildkite twin carries as its
+# own input or literal lives here instead, as a defaulted input the root
+# never has to supply.
 name: example-org
-description: A minimal organisation document, used only by milestone 2b's CLI acceptance test (task K1).
+description: What the organisation owns for a new Rust service -- the GitHub org, the Buildkite org and cluster, and the environment list every project provisions.
 inputs:
+  github_org: { type: GitHubOrg, default: Example-Org }
   buildkite_org: { type: BuildkiteOrg, default: example-bk-org }
-  cluster_name: { type: BuildkiteClusterName, default: Default cluster }
+  cluster: { type: BuildkiteClusterName, default: Default cluster }
+  environments: { type: list<EnvironmentSlug>, default: [dev, stg, prd] }
 steps:
   buildkite_cluster:
     tool: buildkite.cluster.get
     with:
       org: ${{ inputs.buildkite_org }}
-      name: ${{ inputs.cluster_name }}
+      name: ${{ inputs.cluster }}
 outputs:
+  github_org: ${{ inputs.github_org }}
   buildkite_org: ${{ inputs.buildkite_org }}
   cluster: ${{ steps.buildkite_cluster.cluster }}
+  environments: ${{ inputs.environments }}

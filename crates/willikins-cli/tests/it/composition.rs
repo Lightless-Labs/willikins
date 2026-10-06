@@ -96,10 +96,11 @@ fn doppler_test_token() -> String {
 /// document (a non-empty `uses:` reaching `check` unlinked is
 /// `CheckError::Unlinked`, which would fail this with no `resolved` key
 /// at all) -- and K1's own pin, "describe's output omits fixed inputs":
-/// the organisation's two unbound defaulted inputs become the flat
-/// graph's fixed inputs `org/buildkite_org` and `org/cluster_name`
-/// (decision (d6)), which `resolved` must never show (R1/S1's hiding,
-/// here exercised for the CLI surface).
+/// the organisation's four unbound defaulted inputs each become a flat
+/// graph fixed input (`org/github_org`, `org/buildkite_org`,
+/// `org/cluster`, `org/environments`; decision (d6)), none of which
+/// `resolved` must ever show (R1/S1's hiding, here exercised for the CLI
+/// surface).
 #[test]
 fn describe_links_the_sibling_and_hides_its_fixed_inputs() {
     let output = run(
@@ -125,14 +126,17 @@ fn describe_links_the_sibling_and_hides_its_fixed_inputs() {
     assert_eq!(json["missing"].as_array().map(Vec::len), Some(0), "{json}");
     let resolved = json["resolved"].as_object().expect("a resolved object");
     assert!(resolved.contains_key("slug"), "{json}");
-    assert!(
-        !resolved.contains_key("org/buildkite_org"),
-        "a fixed input leaked into describe's output: {json}"
-    );
-    assert!(
-        !resolved.contains_key("org/cluster_name"),
-        "a fixed input leaked into describe's output: {json}"
-    );
+    for fixed in [
+        "org/github_org",
+        "org/buildkite_org",
+        "org/cluster",
+        "org/environments",
+    ] {
+        assert!(
+            !resolved.contains_key(fixed),
+            "fixed input `{fixed}` leaked into describe's output: {json}"
+        );
+    }
 }
 
 /// Acceptance 11, first clause (the `plan` half): the linked graph's
@@ -255,24 +259,30 @@ fn a_child_that_lives_only_in_another_directory_fails_with_unknown_workflow() {
     assert_eq!(errors[0]["workflow"], "example-org", "{json}");
 }
 
-/// Acceptance 11, final clause: `apply --live`'s (and, identically,
-/// `plan --live`'s) credential requirement is computed over the
-/// *linked* graph. `new-rust-service-in-org.yaml`'s own, unlinked node
-/// list calls no Buildkite tool at all -- the pipeline node's `org` and
-/// `cluster` bindings both come from `steps.org`, and the only Buildkite
-/// nodes (`buildkite.cluster.get`, called by `buildkite.pipeline.ensure`'s
-/// own cluster id) live inside `example-org.yaml`. The GitHub and Doppler
-/// credentials are set (correctly shaped, so each of those two checks,
-/// which run first, passes) so the scan reaches the Buildkite check, the
-/// one `--live`'s catalog construction must reach *through the linked
-/// graph* to find at all -- mirrors
-/// `serve_and_live.rs`'s own `plan_live_on_a_document_leaving_buildkite_unbound_still_refuses_naming_the_variable`,
+/// Acceptance 11, final clause: `plan --live`'s credential requirement is
+/// computed over the *linked* graph, not the root's own unlinked node
+/// list. This root's own `pipeline` node also calls a Buildkite tool
+/// (`buildkite.pipeline.ensure`), so an unlinked scan would *still* end
+/// up demanding `WILLIKINS_BUILDKITE_TOKEN` -- but it would name `pipeline`
+/// as the node that needs it. The organisation's own `uses: example-org`
+/// step is declared *before* `pipeline`, so in the linked graph its
+/// expanded node `org/buildkite_cluster` sits earlier in node order
+/// (decision, "Step order", SHARED VALUES) and is the one an `--live`
+/// credential scan actually reports first. That identity -- not merely
+/// *that* the refusal happened -- is the proof the scan walked the
+/// linked graph: an unlinked scan cannot see `org/buildkite_cluster` at
+/// all, since it exists only after linking renames and inlines it.
+///
+/// The GitHub and Doppler credentials are set (correctly shaped, so
+/// each of those two checks, which run first, passes) so the scan
+/// reaches the Buildkite check -- mirrors `serve_and_live.rs`'s own
+/// `plan_live_on_a_document_leaving_buildkite_unbound_still_refuses_naming_the_variable`,
 /// the unlinked, single-document precedent for this exact shape. No
 /// network call is made either way (`live_catalog_for_document`'s own
 /// doc): this fails while *building* the catalog, before `check`, before
 /// any node's `read()`.
 #[test]
-fn live_credential_requirement_is_computed_over_the_linked_graph() {
+fn plan_live_credential_requirement_is_computed_over_the_linked_graph() {
     let token = doppler_test_token();
     let output = run(
         &["--json", "plan", root().to_str().unwrap(), "--live"],
@@ -291,9 +301,46 @@ fn live_credential_requirement_is_computed_over_the_linked_graph() {
         serde_json::from_str(stderr(&output).trim()).expect("valid JSON on stderr");
     assert_eq!(json["kind"], "Buildkite", "{json}");
     assert_eq!(json["document"], "new-rust-service-in-org", "{json}");
-    // The linked path, not a bare `buildkite_cluster`: proof the scan
+    // The linked path, not `pipeline` (this root's own Buildkite node,
+    // which an unlinked scan would have found instead): proof the scan
     // walked the *linked* graph, where this node only exists under its
     // full `<uses step>/<child node>` name (decision (d3)).
+    assert_eq!(json["node"], "org/buildkite_cluster", "{json}");
+    assert_eq!(json["tool"], "buildkite.cluster.get", "{json}");
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("WILLIKINS_BUILDKITE_TOKEN")),
+        "{json}"
+    );
+}
+
+/// The `apply <file> --live` twin of
+/// `plan_live_credential_requirement_is_computed_over_the_linked_graph`:
+/// `cmd_apply_file` builds its own `--live` catalog from the same
+/// `link_workflow` result `cmd_plan` does, before it ever creates the
+/// temporary directory or touches `Butler::start`, so the refusal is
+/// identical in shape, kind, and exit code.
+#[test]
+fn apply_live_credential_requirement_is_computed_over_the_linked_graph() {
+    let token = doppler_test_token();
+    let output = run(
+        &["--json", "apply", root().to_str().unwrap(), "--live"],
+        &[
+            ("WILLIKINS_DOPPLER_TOKEN", token.as_str()),
+            ("WILLIKINS_GITHUB_TOKEN", "ghp_example"),
+        ],
+    );
+    assert_eq!(exit_code(&output), 2, "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).is_empty(),
+        "nothing reached check: {}",
+        stdout(&output)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stderr(&output).trim()).expect("valid JSON on stderr");
+    assert_eq!(json["kind"], "Buildkite", "{json}");
+    assert_eq!(json["document"], "new-rust-service-in-org", "{json}");
     assert_eq!(json["node"], "org/buildkite_cluster", "{json}");
     assert_eq!(json["tool"], "buildkite.cluster.get", "{json}");
     assert!(
@@ -340,7 +387,22 @@ fn text_output_shows_the_linked_node_path_unchanged() {
 // every document under a trusted directory (task S1), and `Butler::apply`'s
 // reload already re-links through it (task S2) before this task existed.
 // `crates/willikins-server/tests/it/composition_s2.rs` already exercises
-// that machinery directly; nothing here would add coverage beyond
-// re-proving S1/S2 through one more entry point, at the cost of needing a
-// document whose class demands approval (so a plan stays pending between
-// two separate CLI invocations) purely to exercise it through the CLI.
+// that machinery directly.
+//
+// A CLI-level test was tried and dropped for two separate reasons, not
+// one: (1) `workflows/fixtures/composition/` cannot itself be pointed at
+// as `--workflows-dir` -- `Butler::start` scans and checks *every*
+// document in it, and that directory deliberately also holds documents
+// that fail to link on purpose (`cycle-a.yaml` and siblings), so the
+// scan refuses outright, naming the first cycle it finds, before this
+// test's own document is ever reached. A clean directory holding only
+// the root and `example-org.yaml` would dodge that. (2) This document's
+// class is `Reversible` (no approval needed), so `apply <file>` plans
+// *and* applies in the same call -- there is no CLI command that only
+// records a plan, so a second, separate `apply --plan-id` call against
+// the same id always meets `ButlerError::AlreadyApplied` first, before
+// `--workflows-dir` is ever linked against. Reaching a genuinely pending
+// plan through the CLI needs a document whose class demands approval
+// (`workflows/fixtures/composition/uses-class-root.yaml` and its child
+// are already shaped for that, acceptance 6), so a plan stays pending
+// between the two invocations this would need.
