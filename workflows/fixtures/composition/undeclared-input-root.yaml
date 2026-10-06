@@ -1,0 +1,20 @@
+# Milestone 2b, acceptance 4 ("none panics") and the independent
+# adversarial pass of 2026-10-06
+# (docs/research/2026-10-06-m2b-adversarial-pass-independent.md): a used
+# document whose own body references an input it never declared must
+# link, not panic, and `check` must refuse the flat graph exactly as it
+# refuses the same typo in a monolith. Pinned by
+# `a_childs_undeclared_input_reference_is_check_s_undeclared_input`
+# (crates/willikins-dsl/tests/it/composition.rs), together with its
+# child `undeclared-input-child.yaml`. Linking succeeds; `check` must
+# fail with exactly:
+#   CheckError::UndeclaredInput {
+#       site: Site::Port { node: NodeName("child/boom"), port: PortName("key") },
+#       input: InputName("child/typo"),
+#   }
+name: undeclared-input-root
+steps:
+  child:
+    uses: undeclared-input-child
+    with:
+      key: example-slug

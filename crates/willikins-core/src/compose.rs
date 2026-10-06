@@ -737,35 +737,32 @@ fn ensure_local_subst(
 /// it), so the only two things that change are a node/input reference,
 /// which gets `step`'s own prefix, and an authored input reference, which
 /// `subst` (that step's own [`ensure_local_subst`] result) replaces with
-/// the parent's own binding for it. Infallible: by the time anything
-/// calls this, [`ensure_local_subst`] has already run for `step` without
-/// error, which is what rules out the one case that would otherwise need
-/// to fail here (see the `Input` arm below).
+/// the parent's own binding for it. Infallible: an input reference
+/// `subst` has no entry for (a deeper fixed path, or a name the child
+/// never declared) is prefixed, and an undeclared one is left for
+/// `check`'s `UndeclaredInput` (see the `Input` arm below).
 fn embed(binding: &Binding, step: &NodeName, subst: &IndexMap<InputName, Binding>) -> Binding {
     match binding {
         Binding::Input(name) => {
             if let Some(replacement) = subst.get(name) {
                 replacement.clone()
-            } else if name.as_str().contains('/') {
-                // Already fixed at a deeper level; bubble it up under
-                // this step's own prefix too (decision (d3), applied to
-                // input paths the same way it applies to node paths).
-                Binding::Input(prefixed_input(step, name))
             } else {
-                // `ensure_local_subst` builds `subst` with one entry for
-                // every declared, non-fixed input of the child -- a
-                // `with:` binding (rewritten) or a fixed-input reference
-                // for a defaulted one left unbound -- and refuses
-                // (`CheckError::UnboundUsesInput`) the one case that
-                // would otherwise leave a gap: required, unbound, and
-                // undefaulted. `embed` is only ever reached for a `step`
-                // whose `ensure_local_subst` call already succeeded, so
-                // a non-path `Input` missing from `subst` here is a bug
-                // in this module, not a document defect.
-                unreachable!(
-                    "ensure_local_subst guarantees a subst entry for every non-path input of \
-                     step `{step}`; `{name}` has none"
-                )
+                // Two cases, one rewrite. A path (`deeper/x`) was already
+                // fixed at a deeper level: bubble it up under this step's
+                // own prefix too (decision (d3), applied to input paths
+                // the same way it applies to node paths). A one-segment
+                // name missing from `subst` is one the child references
+                // but never declared (`ensure_local_subst` gives every
+                // *declared*, non-fixed input an entry or refuses it):
+                // the DSL has no undeclared-input refusal of its own --
+                // that is `check`'s `UndeclaredInput` -- so a document
+                // can carry one, and this must not panic on it. Prefixed,
+                // it names no input of the flat workflow (a fixed input
+                // `<step>/<x>` exists only for a *declared* `x`), so
+                // `check` refuses it exactly as it refuses the same typo
+                // in a monolith (the independent adversarial pass,
+                // 2026-10-06).
+                Binding::Input(prefixed_input(step, name))
             }
         }
         Binding::Step { node, port } => Binding::Step {
@@ -2153,5 +2150,50 @@ mod tests {
                 node: node("b"),
             }]
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 2b, the independent adversarial pass (2026-10-06).
+    // -----------------------------------------------------------------
+
+    /// A used document whose own body references an input it never
+    /// declared (`${{ inputs.typo }}` -- the DSL has no undeclared-input
+    /// refusal of its own; that is `check`'s `UndeclaredInput`) must link
+    /// without panicking. The reference is prefixed like any other input
+    /// path (`c/typo`), so `check` on the flat graph reports
+    /// `UndeclaredInput` exactly as it would for the same typo in a
+    /// monolith -- acceptance 4's "none panics", for a defect a document
+    /// can express.
+    #[test]
+    fn a_childs_reference_to_an_undeclared_input_links_to_a_prefixed_path() {
+        let child = Workflow::new(wf_name("typo-child"))
+            .node(
+                node("n"),
+                Node::new(tool("noop.tool")).port(port("x"), Binding::Input(input("typo"))),
+            )
+            .output(output("o"), Binding::Input(input("typo")));
+        let root = uses_one("root", "c", "typo-child").output(
+            output("o"),
+            Binding::Step {
+                node: node("c"),
+                port: port("o"),
+            },
+        );
+
+        let linked = link(&root, &mut |name| match name.as_str() {
+            "typo-child" => Ok(child.clone()),
+            other => panic!("resolver asked for an unexpected workflow: {other}"),
+        })
+        .expect("an undeclared reference is check's to refuse, not the linker's");
+
+        assert_eq!(
+            linked.workflow.nodes[&node("c/n")].with[&port("x")],
+            Binding::Input(input("c/typo"))
+        );
+        assert_eq!(
+            linked.workflow.outputs[&output("o")],
+            Binding::Input(input("c/typo"))
+        );
+        assert!(!linked.workflow.inputs.contains_key(&input("c/typo")));
     }
 }

@@ -1,0 +1,14 @@
+# Child of undeclared-input-root.yaml; see that file's header
+# (docs/plans/2026-10-05-milestone-2b-composition.md, acceptance 4,
+# "none panics"). Its node binds `${{ inputs.typo }}`, an input this
+# document never declares. The DSL loads it (refusing an undeclared
+# input is `check`'s job), and on its own it fails `check` with
+# UndeclaredInput at `boom.key`, input `typo`.
+name: undeclared-input-child
+inputs:
+  key: { type: ProjectSlug }
+steps:
+  boom:
+    tool: fake.irreversible.ensure
+    with:
+      key: ${{ inputs.typo }}

@@ -444,6 +444,16 @@ fingerprint: []
 LINK ERRORS:
 - kind=UnboundUsesInput display=node `child`: required input `needed` is not bound and has no default json={"kind":"UnboundUsesInput","node":"child","input":"needed"}
 
+=== workflows/fixtures/composition/undeclared-input-child.yaml ===
+USED: 
+CHECK ERRORS:
+- kind=UndeclaredInput display=boom.key: references undeclared input `typo` json={"kind":"UndeclaredInput","site":{"kind":"port","node":"boom","port":"key"},"input":"typo"}
+
+=== workflows/fixtures/composition/undeclared-input-root.yaml ===
+USED: undeclared-input-child
+CHECK ERRORS:
+- kind=UndeclaredInput display=child/boom.key: references undeclared input `child/typo` json={"kind":"UndeclaredInput","site":{"kind":"port","node":"child/boom","port":"key"},"input":"child/typo"}
+
 === workflows/fixtures/composition/unknown-child.yaml ===
 LINK ERRORS:
 - kind=UnknownWorkflow display=node `child`: unknown workflow `ghost-child` json={"kind":"UnknownWorkflow","node":"child","workflow":"ghost-child"}

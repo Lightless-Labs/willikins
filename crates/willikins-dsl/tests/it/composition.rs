@@ -651,3 +651,27 @@ fn characterization_of_every_composition_document() {
     }
     insta::assert_snapshot!(report);
 }
+
+// ---------------------------------------------------------------------
+// Milestone 2b, the independent adversarial pass (2026-10-06).
+// ---------------------------------------------------------------------
+
+/// `workflows/fixtures/composition/undeclared-input-root.yaml`'s header
+/// (with its child `undeclared-input-child.yaml`): a used document's own
+/// reference to an input it never declared links without panicking, and
+/// `check` refuses the flat graph with the same `UndeclaredInput` a
+/// monolith gets, named by the node path and the prefixed input.
+#[test]
+fn a_childs_undeclared_input_reference_is_check_s_undeclared_input() {
+    let errors = check_fixture("undeclared-input-root.yaml").expect_err("must fail check");
+    assert_eq!(
+        errors,
+        vec![CheckError::UndeclaredInput {
+            site: Site::Port {
+                node: node("child/boom"),
+                port: port("key"),
+            },
+            input: input("child/typo"),
+        }]
+    );
+}
