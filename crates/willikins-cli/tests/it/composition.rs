@@ -381,6 +381,67 @@ fn text_output_shows_the_linked_node_path_unchanged() {
     );
 }
 
+/// X1 (the adversarial pass), closing an explicit priority target: "a
+/// caller setting a fixed input through the CLI ... describe". `describe`
+/// already hides `org/cluster` from `resolved` (the test above); this
+/// proves a caller cannot smuggle a value into it either, through the one
+/// real surface the fixture exposes a fixed input on.
+#[test]
+fn describe_refuses_a_callers_value_for_a_fixed_input() {
+    let output = run(
+        &[
+            "--json",
+            "describe",
+            root().to_str().unwrap(),
+            "--input",
+            "slug=k1-notsettable-describe",
+            "--input",
+            "org/cluster=hacked-cluster",
+        ],
+        &[],
+    );
+    assert_eq!(exit_code(&output), 1, "stderr: {}", stderr(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("valid JSON on stdout");
+    let errors = json["errors"].as_array().expect("an errors array");
+    assert!(
+        errors
+            .iter()
+            .any(|e| { e["input"] == "org/cluster" && e["error"]["type_name"] == "NotSettable" }),
+        "expected a NotSettable error for `org/cluster`: {json}"
+    );
+}
+
+/// The same priority target's `plan` half: `cmd_plan` shares the same
+/// `describe` call `cmd_describe` does before it ever reaches
+/// `willikins_core::plan`, so a fixed input is refused at the same point,
+/// never silently accepted into a plan.
+#[test]
+fn plan_refuses_a_callers_value_for_a_fixed_input() {
+    let output = run(
+        &[
+            "--json",
+            "plan",
+            root().to_str().unwrap(),
+            "--input",
+            "slug=k1-notsettable-plan",
+            "--input",
+            "org/buildkite_org=hacked-org",
+        ],
+        &[],
+    );
+    assert_eq!(exit_code(&output), 1, "stderr: {}", stderr(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("valid JSON on stdout");
+    let errors = json["errors"].as_array().expect("an errors array");
+    assert!(
+        errors.iter().any(|e| {
+            e["input"] == "org/buildkite_org" && e["error"]["type_name"] == "NotSettable"
+        }),
+        "expected a NotSettable error for `org/buildkite_org`: {json}"
+    );
+}
+
 // `apply --plan-id --workflows-dir` resolving children in that trusted
 // directory "like the server" (decision (d8)'s last bullet) is not new
 // behaviour this task adds: `Butler::start`'s own scan already links
