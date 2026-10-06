@@ -426,12 +426,40 @@ impl GitHubScaffoldEnsure {
     /// content is compared by [`git_blob_sha`]. The marker's own blob is
     /// the only one this tool ever fetches.
     ///
+    /// When `branch` has a head, this is everything: the only requests
+    /// are the ones a repository with that branch has always issued. When
+    /// `get_branch_head` instead fails `404` or `409`, every other
+    /// outcome below comes from [`Self::observe_without_branch`]
+    /// (milestone 3l, task S2, decision (b)) instead -- `get_commit_root_tree`
+    /// and every tree/blob read are never reached in that case.
+    ///
     /// # Errors
     ///
-    /// Returns [`ToolError`] of kind `NotFound` when `branch` does not
-    /// exist (this tool never creates one) and `Conflict` naming every
-    /// seed path that holds content this tool did not put there, sorted,
-    /// never their content. Any other provider failure is [`to_tool_error`].
+    /// Returns [`ToolError`] of kind:
+    /// - `Conflict`, naming every seed path that holds content this tool
+    ///   did not put there (sorted, never their content), when the
+    ///   branch exists and a declared path conflicts; or naming `branch`
+    ///   and the repository's actual default branch when the repository
+    ///   is empty and they differ (milestone 3l decision (c)).
+    /// - `NotFound`, with the unchanged "branch ... does not exist ...
+    ///   this tool never creates one" message, when `branch` is missing
+    ///   from a repository that is not empty.
+    /// - `Provider`, naming `repo`, when the branch's own `404`/`409`
+    ///   turned out to mean "not available yet" (a `409` on a
+    ///   non-empty repository) or "GitHub reported no usable default
+    ///   branch" (absent, or not a valid [`GitBranchName`]).
+    /// - [`to_tool_error`] for any other provider failure, including a
+    ///   `301` from `GET /repos` (the repository renamed away) -- never
+    ///   reported as `Absent`.
+    ///
+    /// A missing repository or an empty one whose branch matches the
+    /// organisation's default is **not** an error here: both become
+    /// [`ScaffoldState::RepositoryAbsent`] and [`ScaffoldState::Empty`]
+    /// respectively, which `read` maps to [`Observation::Absent`] and
+    /// `ensure` turns into its own, different errors (decision (b): a
+    /// plan-time error for a repository `github.repo.ensure` would
+    /// create in the same plan would make every new-repository document
+    /// unplannable).
     fn observe(
         client: &GitHubClient,
         repo: &GitHubRepo,

@@ -525,22 +525,25 @@ fn a_truncated_tree_is_a_provider_failure_never_absent() {
 #[test]
 fn read_reports_not_found_when_the_branch_does_not_exist() {
     let mut provider = MockProvider::start();
-    provider
+    let ref_mock = provider
         .mock("GET", "/repos/acme/widget/git/ref/heads/main")
         .with_status(404)
+        .expect(1)
         .create();
-    provider
+    let repo_mock = provider
         .mock("GET", "/repos/acme/widget")
         .with_status(200)
         .with_body(
             serde_json::json!({"visibility": "private", "topics": [], "default_branch": "main"})
                 .to_string(),
         )
+        .expect(1)
         .create();
-    provider
+    let branches_mock = provider
         .mock("GET", "/repos/acme/widget/branches?per_page=1")
         .with_status(200)
         .with_body(serde_json::json!([{"name": "main"}]).to_string())
+        .expect(1)
         .create();
     let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
     let err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
@@ -549,6 +552,9 @@ fn read_reports_not_found_when_the_branch_does_not_exist() {
         err.message,
         "branch `main` does not exist on `acme/widget`; this tool never creates one"
     );
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
 }
 
 // -----------------------------------------------------------------------
@@ -604,13 +610,19 @@ fn read_reports_absent_when_the_repository_does_not_exist() {
 fn ensure_reports_not_found_naming_repo_ensure_when_the_repository_does_not_exist() {
     for branch_status in [404, 409] {
         let mut provider = MockProvider::start();
-        provider
+        let ref_mock = provider
             .mock("GET", "/repos/acme/widget/git/ref/heads/main")
             .with_status(branch_status)
+            .expect(1)
             .create();
-        provider
+        let repo_mock = provider
             .mock("GET", "/repos/acme/widget")
             .with_status(404)
+            .expect(1)
+            .create();
+        let branches_mock = provider
+            .mock("GET", "/repos/acme/widget/branches?per_page=1")
+            .expect(0)
             .create();
         let commit = provider.mock("POST", "/graphql").expect(0).create();
         let first_file = provider
@@ -624,12 +636,15 @@ fn ensure_reports_not_found_naming_repo_ensure_when_the_repository_does_not_exis
             .ensure(&scaffold_inputs(seed_files()), &token)
             .unwrap_err();
         assert_eq!(err.kind, ToolErrorKind::NotFound, "{branch_status}");
-        assert!(err.message.contains("does not exist"), "{}", err.message);
-        assert!(
-            err.message.contains("github.repo.ensure"),
-            "{}",
-            err.message
+        assert_eq!(
+            err.message,
+            "`acme/widget` does not exist; this tool never creates a repository \
+             (github.repo.ensure does)",
+            "{branch_status}"
         );
+        ref_mock.assert();
+        repo_mock.assert();
+        branches_mock.assert();
         commit.assert();
         first_file.assert();
     }
@@ -690,22 +705,25 @@ fn read_reports_absent_when_the_repository_is_empty_and_branch_is_the_default() 
 #[allow(clippy::disallowed_methods)] // a test mints its own token
 fn ensure_reports_a_temporary_not_found_when_the_repository_is_empty() {
     let mut provider = MockProvider::start();
-    provider
+    let ref_mock = provider
         .mock("GET", "/repos/acme/widget/git/ref/heads/main")
         .with_status(404)
+        .expect(1)
         .create();
-    provider
+    let repo_mock = provider
         .mock("GET", "/repos/acme/widget")
         .with_status(200)
         .with_body(
             serde_json::json!({"visibility": "private", "topics": [], "default_branch": "main"})
                 .to_string(),
         )
+        .expect(1)
         .create();
-    provider
+    let branches_mock = provider
         .mock("GET", "/repos/acme/widget/branches?per_page=1")
         .with_status(200)
         .with_body("[]")
+        .expect(1)
         .create();
     let commit = provider.mock("POST", "/graphql").expect(0).create();
     let first_file = provider
@@ -719,7 +737,14 @@ fn ensure_reports_a_temporary_not_found_when_the_repository_is_empty() {
         .ensure(&scaffold_inputs(seed_files()), &token)
         .unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::NotFound);
-    assert!(err.message.contains("S3"), "{}", err.message);
+    assert_eq!(
+        err.message,
+        "`acme/widget` is empty; this tool does not yet create a repository's first branch \
+         (milestone 3l task S3 adds that)"
+    );
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
     commit.assert();
     first_file.assert();
 }
@@ -734,35 +759,40 @@ fn ensure_reports_a_temporary_not_found_when_the_repository_is_empty() {
 fn read_and_ensure_conflict_when_the_empty_repositorys_default_branch_differs() {
     for branch_status in [404, 409] {
         let mut provider = MockProvider::start();
-        provider
+        // `read` then `ensure`, each against the same provider: every GET
+        // below is issued exactly twice.
+        let ref_mock = provider
             .mock("GET", "/repos/acme/widget/git/ref/heads/main")
             .with_status(branch_status)
+            .expect(2)
             .create();
-        provider
+        let repo_mock = provider
             .mock("GET", "/repos/acme/widget")
             .with_status(200)
             .with_body(
                 serde_json::json!({"visibility": "private", "topics": [], "default_branch": "trunk"})
                     .to_string(),
             )
+            .expect(2)
             .create();
-        provider
+        let branches_mock = provider
             .mock("GET", "/repos/acme/widget/branches?per_page=1")
             .with_status(200)
             .with_body("[]")
+            .expect(2)
             .create();
         let commit = provider.mock("POST", "/graphql").expect(0).create();
 
         let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
         let read_err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
         assert_eq!(read_err.kind, ToolErrorKind::Conflict, "{branch_status}");
-        assert!(
-            read_err.message.contains("acme/widget"),
-            "{}",
-            read_err.message
+        assert_eq!(
+            read_err.message,
+            "`acme/widget` is empty, and its first commit can only land on its default \
+             branch `trunk`, not `main`; name `trunk` in this document, or change the \
+             organisation's default branch name before the repository is created",
+            "{branch_status}"
         );
-        assert!(read_err.message.contains("main"), "{}", read_err.message);
-        assert!(read_err.message.contains("trunk"), "{}", read_err.message);
 
         let token = SinkToken::new();
         let ensure_err = tool
@@ -770,6 +800,9 @@ fn read_and_ensure_conflict_when_the_empty_repositorys_default_branch_differs() 
             .unwrap_err();
         assert_eq!(ensure_err.kind, ToolErrorKind::Conflict, "{branch_status}");
         assert_eq!(ensure_err.message, read_err.message, "{branch_status}");
+        ref_mock.assert();
+        repo_mock.assert();
+        branches_mock.assert();
         commit.assert();
     }
 }
@@ -781,29 +814,38 @@ fn read_and_ensure_conflict_when_the_empty_repositorys_default_branch_differs() 
 #[test]
 fn read_reports_provider_unavailable_when_the_branch_ref_is_409_on_a_non_empty_repository() {
     let mut provider = MockProvider::start();
-    provider
+    let ref_mock = provider
         .mock("GET", "/repos/acme/widget/git/ref/heads/main")
         .with_status(409)
+        .expect(1)
         .create();
-    provider
+    let repo_mock = provider
         .mock("GET", "/repos/acme/widget")
         .with_status(200)
         .with_body(
             serde_json::json!({"visibility": "private", "topics": [], "default_branch": "main"})
                 .to_string(),
         )
+        .expect(1)
         .create();
-    provider
+    let branches_mock = provider
         .mock("GET", "/repos/acme/widget/branches?per_page=1")
         .with_status(200)
         .with_body(serde_json::json!([{"name": "main"}]).to_string())
+        .expect(1)
         .create();
 
     let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
     let err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::Provider);
-    assert!(err.message.contains("acme/widget"), "{}", err.message);
-    assert!(err.message.contains("not available yet"), "{}", err.message);
+    assert_eq!(
+        err.message,
+        "`acme/widget` is not available yet (GitHub may still be creating it); re-run this \
+         document"
+    );
+    ref_mock.assert();
+    repo_mock.assert();
+    branches_mock.assert();
 }
 
 /// Row: `404`/`409` on the branch ref, `200` on `GET /repos` whose
@@ -815,11 +857,12 @@ fn read_is_provider_when_default_branch_is_absent_or_invalid() {
     for branch_status in [404, 409] {
         for default_branch in [serde_json::Value::Null, serde_json::json!("..bad..")] {
             let mut provider = MockProvider::start();
-            provider
+            let ref_mock = provider
                 .mock("GET", "/repos/acme/widget/git/ref/heads/main")
                 .with_status(branch_status)
+                .expect(1)
                 .create();
-            provider
+            let repo_mock = provider
                 .mock("GET", "/repos/acme/widget")
                 .with_status(200)
                 .with_body(
@@ -830,6 +873,7 @@ fn read_is_provider_when_default_branch_is_absent_or_invalid() {
                     })
                     .to_string(),
                 )
+                .expect(1)
                 .create();
             let branches_mock = provider
                 .mock("GET", "/repos/acme/widget/branches?per_page=1")
@@ -843,7 +887,12 @@ fn read_is_provider_when_default_branch_is_absent_or_invalid() {
                 ToolErrorKind::Provider,
                 "{branch_status} {default_branch:?}"
             );
-            assert!(err.message.contains("acme/widget"), "{}", err.message);
+            assert_eq!(
+                err.message, "`acme/widget` did not report a usable default branch",
+                "{branch_status} {default_branch:?}"
+            );
+            ref_mock.assert();
+            repo_mock.assert();
             branches_mock.assert();
         }
     }
@@ -881,15 +930,18 @@ fn a_successful_branch_head_never_consults_the_repository_or_branches() {
     branches_mock.assert();
 }
 
-/// Any branch-ref failure other than `404`/`409` (here, a `500`) is
-/// reported as-is (`to_tool_error`) without ever consulting the
-/// repository or the branches listing -- never `Absent`.
+/// Any branch-ref failure other than `404`/`409` (here, a `422`, which
+/// `willikins-providers-http` never retries -- a `5xx` would be, muddying
+/// the request count this test pins) is reported as-is (`to_tool_error`)
+/// without ever consulting the repository or the branches listing --
+/// never `Absent`.
 #[test]
 fn any_other_branch_head_error_never_consults_the_repository() {
     let mut provider = MockProvider::start();
-    provider
+    let ref_mock = provider
         .mock("GET", "/repos/acme/widget/git/ref/heads/main")
-        .with_status(500)
+        .with_status(422)
+        .expect(1)
         .create();
     let repo_mock = provider
         .mock("GET", "/repos/acme/widget")
@@ -903,6 +955,7 @@ fn any_other_branch_head_error_never_consults_the_repository() {
     let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
     let err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::Provider);
+    ref_mock.assert();
     repo_mock.assert();
     branches_mock.assert();
 }
@@ -913,13 +966,15 @@ fn any_other_branch_head_error_never_consults_the_repository() {
 #[test]
 fn a_301_from_get_repos_fails_loudly_never_absent() {
     let mut provider = MockProvider::start();
-    provider
+    let ref_mock = provider
         .mock("GET", "/repos/acme/widget/git/ref/heads/main")
         .with_status(404)
+        .expect(1)
         .create();
-    provider
+    let repo_mock = provider
         .mock("GET", "/repos/acme/widget")
         .with_status(301)
+        .expect(1)
         .create();
     let branches_mock = provider
         .mock("GET", "/repos/acme/widget/branches?per_page=1")
@@ -929,6 +984,8 @@ fn a_301_from_get_repos_fails_loudly_never_absent() {
     let tool = GitHubScaffoldEnsure::new(client_against(provider.url()));
     let err = tool.read(&scaffold_inputs(seed_files())).unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::Provider, "{}", err.message);
+    ref_mock.assert();
+    repo_mock.assert();
     branches_mock.assert();
 }
 
