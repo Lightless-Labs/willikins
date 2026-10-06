@@ -23,8 +23,11 @@
 //!   [`flatten`] now walks with a `stack` of workflow names (the
 //!   depth-first path from the root to the document currently being
 //!   entered), a `depth` counter (root is depth 0), and a shared
-//!   `node_count` (every linked tool node, counted once per occurrence —
-//!   a diamond's second occurrence counts again). A `uses:` step whose
+//!   `node_count` (every linked tool node and every `uses:` step,
+//!   counted once per occurrence — a diamond's second occurrence counts
+//!   again; `uses:` steps count since the independent adversarial pass of
+//!   2026-10-06, so a tree of zero-node documents is bounded too). A
+//!   `uses:` step whose
 //!   target is already on `stack` is [`crate::check::CheckError::UsesCycle`];
 //!   one found in a document already at [`MAX_USES_DEPTH`] is
 //!   [`crate::check::CheckError::UsesTooDeep`]; crossing
@@ -105,8 +108,10 @@ use willikins_types::WorkflowName;
 /// the module docs' "Scope" section and milestone 2b decision (d9).
 pub const MAX_USES_DEPTH: usize = 8;
 
-/// The greatest number of tool nodes [`link`] will produce, counted
-/// before any `for_each` expansion. Crossing it is
+/// The greatest number of tool nodes and `uses:` steps [`link`] will
+/// expand, each counted once per occurrence, before any `for_each`
+/// expansion. A `uses:` step counts so that a tree of documents with no
+/// tool node of their own is bounded too. Crossing it is
 /// [`CheckError::UsesTooLarge`] — see the module docs' "Scope" section and
 /// milestone 2b decision (d9).
 pub const MAX_LINKED_NODES: usize = 2048;
@@ -273,7 +278,14 @@ fn flatten(
     // being materialised past the bound: the first document whose own
     // node count tips the running total over `MAX_LINKED_NODES` is
     // refused before *its* children are ever resolved.
-    *node_count += wf.nodes.len();
+    //
+    // A `uses:` step counts too, once per occurrence, exactly like a tool
+    // node (the independent adversarial pass, 2026-10-06): a document of
+    // only `uses:` steps and inputs adds no tool node, so counting tool
+    // nodes alone left a fan-out of zero-node documents unbounded --
+    // `8^8` `flatten` calls for eight levels of eight steps, each
+    // materialising its own inputs and boundaries, with no refusal.
+    *node_count += wf.nodes.len() + wf.uses.len();
     if *node_count > MAX_LINKED_NODES {
         return Err(vec![CheckError::UsesTooLarge { nodes: *node_count }]);
     }
@@ -2195,5 +2207,53 @@ mod tests {
             Binding::Input(input("c/typo"))
         );
         assert!(!linked.workflow.inputs.contains_key(&input("c/typo")));
+    }
+
+    /// Trust boundary 6, decision (d9): the expansion bound must hold for
+    /// a tree of documents with no tool node at all. A document of only
+    /// `uses:` steps and inputs (`alias_child`'s shape, a constants
+    /// document) adds nothing to a count of tool nodes, so a fan-out of
+    /// eight `uses:` steps per level, seven levels deep, over a zero-node
+    /// leaf, is `8^7` (about two million) `flatten` calls, each
+    /// materialising its own inputs and boundaries, with no bound
+    /// tripping. Every `uses:` occurrence counts toward
+    /// `MAX_LINKED_NODES`, so this is refused as `UsesTooLarge` after
+    /// about that many calls, not millions.
+    #[test]
+    fn a_fan_out_of_zero_node_documents_is_refused_as_uses_too_large() {
+        let leaf = Workflow::new(wf_name("l7"))
+            .input(
+                input("x"),
+                InputSpec::new(ty("Text")).with_default(Value::parse(&ty("Text"), "x").unwrap()),
+            )
+            .output(output("x"), Binding::Input(input("x")));
+        let levels: Vec<Workflow> = (0..7)
+            .map(|i| fan(&format!("l{i}"), &format!("l{}", i + 1), 8))
+            .collect();
+        let root = fan("root", "l0", 8);
+
+        let mut calls = 0usize;
+        let err = link(&root, &mut |name| {
+            calls += 1;
+            assert!(
+                calls <= 4 * MAX_LINKED_NODES,
+                "expansion bomb: resolve called {calls} times with no bound tripping"
+            );
+            if name.as_str() == "l7" {
+                return Ok(leaf.clone());
+            }
+            levels
+                .iter()
+                .find(|wf| &wf.name == name)
+                .cloned()
+                .ok_or(ResolveFailure::NotFound)
+        })
+        .unwrap_err();
+
+        assert!(
+            matches!(err.as_slice(), [CheckError::UsesTooLarge { .. }]),
+            "expected exactly one UsesTooLarge, got {err:?}"
+        );
+        assert!(calls <= MAX_LINKED_NODES, "refused after {calls} calls");
     }
 }
