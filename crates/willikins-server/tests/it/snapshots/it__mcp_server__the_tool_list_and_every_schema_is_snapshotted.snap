@@ -390,7 +390,7 @@ expression: snapshot
         },
         "resolved": {
           "additionalProperties": false,
-          "description": "Every input that resolved to a concrete [`Value`]: a parsed raw\nvalue, or a declared default. In declaration order.",
+          "description": "Every input that resolved to a concrete [`Value`]: a parsed raw\nvalue, or a declared default. In declaration order. **Includes**\nevery *fixed* input (milestone 2b, decision (d6)), holding its\nused document's own default: `willikins-server`'s `Butler::plan`\npasses this map straight to `plan`, which needs a fixed input's\nvalue to bind every reference to it inside the document that fixed\nit. Only the agent-facing surfaces built over `Description` (the\nMCP `describe` response, the CLI's `describe` output,\n`WorkflowSummary.inputs`) omit a fixed input — this field itself\nnever does.",
           "patternProperties": {
             "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$": {
               "$ref": "#/$defs/Value"
@@ -2512,6 +2512,39 @@ expression: snapshot
               "required": [
                 "kind",
                 "name"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `uses:` step's `with:` bound a used document's declared input to\na value whose own resolved type is not *exactly* the input's\ndeclared type: `check` resolves the binding the same way it\nresolves a node's own port binding, then requires equality with\n[`crate::compose::Boundary::spec`]'s declared type, with no\none-hop conversion probe (decision (d4), \"exact type at the\nboundary, no conversion\" -- substitution moves the *unconverted*\nbinding inside, so a converted-at-the-boundary value would reach\nthe child's own ports unconverted).\n\nNot one of the plan's variants; milestone 2b, part C, task C1,\ndecision (d4).",
+              "properties": {
+                "expected": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "The input's declared type."
+                },
+                "found": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "The binding's own resolved type."
+                },
+                "input": {
+                  "$ref": "#/$defs/InputName",
+                  "description": "The used document's own input name the binding does not\nmatch."
+                },
+                "kind": {
+                  "const": "UsesInputTypeMismatch",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The `uses:` step."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "input",
+                "expected",
+                "found"
               ],
               "type": "object"
             }

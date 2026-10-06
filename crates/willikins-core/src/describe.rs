@@ -145,6 +145,34 @@ impl fmt::Display for InputError {
     }
 }
 
+impl InputError {
+    /// The [`InputError`] for a caller-supplied raw value aimed at a
+    /// *fixed* input (milestone 2b, decision (d6)): an unbound defaulted
+    /// input of a used document, exposed on the flat workflow only so its
+    /// default can be resolved, never so a caller can override it. Given
+    /// unconditionally — whether or not the raw value happens to parse to
+    /// the same value as the default — because a fixed input is never
+    /// settable at all, not merely settable-to-one-value.
+    ///
+    /// `InputError` stays the plain struct it always was here, rather than
+    /// becoming a tagged enum: `willikins-cli`'s `render::describe_text`
+    /// reads `.input`/`.error` as fields directly, and converting would
+    /// touch a crate outside this task's scope for a case `ParseError`'s
+    /// own `type_name` already discriminates (see the 2026-10-06 addendum
+    /// on the milestone plan, task R1). Discriminable by
+    /// `error.error.type_name == "NotSettable"`.
+    #[must_use]
+    pub fn not_settable(input: InputName) -> Self {
+        let error = ParseError::new(
+            "NotSettable",
+            format!(
+                "input `{input}` is fixed by this document's composition and cannot be set by a caller"
+            ),
+        );
+        Self { input, error }
+    }
+}
+
 /// A declared input `describe` found neither a raw value nor a default for.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
 pub struct MissingInput {
@@ -244,7 +272,15 @@ pub struct Description {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub awaiting: Vec<AwaitingInput>,
     /// Every input that resolved to a concrete [`Value`]: a parsed raw
-    /// value, or a declared default. In declaration order.
+    /// value, or a declared default. In declaration order. **Includes**
+    /// every *fixed* input (milestone 2b, decision (d6)), holding its
+    /// used document's own default: `willikins-server`'s `Butler::plan`
+    /// passes this map straight to `plan`, which needs a fixed input's
+    /// value to bind every reference to it inside the document that fixed
+    /// it. Only the agent-facing surfaces built over `Description` (the
+    /// MCP `describe` response, the CLI's `describe` output,
+    /// `WorkflowSummary.inputs`) omit a fixed input — this field itself
+    /// never does.
     pub resolved: IndexMap<InputName, Value>,
 }
 
@@ -254,7 +290,12 @@ pub struct Description {
 ///
 /// Walks `checked.workflow.inputs` in declaration order. For each declared
 /// input:
-/// - a raw value in `partial` is parsed against the input's declared type
+/// - a raw value in `partial` for a *fixed* input (milestone 2b, decision
+///   (d6): `spec.fixed_by.is_some()`) is never parsed: it is always
+///   [`InputError::not_settable`], whatever that value is, and
+///   [`Description::resolved`] still gets the fixed input's own default,
+///   exactly as if `partial` had held nothing for it;
+/// - otherwise, a raw value in `partial` is parsed against the input's declared type
 ///   with [`Value::parse`] (a [`RawInput::Scalar`]) or [`Value::parse_list`]
 ///   (a [`RawInput::List`]) — either function's own cardinality check
 ///   reports a [`RawInput`] of the wrong shape for the declared type, so no
@@ -281,6 +322,25 @@ pub fn describe(checked: &Checked, partial: &PartialInputs) -> Description {
 
     for (name, spec) in &checked.workflow.inputs {
         match partial.get(name) {
+            // Milestone 2b, decision (d6): a *fixed* input (the linker's
+            // own `InputSpec::fixed_by`) is never settable by a caller,
+            // whatever raw value they supplied — even one that would
+            // parse to the same value the default already holds.
+            // `resolved` still gets the child's own default below, the
+            // same as if nothing had been supplied at all: a fixed input
+            // is never `missing` either.
+            Some(_) if spec.fixed_by.is_some() => {
+                errors.push(InputError::not_settable(name.clone()));
+                let default = spec.default.clone().unwrap_or_else(|| {
+                    unreachable!(
+                        "a fixed input is always defaulted (decision (d6)): the linker only \
+                         fixes a used document's own unbound *defaulted* input, and refuses a \
+                         required, undefaulted one as `UnboundUsesInput` before it ever reaches \
+                         here"
+                    )
+                });
+                resolved.insert(name.clone(), default);
+            }
             Some(raw) => match parse_raw(&spec.ty, raw) {
                 Ok(value) => {
                     resolved.insert(name.clone(), value);
@@ -855,6 +915,134 @@ mod tests {
                 .unwrap()
                 .contains("SYSTEM")
         );
+    }
+
+    /// Milestone 2b, task R1, verify item 2: settles, before this task adds
+    /// `NotSettable` beside it, that `describe` already refuses a caller
+    /// value for a name the workflow does not declare *at all* — distinct
+    /// from a *fixed* input (declared, but not settable; see the tests
+    /// below). `check`'s own `CheckError::UndeclaredInput` is about a
+    /// reference *inside* the document itself; this is the caller-supplied
+    /// name path, at the bottom of [`describe`], which already reported
+    /// this (see `acceptance_5_an_unknown_input_name_is_an_input_error`
+    /// above) before this task touched anything.
+    #[test]
+    fn verify_item_2_an_undeclared_caller_input_name_was_already_refused_before_this_task() {
+        let checked = checked_positive_inputs();
+        let mut partial = PartialInputs::new();
+        partial.insert(
+            input_name("totally_unknown"),
+            RawInput::Scalar("x".to_string()),
+        );
+        let description = describe(&checked, &partial);
+        assert_eq!(description.errors.len(), 1);
+        assert_eq!(description.errors[0].input, input_name("totally_unknown"));
+        assert!(description.errors[0].error.reason.contains("no such input"));
+    }
+
+    /// A `Checked` workflow with one ordinary input and one *fixed* input
+    /// (milestone 2b decision (d6)) — built by hand, rather than through
+    /// `willikins_core::compose::link`, since `check` itself never looks at
+    /// `InputSpec::fixed_by` (only `describe` and `plan` do): a composite's
+    /// fixed input is always defaulted, so this mirrors exactly what the
+    /// linker itself would produce.
+    fn checked_with_a_fixed_input() -> Checked {
+        let workflow = Workflow::new(workflow_name("fixed-input-fixture"))
+            .input(
+                input_name("slug"),
+                InputSpec::new(ty("ProjectSlug"))
+                    .with_description(document_description("Canonical project slug")),
+            )
+            .input(input_name("org/base_configs"), {
+                let mut spec =
+                    InputSpec::new(list_ty("DopplerConfig")).with_default(Value::known_list(vec![
+                        willikins_types::DopplerConfig::parse("shared/base").unwrap(),
+                    ]));
+                spec.fixed_by = Some(NodeName::parse("org").unwrap());
+                spec
+            });
+        let catalog = Catalog::new(willikins_types::registry());
+        check(&workflow, &catalog).expect("no nodes: nothing to fail check")
+    }
+
+    /// Acceptance 7 (decision (d6)): a fixed input is never `missing`, and
+    /// its default resolves into [`Description::resolved`] even when the
+    /// caller supplied nothing for it at all.
+    #[test]
+    fn acceptance_7_an_unbound_fixed_input_is_never_missing_and_resolves_its_default() {
+        let checked = checked_with_a_fixed_input();
+        let mut partial = PartialInputs::new();
+        partial.insert(input_name("slug"), RawInput::Scalar("x".to_string()));
+        let description = describe(&checked, &partial);
+
+        assert!(description.errors.is_empty(), "{:?}", description.errors);
+        assert!(
+            description
+                .missing
+                .iter()
+                .all(|m| m.name != input_name("org/base_configs")),
+            "a fixed input must never be `missing`: {:?}",
+            description.missing
+        );
+        let resolved = description
+            .resolved
+            .get(&input_name("org/base_configs"))
+            .expect("a fixed input's default must still resolve");
+        assert_eq!(resolved.as_list().unwrap().len(), 1);
+    }
+
+    /// Acceptance 7: a caller value for a fixed input gives `NotSettable`
+    /// from `describe`, and `resolved` still holds the fixed input's own
+    /// default — never the caller's rejected value.
+    #[test]
+    fn acceptance_7_a_caller_value_for_a_fixed_input_is_not_settable() {
+        let checked = checked_with_a_fixed_input();
+        let mut partial = PartialInputs::new();
+        partial.insert(input_name("slug"), RawInput::Scalar("x".to_string()));
+        partial.insert(
+            input_name("org/base_configs"),
+            RawInput::from_comma_separated("other/config"),
+        );
+        let description = describe(&checked, &partial);
+
+        assert_eq!(description.errors.len(), 1, "{:?}", description.errors);
+        let error = &description.errors[0];
+        assert_eq!(error.input, input_name("org/base_configs"));
+        assert_eq!(error.error.type_name, "NotSettable");
+        assert!(
+            description
+                .missing
+                .iter()
+                .all(|m| m.name != input_name("org/base_configs"))
+        );
+        let resolved = description
+            .resolved
+            .get(&input_name("org/base_configs"))
+            .expect("the fixed input's default must still resolve, not the caller's value");
+        assert_eq!(
+            resolved.as_list().unwrap().len(),
+            1,
+            "the caller's two-element override must never reach `resolved`"
+        );
+    }
+
+    /// Decision (d6) is explicit that a fixed input is refused
+    /// unconditionally, even when the caller's value happens to equal the
+    /// default: there is no cheaper "settable, but only to this one value"
+    /// reading.
+    #[test]
+    fn acceptance_7_a_caller_value_equal_to_the_default_is_still_not_settable() {
+        let checked = checked_with_a_fixed_input();
+        let mut partial = PartialInputs::new();
+        partial.insert(input_name("slug"), RawInput::Scalar("x".to_string()));
+        partial.insert(
+            input_name("org/base_configs"),
+            RawInput::from_comma_separated("shared/base"),
+        );
+        let description = describe(&checked, &partial);
+
+        assert_eq!(description.errors.len(), 1, "{:?}", description.errors);
+        assert_eq!(description.errors[0].error.type_name, "NotSettable");
     }
 
     /// Milestone 3i, decision (b4): `missing_input` renders a declared

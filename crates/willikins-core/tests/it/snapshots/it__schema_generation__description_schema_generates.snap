@@ -30,7 +30,7 @@ expression: schema
       }
     },
     "resolved": {
-      "description": "Every input that resolved to a concrete [`Value`]: a parsed raw\nvalue, or a declared default. In declaration order.",
+      "description": "Every input that resolved to a concrete [`Value`]: a parsed raw\nvalue, or a declared default. In declaration order. **Includes**\nevery *fixed* input (milestone 2b, decision (d6)), holding its\nused document's own default: `willikins-server`'s `Butler::plan`\npasses this map straight to `plan`, which needs a fixed input's\nvalue to bind every reference to it inside the document that fixed\nit. Only the agent-facing surfaces built over `Description` (the\nMCP `describe` response, the CLI's `describe` output,\n`WorkflowSummary.inputs`) omit a fixed input — this field itself\nnever does.",
       "type": "object",
       "additionalProperties": false,
       "patternProperties": {

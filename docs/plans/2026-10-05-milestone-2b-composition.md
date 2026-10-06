@@ -42,6 +42,23 @@ fixture: every real tool that outputs `AppleBundleIdentifier` in `willikins-prov
 siblings) requires a full App Store Connect credential chain (`issuer_id`/`key_id`/`key`), which would make the
 fixture about credential resolution rather than the boundary rule it exists to pin.
 
+**Addendum:** 2026-10-06 (task R1, commit 1) — the SHARED VALUES line "`InputError::NotSettable { input }` (the
+exact shape follows `InputError`'s existing variants)" cannot be taken literally: `InputError` has no existing
+variants today, because it is a plain struct (`{ input, error: ParseError }`), not a `#[serde(tag = "kind")]` enum
+— `willikins-server/src/error.rs`'s own pinned test and doc comment say so explicitly. Converting it to a real enum
+would not be "additions only" (the published schema goes from one object shape to a tagged union) and would break a
+crate outside this task's scope: `willikins-cli::render::describe_text` reads `.input`/`.error` as struct fields
+directly, never through `Display`, and is not in R1's gates. Implemented instead as `InputError::not_settable`, an
+associated function building the *existing* struct shape with a `ParseError` whose `type_name` is the literal
+`"NotSettable"` — the same device `describe`'s own undeclared-name branch already uses (`ParseError::new("Workflow",
+...)`), just with its own discriminable `type_name`. This keeps `InputError`'s wire shape, and
+`willikins-server/src/error.rs`'s pinned test, byte-for-byte unchanged: regenerating `input_error_schema_generates`
+and `description_schema_generates` produced no diff at all beyond this task's own doc-comment wording (confirmed by
+running both), and the `mcp_server` snapshot's only diff is catching up task C1's `UsesInputTypeMismatch`, which
+(per the 2026-10-05 portfolio addendum above) was never C1's job to regenerate — R1's gate is the first one after it
+to touch that snapshot. A caller discriminates `NotSettable` by `error.error.type_name == "NotSettable"`, not by a
+`kind` tag.
+
 ## Goal
 
 1. **Part P (the document).** A step may say `uses: <workflow-name>` instead of `tool: <tool-name>`. It binds the
