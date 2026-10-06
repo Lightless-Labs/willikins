@@ -56,6 +56,8 @@ Read `docs/plans/2026-09-11-willikins-design.md` before changing anything in `cr
 - A conversion is registered only through `conversions!`, only from a total `From` impl, never
   secret-to-public and never identifier-to-plain (both compile errors), and is resolved by a single probe, never a search.
 - Workflow documents and templates are privileged content: run only from a trusted ref.
+- A used document is found by name in its parent's trusted source; no secret enters one; its
+  nodes are named `<step>/<node>`.
 - No provider-token-shaped literal anywhere in the tree, source or docs alike: any of Doppler's
   six kinds (`dp.sa./pt./ct./st./scim./audit.`) or GitHub's six prefixes
   (`ghp_`/`github_pat_`/`gho_`/`ghu_`/`ghs_`/`ghr_`) followed by a long run. Assemble it from
