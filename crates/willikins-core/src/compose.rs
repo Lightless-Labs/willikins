@@ -366,18 +366,27 @@ fn flatten(
     for (step, uses) in &wf.uses {
         validate_uses_step(step, uses, &children[step])?;
     }
+    //
+    // The order comes from [`substitution_order`], an iterative walk:
+    // resolving each substitution only after every one it reads keeps
+    // [`ensure_input`]'s own recursion one level deep, however long a
+    // chain of steps feeding each other a document declares. Recursing
+    // once per link of such a chain overflowed a 2 MiB thread stack
+    // (the server's `spawn_blocking` size) at 2000 steps, aborting the
+    // process (the independent adversarial pass, 2026-10-06).
     let mut local_substs: IndexMap<NodeName, IndexMap<InputName, Binding>> = IndexMap::new();
     let mut visiting: Vec<(NodeName, InputName)> = Vec::new();
+    for (step, input) in substitution_order(wf, &children)? {
+        ensure_input(
+            &step,
+            &input,
+            wf,
+            &children,
+            &mut local_substs,
+            &mut visiting,
+        )?;
+    }
     for step in wf.uses.keys() {
-        let authored: Vec<InputName> = children[step]
-            .inputs
-            .iter()
-            .filter(|(_, spec)| spec.fixed_by.is_none())
-            .map(|(input, _)| input.clone())
-            .collect();
-        for input in &authored {
-            ensure_input(step, input, wf, &children, &mut local_substs, &mut visiting)?;
-        }
         local_substs.entry(step.clone()).or_default();
     }
 
@@ -688,6 +697,129 @@ fn contains_item(binding: &Binding) -> bool {
             false
         }
     }
+}
+
+/// Every authored input of every `uses:` step at `wf`'s own level, as a
+/// `(step, input)` pair, ordered so each comes after every other pair its
+/// own `with:` binding reads through a sibling's output (decision (d7)),
+/// computed with an explicit stack rather than recursion -- see Phase 2's
+/// own comment in [`flatten`].
+///
+/// One pair *reads* another when its `with:` binding holds
+/// `${{ steps.<s>.<out> }}` and `<s>`'s declared output `<out>` reads
+/// `<s>`'s authored input. A pair reached again while still on the walk's
+/// stack is the loop closing: [`CheckError::UsesOutputCycle`], naming the
+/// step and output whose reference closed it. A reference to an output
+/// the child never declared reads nothing here; [`rewrite_at_level`]
+/// refuses it ([`CheckError::UnknownUsesOutput`], with its site) when the
+/// pair is resolved.
+fn substitution_order(
+    wf: &Workflow,
+    children: &IndexMap<NodeName, Flat>,
+) -> Result<Vec<(NodeName, InputName)>, Vec<CheckError>> {
+    /// One substitution: a `uses:` step and one of its child's authored
+    /// inputs.
+    type Pair = (NodeName, InputName);
+    /// The pairs one pair reads, each with the output that reads it.
+    type Reads = Vec<(Pair, OutputName)>;
+    /// One frame of the walk's explicit stack: a pair, what it reads, and
+    /// how many of those have been visited.
+    type Frame = (Pair, Reads, usize);
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Mark {
+        OnStack,
+        Done,
+    }
+
+    // The pairs `(step, input)`'s own `with:` binding reads, each with the
+    // output whose reference reads it.
+    let reads = |step: &NodeName, input: &InputName| -> Reads {
+        fn steps_referenced<'a>(binding: &'a Binding, out: &mut Vec<(&'a NodeName, &'a PortName)>) {
+            match binding {
+                Binding::Step { node, port } => out.push((node, port)),
+                Binding::List(items) => {
+                    for item in items {
+                        steps_referenced(item, out);
+                    }
+                }
+                Binding::Keyed { .. } | Binding::Input(_) | Binding::Item | Binding::Literal(_) => {
+                }
+            }
+        }
+
+        let mut found = Vec::new();
+        let Some(binding) = wf.uses.get(step).and_then(|uses| uses.with.get(input)) else {
+            return found;
+        };
+        let mut referenced = Vec::new();
+        steps_referenced(binding, &mut referenced);
+        for (node, port) in referenced {
+            let Some(child_flat) = children.get(node) else {
+                continue; // a tool node of `wf`'s own, not a `uses:` step
+            };
+            let Ok(output) = OutputName::parse(port.as_str()) else {
+                continue;
+            };
+            let Some(inner) = child_flat.outputs.get(&output) else {
+                continue; // `rewrite_at_level` refuses it, with its site
+            };
+            let mut read = Vec::new();
+            input_references(inner, &mut read);
+            for name in read {
+                if child_flat
+                    .inputs
+                    .get(name)
+                    .is_some_and(|spec| spec.fixed_by.is_none())
+                {
+                    found.push(((node.clone(), name.clone()), output.clone()));
+                }
+            }
+        }
+        found
+    };
+
+    let mut marks: HashMap<Pair, Mark> = HashMap::new();
+    let mut order = Vec::new();
+    for (step, child_flat) in children {
+        for (input, spec) in &child_flat.inputs {
+            if spec.fixed_by.is_some() {
+                continue;
+            }
+            let start = (step.clone(), input.clone());
+            if marks.contains_key(&start) {
+                continue;
+            }
+            marks.insert(start.clone(), Mark::OnStack);
+            let start_reads = reads(&start.0, &start.1);
+            let mut stack: Vec<Frame> = vec![(start, start_reads, 0)];
+            while let Some((pair, pair_reads, next)) = stack.last_mut() {
+                if let Some((read, output)) = pair_reads.get(*next).cloned() {
+                    *next += 1;
+                    match marks.get(&read) {
+                        Some(Mark::OnStack) => {
+                            return Err(vec![CheckError::UsesOutputCycle {
+                                node: read.0,
+                                output,
+                            }]);
+                        }
+                        Some(Mark::Done) => {}
+                        None => {
+                            marks.insert(read.clone(), Mark::OnStack);
+                            let read_reads = reads(&read.0, &read.1);
+                            stack.push((read, read_reads, 0));
+                        }
+                    }
+                } else {
+                    let pair = pair.clone();
+                    marks.insert(pair.clone(), Mark::Done);
+                    order.push(pair);
+                    stack.pop();
+                }
+            }
+        }
+    }
+    Ok(order)
 }
 
 /// Every input name `binding` reads (`Binding::Input`), recursively
@@ -2410,5 +2542,108 @@ mod tests {
         );
         check::check(&linked.workflow, &test_catalog())
             .expect("the flat graph has no node-level cycle");
+    }
+
+    /// A chain of `uses:` steps declared in reverse dependency order (`s0`
+    /// reads `s1`'s output, `s1` reads `s2`'s, and so on) must link on a
+    /// thread with tokio's default 2 MiB stack: the server runs every MCP
+    /// call, `validate`'s caller-supplied body included, on a
+    /// `spawn_blocking` thread of that size, and a stack overflow there
+    /// aborts the whole process. 2000 steps of a zero-node child stay
+    /// under `MAX_LINKED_NODES`, so no bound refuses this; substitutions
+    /// must be resolved in dependency order, not by one recursion per
+    /// link of the chain (the independent adversarial pass, 2026-10-06).
+    #[test]
+    fn a_long_reverse_chain_of_uses_steps_links_on_a_two_mib_stack() {
+        const STEPS: usize = 2000;
+        let child = Workflow::new(wf_name("pass-child"))
+            .input(input("x"), InputSpec::new(ty("Text")))
+            .output(output("out"), Binding::Input(input("x")));
+        let mut root = Workflow::new(wf_name("root"));
+        for i in 0..STEPS {
+            let binding = if i + 1 == STEPS {
+                Binding::Literal("v".to_string())
+            } else {
+                Binding::Step {
+                    node: node(&format!("s{}", i + 1)),
+                    port: port("out"),
+                }
+            };
+            let mut with = IndexMap::new();
+            with.insert(input("x"), binding);
+            root = root.uses(
+                node(&format!("s{i}")),
+                Uses {
+                    workflow: wf_name("pass-child"),
+                    with,
+                    position: i,
+                },
+            );
+        }
+
+        let linked = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || link(&root, &mut |_| Ok(child.clone())))
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("a chain with no loop links");
+
+        assert_eq!(linked.workflow.boundaries.len(), STEPS);
+        assert!(
+            linked
+                .workflow
+                .boundaries
+                .iter()
+                .all(|b| b.binding == Some(Binding::Literal("v".to_string()))),
+            "every link of the chain resolves to the one literal at its end"
+        );
+    }
+
+    /// The same 2000 steps closed into a ring (`s1999` reads `s0`'s
+    /// output) is a loop made only of pass-throughs: refused as
+    /// `UsesOutputCycle` on the same 2 MiB stack, never by recursing once
+    /// around the ring.
+    #[test]
+    fn a_long_ring_of_pass_through_uses_steps_is_refused_on_a_two_mib_stack() {
+        const STEPS: usize = 2000;
+        let child = Workflow::new(wf_name("pass-child"))
+            .input(input("x"), InputSpec::new(ty("Text")))
+            .output(output("out"), Binding::Input(input("x")));
+        let mut root = Workflow::new(wf_name("root"));
+        for i in 0..STEPS {
+            let mut with = IndexMap::new();
+            with.insert(
+                input("x"),
+                Binding::Step {
+                    node: node(&format!("s{}", (i + 1) % STEPS)),
+                    port: port("out"),
+                },
+            );
+            root = root.uses(
+                node(&format!("s{i}")),
+                Uses {
+                    workflow: wf_name("pass-child"),
+                    with,
+                    position: i,
+                },
+            );
+        }
+
+        let err = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || link(&root, &mut |_| Ok(child.clone())))
+            .unwrap()
+            .join()
+            .unwrap()
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            vec![CheckError::UsesOutputCycle {
+                node: node("s0"),
+                output: output("out"),
+            }]
+        );
     }
 }
