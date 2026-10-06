@@ -289,8 +289,26 @@ impl Value {
     /// # Compile error
     ///
     /// Fails to compile for a misnamed `T`, exactly as [`Self::known`]
-    /// does; see that method's own doc for why and for the compile-fail
-    /// example.
+    /// does; see that method's own doc for why. This constructor carries
+    /// its own `const` assertion, so it has its own proof (milestone 3n's
+    /// F-slice adversarial pass found that deleting this one assertion
+    /// left every test green):
+    ///
+    /// ```compile_fail
+    /// use willikins_types::DomainType;
+    ///
+    /// #[derive(willikins_types::DomainType)]
+    /// #[domain(
+    ///     pattern = "[a-z.]+",
+    ///     description = "A type whose Rust name is not a TypeName.",
+    ///     example = "x"
+    /// )]
+    /// #[allow(non_camel_case_types)]
+    /// struct not_a_type_name(String);
+    ///
+    /// let value = not_a_type_name::parse("x").unwrap();
+    /// willikins_core::Value::known_list(vec![value]);
+    /// ```
     pub fn known_list<T: DomainType + DomainObject + 'static>(values: Vec<T>) -> Self {
         const {
             assert!(
