@@ -21,7 +21,7 @@ use axum::{Form, Router, routing};
 
 use willikins_core::disclosure::mask_json;
 use willikins_journal::{
-    AuthFailedReason, PlanId, PlanRecord, PrincipalId, Reason, Timestamp, Transport,
+    AuthFailedReason, DocumentSha256, PlanId, PlanRecord, PrincipalId, Reason, Timestamp, Transport,
 };
 use willikins_types::WorkflowName;
 
@@ -79,6 +79,15 @@ pub(crate) fn escape_html(text: &str) -> String {
         }
     }
     out
+}
+
+/// The first 12 hex characters of a [`DocumentSha256`] (always exactly 64
+/// hex characters by construction, so `[..12]` never panics): enough for
+/// an approver to recognise the content being approved without the page
+/// carrying a full digest over the network, the same "a prefix is enough"
+/// call [`mask_json`] already makes for a secret value.
+fn short_sha(sha: &DocumentSha256) -> &str {
+    &sha.as_str()[..12]
 }
 
 fn elapsed(since: Timestamp, now: Timestamp) -> Duration {
@@ -149,6 +158,24 @@ fn render_plan_section(butler: &Butler, dir: &Path, record: &PlanRecord, nonce: 
     let mut out = String::new();
     out.push_str("<section class=\"plan\">\n");
     let _ = writeln!(out, "<h2>{}</h2>", escape_html(record.workflow.as_str()));
+    if !record.used.is_empty() {
+        // Decision (d11): the closure `PlanRecorded.used` recorded (S2)
+        // lists every document this plan was built from, so the approver
+        // sees which documents the plan was built from, each name and
+        // short sha in escaped text only -- never in a URL or a form
+        // field name (verify item 6; a node path could hold `/`, which
+        // would need encoding there).
+        out.push_str("<ul class=\"used-documents\">\n");
+        for (name, sha) in &record.used {
+            let _ = writeln!(
+                out,
+                "<li>{} @ {}</li>",
+                escape_html(name.as_str()),
+                escape_html(short_sha(sha))
+            );
+        }
+        out.push_str("</ul>\n");
+    }
     let _ = writeln!(
         out,
         "<p>plan_id: <code>{}</code></p>",

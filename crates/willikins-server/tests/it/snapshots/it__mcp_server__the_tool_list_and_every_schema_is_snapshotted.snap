@@ -499,6 +499,13 @@ expression: snapshot
             "name": {
               "$ref": "#/$defs/WorkflowName",
               "description": "The workflow's name."
+            },
+            "uses": {
+              "description": "This workflow's own direct children -- every `uses:` step's\nworkflow name, in declaration order -- never a used document's own\nchildren. Empty, and omitted from the wire, for a document with no\n`uses:` step. `list_workflows`' `composes` (decision (d11)); the\nshas for these names are already in `ServerStarted.workflow_hashes`.",
+              "items": {
+                "$ref": "#/$defs/WorkflowName"
+              },
+              "type": "array"
             }
           },
           "required": [

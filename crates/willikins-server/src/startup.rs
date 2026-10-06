@@ -319,7 +319,24 @@ pub struct WorkflowSummary {
     /// not willikins' own words.
     pub document_description: Option<willikins_types::Description>,
     /// Every declared input, in declaration order.
+    // Milestone 2b: never includes a *fixed* input
+    // (`InputSpec::fixed_by.is_some()`) -- not that one could reach here,
+    // since this is built from `Loaded::workflow`, the authored and
+    // still-unlinked document (see that field's own doc), which never
+    // carries a fixed input at all; those only exist on the *linked* flat
+    // graph. The filter is kept anyway so this type's own contract does
+    // not depend on which of `Loaded`'s two workflows happens to feed it
+    // today. A plain comment, not a doc comment, so the published
+    // `mcp_server` schema's description of this field stays unchanged
+    // (the "Published shapes" gate rule: additions only).
     pub inputs: Vec<InputSummary>,
+    /// This workflow's own direct children -- every `uses:` step's
+    /// workflow name, in declaration order -- never a used document's own
+    /// children. Empty, and omitted from the wire, for a document with no
+    /// `uses:` step. `list_workflows`' `composes` (decision (d11)); the
+    /// shas for these names are already in `ServerStarted.workflow_hashes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<WorkflowName>,
 }
 
 impl From<Loaded> for WorkflowSummary {
@@ -331,11 +348,18 @@ impl From<Loaded> for WorkflowSummary {
                 .workflow
                 .inputs
                 .into_iter()
+                .filter(|(_, spec)| spec.fixed_by.is_none())
                 .map(|(name, spec)| InputSummary {
                     name,
                     required: spec.default.is_none(),
                     ty: spec.ty,
                 })
+                .collect(),
+            uses: loaded
+                .workflow
+                .uses
+                .values()
+                .map(|uses| uses.workflow.clone())
                 .collect(),
         }
     }
@@ -581,6 +605,95 @@ mod tests {
         // ...but `check` ran against the *linked*, flattened graph, which
         // has no `uses:` left at all.
         assert!(root.checked.workflow.uses.is_empty());
+    }
+
+    #[test]
+    fn workflow_summary_reports_uses_for_a_composite_and_omits_it_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "child.yaml", "name: child\nsteps: {}\n");
+        write(
+            dir.path(),
+            "root.yaml",
+            "name: root\nsteps:\n  c:\n    uses: child\n",
+        );
+        let loaded = scan_directory(dir.path(), &empty_catalog()).unwrap();
+        let summaries: Vec<WorkflowSummary> =
+            loaded.into_iter().map(WorkflowSummary::from).collect();
+
+        let child = summaries
+            .iter()
+            .find(|summary| summary.name.as_str() == "child")
+            .unwrap();
+        assert!(child.uses.is_empty());
+        assert_eq!(
+            serde_json::to_value(child).unwrap().get("uses"),
+            None,
+            "an empty `uses` is omitted from the wire entirely"
+        );
+
+        let root = summaries
+            .iter()
+            .find(|summary| summary.name.as_str() == "root")
+            .unwrap();
+        assert_eq!(
+            root.uses
+                .iter()
+                .map(WorkflowName::as_str)
+                .collect::<Vec<_>>(),
+            ["child"]
+        );
+    }
+
+    #[test]
+    fn workflow_summary_excludes_a_fixed_input() {
+        // Hand-built, not scanned: `scan_directory`'s own `Loaded::workflow`
+        // is always the *unlinked*, authored document (its own doc comment),
+        // which never carries a fixed input at all -- only the linker ever
+        // sets `InputSpec::fixed_by`. This pins `WorkflowSummary::from`'s own
+        // filter directly, the way `describe.rs`'s
+        // `checked_with_a_fixed_input` pins `describe` against the same
+        // hand-built shape the linker would actually produce.
+        let workflow = Workflow::new(willikins_types::WorkflowName::parse("fixture").unwrap())
+            .input(
+                willikins_core::InputName::parse("slug").unwrap(),
+                willikins_core::InputSpec::new(
+                    willikins_core::TypeRef::parse("ProjectSlug").unwrap(),
+                ),
+            )
+            .input(
+                willikins_core::InputName::parse("org/base_configs").unwrap(),
+                {
+                    let mut spec = willikins_core::InputSpec::new(
+                        willikins_core::TypeRef::parse("list<DopplerConfig>").unwrap(),
+                    )
+                    .with_default(willikins_core::Value::known_list(vec![
+                        willikins_types::DopplerConfig::parse("shared/base").unwrap(),
+                    ]));
+                    spec.fixed_by = Some(willikins_core::NodeName::parse("org").unwrap());
+                    spec
+                },
+            );
+        let catalog = empty_catalog();
+        let checked = check(&workflow, &catalog).expect("no nodes: nothing to fail check");
+        let loaded = Loaded {
+            path: PathBuf::from("fixture.yaml"),
+            name: workflow.name.clone(),
+            document_sha256: DocumentSha256::compute(b""),
+            workflow,
+            checked,
+        };
+
+        let summary = WorkflowSummary::from(loaded);
+        let names: Vec<&str> = summary
+            .inputs
+            .iter()
+            .map(|input| input.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["slug"],
+            "the fixed input `org/base_configs` is excluded"
+        );
     }
 
     #[cfg(unix)]
