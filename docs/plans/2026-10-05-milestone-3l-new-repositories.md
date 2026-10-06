@@ -1,6 +1,7 @@
 # Milestone 3l: a document creates a brand-new repository and scaffolds it
 
 **Created:** 2026-10-05 (from the operator's question of 2026-10-04: what happens for a new repository, or one that
+**Completed:** 2026-10-06 — a document can create a repository and scaffold it on the first run; live-proven in the sandbox (eleven steps); full gate 49 suites, 3342 tests.
 is not cloned locally)
 **Reviewed:** 2026-10-05 (portfolio review of the five plans of 2026-10-05: 3k, 2b, 3l, 3m, 3n)
 **Addendum:** 2026-10-05 — portfolio review. Order: 3k, then 3n F1–F3, then this milestone, then 2b, 3n's S and G
