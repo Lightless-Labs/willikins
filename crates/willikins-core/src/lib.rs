@@ -14,6 +14,7 @@ pub mod apply;
 pub mod catalog;
 pub mod check;
 pub mod class;
+pub mod compose;
 pub mod describe;
 pub mod disclosure;
 pub mod plan;
@@ -32,6 +33,7 @@ pub use apply::{
 pub use catalog::{Catalog, CatalogError};
 pub use check::{CheckError, CheckWarning, Checked, Edge, check};
 pub use class::Class;
+pub use compose::{Boundary, Linked, ResolveFailure, link};
 pub use describe::{
     AwaitingInput, Description, InputArg, InputError, MissingInput, PartialInputs, RawInput,
     describe,

@@ -160,6 +160,16 @@ pub struct InputSpec {
     /// document. Bounded and control-character-free by construction — see
     /// [`willikins_types::Description`].
     pub description: Option<willikins_types::Description>,
+    /// `None` for every authored input. `Some(<uses step>)` when the
+    /// linker (`willikins_core::compose::link`, milestone 2b decision
+    /// (d6)) produced this input by leaving a used document's defaulted
+    /// input unbound: the `uses:` step that fixed it, itself a path when
+    /// the fixing happened more than one level down
+    /// (`mid/leafstep` for an input fixed two levels deep). A fixed input
+    /// is never settable by a caller — see the module and `describe`'s
+    /// own docs for which surfaces hide it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_by: Option<NodeName>,
 }
 
 impl InputSpec {
@@ -170,6 +180,7 @@ impl InputSpec {
             ty,
             default: None,
             description: None,
+            fixed_by: None,
         }
     }
 
@@ -318,11 +329,20 @@ pub struct Workflow {
     pub uses: IndexMap<NodeName, Uses>,
     /// The workflow's outputs, in declaration order.
     pub outputs: IndexMap<OutputName, Binding>,
+    /// Every `uses:` step's input boundary, across the whole tree that was
+    /// linked into this workflow. Filled only by the linker
+    /// (`willikins_core::compose::link`, milestone 2b task L1); empty for
+    /// a workflow that never had a `uses:` step, or that has not gone
+    /// through the linker yet. Skipped when empty, alongside
+    /// [`Self::uses`], so a document without `uses:` serializes
+    /// byte-identically to before milestone 2b.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub boundaries: Vec<crate::compose::Boundary>,
 }
 
 impl Workflow {
     /// An empty workflow named `name`, with no description, inputs,
-    /// nodes, `uses:` steps, or outputs.
+    /// nodes, `uses:` steps, outputs, or boundaries.
     #[must_use]
     pub fn new(name: willikins_types::WorkflowName) -> Self {
         Self {
@@ -332,6 +352,7 @@ impl Workflow {
             nodes: IndexMap::new(),
             uses: IndexMap::new(),
             outputs: IndexMap::new(),
+            boundaries: Vec::new(),
         }
     }
 
