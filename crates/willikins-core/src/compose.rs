@@ -52,11 +52,11 @@
 //!     (`Document`).
 //!   - A `uses:` step's `with:` naming an input the used document never
 //!     declared is [`crate::check::CheckError::UnknownUsesInput`],
-//!     checked eagerly in [`ensure_local_subst`] (not lazily, unlike the
+//!     checked eagerly in [`validate_uses_step`] (not lazily, unlike the
 //!     rest of this list).
 //!   - A used document's required input left both unbound and
 //!     undefaulted is [`crate::check::CheckError::UnboundUsesInput`],
-//!     also checked eagerly in [`ensure_local_subst`] for every declared
+//!     also checked eagerly in [`validate_uses_step`] for every declared
 //!     input, whether or not the child ever actually references it.
 //!   - `${{ item }}` bound to a `uses:` step's input, bare or inside a
 //!     list element, is [`crate::check::CheckError::ItemInUses`].
@@ -66,11 +66,15 @@
 //!     [`crate::check::CheckError::KeyedOnUses`].
 //!   - An alias cycle between two `uses:` steps' outputs is
 //!     [`crate::check::CheckError::UsesOutputCycle`]: [`rewrite_at_level`]
-//!     and [`ensure_local_subst`] thread a `visiting` stack (reset per
-//!     [`flatten`] call, one entry per `uses:` step currently being
-//!     resolved at *this* level), and a `Step`/`Keyed` reference onto a
-//!     step already on it is the loop closing, refused before the
-//!     recursion that would otherwise overflow the stack.
+//!     and [`ensure_input`] thread a `visiting` stack (reset per
+//!     [`flatten`] call, one `(step, input)` entry per substitution
+//!     currently being resolved at *this* level), and a `Step` reference
+//!     to an output that reads an input already on it is the loop
+//!     closing, refused before the recursion that would otherwise
+//!     overflow the stack. The stack is per input, not per step (the
+//!     independent adversarial pass, 2026-10-06), so two steps feeding
+//!     each other through outputs that come from nodes are not refused
+//!     here; `check` judges them on the flat graph.
 //!   - A `/` in any node, input, or `uses:`-step name a workflow handed
 //!     to the linker authored itself (root or a resolved child) is
 //!     [`crate::check::CheckError::PathInAuthoredName`], checked at the
@@ -99,7 +103,7 @@ use indexmap::IndexMap;
 use crate::check::CheckError;
 use crate::site::Site;
 use crate::tool::PortName;
-use crate::workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};
+use crate::workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Uses, Workflow};
 use willikins_types::WorkflowName;
 
 /// The greatest nesting depth [`link`] will resolve: the root document is
@@ -347,16 +351,34 @@ fn flatten(
     }
 
     // Phase 2: every step's own substitution map for its child's authored
-    // inputs, resolved lazily (and memoized) so a sibling reference
-    // resolves regardless of declaration order. `visiting` is this
-    // level's own alias-cycle guard (decision (d7)): one entry per
-    // `uses:` step currently being resolved, reset fresh for every
+    // inputs. Each step's `with:` is first validated as a whole
+    // ([`validate_uses_step`]), then every entry is resolved lazily, one
+    // *input* at a time (and memoized), so a sibling reference resolves
+    // regardless of declaration order. `visiting` is this level's own
+    // alias-cycle guard (decision (d7)): one `(step, input)` entry per
+    // substitution currently being resolved, reset fresh for every
     // `flatten` call -- a cycle at one level never interferes with an
-    // unrelated one elsewhere in the tree.
+    // unrelated one elsewhere in the tree. It is per input, not per step
+    // (the independent adversarial pass, 2026-10-06): resolving
+    // `steps.a.out` needs only the inputs `out`'s own binding reads, so
+    // two steps feeding each other through outputs that come from nodes
+    // are not a loop, and `check` judges them on the flat graph.
+    for (step, uses) in &wf.uses {
+        validate_uses_step(step, uses, &children[step])?;
+    }
     let mut local_substs: IndexMap<NodeName, IndexMap<InputName, Binding>> = IndexMap::new();
-    let mut visiting: Vec<NodeName> = Vec::new();
+    let mut visiting: Vec<(NodeName, InputName)> = Vec::new();
     for step in wf.uses.keys() {
-        ensure_local_subst(step, wf, &children, &mut local_substs, &mut visiting)?;
+        let authored: Vec<InputName> = children[step]
+            .inputs
+            .iter()
+            .filter(|(_, spec)| spec.fixed_by.is_none())
+            .map(|(input, _)| input.clone())
+            .collect();
+        for input in &authored {
+            ensure_input(step, input, wf, &children, &mut local_substs, &mut visiting)?;
+        }
+        local_substs.entry(step.clone()).or_default();
     }
 
     // Phase 3a: this level's own direct boundaries, plus every bubbled-up
@@ -404,13 +426,13 @@ fn flatten(
                 inputs.insert(prefixed_input(step, input), fixed);
             } else if !uses.with.contains_key(input) {
                 if spec.default.is_none() {
-                    // Required, unbound, undefaulted -- `ensure_local_subst`
+                    // Required, unbound, undefaulted -- `validate_uses_step`
                     // (Phase 2, which already ran without error) refuses
                     // this eagerly as `CheckError::UnboundUsesInput` for
                     // every declared input, so Phase 3b can never reach
                     // this arm for one.
                     unreachable!(
-                        "ensure_local_subst already refused step `{step}`, input `{input}` as \
+                        "validate_uses_step already refused step `{step}`, input `{input}` as \
                          UnboundUsesInput before Phase 3b could be reached"
                     );
                 }
@@ -513,7 +535,7 @@ fn flatten(
 
 /// Rewrite a binding authored at `wf`'s own level (one of `wf`'s own
 /// node's bindings, one of `wf`'s own outputs, or -- recursively, from
-/// [`ensure_local_subst`] -- one of a `uses:` step's own `with:` values):
+/// [`ensure_input`] -- one of a `uses:` step's own `with:` values):
 /// the only thing that changes here is a `Step`/`Keyed` reference onto
 /// one of `wf`'s own `uses:` steps, which resolves through that child's
 /// own declared output, or refuses (decision (d7)). Everything else -- a
@@ -524,14 +546,13 @@ fn flatten(
 /// [`CheckError::UnknownUsesOutput`] and [`CheckError::KeyedOnUses`]
 /// (both need to report where the bad reference *is*, not only what it
 /// names); see the module docs. `visiting` is this `flatten` call's own
-/// alias-cycle guard, threaded through to [`ensure_local_subst`] and
-/// back.
+/// alias-cycle guard, threaded through to [`ensure_input`] and back.
 fn rewrite_at_level(
     binding: &Binding,
     wf: &Workflow,
     children: &IndexMap<NodeName, Flat>,
     local_substs: &mut IndexMap<NodeName, IndexMap<InputName, Binding>>,
-    visiting: &mut Vec<NodeName>,
+    visiting: &mut Vec<(NodeName, InputName)>,
     site: &Site,
 ) -> Result<Binding, Vec<CheckError>> {
     match binding {
@@ -549,19 +570,6 @@ fn rewrite_at_level(
                 let output_name = OutputName::parse(port.as_str()).unwrap_or_else(|err| {
                     unreachable!("a PortName is always a valid OutputName too: {err}")
                 });
-                if visiting.contains(node) {
-                    // Decision (d7): an alias cycle made only of
-                    // pass-throughs, with no node on it, so the
-                    // node-level cycle check (`check::find_cycles`,
-                    // which runs on the flat graph) never sees it. This
-                    // is the loop closing.
-                    return Err(vec![CheckError::UsesOutputCycle {
-                        node: node.clone(),
-                        output: output_name,
-                    }]);
-                }
-                ensure_local_subst(node, wf, children, local_substs, visiting)?;
-                let subst = &local_substs[node];
                 let child_flat = &children[node];
                 let inner = child_flat.outputs.get(&output_name).ok_or_else(|| {
                     vec![CheckError::UnknownUsesOutput {
@@ -570,6 +578,36 @@ fn rewrite_at_level(
                         output: output_name.clone(),
                     }]
                 })?;
+                // Only the step's own authored inputs `inner` actually
+                // reads need a substitution before it can be embedded:
+                // an output that comes from a node reads none, so it
+                // resolves even while one of the step's other inputs is
+                // still being resolved (decision (d7)).
+                let mut read = Vec::new();
+                input_references(inner, &mut read);
+                for input in read {
+                    let authored = child_flat
+                        .inputs
+                        .get(input)
+                        .is_some_and(|spec| spec.fixed_by.is_none());
+                    if !authored {
+                        continue;
+                    }
+                    if visiting.iter().any(|(s, i)| s == node && i == input) {
+                        // Decision (d7): an alias cycle made only of
+                        // pass-throughs, with no node on it, so the
+                        // node-level cycle check (`check::find_cycles`,
+                        // which runs on the flat graph) never sees it.
+                        // This is the loop closing.
+                        return Err(vec![CheckError::UsesOutputCycle {
+                            node: node.clone(),
+                            output: output_name,
+                        }]);
+                    }
+                    ensure_input(node, input, wf, children, local_substs, visiting)?;
+                }
+                let empty = IndexMap::new();
+                let subst = local_substs.get(node).unwrap_or(&empty);
                 Ok(embed(inner, node, subst))
             } else {
                 Ok(binding.clone())
@@ -652,33 +690,33 @@ fn contains_item(binding: &Binding) -> bool {
     }
 }
 
-/// Fill in `local_substs[step]` (memoized: a no-op once present), by
-/// rewriting `step`'s own `with:` bindings at `wf`'s own level, and
-/// recording a fresh fixed-input reference for every one of the child's
-/// authored inputs that `with:` left unbound but that carries a default.
-/// Eagerly refuses, before touching any binding: an unknown `with:` key
-/// (decision (d4), [`CheckError::UnknownUsesInput`]) and, for every
-/// declared input in turn, `${{ item }}` bound to it
-/// ([`CheckError::ItemInUses`]) or a required input left both unbound
-/// and undefaulted ([`CheckError::UnboundUsesInput`]) -- the latter
-/// whether or not anything inside the child actually references it, so
-/// [`embed`] never needs to check for it.
-fn ensure_local_subst(
-    step: &NodeName,
-    wf: &Workflow,
-    children: &IndexMap<NodeName, Flat>,
-    local_substs: &mut IndexMap<NodeName, IndexMap<InputName, Binding>>,
-    visiting: &mut Vec<NodeName>,
-) -> Result<(), Vec<CheckError>> {
-    if local_substs.contains_key(step) {
-        return Ok(());
+/// Every input name `binding` reads (`Binding::Input`), recursively
+/// through a list.
+fn input_references<'a>(binding: &'a Binding, out: &mut Vec<&'a InputName>) {
+    match binding {
+        Binding::Input(name) => out.push(name),
+        Binding::List(items) => {
+            for item in items {
+                input_references(item, out);
+            }
+        }
+        Binding::Step { .. } | Binding::Keyed { .. } | Binding::Item | Binding::Literal(_) => {}
     }
-    let uses = wf
-        .uses
-        .get(step)
-        .unwrap_or_else(|| unreachable!("only ever called with one of `wf.uses`'s own keys"));
-    let child_flat = &children[step];
+}
 
+/// Validate one `uses:` step's `with:` against its child's authored
+/// inputs, before any binding is rewritten (decision (d4)): an unknown
+/// `with:` key ([`CheckError::UnknownUsesInput`]) and, for every declared
+/// input in turn, `${{ item }}` bound to it ([`CheckError::ItemInUses`])
+/// or a required input left both unbound and undefaulted
+/// ([`CheckError::UnboundUsesInput`]) -- the latter whether or not
+/// anything inside the child actually references it, so neither
+/// [`ensure_input`] nor [`embed`] ever needs to check for it.
+fn validate_uses_step(
+    step: &NodeName,
+    uses: &Uses,
+    child_flat: &Flat,
+) -> Result<(), Vec<CheckError>> {
     for key in uses.with.keys() {
         if !child_flat.inputs.contains_key(key) {
             return Err(vec![CheckError::UnknownUsesInput {
@@ -687,57 +725,86 @@ fn ensure_local_subst(
             }]);
         }
     }
-
-    // `visiting` marks `step` as "being resolved" for the rest of this
-    // function's body: a `Step`/`Keyed` reference (reached through
-    // `rewrite_at_level`, recursively, for a sibling's own `with:`
-    // binding) that re-enters `ensure_local_subst` for `step` while it
-    // is on this list is decision (d7)'s alias cycle
-    // (`CheckError::UsesOutputCycle`), checked in `rewrite_at_level`
-    // itself. Left un-popped on every error path below: every one
-    // aborts the whole `link` call via `?`, so nothing after an error
-    // ever reads `visiting` again (the same convention `flatten`'s own
-    // `stack` already uses for the same reason).
-    visiting.push(step.clone());
-
-    let mut subst = IndexMap::new();
     for (input, spec) in &child_flat.inputs {
         if spec.fixed_by.is_some() {
             // Fixed at a deeper level already; never part of this child's
             // own `with:` surface (decision (d6)).
             continue;
         }
-        if let Some(binding) = uses.with.get(input) {
-            if contains_item(binding) {
+        match uses.with.get(input) {
+            Some(binding) if contains_item(binding) => {
                 return Err(vec![CheckError::ItemInUses {
                     node: step.clone(),
                     input: input.clone(),
                 }]);
             }
-            // The site of a reference inside this `with:` value: the
-            // `uses:` step as `node`, the child input (reparsed as a
-            // `PortName`, which shares `InputName`'s grammar) as `port`
-            // -- see the module docs' "the grammars coincide" note.
-            let site = Site::Port {
-                node: step.clone(),
-                port: PortName::parse(input.as_str()).unwrap_or_else(|err| {
-                    unreachable!("an InputName is always a valid PortName too: {err}")
-                }),
-            };
-            let rewritten = rewrite_at_level(binding, wf, children, local_substs, visiting, &site)?;
-            subst.insert(input.clone(), rewritten);
-        } else if spec.default.is_some() {
-            subst.insert(input.clone(), Binding::Input(prefixed_input(step, input)));
-        } else {
-            // Required, unbound, undefaulted (decision (d4)).
-            return Err(vec![CheckError::UnboundUsesInput {
-                node: step.clone(),
-                input: input.clone(),
-            }]);
+            None if spec.default.is_none() => {
+                return Err(vec![CheckError::UnboundUsesInput {
+                    node: step.clone(),
+                    input: input.clone(),
+                }]);
+            }
+            Some(_) | None => {}
         }
     }
-    visiting.pop();
-    local_substs.insert(step.clone(), subst);
+    Ok(())
+}
+
+/// Fill in `local_substs[step][input]` (memoized: a no-op once present)
+/// for one of the child's authored inputs: its `with:` binding,
+/// rewritten at `wf`'s own level, or a fresh fixed-input reference when
+/// `with:` left it unbound (it carries a default: [`validate_uses_step`]
+/// already refused the undefaulted case for every step at this level).
+///
+/// `visiting` marks `(step, input)` as "being resolved" while its binding
+/// is rewritten: a `Step` reference (reached through
+/// [`rewrite_at_level`], recursively) to an output of `step` that reads
+/// `input` while it is on this list is decision (d7)'s alias cycle
+/// ([`CheckError::UsesOutputCycle`]), checked in [`rewrite_at_level`]
+/// itself. Left un-popped on every error path: every one aborts the
+/// whole `link` call via `?`, so nothing after an error ever reads
+/// `visiting` again (the same convention `flatten`'s own `stack` already
+/// uses for the same reason).
+fn ensure_input(
+    step: &NodeName,
+    input: &InputName,
+    wf: &Workflow,
+    children: &IndexMap<NodeName, Flat>,
+    local_substs: &mut IndexMap<NodeName, IndexMap<InputName, Binding>>,
+    visiting: &mut Vec<(NodeName, InputName)>,
+) -> Result<(), Vec<CheckError>> {
+    if local_substs
+        .get(step)
+        .is_some_and(|subst| subst.contains_key(input))
+    {
+        return Ok(());
+    }
+    let uses = wf
+        .uses
+        .get(step)
+        .unwrap_or_else(|| unreachable!("only ever called with one of `wf.uses`'s own keys"));
+    let resolved = if let Some(binding) = uses.with.get(input) {
+        // The site of a reference inside this `with:` value: the `uses:`
+        // step as `node`, the child input (reparsed as a `PortName`, which
+        // shares `InputName`'s grammar) as `port` -- see the module docs'
+        // "the grammars coincide" note.
+        let site = Site::Port {
+            node: step.clone(),
+            port: PortName::parse(input.as_str()).unwrap_or_else(|err| {
+                unreachable!("an InputName is always a valid PortName too: {err}")
+            }),
+        };
+        visiting.push((step.clone(), input.clone()));
+        let rewritten = rewrite_at_level(binding, wf, children, local_substs, visiting, &site)?;
+        visiting.pop();
+        rewritten
+    } else {
+        Binding::Input(prefixed_input(step, input))
+    };
+    local_substs
+        .entry(step.clone())
+        .or_default()
+        .insert(input.clone(), resolved);
     Ok(())
 }
 
@@ -748,7 +815,7 @@ fn ensure_local_subst(
 /// [`flatten`] call -- no further `uses:`-step indirection remains inside
 /// it), so the only two things that change are a node/input reference,
 /// which gets `step`'s own prefix, and an authored input reference, which
-/// `subst` (that step's own [`ensure_local_subst`] result) replaces with
+/// `subst` (that step's own [`ensure_input`] results) replaces with
 /// the parent's own binding for it. Infallible: an input reference
 /// `subst` has no entry for (a deeper fixed path, or a name the child
 /// never declared) is prefixed, and an undeclared one is left for
@@ -764,8 +831,9 @@ fn embed(binding: &Binding, step: &NodeName, subst: &IndexMap<InputName, Binding
                 // own prefix too (decision (d3), applied to input paths
                 // the same way it applies to node paths). A one-segment
                 // name missing from `subst` is one the child references
-                // but never declared (`ensure_local_subst` gives every
-                // *declared*, non-fixed input an entry or refuses it):
+                // but never declared (`ensure_input` gives every
+                // *declared*, non-fixed input it is asked for an entry,
+                // and every one `binding` reads is asked for first):
                 // the DSL has no undeclared-input refusal of its own --
                 // that is `check`'s `UndeclaredInput` -- so a document
                 // can carry one, and this must not panic on it. Prefixed,
@@ -2255,5 +2323,92 @@ mod tests {
             "expected exactly one UsesTooLarge, got {err:?}"
         );
         assert!(calls <= MAX_LINKED_NODES, "refused after {calls} calls");
+    }
+
+    /// Decision (d7): "two `uses:` steps may legitimately feed each
+    /// other's inputs when the node-level graph has no cycle, and
+    /// `check`'s cycle detection judges that on the flat graph." `a`'s
+    /// input is bound to `b`'s output and `b`'s to `a`'s, but each output
+    /// comes from a node (`m`) that reads none of the step's own bound
+    /// inputs, so the flat graph is `a/m -> b/n`, `b/m -> a/n`: acyclic,
+    /// exactly what the same four nodes written as a monolith give. Only
+    /// a loop of pass-throughs is `UsesOutputCycle`
+    /// (`an_alias_cycle_between_two_uses_steps_outputs_is_refused`).
+    #[test]
+    fn two_uses_steps_feeding_each_other_without_a_node_cycle_link_and_check() {
+        let text = |v: &str| Value::parse(&ty("Text"), v).unwrap();
+        let child = Workflow::new(wf_name("feed-child"))
+            .input(
+                input("seed"),
+                InputSpec::new(ty("Text")).with_default(text("s")),
+            )
+            .input(input("x"), InputSpec::new(ty("Text")))
+            .node(
+                node("m"),
+                Node::new(tool("text.identity")).port(port("value"), Binding::Input(input("seed"))),
+            )
+            .node(
+                node("n"),
+                Node::new(tool("text.identity")).port(port("value"), Binding::Input(input("x"))),
+            )
+            .output(
+                output("out_m"),
+                Binding::Step {
+                    node: node("m"),
+                    port: port("value"),
+                },
+            );
+        let feed = |from: &str| {
+            let mut with = IndexMap::new();
+            with.insert(
+                input("x"),
+                Binding::Step {
+                    node: node(from),
+                    port: port("out_m"),
+                },
+            );
+            with
+        };
+        let root = Workflow::new(wf_name("root"))
+            .uses(
+                node("a"),
+                Uses {
+                    workflow: wf_name("feed-child"),
+                    with: feed("b"),
+                    position: 0,
+                },
+            )
+            .uses(
+                node("b"),
+                Uses {
+                    workflow: wf_name("feed-child"),
+                    with: feed("a"),
+                    position: 1,
+                },
+            );
+
+        let linked = link(&root, &mut |name| match name.as_str() {
+            "feed-child" => Ok(child.clone()),
+            other => panic!("resolver asked for an unexpected workflow: {other}"),
+        })
+        .expect("no alias cycle: each output comes from a node that reads no bound input");
+
+        let value = |n: &str| linked.workflow.nodes[&node(n)].with[&port("value")].clone();
+        assert_eq!(
+            value("a/n"),
+            Binding::Step {
+                node: node("b/m"),
+                port: port("value"),
+            }
+        );
+        assert_eq!(
+            value("b/n"),
+            Binding::Step {
+                node: node("a/m"),
+                port: port("value"),
+            }
+        );
+        check::check(&linked.workflow, &test_catalog())
+            .expect("the flat graph has no node-level cycle");
     }
 }
