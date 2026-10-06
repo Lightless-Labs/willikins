@@ -134,9 +134,40 @@ pub fn load_named_document(
 /// ([`crate::startup::scan_directory`], `Butler::validate`/`describe`)
 /// only care that `link` itself succeeded or failed, and do not read it
 /// yet.
+///
+/// **Caches a successful load by name** (X1, the adversarial pass):
+/// [`willikins_core::compose::link`] calls `resolve` once per
+/// *occurrence* of a `uses:` step, with no memoization of its own -- a
+/// diamond's second reference to the same child, or simply many `uses:`
+/// steps naming the same document, each trigger their own call. Without
+/// this cache, each occurrence re-reads and re-parses the file from
+/// disk, so a caller-controlled root (`validate`'s body, over the
+/// network) referencing one real, trusted-but-sparse document (few tool
+/// nodes, so [`MAX_LINKED_NODES`](willikins_core::compose::MAX_LINKED_NODES)
+/// never trips) many times forces repeated full re-reads of up to
+/// [`willikins_dsl::MAX_DOCUMENT_BYTES`] each -- an expansion bomb that
+/// does real I/O and parsing work before any refusal fires, bounded only
+/// by the number of `uses:` steps a 256 KiB body can hold. Caching here
+/// is sound because one `link` call is one synchronous snapshot of the
+/// trusted directory: every occurrence of the same name within it must
+/// see the same bytes regardless, so reading them once is not merely
+/// faster but more consistent than re-reading mid-walk. `used` (the
+/// linker's own multiset of flattened node occurrences, decision (d9))
+/// is unaffected: `link` still calls `resolve` -- and therefore `flatten`
+/// -- once per occurrence; only the disk read and the YAML parse
+/// underneath it are shared. See `tests::a_repeated_name_is_read_from_disk_once`.
 pub struct TrustedResolver<'a> {
     dir: &'a Path,
     shas: BTreeMap<WorkflowName, DocumentSha256>,
+    // `BTreeMap`, not `HashMap`: `WorkflowName` (never secret) has a
+    // hand-written `Ord`/`PartialOrd` for exactly this reason (milestone
+    // 2b, task J1's addendum), but `#[derive(DomainType)]` deliberately
+    // never derives `Hash` for any domain type -- a secret one hashed
+    // into a `HashMap` could leak its length through bucket placement,
+    // and the macro has no way to tell a secret type from this one at
+    // the point it decides which traits to emit.
+    cache: BTreeMap<WorkflowName, (DocumentSha256, Workflow)>,
+    reads: usize,
 }
 
 impl<'a> TrustedResolver<'a> {
@@ -146,13 +177,16 @@ impl<'a> TrustedResolver<'a> {
         Self {
             dir,
             shas: BTreeMap::new(),
+            cache: BTreeMap::new(),
+            reads: 0,
         }
     }
 
     /// Resolve `name` the way [`willikins_core::compose::link`]'s own
     /// `resolve` callback expects: [`load_named_document`] under this
-    /// resolver's directory, recording the loaded document's sha on
-    /// success.
+    /// resolver's directory on the first call for `name`, served from
+    /// [`Self`]'s own cache on every later one (see the struct docs), and
+    /// recording the loaded document's sha on success either way.
     ///
     /// # Errors
     ///
@@ -161,11 +195,20 @@ impl<'a> TrustedResolver<'a> {
     /// name-mismatched one -- deliberately not told apart, matching
     /// [`LoadError`]'s own docs, so a caller probing for either learns
     /// nothing a legitimate lookup would not; or [`ResolveFailure::Document`]
-    /// when the named document exists but fails to parse.
+    /// when the named document exists but fails to parse. A failure is
+    /// never cached: `link` is first-error-wins and aborts the whole call
+    /// through `?` the moment one occurs, so a failed name is never asked
+    /// for again within the same `link` call.
     pub fn resolve(&mut self, name: &WorkflowName) -> Result<Workflow, ResolveFailure> {
+        if let Some((sha, workflow)) = self.cache.get(name) {
+            self.shas.insert(name.clone(), sha.clone());
+            return Ok(workflow.clone());
+        }
+        self.reads += 1;
         match load_named_document(self.dir, name) {
             Ok((sha, workflow)) => {
-                self.shas.insert(name.clone(), sha);
+                self.shas.insert(name.clone(), sha.clone());
+                self.cache.insert(name.clone(), (sha, workflow.clone()));
                 Ok(workflow)
             }
             Err(LoadError::NotFound) => Err(ResolveFailure::NotFound),
@@ -189,6 +232,19 @@ impl<'a> TrustedResolver<'a> {
     #[must_use]
     pub fn shas(&self) -> &BTreeMap<WorkflowName, DocumentSha256> {
         &self.shas
+    }
+
+    /// How many times this resolver actually read a document from disk,
+    /// as opposed to serving a cached parse -- at most one per distinct
+    /// name `resolve` was ever asked to load successfully (X1). Exists
+    /// for this module's own cache test; a production caller has no
+    /// present reason to read it, so `#[allow(dead_code)]` outside
+    /// `cfg(test)` rather than a narrower visibility that would need
+    /// widening the moment one does.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn reads(&self) -> usize {
+        self.reads
     }
 }
 
@@ -312,6 +368,55 @@ mod tests {
             ResolveFailure::NotFound
         );
         assert!(resolver.shas().is_empty());
+    }
+
+    /// X1 (the adversarial pass): repeatedly resolving the same name
+    /// within one resolver reads the file from disk once, not once per
+    /// call -- the fix for the expansion bomb the struct docs describe
+    /// (a caller-controlled root with many `uses:` steps naming the same
+    /// trusted-but-sparse document would otherwise force one full
+    /// re-read and re-parse per occurrence, bounded only by how many
+    /// `uses:` steps a 256 KiB body can hold, long before
+    /// `MAX_LINKED_NODES` ever has a reason to refuse). Every call still
+    /// returns the right workflow and records the sha, so `link`'s own
+    /// per-occurrence behaviour (acceptance 4's diamond test, in
+    /// `compose.rs`) is unaffected; only the disk read and the parse are
+    /// shared.
+    #[test]
+    fn a_repeated_name_is_read_from_disk_once() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "child.yaml", &doc_named("child"));
+        let mut resolver = TrustedResolver::new(dir.path());
+        for _ in 0..50 {
+            let workflow = resolver.resolve(&wf("child")).unwrap();
+            assert_eq!(workflow.name.as_str(), "child");
+        }
+        assert_eq!(
+            resolver.reads(),
+            1,
+            "50 occurrences of the same name must read the file once"
+        );
+        assert_eq!(
+            resolver.shas().get(&wf("child")),
+            Some(&DocumentSha256::compute(doc_named("child").as_bytes())),
+            "the sha is still recorded even when served from the cache"
+        );
+    }
+
+    /// The cache is per name: resolving two different documents still
+    /// reads each of them once.
+    #[test]
+    fn two_different_names_are_each_read_once() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.yaml", &doc_named("a"));
+        write(dir.path(), "b.yaml", &doc_named("b"));
+        let mut resolver = TrustedResolver::new(dir.path());
+        for _ in 0..10 {
+            resolver.resolve(&wf("a")).unwrap();
+            resolver.resolve(&wf("b")).unwrap();
+        }
+        assert_eq!(resolver.reads(), 2);
+        assert_eq!(resolver.shas().len(), 2);
     }
 
     #[cfg(unix)]
