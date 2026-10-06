@@ -656,14 +656,13 @@ impl GitHubClient {
     /// GitHub documents to initialise an empty repository (milestone 3l,
     /// SHARED VALUES "First-file call (S1)"). The body is exactly
     /// `message`, `content` (standard base64 of `file`'s bytes), and
-    /// `branch` — never `sha` (which this endpoint, undocumented here,
-    /// treats as "I am replacing an existing file"; omitting it is what
-    /// lets this call only ever create), never `committer` or `author`
-    /// (GitHub defaults both to the authenticated identity). `file`'s path
-    /// is percent-encoded per [`encode_contents_path`]. The response is
-    /// discarded entirely — [`Self::ensure`](crate::tools::scaffold_ensure)
-    /// re-reads instead of trusting it (decision (a) of the milestone's
-    /// plan).
+    /// `branch` — never `sha` (GitHub's own docs: "Required if you are
+    /// updating a file"; omitting it is what lets this call only ever
+    /// create), never `committer` or `author` (GitHub defaults both to the
+    /// authenticated identity). `file`'s path is percent-encoded per
+    /// [`encode_contents_path`]. The response is discarded entirely —
+    /// `github.scaffold.ensure` re-reads instead of trusting it (decision
+    /// (a) of the milestone's plan).
     ///
     /// # Errors
     ///
@@ -1721,43 +1720,49 @@ mod tests {
     #[test]
     fn has_any_branch_404_is_err_with_the_status() {
         let mut provider = willikins_providers_http::testing::MockProvider::start();
-        provider
+        let mock = provider
             .mock("GET", "/repos/acme/widget/branches?per_page=1")
             .with_status(404)
             .with_body(serde_json::json!({"message": "Not Found"}).to_string())
+            .expect(1)
             .create();
         let client = client_against(provider.url());
         let err = client.has_any_branch(&repo()).unwrap_err();
         assert_eq!(err.status, Some(404));
+        mock.assert();
     }
 
     #[test]
     fn get_repo_parses_a_body_with_default_branch() {
         let mut provider = willikins_providers_http::testing::MockProvider::start();
-        provider
+        let mock = provider
             .mock("GET", "/repos/acme/widget")
             .with_status(200)
             .with_body(
                 serde_json::json!({"visibility": "private", "topics": [], "default_branch": "main"})
                     .to_string(),
             )
+            .expect(1)
             .create();
         let client = client_against(provider.url());
         let body = client.get_repo(&repo()).unwrap();
         assert_eq!(body.default_branch, Some("main".to_string()));
+        mock.assert();
     }
 
     #[test]
     fn get_repo_parses_a_body_without_default_branch() {
         let mut provider = willikins_providers_http::testing::MockProvider::start();
-        provider
+        let mock = provider
             .mock("GET", "/repos/acme/widget")
             .with_status(200)
             .with_body(serde_json::json!({"visibility": "private", "topics": []}).to_string())
+            .expect(1)
             .create();
         let client = client_against(provider.url());
         let body = client.get_repo(&repo()).unwrap();
         assert_eq!(body.default_branch, None);
+        mock.assert();
     }
 
     fn first_file_fixture() -> (GitBranchName, RepoFile) {
@@ -1791,47 +1796,18 @@ mod tests {
     }
 
     #[test]
-    fn create_first_file_extra_key_does_not_match_the_exact_body() {
-        // The same exact-match matcher `json_body` uses elsewhere: a
-        // request body carrying a key beyond `message`/`content`/`branch`
-        // (as would happen if a future edit smuggled in `sha`) would leave
-        // this mock unmatched and the call failing, proving the body is
-        // exactly those three keys, never a superset.
-        let mut provider = willikins_providers_http::testing::MockProvider::start();
-        let (branch, file) = first_file_fixture();
-        let mock = provider
-            .mock("PUT", "/repos/acme/widget/contents/a%2Bb/c%40d.txt")
-            .match_body(willikins_providers_http::testing::json_body(
-                serde_json::json!({
-                    "message": "chore: seed",
-                    "content": STANDARD.encode(b"hello"),
-                    "branch": "main",
-                    "sha": "unexpected",
-                }),
-            ))
-            .with_status(201)
-            .with_body("{}")
-            .expect(0)
-            .create();
-        let client = client_against(provider.url());
-        client
-            .create_first_file(&repo(), &branch, &file, "chore: seed")
-            .unwrap_err();
-        mock.assert();
-    }
-
-    #[test]
     fn create_first_file_409_422_404_report_the_shared_failure_message_without_echoing_the_body() {
         for status in [409u16, 422, 404] {
             let mut provider = willikins_providers_http::testing::MockProvider::start();
             let (branch, file) = first_file_fixture();
             let marker = format!("wlkn-test-marker-first-file-{status}");
-            provider
+            let mock = provider
                 .mock("PUT", "/repos/acme/widget/contents/a%2Bb/c%40d.txt")
                 .with_status(usize::from(status))
                 .with_body(
                     serde_json::json!({"message": format!("conflict: {marker}")}).to_string(),
                 )
+                .expect(1)
                 .create();
             let client = client_against(provider.url());
             let err = client
@@ -1841,6 +1817,7 @@ mod tests {
             assert_eq!(err.message, FIRST_FILE_FAILURE_MESSAGE);
             assert!(!err.message.contains(&marker));
             assert!(!format!("{err:?}").contains(&marker));
+            mock.assert();
         }
     }
 
@@ -1853,17 +1830,20 @@ mod tests {
             let mut provider = willikins_providers_http::testing::MockProvider::start();
             let (branch, file) = first_file_fixture();
             let marker = format!("wlkn-test-marker-first-file-{status}");
-            provider
+            let mock = provider
                 .mock("PUT", "/repos/acme/widget/contents/a%2Bb/c%40d.txt")
                 .with_status(usize::from(status))
                 .with_body(serde_json::json!({"message": format!("denied: {marker}")}).to_string())
+                .expect(1)
                 .create();
             let client = client_against(provider.url());
             let err = client
                 .create_first_file(&repo(), &branch, &file, "chore: seed")
                 .unwrap_err();
+            assert_eq!(err.status, Some(status));
             assert_eq!(err.message, expected);
             assert!(!err.message.contains(&marker));
+            mock.assert();
         }
     }
 
