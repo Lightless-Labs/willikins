@@ -7,35 +7,28 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-10-05) — milestone 3k (faster gates): every crate's default-built integration tests now build as one binary; T16 (after-measurement and close) is still open
+### RESUME HERE (2026-10-06) — five lanes planned together; 3k, 3n's first slice, 3l and 2b landed; next: AGENTS.md, then the rest of 3n, then 3m
 
-- **Live state:** `main` on top of T14's commit (`ee42d53`), plus T15's docs-only commit. Plan
-  `docs/plans/2026-10-05-milestone-3k-faster-gates.md`: T1–T14 landed, one crate per commit, in the plan's order
-  (dsl pilot, core, the layout guard, types, fake, http, journal, github, signoz, buildkite, doppler, appstore,
-  server, cli). T15 is this entry. **T16 (after-measurement and close) is open** — the coordinator repeats T0's
-  measurement protocol on the final tree and records both tables in a Completed header; until then the plan stays
-  un-Completed.
-- **What changed.** Every crate's top-level `crates/<c>/tests/*.rs` moved into one binary, `tests/it/main.rs`, one
-  `mod <stem>;` per former file (`git mv`, so `git log --follow` still works). Default-built integration-test
-  binaries: 13 in the public tree (one per crate), 16 on the operator's machine (the three gitignored
-  `crates/willikins-cli/tests/operator_*.rs` targets stay separate and unmoved). The 10
-  `required-features = ["live-tests"]` targets also stay top-level and unmoved; they build only with
-  `--features live-tests` (decision (d3)).
-- **Run one test module** with `cargo test -p <crate> --test it <module>::` (note the trailing `::`; add
-  `-j 2`/`RUST_TEST_THREADS=2` per the Commands section below). `--exact` now needs the module prefix too
-  (`<module>::<test_name>`), or it silently matches nothing — one of the three traps this milestone found, closed
-  by acceptance 4's mutation check and recorded under `docs/solutions/tooling/`.
-- **Guards that know their own path** now read `tests/it/...`: `crates/willikins-core/tests/it/secret_literal_guard.rs`,
-  `crates/willikins-core/tests/it/sink_token_guard.rs`, `crates/willikins-cli/tests/it/no_gh_writes_guard.rs`,
-  `crates/willikins-providers-appstore/tests/it/no_certificate_writes_guard.rs`. A new ratcheting layout guard,
-  `crates/willikins-core/tests/it/test_layout_guard.rs`, keeps the one-binary layout from eroding (an undeclared
-  `tests/it/*.rs`, a stray top-level file, a leftover `tests/snapshots/`, an orphaned `it__<m>__*.snap`, or a
-  `.proptest-regressions` file beside the old source path all go red); its `PENDING` list is now empty.
-- **Three silent traps found and closed**, written up under `docs/solutions/tooling/`: the `--exact` filter without
-  its module prefix; a proptest regression-seed file left where proptest's `SourceParallel` walk no longer looks
-  (now `tests/proptest-regressions/<stem>.txt`); and an undeclared `tests/it/*.rs` module, never compiled.
-- **Open: T16**, the coordinator's — the after-measurement against T0's baseline and the full four-command gate,
-  closing the plan.
+- **Live state:** `main` pushed. Full gate on the 2b tree: 49 suites / 3466 tests / 0 failed, about 7 minutes.
+- **Plans** (2026-10-05, written in parallel, then one portfolio review ordered them): 3k faster gates,
+  3n checked as a typed graph, 3l new repositories, 2b composition, 3m safe rollback. Order: 3k, 3n F1-F3, 3l, 2b,
+  then the AGENTS.md todo, the rest of 3n (S1 onward), and 3m last.
+- **3k (completed):** one integration-test binary per crate (`crates/<crate>/tests/it/<module>.rs`, declared in
+  `tests/it/main.rs`, guarded by `test_layout_guard`); the test run went 251 s to 108 s, 167 test executables to 16.
+- **3n F1-F3:** two apply panics fixed, tool outputs checked against the spec where produced, no Value named by
+  itself (`known_dyn_as` takes a registry).
+- **3l (completed):** a document can create a repository and scaffold it on the first run (first file through the
+  Contents API, then the signed commit); live cycle passed in the sandbox. The first commit is unsigned.
+- **2b (completed):** `uses:` composes documents, linked into one flat graph (`<step>/<node>`); the operator's
+  document is split (private) into an organisation document and the app document, converged live (run `01a112cb`).
+- **Operator decisions recorded:** teardown policy is the document's, per node, with conservative defaults (3m);
+  new repositories in a real organisation are created with an org-scoped PAT in Doppler (3l); `AGENTS.md` is
+  document work with the existing render and scaffold tools, content from the document
+  (`todos/2026-10-06-provision-agents-md.md`).
+- **The runner:** `scratchpad/runner.js` (not tracked) reads a plan's Tasks table and runs each implementer task with
+  sonnet, then an opus attack; `coordinatorDone`, `hints` and `only` steer resumes. Agents wait 3 quiet seconds for
+  cargo; the coordinator gates and commits work an agent could not finish.
+- **Credentials:** the real Doppler token was replaced twice (2026-10-01, 2026-10-06), each time after a 401.
 
 ### Earlier (2026-10-04) — the operator's iOS app is provisioned end to end: a real run of its document plans and applies every node with no change
 
@@ -780,6 +773,8 @@ regenerated from that frontmatter; a todo marked `done` leaves it.
 | `todos/2026-09-23-checked-as-a-typed-graph.md` | pending | medium | Turn Checked into a typed graph that plan, apply and describe consume |
 | `todos/2026-09-29-deterministic-safe-rollback.md` | pending | medium | Deterministic, safe rollback of what a run created |
 | `todos/2026-09-29-open-source-agent-tools.md` | pending | medium | Provision the operator's two open-source, self-hostable tools for AI agents |
+| `todos/2026-10-05-reusable-ios-app-document.md` | pending | medium | A reusable iOS-app document, and the RepoPath derivation it needs |
+| `todos/2026-10-06-provision-agents-md.md` | pending | medium | Provision a project's AGENTS.md |
 
 ## How Work Is Verified
 
