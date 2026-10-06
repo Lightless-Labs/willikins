@@ -593,6 +593,67 @@ fn missing_input_when_a_binding_names_an_input_the_caller_did_not_supply() {
     }
 }
 
+// -------------------------------------------------------------
+// R1 (milestone 2b, decision (d6)): the plan-side InputNotSettable backstop
+// -------------------------------------------------------------
+
+/// Milestone 2b, task R1: a fixed input (`InputSpec::fixed_by`) that a
+/// caller tries to set to a value different from its own default is
+/// `PlanError::InputNotSettable` -- the backstop for a library caller that
+/// builds its own resolved-inputs map by hand, bypassing `describe`'s own
+/// refusal (`willikins_core::InputError::not_settable`), which every
+/// caller through `describe` already hits first.
+#[test]
+fn a_caller_value_for_a_fixed_input_that_differs_from_the_default_is_not_settable() {
+    let (_state, fake_catalog) = empty();
+    let mut spec = InputSpec::new(ty("GitHubOrg")).with_default(Value::known(
+        willikins_types::GitHubOrg::parse("shared").unwrap(),
+    ));
+    spec.fixed_by = Some(node("org"));
+    let workflow = Workflow::new(workflow_name("fixed-input-plan-fixture"))
+        .input(input("org/github_org"), spec);
+    let checked = check(&workflow, &fake_catalog).expect("no nodes: nothing to fail check");
+
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("org/github_org"),
+        Value::known(willikins_types::GitHubOrg::parse("other").unwrap()),
+    );
+    let err = plan(&checked, &inputs, &fake_catalog).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "workflow input `org/github_org` is fixed by this document's composition and cannot be \
+         set by a caller"
+    );
+    match err {
+        PlanError::InputNotSettable { input: i } => assert_eq!(i, input("org/github_org")),
+        other => panic!("expected InputNotSettable, got {other:?}"),
+    }
+}
+
+/// The other half: a caller value that happens to equal the fixed input's
+/// own default is let through unchanged -- nothing about the plan would
+/// differ either way, so this is not refused.
+#[test]
+fn a_caller_value_for_a_fixed_input_that_equals_the_default_plans_cleanly() {
+    let (_state, fake_catalog) = empty();
+    let mut spec = InputSpec::new(ty("GitHubOrg")).with_default(Value::known(
+        willikins_types::GitHubOrg::parse("shared").unwrap(),
+    ));
+    spec.fixed_by = Some(node("org"));
+    let workflow = Workflow::new(workflow_name("fixed-input-plan-fixture-2"))
+        .input(input("org/github_org"), spec);
+    let checked = check(&workflow, &fake_catalog).expect("no nodes: nothing to fail check");
+
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("org/github_org"),
+        Value::known(willikins_types::GitHubOrg::parse("shared").unwrap()),
+    );
+    let result = plan(&checked, &inputs, &fake_catalog);
+    assert!(result.is_ok(), "{result:?}");
+}
+
 #[test]
 fn plan_error_display_is_one_line() {
     let err = PlanError::KeyNotInForEach {

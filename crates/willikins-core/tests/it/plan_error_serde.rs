@@ -62,6 +62,7 @@ fn plan_error_samples() -> Vec<PlanError> {
             expected: ty("A"),
             found: ty("B"),
         },
+        PlanError::InputNotSettable { input: input("i") },
     ]
 }
 
@@ -100,6 +101,7 @@ variant_kinds!(
     Tool,
     EdgeTypeMismatch,
     InputTypeMismatch,
+    InputNotSettable,
 );
 
 #[test]

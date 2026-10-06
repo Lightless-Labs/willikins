@@ -510,6 +510,22 @@ pub enum PlanError {
         /// valid type name at all.
         found: TypeRef,
     },
+    /// A caller supplied a value for a *fixed* input (milestone 2b,
+    /// decision (d6), `docs/plans/2026-10-05-milestone-2b-composition.md`:
+    /// `workflow.inputs[input].fixed_by.is_some()`) that differs from the
+    /// used document's own default. `describe`'s own refusal
+    /// ([`crate::describe::InputError::not_settable`]) already catches
+    /// this for every caller that resolves inputs through it -- the CLI,
+    /// the MCP surface, and `willikins-server`'s `Butler::plan_inner`,
+    /// which passes `describe(..).resolved` straight here. This is the
+    /// backstop for a library caller that builds its own resolved-inputs
+    /// map by hand; a value that happens to equal the default is let
+    /// through unchanged, since nothing about the plan would differ
+    /// either way.
+    InputNotSettable {
+        /// The fixed input a caller tried to set.
+        input: InputName,
+    },
 }
 
 impl std::fmt::Display for PlanError {
@@ -563,6 +579,11 @@ impl std::fmt::Display for PlanError {
             } => write!(
                 f,
                 "workflow input `{input}`: expected {expected}, found `{found}`"
+            ),
+            Self::InputNotSettable { input } => write!(
+                f,
+                "workflow input `{input}` is fixed by this document's composition and cannot be \
+                 set by a caller"
             ),
         }
     }
@@ -704,9 +725,12 @@ fn key_for_each_items(
 /// # Errors
 ///
 /// Returns [`PlanError::InputTypeMismatch`] before any node is planned when
-/// a supplied workflow input is not of its declared type; otherwise the
-/// first [`PlanError`] found while walking the workflow; see the module
-/// docs for why this is one error, not a list.
+/// a supplied workflow input is not of its declared type, or
+/// [`PlanError::InputNotSettable`] (also before any node is planned) when a
+/// supplied value for a *fixed* input (milestone 2b, decision (d6))
+/// differs from its own default; otherwise the first [`PlanError`] found
+/// while walking the workflow; see the module docs for why this is one
+/// error, not a list.
 ///
 /// # Panics
 ///
@@ -749,6 +773,7 @@ pub(crate) fn walk(
 ) -> Result<Walk, PlanError> {
     let workflow = &checked.workflow;
     check_input_types(workflow, inputs, catalog.registry())?;
+    check_fixed_inputs(workflow, inputs)?;
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut planned: Vec<PlannedNode> = Vec::new();
     // Aligned with `planned`, 1:1 (see `Walk`'s own doc); named apart from
@@ -1152,6 +1177,41 @@ fn check_input_types(
                     list: spec.ty.list,
                 }));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a caller-supplied value for a *fixed* input (milestone 2b,
+/// decision (d6)) that differs from the used document's own default --
+/// [`PlanError::InputNotSettable`]'s own backstop role; see that variant's
+/// doc. A value equal to the default is let through unchanged.
+///
+/// Compares with [`Value`]'s own `PartialEq` (declared type plus
+/// [`willikins_types::DomainObject::dyn_eq`] on the known content), not by
+/// rendering: a fixed input is never secret-typed (`check` already refuses
+/// a secret workflow input), so there is no redaction concern either way.
+fn check_fixed_inputs(
+    workflow: &Workflow,
+    inputs: &IndexMap<InputName, Value>,
+) -> Result<(), PlanError> {
+    for (name, spec) in &workflow.inputs {
+        if spec.fixed_by.is_none() {
+            continue;
+        }
+        let Some(value) = inputs.get(name) else {
+            continue;
+        };
+        let default = spec.default.as_ref().unwrap_or_else(|| {
+            unreachable!(
+                "a fixed input is always defaulted (decision (d6)): see \
+                 `crate::describe::describe`'s own matching `unreachable!`"
+            )
+        });
+        if value != default {
+            return Err(PlanError::InputNotSettable {
+                input: name.clone(),
+            });
         }
     }
     Ok(())

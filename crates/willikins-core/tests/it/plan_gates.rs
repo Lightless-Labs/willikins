@@ -19,8 +19,8 @@ use indexmap::IndexMap;
 use crate::common::{input, node, output, port, tool_name, ty, workflow_name};
 use willikins_core::{
     Action, Binding, Catalog, CatalogError, Class, Ensured, Gate, GateError, InputSpec, Inputs,
-    Node, Observation, Outputs, PortSpec, PortType, SinkToken, Tool, ToolError, ToolSpec, Value,
-    Workflow, check, plan,
+    Node, Observation, Outputs, PartialInputs, PortSpec, PortType, SinkToken, Tool, ToolError,
+    ToolSpec, Uses, Value, Workflow, check, describe, link, plan,
 };
 use willikins_types::{DomainType, EnvironmentSlug};
 
@@ -1076,4 +1076,98 @@ fn supplying_done_makes_the_acknowledgement_gate_compute() {
 
     assert_eq!(by_name(&result.nodes, "gate", None).action, Action::Compute);
     assert!(result.blocked.is_empty());
+}
+
+// ---------------------------------------------------------------------
+// R1 (milestone 2b, decision (d6), "Acknowledgements"): after
+// substitution, `BlockedGate.awaiting_inputs` names the root's own input,
+// never the child's, since an `OperatorAcknowledgement` input can never
+// carry a default (`AcknowledgementDefault`) and so is always bound by
+// the parent -- exercised end to end through the linker, not merely
+// asserted.
+// ---------------------------------------------------------------------
+
+/// A one-node child document: the same `test.acknowledge` gate as
+/// [`ack_workflow`], but declaring its own input (`ack`, no default --
+/// `check` refuses one, and this document is never checked on its own
+/// here anyway) rather than a root's.
+fn ack_child_workflow() -> Workflow {
+    Workflow::new(workflow_name("ack-child"))
+        .input(input("ack"), InputSpec::new(ty("OperatorAcknowledgement")))
+        .node(
+            node("gate"),
+            Node::new(tool_name("test.acknowledge"))
+                .port(port("step"), Binding::Literal("do the thing".to_string()))
+                .port(port("acknowledged"), Binding::Input(input("ack"))),
+        )
+}
+
+/// A root with one declared input (`m_done`, the same shape as
+/// [`ack_workflow`]'s own `ack_done`) and one `uses:` step, `org`, binding
+/// the child's `ack` input straight to it -- decision (d6)'s normal case,
+/// "normally to the parent's own input".
+fn ack_composite_root() -> Workflow {
+    let mut with = IndexMap::new();
+    with.insert(input("ack"), Binding::Input(input("m_done")));
+    Workflow::new(workflow_name("ack-composite-root"))
+        .input(
+            input("m_done"),
+            InputSpec::new(ty("OperatorAcknowledgement")),
+        )
+        .uses(
+            node("org"),
+            Uses {
+                workflow: workflow_name("ack-child"),
+                with,
+                position: 0,
+            },
+        )
+}
+
+/// Acceptance 7: a child gate whose acknowledgement input is bound to the
+/// root's input `m_done` plans `Blocked` with `awaiting_inputs ==
+/// [m_done]` -- the root's own name, not the child's `ack`, because
+/// linking substitutes the binding before `plan` ever sees the node.
+#[test]
+fn acceptance_7_a_linked_acknowledgement_gate_awaits_the_roots_own_input() {
+    let mut resolve = |name: &willikins_types::WorkflowName| match name.as_str() {
+        "ack-child" => Ok(ack_child_workflow()),
+        other => panic!("resolver asked for an unexpected workflow: {other}"),
+    };
+    let linked = link(&ack_composite_root(), &mut resolve).expect("a well-formed composite links");
+    assert_eq!(
+        linked
+            .workflow
+            .inputs
+            .keys()
+            .map(willikins_core::InputName::as_str)
+            .collect::<Vec<_>>(),
+        vec!["m_done"],
+        "the child's `ack` input is bound via `with:`, never exposed as its own fixed input"
+    );
+
+    let catalog = ack_catalog();
+    let checked = check(&linked.workflow, &catalog).expect("the linked graph checks cleanly");
+
+    // Empty partial: `m_done` is `awaiting`, never `resolved` -- the same
+    // shape `describe` leaves an unsupplied acknowledgement input in at
+    // the root (acceptance 16), now reached through a linked composite.
+    let description = describe(&checked, &PartialInputs::new());
+    assert_eq!(description.awaiting.len(), 1);
+    assert_eq!(description.awaiting[0].name, input("m_done"));
+    assert!(!description.resolved.contains_key(&input("m_done")));
+
+    let result = plan(&checked, &description.resolved, &catalog)
+        .expect("an unsupplied OperatorAcknowledgement input must never fail `plan`");
+
+    assert_eq!(
+        by_name(&result.nodes, "org/gate", None).action,
+        Action::Blocked
+    );
+    assert_eq!(result.blocked.len(), 1);
+    assert_eq!(
+        result.blocked[0].awaiting_inputs,
+        vec![input("m_done")],
+        "the report must name the root's own input, the one a --input flag would supply"
+    );
 }
