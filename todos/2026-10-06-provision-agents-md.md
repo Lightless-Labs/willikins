@@ -21,22 +21,23 @@ provisioning a project on the user's behalf)." AGENTS.md only, no CLAUDE.md.
 
 - **A file write, nothing more.** Write `AGENTS.md` where the project lives if it is absent;
   never overwrite it, never track edits afterwards. Re-running converges: present means done.
-- **Two sources of content.** The organisation's and monorepo's part lives in the organisation
-  document (milestone 2b's `uses:`), so every project in that organisation gets the same part. The
-  project's own part is an input supplied when willikins is called, by the operator or by an agent
-  provisioning a project on the operator's behalf.
+- **The content comes from the document.** The operator, 2026-10-06: "the content would have to
+  come from the document. It's just file writing, with limited text-only templating capability."
+  The whole file is a template in the document (the organisation's and monorepo's part in the
+  organisation document, through milestone 2b's `uses:`; the project's part in the project's
+  document), rendered by `repo.file.render`. Inputs only fill placeholders; no input supplies a
+  template or a free-form section.
 - **Projects already scaffolded.** A scaffold is a seed: once its marker exists it never writes
   again, so a document that adds AGENTS.md to an already-landed scaffold would never write it. This
   needs a small write-if-absent file tool (one file, no marker), usable for any later file.
 
 ## Design points for the plan
 
-- The project's part is text an agent may write that later agents will read as instructions. It
-  should be a bounded, typed Markdown value (not `Text`, not a template), refused if it is a secret
-  type, and shown in full in the plan so approving the plan approves the words.
-- The organisation's part is document content (privileged, from a trusted ref), rendered through
-  `repo.file.render`; the input is placed only as a whole section, never spliced into a command,
-  path or code fence.
+- Placeholders today take `TemplateValue`, an identifier-like grammar with no spaces. Prose values
+  (a project's one-line description, say) need a text placeholder kind. Decide whether that kind is
+  admitted only in Markdown files, how it is bounded (length, no control characters, no fence or
+  heading injection), and that a secret type can never fill it.
+- The rendered file is shown in full in the plan, so approving the plan approves the words.
 - Which repository and path: a monorepo app writes `apps/<slug>/AGENTS.md`; a standalone repository
   writes `AGENTS.md` at its root (milestone 3l's new repositories).
 
