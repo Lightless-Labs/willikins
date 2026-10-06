@@ -1,0 +1,71 @@
+# Milestone 3o, task E2 (docs/plans/2026-10-06-milestone-3o-agents-md.md,
+# SHARED VALUES "Monorepo app document (E2)", decisions (d2), (d4)): a
+# monorepo app's own document, scaffolding `apps/sample/` and then
+# seeding its `AGENTS.md` through a **second** `github.scaffold.ensure`
+# node with its own marker (`apps/sample/.willikins-agents`) -- adding
+# `AGENTS.md` to the first scaffold's `files` would do nothing once that
+# scaffold's marker exists, with no warning (decision (d4)), so this
+# shape plans `Create` on a brand-new app and on one already scaffolded
+# alike. The app file names `../../AGENTS.md` for every organisation
+# convention and holds no organisation prose of its own (decision (d2));
+# `agents.repo` binds `app_files.repo` (a `Binding::Step`), ordering the
+# two commits by a data edge rather than by the commit retry alone.
+# Pinned by `crates/willikins-cli/tests/it/agents_md_documents.rs`,
+# acceptance 4-7.
+name: monorepo-app
+description: Scaffold a monorepo app and seed its own AGENTS.md through a second scaffold.
+inputs:
+  app_identifier:
+    type: AppleBundleIdentifier
+    description: "The app's bundle identifier"
+steps:
+  monorepo:
+    tool: github.repo.get
+    with:
+      repo: Example-Org/monorepo
+  app_build:
+    tool: repo.file.render
+    with:
+      path: apps/sample/BUILD.bazel
+      template: "# Sample app package.\n"
+  app_files:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ steps.monorepo.repo }}
+      branch: main
+      marker: apps/sample/.willikins-scaffold
+      files:
+        - ${{ steps.app_build.file }}
+      message: "chore(sample): scaffold the app"
+  agents_md:
+    tool: repo.file.render
+    with:
+      path: apps/sample/AGENTS.md
+      values:
+        - ${{ inputs.app_identifier }}
+      template: |
+        # apps/sample
+
+        Bundle identifier: {{ 0 }}
+
+        See ../../AGENTS.md for every Example-Org convention.
+
+        If `docs/HANDOFF.md` does not exist yet, create it in the first
+        session that changes anything here.
+
+        Commands:
+
+        - `bazel build //apps/sample/...`
+        - `bazel test //apps/sample/...`
+
+        Caution: commit only `apps/sample/` paths from this app's own
+        sessions.
+  agents:
+    tool: github.scaffold.ensure
+    with:
+      repo: ${{ steps.app_files.repo }}
+      branch: main
+      marker: apps/sample/.willikins-agents
+      files:
+        - ${{ steps.agents_md.file }}
+      message: "docs(sample): seed AGENTS.md"

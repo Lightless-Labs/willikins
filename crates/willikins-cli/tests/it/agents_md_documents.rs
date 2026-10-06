@@ -1,11 +1,20 @@
-//! Milestone 3o, task E1 (`docs/plans/2026-10-06-milestone-3o-agents-md.md`,
-//! acceptance 1-3): the standalone pair -- an organisation-owned used
-//! document (`workflows/fixtures/agents-md/example-org-agents-md.yaml`)
+//! Milestone 3o, tasks E1 and E2
+//! (`docs/plans/2026-10-06-milestone-3o-agents-md.md`):
+//!
+//! **E1 (acceptance 1-3): the standalone pair** -- an organisation-owned
+//! used document (`workflows/fixtures/agents-md/example-org-agents-md.yaml`)
 //! renders a standalone repository's whole `AGENTS.md`, decisions (d1)
 //! and (d3). `standalone-service.yaml` `uses:` it and lists its `file`
 //! output in its one scaffold commit, and `project-prose-root.yaml` is
 //! the negative fixture proving a `uses:` step's `with:` literal is type
 //! -checked against the child's declared input, never embedded unchecked.
+//!
+//! **E2 (acceptance 4-7): the monorepo app document** --
+//! `workflows/fixtures/agents-md/monorepo-app.yaml`, decisions (d2) and
+//! (d4): the app's own document scaffolds `apps/sample/` and then seeds
+//! its `AGENTS.md` through a **second** `github.scaffold.ensure` node
+//! with its own marker, so the same document shape plans `Create` on a
+//! brand-new app and on one already scaffolded alike.
 //!
 //! Linking is done here with a small local `resolve` closure mirroring
 //! `willikins-cli`'s own `resolve_sibling` (`src/main.rs`, milestone 2b
@@ -18,16 +27,19 @@
 //! file otherwise needs the other's fixture-specific constants.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
 use willikins_core::{
-    Action, Approval, CheckError, InputName, NodeStatus, Plan, PortName, RecordingObserver,
-    ResolveFailure, Value, apply, check, link, plan,
+    Action, Approval, Binding, CheckError, InputName, NodeName, NodeStatus, Plan, PlanError,
+    PortName, RecordingObserver, ResolveFailure, ToolErrorKind, Value, apply, check, link, plan,
 };
+use willikins_providers_fake::FakeState;
 use willikins_providers_fake::state::{repo_key, scaffold_key};
 use willikins_types::{
-    DomainType, GitBranchName, GitHubRepo, RepoFile, RepoVisibility, TemplateValue,
+    AppleBundleIdentifier, DomainType, GitBranchName, GitHubRepo, RepoFile, RepoVisibility,
+    TemplateValue,
 };
 
 fn workspace_root() -> PathBuf {
@@ -268,4 +280,267 @@ fn project_prose_root_is_refused_invalid_literal_naming_the_with_input() {
         )),
         "expected an InvalidLiteral naming node `agents_md`, port `project`: {errors:?}"
     );
+}
+
+// --- Milestone 3o, task E2 (acceptance 4-7): the monorepo app document ---
+//
+// `monorepo-app.yaml` has no `uses:` step, so it is loaded and checked
+// directly (never through `linked`): `monorepo` (`github.repo.get`)
+// references a repository this document does not own, `app_files` is the
+// app's own first scaffold, and `agents`/`agents_md` are the second
+// scaffold's pair, decision (d4). `agents.repo` binds `app_files.repo`
+// (acceptance 7), ordering the two commits.
+
+fn monorepo_repo() -> GitHubRepo {
+    GitHubRepo::parse("Example-Org/monorepo").unwrap()
+}
+
+fn app_identifier() -> AppleBundleIdentifier {
+    AppleBundleIdentifier::parse("com.example.app").unwrap()
+}
+
+fn monorepo_app_inputs() -> IndexMap<InputName, Value> {
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        InputName::parse("app_identifier").unwrap(),
+        Value::known(app_identifier()),
+    );
+    inputs
+}
+
+/// The monorepo exists (this document never creates it: `github.repo.get`
+/// only references), with no scaffold of either kind landed yet.
+fn fresh_monorepo_state() -> Arc<Mutex<FakeState>> {
+    Arc::new(Mutex::new(FakeState::new().with_repo(
+        &monorepo_repo(),
+        RepoVisibility::Private,
+        true,
+    )))
+}
+
+/// The app's first scaffold has already landed (its marker alone is
+/// enough: a scaffold never re-reads its files once the marker is
+/// present). Seeded directly with `with_scaffold_files`, never by
+/// applying the whole document -- that would land the second marker too.
+fn already_scaffolded_state() -> Arc<Mutex<FakeState>> {
+    Arc::new(Mutex::new(
+        FakeState::new()
+            .with_repo(&monorepo_repo(), RepoVisibility::Private, true)
+            .with_scaffold_files(
+                &monorepo_repo(),
+                &branch(),
+                &[("apps/sample/.willikins-scaffold", "managed-by: willikins\n")],
+            ),
+    ))
+}
+
+/// Acceptance 4: `monorepo-app` checks. A fresh monorepo (the repository
+/// exists, no markers): `app_files` and `agents` both plan `Create`. The
+/// rendered `agents_md` file's path is `apps/sample/AGENTS.md` and its
+/// content equals `expected/monorepo-app-AGENTS.md`, with
+/// `com.example.app` in place of `{{ 0 }}`. Apply creates both scaffolds.
+#[test]
+fn monorepo_app_fresh_creates_both_scaffolds_and_renders_the_file() {
+    let state = fresh_monorepo_state();
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let workflow = load("monorepo-app");
+    let checked = check(&workflow, &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+    let inputs = monorepo_app_inputs();
+
+    let planned1 =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    assert_eq!(action_of(&planned1, "app_files", None), Action::Create);
+    assert_eq!(action_of(&planned1, "agents", None), Action::Create);
+
+    let agents_file = rendered_file_of(&planned1, "agents_md", None);
+    assert_eq!(agents_file.path().as_str(), "apps/sample/AGENTS.md");
+    assert_eq!(
+        agents_file.content(),
+        expected_file("monorepo-app-AGENTS.md")
+    );
+
+    let mut observer = RecordingObserver::new();
+    let applied1 = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &planned1,
+        &human_approval(),
+        &mut observer,
+    )
+    .expect("run 1 applies");
+    assert!(matches!(
+        status_of(&applied1, "app_files", None),
+        NodeStatus::Created
+    ));
+    assert!(matches!(
+        status_of(&applied1, "agents", None),
+        NodeStatus::Created
+    ));
+
+    let planned2 =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    assert_eq!(action_of(&planned2, "app_files", None), Action::NoOp);
+    assert_eq!(action_of(&planned2, "agents", None), Action::NoOp);
+}
+
+/// Acceptance 5: already scaffolded (the first marker present in the
+/// fake, through the fake's existing seeding, never through an apply of
+/// the whole document): `app_files` plans `NoOp` and `agents` `Create`.
+/// Apply, then re-plan: every node `NoOp`.
+#[test]
+fn monorepo_app_already_scaffolded_creates_only_the_agents_marker() {
+    let state = already_scaffolded_state();
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = check(&load("monorepo-app"), &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+    let inputs = monorepo_app_inputs();
+
+    let planned1 =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    assert_eq!(action_of(&planned1, "app_files", None), Action::NoOp);
+    assert_eq!(action_of(&planned1, "agents", None), Action::Create);
+
+    let mut observer = RecordingObserver::new();
+    let applied1 = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &planned1,
+        &human_approval(),
+        &mut observer,
+    )
+    .expect("run 1 applies");
+    assert!(matches!(
+        status_of(&applied1, "agents", None),
+        NodeStatus::Created
+    ));
+
+    let planned2 =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    assert_eq!(action_of(&planned2, "app_files", None), Action::NoOp);
+    assert_eq!(action_of(&planned2, "agents", None), Action::NoOp);
+
+    let locked = state.lock().unwrap();
+    let scaffold_map = locked
+        .scaffolds
+        .get(&scaffold_key(&monorepo_repo(), &branch()))
+        .expect("the scaffold map exists");
+    assert!(scaffold_map.contains_key("apps/sample/.willikins-scaffold"));
+    assert!(scaffold_map.contains_key("apps/sample/.willikins-agents"));
+    assert!(scaffold_map.contains_key("apps/sample/AGENTS.md"));
+}
+
+/// Acceptance 6, first half: a different `apps/sample/AGENTS.md` already
+/// present (seeded with `with_scaffold_files`, no marker): the plan fails
+/// with a `Conflict` naming the path, attributed to `agents`.
+#[test]
+fn monorepo_app_a_different_existing_agents_md_fails_plan_naming_the_path() {
+    let state = Arc::new(Mutex::new(
+        FakeState::new()
+            .with_repo(&monorepo_repo(), RepoVisibility::Private, true)
+            .with_scaffold_files(
+                &monorepo_repo(),
+                &branch(),
+                &[("apps/sample/AGENTS.md", "someone else's file\n")],
+            ),
+    ));
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = check(&load("monorepo-app"), &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+    let inputs = monorepo_app_inputs();
+
+    let err = plan(&checked, &inputs, &catalog)
+        .expect_err("a different existing AGENTS.md must refuse to plan");
+    match err {
+        PlanError::Tool {
+            node: failed_node,
+            error,
+        } => {
+            assert_eq!(failed_node, NodeName::parse("agents").unwrap());
+            assert_eq!(error.kind, ToolErrorKind::Conflict);
+            assert!(
+                error.message.contains("apps/sample/AGENTS.md"),
+                "the conflict must name the path: {}",
+                error.message
+            );
+        }
+        other => panic!("expected PlanError::Tool at `agents`, got {other:?}"),
+    }
+}
+
+/// Acceptance 6, second half: a byte-equal `apps/sample/AGENTS.md`
+/// already present: `agents` plans `Create` (the marker is still
+/// absent), the apply commits only the marker (the seed path is already
+/// equal, so it is skipped on write), and the re-plan is `NoOp`. The
+/// fake's flat path map cannot itself distinguish "skipped, byte-equal"
+/// from "rewrote the same bytes"; what this asserts is the marker
+/// landing and the file staying byte-equal to the draft, which is what
+/// `ScaffoldState::Absent { already_equal }` (`github_scaffold_ensure.rs`)
+/// is for.
+#[test]
+fn monorepo_app_a_byte_equal_existing_agents_md_commits_only_the_marker() {
+    let state = Arc::new(Mutex::new(
+        FakeState::new()
+            .with_repo(&monorepo_repo(), RepoVisibility::Private, true)
+            .with_scaffold_files(
+                &monorepo_repo(),
+                &branch(),
+                &[(
+                    "apps/sample/AGENTS.md",
+                    expected_file("monorepo-app-AGENTS.md").as_str(),
+                )],
+            ),
+    ));
+    let catalog = willikins_providers_fake::catalog(state.clone());
+    let checked = check(&load("monorepo-app"), &catalog)
+        .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
+    let inputs = monorepo_app_inputs();
+
+    let planned1 =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    assert_eq!(action_of(&planned1, "agents", None), Action::Create);
+
+    let mut observer = RecordingObserver::new();
+    let applied1 = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &planned1,
+        &human_approval(),
+        &mut observer,
+    )
+    .expect("run 1 applies");
+    assert!(matches!(
+        status_of(&applied1, "agents", None),
+        NodeStatus::Created
+    ));
+
+    let planned2 =
+        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    assert_eq!(action_of(&planned2, "agents", None), Action::NoOp);
+
+    let locked = state.lock().unwrap();
+    let scaffold_map = locked
+        .scaffolds
+        .get(&scaffold_key(&monorepo_repo(), &branch()))
+        .expect("the scaffold map exists");
+    assert!(scaffold_map.contains_key("apps/sample/.willikins-agents"));
+}
+
+/// Acceptance 7: `agents.repo` binds `app_files.repo` through a
+/// `Binding::Step`, ordering the two commits by a data edge rather than
+/// by the commit retry alone.
+#[test]
+fn agents_repo_binds_app_files_repo() {
+    let workflow = load("monorepo-app");
+    let node = &workflow.nodes[&NodeName::parse("agents").unwrap()];
+    match node.with.get(&PortName::parse("repo").unwrap()) {
+        Some(Binding::Step { node: n, port }) => {
+            assert_eq!(n.as_str(), "app_files");
+            assert_eq!(port.as_str(), "repo");
+        }
+        other => panic!("expected a Binding::Step onto app_files.repo, got {other:?}"),
+    }
 }
