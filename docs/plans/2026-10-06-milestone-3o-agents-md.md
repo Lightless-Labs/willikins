@@ -4,6 +4,23 @@
 file conventions and the operator's monorepo, the facts an app file needs, and what the types allow across a `uses:`
 boundary)
 
+**Addendum:** 2026-10-09 — the operator approved **two files**, not one: `apps/<slug>/AGENTS.md` and
+`apps/<slug>/ios/AGENTS.md`, both owned by the project document (decision (d2) extends to the second file the same
+way: the monorepo root's own `AGENTS.md` already carries the organisation's conventions, so neither app file repeats
+them). Task O1's nodes are now two renders, `agents_md` and `ios_agents_md`, both bound into the second scaffold's
+`files` beside the single render SHARED VALUES' "Private nodes (O1)" row originally described; the monolith baseline
+gained the same three nodes (two renders plus the second scaffold), and the converged counts move to 20 `NoOp`, 64
+`Compute` (one more `Compute` than the single-file shape, the second render; the second scaffold still converges to
+one `NoOp` regardless of how many files its marker seeds).
+
+Separately, the monorepo's root `CLAUDE.md` was replaced by an identical `AGENTS.md`. This closes risk 3 and verify
+item 1: there is no longer a root `CLAUDE.md` to make Claude Code skip an app's own `AGENTS.md` by default, so "Needs
+the operator" item 2 needed no monorepo edit after all. Decision (d5) stands unchanged for both files: neither seeds
+a `docs/HANDOFF.md` stub — the first session that changes anything still creates it by hand.
+
+The expected live plan (task L1), once the operator approves it: the second scaffold (`<slug>_agents`) `Create`,
+both renders (`agents_md`, `ios_agents_md`) `Compute`, everything else already converged reads `NoOp`.
+
 ## Goal
 
 A document writes a project's `AGENTS.md` with the tools that exist (`repo.file.render`, `github.scaffold.ensure`,
