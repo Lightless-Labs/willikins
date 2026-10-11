@@ -112,6 +112,44 @@ and the private fake-backed `operator_*` targets stayed green.
    is not an acceptance-6 "byte-identical" drift -- that item is runtime artifacts (characterization, fixtures,
    plan JSON, journal, composition snapshot) -- but it is still a pinned file moving, so it is recorded here rather
    than silently overwritten.
+**Addendum:** 2026-10-11 (task G2). Three points not spelled out by decision (g5) or SHARED VALUES.
+
+1. **`describe.rs`'s ratchet lands at 1, not SHARED VALUES' final 0, and no other listed task closes the gap.**
+   (g5) says `describe`'s "two `unreachable!`s go" -- true, and done: `missing_input` and `awaiting_input` no longer
+   call `willikins_types::registry()` and panic if it comes up empty. The *third* `unreachable!` `describe.rs`
+   carries, from before G2, is unrelated to the registry: 2b's R1 fixed-input hiding (`spec.fixed_by.is_some()`)
+   asserts `spec.default.is_some()` ("a fixed input is always defaulted"). Closing that one needs a check-time
+   fixed default, which SHARED VALUES' frozen `CheckedInput { name, spec, entry, awaited }` has no field for --
+   `spec.default` already carries it, so there is nothing new to add; the `unreachable!` is really about trusting
+   the linker's own invariant without re-deriving it, which no G2 pointer asks for. `plan.rs`'s matching assertion,
+   in `check_fixed_inputs`, is further out of reach: that function still reads `checked.workflow()`, the bridge
+   G7 deletes, and was not named in G2's scope either. **Flagged for the coordinator**: either G7 is the right
+   place to also close both "always defaulted" assertions (reading the default through `CheckedInput`/a future
+   `Source` once `workflow()` goes), or the plan's final-value row undercounts by one for `describe.rs` (and,
+   correspondingly, by one for `plan.rs`, which SHARED VALUES already pins at 6 including this same assertion
+   twice, once per function -- re-read the ratchet's own file-by-file math before G7 asserts final values). Pinned
+   today at `describe.rs` 1 (down from 3, lowered only, per `ratchet.rs`'s own rule), with a second test
+   (`describe_consults_no_second_registry`) pinning the registry half of acceptance 12 directly, since the ratchet
+   count alone cannot distinguish "closed by reading `CheckedInput`" from "closed by deleting the check and
+   silently accepting the bad input" -- the two `unreachable!`s leaving is necessary but not sufficient evidence.
+2. **`InputId` is minted and immediately discarded, with no reader until G3 -- and cannot literally mirror G1's
+   `SingleId`/`EachId` counter.** `CheckedInput` carries no `id` field by SHARED VALUES' own frozen shape, so
+   there is nowhere in this table for `InputId` to live yet (`SingleId`/`EachId` are stored into `Shape`; this
+   one has no equivalent home before G3's `Source::Input(InputId)`). A first attempt matched G1's exact
+   shape -- same derive set, a plain per-row `u32` counter, `let id = InputId(next_input); next_input += 1;` --
+   and failed `cargo clippy -p willikins-core --all-targets -- -D warnings` with
+   `no_effect_underscore_binding`: binding an inert `InputId(next_input)` to `_id` has nothing the lint will
+   count as live. `build_checked_nodes`'s `SingleId`/`EachId` never hit this, because each is immediately stored
+   into a `Shape` field, which *is* a use. The fix keeps the same fallible cast `check_workflow_inputs`'s
+   neighbor already uses (`u32::try_from(index).unwrap_or_else(|_| unreachable!(...))`): a construction that can
+   itself diverge reads as live to the lint, so `InputId` is minted this way instead, in declaration order,
+   until G3 gives it a field to sit in.
+3. **Acceptance 12's "byte-identical describe outputs" is proven by the server's `acceptance_read_ops` and
+   `composition_s1` suites, not by `willikins-dsl`'s `characterization_of_every_document`.** The dsl acceptance
+   target never calls `describe()` at all (it characterizes `check`/`plan`); it was run anyway, as the task row's
+   literal scoped gate, and it stayed green (proving `check`/`plan` untouched), but it is not this acceptance
+   item's own evidence. Future `describe.rs` tasks should name the server suites, not the dsl target, as acceptance
+   12's byte-identical proof.
 
 ## Goal
 
