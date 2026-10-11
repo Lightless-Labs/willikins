@@ -789,6 +789,40 @@ fn acceptance_4_for_each_over_a_scalar_input_is_rejected() {
     );
 }
 
+/// Milestone 3n, decision (b1); acceptance test 11, second clause: the
+/// same node, with a colliding default stacked on top of an
+/// identifier-typed source, still reports only `IdentifierForEachSource`,
+/// not `DuplicateForEachDefault` -- the identifier check runs first (the
+/// module docs' "Error ordering"), because `DuplicateForEachDefault`'s own
+/// `key` field would itself be a rendered identifier here.
+#[test]
+fn acceptance_11_identifier_for_each_source_is_refused_even_with_a_colliding_default() {
+    let cert = willikins_types::AppleCertificateId::parse("C3RT1F1CATE9").unwrap();
+    let workflow = Workflow::new(workflow_name("identifier-for-each-colliding"))
+        .input(
+            input("ids"),
+            InputSpec::new(list_ty("AppleCertificateId"))
+                .with_default(Value::known_list(vec![cert.clone(), cert])),
+        )
+        .node(
+            node("loop"),
+            Node::new(tool_name("fake.irreversible.ensure"))
+                .for_each(Binding::Input(input("ids")))
+                .port(port("key"), Binding::Literal("third-thoughts".to_string())),
+        );
+    let catalog = test_catalog();
+    let errors = check(&workflow, &catalog)
+        .expect_err("an identifier-typed for_each source must be rejected");
+    assert_eq!(
+        errors,
+        vec![CheckError::IdentifierForEachSource {
+            node: node("loop"),
+            ty: list_ty("AppleCertificateId"),
+        }],
+        "acceptance test 11: IdentifierForEachSource must fire before DuplicateForEachDefault"
+    );
+}
+
 #[test]
 fn acceptance_4_item_outside_a_for_each_node_is_rejected() {
     let workflow = Workflow::new(workflow_name("item-outside"))

@@ -1,5 +1,5 @@
-//! Milestone 3i, task B7 (decision (b8); acceptance 20): the two
-//! document-level pre-rendered-string guards, plus the end-to-end proof
+//! Milestone 3i, task B7 (decision (b8); acceptance 20): one
+//! document-level pre-rendered-string guard, plus the end-to-end proof
 //! that `describe` renders an identifier-typed input *default* masked.
 //!
 //! Decision (b8) lists four routes a `Value` reaches text before any
@@ -7,12 +7,23 @@
 //! (pinned in `crates/willikins-server/src/catalog.rs`'s own
 //! `no_live_or_fake_tool_has_an_identifier_typed_key_or_gate_subject_port`),
 //! a `for_each` instance key, and `describe`'s rendered `default`. This
-//! file pins the remaining two at the document level: no shipped
+//! file pinned the remaining two at the document level: no shipped
 //! document's `for_each` source resolves to a list of an identifier
 //! type, and no shipped document declares an identifier-typed input
-//! default. Both are read-only over every document under `workflows/`
-//! and `workflows/fixtures/` -- neither test writes a new fixture there,
-//! since the characterization snapshot
+//! default.
+//!
+//! Milestone 3n, decision (b1): the `for_each` guard is deleted here.
+//! `check` now refuses an identifier-typed `for_each` source outright
+//! (`CheckError::IdentifierForEachSource`, pinned by
+//! `crates/willikins-core/tests/it/check.rs` and this crate's own
+//! `milestone_3n_acceptance_11_identifier_for_each_source_is_refused`),
+//! so the document-level search this guard ran is no longer the only
+//! thing standing between a shipped document and that shape -- `check`
+//! itself is. The input-default guard stays: a default is not a
+//! `for_each` key, and `describe` already masks it. Read-only over
+//! every document under `workflows/` and `workflows/fixtures/` --
+//! this test writes no new fixture there, since the characterization
+//! snapshot
 //! (`crates/willikins-dsl/tests/it/snapshots/it__acceptance__characterization_of_every_document.snap`)
 //! must stay byte-identical for this task (acceptance 21).
 //!
@@ -31,7 +42,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-use willikins_core::{Binding, Catalog, TypeRef, Workflow};
+use willikins_core::TypeRef;
 use willikins_dsl::load_document;
 
 fn workspace_root() -> PathBuf {
@@ -65,100 +76,6 @@ fn is_identifier(ty: &TypeRef) -> bool {
     willikins_types::registry()
         .get(&ty.name)
         .is_some_and(|entry| entry.info.identifier)
-}
-
-// ---------------------------------------------------------------------
-// Guard: no `for_each` source in any shipped document resolves to a
-// list of an identifier type.
-// ---------------------------------------------------------------------
-
-/// The declared type a `for_each` source binding would resolve to, for the
-/// two shapes every shipped document's `for_each` actually uses today:
-/// `Binding::Input` (the input's own declared type) and `Binding::Step`
-/// (the producing node's declared output port type, regardless of
-/// whether that node has its own `for_each` -- this guard cares only
-/// about the element type's identifier-ness, never its list-ness, which
-/// is exactly how `check`'s own secrecy check treats an edge's type too;
-/// see `check.rs`'s `is_secret`). A literal, a `Binding::List`, and a
-/// bare `Binding::Item` can never check-succeed as a `for_each` source at
-/// all. `Binding::Keyed` could in principle (`check.rs`'s own `resolve`
-/// does not forbid a keyed reference to a `for_each` node whose output
-/// port is itself list-typed), but no shipped document does this, so
-/// this function panics on it rather than silently resolving it wrong.
-/// Only a document whose `check` already succeeded is ever asked here.
-fn for_each_source_type(workflow: &Workflow, catalog: &Catalog, binding: &Binding) -> TypeRef {
-    match binding {
-        Binding::Input(name) => workflow
-            .inputs
-            .get(name)
-            .unwrap_or_else(|| panic!("for_each source names unknown input `{name}`"))
-            .ty
-            .clone(),
-        Binding::Step { node, port } => {
-            let target = workflow
-                .nodes
-                .get(node)
-                .unwrap_or_else(|| panic!("for_each source names unknown node `{node}`"));
-            let tool = catalog.get(&target.tool).unwrap_or_else(|| {
-                panic!(
-                    "for_each source's node calls unregistered tool `{}`",
-                    target.tool
-                )
-            });
-            tool.spec()
-                .outputs
-                .get(port)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "for_each source names unknown output `{port}` on `{}`",
-                        target.tool
-                    )
-                })
-                .clone()
-        }
-        other => panic!("a checked for_each source has an unexpected shape: {other:?}"),
-    }
-}
-
-#[test]
-fn no_shipped_document_for_each_source_resolves_to_an_identifier_typed_list() {
-    let (_state, catalog) = willikins_providers_fake::empty();
-    let mut saw_a_for_each = false;
-
-    for path in every_document_path() {
-        let Ok(workflow) = load_document(&path) else {
-            // The one deliberately malformed fixture
-            // (`workflows/fixtures/bogus-field.yaml`-shaped) never
-            // resolves to a `Workflow` at all, so it has no `for_each`
-            // binding to inspect.
-            continue;
-        };
-        // Only a document `check` accepts has a `for_each` binding that
-        // actually resolved: `check` already refuses one that does not
-        // (`ForEachOverScalar`, `SecretForEachSource`, an unresolved
-        // reference), each reported elsewhere and none of them this
-        // guard's concern.
-        if willikins_core::check(&workflow, &catalog).is_err() {
-            continue;
-        }
-        for (name, node) in &workflow.nodes {
-            let Some(binding) = &node.for_each else {
-                continue;
-            };
-            saw_a_for_each = true;
-            let ty = for_each_source_type(&workflow, &catalog, binding);
-            assert!(
-                !is_identifier(&ty),
-                "{}: node `{name}`'s for_each source resolves to identifier type `{ty}`",
-                path.display()
-            );
-        }
-    }
-
-    assert!(
-        saw_a_for_each,
-        "no shipped document has a for_each node at all; this guard would otherwise pass vacuously"
-    );
 }
 
 // ---------------------------------------------------------------------

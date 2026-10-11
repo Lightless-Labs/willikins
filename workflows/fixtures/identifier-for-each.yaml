@@ -1,0 +1,17 @@
+# Milestone 3n, decision (b1); acceptance test 11: a `for_each` bound to a
+# list whose element type is marked `#[domain(identifier)]`. An instance
+# key is a rendered string and also the text a `Binding::Keyed` reference
+# matches, so it cannot be masked without breaking keyed references, and it
+# cannot be printed whole without breaking milestone 3i's promise. `check`
+# returns exactly one error:
+#   IdentifierForEachSource { node: loop, ty: list<AppleCertificateId> }
+name: identifier-for-each
+description: A for_each over a list of an identifier type.
+inputs:
+  ids: { type: list<AppleCertificateId> }
+steps:
+  loop:
+    tool: fake.irreversible.ensure
+    for_each: ${{ inputs.ids }}
+    with:
+      key: third-thoughts

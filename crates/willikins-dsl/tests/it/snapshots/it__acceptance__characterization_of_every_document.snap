@@ -1,6 +1,6 @@
 ---
 source: crates/willikins-dsl/tests/it/acceptance.rs
-assertion_line: 463
+assertion_line: 465
 expression: report
 ---
 === workflows/apple-signing-credential-from-doppler.yaml ===
@@ -344,6 +344,10 @@ OUTPUTS:
 PLAN:
 plan_json: {"workflow":"hostile-markup-pending","nodes":[{"name":"danger","instance":null,"tool":"fake.irreversible.ensure","action":"create","inputs":{"key":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{}}],"outputs":{},"class":"irreversible","requires_approval":true}
 fingerprint: [{"name":"danger","instance":null,"action":"create","outputs":[]}]
+
+=== workflows/fixtures/identifier-for-each.yaml ===
+CHECK ERRORS:
+- kind=IdentifierForEachSource display=node `loop`: for_each over `list<AppleCertificateId>`, an identifier type: its instance keys would print identifiers whole json={"kind":"IdentifierForEachSource","node":"loop","ty":"list<AppleCertificateId>"}
 
 === workflows/fixtures/inherits-literal-list.yaml ===
 CHECK ERRORS:

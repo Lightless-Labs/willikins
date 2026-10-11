@@ -480,6 +480,36 @@ outputs:
 }
 
 // ---------------------------------------------------------------------
+// Milestone 3n, decision (b1); acceptance test 11: an identifier-typed
+// for_each source is refused by check.
+// ---------------------------------------------------------------------
+
+#[test]
+fn milestone_3n_acceptance_11_identifier_for_each_source_is_refused() {
+    let catalog = empty_catalog();
+
+    let identifier_source = load(&fixture("identifier-for-each.yaml"));
+    assert_eq!(
+        willikins_core::check(&identifier_source, &catalog).unwrap_err(),
+        vec![CheckError::IdentifierForEachSource {
+            node: node("loop"),
+            ty: list_ty("AppleCertificateId"),
+        }],
+        "milestone 3n acceptance test 11: IdentifierForEachSource"
+    );
+
+    // A secret for_each source still produces only SecretForEachSource --
+    // unaffected by the identifier check, which runs after it (the module
+    // docs' "Error ordering").
+    let secret_source = load(&fixture("secret-for-each.yaml"));
+    assert_eq!(
+        willikins_core::check(&secret_source, &catalog).unwrap_err(),
+        vec![CheckError::SecretForEachSource { node: node("loop") }],
+        "milestone 3n acceptance test 11: a secret source is unaffected"
+    );
+}
+
+// ---------------------------------------------------------------------
 // acceptance test 5: describe loop
 // ---------------------------------------------------------------------
 
