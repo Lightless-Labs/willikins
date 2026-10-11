@@ -45,10 +45,16 @@
 //!    ([`CheckError::UsesInputTypeMismatch`]; decision (d4), "exact type
 //!    at the boundary, no conversion").
 //! 4. For every node whose tool *is* known, in node declaration order:
-//!    its `for_each` binding's errors, then its input ports in the order
-//!    the tool spec declares them (an unbound required port, or a bound
-//!    port's own errors), then any `with` keys that are not one of the
-//!    tool's ports, in `with` declaration order.
+//!    its `for_each` binding's errors -- a secret source
+//!    ([`CheckError::SecretForEachSource`]), then a scalar source
+//!    ([`CheckError::ForEachOverScalar`]), then an identifier-typed source
+//!    ([`CheckError::IdentifierForEachSource`]), then a colliding default
+//!    ([`CheckError::DuplicateForEachDefault`]); the identifier check
+//!    comes before the duplicate-default check because that error's
+//!    `key` field is a rendered identifier -- then its input ports in the
+//!    order the tool spec declares them (an unbound required port, or a
+//!    bound port's own errors), then any `with` keys that are not one of
+//!    the tool's ports, in `with` declaration order.
 //! 5. Workflow outputs' errors, in declaration order.
 //! 6. [`CheckError::Cycle`], one per cyclic strongly-connected component,
 //!    ordered by the lowest declaration index among its nodes.
@@ -1120,6 +1126,30 @@ pub enum CheckError {
         /// The node whose `for_each` source is not a list.
         node: NodeName,
     },
+    /// A `for_each` binding resolved to a list whose element type is
+    /// marked `#[domain(identifier)]` in the catalog's registry
+    /// (`entry.info.identifier`).
+    ///
+    /// A `for_each` instance key is a rendered string, and also the exact
+    /// text a [`crate::workflow::Binding::Keyed`] reference matches
+    /// against, so it cannot be masked without breaking keyed references;
+    /// it also cannot be printed whole without breaking milestone 3i's
+    /// promise that no document route ever prints an identifier-typed
+    /// value unmasked. Refusing is the only honest answer. Checked before
+    /// [`Self::DuplicateForEachDefault`] -- see the module docs' "Error
+    /// ordering" -- because that error's own `key` field would itself be
+    /// a rendered identifier here.
+    ///
+    /// Not one of the plan's variants; milestone 3n, decision (b1).
+    /// Replaces milestone 3i's own document-level guard test, which
+    /// searched shipped documents for exactly this shape; `check` now
+    /// refuses it outright.
+    IdentifierForEachSource {
+        /// The node whose `for_each` source is identifier-typed.
+        node: NodeName,
+        /// The source's resolved `list<T>` type.
+        ty: TypeRef,
+    },
     /// A `Binding::Item` was used outside any `for_each` node.
     ItemOutsideForEach {
         /// The binding's own location the `item` binding was found in.
@@ -1608,6 +1638,10 @@ impl fmt::Display for CheckError {
             Self::ForEachOverScalar { node } => {
                 write!(f, "node `{node}`: for_each source is not a list")
             }
+            Self::IdentifierForEachSource { node, ty } => write!(
+                f,
+                "node `{node}`: for_each over `{ty}`, an identifier type: its instance keys would print identifiers whole"
+            ),
             Self::ItemOutsideForEach { site } => {
                 write!(f, "{site}: `item` is only valid inside a for_each node")
             }
@@ -1816,6 +1850,7 @@ impl CheckError {
             Self::SecretWorkflowInput { .. } => "SecretWorkflowInput",
             Self::SecretForEachSource { .. } => "SecretForEachSource",
             Self::ForEachOverScalar { .. } => "ForEachOverScalar",
+            Self::IdentifierForEachSource { .. } => "IdentifierForEachSource",
             Self::ItemOutsideForEach { .. } => "ItemOutsideForEach",
             Self::KeyedOnScalarNode { .. } => "KeyedOnScalarNode",
             Self::Cycle { .. } => "Cycle",
@@ -2461,6 +2496,17 @@ fn is_secret(ty: &TypeRef, registry: &TypeRegistry) -> bool {
     registry.is_secret(&ty.name) == Some(true)
 }
 
+/// Whether `ty` is an identifier type (`#[domain(identifier)]`), per
+/// `registry`. `ty.name` is the element type whether or not `ty` itself is
+/// list-typed (milestone 3n, decision (b1)), the same convention
+/// [`is_secret`] already relies on. An unregistered type name is treated
+/// as non-identifier.
+fn is_identifier(ty: &TypeRef, registry: &TypeRegistry) -> bool {
+    registry
+        .get(&ty.name)
+        .is_some_and(|entry| entry.info.identifier)
+}
+
 /// Whether `port_ty` accepts a secret value at all: [`PortType::AnySecret`]
 /// always does; [`PortType::Exact`] does only when its own type is secret.
 fn port_accepts_secret(port_ty: &PortType, registry: &TypeRegistry) -> bool {
@@ -2670,8 +2716,10 @@ impl<'a> Resolver<'a> {
     }
 
     /// Resolve `node`'s `for_each` binding, if any, pushing
-    /// [`CheckError::ForEachOverScalar`] or [`CheckError::SecretForEachSource`]
-    /// as needed.
+    /// [`CheckError::SecretForEachSource`], [`CheckError::ForEachOverScalar`],
+    /// [`CheckError::IdentifierForEachSource`] or
+    /// [`CheckError::DuplicateForEachDefault`] as needed, in that order (the
+    /// module docs' "Error ordering").
     fn check_for_each(
         &mut self,
         name: &NodeName,
@@ -2699,6 +2747,13 @@ impl<'a> Resolver<'a> {
         }
         if !ty.list {
             errors.push(CheckError::ForEachOverScalar { node: name.clone() });
+            return ItemContext::ForEachBroken;
+        }
+        if is_identifier(&ty, self.registry) {
+            errors.push(CheckError::IdentifierForEachSource {
+                node: name.clone(),
+                ty: ty.clone(),
+            });
             return ItemContext::ForEachBroken;
         }
         if let Some(error) = self.colliding_for_each_default(name, binding) {
@@ -4590,6 +4645,28 @@ mod tests {
     }
 
     #[test]
+    fn identifier_for_each_source_names_the_node_and_the_identifier_type() {
+        let error = CheckError::IdentifierForEachSource {
+            node: node_name("loop"),
+            ty: list_ty("AppleCertificateId"),
+        };
+        assert_eq!(
+            error.to_string(),
+            "node `loop`: for_each over `list<AppleCertificateId>`, an identifier type: its instance keys would print identifiers whole"
+        );
+        assert_eq!(error.kind(), "IdentifierForEachSource");
+        let json = serde_json::to_value(&error).expect("CheckError must serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "IdentifierForEachSource",
+                "node": "loop",
+                "ty": "list<AppleCertificateId>",
+            })
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn every_variants_display_names_its_node_and_port() {
         let cases: Vec<(CheckError, &str, Option<&str>)> = vec![
@@ -4686,6 +4763,14 @@ mod tests {
             (
                 CheckError::ForEachOverScalar {
                     node: node_name("n"),
+                },
+                "n",
+                None,
+            ),
+            (
+                CheckError::IdentifierForEachSource {
+                    node: node_name("n"),
+                    ty: list_ty("AppleCertificateId"),
                 },
                 "n",
                 None,
@@ -5010,6 +5095,10 @@ mod tests {
             CheckError::ForEachOverScalar {
                 node: node_name("n"),
             },
+            CheckError::IdentifierForEachSource {
+                node: node_name("n"),
+                ty: list_ty("AppleCertificateId"),
+            },
             CheckError::ItemOutsideForEach {
                 site: port_site("n", "p"),
             },
@@ -5146,6 +5235,7 @@ mod tests {
         SecretWorkflowInput,
         SecretForEachSource,
         ForEachOverScalar,
+        IdentifierForEachSource,
         ItemOutsideForEach,
         KeyedOnScalarNode,
         Cycle,

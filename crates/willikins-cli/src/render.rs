@@ -260,6 +260,9 @@ fn check_error_detail(error: &CheckError) -> String {
         CheckError::ForEachOverScalar { node } => {
             format!("{node}: for_each source is not a list")
         }
+        CheckError::IdentifierForEachSource { node, ty } => {
+            format!("{node}: for_each over `{ty}`, an identifier type")
+        }
         CheckError::ItemOutsideForEach { site } => {
             format!("{site}: `item` is only valid inside a for_each node")
         }
