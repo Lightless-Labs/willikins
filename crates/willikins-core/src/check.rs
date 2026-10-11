@@ -277,21 +277,6 @@ impl Checked {
     pub(crate) fn outputs(&self) -> &[CheckedOutput] {
         &self.outputs
     }
-
-    /// The workflow's own declared [`Node`] a [`CheckedNode`] was built
-    /// from. Crate-private bridge, on the same schedule as [`Self::workflow`]:
-    /// `plan.rs` and `apply.rs` still read a node's raw `for_each` binding
-    /// and `with` map through this, for the `for_each` gate-collection
-    /// path (G5's), which still classifies `Binding`s rather than
-    /// `Source`s. `declared_at` is a bounds-checked index into
-    /// `self.workflow.nodes`, not a proof -- see `check`'s own module doc,
-    /// "Typed ids are indexes, not proofs".
-    pub(crate) fn declared_node(&self, node: &CheckedNode) -> &Node {
-        let Some((_, declared)) = self.workflow.nodes.get_index(node.declared_at) else {
-            unreachable!("`declared_at` always indexes `workflow.nodes`")
-        };
-        declared
-    }
 }
 
 /// Hand-written (decision (s3)): [`CheckedNode`] holds `Arc<dyn Tool>`,
@@ -332,8 +317,7 @@ pub(crate) struct CheckedNode {
     /// This node's name.
     pub(crate) name: NodeName,
     /// This node's index into [`Workflow::nodes`] -- declaration order,
-    /// not topological order (SHARED VALUES). The bridge for a node's raw
-    /// `Binding`s until G3/G4; see [`Checked::declared_node`].
+    /// not topological order (SHARED VALUES).
     pub(crate) declared_at: usize,
     /// The tool handle [`check`] resolved against the catalog it was
     /// given. `plan` and `apply` call through this, never through a
@@ -5448,12 +5432,14 @@ mod tests {
     /// with no `for_each` gets `Shape::Single`, a `for_each` node gets
     /// `Shape::Each` carrying its resolved element type, both carry the
     /// tool handle `check` resolved (never read back through the
-    /// catalog), `declared_at` is each node's own position in
-    /// `workflow.nodes`, and `Checked::declared_node` is the inverse of
-    /// that index. Ids are assigned in topological order within their own
-    /// kind (SHARED VALUES); with no edge between these two nodes,
-    /// topological order ties on declaration order, so `single` is id 0
-    /// among `Single` nodes and `each` is id 0 among `Each` nodes.
+    /// catalog), and `declared_at` is each node's own position in
+    /// `workflow.nodes` (checked directly, this test being inside
+    /// `check.rs` itself -- `Checked::declared_node`, the one bridge that
+    /// read `declared_at` back into a `Node`, lost its last caller at G6
+    /// and is gone). Ids are assigned in topological order within their own kind
+    /// (SHARED VALUES); with no edge between these two nodes, topological
+    /// order ties on declaration order, so `single` is id 0 among
+    /// `Single` nodes and `each` is id 0 among `Each` nodes.
     #[test]
     fn check_builds_a_single_shape_and_an_each_shape_with_the_right_element_and_tool() {
         let catalog = {
@@ -5503,8 +5489,15 @@ mod tests {
             Shape::Each { .. } => panic!("a node with no for_each must be Shape::Single"),
         }
         assert!(
-            checked.declared_node(single).for_each.is_none(),
-            "declared_node is the inverse of declared_at"
+            checked
+                .workflow
+                .nodes
+                .get_index(single.declared_at)
+                .expect("declared_at indexes workflow.nodes")
+                .1
+                .for_each
+                .is_none(),
+            "declared_at is the inverse of workflow.nodes' own position"
         );
 
         let each = nodes
@@ -5531,8 +5524,15 @@ mod tests {
             Shape::Single { .. } => panic!("a for_each node must be Shape::Each"),
         }
         assert!(
-            checked.declared_node(each).for_each.is_some(),
-            "declared_node is the inverse of declared_at"
+            checked
+                .workflow
+                .nodes
+                .get_index(each.declared_at)
+                .expect("declared_at indexes workflow.nodes")
+                .1
+                .for_each
+                .is_some(),
+            "declared_at is the inverse of workflow.nodes' own position"
         );
     }
 

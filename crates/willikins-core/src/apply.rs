@@ -7,35 +7,46 @@
 //!
 //! # Resolving an instance's inputs during a run
 //!
-//! [`crate::plan::plan`] resolves every node's `with` bindings from each
-//! upstream node's *planned* outputs — the values a `read`-only pass
-//! observed or predicted before this run touched anything. Once the run
-//! is under way, an upstream node's real outputs can differ from what was
-//! planned: a freshly minted secret is `Known` here even though `read`
-//! could only ever report it `Unknown`. So a [`PlannedNode`]'s own
-//! `inputs` are reused for every port bound by [`Binding::Literal`],
-//! [`Binding::Input`], and [`Binding::Item`] — none of which can change
-//! mid-run, since none of them depend on another node's output — and only
-//! a `Source::Step`/`Source::Aggregate`/`Source::Keyed` port (or a
-//! [`Bound::List`] holding one) is re-resolved, against this run's own
-//! accumulating typed result tables, through the very same
-//! [`crate::plan::resolve_source`] (and the [`crate::plan::ResolveCtx`] it
-//! reads) that `plan` itself uses: one resolver, fed two different result
-//! tables, rather than a second copy of `plan`'s own logic.
+//! Milestone 3n, decision (g3): `apply` resolves **every** port of an
+//! instance from the graph, through the very same
+//! [`crate::plan::bind_ports`] [`crate::plan::plan`] itself calls, fed
+//! this run's own accumulating typed result tables instead of `plan`'s —
+//! never only the [`Source::Step`]/[`Source::Aggregate`]/[`Source::Keyed`]
+//! ports layered over a [`PlannedNode`]'s own `inputs`. A
+//! [`Source::Literal`] (the same stored [`Value`]), [`Source::Input`] (the
+//! same `inputs` map) and [`Source::Item`] (the same value [`walk`]
+//! recorded for this instance) resolve to exactly the value `plan` already
+//! used, so the [`ApplyEvent::NodeStarted`] an observer sees is unchanged
+//! even though nothing is reused directly; only a `Step`/`Aggregate`/
+//! `Keyed` source (or a [`Bound::List`] holding one) can actually differ
+//! from what `plan` saw, since only an upstream node's real output can
+//! change mid-run. One resolver, fed two different result tables, rather
+//! than a second copy of `plan`'s own logic.
+//!
+//! **Unknown attribution comes from resolution.** [`bind_ports`] returns,
+//! beside the resolved [`Inputs`], where every `Unknown` port's value came
+//! from ([`crate::plan::UnknownOrigin`]): an upstream node
+//! ([`Source::Step`]/[`Source::Aggregate`]/[`Source::Keyed`]) or a workflow
+//! input with no known value ([`Source::Input`] -- awaited or not: an
+//! un-awaited input the caller simply left `Unknown` attributes exactly
+//! the same way). [`first_unknown_required_input`] reads that table
+//! instead of re-deriving the same answer from a raw
+//! [`crate::workflow::Binding`] after the fact.
 
 use indexmap::IndexMap;
 
-use crate::check::{Bound, Checked, Shape, Source};
+use crate::check::{Bound, Checked, CheckedInput, PortEdge, Shape, Source};
 use crate::class::Class;
 use crate::plan::{Action, BlockedGate, Group, Plan, PlannedNode};
 use crate::plan::{
     EachInstanceResult, EachResult, FilledOutputs, InstanceFingerprint, PlanError, ResolveCtx,
-    SingleResult, Walk, fill_outputs, resolve_list_source, resolve_source, walk,
+    SingleResult, UnknownOrigin, Walk, bind_ports, fill_outputs, node_names_by_shape,
+    resolve_source, walk,
 };
 use crate::site::Site;
 use crate::tool::{Ensured, Inputs, Outputs, PortName, Tool, ToolError, ToolErrorKind};
 use crate::value::Value;
-use crate::workflow::{Binding, InputName, Node, NodeName, OutputName};
+use crate::workflow::{InputName, NodeName, OutputName};
 use crate::{Catalog, ToolName};
 use willikins_types::SinkToken;
 
@@ -275,7 +286,8 @@ pub enum ApplyError {
         #[serde(rename = "detail")]
         kind: Box<DriftKind>,
     },
-    /// A [`Binding::Step`] or [`Binding::Keyed`] port required by `node`
+    /// A [`Source::Step`], [`Source::Aggregate`] or [`Source::Keyed`] port
+    /// required by `node`
     /// resolved to [`crate::value::ValueState::Unknown`] because `from`'s
     /// output cannot be re-read (its planned action was
     /// [`Action::NoOp`]/converged), and `node`'s own planned action was
@@ -612,9 +624,15 @@ pub fn apply(
     let mut each_results: Vec<EachResult> = Vec::new();
     let mut applied_nodes: Vec<AppliedNode> = Vec::new();
 
+    // Milestone 3n, G6: translates a `Source::Step`/`Aggregate`/`Keyed`'s
+    // own typed id back to its producing node's name, for
+    // `first_unknown_required_input`'s own attribution -- the same shape
+    // `plan`'s `walk` already builds for `GateTracking` (G5), shared here
+    // via `node_names_by_shape` rather than re-derived.
+    let (single_names, each_names) = node_names_by_shape(checked);
+
     for (checked_node, group) in checked.nodes().iter().zip(&fresh.groups) {
         let name = &checked_node.name;
-        let node = checked.declared_node(checked_node);
         // G1: the tool handle `check` already resolved, never a second
         // catalog lookup by name (verify item 4).
         let tool = checked_node.tool.as_ref();
@@ -642,12 +660,13 @@ pub fn apply(
             // see its own `Action::Blocked | Action::Skip` arm.
             Group::Skipped { planned } => {
                 apply_instance(
-                    checked,
+                    checked.inputs(),
                     inputs,
                     catalog,
                     &single_results,
                     &each_results,
-                    node,
+                    &single_names,
+                    &each_names,
                     tool,
                     spec,
                     &ports,
@@ -667,12 +686,13 @@ pub fn apply(
             }
             Group::Single { planned } => {
                 let (outputs, _blocked) = apply_instance(
-                    checked,
+                    checked.inputs(),
                     inputs,
                     catalog,
                     &single_results,
                     &each_results,
-                    node,
+                    &single_names,
+                    &each_names,
                     tool,
                     spec,
                     &ports,
@@ -690,12 +710,13 @@ pub fn apply(
                 let mut each_instance_results = Vec::with_capacity(instances.len());
                 for instance in instances {
                     let (outputs, blocked) = apply_instance(
-                        checked,
+                        checked.inputs(),
                         inputs,
                         catalog,
                         &single_results,
                         &each_results,
-                        node,
+                        &single_names,
+                        &each_names,
                         tool,
                         spec,
                         &ports,
@@ -725,6 +746,8 @@ pub fn apply(
         inputs,
         single: &single_results,
         each: &each_results,
+        single_names: &single_names,
+        each_names: &each_names,
     };
     for checked_output in checked.outputs() {
         let site = Site::Output {
@@ -768,10 +791,10 @@ pub fn apply(
 /// loop pick `ports` once per node, from `Shape`'s two variants, with no
 /// further generic parameter for the `Group` match just below to
 /// reconcile against a second time.
-fn erase_ports<I>(ports: &[crate::check::PortEdge<I>]) -> Vec<crate::check::PortEdge<()>> {
+fn erase_ports<I>(ports: &[PortEdge<I>]) -> Vec<PortEdge<()>> {
     ports
         .iter()
-        .map(|port_edge| crate::check::PortEdge {
+        .map(|port_edge| PortEdge {
             port: port_edge.port.clone(),
             with_position: port_edge.with_position,
             bound: match &port_edge.bound {
@@ -821,15 +844,16 @@ fn erase_source<I>(source: &Source<I>) -> Source<()> {
 #[allow(clippy::too_many_arguments)] // one instance's worth of classification; see the doc above
 #[allow(clippy::too_many_lines)] // one instance's five outcomes (blocked/skip, pure, ensure's two, converged, two unknowns), not split further
 fn apply_instance(
-    checked: &Checked,
+    checked_inputs: &[CheckedInput],
     inputs: &IndexMap<InputName, Value>,
     catalog: &Catalog,
     single: &[SingleResult],
     each: &[EachResult],
-    node: &Node,
+    single_names: &[NodeName],
+    each_names: &[NodeName],
     tool: &dyn Tool,
     spec: &crate::tool::ToolSpec,
-    ports: &[crate::check::PortEdge<()>],
+    ports: &[PortEdge<()>],
     token: &SinkToken,
     name: &NodeName,
     fresh: &Walk,
@@ -876,8 +900,18 @@ fn apply_instance(
         return Ok((outputs, blocked));
     }
 
-    let resolved_inputs =
-        resolve_instance_inputs(checked, inputs, single, each, ports, planned, item)?;
+    let (resolved_inputs, origins) = resolve_instance_inputs(
+        checked_inputs,
+        inputs,
+        single,
+        each,
+        single_names,
+        each_names,
+        name,
+        spec,
+        ports,
+        item,
+    )?;
 
     if spec.pure {
         let outputs = planned.outputs.clone();
@@ -902,7 +936,7 @@ fn apply_instance(
         return Ok((outputs, false));
     }
 
-    match first_unknown_required_input(spec, node, &resolved_inputs) {
+    match first_unknown_required_input(spec, &origins) {
         None => {
             observer.on(ApplyEvent::NodeStarted {
                 node: name.clone(),
@@ -1097,94 +1131,46 @@ fn not_run_tail(remaining: &[PlannedNode]) -> Vec<AppliedNode> {
         .collect()
 }
 
-/// Resolve `planned`'s inputs the way this run has actually gone so far:
-/// start from the values [`plan`] itself resolved (correct for every port
-/// bound by a [`Source::Literal`], [`Source::Input`] or [`Source::Item`],
-/// none of which can change mid-run), then re-resolve every port whose
-/// source [`source_may_change_mid_run`] -- a `Step`, `Aggregate` or
-/// `Keyed` source, or a [`Bound::List`] holding one -- against this run's
-/// own accumulating typed result tables, delivering each through the edge
-/// (or, for a list, the per-element edges) `check` recorded for it,
-/// exactly as [`plan`] delivered the rest.
+/// Resolve every one of `name`'s bound `ports` fresh, from the graph
+/// (milestone 3n, decision (g3)): `crate::plan::bind_ports`, the exact
+/// function `plan` itself calls, fed this run's own accumulating typed
+/// result tables (`single`/`each`) instead of `plan`'s. A
+/// [`Source::Literal`] (the same stored [`Value`]), [`Source::Input`]
+/// (the same `inputs` map) and [`Source::Item`] (`item`, the same value
+/// `crate::plan::walk` recorded for this instance) therefore resolve to
+/// exactly what `plan` already used; only a `Step`, `Aggregate` or
+/// `Keyed` source (or a [`Bound::List`] holding one) can actually differ,
+/// since only an upstream node's real output can change mid-run --
+/// `bind_ports` resolves every port alike, with nothing left here to
+/// decide which ones might.
 ///
-/// `item` is this instance's own `for_each` item, exactly the [`Value`]
-/// [`crate::plan::walk`] recorded for it (`None` for a node with no
-/// `for_each`). A re-resolved [`Bound::List`] may hold a [`Source::Item`]
-/// element beside a `Step`/`Aggregate`/`Keyed` one -- the list as a whole
-/// needs re-resolving because of the latter, but every element, including
-/// the `Item` one, is re-resolved together (decision (f1), point 2).
-#[allow(clippy::too_many_arguments)] // single/each (milestone 3n, G3) join the existing shape
+/// Also returns, beside the resolved [`Inputs`], where every port whose
+/// delivered value turned out [`crate::value::ValueState::Unknown`] came
+/// from ([`UnknownOrigin`]) -- [`first_unknown_required_input`]'s own
+/// source, read instead of re-derived from a
+/// [`crate::workflow::Binding`].
+#[allow(clippy::too_many_arguments)] // single/each/single_names/each_names (milestone 3n, G3/G6) join the existing shape
 fn resolve_instance_inputs(
-    checked: &Checked,
+    checked_inputs: &[CheckedInput],
     inputs: &IndexMap<InputName, Value>,
     single: &[SingleResult],
     each: &[EachResult],
-    ports: &[crate::check::PortEdge<()>],
-    planned: &PlannedNode,
+    single_names: &[NodeName],
+    each_names: &[NodeName],
+    name: &NodeName,
+    spec: &crate::tool::ToolSpec,
+    ports: &[PortEdge<()>],
     item: Option<&Value>,
-) -> Result<Inputs, ApplyError> {
-    let mut resolved = planned.inputs.clone();
+) -> Result<(Inputs, IndexMap<PortName, UnknownOrigin>), ApplyError> {
     let ctx = ResolveCtx {
-        checked_inputs: checked.inputs(),
+        checked_inputs,
         inputs,
         single,
         each,
+        single_names,
+        each_names,
     };
-    for port_edge in ports {
-        match &port_edge.bound {
-            // Scalar ports (milestone 3n, G3): a `Step`/`Aggregate`/`Keyed`
-            // source -- the only ones that can change mid-run -- is
-            // re-resolved straight off its own `Source`, through
-            // `ctx.single`/`ctx.each`, with no `Binding` match.
-            // `Literal`, `Input` and `Item` never change mid-run (see this
-            // function's own module doc), so they are skipped.
-            Bound::Scalar { source, edge } => {
-                if !source_may_change_mid_run(source) {
-                    continue;
-                }
-                let site = Site::Port {
-                    node: planned.name.clone(),
-                    port: port_edge.port.clone(),
-                };
-                let raw = resolve_source(&ctx, source, &site, item)
-                    .map_err(|error| ApplyError::Plan { error })?;
-                let delivered = edge.deliver(raw).map_err(|mismatch| ApplyError::Plan {
-                    error: PlanError::EdgeTypeMismatch {
-                        site,
-                        expected: mismatch.expected,
-                        found: mismatch.found,
-                    },
-                })?;
-                resolved.insert(port_edge.port.clone(), delivered);
-            }
-            // List ports (milestone 3n, G4): re-resolved as a whole the
-            // moment any one element may change mid-run -- the same rule
-            // the scalar case applies, over every element instead of one
-            // source.
-            Bound::List { elements, edge } => {
-                if !elements.iter().any(source_may_change_mid_run) {
-                    continue;
-                }
-                let delivered =
-                    resolve_list_source(&ctx, &planned.name, &port_edge.port, elements, edge, item)
-                        .map_err(|error| ApplyError::Plan { error })?;
-                resolved.insert(port_edge.port.clone(), delivered);
-            }
-        }
-    }
-    Ok(resolved)
-}
-
-/// Whether a [`Source`] can resolve to a different value partway through a
-/// run than [`plan`] itself saw: `Step`, `Aggregate` and `Keyed` (an
-/// earlier node's output, re-read as this run's own nodes finish).
-/// `Literal`, `Input` and `Item` can never change mid-run — see
-/// [`resolve_instance_inputs`].
-fn source_may_change_mid_run<I>(source: &Source<I>) -> bool {
-    matches!(
-        source,
-        Source::Step { .. } | Source::Aggregate { .. } | Source::Keyed { .. }
-    )
+    bind_ports(&ctx, name, spec, ports, item).map_err(|error| ApplyError::Plan { error })
 }
 
 /// Where an unknown required input's value was supposed to come from.
@@ -1206,89 +1192,39 @@ enum UnknownRequired {
     },
 }
 
-/// The first required input port of `spec` that is
-/// [`crate::value::ValueState::Unknown`] in `resolved`, and where its
-/// value was supposed to come from — or `None` when every required port is
-/// known.
-///
-/// # Panics
-///
-/// Panics if an unknown required port is bound by a [`Binding::Literal`]
-/// or [`Binding::Item`], or is not bound at all: a literal is parsed into
-/// a known value, a `for_each` item is an element of a known list, and
-/// `check` refuses an unbound required port
-/// ([`crate::CheckError::UnboundInput`]), so none of the three can be
-/// unknown here. A [`Binding::Input`] *can* be — it carries whatever the
-/// caller supplied, and a tool's `read` need not consult every required
-/// port, so the re-plan in rule 2 does not always catch it — which is why
-/// that case is a value of its own rather than a panic.
+/// The first required input port of `spec` with an entry in `origins` --
+/// i.e. the first required port whose resolved, delivered value turned out
+/// [`crate::value::ValueState::Unknown`] -- and where it came from, or
+/// `None` when every required port is known (milestone 3n, decision
+/// (g3)). `origins` (`resolve_instance_inputs`'s own [`UnknownOrigin`]
+/// table) already names it the moment it is produced, so there is
+/// nothing left to re-derive from a [`crate::workflow::Binding`] here,
+/// and no required-and-unknown port can be missing from it: a
+/// [`Source::Literal`] or [`Source::Item`] is always known, so every
+/// other kind that resolves `Unknown` always has a name to blame.
 fn first_unknown_required_input(
     spec: &crate::tool::ToolSpec,
-    node: &Node,
-    resolved: &Inputs,
+    origins: &IndexMap<PortName, UnknownOrigin>,
 ) -> Option<UnknownRequired> {
     for (port, port_spec) in &spec.inputs {
         if !port_spec.required {
             continue;
         }
-        let known = resolved.get(port).is_some_and(Value::is_known);
-        if known {
+        let Some(origin) = origins.get(port) else {
             continue;
-        }
-        let Some(binding) = node.with.get(port) else {
-            unreachable!("`check` refuses an unbound required port")
         };
-        return Some(classify_unknown_binding(binding, port));
+        return Some(match origin {
+            UnknownOrigin::Upstream(from) => UnknownRequired::Upstream {
+                port: port.clone(),
+                from: from.clone(),
+            },
+            UnknownOrigin::WorkflowInput(input) => UnknownRequired::WorkflowInput {
+                port: port.clone(),
+                input: input.clone(),
+            },
+        });
     }
     None
-}
-
-/// Where `binding` (bound at `port`) says an unknown required value was
-/// supposed to come from: [`UnknownRequired::Upstream`] for a `Step` or
-/// `Keyed` reference, [`UnknownRequired::WorkflowInput`] for an `Input`, or,
-/// for a [`Binding::List`], whichever of its elements is the first to name
-/// one of those two (a literal or an `item` element is always known, so it
-/// is never the reason the whole list came back unknown; skipped rather
-/// than recursed into, since recursing would hit the panic below for a
-/// blamelessly-known element sitting before the real cause).
-///
-/// # Panics
-///
-/// Panics if `binding` is a [`Binding::Literal`] or [`Binding::Item`], or a
-/// [`Binding::List`] whose every element is one of those two — see
-/// [`first_unknown_required_input`]'s own panic doc for why none of them
-/// can be the reason a required port is unknown.
-fn classify_unknown_binding(binding: &Binding, port: &PortName) -> UnknownRequired {
-    match binding {
-        Binding::Step { node: upstream, .. } | Binding::Keyed { node: upstream, .. } => {
-            UnknownRequired::Upstream {
-                port: port.clone(),
-                from: upstream.clone(),
-            }
-        }
-        Binding::Input(input) => UnknownRequired::WorkflowInput {
-            port: port.clone(),
-            input: input.clone(),
-        },
-        Binding::List(elements) => {
-            let attributable = elements.iter().find(|element| {
-                matches!(
-                    element,
-                    Binding::Step { .. } | Binding::Keyed { .. } | Binding::Input(_)
-                )
-            });
-            match attributable {
-                Some(element) => classify_unknown_binding(element, port),
-                None => unreachable!(
-                    "a list bound entirely to literals and items cannot be Unknown here"
-                ),
-            }
-        }
-        Binding::Literal(_) | Binding::Item => unreachable!(
-            "a literal is parsed into a known value, a for_each item is an element of a known \
-             list, so neither can be Unknown here"
-        ),
-    }
 }
 
 /// Compare `approved`'s and `fresh`'s fingerprints, instance by instance in

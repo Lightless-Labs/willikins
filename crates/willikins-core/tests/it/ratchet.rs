@@ -3,8 +3,9 @@
 //! `.unwrap()`/`panic!` per file, in the text above that file's first
 //! top-level `#[cfg(test)]` module line (the whole file, for one with
 //! none), and pins today's counts. A task lowers these constants to what
-//! it leaves and never raises one; after G7 this test asserts the plan's
-//! final values (`plan.rs` 6, `apply.rs` 2, `describe.rs` 0).
+//! it leaves and never raises one. `apply.rs` reached its final value (2)
+//! at G6; after G7 this test asserts the remaining final values
+//! (`plan.rs` 6, `describe.rs` 0).
 
 use std::fs;
 use std::path::Path;
@@ -90,6 +91,21 @@ fn the_unreachable_ratchet_never_rises() {
     // (`resolve_instance_inputs`'s list-port loop) swaps `resolve_and_deliver`
     // for the same `resolve_list_source` `plan.rs` gained, with no new
     // fallback either way.
+    //
+    // G6 (2026-10-11): `apply` now resolves every port through
+    // `crate::plan::bind_ports` directly -- the exact function `plan`
+    // itself calls -- instead of a layered `resolve_instance_inputs` that
+    // started from `planned.inputs` and re-resolved only a
+    // `source_may_change_mid_run` subset. `source_may_change_mid_run`,
+    // `classify_unknown_binding` (two `unreachable!`s) and
+    // `first_unknown_required_input`'s own "unbound required port" one
+    // are all deleted: `bind_ports` returns an `UnknownOrigin` beside
+    // every `Unknown` port the moment it is produced, so there is nothing
+    // left to re-derive from a `Binding`. `apply.rs` drops from 5 to 2
+    // (`check_drift`'s and `instance_drift`'s own, unmoved) -- this
+    // milestone's final value for the file (SHARED VALUES). `plan.rs`
+    // holds flat at 10: `bind_ports`'s and `resolve_list_source`'s new
+    // `UnknownOrigin` side channel adds no fallback of its own.
     assert_eq!(
         ratchet_count("src/plan.rs"),
         10,
@@ -97,7 +113,7 @@ fn the_unreachable_ratchet_never_rises() {
     );
     assert_eq!(
         ratchet_count("src/apply.rs"),
-        5,
+        2,
         "apply.rs's unreachable ratchet moved; lower it, never raise it"
     );
     assert_eq!(

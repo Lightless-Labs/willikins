@@ -786,11 +786,82 @@ fn resolve_keyed_source(
 /// reads them (their one remaining reader, the old `Binding`-based
 /// resolver, went with this same task). This is exactly decision (g2)'s
 /// end state for this type, reached early.
+///
+/// `single_names`/`each_names` (G6) translate a [`Source::Step`]'s or
+/// [`Source::Aggregate`]/[`Source::Keyed`]'s own typed id straight back to
+/// its producing node's [`NodeName`] -- the same shape `GateTracking`'s
+/// own tables already take (G5), here so [`source_origin`] can name an
+/// `Unknown` value's origin without a second lookup. `resolve_source`
+/// itself never reads them: no source resolution needs a node's name,
+/// only its attribution does.
 pub(crate) struct ResolveCtx<'a> {
     pub(crate) checked_inputs: &'a [CheckedInput],
     pub(crate) inputs: &'a IndexMap<InputName, Value>,
     pub(crate) single: &'a [SingleResult],
     pub(crate) each: &'a [EachResult],
+    pub(crate) single_names: &'a [NodeName],
+    pub(crate) each_names: &'a [NodeName],
+}
+
+/// `single_names[id.0]`/`each_names[id.0]` translate a [`SingleId`]/
+/// [`EachId`] straight back to its own node's [`NodeName`] (milestone 3n,
+/// decisions (g1)/(g4)): built once, before either `plan`'s or `apply`'s
+/// own node loop, from `checked.nodes()`'s own topological order -- the
+/// same order `check` minted each id in, within its own kind (SHARED
+/// VALUES), so `single_names[id.0]`/`each_names[id.0]` is always that
+/// id's own node, with no separate id-to-name map maintained by `check`.
+pub(crate) fn node_names_by_shape(checked: &Checked) -> (Vec<NodeName>, Vec<NodeName>) {
+    let single_names = checked
+        .nodes()
+        .iter()
+        .filter(|checked_node| matches!(checked_node.shape, Shape::Single { .. }))
+        .map(|checked_node| checked_node.name.clone())
+        .collect();
+    let each_names = checked
+        .nodes()
+        .iter()
+        .filter(|checked_node| matches!(checked_node.shape, Shape::Each { .. }))
+        .map(|checked_node| checked_node.name.clone())
+        .collect();
+    (single_names, each_names)
+}
+
+/// Where a [`Source`]'s resolved, delivered value turned out
+/// [`crate::value::ValueState::Unknown`] (milestone 3n, decision (g3)):
+/// an upstream node's own output ([`Source::Step`]/[`Source::Aggregate`]/
+/// [`Source::Keyed`]), or a workflow input with no known value
+/// ([`Source::Input`]). [`Source::Literal`] and [`Source::Item`] are
+/// always known, so they are never this -- see [`source_origin`].
+pub(crate) enum UnknownOrigin {
+    /// From `.0`'s own output, which this run could not deliver known.
+    Upstream(NodeName),
+    /// From the workflow input `.0`, which has no known value.
+    WorkflowInput(InputName),
+}
+
+/// [`UnknownOrigin`]'s own classification of `source`'s *kind*, read off
+/// `ctx`'s name tables with no catalog lookup. Called only once a
+/// resolved, delivered value has already turned out `Unknown`
+/// ([`bind_ports`]'s and [`resolve_list_source`]'s own callers), so every
+/// reachable arm always has a name to give: a [`Source::Literal`] or
+/// [`Source::Item`] is always known and never reaches here, and every
+/// other kind carries, or indexes to, one (milestone 3n, decision (g3) --
+/// "attribution comes from resolution"). Replaces the old `apply.rs`
+/// `classify_unknown_binding`, which re-derived the same answer from a
+/// raw [`crate::workflow::Binding`] after the fact.
+fn source_origin<I>(ctx: &ResolveCtx, source: &Source<I>) -> Option<UnknownOrigin> {
+    match source {
+        Source::Literal(_) | Source::Item(_) => None,
+        Source::Input(id) => Some(UnknownOrigin::WorkflowInput(
+            ctx.checked_inputs[id.0 as usize].name.clone(),
+        )),
+        Source::Step { from, .. } => Some(UnknownOrigin::Upstream(
+            ctx.single_names[from.0 as usize].clone(),
+        )),
+        Source::Aggregate { from, .. } | Source::Keyed { from, .. } => Some(
+            UnknownOrigin::Upstream(ctx.each_names[from.0 as usize].clone()),
+        ),
+    }
 }
 
 /// Key `items`, a `for_each` node's source items, naming every one by
@@ -939,23 +1010,9 @@ pub(crate) fn walk(
     // the producing node's own typed id, never its name (G1), but
     // `GateTracking`'s own bookkeeping stays keyed by `NodeName` -- that is
     // what `BlockedGate` (and so the plan JSON) is keyed by, unchanged.
-    // These two tables translate an id straight back to its node's name,
-    // built once from `checked.nodes()`'s own topological order, which is
-    // exactly the order `check` minted `SingleId`/`EachId` in within each
-    // kind (SHARED VALUES): `single_names[id.0]`/`each_names[id.0]` is
-    // always that id's own node.
-    let single_names: Vec<NodeName> = checked
-        .nodes()
-        .iter()
-        .filter(|checked_node| matches!(checked_node.shape, Shape::Single { .. }))
-        .map(|checked_node| checked_node.name.clone())
-        .collect();
-    let each_names: Vec<NodeName> = checked
-        .nodes()
-        .iter()
-        .filter(|checked_node| matches!(checked_node.shape, Shape::Each { .. }))
-        .map(|checked_node| checked_node.name.clone())
-        .collect();
+    // `node_names_by_shape` (G6; shared with `ResolveCtx`'s own attribution
+    // tables) translates an id straight back to its node's name.
+    let (single_names, each_names) = node_names_by_shape(checked);
 
     for checked_node in checked.nodes() {
         let name = &checked_node.name;
@@ -968,6 +1025,8 @@ pub(crate) fn walk(
             inputs,
             single: &single,
             each: &each,
+            single_names: &single_names,
+            each_names: &each_names,
         };
 
         // Decision (j), point 3: a skip set is decided from this node's
@@ -1028,7 +1087,7 @@ pub(crate) fn walk(
 
         match &checked_node.shape {
             Shape::Single { ports, .. } => {
-                let bound = bind_ports(&ctx, name, spec, ports, None)?;
+                let (bound, _origins) = bind_ports(&ctx, name, spec, ports, None)?;
                 let node_plan = plan_one(name, None, spec, tool, bound, catalog.registry())?;
                 if node_plan.action == Action::Blocked {
                     gates.mark_blocked(
@@ -1075,7 +1134,7 @@ pub(crate) fn walk(
                 let mut each_instance_results = Vec::with_capacity(keyed.len());
                 let mut group_instances = Vec::with_capacity(keyed.len());
                 for (item_value, key) in keyed {
-                    let bound = bind_ports(&ctx, name, spec, ports, Some(&item_value))?;
+                    let (bound, _origins) = bind_ports(&ctx, name, spec, ports, Some(&item_value))?;
                     let node_plan = plan_one(
                         name,
                         Some(key.clone()),
@@ -1130,6 +1189,8 @@ pub(crate) fn walk(
         inputs,
         single: &single,
         each: &each,
+        single_names: &single_names,
+        each_names: &each_names,
     };
     for checked_output in checked.outputs() {
         let site = Site::Output {
@@ -1489,14 +1550,25 @@ fn check_fixed_inputs(
 /// [`resolve_source`]/[`resolve_list_source`] and [`Edge::deliver`], with
 /// no `Binding` match and no catalog lookup. A port `check` did not
 /// require and the node did not bind is simply absent from the result.
-fn bind_ports<I>(
+///
+/// Also returns, for every port whose delivered value turned out
+/// [`crate::value::ValueState::Unknown`], where it came from
+/// ([`UnknownOrigin`], milestone 3n, decision (g3)): `plan`'s own callers
+/// ignore it, and [`crate::apply::apply`] reads it instead of re-deriving
+/// the same answer from a [`crate::workflow::Binding`] after the fact.
+/// `plan` and `apply` therefore resolve every port the same way, down to
+/// this shared function -- `apply` passes it the exact same `item` [`walk`]
+/// recorded for this instance (milestone 3n, decision (g3): "resolves
+/// every port of an instance from the graph").
+pub(crate) fn bind_ports<I>(
     ctx: &ResolveCtx,
     node_name: &NodeName,
     spec: &ToolSpec,
     ports: &[PortEdge<I>],
     item: Option<&Value>,
-) -> Result<Inputs, PlanError> {
+) -> Result<(Inputs, IndexMap<PortName, UnknownOrigin>), PlanError> {
     let mut inputs = Inputs::new();
+    let mut origins = IndexMap::new();
     for port in spec.inputs.keys() {
         let Some(port_edge) = ports.iter().find(|port_edge| &port_edge.port == port) else {
             continue;
@@ -1515,15 +1587,22 @@ fn bind_ports<I>(
                             expected: mismatch.expected,
                             found: mismatch.found,
                         })?;
+                if !delivered.is_known() {
+                    origins.extend(source_origin(ctx, source).map(|origin| (port.clone(), origin)));
+                }
                 inputs.insert(port.clone(), delivered);
             }
             Bound::List { elements, edge } => {
-                let value = resolve_list_source(ctx, node_name, port, elements, edge, item)?;
+                let (value, origin) =
+                    resolve_list_source(ctx, node_name, port, elements, edge, item)?;
+                if let Some(origin) = origin {
+                    origins.insert(port.clone(), origin);
+                }
                 inputs.insert(port.clone(), value);
             }
         }
     }
-    Ok(inputs)
+    Ok((inputs, origins))
 }
 
 /// Resolve a [`Bound::List`] port's `elements`, aligned with `edge`'s own
@@ -1538,19 +1617,24 @@ fn bind_ports<I>(
 /// element's known scalar object is assembled into one known list, in
 /// declaration order.
 ///
+/// Also returns the first unknown element's own [`UnknownOrigin`] (G6),
+/// `None` only when the whole list is known: a literal or an item element
+/// is always known, so the first element whose *delivered* value is not
+/// known is always one [`source_origin`] can name.
+///
 /// # Errors
 ///
 /// Returns [`PlanError::EdgeTypeMismatch`], attributed to the offending
 /// element, on the same backstop [`crate::check::Edge::deliver`] documents;
 /// otherwise whatever [`resolve_source`] returns for a non-literal element.
-pub(crate) fn resolve_list_source<I>(
+fn resolve_list_source<I>(
     ctx: &ResolveCtx,
     node: &NodeName,
     port: &PortName,
     elements: &[Source<I>],
     edge: &Edge,
     item: Option<&Value>,
-) -> Result<Value, PlanError> {
+) -> Result<(Value, Option<UnknownOrigin>), PlanError> {
     let element_ty = edge.delivered().element();
     let element_edges = edge
         .elements()
@@ -1559,6 +1643,7 @@ pub(crate) fn resolve_list_source<I>(
     let mut known: Vec<std::sync::Arc<dyn willikins_types::DomainObject>> =
         Vec::with_capacity(elements.len());
     let mut unknown = false;
+    let mut origin: Option<UnknownOrigin> = None;
     for (index, (source, element_edge)) in elements.iter().zip(element_edges).enumerate() {
         let site = Site::list_element(node.clone(), port.clone(), index);
         let raw = resolve_source(ctx, source, &site, item)?;
@@ -1570,19 +1655,25 @@ pub(crate) fn resolve_list_source<I>(
                     expected: mismatch.expected,
                     found: mismatch.found,
                 })?;
-        if unknown {
-            continue;
-        }
         match delivered.as_scalar_arc() {
-            Some(object) => known.push(object),
-            None => unknown = true,
+            Some(object) if !unknown => known.push(object),
+            Some(_) => {}
+            None => {
+                unknown = true;
+                if origin.is_none() {
+                    origin = source_origin(ctx, source);
+                }
+            }
         }
     }
 
     if unknown {
-        return Ok(Value::unknown(TypeRef::list_of(element_ty.name.clone())));
+        return Ok((
+            Value::unknown(TypeRef::list_of(element_ty.name.clone())),
+            origin,
+        ));
     }
-    Ok(Value::known_dyn_list(element_ty.name.clone(), known))
+    Ok((Value::known_dyn_list(element_ty.name.clone(), known), None))
 }
 
 /// Plan one call to `tool`: check its key ports are known, call

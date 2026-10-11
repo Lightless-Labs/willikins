@@ -1431,6 +1431,92 @@ fn item_in_a_list_port_applies_with_each_instances_own_item() {
     );
 }
 
+/// Acceptance test 10 (milestone 3n, decision (g3)): a `for_each` node's
+/// required `list<GitHubOrg>` port is bound
+/// `[<literal>, ${{ item }}, ${{ steps.upstream.value }}]`. `upstream`'s
+/// one output is always `Unknown`
+/// ([`UnreadableUpstreamTool`]), so the whole list resolves `Unknown` too
+/// (the literal and item elements are known, but the list as a whole is
+/// `Unknown` the moment any element is), and the required-port check
+/// refuses the run with [`ApplyError::UnknownInput`] -- attributed to
+/// `upstream`, the first element that is actually `Unknown`, never to the
+/// literal or item elements before it. This already passed under the old
+/// `classify_unknown_binding` (it too picked the first `Step`/`Keyed`
+/// element), so it is not new *red*; it pins the same behaviour under the
+/// new, graph-only resolver, where the real test is that this file
+/// compiles at all once `classify_unknown_binding` and `Node` are gone.
+#[test]
+fn a_list_ports_upstream_unknown_element_attributes_to_the_upstream_node() {
+    let mut catalog = Catalog::new(willikins_types::registry());
+    catalog
+        .insert(Arc::new(UnreadableUpstreamTool::new("test.upstream")))
+        .unwrap();
+    let sink = common::RecordingListTool::new("test.sink_orgs", "orgs", "GitHubOrg");
+    catalog.insert(Arc::new(sink)).unwrap();
+
+    let workflow = Workflow::new(workflow_name("list-upstream-unknown"))
+        .input(input("orgs"), InputSpec::new(list_ty("GitHubOrg")))
+        .node(node("upstream"), Node::new(tool_name("test.upstream")))
+        .node(
+            node("sink"),
+            Node::new(tool_name("test.sink_orgs"))
+                .for_each(Binding::Input(input("orgs")))
+                .port(
+                    port("orgs"),
+                    Binding::List(vec![
+                        Binding::Literal("example-org".to_string()),
+                        Binding::Item,
+                        Binding::Step {
+                            node: node("upstream"),
+                            port: port("value"),
+                        },
+                    ]),
+                ),
+        );
+    let checked = check(&workflow, &catalog).expect("the document checks cleanly");
+
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        input("orgs"),
+        Value::parse_list(&list_ty("GitHubOrg"), &["example-org"]).unwrap(),
+    );
+
+    let approved = plan(&checked, &inputs, &catalog).expect("plans despite the unknown element");
+    assert_eq!(
+        approved
+            .nodes
+            .iter()
+            .find(|n| n.name.as_str() == "sink")
+            .expect("one instance of `sink`")
+            .action,
+        Action::Create
+    );
+
+    let mut observer = RecordingObserver::new();
+    let err = apply(
+        &checked,
+        &inputs,
+        &catalog,
+        &approved,
+        &Approval::Auto,
+        &mut observer,
+    )
+    .expect_err("a required list port that resolves Unknown through an upstream element blocks");
+
+    let ApplyError::UnknownInput {
+        node: blocked_node,
+        port: blocked_port,
+        from,
+        ..
+    } = err
+    else {
+        panic!("expected ApplyError::UnknownInput, got {err:?}");
+    };
+    assert_eq!(blocked_node.as_str(), "sink");
+    assert_eq!(blocked_port.as_str(), "orgs");
+    assert_eq!(from.as_str(), "upstream");
+}
+
 // ---------------------------------------------------------------------
 // Milestone 3d, decision (f): `plan` and `apply` deliver a binding
 // through the edge `check` recorded, and never look a conversion up
