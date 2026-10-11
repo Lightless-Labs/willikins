@@ -58,6 +58,38 @@ test was also refused by the `TypeId` loop. Three plan-time cases now pin it (`e
 list on a scalar port, and an `Unknown` predicted as another type. Acceptance 3 is extended by these three, and
 acceptance 4 by the `known_list` doctest. No production code changed. The characterization, the dsl acceptance target
 and the private fake-backed `operator_*` targets stayed green.
+**Addendum:** 2026-10-11 (task S1). Five points not spelled out by the task row or the (s1)/(s2) decisions.
+
+1. **`startup.rs`'s `root.checked.workflow.uses.is_empty()` assertion**, not named in the (s1) read-migration table,
+   is dropped rather than migrated: `check`'s own stage 0 refuses a non-empty `uses` outright
+   (`CheckError::Unlinked`), so a linked `Checked` with one can never exist, and `DocumentView` (the sealed
+   `Checked`'s only read of the document's declared surface) has no `uses()` to read it back through. The test
+   keeps its first assertion (the root's *authored*, unlinked `workflow.uses` is non-empty) with a comment
+   explaining why the second one is gone.
+2. **The ratchet is pinned at 32/9/3, not SHARED VALUES' 30/9/2 baseline.** `git log --oneline 28dc3e1..HEAD --
+   crates/willikins-core/src/{plan,describe}.rs` shows the two commits responsible: `f913c80` (2b's R1, `describe`
+   hiding a fixed input) and `3b187a9` (2b, `plan` refusing a caller value for a fixed input) each added one
+   `unreachable!` after F2's own addendum (which explicitly stopped at 31) landed. S1 pins today's counts, not the
+   plan's own baseline; it lowers nothing and raises nothing, which is all the task asks.
+3. **The moved `EdgeTypeMismatch` backstop test** (decision (s2)) cannot reuse `tests/it/apply.rs`'s private
+   `ConvA`/`ConvB` fixture, unreachable from `check.rs`'s own unit tests. It uses the real production conversion
+   row `AppleBundleIdentifier => Text` (`willikins-types`'s own `conversion_rows`) instead, with a local
+   single-port `DummyTool` -- no bespoke conversion table needed.
+4. **(s1) says `types()`, `output_types()` and `order()` are "read only by tests and the characterization" until
+   G7**, which turned out false for `types()`: `plan::walk` and two sites in `apply.rs` (the output pass and
+   `resolve_instance_inputs`, the latter once per applied instance) need the edge map to build a `ResolveCtx`.
+   Cloning it at each of those call sites would be needless copying. Fixed by adding `pub(crate) fn edges(&self)
+   -> &IndexMap<NodeName, IndexMap<PortName, Edge>>` beside `workflow()`, with the same "deleted by G7" note, and
+   using it at all three `ResolveCtx` sites instead of `types()`. `order()` and `output_types()` are each read once
+   per `plan`/`apply` call, so no equivalent bridge was added for them.
+5. **`willikins-providers-doppler`'s `tests/it/live_catalog.rs`** was an unlisted site, missed by the first
+   workspace-wide audit (`cargo check --workspace --all-targets`, which stops scheduling further crates once one
+   target fails to build, so it never reached this crate while the willikins-cli and willikins-core errors fixed in
+   commit 1 stood). It has the same `against_live.types`/`against_fake.types`-shaped comparison as the two named
+   provider parity suites but is not one of them. Found and fixed once the audit widened to `cargo check
+   --workspace --all-targets --all-features --keep-going`, which enumerates every error across the whole workspace,
+   gated targets included, in one pass. Later tasks touching call sites across the workspace (B2 above all) should
+   use this form, not a plain `--all-targets` run, to see every remaining site at once.
 
 ## Goal
 

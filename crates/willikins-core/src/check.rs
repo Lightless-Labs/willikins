@@ -189,8 +189,14 @@ impl Checked {
     }
 
     /// Every node `with` binding `check` validated, keyed by node then
-    /// port. See [`Self::types`]'s field doc (now private; this is the
-    /// public accessor, SHARED VALUES of milestone 3n's decision (s1)).
+    /// port: the binding's own resolved type, and the conversion `check`
+    /// chose to deliver it to the port's type, if any ([`Edge`]). Does not
+    /// cover `for_each` bindings, and never mixes in workflow outputs
+    /// (those are [`Self::output_types`]), so a node named `outputs` keeps
+    /// its own entry. Public accessor, SHARED VALUES of milestone 3n's
+    /// decision (s1); owned, so a caller resolving many ports should bind
+    /// it once rather than call this per port (see [`Self::edges`] for
+    /// `plan`'s and `apply`'s own zero-copy route to the same map).
     #[must_use]
     pub fn types(&self) -> IndexMap<NodeName, IndexMap<PortName, Edge>> {
         self.types.clone()
@@ -221,6 +227,18 @@ impl Checked {
     /// from another crate.
     pub(crate) fn workflow(&self) -> &Workflow {
         &self.workflow
+    }
+
+    /// [`Self::types`] by reference, not by clone. Crate-private, for the
+    /// same reason and on the same schedule as [`Self::workflow`]:
+    /// `plan.rs` and `apply.rs` build a [`crate::plan::ResolveCtx`] per
+    /// node (`plan`) or per instance (`apply`), and cloning the whole map
+    /// at each of those call sites would be needless copying on every
+    /// node/instance rather than once per `plan`/`apply` call. Deleted by
+    /// task G7, once those modules read per-port sources from the graph
+    /// instead of this one shared map.
+    pub(crate) fn edges(&self) -> &IndexMap<NodeName, IndexMap<PortName, Edge>> {
+        &self.types
     }
 }
 
@@ -270,9 +288,11 @@ impl<'a> DocumentView<'a> {
 /// `check` is the only constructor ([`Self::exact`] and [`Self::converted`]
 /// are `pub(crate)`), so outside `willikins-core` an `Edge` can only come
 /// from a real `check` -- there is no struct-literal or `Default` way to
-/// forge one, even though [`Checked::types`] is a public field. `plan` and
-/// `apply` read the conversion from here (`willikins-core::value::Conversion`)
-/// and never resolve one themselves; see [`crate::value::TypeRegistry::probe_conversion`]'s
+/// forge one. (Milestone 3n's decision (s2): since [`Checked`]'s own
+/// fields are private too, even an edge *moved onto the wrong port* now
+/// takes code inside `check.rs` itself.) `plan` and `apply` read the
+/// conversion from here (`willikins-core::value::Conversion`) and never
+/// resolve one themselves; see [`crate::value::TypeRegistry::probe_conversion`]'s
 /// own doc for why it is `check`'s alone to call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edge {

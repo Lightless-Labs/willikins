@@ -776,7 +776,7 @@ pub(crate) fn walk(
     check_input_types(workflow, inputs, catalog.registry())?;
     check_fixed_inputs(workflow, inputs)?;
     let order = checked.order();
-    let types = checked.types();
+    let types = checked.edges();
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut planned: Vec<PlannedNode> = Vec::new();
     // Aligned with `planned`, 1:1 (see `Walk`'s own doc); named apart from
@@ -801,7 +801,7 @@ pub(crate) fn walk(
             inputs,
             catalog,
             results: &results,
-            edges: &types,
+            edges: types,
         };
 
         // Decision (j), point 3: a skip set is decided from the bindings
@@ -931,7 +931,7 @@ pub(crate) fn walk(
         inputs,
         catalog,
         results: &results,
-        edges: &types,
+        edges: types,
     };
     for (out_name, binding) in &workflow.outputs {
         // A literal output has no declared type to resolve against; see

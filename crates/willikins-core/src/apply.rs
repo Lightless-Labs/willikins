@@ -871,14 +871,14 @@ pub fn apply(
     }
 
     // Rule 5.
-    let types = checked.types();
+    let types = checked.edges();
     let mut outputs = IndexMap::new();
     let ctx = ResolveCtx {
         workflow,
         inputs,
         catalog,
         results: &results,
-        edges: &types,
+        edges: types,
     };
     for (out_name, binding) in &workflow.outputs {
         if matches!(binding, Binding::Literal(_)) {
@@ -997,13 +997,13 @@ fn resolve_instance_inputs(
     item: Option<&Value>,
 ) -> Result<Inputs, ApplyError> {
     let mut resolved = planned.inputs.clone();
-    let types = checked.types();
+    let types = checked.edges();
     let ctx = ResolveCtx {
         workflow: checked.workflow(),
         inputs,
         catalog,
         results,
-        edges: &types,
+        edges: types,
     };
     for (port, binding) in &node.with {
         if binding_may_change_mid_run(binding) {
