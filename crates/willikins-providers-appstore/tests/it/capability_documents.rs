@@ -92,7 +92,7 @@ fn the_setting_mismatch_fixture_checks_cleanly_but_fails_plan_naming_healthkit()
         )
     });
 
-    let err = willikins_core::plan(&checked, &positive_inputs(), &catalog)
+    let err = willikins_core::plan(&checked, &positive_inputs())
         .expect_err("plan must fail on the mismatched pairing");
 
     match err {
@@ -247,7 +247,7 @@ fn a_document_that_ensures_a_new_bundle_id_and_a_capability_on_it_plans_with_bot
 
     let inputs = fresh_bundle_id_inputs();
 
-    let plan = willikins_core::plan(&checked, &inputs, &catalog).unwrap_or_else(|err| {
+    let plan = willikins_core::plan(&checked, &inputs).unwrap_or_else(|err| {
         panic!("plan must resolve both nodes as create, never fail on the fresh parent: {err:?}")
     });
 
@@ -280,17 +280,16 @@ fn a_document_that_ensures_a_new_bundle_id_and_a_capability_on_it_applies_then_c
         .unwrap_or_else(|errors| panic!("the document must check cleanly: {errors:?}"));
     let inputs = fresh_bundle_id_inputs();
 
-    let plan = willikins_core::plan(&checked, &inputs, &catalog)
-        .unwrap_or_else(|err| panic!("must plan: {err:?}"));
+    let plan =
+        willikins_core::plan(&checked, &inputs).unwrap_or_else(|err| panic!("must plan: {err:?}"));
     let mut observer = willikins_core::RecordingObserver::new();
     let approval = willikins_core::Approval::Human {
         approver: willikins_core::PrincipalId::parse("operator").unwrap(),
         at: willikins_core::Timestamp::now(),
     };
-    willikins_core::apply(&checked, &inputs, &catalog, &plan, &approval, &mut observer)
-        .unwrap_or_else(|err| {
-            panic!("must apply: the capability node runs after its parent exists: {err:?}")
-        });
+    willikins_core::apply(&checked, &inputs, &plan, &approval, &mut observer).unwrap_or_else(
+        |err| panic!("must apply: the capability node runs after its parent exists: {err:?}"),
+    );
 
     {
         let state = state.lock().unwrap();
@@ -307,7 +306,7 @@ fn a_document_that_ensures_a_new_bundle_id_and_a_capability_on_it_applies_then_c
         );
     }
 
-    let second = willikins_core::plan(&checked, &inputs, &catalog)
+    let second = willikins_core::plan(&checked, &inputs)
         .unwrap_or_else(|err| panic!("must plan again: {err:?}"));
     for node in ["bundle_id", "healthkit"] {
         let action = second

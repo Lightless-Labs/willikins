@@ -121,7 +121,7 @@ fn the_doppler_chain_plans_and_produces_a_redacted_profile_content() {
     let checked = willikins_core::check(&workflow, &catalog)
         .unwrap_or_else(|errors| panic!("document must check cleanly: {errors:?}"));
 
-    let plan = willikins_core::plan(&checked, &positive_inputs(), &catalog)
+    let plan = willikins_core::plan(&checked, &positive_inputs())
         .unwrap_or_else(|err| panic!("plan must resolve every node: {err:?}"));
 
     let profile_output = plan
@@ -175,7 +175,7 @@ fn an_invalid_profile_plans_as_a_replacement_naming_the_profile_by_its_non_secre
     let checked = willikins_core::check(&workflow, &catalog)
         .unwrap_or_else(|errors| panic!("document must check cleanly: {errors:?}"));
 
-    let plan = willikins_core::plan(&checked, &positive_inputs(), &catalog)
+    let plan = willikins_core::plan(&checked, &positive_inputs())
         .unwrap_or_else(|err| panic!("plan must resolve every node: {err:?}"));
 
     let profile_node = plan
@@ -238,7 +238,7 @@ fn a_profile_invalidated_after_approval_refuses_as_action_drift_and_deletes_noth
     let catalog = willikins_providers_fake::catalog(std::sync::Arc::clone(&state));
     let checked = willikins_core::check(&workflow, &catalog)
         .unwrap_or_else(|errors| panic!("document must check cleanly: {errors:?}"));
-    let approved = willikins_core::plan(&checked, &positive_inputs(), &catalog)
+    let approved = willikins_core::plan(&checked, &positive_inputs())
         .unwrap_or_else(|err| panic!("plan must resolve every node: {err:?}"));
     let profile_action = approved
         .nodes
@@ -264,7 +264,6 @@ fn a_profile_invalidated_after_approval_refuses_as_action_drift_and_deletes_noth
     let error = willikins_core::apply(
         &checked,
         &positive_inputs(),
-        &catalog,
         &approved,
         &approval,
         &mut observer,
@@ -515,7 +514,7 @@ fn a_profile_name_other_than_the_identifier_still_checks_and_plans() {
         InputName::parse("profile_name").unwrap(),
         scalar_input("AppleProfileName", "Any Name The Operator Likes"),
     );
-    let plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let plan = willikins_core::plan(&checked, &inputs)
         .unwrap_or_else(|err| panic!("a different name must plan: {err:?}"));
     let profile = plan
         .nodes
@@ -545,7 +544,7 @@ fn the_document_is_equivalent_to_its_two_input_predecessor() {
         let catalog = willikins_providers_fake::catalog(seeded_state());
         let checked = willikins_core::check(workflow, &catalog)
             .unwrap_or_else(|errors| panic!("must check: {errors:?}"));
-        let plan = willikins_core::plan(&checked, inputs, &catalog)
+        let plan = willikins_core::plan(&checked, inputs)
             .unwrap_or_else(|err| panic!("must plan: {err:?}"));
         let plan_json = serde_json::to_value(&plan).unwrap();
         let fingerprint = serde_json::to_value(plan.fingerprint()).unwrap();
@@ -554,7 +553,7 @@ fn the_document_is_equivalent_to_its_two_input_predecessor() {
             approver: willikins_core::PrincipalId::parse("operator").unwrap(),
             at: now,
         };
-        willikins_core::apply(&checked, inputs, &catalog, &plan, &approval, &mut observer)
+        willikins_core::apply(&checked, inputs, &plan, &approval, &mut observer)
             .unwrap_or_else(|err| panic!("must apply: {err:?}"));
         let events = serde_json::to_value(&observer.events).unwrap();
         (plan_json, fingerprint, events)

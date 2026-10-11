@@ -142,6 +142,12 @@ use willikins_types::{Description, ParseError, WorkflowName};
 pub struct Checked {
     /// The checked workflow, unchanged.
     workflow: Workflow,
+    /// The catalog's own type registry, captured once by `check` (milestone
+    /// 3n, decision (g1)). From B2 on, `plan` and `apply` take no
+    /// `&Catalog` at all, so this is the only way they reach a registry --
+    /// the same one `check` validated every literal, input and tool spec
+    /// against, never a different one (verify item 4, re-confirmed by B2).
+    registry: &'static TypeRegistry,
     /// Every declared workflow input, in declaration order (`InputId` is
     /// the position in this slice -- SHARED VALUES of milestone 3n's
     /// decision (g1)). From G2 on, `check_input_types`, `describe` and
@@ -280,6 +286,18 @@ impl Checked {
         &self.nodes
     }
 
+    /// The catalog's own type registry, captured once by `check`
+    /// (milestone 3n, decision (g1)). Crate-private: `plan` and `apply`
+    /// (B2 on) use this instead of a `&Catalog` parameter for every place
+    /// that only ever read `catalog.registry()` -- `fill_outputs`'s output
+    /// check, the `for_each` keying backstop, and `plan_one`'s own key-port
+    /// check. Not exposed outside `willikins-core`: nothing public needs a
+    /// bare registry, and `Checked::document`/`types`/`output_types`
+    /// already answer every type question a caller has.
+    pub(crate) fn registry(&self) -> &'static TypeRegistry {
+        self.registry
+    }
+
     /// Every declared workflow input, in declaration order (`InputId` is
     /// the position in this slice; milestone 3n, decision (g1)).
     /// Crate-private, on the same "never leaves `willikins-core`" schedule
@@ -306,6 +324,12 @@ impl Checked {
 /// gains ports and sources (G3 on), a bound literal has to print as its
 /// own [`Value`]'s `Debug`, which redacts by type construction (see
 /// `Value`'s own impl) -- this type never prints a literal's raw content.
+/// `registry` (B2) is deliberately left out too: `TypeRegistry` has no
+/// `Debug` of its own that would be worth reading here, and printing it
+/// would dump every type the catalog has ever registered, not anything
+/// about this one checked workflow.
+#[allow(clippy::missing_fields_in_debug)]
+// `registry` is left out on purpose, not forgotten -- see the doc comment above
 impl fmt::Debug for Checked {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Checked")
@@ -1987,6 +2011,7 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
 
     Ok(Checked {
         workflow: workflow.clone(),
+        registry,
         inputs,
         order,
         nodes,
@@ -5602,7 +5627,7 @@ mod tests {
             Value::known(willikins_types::Text::parse("hello").unwrap()),
         );
 
-        let plan_err = crate::plan::plan(&forged, &inputs, &catalog).expect_err(
+        let plan_err = crate::plan::plan(&forged, &inputs).expect_err(
             "sink2's real Text does not match the moved edge's AppleBundleIdentifier source",
         );
         match plan_err {
@@ -5628,13 +5653,11 @@ mod tests {
         // has an `approved: &Plan` to diff against -- its own opening
         // replan against the forged `Checked` is what surfaces the same
         // refusal for `apply`, before any drift check or `ensure` call.
-        let genuine_planned =
-            crate::plan::plan(&checked, &inputs, &catalog).expect("the real Checked plans");
+        let genuine_planned = crate::plan::plan(&checked, &inputs).expect("the real Checked plans");
         let mut observer = crate::apply::RecordingObserver::new();
         let apply_err = crate::apply::apply(
             &forged,
             &inputs,
-            &catalog,
             &genuine_planned,
             &crate::apply::Approval::Auto,
             &mut observer,

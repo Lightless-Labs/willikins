@@ -633,7 +633,7 @@ fn acceptance_06_plan_against_empty_state() {
     let checked = willikins_core::check(&workflow, &catalog)
         .expect("acceptance test 6: the positive fixture must check cleanly");
     let inputs = positive_inputs("acceptance test 6", &checked);
-    let result = willikins_core::plan(&checked, &inputs, &catalog)
+    let result = willikins_core::plan(&checked, &inputs)
         .expect("acceptance test 6: plan against empty state must succeed");
 
     assert_eq!(
@@ -725,9 +725,8 @@ fn acceptance_06_plan_against_empty_state() {
             ("org", RawInput::Scalar("lightless-labs".to_string())),
         ],
     );
-    let irreversible_plan =
-        willikins_core::plan(&irreversible_checked, &irreversible_inputs, &catalog)
-            .expect("acceptance test 6: irreversible.yaml plan must succeed");
+    let irreversible_plan = willikins_core::plan(&irreversible_checked, &irreversible_inputs)
+        .expect("acceptance test 6: irreversible.yaml plan must succeed");
     assert_eq!(
         irreversible_plan.class,
         Class::Irreversible,
@@ -752,7 +751,7 @@ fn acceptance_07_plan_against_seeded_state() {
     let ours_checked = willikins_core::check(&workflow, &ours_catalog)
         .expect("acceptance test 7: must check cleanly against the ours-seeded catalog");
     let ours_inputs = positive_inputs("acceptance test 7", &ours_checked);
-    let ours_plan = willikins_core::plan(&ours_checked, &ours_inputs, &ours_catalog)
+    let ours_plan = willikins_core::plan(&ours_checked, &ours_inputs)
         .expect("acceptance test 7: plan against an owned repo must succeed");
     let repo_node = find_planned(&ours_plan, "repo", None);
     assert_eq!(
@@ -774,7 +773,7 @@ fn acceptance_07_plan_against_seeded_state() {
     let foreign_checked = willikins_core::check(&workflow, &foreign_catalog)
         .expect("acceptance test 7: must check cleanly against the foreign-seeded catalog");
     let foreign_inputs = positive_inputs("acceptance test 7", &foreign_checked);
-    let foreign_err = willikins_core::plan(&foreign_checked, &foreign_inputs, &foreign_catalog)
+    let foreign_err = willikins_core::plan(&foreign_checked, &foreign_inputs)
         .expect_err("acceptance test 7: a foreign repo must not plan");
     match foreign_err {
         PlanError::NameTaken { node: n, tool, key } => {
@@ -824,7 +823,7 @@ fn acceptance_07_plan_against_seeded_state() {
             ),
         ],
     );
-    let err = willikins_core::plan(&checked, &inputs, &catalog)
+    let err = willikins_core::plan(&checked, &inputs)
         .expect_err("acceptance test 7: `prd` is not in [dev, qa]");
     match err {
         PlanError::KeyNotInForEach { site, key } => {
@@ -971,8 +970,8 @@ fn acceptance_08b_seeded_secret_never_leaks() {
         &checked,
         &[("project", RawInput::Scalar("widgets".to_string()))],
     );
-    let result = willikins_core::plan(&checked, &inputs, &catalog)
-        .expect("acceptance test 8b: plan must succeed");
+    let result =
+        willikins_core::plan(&checked, &inputs).expect("acceptance test 8b: plan must succeed");
     let secret_node = find_planned(&result, "secret", None);
     let secret_value = secret_node
         .outputs
@@ -1196,7 +1195,7 @@ fn milestone_2_acceptance_09_attribute_mismatch_visibility() {
         "milestone 2 acceptance test 9: must check cleanly against the ours-public catalog",
     );
     let inputs = positive_inputs("milestone 2 acceptance test 9", &checked);
-    let err = willikins_core::plan(&checked, &inputs, &catalog)
+    let err = willikins_core::plan(&checked, &inputs)
         .expect_err("milestone 2 acceptance test 9: a public-vs-private mismatch must not plan");
     match err {
         PlanError::AttributeMismatch { site } => {
@@ -1309,7 +1308,7 @@ fn milestone_2_acceptance_07_auto_on_the_irreversible_fixture_refuses_before_any
             ("org", RawInput::Scalar("lightless-labs".to_string())),
         ],
     );
-    let approved = willikins_core::plan(&checked, &inputs, &catalog)
+    let approved = willikins_core::plan(&checked, &inputs)
         .expect("milestone 2 acceptance test 7: plan against empty state succeeds");
     assert_eq!(approved.class, Class::Irreversible);
     assert!(approved.requires_approval);
@@ -1318,7 +1317,6 @@ fn milestone_2_acceptance_07_auto_on_the_irreversible_fixture_refuses_before_any
     let err = willikins_core::apply(
         &checked,
         &inputs,
-        &catalog,
         &approved,
         &willikins_core::Approval::Auto,
         &mut observer,
@@ -1391,19 +1389,12 @@ fn milestone_2_acceptance_05_executor_happy_path_with_marker_and_qa_environment(
         ],
     );
 
-    let approved = willikins_core::plan(&checked, &inputs, &catalog)
+    let approved = willikins_core::plan(&checked, &inputs)
         .expect("milestone 2 acceptance test 5: plan against empty state must succeed");
 
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("milestone 2 acceptance test 5: apply against empty state must succeed");
+    let applied = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("milestone 2 acceptance test 5: apply against empty state must succeed");
 
     assert!(matches!(
         node_status(&applied, "names", None),
@@ -1509,13 +1500,12 @@ fn milestone_2_acceptance_06a_convergence_after_a_config_failure() {
         .expect("milestone 2 acceptance test 6a: positive fixture must check cleanly");
     let inputs = positive_inputs("milestone 2 acceptance test 6a", &checked);
 
-    let first_plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let first_plan = willikins_core::plan(&checked, &inputs)
         .expect("milestone 2 acceptance test 6a: first plan against empty state must succeed");
     let mut observer = willikins_core::NoopObserver;
     let first_err = apply(
         &checked,
         &inputs,
-        &catalog,
         &first_plan,
         &Approval::Auto,
         &mut observer,
@@ -1561,13 +1551,12 @@ fn milestone_2_acceptance_06a_convergence_after_a_config_failure() {
         NodeStatus::NotRun
     ));
 
-    let second_plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let second_plan = willikins_core::plan(&checked, &inputs)
         .expect("milestone 2 acceptance test 6a: a fresh plan must succeed after the failure");
     let mut observer2 = willikins_core::NoopObserver;
     let second_applied = apply(
         &checked,
         &inputs,
-        &catalog,
         &second_plan,
         &Approval::Auto,
         &mut observer2,
@@ -1623,13 +1612,12 @@ fn milestone_2_acceptance_06b_unknown_input_gap_and_rotation_workflow_converges_
         .expect("milestone 2 acceptance test 6b: positive fixture must check cleanly");
     let inputs = positive_inputs("milestone 2 acceptance test 6b", &checked);
 
-    let first_plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let first_plan = willikins_core::plan(&checked, &inputs)
         .expect("milestone 2 acceptance test 6b: first plan must succeed");
     let mut observer = willikins_core::NoopObserver;
     let first_err = apply(
         &checked,
         &inputs,
-        &catalog,
         &first_plan,
         &Approval::Auto,
         &mut observer,
@@ -1653,7 +1641,7 @@ fn milestone_2_acceptance_06b_unknown_input_gap_and_rotation_workflow_converges_
         NodeStatus::Failed { .. }
     ));
 
-    let second_plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let second_plan = willikins_core::plan(&checked, &inputs)
         .expect("milestone 2 acceptance test 6b: a fresh plan must succeed after the failure");
     assert_eq!(
         find_planned(&second_plan, "token", None).action,
@@ -1673,7 +1661,6 @@ fn milestone_2_acceptance_06b_unknown_input_gap_and_rotation_workflow_converges_
     let second_err = apply(
         &checked,
         &inputs,
-        &catalog,
         &second_plan,
         &Approval::Auto,
         &mut observer2,
@@ -1719,7 +1706,7 @@ fn milestone_2_acceptance_06b_unknown_input_gap_and_rotation_workflow_converges_
             ),
         ],
     );
-    let rotate_plan = willikins_core::plan(&rotate_checked, &rotate_inputs, &catalog)
+    let rotate_plan = willikins_core::plan(&rotate_checked, &rotate_inputs)
         .expect("milestone 2 acceptance test 6b: rotate plan must succeed");
     assert!(rotate_plan.requires_approval, "rotate is Destructive");
 
@@ -1731,7 +1718,6 @@ fn milestone_2_acceptance_06b_unknown_input_gap_and_rotation_workflow_converges_
     let rotate_applied = apply(
         &rotate_checked,
         &rotate_inputs,
-        &catalog,
         &rotate_plan,
         &approval,
         &mut rotate_observer,
@@ -1782,18 +1768,11 @@ fn milestone_2_acceptance_06c_steady_state_third_apply_converges_without_a_call(
     let inputs = positive_inputs("milestone 2 acceptance test 6c", &checked);
 
     let run = |label: &str| -> Applied {
-        let plan = willikins_core::plan(&checked, &inputs, &catalog)
+        let plan = willikins_core::plan(&checked, &inputs)
             .unwrap_or_else(|err| panic!("{label}: plan must succeed: {err}"));
         let mut observer = willikins_core::NoopObserver;
-        apply(
-            &checked,
-            &inputs,
-            &catalog,
-            &plan,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .unwrap_or_else(|err| panic!("{label}: apply must succeed: {err}"))
+        apply(&checked, &inputs, &plan, &Approval::Auto, &mut observer)
+            .unwrap_or_else(|err| panic!("{label}: apply must succeed: {err}"))
     };
 
     let first = run("milestone 2 acceptance test 6c, first apply");
@@ -1885,7 +1864,7 @@ fn milestone_2_acceptance_09_core_apply_refuses_a_visibility_mismatch_via_the_re
     let checked = willikins_core::check(&workflow, &catalog)
         .expect("milestone 2 acceptance test 9 core: positive fixture must check cleanly");
     let inputs = positive_inputs("milestone 2 acceptance test 9 core", &checked);
-    let approved = willikins_core::plan(&checked, &inputs, &catalog)
+    let approved = willikins_core::plan(&checked, &inputs)
         .expect("milestone 2 acceptance test 9 core: plan against empty state must succeed");
 
     let json = std::fs::read_to_string(state_fixture("repo-ours-public.json"))
@@ -1895,15 +1874,7 @@ fn milestone_2_acceptance_09_core_apply_refuses_a_visibility_mismatch_via_the_re
     *state.lock().unwrap() = mismatched;
 
     let mut observer = willikins_core::NoopObserver;
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err(
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer).expect_err(
         "milestone 2 acceptance test 9 core: a visibility mismatch must refuse via re-plan",
     );
     match err {
@@ -2064,13 +2035,12 @@ fn milestone_2_acceptance_06_every_instance_of_both_fixtures_converges_after_a_f
             .unwrap_or_else(|errors| panic!("{label}: must check cleanly: {errors:?}"));
         let inputs = positive_inputs(&label, &checked);
 
-        let first_plan = willikins_core::plan(&checked, &inputs, &catalog)
+        let first_plan = willikins_core::plan(&checked, &inputs)
             .unwrap_or_else(|err| panic!("{label}: first plan must succeed: {err}"));
         let mut observer = RecordingObserver::new();
         let Err(err) = apply(
             &checked,
             &inputs,
-            &catalog,
             &first_plan,
             &Approval::Auto,
             &mut observer,
@@ -2125,13 +2095,12 @@ fn milestone_2_acceptance_06_every_instance_of_both_fixtures_converges_after_a_f
 
         // Round two: a fresh plan, and either everything settles or the
         // one documented gap appears.
-        let second_plan = willikins_core::plan(&checked, &inputs, &catalog)
+        let second_plan = willikins_core::plan(&checked, &inputs)
             .unwrap_or_else(|err| panic!("{label}: second plan must succeed: {err}"));
         let mut observer2 = willikins_core::NoopObserver;
         match apply(
             &checked,
             &inputs,
-            &catalog,
             &second_plan,
             &Approval::Auto,
             &mut observer2,
@@ -2156,13 +2125,12 @@ fn milestone_2_acceptance_06_every_instance_of_both_fixtures_converges_after_a_f
                 let rotate_checked = willikins_core::check(&rotate_workflow, &catalog)
                     .unwrap_or_else(|errors| panic!("{label}: rotate must check: {errors:?}"));
                 let rotate_resolved = rotate_inputs(&label, &rotate_checked);
-                let rotate_plan = willikins_core::plan(&rotate_checked, &rotate_resolved, &catalog)
+                let rotate_plan = willikins_core::plan(&rotate_checked, &rotate_resolved)
                     .unwrap_or_else(|err| panic!("{label}: rotate plan: {err}"));
                 let mut rotate_observer = willikins_core::NoopObserver;
                 let rotated = apply(
                     &rotate_checked,
                     &rotate_resolved,
-                    &catalog,
                     &rotate_plan,
                     &human_approval(),
                     &mut rotate_observer,
@@ -2171,13 +2139,12 @@ fn milestone_2_acceptance_06_every_instance_of_both_fixtures_converges_after_a_f
                 assert_settled(&format!("{label} (rotation)"), &rotated);
 
                 // And the original workflow now settles too.
-                let third_plan = willikins_core::plan(&checked, &inputs, &catalog)
+                let third_plan = willikins_core::plan(&checked, &inputs)
                     .unwrap_or_else(|err| panic!("{label}: third plan: {err}"));
                 let mut observer3 = willikins_core::NoopObserver;
                 let settled = apply(
                     &checked,
                     &inputs,
-                    &catalog,
                     &third_plan,
                     &Approval::Auto,
                     &mut observer3,
@@ -2202,13 +2169,12 @@ fn milestone_2_acceptance_06_every_instance_of_both_fixtures_converges_after_a_f
             .unwrap_or_else(|errors| panic!("{label}: must check cleanly: {errors:?}"));
         let inputs = rotate_inputs(&label, &checked);
 
-        let first_plan = willikins_core::plan(&checked, &inputs, &catalog)
+        let first_plan = willikins_core::plan(&checked, &inputs)
             .unwrap_or_else(|err| panic!("{label}: first plan must succeed: {err}"));
         let mut observer = willikins_core::NoopObserver;
         let err = apply(
             &checked,
             &inputs,
-            &catalog,
             &first_plan,
             &human_approval(),
             &mut observer,
@@ -2232,13 +2198,12 @@ fn milestone_2_acceptance_06_every_instance_of_both_fixtures_converges_after_a_f
             );
         }
 
-        let second_plan = willikins_core::plan(&checked, &inputs, &catalog)
+        let second_plan = willikins_core::plan(&checked, &inputs)
             .unwrap_or_else(|err| panic!("{label}: second plan must succeed: {err}"));
         let mut observer2 = willikins_core::NoopObserver;
         let applied = apply(
             &checked,
             &inputs,
-            &catalog,
             &second_plan,
             &human_approval(),
             &mut observer2,
@@ -2268,7 +2233,7 @@ fn milestone_2_acceptance_07_approval_required_makes_no_read_and_no_ensure_call(
     let checked = willikins_core::check(&workflow, &catalog)
         .expect("rotate-service-token.yaml must check cleanly");
     let inputs = rotate_inputs("milestone 2 acceptance test 7", &checked);
-    let approved = willikins_core::plan(&checked, &inputs, &catalog).expect("rotate plans");
+    let approved = willikins_core::plan(&checked, &inputs).expect("rotate plans");
     assert!(approved.requires_approval, "the rotation is Destructive");
 
     // `plan` itself reads; clear the counters so what follows is only
@@ -2280,15 +2245,8 @@ fn milestone_2_acceptance_07_approval_required_makes_no_read_and_no_ensure_call(
     }
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("a Destructive plan must refuse Approval::Auto");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("a Destructive plan must refuse Approval::Auto");
     assert!(
         matches!(
             err,
@@ -2324,17 +2282,9 @@ fn milestone_2_acceptance_06_one_plan_and_one_apply_read_twice_and_ensure_once()
     let catalog = willikins_providers_fake::catalog(Arc::clone(&state));
     let checked = willikins_core::check(&workflow, &catalog).expect("checks cleanly");
     let inputs = positive_inputs("milestone 2 call accounting", &checked);
-    let approved = willikins_core::plan(&checked, &inputs, &catalog).expect("plans");
+    let approved = willikins_core::plan(&checked, &inputs).expect("plans");
     let mut observer = willikins_core::NoopObserver;
-    apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("applies");
+    apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer).expect("applies");
 
     let locked = state.lock().unwrap();
     for (tool, key) in POSITIVE_FIXTURE_INSTANCES {
@@ -2382,7 +2332,7 @@ fn milestone_2_acceptance_08_a_secret_rotated_between_plan_and_apply_is_not_drif
         &checked,
         &[("project", RawInput::Scalar("third-thoughts".to_string()))],
     );
-    let approved = willikins_core::plan(&checked, &inputs, &catalog).expect("plans");
+    let approved = willikins_core::plan(&checked, &inputs).expect("plans");
 
     // Rotate the secret out of band, between approval and apply.
     {
@@ -2396,15 +2346,8 @@ fn milestone_2_acceptance_08_a_secret_rotated_between_plan_and_apply_is_not_drif
     }
 
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("a secret's bytes changing is not drift");
+    let applied = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("a secret's bytes changing is not drift");
     assert!(matches!(
         node_status(&applied, "ci_secret", None),
         NodeStatus::Created

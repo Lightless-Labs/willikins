@@ -49,7 +49,7 @@ fn plans_blocked_without_the_acknowledgement_input() {
     let checked = check(&workflow(), &catalog).unwrap();
 
     let inputs: IndexMap<InputName, Value> = IndexMap::new();
-    let planned = plan(&checked, &inputs, &catalog)
+    let planned = plan(&checked, &inputs)
         .expect("an unsupplied OperatorAcknowledgement input never fails `plan`");
 
     let node = planned
@@ -83,7 +83,7 @@ fn plans_compute_once_done_is_supplied() {
         InputName::parse("m7_bootstrap_done").unwrap(),
         Value::known(willikins_types::OperatorAcknowledgement::parse("done").unwrap()),
     );
-    let planned = plan(&checked, &inputs, &catalog).expect("a supplied acknowledgement plans");
+    let planned = plan(&checked, &inputs).expect("a supplied acknowledgement plans");
 
     let node = planned
         .nodes

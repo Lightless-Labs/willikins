@@ -70,7 +70,7 @@ fn boundary_an_approval_is_not_bound_to_the_plan_it_approves() {
     let checked = check(&workflow, &catalog).expect("the irreversible workflow checks");
     assert_eq!(checked.class(), Class::Irreversible);
     let inputs = common::new_rust_service_inputs();
-    let approved = plan(&checked, &inputs, &catalog).expect("plans against empty state");
+    let approved = plan(&checked, &inputs).expect("plans against empty state");
 
     // An approval a human granted for some entirely different plan --
     // core has nothing to compare it against.
@@ -79,15 +79,8 @@ fn boundary_an_approval_is_not_bound_to_the_plan_it_approves() {
         at: timestamp("2026-09-14T09:00:00+00:00"),
     };
     let mut observer = RecordingObserver::new();
-    apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &approval,
-        &mut observer,
-    )
-    .expect("core accepts any Human approval; the plan binding is the server's");
+    apply(&checked, &inputs, &approved, &approval, &mut observer)
+        .expect("core accepts any Human approval; the plan binding is the server's");
 
     assert!(
         state
@@ -118,22 +111,15 @@ fn boundary_an_approval_timestamped_in_the_future_still_runs() {
     let workflow = common::irreversible_workflow();
     let checked = check(&workflow, &catalog).expect("the irreversible workflow checks");
     let inputs = common::new_rust_service_inputs();
-    let approved = plan(&checked, &inputs, &catalog).expect("plans against empty state");
+    let approved = plan(&checked, &inputs).expect("plans against empty state");
 
     let approval = Approval::Human {
         approver: principal("operator"),
         at: timestamp("2999-01-01T00:00:00+00:00"),
     };
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &approval,
-        &mut observer,
-    )
-    .expect("core does not judge an approval's timestamp");
+    let applied = apply(&checked, &inputs, &approved, &approval, &mut observer)
+        .expect("core does not judge an approval's timestamp");
     assert!(!applied.nodes.is_empty());
     assert!(
         state
@@ -158,7 +144,7 @@ fn a_duplicated_for_each_instance_in_the_approved_plan_is_instance_drift() {
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &catalog).expect("the positive fixture checks");
     let inputs = common::new_rust_service_inputs();
-    let mut approved = plan(&checked, &inputs, &catalog).expect("plans against empty state");
+    let mut approved = plan(&checked, &inputs).expect("plans against empty state");
 
     let first_config = approved
         .nodes
@@ -175,15 +161,8 @@ fn a_duplicated_for_each_instance_in_the_approved_plan_is_instance_drift() {
     }
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("a duplicated instance must be refused");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("a duplicated instance must be refused");
     let ApplyError::Drift { node: name, .. } = &err else {
         panic!("expected Drift, got {err:?}");
     };
@@ -263,8 +242,8 @@ fn boundary_an_approved_plan_of_another_workflow_with_an_equal_fingerprint_runs(
     let approved_checked = check(&approved_document, &catalog).expect("document A checks");
     let swapped_checked = check(&swapped_document, &catalog).expect("document B checks");
 
-    let approved = plan(&approved_checked, &inputs, &catalog).expect("document A plans");
-    let swapped = plan(&swapped_checked, &inputs, &catalog).expect("document B plans");
+    let approved = plan(&approved_checked, &inputs).expect("document A plans");
+    let swapped = plan(&swapped_checked, &inputs).expect("document B plans");
     assert_eq!(
         approved.fingerprint(),
         swapped.fingerprint(),
@@ -279,7 +258,6 @@ fn boundary_an_approved_plan_of_another_workflow_with_an_equal_fingerprint_runs(
     apply(
         &swapped_checked,
         &inputs,
-        &catalog,
         &approved,
         &Approval::Auto,
         &mut observer,
@@ -308,7 +286,7 @@ fn boundary_tampering_with_the_approved_plans_inputs_changes_nothing_that_runs()
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &catalog).expect("the positive fixture checks");
     let inputs = common::new_rust_service_inputs();
-    let mut approved = plan(&checked, &inputs, &catalog).expect("plans against empty state");
+    let mut approved = plan(&checked, &inputs).expect("plans against empty state");
 
     for planned in &mut approved.nodes {
         if planned.name.as_str() == "repo" {
@@ -320,15 +298,8 @@ fn boundary_tampering_with_the_approved_plans_inputs_changes_nothing_that_runs()
     }
 
     let mut observer = RecordingObserver::new();
-    apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("the tampered inputs are not even looked at");
+    apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("the tampered inputs are not even looked at");
 
     let locked = state.lock().unwrap();
     assert!(
@@ -518,18 +489,11 @@ fn undeclared_outputs_are_dropped_and_forgotten_ones_become_unknown() {
         .node(node("liar"), Node::new(tool_name("test.lies")));
     let checked = check(&workflow, &catalog).expect("the workflow checks");
     let inputs = IndexMap::new();
-    let approved = plan(&checked, &inputs, &catalog).expect("plans");
+    let approved = plan(&checked, &inputs).expect("plans");
 
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("runs");
+    let applied =
+        apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer).expect("runs");
 
     let outputs = &applied.nodes[0].outputs;
     assert_eq!(
@@ -593,19 +557,12 @@ fn a_secret_returned_on_a_non_secret_port_is_refused_before_it_reaches_a_sink() 
         );
     let checked = check(&workflow, &catalog).expect("check types `value` from the spec: GitHubOrg");
     let inputs = IndexMap::new();
-    let approved = plan(&checked, &inputs, &catalog)
+    let approved = plan(&checked, &inputs)
         .expect("plans: the liar's `read` predicts nothing, so the lie is Unknown at plan time");
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("the liar's own output disagrees with its spec");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("the liar's own output disagrees with its spec");
 
     match &err {
         ApplyError::Tool {
@@ -674,7 +631,7 @@ fn a_panicking_observer_unwinds_out_of_apply_leaving_earlier_writes_in_place() {
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &catalog).expect("the positive fixture checks");
     let inputs = common::new_rust_service_inputs();
-    let approved = plan(&checked, &inputs, &catalog).expect("plans against empty state");
+    let approved = plan(&checked, &inputs).expect("plans against empty state");
 
     // Event 5 is the third instance's `NodeStarted` (`names` and `repo`
     // contribute two events each), so `repo` has already been created.
@@ -685,14 +642,7 @@ fn a_panicking_observer_unwinds_out_of_apply_leaving_earlier_writes_in_place() {
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        apply(
-            &checked,
-            &inputs,
-            &catalog,
-            &approved,
-            &Approval::Auto,
-            &mut observer,
-        )
+        apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
     }));
     std::panic::set_hook(previous_hook);
     assert!(outcome.is_err(), "the panic unwound out of apply");
@@ -738,7 +688,7 @@ fn boundary_two_threads_applying_one_plan_share_state_with_no_mutual_exclusion()
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &catalog).expect("the positive fixture checks");
     let inputs = common::new_rust_service_inputs();
-    let approved = plan(&checked, &inputs, &catalog).expect("plans against empty state");
+    let approved = plan(&checked, &inputs).expect("plans against empty state");
 
     let barrier = Arc::new(std::sync::Barrier::new(2));
     let outcomes: Vec<_> = std::thread::scope(|scope| {
@@ -747,19 +697,11 @@ fn boundary_two_threads_applying_one_plan_share_state_with_no_mutual_exclusion()
                 let barrier = Arc::clone(&barrier);
                 let checked = &checked;
                 let inputs = &inputs;
-                let catalog = &catalog;
                 let approved = &approved;
                 scope.spawn(move || {
                     barrier.wait();
                     let mut observer = RecordingObserver::new();
-                    let result = apply(
-                        checked,
-                        inputs,
-                        catalog,
-                        approved,
-                        &Approval::Auto,
-                        &mut observer,
-                    );
+                    let result = apply(checked, inputs, approved, &Approval::Auto, &mut observer);
                     (
                         result.is_ok(),
                         result.map_or_else(|err| format!("{err:?}"), |ok| format!("{ok:?}")),
@@ -843,8 +785,8 @@ fn a_second_plan_touching_the_same_resource_is_refused_by_the_re_plan() {
     let private = with_visibility(RepoVisibility::Private);
     let public = with_visibility(RepoVisibility::Public);
 
-    let private_plan = plan(&checked, &private, &catalog).expect("plans");
-    let public_plan = plan(&checked, &public, &catalog).expect("plans");
+    let private_plan = plan(&checked, &private).expect("plans");
+    let public_plan = plan(&checked, &public).expect("plans");
     assert_eq!(private_plan.nodes[0].action, Action::Create);
     assert_eq!(public_plan.nodes[0].action, Action::Create);
 
@@ -852,7 +794,6 @@ fn a_second_plan_touching_the_same_resource_is_refused_by_the_re_plan() {
     apply(
         &checked,
         &private,
-        &catalog,
         &private_plan,
         &Approval::Auto,
         &mut observer,
@@ -863,7 +804,6 @@ fn a_second_plan_touching_the_same_resource_is_refused_by_the_re_plan() {
     let err = apply(
         &checked,
         &public,
-        &catalog,
         &public_plan,
         &Approval::Auto,
         &mut observer,
@@ -907,7 +847,7 @@ fn a_drift_refusal_carries_no_partial_result_and_a_tool_failure_does() {
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &catalog).expect("the positive fixture checks");
     let inputs = common::new_rust_service_inputs();
-    let approved = plan(&checked, &inputs, &catalog).expect("plans against empty state");
+    let approved = plan(&checked, &inputs).expect("plans against empty state");
 
     // Drift: seed the repository so the fresh plan says NoOp.
     state.lock().unwrap().github_repos.insert(
@@ -921,15 +861,8 @@ fn a_drift_refusal_carries_no_partial_result_and_a_tool_failure_does() {
         },
     );
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("the seeded repository is drift");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("the seeded repository is drift");
     match &err {
         ApplyError::Drift { kind, .. } => {
             assert!(matches!(
@@ -944,22 +877,15 @@ fn a_drift_refusal_carries_no_partial_result_and_a_tool_failure_does() {
     }
 
     // A tool failure, by contrast, carries its partial result.
-    let approved = plan(&checked, &inputs, &catalog).expect("re-plans");
+    let approved = plan(&checked, &inputs).expect("re-plans");
     state
         .lock()
         .unwrap()
         .fail_ensure_once
         .push(call_key("doppler.project.ensure", "third-thoughts"));
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("the injected failure stops the run");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("the injected failure stops the run");
     let ApplyError::Tool { applied, .. } = &err else {
         panic!("expected Tool, got {err:?}");
     };

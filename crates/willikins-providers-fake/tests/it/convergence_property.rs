@@ -430,8 +430,8 @@ fn convergence_case(scenario: &Scenario, injection: &Injection) -> Result<(), Te
     // Round 1, against empty state with the failure already queued: every
     // node is a fresh `Create`, and the run stops at exactly the injected
     // instance.
-    let plan1 = plan(&checked, &inputs, &fake_catalog)
-        .unwrap_or_else(|err| panic!("round 1 plan must succeed: {err}"));
+    let plan1 =
+        plan(&checked, &inputs).unwrap_or_else(|err| panic!("round 1 plan must succeed: {err}"));
     for instance in &plan1.nodes {
         prop_assert_eq!(
             instance.action,
@@ -442,14 +442,7 @@ fn convergence_case(scenario: &Scenario, injection: &Injection) -> Result<(), Te
     }
     let approval1 = approval_for(&plan1);
     let mut observer1 = NoopObserver;
-    let nodes1 = match apply(
-        &checked,
-        &inputs,
-        &fake_catalog,
-        &plan1,
-        &approval1,
-        &mut observer1,
-    ) {
+    let nodes1 = match apply(&checked, &inputs, &plan1, &approval1, &mut observer1) {
         Err(ApplyError::Tool {
             node: failed,
             applied,
@@ -496,8 +489,8 @@ fn convergence_case(scenario: &Scenario, injection: &Injection) -> Result<(), Te
     // Round 2: a fresh plan shows every finished node `NoOp` and the rest
     // `Create`, and the apply either settles everything or stops at the
     // gap.
-    let plan2 = plan(&checked, &inputs, &fake_catalog)
-        .unwrap_or_else(|err| panic!("round 2 plan must succeed: {err}"));
+    let plan2 =
+        plan(&checked, &inputs).unwrap_or_else(|err| panic!("round 2 plan must succeed: {err}"));
     for (name, _, _) in scenario.instances() {
         let expected = if finished(&nodes1, &name) {
             Action::NoOp
@@ -513,14 +506,7 @@ fn convergence_case(scenario: &Scenario, injection: &Injection) -> Result<(), Te
     }
     let approval2 = approval_for(&plan2);
     let mut observer2 = NoopObserver;
-    let nodes2 = match apply(
-        &checked,
-        &inputs,
-        &fake_catalog,
-        &plan2,
-        &approval2,
-        &mut observer2,
-    ) {
+    let nodes2 = match apply(&checked, &inputs, &plan2, &approval2, &mut observer2) {
         Ok(applied) => {
             prop_assert!(
                 !expects_gap,

@@ -68,7 +68,7 @@ fn the_doppler_chain_plans_and_references_the_repository() {
         scalar_input("GitHubRepo", "example-org/monorepo"),
     );
 
-    let plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let plan = willikins_core::plan(&checked, &inputs)
         .unwrap_or_else(|err| panic!("plan must resolve every node: {err:?}"));
 
     // The task's own redaction claim, for "plan": the seeded token's raw

@@ -113,8 +113,7 @@ fn fresh_run_creates_then_converges_with_both_files_the_marker_and_branch_main()
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = base_inputs();
 
-    let planned1 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    let planned1 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
     assert_eq!(action_of(&planned1, "repo", None), Action::Create);
     assert_eq!(action_of(&planned1, "scaffold", None), Action::Create);
 
@@ -122,7 +121,6 @@ fn fresh_run_creates_then_converges_with_both_files_the_marker_and_branch_main()
     let applied1 = apply(
         &checked,
         &inputs,
-        &catalog,
         &planned1,
         &human_approval(),
         &mut observer,
@@ -137,8 +135,7 @@ fn fresh_run_creates_then_converges_with_both_files_the_marker_and_branch_main()
         NodeStatus::Created
     ));
 
-    let planned2 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    let planned2 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
     assert_eq!(action_of(&planned2, "repo", None), Action::NoOp);
     assert_eq!(action_of(&planned2, "scaffold", None), Action::NoOp);
 
@@ -173,8 +170,7 @@ fn a_mismatched_default_branch_fails_plan_with_a_conflict_attributed_to_scaffold
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = base_inputs();
 
-    let err = plan(&checked, &inputs, &catalog)
-        .expect_err("a mismatched default branch must refuse to plan");
+    let err = plan(&checked, &inputs).expect_err("a mismatched default branch must refuse to plan");
     match err {
         PlanError::Tool {
             node: failed_node,

@@ -63,7 +63,7 @@ fn approval_required_refuses_without_journaling_run_started() {
     assert!(description.missing.is_empty());
     let inputs = description.resolved;
 
-    let approved = plan(&checked, &inputs, &catalog).expect("plan against empty state succeeds");
+    let approved = plan(&checked, &inputs).expect("plan against empty state succeeds");
     assert!(
         approved.requires_approval,
         "irreversible.yaml must require approval"
@@ -89,14 +89,7 @@ fn approval_required_refuses_without_journaling_run_started() {
     let principal = willikins_journal::PrincipalId::parse("agent").unwrap();
     let (result, _run_id, journal_error) =
         run_and_journal(&mut journal, principal, plan_id, |observer| {
-            apply(
-                &checked,
-                &inputs,
-                &catalog,
-                &approved,
-                &Approval::Auto,
-                observer,
-            )
+            apply(&checked, &inputs, &approved, &Approval::Auto, observer)
         });
     assert!(journal_error.is_none(), "{journal_error:?}");
     assert!(

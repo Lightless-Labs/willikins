@@ -635,11 +635,9 @@ impl Butler {
         let resolved = description.resolved;
 
         let planned =
-            willikins_core::plan(&checked, &resolved, &self.catalog).map_err(|error| {
-                ButlerError::Plan {
-                    error: Box::new(error),
-                    attempt: crate::error::PlanAttempt::Initial,
-                }
+            willikins_core::plan(&checked, &resolved).map_err(|error| ButlerError::Plan {
+                error: Box::new(error),
+                attempt: crate::error::PlanAttempt::Initial,
             })?;
         let fingerprint = planned.fingerprint();
         let class = planned.class;
@@ -996,7 +994,7 @@ impl Butler {
                 }
             };
 
-        let fresh = match willikins_core::plan(&checked_now, &resolved_inputs, &self.catalog) {
+        let fresh = match willikins_core::plan(&checked_now, &resolved_inputs) {
             Ok(fresh) => fresh,
             Err(error) => {
                 self.refuse_apply(
@@ -1041,7 +1039,6 @@ impl Butler {
 
         let journal = self.journal.clone();
         let run_lock = Arc::clone(&self.run_lock);
-        let catalog = Arc::clone(&self.catalog);
         let thread_principal = principal.clone();
 
         std::thread::spawn(move || {
@@ -1055,7 +1052,6 @@ impl Butler {
                         willikins_core::apply(
                             &checked_now,
                             &resolved_inputs,
-                            &catalog,
                             &fresh,
                             &approval,
                             observer,

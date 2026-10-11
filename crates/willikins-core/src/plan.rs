@@ -1,4 +1,4 @@
-//! Plan a [`Checked`] workflow against a [`Catalog`]: walk
+//! Plan a [`Checked`] workflow: walk
 //! [`Checked::order`], expand every `for_each` node into one instance per
 //! source item, call [`Tool::read`] for each instance, and classify the
 //! resulting action.
@@ -66,7 +66,6 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use crate::catalog::Catalog;
 use crate::check::{
     Bound, Checked, CheckedInput, EachId, Edge, InputId, OutputSlot, PortEdge, Shape, SingleId,
     Source,
@@ -871,9 +870,10 @@ fn source_origin<I>(ctx: &ResolveCtx, source: &Source<I>) -> Option<UnknownOrigi
 
 /// Key `items`, a `for_each` node's source items, naming every one by
 /// `element` -- the source's own declared element type -- through
-/// [`Value::known_dyn_as`]'s `TypeId` test against `registry` (the same
-/// catalog `plan` was given, never a different one), rather than
-/// trusting what the item itself reports (milestone 3n, decision (f3)).
+/// [`Value::known_dyn_as`]'s `TypeId` test against `registry` (`checked`'s
+/// own, the same one `check` validated this source against -- B2 on,
+/// there is no second catalog to differ from), rather than trusting what
+/// the item itself reports (milestone 3n, decision (f3)).
 /// Pairs each item's `Value` with the canonical string a
 /// [`crate::workflow::Binding::Keyed`] reference matches against.
 ///
@@ -907,8 +907,11 @@ fn key_for_each_items(
         .collect()
 }
 
-/// Plan `checked` against `catalog`, resolving its workflow inputs from
-/// `inputs`.
+/// Plan `checked`, resolving its workflow inputs from `inputs`. Milestone
+/// 3n, decision (b2): no `&Catalog` parameter -- `checked` already carries
+/// the resolved tool handle for every node (`CheckedNode.tool`) and the
+/// catalog's own registry (`Checked::registry`), so there is no second
+/// lookup left for a catalog to serve.
 ///
 /// Walks `checked.order`; for each node, resolves its `for_each` source (if
 /// any) and every instance's `with` bindings, checks the tool's key ports
@@ -928,18 +931,12 @@ fn key_for_each_items(
 ///
 /// # Panics
 ///
-/// Panics if `catalog` does not contain a tool `checked` was itself checked
-/// against, or if a node, port, or output name `checked` resolved is not
-/// actually present in its own workflow — both would mean `checked` was not
-/// produced by [`crate::check::check`] against a catalog compatible with
-/// `catalog`, which is a caller contract violation, not a value `plan`
-/// deals with normally.
-pub fn plan(
-    checked: &Checked,
-    inputs: &IndexMap<InputName, Value>,
-    catalog: &Catalog,
-) -> Result<Plan, PlanError> {
-    Ok(walk(checked, inputs, catalog)?.plan)
+/// Panics if a node, port, or output name `checked` resolved is not
+/// actually present in its own workflow -- which would mean `checked` was
+/// not produced by [`crate::check::check`], a caller contract violation,
+/// not a value `plan` deals with normally.
+pub fn plan(checked: &Checked, inputs: &IndexMap<InputName, Value>) -> Result<Plan, PlanError> {
+    Ok(walk(checked, inputs)?.plan)
 }
 
 /// What [`plan`] and [`crate::apply::apply`] share: the finished [`Plan`],
@@ -991,7 +988,6 @@ pub(crate) struct EachInstance {
 pub(crate) fn walk(
     checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
-    catalog: &Catalog,
 ) -> Result<Walk, PlanError> {
     check_input_types(checked.inputs(), inputs)?;
     check_fixed_inputs(checked.inputs(), inputs)?;
@@ -1092,7 +1088,7 @@ pub(crate) fn walk(
         match &checked_node.shape {
             Shape::Single { ports, .. } => {
                 let (bound, _origins) = bind_ports(&ctx, name, spec, ports, None)?;
-                let node_plan = plan_one(name, None, spec, tool, bound, catalog.registry())?;
+                let node_plan = plan_one(name, None, spec, tool, bound, checked.registry())?;
                 if node_plan.action == Action::Blocked {
                     gates.mark_blocked(
                         name.clone(),
@@ -1125,7 +1121,7 @@ pub(crate) fn walk(
                 // indistinguishable both to a `Keyed` reference and in the
                 // finished plan.
                 let element = source_value.ty().element().name;
-                let keyed = key_for_each_items(name, &element, items, catalog.registry())?;
+                let keyed = key_for_each_items(name, &element, items, checked.registry())?;
                 let mut seen: HashSet<&str> = HashSet::with_capacity(keyed.len());
                 for (_, key) in &keyed {
                     if !seen.insert(key.as_str()) {
@@ -1145,7 +1141,7 @@ pub(crate) fn walk(
                         spec,
                         tool,
                         bound,
-                        catalog.registry(),
+                        checked.registry(),
                     )?;
                     let blocked = node_plan.action == Action::Blocked;
                     if blocked {

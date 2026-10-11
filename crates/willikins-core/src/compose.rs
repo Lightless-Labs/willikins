@@ -1591,7 +1591,7 @@ mod tests {
             "describe resolves a fixed input's default the same as any other"
         );
 
-        let result = plan::plan(&checked, &description.resolved, &catalog).unwrap();
+        let result = plan::plan(&checked, &description.resolved).unwrap();
 
         // `cfg`'s `for_each` source is the very same fixed input; its
         // aggregated output is not a declared workflow output on this
@@ -1633,7 +1633,7 @@ mod tests {
         let description = describe::describe(&checked, &partial);
         assert!(description.missing.is_empty(), "{:?}", description.missing);
 
-        let result = plan::plan(&checked, &description.resolved, &catalog).unwrap();
+        let result = plan::plan(&checked, &description.resolved).unwrap();
         let aggregated = result
             .outputs
             .get(&output("cfg_all"))

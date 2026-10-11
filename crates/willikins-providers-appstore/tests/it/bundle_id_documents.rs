@@ -94,7 +94,7 @@ fn the_doppler_chain_plans_and_registers_the_bundle_id() {
         scalar_input("AppleBundleIdPlatform", "UNIVERSAL"),
     );
 
-    let plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let plan = willikins_core::plan(&checked, &inputs)
         .unwrap_or_else(|err| panic!("plan must resolve every node: {err:?}"));
 
     let id = plan
@@ -183,7 +183,7 @@ fn a_drifted_name_fails_plan_even_though_ensure_can_converge_it() {
         scalar_input("AppleBundleIdPlatform", "UNIVERSAL"),
     );
 
-    let err = willikins_core::plan(&checked, &inputs, &catalog)
+    let err = willikins_core::plan(&checked, &inputs)
         .expect_err("a drifted name must fail plan, not silently converge");
     assert!(
         matches!(err, willikins_core::PlanError::AttributeMismatch { .. }),

@@ -60,7 +60,7 @@ fn the_doppler_chain_plans_and_resolves_every_part() {
         .unwrap(),
     );
 
-    let plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let plan = willikins_core::plan(&checked, &inputs)
         .unwrap_or_else(|err| panic!("plan must resolve every node: {err:?}"));
 
     let issuer_id = plan

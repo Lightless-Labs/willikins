@@ -35,6 +35,7 @@
 
 use indexmap::IndexMap;
 
+use crate::ToolName;
 use crate::check::{Bound, Checked, CheckedInput, PortEdge, Shape, Source};
 use crate::class::Class;
 use crate::plan::{Action, BlockedGate, Group, Plan, PlannedNode};
@@ -45,9 +46,8 @@ use crate::plan::{
 };
 use crate::site::Site;
 use crate::tool::{Ensured, Inputs, Outputs, PortName, Tool, ToolError, ToolErrorKind};
-use crate::value::Value;
+use crate::value::{TypeRegistry, Value};
 use crate::workflow::{InputName, NodeName, OutputName};
-use crate::{Catalog, ToolName};
 use willikins_types::SinkToken;
 
 mod principal;
@@ -264,7 +264,7 @@ pub enum ApplyError {
         /// The plan's approval class.
         class: Class,
     },
-    /// Re-planning `checked` against `catalog` and `inputs` failed.
+    /// Re-planning `checked` against `inputs` failed.
     Plan {
         /// The failure.
         error: PlanError,
@@ -518,8 +518,9 @@ impl ApplyObserver for RecordingObserver {
 // apply (section C)
 // ---------------------------------------------------------------------
 
-/// Run `approved` (a [`Plan`] for `checked` against `inputs` and
-/// `catalog`), minting the one [`SinkToken`] the whole run gets.
+/// Run `approved` (a [`Plan`] for `checked` against `inputs`), minting the
+/// one [`SinkToken`] the whole run gets. Milestone 3n, decision (b2): no
+/// `&Catalog` parameter -- see [`plan`]'s own doc for why.
 ///
 /// Implements the design's six numbered rules in order:
 ///
@@ -566,16 +567,14 @@ impl ApplyObserver for RecordingObserver {
 ///
 /// # Panics
 ///
-/// Panics if `checked`, `approved`, or `catalog` are mutually
-/// inconsistent (a node or tool `approved` names that `checked` or
-/// `catalog` does not have) — a caller contract violation, the same way
-/// [`plan`] panics on one; see `plan`'s own doc.
+/// Panics if `checked` and `approved` are mutually inconsistent (a node or
+/// tool `approved` names that `checked` does not have) — a caller contract
+/// violation, the same way [`plan`] panics on one; see `plan`'s own doc.
 #[allow(clippy::too_many_lines)]
 // one function, six numbered rules; splitting further would scatter the sequence the module doc walks through
 pub fn apply(
     checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
-    catalog: &Catalog,
     approved: &Plan,
     approval: &Approval,
     observer: &mut dyn ApplyObserver,
@@ -598,7 +597,7 @@ pub fn apply(
     }
 
     // Rule 2.
-    let fresh = walk(checked, inputs, catalog).map_err(|error| ApplyError::Plan { error })?;
+    let fresh = walk(checked, inputs).map_err(|error| ApplyError::Plan { error })?;
     check_drift(approved, &fresh.plan)?;
 
     // Rule 3: the one non-test `SinkToken::new` call site in the
@@ -662,7 +661,7 @@ pub fn apply(
                 apply_instance(
                     checked.inputs(),
                     inputs,
-                    catalog,
+                    checked.registry(),
                     &single_results,
                     &each_results,
                     &single_names,
@@ -688,7 +687,7 @@ pub fn apply(
                 let (outputs, _blocked) = apply_instance(
                     checked.inputs(),
                     inputs,
-                    catalog,
+                    checked.registry(),
                     &single_results,
                     &each_results,
                     &single_names,
@@ -712,7 +711,7 @@ pub fn apply(
                     let (outputs, blocked) = apply_instance(
                         checked.inputs(),
                         inputs,
-                        catalog,
+                        checked.registry(),
                         &single_results,
                         &each_results,
                         &single_names,
@@ -846,7 +845,7 @@ fn erase_source<I>(source: &Source<I>) -> Source<()> {
 fn apply_instance(
     checked_inputs: &[CheckedInput],
     inputs: &IndexMap<InputName, Value>,
-    catalog: &Catalog,
+    registry: &'static TypeRegistry,
     single: &[SingleResult],
     each: &[EachResult],
     single_names: &[NodeName],
@@ -955,8 +954,7 @@ fn apply_instance(
             match refuse_unplanned_replacement(tool, planned, &resolved_inputs)
                 .and_then(|()| tool.ensure(&resolved_inputs, token))
                 .and_then(|Ensured { outputs, changed }| {
-                    fill_outputs(catalog.registry(), spec, &outputs)
-                        .map(|outputs| (outputs, changed))
+                    fill_outputs(registry, spec, &outputs).map(|outputs| (outputs, changed))
                 }) {
                 Ok((outputs, changed)) => {
                     let status = if changed {

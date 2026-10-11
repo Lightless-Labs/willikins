@@ -323,7 +323,7 @@ fn acceptance_11_the_plan_is_reversible_and_auto_approves() {
     let checked =
         willikins_core::check(&workflow, &catalog).expect("acceptance test 11: must check cleanly");
     let inputs = positive_inputs("acceptance test 11", &checked);
-    let planned = willikins_core::plan(&checked, &inputs, &catalog)
+    let planned = willikins_core::plan(&checked, &inputs)
         .expect("acceptance test 11: plan against the seeded cluster must succeed");
 
     assert_eq!(
@@ -340,15 +340,8 @@ fn acceptance_11_the_plan_is_reversible_and_auto_approves() {
     // "auto-approves" means operationally): the run must not be refused
     // with `ApplyError::ApprovalRequired`.
     let mut observer = willikins_core::NoopObserver;
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &planned,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("acceptance test 11: an auto-approved reversible plan must apply");
+    let applied = apply(&checked, &inputs, &planned, &Approval::Auto, &mut observer)
+        .expect("acceptance test 11: an auto-approved reversible plan must apply");
     assert!(
         applied
             .nodes
@@ -376,7 +369,7 @@ fn acceptance_12_executor_happy_path_against_seeded_cluster_state() {
         willikins_core::check(&workflow, &catalog).expect("acceptance test 12: must check cleanly");
     let inputs = positive_inputs("acceptance test 12", &checked);
 
-    let planned = willikins_core::plan(&checked, &inputs, &catalog)
+    let planned = willikins_core::plan(&checked, &inputs)
         .expect("acceptance test 12: plan against the seeded cluster must succeed");
     assert_eq!(
         find_planned(&planned, "names", None).action,
@@ -407,15 +400,8 @@ fn acceptance_12_executor_happy_path_against_seeded_cluster_state() {
     }
 
     let mut observer = willikins_core::NoopObserver;
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &planned,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("acceptance test 12: apply must succeed");
+    let applied = apply(&checked, &inputs, &planned, &Approval::Auto, &mut observer)
+        .expect("acceptance test 12: apply must succeed");
 
     assert!(matches!(
         node_status(&applied, "names", None),
@@ -498,13 +484,12 @@ fn acceptance_13_convergence_after_a_pipeline_failure() {
         willikins_core::check(&workflow, &catalog).expect("acceptance test 13: must check cleanly");
     let inputs = positive_inputs("acceptance test 13", &checked);
 
-    let first_plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let first_plan = willikins_core::plan(&checked, &inputs)
         .expect("acceptance test 13: first plan must succeed");
     let mut observer = willikins_core::NoopObserver;
     let first_err = apply(
         &checked,
         &inputs,
-        &catalog,
         &first_plan,
         &Approval::Auto,
         &mut observer,
@@ -534,7 +519,7 @@ fn acceptance_13_convergence_after_a_pipeline_failure() {
 
     // A fresh plan shows every finished node NoOp/Unchanged/Computed and
     // `pipeline` still to create.
-    let second_plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let second_plan = willikins_core::plan(&checked, &inputs)
         .expect("acceptance test 13: second plan must succeed");
     assert_eq!(
         find_planned(&second_plan, "pipeline", None).action,
@@ -551,7 +536,6 @@ fn acceptance_13_convergence_after_a_pipeline_failure() {
     let second_applied = apply(
         &checked,
         &inputs,
-        &catalog,
         &second_plan,
         &Approval::Auto,
         &mut observer2,
@@ -564,7 +548,7 @@ fn acceptance_13_convergence_after_a_pipeline_failure() {
 
     // A third plan against the now-finished state shows NoOp/Unchanged/
     // Computed everywhere -- nothing left to do.
-    let third_plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let third_plan = willikins_core::plan(&checked, &inputs)
         .expect("acceptance test 13: third plan must succeed");
     for name in ["repo", "doppler", "pipeline"] {
         assert_eq!(
@@ -595,7 +579,7 @@ fn acceptance_14_plan_fails_at_buildkite_cluster_when_no_cluster_matches() {
         .expect("acceptance test 14: must check cleanly even though the cluster is absent");
     let inputs = positive_inputs("acceptance test 14", &checked);
 
-    let err = willikins_core::plan(&checked, &inputs, &catalog)
+    let err = willikins_core::plan(&checked, &inputs)
         .expect_err("acceptance test 14: plan must fail when the cluster does not exist");
     match err {
         PlanError::Tool {
@@ -724,7 +708,7 @@ fn for_each_fan_out_over_a_caller_supplied_environment_list() {
             ),
         ],
     );
-    let planned = willikins_core::plan(&checked, &inputs, &catalog)
+    let planned = willikins_core::plan(&checked, &inputs)
         .expect("plan with a caller-supplied environment list must succeed");
     let config_instances: Vec<Option<String>> = planned
         .nodes
@@ -739,15 +723,8 @@ fn for_each_fan_out_over_a_caller_supplied_environment_list() {
     );
 
     let mut observer = willikins_core::NoopObserver;
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &planned,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("apply with a caller-supplied environment list must succeed");
+    let applied = apply(&checked, &inputs, &planned, &Approval::Auto, &mut observer)
+        .expect("apply with a caller-supplied environment list must succeed");
     for env in ["qa", "canary"] {
         assert!(
             matches!(

@@ -1149,4 +1149,66 @@ how values reach tools.
    The operator confirms that, or makes the edit themselves. Only needed if B2 is signed off.
 
 **Addendum:** 2026-10-11 (coordinator) — G7's ratchet question decided: plan.rs's final `unreachable!` count is **8**, accepted as this milestone's final value. The two beyond SHARED VALUES' itemized 6 (resolve_source's `Source::Item` arm, resolve_list_source's `edge.elements()` unwrap) were existing, counted fallbacks the itemization missed; removing them means reshaping `Bound::List` or the Walk/EachInstance item path, which (g1) froze. Banked as `todos/2026-10-11-plan-ratchet-last-two.md`, not reopened mid-milestone.
+**Addendum:** 2026-10-11 (task B2, coordinator sign-off per the "Needs the coordinator" section
+above). One point decision (g1)'s own representation did not actually land with, discovered while
+implementing B2, plus the mechanical scope found by the compiler rather than by estimate.
+
+1. **`Checked` did not in fact hold `registry: &'static TypeRegistry`.** Decision (g1)'s own
+   representation table names this field ("the catalog's, captured by check"), and decision (b2)
+   is written as if it exists ("`Checked` holds that registry"), but no G-task's addendum records
+   adding it, and it was not there: `catalog.registry()` was still the only route to a registry in
+   `plan.rs`/`apply.rs` through G7. Without it, deleting the `&Catalog` parameter cannot compile --
+   `fill_outputs` (F2), `key_for_each_items` (F3's backstop) and `plan_one`'s key-port check all
+   still need a `&TypeRegistry`, and `tests/it/apply.rs`'s own conversion fixtures build a `Catalog`
+   over a local, non-global registry specifically to prove `plan`/`apply` read *that* one back, not
+   the global singleton -- so this is a precondition gap in the plan, not a design choice to make
+   fresh. Added as part of this task, in the same commit: an eighth private field (`nodes` was the
+   seventh, at G1), set from the `registry` local `check()` already has at its
+   `Ok(Checked { .. })` site, plus a crate-private `fn registry(&self)
+   -> &'static TypeRegistry` accessor. Left out of the hand-written `Debug` (decision (s3)): nothing
+   reads a bare `TypeRegistry`'s own `Debug`, and printing one would dump the catalog's entire type
+   list, not anything about this checked workflow (`#[allow(clippy::missing_fields_in_debug)]`, with
+   a comment, since the omission is deliberate, not an oversight the lint should catch). Moves
+   `tests/sealed/fail/struct_literal.stderr` a third time (G1 and G7 each moved it once already for
+   the same reason -- a field appearing or leaving); regenerated with `TRYBUILD=overwrite`, diff is
+   exactly `registry` in both field lists, nothing else.
+2. **Verify item 4 (same catalog for check and plan/apply) is re-confirmed, not re-audited.** G1's
+   own commit message already recorded the audit's result (36 files calling both `check(` and
+   `plan(`/`apply(`, five with more than one `catalog` binding in scope, each read by hand, none
+   planning or applying against a catalog different from the one it checked against). B2 does not
+   repeat that audit; it relies on it, per the precondition the plan itself states, and found nothing
+   in 317 call sites across 30 files that contradicted it -- every single-line `plan(...)` or
+   multi-line `apply(...)` call needed exactly one argument deleted, never a different catalog
+   substituted.
+3. **Scope, found by the compiler rather than estimated:** `cargo check --workspace --all-targets
+   --all-features --keep-going` (S1's own recommended form, widened again here since fixing one
+   layer of errors always unblocked checking the next downstream crate -- four passes in total:
+   `willikins-core`/`willikins-server`/`willikins-dsl`/`willikins-journal`/
+   `willikins-providers-{fake,github}`, then `willikins-cli`/`willikins-providers-{appstore,
+   buildkite,doppler}` once those compiled, then the two gitignored `operator_*` files once
+   `willikins-cli` itself compiled, then zero). Every one of the roughly 220 `plan`/`apply` call
+   sites the compiler found (close to the plan's own 208 + 109 estimate) was a plain argument
+   deletion; none was reported as anything else. Two test-only cleanups followed, caught by a
+   plain `cargo check`'s own unused-variable warnings rather than by `-D warnings` (which only
+   `clippy` applies): `crates/willikins-journal/tests/it/acceptance_10_journal.rs`'s `record_plan`
+   helper lost its own now-unread `catalog` parameter (it only ever forwarded it to `plan`), and
+   `crates/willikins-core/tests/it/apply_adversarial.rs`'s thread-local `let catalog = &catalog;`
+   reborrow (now-dead, since `apply` no longer takes it) was deleted.
+4. **One test's premise is now stronger than it was written for, not merely dead.**
+   `crates/willikins-core/tests/it/plan_adversarial.rs`'s
+   `planning_against_a_different_registry_compatible_catalog_no_longer_panics` (renamed by G1 from
+   a panic-pinning test to a "no longer panics" one) built a second `Catalog` specifically to hand
+   to `plan` and show it was ignored. B2 removes the parameter outright, so that catalog cannot be
+   constructed and handed anywhere any more -- rewritten (comment and body, same test name and
+   assertion) to say so: G1 made the case a non-panic, B2 makes it unrepresentable, which is this
+   whole milestone's own goal restated at one more layer.
+5. **The gitignored `operator_*` tests under `crates/willikins-cli/tests/`**: two of the four
+   targets call `plan`/`apply` (28 and 5 sites respectively; the other two call neither function)
+   and were edited the same mechanical way, locally, in the same step, per decision (b2) and "Needs
+   the operator" item 1; not staged, not committed. All four targets, plus every edited tracked
+   crate's own test suite and a scoped `-p willikins-server --test it` and
+   `cargo check -p willikins-types`, are reported green in this task's own return.
+6. **No shim, one commit** (decision (b2)): `plan` and `apply` are `plan(checked, inputs)` and
+   `apply(checked, inputs, approved, approval, observer)`, exactly SHARED VALUES' signatures, with
+   no deprecated overload and no per-crate split.
 

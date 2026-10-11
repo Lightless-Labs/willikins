@@ -219,7 +219,7 @@ fn three_secrets_fanned_out_through_for_each_never_appear_in_the_plan() {
     let fake_catalog = catalog(seeded_secret_state());
     let workflow = secret_fan_out_workflow();
     let checked = check(&workflow, &fake_catalog).expect("the fan-out workflow checks cleanly");
-    let result = plan(&checked, &three_environments(), &fake_catalog).expect("plans cleanly");
+    let result = plan(&checked, &three_environments()).expect("plans cleanly");
 
     // Three secret-bearing sinks, each holding a *known* secret: this test
     // would pass vacuously if the values were `Unknown`.
@@ -283,7 +283,7 @@ fn a_tool_error_from_a_tool_handed_a_secret_never_shows_its_bytes() {
             ),
         );
     let checked = check(&workflow, &fake_catalog).expect("an AnySecret sink checks cleanly");
-    let err = plan(&checked, &IndexMap::new(), &fake_catalog).unwrap_err();
+    let err = plan(&checked, &IndexMap::new()).unwrap_err();
     match &err {
         PlanError::Tool { node: n, error } => {
             assert_eq!(*n, node("sink"));
@@ -340,7 +340,7 @@ fn name_taken_carries_only_key_ports_never_a_secret_non_key_port() {
                 ),
         );
     let checked = check(&workflow, &fake_catalog).unwrap();
-    let err = plan(&checked, &IndexMap::new(), &fake_catalog).unwrap_err();
+    let err = plan(&checked, &IndexMap::new()).unwrap_err();
     match &err {
         PlanError::NameTaken { node: n, tool, key } => {
             assert_eq!(*n, node("taken"));
@@ -401,7 +401,7 @@ fn an_empty_for_each_source_plans_zero_instances_and_a_known_empty_list() {
     let (_state, fake_catalog) = empty();
     let workflow = configs_only_workflow();
     let checked = check(&workflow, &fake_catalog).unwrap();
-    let result = plan(&checked, &environments(&[]), &fake_catalog).expect("an empty list plans");
+    let result = plan(&checked, &environments(&[])).expect("an empty list plans");
 
     assert!(
         result.nodes.is_empty(),
@@ -424,7 +424,7 @@ fn a_keyed_reference_into_an_empty_for_each_is_key_not_in_for_each() {
         input("environments"),
         Value::parse_list(&list_ty("EnvironmentSlug"), &[]).unwrap(),
     );
-    let err = plan(&checked, &inputs, &fake_catalog).unwrap_err();
+    let err = plan(&checked, &inputs).unwrap_err();
     match err {
         PlanError::KeyNotInForEach { site, key } => {
             assert_eq!(
@@ -450,10 +450,8 @@ fn planning_twice_yields_identical_json() {
     let workflow = secret_fan_out_workflow();
     let checked = check(&workflow, &fake_catalog).unwrap();
     let inputs = three_environments();
-    let first =
-        serde_json::to_string_pretty(&plan(&checked, &inputs, &fake_catalog).unwrap()).unwrap();
-    let second =
-        serde_json::to_string_pretty(&plan(&checked, &inputs, &fake_catalog).unwrap()).unwrap();
+    let first = serde_json::to_string_pretty(&plan(&checked, &inputs).unwrap()).unwrap();
+    let second = serde_json::to_string_pretty(&plan(&checked, &inputs).unwrap()).unwrap();
     assert_eq!(first, second);
 }
 
@@ -462,30 +460,30 @@ fn missing_inputs_are_an_error_not_a_panic_even_when_nothing_is_supplied() {
     let (_state, fake_catalog) = empty();
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &fake_catalog).unwrap();
-    let err = plan(&checked, &IndexMap::new(), &fake_catalog).unwrap_err();
+    let err = plan(&checked, &IndexMap::new()).unwrap_err();
     assert!(matches!(err, PlanError::MissingInput { .. }), "{err:?}");
 }
 
-/// Superseded by milestone 3n's G1 (was: a catalog that does not hold the
-/// tools a `Checked` was checked against is a caller-contract violation,
-/// documented on `plan` as a panic). From G1 on, `plan` reads a node's
-/// tool handle from `CheckedNode.tool` -- the one `check` itself resolved
-/// -- and never asks `catalog` for it again; `catalog` is read only for
-/// its registry (decision (g1); decision (b2) later drops the parameter
-/// altogether). A catalog that does not hold `checked`'s tools no longer
-/// makes `plan` panic, as long as its registry still agrees with the one
-/// `check` validated against (verify item 4's own precondition).
+/// Superseded twice over. First by milestone 3n's G1 (was: a catalog that
+/// does not hold the tools a `Checked` was checked against is a
+/// caller-contract violation, documented on `plan` as a panic) -- from G1
+/// on, `plan` reads a node's tool handle from `CheckedNode.tool`, the one
+/// `check` itself resolved, and never asks a catalog for it again. Then by
+/// B2 (decision (b2)): `plan` takes no `&Catalog` parameter at all, so
+/// "a different catalog" is not a value this test can even construct and
+/// hand to `plan` any more -- the case G1 made a non-panic, B2 makes
+/// unrepresentable. What is left to pin is just that `plan` still succeeds
+/// with nothing but `checked` and `inputs`.
 #[test]
 fn planning_against_a_different_registry_compatible_catalog_no_longer_panics() {
     let (_state, fake_catalog) = empty();
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &fake_catalog).unwrap();
-    let other = Catalog::new(willikins_types::registry());
-    let result = plan(&checked, &common::new_rust_service_inputs(), &other);
+    let result = plan(&checked, &common::new_rust_service_inputs());
     assert!(
         result.is_ok(),
-        "G1: `plan` never looks a node's tool up in `catalog` again, so a \
-         catalog missing it is no longer a panic: {result:?}"
+        "B2: `plan` takes no `&Catalog` at all, so there is no second \
+         catalog left to miss a tool: {result:?}"
     );
 }
 
@@ -515,7 +513,7 @@ fn naming_v1_is_compute_even_when_the_state_is_seeded() {
     let fake_catalog = catalog(state);
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &fake_catalog).unwrap();
-    let result = plan(&checked, &common::new_rust_service_inputs(), &fake_catalog).unwrap();
+    let result = plan(&checked, &common::new_rust_service_inputs()).unwrap();
     let names = result
         .nodes
         .iter()
@@ -541,7 +539,7 @@ fn requires_approval_is_true_exactly_above_reversible() {
         let workflow = Workflow::new(workflow_name("classified"))
             .node(node("only"), Node::new(tool_name("test.classified")));
         let checked = check(&workflow, &fake_catalog).unwrap();
-        let result = plan(&checked, &IndexMap::new(), &fake_catalog).unwrap();
+        let result = plan(&checked, &IndexMap::new()).unwrap();
         assert_eq!(result.class, class);
         assert_eq!(result.requires_approval, expected, "class {class:?}");
     }
@@ -659,12 +657,8 @@ fn two_for_each_items_rendering_to_the_same_key_are_rejected() {
     let (_state, fake_catalog) = empty();
     let workflow = configs_only_workflow();
     let checked = check(&workflow, &fake_catalog).unwrap();
-    let err = plan(
-        &checked,
-        &environments(&["dev", "dev", "prd"]),
-        &fake_catalog,
-    )
-    .expect_err("two instances with the same key are ambiguous and must be refused");
+    let err = plan(&checked, &environments(&["dev", "dev", "prd"]))
+        .expect_err("two instances with the same key are ambiguous and must be refused");
     match err {
         PlanError::DuplicateForEachKey { node: n, key } => {
             assert_eq!(n, node("configs"));

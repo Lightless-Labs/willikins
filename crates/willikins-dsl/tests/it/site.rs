@@ -68,7 +68,7 @@ fn one_plan_error(source: &str, supplied: &IndexMap<InputName, Value>) -> PlanEr
     let (_state, catalog) = willikins_providers_fake::empty();
     let checked = willikins_core::check(&workflow, &catalog)
         .unwrap_or_else(|errors| panic!("document must check cleanly: {errors:?}"));
-    willikins_core::plan(&checked, supplied, &catalog).expect_err("plan must fail")
+    willikins_core::plan(&checked, supplied).expect_err("plan must fail")
 }
 
 fn scalar_input(name: &str, ty: &str, text: &str) -> (InputName, Value) {

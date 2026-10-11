@@ -78,15 +78,14 @@ fn distinctive_token() -> willikins_types::DopplerServiceToken {
 const TOKEN_MARKER_BYTES: &str = "MARKERMARKERMARKERMARKERMARKERMARKERMARKER";
 const SECRET_SEEDED_BYTES: &str = "acceptance-test-8b-fake-secret-bytes-do-not-leak";
 
-/// Plan and record `workflow` against `catalog`/`inputs`, journaling
+/// Plan and record `workflow` against `inputs`, journaling
 /// `PlanRecorded`, and return the fresh id and [`Plan`].
 fn record_plan(
     journal: &mut FileJournal,
     checked: &willikins_core::Checked,
     inputs: &IndexMap<InputName, Value>,
-    catalog: &willikins_core::Catalog,
 ) -> (PlanId, Plan) {
-    let approved = plan(checked, inputs, catalog).expect("plan must succeed");
+    let approved = plan(checked, inputs).expect("plan must succeed");
     let plan_id = PlanId::new();
     journal
         .append(Event::PlanRecorded {
@@ -137,22 +136,13 @@ fn acceptance_10_journal_records_two_runs_without_leaking_either_secret() {
             ("org", RawInput::Scalar("lightless-labs".to_string())),
         ],
     );
-    let (plan_id_1, approved_1) = record_plan(&mut journal, &checked, &inputs, &catalog);
+    let (plan_id_1, approved_1) = record_plan(&mut journal, &checked, &inputs);
 
     let (result_1, _run_id_1, journal_error_1) = run_and_journal(
         &mut journal,
         willikins_journal::PrincipalId::parse("agent").unwrap(),
         plan_id_1,
-        |observer| {
-            apply(
-                &checked,
-                &inputs,
-                &catalog,
-                &approved_1,
-                &Approval::Auto,
-                observer,
-            )
-        },
+        |observer| apply(&checked, &inputs, &approved_1, &Approval::Auto, observer),
     );
     assert!(journal_error_1.is_none(), "{journal_error_1:?}");
     result_1.expect("run 1 must succeed");
@@ -176,12 +166,7 @@ fn acceptance_10_journal_records_two_runs_without_leaking_either_secret() {
         &secret_checked,
         &[("project", RawInput::Scalar("widgets".to_string()))],
     );
-    let (plan_id_2, approved_2) = record_plan(
-        &mut journal,
-        &secret_checked,
-        &secret_inputs,
-        &seeded_catalog,
-    );
+    let (plan_id_2, approved_2) = record_plan(&mut journal, &secret_checked, &secret_inputs);
 
     let (result_2, _run_id_2, journal_error_2) = run_and_journal(
         &mut journal,
@@ -191,7 +176,6 @@ fn acceptance_10_journal_records_two_runs_without_leaking_either_secret() {
             apply(
                 &secret_checked,
                 &secret_inputs,
-                &seeded_catalog,
                 &approved_2,
                 &Approval::Auto,
                 observer,

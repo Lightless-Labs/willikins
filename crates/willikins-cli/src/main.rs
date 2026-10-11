@@ -476,7 +476,7 @@ fn cmd_plan(
         return ExitCode::from(1);
     }
 
-    match willikins_core::plan(&checked, &description.resolved, &catalog) {
+    match willikins_core::plan(&checked, &description.resolved) {
         Ok(plan) => {
             if json {
                 render::print_json(&plan, disclosure);

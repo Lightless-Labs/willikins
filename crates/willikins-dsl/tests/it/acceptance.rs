@@ -437,7 +437,7 @@ fn characterize(path: &str) -> String {
 
     writeln!(report, "PLAN:").unwrap();
     let inputs = synthesized_inputs(&workflow);
-    match willikins_core::plan(&checked, &inputs, &catalog) {
+    match willikins_core::plan(&checked, &inputs) {
         Err(err) => {
             writeln!(report, "PLAN ERROR: {err}").unwrap();
         }

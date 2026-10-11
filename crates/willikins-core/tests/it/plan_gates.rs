@@ -456,7 +456,7 @@ fn a_blocked_gate_skips_its_dependents_and_leaves_every_other_branch_alone() {
     let workflow = workflow();
     let checked = check(&workflow, &catalog).expect("the test graph checks cleanly");
     let inputs = envs_inputs();
-    let result = plan(&checked, &inputs, &catalog).expect("a blocked gate never fails `plan`");
+    let result = plan(&checked, &inputs).expect("a blocked gate never fails `plan`");
 
     assert_eq!(
         by_name(&result.nodes, "gate", Some("dev")).action,
@@ -581,7 +581,7 @@ fn a_step_binding_on_a_blocked_scalar_gate_is_skipped_and_never_read() {
                 .port(port("value"), Binding::Literal("prd".to_string())),
         );
     let checked = check(&workflow, &catalog).expect("the test graph checks cleanly");
-    let result = plan(&checked, &IndexMap::new(), &catalog).expect("a blocked gate never fails");
+    let result = plan(&checked, &IndexMap::new()).expect("a blocked gate never fails");
 
     assert_eq!(by_name(&result.nodes, "gate", None).action, Action::Blocked);
     assert_eq!(
@@ -631,7 +631,7 @@ fn a_list_element_binding_on_a_blocked_gate_is_skipped_and_never_read() {
             ),
         );
     let checked = check(&workflow, &catalog).expect("the test graph checks cleanly");
-    let result = plan(&checked, &IndexMap::new(), &catalog).expect("a blocked gate never fails");
+    let result = plan(&checked, &IndexMap::new()).expect("a blocked gate never fails");
 
     assert_eq!(by_name(&result.nodes, "gate", None).action, Action::Blocked);
     assert_eq!(
@@ -663,7 +663,7 @@ fn a_satisfied_gate_blocks_nothing_and_the_plan_json_has_no_blocked_key() {
     let workflow = workflow();
     let checked = check(&workflow, &catalog).unwrap();
     let inputs = envs_inputs();
-    let result = plan(&checked, &inputs, &catalog).unwrap();
+    let result = plan(&checked, &inputs).unwrap();
 
     assert_eq!(
         by_name(&result.nodes, "gate", Some("dev")).action,
@@ -1038,7 +1038,7 @@ fn an_unsupplied_acknowledgement_input_blocks_the_gate_and_is_named_in_awaiting_
     // No entry for `ack_done` at all -- exactly what `describe` leaves
     // behind for an awaited input (never added to the resolved map).
     let inputs: IndexMap<willikins_core::InputName, Value> = IndexMap::new();
-    let result = plan(&checked, &inputs, &catalog)
+    let result = plan(&checked, &inputs)
         .expect("an unsupplied OperatorAcknowledgement input must never fail `plan`");
 
     assert_eq!(by_name(&result.nodes, "gate", None).action, Action::Blocked);
@@ -1072,7 +1072,7 @@ fn supplying_done_makes_the_acknowledgement_gate_compute() {
         input("ack_done"),
         Value::known(willikins_types::OperatorAcknowledgement::parse("done").unwrap()),
     );
-    let result = plan(&checked, &inputs, &catalog).expect("a supplied acknowledgement plans fine");
+    let result = plan(&checked, &inputs).expect("a supplied acknowledgement plans fine");
 
     assert_eq!(by_name(&result.nodes, "gate", None).action, Action::Compute);
     assert!(result.blocked.is_empty());
@@ -1157,7 +1157,7 @@ fn acceptance_7_a_linked_acknowledgement_gate_awaits_the_roots_own_input() {
     assert_eq!(description.awaiting[0].name, input("m_done"));
     assert!(!description.resolved.contains_key(&input("m_done")));
 
-    let result = plan(&checked, &description.resolved, &catalog)
+    let result = plan(&checked, &description.resolved)
         .expect("an unsupplied OperatorAcknowledgement input must never fail `plan`");
 
     assert_eq!(
@@ -1392,7 +1392,7 @@ fn acceptance_9_awaiting_inputs_over_a_for_each_gate_keeps_with_order_not_spec_o
     // does, rather than hand-building an inputs map. Both `ack_a_input` and
     // `ack_b_input` stay unsupplied (`awaiting`, never `resolved`).
     let description = describe(&checked, &PartialInputs::new());
-    let result = plan(&checked, &description.resolved, &catalog)
+    let result = plan(&checked, &description.resolved)
         .expect("an unsupplied OperatorAcknowledgement input must never fail `plan`");
 
     let gate_instance = by_name(&result.nodes, "gate", Some("do-the-thing"));

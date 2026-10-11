@@ -333,19 +333,12 @@ fn a_blocked_run_still_creates_every_independent_resource() {
     let workflow = workflow(false);
     let checked = check(&workflow, &tc.catalog).expect("checks cleanly");
     let inputs = key_inputs();
-    let approved = plan(&checked, &inputs, &tc.catalog).expect("plan never fails on a gate");
+    let approved = plan(&checked, &inputs).expect("plan never fails on a gate");
     assert_eq!(approved.blocked.len(), 1);
 
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &tc.catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("a blocked run is Ok, not an error");
+    let applied = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("a blocked run is Ok, not an error");
 
     assert!(matches!(
         applied_status(&applied, "gate"),
@@ -400,17 +393,10 @@ fn a_second_apply_after_the_gate_opens_runs_the_skipped_node_and_a_third_converg
     let inputs = key_inputs();
 
     // Run 1: blocked.
-    let plan1 = plan(&checked, &inputs, &tc.catalog).unwrap();
+    let plan1 = plan(&checked, &inputs).unwrap();
     let mut obs1 = RecordingObserver::new();
-    let applied1 = apply(
-        &checked,
-        &inputs,
-        &tc.catalog,
-        &plan1,
-        &Approval::Auto,
-        &mut obs1,
-    )
-    .expect("blocked run is Ok");
+    let applied1 =
+        apply(&checked, &inputs, &plan1, &Approval::Auto, &mut obs1).expect("blocked run is Ok");
     assert!(matches!(
         applied_status(&applied1, "downstream"),
         NodeStatus::Skipped
@@ -420,18 +406,11 @@ fn a_second_apply_after_the_gate_opens_runs_the_skipped_node_and_a_third_converg
     // The gate opens; a fresh plan is required (the plan's own actions
     // changed), which is what "re-run this document" means in practice.
     *tc.open.lock().unwrap() = true;
-    let plan2 = plan(&checked, &inputs, &tc.catalog).unwrap();
+    let plan2 = plan(&checked, &inputs).unwrap();
     assert!(plan2.blocked.is_empty());
     let mut obs2 = RecordingObserver::new();
-    let applied2 = apply(
-        &checked,
-        &inputs,
-        &tc.catalog,
-        &plan2,
-        &Approval::Auto,
-        &mut obs2,
-    )
-    .expect("the resumed run succeeds");
+    let applied2 = apply(&checked, &inputs, &plan2, &Approval::Auto, &mut obs2)
+        .expect("the resumed run succeeds");
     assert!(applied2.blocked.is_empty());
     assert!(matches!(
         applied_status(&applied2, "gate"),
@@ -447,17 +426,10 @@ fn a_second_apply_after_the_gate_opens_runs_the_skipped_node_and_a_third_converg
     ));
 
     // A third apply, re-planned again, converges everything.
-    let plan3 = plan(&checked, &inputs, &tc.catalog).unwrap();
+    let plan3 = plan(&checked, &inputs).unwrap();
     let mut obs3 = RecordingObserver::new();
-    let applied3 = apply(
-        &checked,
-        &inputs,
-        &tc.catalog,
-        &plan3,
-        &Approval::Auto,
-        &mut obs3,
-    )
-    .expect("the third run converges");
+    let applied3 = apply(&checked, &inputs, &plan3, &Approval::Auto, &mut obs3)
+        .expect("the third run converges");
     assert!(matches!(
         applied_status(&applied3, "gate"),
         NodeStatus::Computed
@@ -482,7 +454,7 @@ fn a_gate_flipped_between_plan_and_apply_refuses_as_action_drift() {
     let checked = check(&workflow, &tc.catalog).unwrap();
     let inputs = key_inputs();
 
-    let approved = plan(&checked, &inputs, &tc.catalog).unwrap();
+    let approved = plan(&checked, &inputs).unwrap();
     assert_eq!(
         approved
             .nodes
@@ -497,15 +469,7 @@ fn a_gate_flipped_between_plan_and_apply_refuses_as_action_drift() {
     // longer describes what would actually happen.
     *tc.open.lock().unwrap() = true;
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &tc.catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .unwrap_err();
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer).unwrap_err();
     match err {
         ApplyError::Drift { node, kind, .. } => {
             assert_eq!(node.as_str(), "gate");
@@ -534,18 +498,10 @@ fn a_tool_failure_still_stops_the_walk_leaving_earlier_blocked_and_skipped_statu
     let workflow = workflow(true);
     let checked = check(&workflow, &tc.catalog).expect("checks cleanly");
     let inputs = key_inputs();
-    let approved = plan(&checked, &inputs, &tc.catalog).unwrap();
+    let approved = plan(&checked, &inputs).unwrap();
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &tc.catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .unwrap_err();
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer).unwrap_err();
 
     let ApplyError::Tool { node, applied, .. } = err else {
         panic!("expected ApplyError::Tool");

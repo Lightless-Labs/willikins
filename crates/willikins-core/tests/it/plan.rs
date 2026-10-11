@@ -29,7 +29,7 @@ fn acceptance_6_plan_against_empty_state() {
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &fake_catalog).expect("the positive fixture checks cleanly");
     let inputs = common::new_rust_service_inputs();
-    let result = plan(&checked, &inputs, &fake_catalog).expect("empty state plans cleanly");
+    let result = plan(&checked, &inputs).expect("empty state plans cleanly");
 
     assert_eq!(result.workflow.as_str(), "new-rust-service");
     assert_eq!(result.class, Class::Reversible);
@@ -92,7 +92,7 @@ fn acceptance_6_insta_snapshot_of_the_empty_state_plan() {
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &fake_catalog).unwrap();
     let inputs = common::new_rust_service_inputs();
-    let result = plan(&checked, &inputs, &fake_catalog).unwrap();
+    let result = plan(&checked, &inputs).unwrap();
     insta::assert_snapshot!(serde_json::to_string_pretty(&result).unwrap());
 }
 
@@ -107,7 +107,7 @@ fn acceptance_6_an_irreversible_node_makes_the_plan_require_approval() {
     let checked =
         check(&workflow, &fake_catalog).expect("adding an irreversible node still checks");
     let inputs = common::new_rust_service_inputs();
-    let result = plan(&checked, &inputs, &fake_catalog).unwrap();
+    let result = plan(&checked, &inputs).unwrap();
     assert_eq!(result.class, Class::Irreversible);
     assert!(result.requires_approval);
     let danger = result
@@ -130,7 +130,7 @@ fn a_step_reference_into_a_for_each_node_aggregates_a_known_list_of_three() {
     );
     let checked = check(&workflow, &fake_catalog).expect("a plain Step onto configs still checks");
     let inputs = common::new_rust_service_inputs();
-    let result = plan(&checked, &inputs, &fake_catalog).unwrap();
+    let result = plan(&checked, &inputs).unwrap();
     let all_configs = result.outputs.get(&output("all_configs")).unwrap();
     assert!(all_configs.is_known());
     let rendered: Vec<String> = all_configs
@@ -165,7 +165,7 @@ fn acceptance_7_a_repo_that_exists_and_is_ours_is_a_no_op_with_a_known_url() {
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &fake_catalog).unwrap();
     let inputs = common::new_rust_service_inputs();
-    let result = plan(&checked, &inputs, &fake_catalog).unwrap();
+    let result = plan(&checked, &inputs).unwrap();
 
     let repo_node = result
         .nodes
@@ -193,7 +193,7 @@ fn acceptance_7_a_foreign_repo_is_name_taken() {
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &fake_catalog).unwrap();
     let inputs = common::new_rust_service_inputs();
-    let err = plan(&checked, &inputs, &fake_catalog).unwrap_err();
+    let err = plan(&checked, &inputs).unwrap_err();
     match err {
         PlanError::NameTaken { node: n, tool, key } => {
             assert_eq!(n, node("repo"));
@@ -217,7 +217,7 @@ fn acceptance_7_environments_dev_qa_with_configs_prd_referenced_is_key_not_in_fo
             willikins_types::EnvironmentSlug::parse("qa").unwrap(),
         ]),
     );
-    let err = plan(&checked, &inputs, &fake_catalog).unwrap_err();
+    let err = plan(&checked, &inputs).unwrap_err();
     match err {
         PlanError::KeyNotInForEach { site, key } => {
             assert_eq!(
@@ -265,7 +265,7 @@ fn acceptance_8b_a_known_secret_output_stays_redacted_in_json_and_debug() {
     let checked = check(&workflow, &fake_catalog).unwrap();
     let mut inputs = IndexMap::new();
     inputs.insert(input("config"), Value::known(config));
-    let result = plan(&checked, &inputs, &fake_catalog).unwrap();
+    let result = plan(&checked, &inputs).unwrap();
 
     let json = serde_json::to_string_pretty(&result).unwrap();
     assert!(json.contains("[REDACTED DopplerSecretValue]"), "{json}");
@@ -385,7 +385,7 @@ fn key_unknown_when_a_tools_key_port_resolves_to_unknown() {
             ),
         );
     let checked = check(&workflow, &fake_catalog).expect("both dummy tools check cleanly");
-    let err = plan(&checked, &IndexMap::new(), &fake_catalog).unwrap_err();
+    let err = plan(&checked, &IndexMap::new()).unwrap_err();
     match err {
         PlanError::KeyUnknown { node: n, port: p } => {
             assert_eq!(n, node("consumer"));
@@ -436,7 +436,7 @@ fn for_each_unknown_when_the_source_resolves_to_unknown() {
                 .port(port("value"), Binding::Item),
         );
     let checked = check(&workflow, &fake_catalog).expect("both dummy tools check cleanly");
-    let err = plan(&checked, &IndexMap::new(), &fake_catalog).unwrap_err();
+    let err = plan(&checked, &IndexMap::new()).unwrap_err();
     match err {
         PlanError::ForEachUnknown { node: n } => assert_eq!(n, node("consumer")),
         other => panic!("expected ForEachUnknown, got {other:?}"),
@@ -486,7 +486,7 @@ fn list_binding_resolves_a_known_list_of_known_elements_in_order() {
         input("org2"),
         Value::known(willikins_types::GitHubOrg::parse("other").unwrap()),
     );
-    let result = plan(&checked, &inputs, &fake_catalog).expect("both elements are known");
+    let result = plan(&checked, &inputs).expect("both elements are known");
 
     let sink = result
         .nodes
@@ -558,8 +558,7 @@ fn list_binding_with_one_unknown_element_resolves_to_an_unknown_list() {
         input("org1"),
         Value::known(willikins_types::GitHubOrg::parse("acme").unwrap()),
     );
-    let result =
-        plan(&checked, &inputs, &fake_catalog).expect("an unknown element never fails plan");
+    let result = plan(&checked, &inputs).expect("an unknown element never fails plan");
 
     let sink = result
         .nodes
@@ -586,7 +585,7 @@ fn missing_input_when_a_binding_names_an_input_the_caller_did_not_supply() {
     // Deliberately omit `slug`.
     let mut inputs = common::new_rust_service_inputs();
     inputs.shift_remove(&input("slug"));
-    let err = plan(&checked, &inputs, &fake_catalog).unwrap_err();
+    let err = plan(&checked, &inputs).unwrap_err();
     match err {
         PlanError::MissingInput { input: i } => assert_eq!(i, input("slug")),
         other => panic!("expected MissingInput, got {other:?}"),
@@ -619,7 +618,7 @@ fn a_caller_value_for_a_fixed_input_that_differs_from_the_default_is_not_settabl
         input("org/github_org"),
         Value::known(willikins_types::GitHubOrg::parse("other").unwrap()),
     );
-    let err = plan(&checked, &inputs, &fake_catalog).unwrap_err();
+    let err = plan(&checked, &inputs).unwrap_err();
     assert_eq!(
         err.to_string(),
         "workflow input `org/github_org` is fixed by this document's composition and cannot be \
@@ -650,7 +649,7 @@ fn a_caller_value_for_a_fixed_input_that_equals_the_default_plans_cleanly() {
         input("org/github_org"),
         Value::known(willikins_types::GitHubOrg::parse("shared").unwrap()),
     );
-    let result = plan(&checked, &inputs, &fake_catalog);
+    let result = plan(&checked, &inputs);
     assert!(result.is_ok(), "{result:?}");
 }
 
@@ -744,7 +743,7 @@ fn attribute_mismatch_reaches_plan_through_a_for_each_instance() {
             willikins_types::GitHubOrg::parse("second-org").unwrap(),
         ]),
     );
-    let err = plan(&checked, &inputs, &fake_catalog).unwrap_err();
+    let err = plan(&checked, &inputs).unwrap_err();
     match err {
         PlanError::AttributeMismatch { site } => assert_eq!(
             site,
@@ -772,7 +771,7 @@ fn attribute_mismatch_on_a_port_the_node_never_bound_is_an_error_not_a_panic() {
         ),
     );
     let checked = check(&workflow, &fake_catalog).expect("the dummy tool checks cleanly");
-    let err = plan(&checked, &IndexMap::new(), &fake_catalog).unwrap_err();
+    let err = plan(&checked, &IndexMap::new()).unwrap_err();
     match err {
         PlanError::AttributeMismatch { site } => {
             assert_eq!(

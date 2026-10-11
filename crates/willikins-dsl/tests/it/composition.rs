@@ -625,7 +625,7 @@ fn characterize_composition(path: &str) -> String {
 
     writeln!(report, "PLAN:").unwrap();
     let inputs = synthesized_inputs(&linked.workflow);
-    match plan(&checked, &inputs, &catalog) {
+    match plan(&checked, &inputs) {
         Err(err) => {
             writeln!(report, "PLAN ERROR: {err}").unwrap();
         }

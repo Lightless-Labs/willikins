@@ -201,8 +201,7 @@ fn standalone_service_links_and_checks() {
         .unwrap_or_else(|errors| panic!("the linked document checks cleanly: {errors:?}"));
     let inputs = standalone_inputs();
 
-    let planned1 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    let planned1 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
     assert_eq!(action_of(&planned1, "repo", None), Action::Create);
     assert_eq!(
         action_of(&planned1, "agents_md/agents", None),
@@ -219,7 +218,6 @@ fn standalone_service_links_and_checks() {
     let applied1 = apply(
         &checked,
         &inputs,
-        &catalog,
         &planned1,
         &human_approval(),
         &mut observer,
@@ -234,8 +232,7 @@ fn standalone_service_links_and_checks() {
         NodeStatus::Created
     ));
 
-    let planned2 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    let planned2 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
     assert_eq!(action_of(&planned2, "repo", None), Action::NoOp);
     assert_eq!(action_of(&planned2, "scaffold", None), Action::NoOp);
     // Pure render nodes always compute, apply or no: they never read
@@ -352,8 +349,7 @@ fn monorepo_app_fresh_creates_both_scaffolds_and_renders_the_file() {
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = monorepo_app_inputs();
 
-    let planned1 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    let planned1 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
     assert_eq!(action_of(&planned1, "app_files", None), Action::Create);
     assert_eq!(action_of(&planned1, "agents", None), Action::Create);
 
@@ -368,7 +364,6 @@ fn monorepo_app_fresh_creates_both_scaffolds_and_renders_the_file() {
     let applied1 = apply(
         &checked,
         &inputs,
-        &catalog,
         &planned1,
         &human_approval(),
         &mut observer,
@@ -383,8 +378,7 @@ fn monorepo_app_fresh_creates_both_scaffolds_and_renders_the_file() {
         NodeStatus::Created
     ));
 
-    let planned2 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    let planned2 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
     assert_eq!(action_of(&planned2, "app_files", None), Action::NoOp);
     assert_eq!(action_of(&planned2, "agents", None), Action::NoOp);
 }
@@ -401,8 +395,7 @@ fn monorepo_app_already_scaffolded_creates_only_the_agents_marker() {
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = monorepo_app_inputs();
 
-    let planned1 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    let planned1 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
     assert_eq!(action_of(&planned1, "app_files", None), Action::NoOp);
     assert_eq!(action_of(&planned1, "agents", None), Action::Create);
 
@@ -410,7 +403,6 @@ fn monorepo_app_already_scaffolded_creates_only_the_agents_marker() {
     let applied1 = apply(
         &checked,
         &inputs,
-        &catalog,
         &planned1,
         &human_approval(),
         &mut observer,
@@ -421,8 +413,7 @@ fn monorepo_app_already_scaffolded_creates_only_the_agents_marker() {
         NodeStatus::Created
     ));
 
-    let planned2 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    let planned2 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
     assert_eq!(action_of(&planned2, "app_files", None), Action::NoOp);
     assert_eq!(action_of(&planned2, "agents", None), Action::NoOp);
 
@@ -455,8 +446,8 @@ fn monorepo_app_a_different_existing_agents_md_fails_plan_naming_the_path() {
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = monorepo_app_inputs();
 
-    let err = plan(&checked, &inputs, &catalog)
-        .expect_err("a different existing AGENTS.md must refuse to plan");
+    let err =
+        plan(&checked, &inputs).expect_err("a different existing AGENTS.md must refuse to plan");
     match err {
         PlanError::Tool {
             node: failed_node,
@@ -502,15 +493,13 @@ fn monorepo_app_a_byte_equal_existing_agents_md_commits_only_the_marker() {
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = monorepo_app_inputs();
 
-    let planned1 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    let planned1 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
     assert_eq!(action_of(&planned1, "agents", None), Action::Create);
 
     let mut observer = RecordingObserver::new();
     let applied1 = apply(
         &checked,
         &inputs,
-        &catalog,
         &planned1,
         &human_approval(),
         &mut observer,
@@ -521,8 +510,7 @@ fn monorepo_app_a_byte_equal_existing_agents_md_commits_only_the_marker() {
         NodeStatus::Created
     ));
 
-    let planned2 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    let planned2 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
     assert_eq!(action_of(&planned2, "agents", None), Action::NoOp);
 
     let locked = state.lock().unwrap();
@@ -724,8 +712,7 @@ fn monorepo_app_shared_marker_silently_drops_agents_md() {
         .unwrap_or_else(|errors| panic!("a shared marker is not itself a check error: {errors:?}"));
     let inputs = monorepo_app_inputs();
 
-    let planned1 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("plans cleanly: {err}"));
+    let planned1 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("plans cleanly: {err}"));
     assert_eq!(action_of(&planned1, "app_files", None), Action::Create);
     assert_eq!(action_of(&planned1, "agents", None), Action::Create);
 
@@ -733,7 +720,6 @@ fn monorepo_app_shared_marker_silently_drops_agents_md() {
     let applied1 = apply(
         &checked,
         &inputs,
-        &catalog,
         &planned1,
         &human_approval(),
         &mut observer,
@@ -777,7 +763,7 @@ fn monorepo_app_a_second_scaffold_cannot_overwrite_the_first_markers_path() {
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = monorepo_app_inputs();
 
-    let err = plan(&checked, &inputs, &catalog)
+    let err = plan(&checked, &inputs)
         .expect_err("overwriting the first scaffold's marker as a file must refuse to plan");
     match err {
         PlanError::Tool {
@@ -818,8 +804,8 @@ fn standalone_service_a_different_existing_agents_md_fails_plan_naming_the_path(
         .unwrap_or_else(|errors| panic!("the linked document checks cleanly: {errors:?}"));
     let inputs = standalone_inputs();
 
-    let err = plan(&checked, &inputs, &catalog)
-        .expect_err("a different existing AGENTS.md must refuse to plan");
+    let err =
+        plan(&checked, &inputs).expect_err("a different existing AGENTS.md must refuse to plan");
     match err {
         PlanError::Tool {
             node: failed_node,

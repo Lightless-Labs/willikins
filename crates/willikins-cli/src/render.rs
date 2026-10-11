@@ -1650,18 +1650,11 @@ mod tests {
             CoreValue::known(willikins_types::DopplerTokenName::parse("ci").unwrap()),
         );
 
-        let approved =
-            plan(&checked, &inputs, &fake_catalog).expect("plan against empty state must succeed");
+        let approved = plan(&checked, &inputs).expect("plan against empty state must succeed");
         let mut observer = NoopObserver;
-        let applied = willikins_core::apply(
-            &checked,
-            &inputs,
-            &fake_catalog,
-            &approved,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect("apply against empty state must succeed");
+        let applied =
+            willikins_core::apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+                .expect("apply against empty state must succeed");
 
         let text = applied_text(&applied, Disclosure::Masked);
         assert!(text.contains("Created"), "text: {text}");

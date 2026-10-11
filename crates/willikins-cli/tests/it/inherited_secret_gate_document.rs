@@ -168,8 +168,7 @@ fn run_1_creates_inherit_and_blocks_the_key_naming_config_and_name() {
     let checked = check(&document(), &catalog)
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = base_inputs();
-    let planned =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    let planned = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
 
     assert_eq!(action_of(&planned, "inherit", None), Action::Create);
     assert_eq!(action_of(&planned, "apns_key", None), Action::Blocked);
@@ -202,18 +201,10 @@ fn apply_run_1_then_run_2_resolves_inherit_and_computes_the_key() {
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = base_inputs();
 
-    let planned1 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    let planned1 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
     let mut observer = RecordingObserver::new();
-    let applied1 = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &planned1,
-        &approval(),
-        &mut observer,
-    )
-    .expect("a blocked run is Ok, not an error");
+    let applied1 = apply(&checked, &inputs, &planned1, &approval(), &mut observer)
+        .expect("a blocked run is Ok, not an error");
     assert!(matches!(
         status_of(&applied1, "inherit", None),
         NodeStatus::Created
@@ -223,8 +214,7 @@ fn apply_run_1_then_run_2_resolves_inherit_and_computes_the_key() {
         NodeStatus::Blocked
     ));
 
-    let planned2 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    let planned2 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
     assert_eq!(action_of(&planned2, "inherit", None), Action::NoOp);
     assert_eq!(action_of(&planned2, "apns_key", None), Action::Compute);
     assert!(
@@ -248,8 +238,7 @@ fn a_non_inheritable_base_blocks_its_gate_and_skips_inherit_and_the_key() {
     let checked = check(&document(), &catalog)
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = base_inputs();
-    let planned =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("the document plans: {err}"));
+    let planned = plan(&checked, &inputs).unwrap_or_else(|err| panic!("the document plans: {err}"));
 
     assert_eq!(
         action_of(&planned, "base_config_gate", Some("shared_keys/prd")),
@@ -288,21 +277,12 @@ fn a_base_without_the_secret_leaves_the_key_blocked_after_run_1_applies() {
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
     let inputs = base_inputs();
 
-    let planned1 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
+    let planned1 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 1 plans: {err}"));
     let mut observer = RecordingObserver::new();
-    apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &planned1,
-        &approval(),
-        &mut observer,
-    )
-    .expect("a blocked run is Ok, not an error");
+    apply(&checked, &inputs, &planned1, &approval(), &mut observer)
+        .expect("a blocked run is Ok, not an error");
 
-    let planned2 =
-        plan(&checked, &inputs, &catalog).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
+    let planned2 = plan(&checked, &inputs).unwrap_or_else(|err| panic!("run 2 plans: {err}"));
     assert_eq!(action_of(&planned2, "inherit", None), Action::NoOp);
     assert_eq!(
         action_of(&planned2, "apns_key", None),
@@ -358,7 +338,7 @@ fn a_config_inheriting_a_base_the_document_does_not_name_refuses_to_plan() {
     let catalog = willikins_providers_fake::catalog(state.clone());
     let checked = check(&document(), &catalog)
         .unwrap_or_else(|errors| panic!("the document checks cleanly: {errors:?}"));
-    let err = plan(&checked, &base_inputs(), &catalog)
+    let err = plan(&checked, &base_inputs())
         .expect_err("inherit must refuse to drop a base, so the run must not plan");
     match err {
         PlanError::AttributeMismatch {

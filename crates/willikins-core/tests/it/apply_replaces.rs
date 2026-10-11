@@ -222,20 +222,13 @@ fn apply_never_deletes_what_the_approved_plan_showed_as_no_op() {
     let checked = check(&workflow(), &catalog).expect("checks cleanly");
     let inputs = key_inputs();
 
-    let approved = plan(&checked, &inputs, &catalog).unwrap();
+    let approved = plan(&checked, &inputs).unwrap();
     assert_eq!(action_of(&approved, "invalidator"), Action::Create);
     assert_eq!(action_of(&approved, "profile"), Action::NoOp);
     assert!(approved.replacing.is_empty());
 
     let mut observer = RecordingObserver::new();
-    let result = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    );
+    let result = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer);
 
     assert_eq!(
         world.lock().unwrap().deletes,
@@ -269,22 +262,15 @@ fn apply_never_deletes_what_the_approved_plan_showed_as_no_op() {
     ));
 
     // The re-run: the plan now shows the replacement and names it.
-    let replan = plan(&checked, &inputs, &catalog).unwrap();
+    let replan = plan(&checked, &inputs).unwrap();
     assert_eq!(action_of(&replan, "profile"), Action::Replace);
     assert_eq!(replan.replacing.len(), 1);
     assert_eq!(replan.replacing[0].node.as_str(), "profile");
 
     // Approving that plan runs the replacement, exactly once.
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &replan,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("a shown replacement runs");
+    let applied = apply(&checked, &inputs, &replan, &Approval::Auto, &mut observer)
+        .expect("a shown replacement runs");
     assert_eq!(world.lock().unwrap().deletes, 1);
     assert!(matches!(
         applied
@@ -308,19 +294,12 @@ fn a_no_op_that_stays_valid_still_converges() {
     let catalog = catalog(&world);
     let checked = check(&workflow(), &catalog).expect("checks cleanly");
     let inputs = key_inputs();
-    let approved = plan(&checked, &inputs, &catalog).unwrap();
+    let approved = plan(&checked, &inputs).unwrap();
     assert_eq!(action_of(&approved, "profile"), Action::NoOp);
 
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("converges");
+    let applied =
+        apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer).expect("converges");
     assert_eq!(world.lock().unwrap().deletes, 0);
     assert!(matches!(
         applied

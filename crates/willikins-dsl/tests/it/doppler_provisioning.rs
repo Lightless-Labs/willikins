@@ -143,18 +143,11 @@ fn doppler_project_creates_a_project_and_its_default_configs() {
             RawInput::Scalar("lightless-labs-widgets".to_string()),
         )],
     );
-    let approved = plan(&checked, &inputs, &catalog)
+    let approved = plan(&checked, &inputs)
         .expect("doppler-project.yaml must plan cleanly against empty state");
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("doppler-project.yaml must apply cleanly against empty state");
+    let applied = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("doppler-project.yaml must apply cleanly against empty state");
 
     assert!(matches!(
         node_status(&applied, "doppler", None),
@@ -222,18 +215,10 @@ fn doppler_backend_alone_inherits_the_shared_backend_base() {
         &checked,
         &[("project", RawInput::Scalar("ledger".to_string()))],
     );
-    let approved =
-        plan(&checked, &inputs, &catalog).expect("doppler-backend.yaml must plan cleanly");
+    let approved = plan(&checked, &inputs).expect("doppler-backend.yaml must plan cleanly");
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("doppler-backend.yaml must apply cleanly");
+    let applied = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("doppler-backend.yaml must apply cleanly");
 
     for env in ["dev", "stg", "prd"] {
         assert!(
@@ -287,13 +272,12 @@ fn compose_project_then_ios() {
         &project_checked,
         &[("project", RawInput::Scalar("widgets".to_string()))],
     );
-    let project_plan = plan(&project_checked, &project_inputs, &catalog)
-        .expect("doppler-project.yaml must plan cleanly");
+    let project_plan =
+        plan(&project_checked, &project_inputs).expect("doppler-project.yaml must plan cleanly");
     let mut observer = RecordingObserver::new();
     let project_applied = apply(
         &project_checked,
         &project_inputs,
-        &catalog,
         &project_plan,
         &Approval::Auto,
         &mut observer,
@@ -314,13 +298,12 @@ fn compose_project_then_ios() {
         &ios_checked,
         &[("project", RawInput::Scalar("widgets".to_string()))],
     );
-    let ios_plan = plan(&ios_checked, &ios_inputs, &catalog)
+    let ios_plan = plan(&ios_checked, &ios_inputs)
         .expect("doppler-ios.yaml must plan cleanly against the project doppler-project made");
     let mut observer = RecordingObserver::new();
     let ios_applied = apply(
         &ios_checked,
         &ios_inputs,
-        &catalog,
         &ios_plan,
         &Approval::Auto,
         &mut observer,
@@ -374,13 +357,12 @@ fn compose_project_then_backend_for_ios_inherits_both_shared_bases() {
         &project_checked,
         &[("project", RawInput::Scalar("cortex".to_string()))],
     );
-    let project_plan = plan(&project_checked, &project_inputs, &catalog)
-        .expect("doppler-project.yaml must plan cleanly");
+    let project_plan =
+        plan(&project_checked, &project_inputs).expect("doppler-project.yaml must plan cleanly");
     let mut observer = RecordingObserver::new();
     let project_applied = apply(
         &project_checked,
         &project_inputs,
-        &catalog,
         &project_plan,
         &Approval::Auto,
         &mut observer,
@@ -400,13 +382,12 @@ fn compose_project_then_backend_for_ios_inherits_both_shared_bases() {
         &bfi_checked,
         &[("project", RawInput::Scalar("cortex".to_string()))],
     );
-    let bfi_plan = plan(&bfi_checked, &bfi_inputs, &catalog)
-        .expect("doppler-backend-for-ios.yaml must plan cleanly");
+    let bfi_plan =
+        plan(&bfi_checked, &bfi_inputs).expect("doppler-backend-for-ios.yaml must plan cleanly");
     let mut observer = RecordingObserver::new();
     let bfi_applied = apply(
         &bfi_checked,
         &bfi_inputs,
-        &catalog,
         &bfi_plan,
         &Approval::Auto,
         &mut observer,
@@ -471,7 +452,7 @@ fn doppler_ios_plan_refuses_a_config_that_already_inherits_an_extra() {
         &[("project", RawInput::Scalar("widgets".to_string()))],
     );
 
-    let err = plan(&checked, &inputs, &catalog)
+    let err = plan(&checked, &inputs)
         .expect_err("plan must refuse rather than silently drop the hand-wired extra");
     match err {
         PlanError::AttributeMismatch { site } => {

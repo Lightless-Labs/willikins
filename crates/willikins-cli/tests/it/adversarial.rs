@@ -152,7 +152,7 @@ fn finding_01_every_declared_output_reaches_the_plan() {
     );
     let description = willikins_core::describe(&checked, &partial);
     assert!(description.errors.is_empty() && description.missing.is_empty());
-    let plan = willikins_core::plan(&checked, &description.resolved, &catalog).expect("plans");
+    let plan = willikins_core::plan(&checked, &description.resolved).expect("plans");
 
     let planned: Vec<OutputName> = plan.outputs.keys().cloned().collect();
     assert_eq!(
@@ -222,7 +222,7 @@ fn pinned_a_hostile_secret_value_never_reaches_stdout() {
         RawInput::Scalar("widgets".to_string()),
     );
     let description = willikins_core::describe(&checked, &partial);
-    let plan = willikins_core::plan(&checked, &description.resolved, &catalog).expect("plans");
+    let plan = willikins_core::plan(&checked, &description.resolved).expect("plans");
 
     let json = serde_json::to_string_pretty(&plan).expect("Plan serializes");
     let debug = format!("{plan:?}");
@@ -464,8 +464,7 @@ fn finding_02_an_output_referencing_a_step_named_outputs_resolves() {
     // `check` and `plan` now agree: the output is typed and planned.
     let partial = PartialInputs::new();
     let description = willikins_core::describe(&checked, &partial);
-    let plan = willikins_core::plan(&checked, &description.resolved, &empty_catalog())
-        .expect("finding 2: plans");
+    let plan = willikins_core::plan(&checked, &description.resolved).expect("finding 2: plans");
     let output_types = checked.output_types();
     assert_eq!(
         plan.outputs.keys().collect::<Vec<_>>(),
@@ -982,7 +981,7 @@ proptest! {
         if !description.missing.is_empty() || !description.errors.is_empty() {
             return Ok(());
         }
-        let planned = willikins_core::plan(&checked, &description.resolved, &catalog);
+        let planned = willikins_core::plan(&checked, &description.resolved);
         if let Ok(plan) = planned {
             // Finding 1 and 2's invariant, from the outside: `plan` never
             // reports a smaller output surface than `check` typed.

@@ -234,7 +234,7 @@ fn absent_with_updates_true_plans_update() {
     let catalog = toggleable_catalog(&world);
     let checked = check(&workflow("test.toggleable"), &catalog).expect("checks cleanly");
     let inputs = key_inputs();
-    let result = plan(&checked, &inputs, &catalog).expect("plans cleanly");
+    let result = plan(&checked, &inputs).expect("plans cleanly");
 
     assert_eq!(action_of(&result, "subject"), Action::Update);
     assert_eq!(world.lock().unwrap().update_calls, 1);
@@ -252,7 +252,7 @@ fn replaces_wins_over_updates() {
     let catalog = toggleable_catalog(&world);
     let checked = check(&workflow("test.toggleable"), &catalog).expect("checks cleanly");
     let inputs = key_inputs();
-    let result = plan(&checked, &inputs, &catalog).expect("plans cleanly");
+    let result = plan(&checked, &inputs).expect("plans cleanly");
 
     assert_eq!(action_of(&result, "subject"), Action::Replace);
     assert_eq!(
@@ -274,7 +274,7 @@ fn present_plans_no_op_and_never_calls_updates() {
     let catalog = toggleable_catalog(&world);
     let checked = check(&workflow("test.toggleable"), &catalog).expect("checks cleanly");
     let inputs = key_inputs();
-    let result = plan(&checked, &inputs, &catalog).expect("plans cleanly");
+    let result = plan(&checked, &inputs).expect("plans cleanly");
 
     assert_eq!(action_of(&result, "subject"), Action::NoOp);
     assert_eq!(world.lock().unwrap().update_calls, 0);
@@ -287,7 +287,7 @@ fn pure_tool_never_calls_updates() {
     let catalog = never_updates_catalog(false);
     let checked = check(&workflow("test.never_updates"), &catalog).expect("checks cleanly");
     let inputs = key_inputs();
-    let result = plan(&checked, &inputs, &catalog).expect("plans cleanly, never panics");
+    let result = plan(&checked, &inputs).expect("plans cleanly, never panics");
 
     assert_eq!(action_of(&result, "subject"), Action::Compute);
 }
@@ -299,7 +299,7 @@ fn gate_never_calls_updates() {
     let catalog = never_updates_catalog(true);
     let checked = check(&workflow("test.never_updates"), &catalog).expect("checks cleanly");
     let inputs = key_inputs();
-    let result = plan(&checked, &inputs, &catalog).expect("plans cleanly, never panics");
+    let result = plan(&checked, &inputs).expect("plans cleanly, never panics");
 
     assert_eq!(action_of(&result, "subject"), Action::Blocked);
 }
@@ -315,7 +315,7 @@ fn updates_error_maps_to_plan_error_tool() {
     let catalog = toggleable_catalog(&world);
     let checked = check(&workflow("test.toggleable"), &catalog).expect("checks cleanly");
     let inputs = key_inputs();
-    let result = plan(&checked, &inputs, &catalog);
+    let result = plan(&checked, &inputs);
 
     let Err(PlanError::Tool { node, error }) = result else {
         panic!("expected PlanError::Tool, got {result:?}");
@@ -336,7 +336,7 @@ fn approved_create_that_replans_update_fails_apply_with_action_drift() {
     let checked = check(&workflow("test.toggleable"), &catalog).expect("checks cleanly");
     let inputs = key_inputs();
 
-    let approved = plan(&checked, &inputs, &catalog).unwrap();
+    let approved = plan(&checked, &inputs).unwrap();
     assert_eq!(action_of(&approved, "subject"), Action::Create);
 
     // The resource's state changes between planning and applying: the
@@ -344,14 +344,7 @@ fn approved_create_that_replans_update_fails_apply_with_action_drift() {
     world.lock().unwrap().updates = true;
 
     let mut observer = RecordingObserver::new();
-    let result = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    );
+    let result = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer);
 
     let Err(ApplyError::Drift { node, kind, .. }) = result else {
         panic!("expected ApplyError::Drift, got {result:?}");

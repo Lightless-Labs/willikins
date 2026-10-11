@@ -181,8 +181,8 @@ fn boundary_a_plan_approved_for_one_document_applies_to_another_with_the_same_fi
     let swapped_checked = check(&swapped_document, &catalog).expect("document B checks");
     let no_inputs = IndexMap::new();
 
-    let approved = plan(&approved_checked, &no_inputs, &catalog).expect("document A plans");
-    let swapped = plan(&swapped_checked, &no_inputs, &catalog).expect("document B plans");
+    let approved = plan(&approved_checked, &no_inputs).expect("document A plans");
+    let swapped = plan(&swapped_checked, &no_inputs).expect("document B plans");
     assert_eq!(
         approved.fingerprint(),
         swapped.fingerprint(),
@@ -207,7 +207,6 @@ fn boundary_a_plan_approved_for_one_document_applies_to_another_with_the_same_fi
             apply(
                 &swapped_checked,
                 &no_inputs,
-                &catalog,
                 &approved,
                 &Approval::Auto,
                 observer,
@@ -273,7 +272,7 @@ fn boundary_a_hand_edited_plan_record_replays_as_truth() {
     let document = load(&fixture("plan-identity-a.yaml"));
     let checked = check(&document, &catalog).expect("checks");
     let no_inputs = IndexMap::new();
-    let approved = plan(&checked, &no_inputs, &catalog).expect("plans");
+    let approved = plan(&checked, &no_inputs).expect("plans");
 
     let dir = tempfile::tempdir().unwrap();
     let journal_path = dir.path().join("journal.jsonl");
@@ -748,7 +747,7 @@ fn the_rotation_workflow_journals_a_minted_secret_and_a_tool_failure_without_lea
             ),
         ],
     );
-    let approved = plan(&checked, &inputs, &catalog).expect("plans");
+    let approved = plan(&checked, &inputs).expect("plans");
     assert!(approved.requires_approval);
 
     let dir = tempfile::tempdir().unwrap();
@@ -762,7 +761,7 @@ fn the_rotation_workflow_journals_a_minted_secret_and_a_tool_failure_without_lea
     };
     let (result, run_id, journal_error) =
         run_and_journal(&mut journal, principal("agent"), plan_id, |observer| {
-            apply(&checked, &inputs, &catalog, &approved, &approval, observer)
+            apply(&checked, &inputs, &approved, &approval, observer)
         });
     assert!(journal_error.is_none(), "{journal_error:?}");
     let err = result.expect_err("the injected failure stops the run at the sink");
@@ -894,20 +893,13 @@ fn node_started_inputs_holding_a_secret_list_are_redacted_element_by_element() {
         );
     let checked = check(&workflow, &catalog).expect("a secret list into a secret list port checks");
     let no_inputs = IndexMap::new();
-    let approved = plan(&checked, &no_inputs, &catalog).expect("plans");
+    let approved = plan(&checked, &no_inputs).expect("plans");
 
     let mut journal = MemoryJournal::new();
     let plan_id = record_plan(&mut journal, &checked, &no_inputs, &approved, "sha256-list");
     let (result, _run_id, journal_error) =
         run_and_journal(&mut journal, principal("agent"), plan_id, |observer| {
-            apply(
-                &checked,
-                &no_inputs,
-                &catalog,
-                &approved,
-                &Approval::Auto,
-                observer,
-            )
+            apply(&checked, &no_inputs, &approved, &Approval::Auto, observer)
         });
     assert!(journal_error.is_none(), "{journal_error:?}");
     result.expect("runs");
@@ -946,20 +938,13 @@ fn a_document_default_spelling_the_redaction_marker_is_not_marked_redacted() {
     let document = load(&fixture("redaction-marker-default.yaml"));
     let checked = check(&document, &catalog).expect("the fixture checks");
     let inputs = resolve_inputs(&checked, &[]);
-    let approved = plan(&checked, &inputs, &catalog).expect("plans");
+    let approved = plan(&checked, &inputs).expect("plans");
 
     let mut journal = MemoryJournal::new();
     let plan_id = record_plan(&mut journal, &checked, &inputs, &approved, "sha256-marker");
     let (result, _run_id, journal_error) =
         run_and_journal(&mut journal, principal("agent"), plan_id, |observer| {
-            apply(
-                &checked,
-                &inputs,
-                &catalog,
-                &approved,
-                &Approval::Auto,
-                observer,
-            )
+            apply(&checked, &inputs, &approved, &Approval::Auto, observer)
         });
     assert!(journal_error.is_none(), "{journal_error:?}");
     result.expect("runs");

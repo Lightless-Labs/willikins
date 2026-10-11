@@ -67,20 +67,13 @@ fn happy_path_creates_everything_and_the_marker_never_leaks() {
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &catalog).expect("the positive fixture checks cleanly");
     let inputs = common::new_rust_service_inputs();
-    let approved = plan(&checked, &inputs, &catalog).expect("empty state plans cleanly");
+    let approved = plan(&checked, &inputs).expect("empty state plans cleanly");
     assert_eq!(approved.class, Class::Reversible);
     assert!(!approved.requires_approval);
 
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("the happy path must apply cleanly");
+    let applied = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("the happy path must apply cleanly");
 
     let by_name = |name: &str, instance: Option<&str>| {
         applied
@@ -164,7 +157,7 @@ fn drift_on_action_stops_before_any_provider_call() {
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &catalog).expect("the positive fixture checks cleanly");
     let inputs = common::new_rust_service_inputs();
-    let approved = plan(&checked, &inputs, &catalog).expect("empty state plans cleanly");
+    let approved = plan(&checked, &inputs).expect("empty state plans cleanly");
 
     // Seed the repo as ours, matching the requested (default) visibility,
     // between `plan` and `apply`: a fresh re-plan now sees it `NoOp`
@@ -180,15 +173,8 @@ fn drift_on_action_stops_before_any_provider_call() {
     }
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("a drifted plan must refuse");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("a drifted plan must refuse");
 
     match err {
         ApplyError::Drift {
@@ -241,7 +227,7 @@ fn human_approval_is_accepted_for_a_reversible_plan() {
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &catalog).expect("the positive fixture checks cleanly");
     let inputs = common::new_rust_service_inputs();
-    let approved = plan(&checked, &inputs, &catalog).expect("empty state plans cleanly");
+    let approved = plan(&checked, &inputs).expect("empty state plans cleanly");
     assert!(
         !approved.requires_approval,
         "the positive fixture is Reversible"
@@ -252,15 +238,8 @@ fn human_approval_is_accepted_for_a_reversible_plan() {
         at: timestamp("2026-09-13T09:00:00Z"),
     };
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &approval,
-        &mut observer,
-    )
-    .expect("a human-approved Reversible plan runs");
+    let applied = apply(&checked, &inputs, &approved, &approval, &mut observer)
+        .expect("a human-approved Reversible plan runs");
     assert!(matches!(
         common::status_of(&applied, "repo", None),
         NodeStatus::Created
@@ -282,18 +261,11 @@ fn a_tool_failure_reports_failed_then_not_run() {
         .node(node("after"), Node::new(tool_name("test.after")));
     let checked = check(&workflow, &catalog).expect("a workflow with no bindings checks cleanly");
     let inputs = IndexMap::new();
-    let approved = plan(&checked, &inputs, &catalog).expect("plan against no state succeeds");
+    let approved = plan(&checked, &inputs).expect("plan against no state succeeds");
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("a failing ensure must stop the run");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("a failing ensure must stop the run");
 
     let ApplyError::Tool {
         node: failed_node,
@@ -341,7 +313,7 @@ fn unknown_input_blocks_a_create_node_reading_an_unreadable_upstream_output() {
         );
     let checked = check(&workflow, &catalog).expect("must check cleanly");
     let inputs = IndexMap::new();
-    let approved = plan(&checked, &inputs, &catalog).expect("plan succeeds");
+    let approved = plan(&checked, &inputs).expect("plan succeeds");
     assert_eq!(
         approved
             .nodes
@@ -353,15 +325,8 @@ fn unknown_input_blocks_a_create_node_reading_an_unreadable_upstream_output() {
     );
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("an unreadable required input must block");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("an unreadable required input must block");
 
     let ApplyError::UnknownInput {
         node: blocked_node,
@@ -393,20 +358,13 @@ fn approval_gate_blocks_auto_and_runs_with_human() {
     let workflow = common::irreversible_workflow();
     let checked = check(&workflow, &catalog).expect("irreversible workflow checks cleanly");
     let inputs = common::new_rust_service_inputs();
-    let approved = plan(&checked, &inputs, &catalog).expect("plan against empty state succeeds");
+    let approved = plan(&checked, &inputs).expect("plan against empty state succeeds");
     assert_eq!(approved.class, Class::Irreversible);
     assert!(approved.requires_approval);
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("Auto on an irreversible plan must refuse");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("Auto on an irreversible plan must refuse");
     match err {
         ApplyError::ApprovalRequired { class } => assert_eq!(class, Class::Irreversible),
         other => panic!("expected ApprovalRequired, got {other:?}"),
@@ -426,15 +384,8 @@ fn approval_gate_blocks_auto_and_runs_with_human() {
         at: timestamp("2026-09-13T12:00:00+00:00"),
     };
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &approval,
-        &mut observer,
-    )
-    .expect("Human approval must let the plan run");
+    let applied = apply(&checked, &inputs, &approved, &approval, &mut observer)
+        .expect("Human approval must let the plan run");
 
     let danger = applied
         .nodes
@@ -480,7 +431,7 @@ fn a_re_plan_failure_surfaces_as_apply_error_plan() {
         input("slug"),
         Value::known(ProjectSlug::parse("third-thoughts").unwrap()),
     );
-    let approved = plan(&checked, &inputs, &catalog).expect("plan succeeds with both inputs bound");
+    let approved = plan(&checked, &inputs).expect("plan succeeds with both inputs bound");
 
     // `apply`'s own `inputs` withholds `slug`.
     let mut incomplete_inputs = IndexMap::new();
@@ -492,7 +443,6 @@ fn a_re_plan_failure_surfaces_as_apply_error_plan() {
     let err = apply(
         &checked,
         &incomplete_inputs,
-        &catalog,
         &approved,
         &Approval::Auto,
         &mut observer,
@@ -529,23 +479,21 @@ fn a_second_apply_against_the_first_ones_state_converges_the_unreadable_secret_c
     let checked = check(&workflow, &catalog).expect("checks cleanly");
     let inputs = common::new_rust_service_inputs();
 
-    let first_plan = plan(&checked, &inputs, &catalog).expect("first plan succeeds");
+    let first_plan = plan(&checked, &inputs).expect("first plan succeeds");
     apply(
         &checked,
         &inputs,
-        &catalog,
         &first_plan,
         &Approval::Auto,
         &mut RecordingObserver::new(),
     )
     .expect("first apply creates everything");
 
-    let second_plan = plan(&checked, &inputs, &catalog).expect("re-plan against populated state");
+    let second_plan = plan(&checked, &inputs).expect("re-plan against populated state");
     let mut observer = RecordingObserver::new();
     let applied = apply(
         &checked,
         &inputs,
-        &catalog,
         &second_plan,
         &Approval::Auto,
         &mut observer,
@@ -650,13 +598,12 @@ fn an_approved_plan_from_another_workflow_is_drift_not_a_panic() {
     let checked_a = check(&workflow_a, &catalog).expect("workflow A checks");
     let checked_b = check(&workflow_b, &catalog).expect("workflow B checks");
     let inputs = IndexMap::new();
-    let approved = plan(&checked_a, &inputs, &catalog).expect("workflow A plans");
+    let approved = plan(&checked_a, &inputs).expect("workflow A plans");
 
     let mut observer = RecordingObserver::new();
     let err = apply(
         &checked_b,
         &inputs,
-        &catalog,
         &approved,
         &Approval::Auto,
         &mut observer,
@@ -713,14 +660,13 @@ fn for_each_instances_are_compared_by_key_not_only_by_position() {
         inputs
     };
 
-    let approved = plan(&checked, &environments("dev", "stg"), &catalog).expect("plans");
+    let approved = plan(&checked, &environments("dev", "stg")).expect("plans");
     let swapped = environments("stg", "dev");
 
     let mut observer = RecordingObserver::new();
     let err = apply(
         &checked,
         &swapped,
-        &catalog,
         &approved,
         &Approval::Auto,
         &mut observer,
@@ -787,13 +733,12 @@ fn an_approved_plan_with_an_extra_instance_is_instance_drift() {
         inputs
     };
 
-    let approved = plan(&checked, &slugs(&["dev", "stg"]), &catalog).expect("plans");
+    let approved = plan(&checked, &slugs(&["dev", "stg"])).expect("plans");
 
     let mut observer = RecordingObserver::new();
     let err = apply(
         &checked,
         &slugs(&["dev"]),
-        &catalog,
         &approved,
         &Approval::Auto,
         &mut observer,
@@ -899,17 +844,10 @@ fn a_for_each_node_minting_secrets_redacts_them_everywhere_including_the_output_
         ]),
     );
 
-    let approved = plan(&checked, &inputs, &catalog).expect("plans against empty state");
+    let approved = plan(&checked, &inputs).expect("plans against empty state");
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("applies against empty state");
+    let applied = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("applies against empty state");
 
     // The same bytes `common::distinctive_token` is built from; a secret
     // type never hands them back, so the test holds its own copy.
@@ -1013,21 +951,14 @@ fn a_changed_observed_non_secret_output_is_output_drift() {
         .node(node("live"), Node::new(tool_name("test.live")));
     let checked = check(&workflow, &catalog).expect("checks");
     let inputs = IndexMap::new();
-    let approved = plan(&checked, &inputs, &catalog).expect("plans");
+    let approved = plan(&checked, &inputs).expect("plans");
 
     // The provider's own state changes under us between approval and run.
     *live_value.lock().unwrap() = willikins_types::GitHubOrg::parse("other-org").unwrap();
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("a changed observed value must refuse");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("a changed observed value must refuse");
 
     let ApplyError::Drift {
         node: name, kind, ..
@@ -1079,19 +1010,12 @@ fn an_unknown_value_for_a_required_input_is_refused_and_never_calls_ensure() {
 
     // `plan` itself is happy: `github.repo.ensure`'s `read` only needs the
     // repository's own name to see that it is absent.
-    let approved = plan(&checked, &inputs, &catalog).expect("plans with an unknown visibility");
+    let approved = plan(&checked, &inputs).expect("plans with an unknown visibility");
     assert_eq!(approved.nodes[0].action, Action::Create);
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("a required input with no known value must refuse");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect_err("a required input with no known value must refuse");
 
     let ApplyError::UnknownRequiredInput {
         node: blocked,
@@ -1150,19 +1074,12 @@ fn an_unknown_required_input_on_a_planned_no_op_converges_without_a_call() {
 
     // The repository is present and its visibility is not knowably
     // different, so the fresh plan has nothing to do here.
-    let approved = plan(&checked, &inputs, &catalog).expect("plans with an unknown visibility");
+    let approved = plan(&checked, &inputs).expect("plans with an unknown visibility");
     assert_eq!(approved.nodes[0].action, Action::NoOp);
 
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("a planned no-op with an unknown input converges");
+    let applied = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("a planned no-op with an unknown input converges");
 
     assert!(matches!(applied.nodes[0].status, NodeStatus::Converged));
     assert_eq!(
@@ -1193,7 +1110,7 @@ fn a_cleared_approval_flag_does_not_bypass_the_gate() {
     assert_eq!(checked.class(), Class::Irreversible);
     let inputs = common::new_rust_service_inputs();
 
-    let mut forged = plan(&checked, &inputs, &catalog).expect("plan against empty state succeeds");
+    let mut forged = plan(&checked, &inputs).expect("plan against empty state succeeds");
     forged.requires_approval = false;
     forged.class = Class::Reversible;
 
@@ -1205,15 +1122,8 @@ fn a_cleared_approval_flag_does_not_bypass_the_gate() {
     }
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &forged,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("the checked workflow's class decides, not the plan's flag");
+    let err = apply(&checked, &inputs, &forged, &Approval::Auto, &mut observer)
+        .expect_err("the checked workflow's class decides, not the plan's flag");
     match err {
         ApplyError::ApprovalRequired { class } => assert_eq!(class, Class::Irreversible),
         other => panic!("expected ApprovalRequired, got {other:?}"),
@@ -1301,7 +1211,7 @@ fn an_empty_for_each_source_applies_zero_instances_and_a_known_empty_list() {
         Value::parse_list(&list_ty("EnvironmentSlug"), &[]).unwrap(),
     );
 
-    let approved = plan(&checked, &inputs, &fake_catalog).expect("an empty list plans");
+    let approved = plan(&checked, &inputs).expect("an empty list plans");
     assert!(
         approved
             .nodes
@@ -1312,15 +1222,8 @@ fn an_empty_for_each_source_applies_zero_instances_and_a_known_empty_list() {
     );
 
     let mut observer = RecordingObserver::new();
-    let applied = apply(
-        &checked,
-        &inputs,
-        &fake_catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("apply must succeed with zero instances, never panic");
+    let applied = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("apply must succeed with zero instances, never panic");
 
     let all_configs = applied
         .outputs
@@ -1398,17 +1301,10 @@ fn item_in_a_list_port_applies_with_each_instances_own_item() {
         Value::parse_list(&list_ty("Text"), &["x", "y"]).unwrap(),
     );
 
-    let approved = plan(&checked, &inputs, &fake_catalog).expect("plans");
+    let approved = plan(&checked, &inputs).expect("plans");
     let mut observer = RecordingObserver::new();
-    apply(
-        &checked,
-        &inputs,
-        &fake_catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect("apply must pass each instance its own item, never panic");
+    apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+        .expect("apply must pass each instance its own item, never panic");
 
     let calls = ensures.lock().unwrap();
     assert_eq!(calls.len(), 2, "one ensure call per for_each instance");
@@ -1481,7 +1377,7 @@ fn a_list_ports_upstream_unknown_element_attributes_to_the_upstream_node() {
         Value::parse_list(&list_ty("GitHubOrg"), &["example-org"]).unwrap(),
     );
 
-    let approved = plan(&checked, &inputs, &catalog).expect("plans despite the unknown element");
+    let approved = plan(&checked, &inputs).expect("plans despite the unknown element");
     assert_eq!(
         approved
             .nodes
@@ -1493,15 +1389,9 @@ fn a_list_ports_upstream_unknown_element_attributes_to_the_upstream_node() {
     );
 
     let mut observer = RecordingObserver::new();
-    let err = apply(
-        &checked,
-        &inputs,
-        &catalog,
-        &approved,
-        &Approval::Auto,
-        &mut observer,
-    )
-    .expect_err("a required list port that resolves Unknown through an upstream element blocks");
+    let err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer).expect_err(
+        "a required list port that resolves Unknown through an upstream element blocks",
+    );
 
     let ApplyError::UnknownInput {
         node: blocked_node,
@@ -1892,7 +1782,7 @@ mod conversions {
         let mut inputs = IndexMap::new();
         inputs.insert(input("a"), Value::known(a("hello")));
 
-        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans");
+        let planned = plan(&checked, &inputs).expect("plans");
         let delivered = only_b(&planned.nodes[0].inputs);
         assert_eq!(delivered.ty(), &scalar("ConvB"));
         assert_eq!(b_text(delivered), "hello");
@@ -1906,15 +1796,7 @@ mod conversions {
         );
 
         let mut observer = RecordingObserver::new();
-        apply(
-            &checked,
-            &inputs,
-            &fixture.catalog,
-            &planned,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect("applies");
+        apply(&checked, &inputs, &planned, &Approval::Auto, &mut observer).expect("applies");
         let ensures = fixture.sink_b.ensures.lock().unwrap();
         assert_eq!(ensures.len(), 1);
         assert_eq!(only_b(&ensures[0]).ty(), &scalar("ConvB"));
@@ -1943,7 +1825,7 @@ mod conversions {
         let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
         let inputs = IndexMap::new();
 
-        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans");
+        let planned = plan(&checked, &inputs).expect("plans");
         let sink = planned
             .nodes
             .iter()
@@ -1957,15 +1839,7 @@ mod conversions {
         );
 
         let mut observer = RecordingObserver::new();
-        apply(
-            &checked,
-            &inputs,
-            &fixture.catalog,
-            &planned,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect("applies");
+        apply(&checked, &inputs, &planned, &Approval::Auto, &mut observer).expect("applies");
         let ensures = fixture.sink_b.ensures.lock().unwrap();
         assert_eq!(ensures.len(), 1);
         assert_eq!(only_b(&ensures[0]).ty(), &scalar("ConvB"));
@@ -2008,7 +1882,7 @@ mod conversions {
         let mut inputs = IndexMap::new();
         inputs.insert(input("z"), Value::known(ConvB::parse("z").unwrap()));
 
-        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans");
+        let planned = plan(&checked, &inputs).expect("plans");
         let sink = planned
             .nodes
             .iter()
@@ -2025,15 +1899,7 @@ mod conversions {
         assert_eq!(bs.ty(), &TypeRef::list_of(name("ConvB")));
 
         let mut observer = RecordingObserver::new();
-        apply(
-            &checked,
-            &inputs,
-            &fixture.catalog,
-            &planned,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect("applies");
+        apply(&checked, &inputs, &planned, &Approval::Auto, &mut observer).expect("applies");
         let ensures = fixture.sink_list_b.ensures.lock().unwrap();
         assert_eq!(ensures.len(), 1);
         let bs = ensures[0]
@@ -2079,7 +1945,7 @@ mod conversions {
         let mut inputs = IndexMap::new();
         inputs.insert(input("xs"), Value::known_list(vec![a("x"), a("y")]));
 
-        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans");
+        let planned = plan(&checked, &inputs).expect("plans");
         let delivered: Vec<(String, Option<String>, String)> = planned
             .nodes
             .iter()
@@ -2104,15 +1970,7 @@ mod conversions {
         );
 
         let mut observer = RecordingObserver::new();
-        apply(
-            &checked,
-            &inputs,
-            &fixture.catalog,
-            &planned,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect("applies");
+        apply(&checked, &inputs, &planned, &Approval::Auto, &mut observer).expect("applies");
         let ensures = fixture.sink_b.ensures.lock().unwrap();
         let texts: Vec<&str> = ensures.iter().map(|i| b_text(only_b(i))).collect();
         assert_eq!(texts, vec!["x", "y", "y"]);
@@ -2142,7 +2000,7 @@ mod conversions {
         let checked = check(&workflow, &fixture.catalog).expect("SecA converts to SecB");
         let inputs = IndexMap::new();
 
-        let planned = plan(&checked, &inputs, &fixture.catalog).expect("plans");
+        let planned = plan(&checked, &inputs).expect("plans");
         let sink = planned
             .nodes
             .iter()
@@ -2153,15 +2011,8 @@ mod conversions {
         assert_eq!(delivered.render().to_string(), "[REDACTED SecB]");
 
         let mut observer = RecordingObserver::new();
-        let applied = apply(
-            &checked,
-            &inputs,
-            &fixture.catalog,
-            &planned,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect("applies");
+        let applied =
+            apply(&checked, &inputs, &planned, &Approval::Auto, &mut observer).expect("applies");
 
         let bytes = secret_bytes();
         for (what, dump) in [
@@ -2290,7 +2141,7 @@ mod conversions {
 
         let mut inputs = IndexMap::new();
         inputs.insert(input("a"), foreign);
-        let err = plan(&checked, &inputs, &fixture.catalog).expect_err("a ConvB is not a ConvA");
+        let err = plan(&checked, &inputs).expect_err("a ConvB is not a ConvA");
         assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &scalar("ConvB"));
         assert_eq!(
             err.to_string(),
@@ -2330,14 +2181,12 @@ mod conversions {
 
         let mut genuine_inputs = IndexMap::new();
         genuine_inputs.insert(input("a"), Value::known(a("real")));
-        let approved =
-            plan(&checked, &genuine_inputs, &fixture.catalog).expect("a real ConvA plans");
+        let approved = plan(&checked, &genuine_inputs).expect("a real ConvA plans");
         fixture.sink_b.reads.lock().unwrap().clear();
 
         let mut inputs = IndexMap::new();
         inputs.insert(input("a"), impostor);
-        let err = plan(&checked, &inputs, &fixture.catalog)
-            .expect_err("a same-named impostor is not a real ConvA");
+        let err = plan(&checked, &inputs).expect_err("a same-named impostor is not a real ConvA");
         assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &scalar("ConvA"));
         assert_eq!(
             err.to_string(),
@@ -2346,15 +2195,8 @@ mod conversions {
         );
 
         let mut observer = RecordingObserver::new();
-        let apply_err = apply(
-            &checked,
-            &inputs,
-            &fixture.catalog,
-            &approved,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect_err("apply's opening replan parses the same inputs");
+        let apply_err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+            .expect_err("apply's opening replan parses the same inputs");
         match apply_err {
             ApplyError::Plan { error } => {
                 assert_input_type_mismatch(&error, "a", &scalar("ConvA"), &scalar("ConvA"));
@@ -2403,8 +2245,7 @@ mod conversions {
             );
             let mut inputs = IndexMap::new();
             inputs.insert(input("xs"), forged);
-            let err = plan(&checked, &inputs, &fixture.catalog)
-                .expect_err("one element is not a real ConvA");
+            let err = plan(&checked, &inputs).expect_err("one element is not a real ConvA");
             assert_input_type_mismatch(&err, "xs", &TypeRef::list_of(name("ConvA")), &found);
             assert!(
                 fixture.sink_b.reads.lock().unwrap().is_empty(),
@@ -2448,7 +2289,7 @@ mod conversions {
         );
         let mut inputs = IndexMap::new();
         inputs.insert(input("xs"), forged);
-        let err = plan(&checked, &inputs, &fixture.catalog)
+        let err = plan(&checked, &inputs)
             .expect_err("a conv_a is not a ConvA, and saying so must not panic");
         assert_input_type_mismatch(
             &err,
@@ -2518,7 +2359,7 @@ mod conversions {
         ] {
             let mut inputs = IndexMap::new();
             inputs.insert(input("a"), value);
-            let err = plan(&checked, &inputs, &fixture.catalog)
+            let err = plan(&checked, &inputs)
                 .expect_err("the echo's exact ConvA port must not receive it");
             assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &found);
             assert!(
@@ -2553,8 +2394,7 @@ mod conversions {
         ] {
             let mut inputs = IndexMap::new();
             inputs.insert(input("a"), value);
-            let err =
-                plan(&scalar_checked, &inputs, &fixture.catalog).expect_err("not a scalar ConvA");
+            let err = plan(&scalar_checked, &inputs).expect_err("not a scalar ConvA");
             assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &found);
         }
         assert!(fixture.sink_b.reads.lock().unwrap().is_empty());
@@ -2569,7 +2409,7 @@ mod conversions {
             check(&list_workflow, &fixture.catalog).expect("A converts to B in one hop");
         let mut inputs = IndexMap::new();
         inputs.insert(input("xs"), Value::known(a("x")));
-        let err = plan(&list_checked, &inputs, &fixture.catalog).expect_err("not a list");
+        let err = plan(&list_checked, &inputs).expect_err("not a list");
         assert_input_type_mismatch(
             &err,
             "xs",
@@ -2579,8 +2419,8 @@ mod conversions {
 
         let mut inputs = IndexMap::new();
         inputs.insert(input("a"), Value::unknown(scalar("ConvA")));
-        let planned = plan(&scalar_checked, &inputs, &fixture.catalog)
-            .expect("an Unknown of the declared type is well typed");
+        let planned =
+            plan(&scalar_checked, &inputs).expect("an Unknown of the declared type is well typed");
         assert_eq!(
             only_b(&planned.nodes[0].inputs),
             &Value::unknown(scalar("ConvB"))
@@ -2600,8 +2440,7 @@ mod conversions {
 
         let mut genuine_inputs = IndexMap::new();
         genuine_inputs.insert(input("a"), Value::known(a("real")));
-        let approved =
-            plan(&checked, &genuine_inputs, &fixture.catalog).expect("a real ConvA plans");
+        let approved = plan(&checked, &genuine_inputs).expect("a real ConvA plans");
         fixture.sink_b.reads.lock().unwrap().clear();
 
         let mut inputs = IndexMap::new();
@@ -2609,7 +2448,7 @@ mod conversions {
             input("a"),
             Value::known(SecA::parse(&secret_bytes()).unwrap()),
         );
-        let err = plan(&checked, &inputs, &fixture.catalog).expect_err("a SecA is not a ConvA");
+        let err = plan(&checked, &inputs).expect_err("a SecA is not a ConvA");
         assert_input_type_mismatch(&err, "a", &scalar("ConvA"), &scalar("SecA"));
         for dump in [
             err.to_string(),
@@ -2620,15 +2459,8 @@ mod conversions {
         }
 
         let mut observer = RecordingObserver::new();
-        let apply_err = apply(
-            &checked,
-            &inputs,
-            &fixture.catalog,
-            &approved,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect_err("apply's opening replan refuses it too");
+        let apply_err = apply(&checked, &inputs, &approved, &Approval::Auto, &mut observer)
+            .expect_err("apply's opening replan refuses it too");
         assert!(!format!("{apply_err:?}").contains(&secret_bytes()));
         assert!(!apply_err.to_string().contains(&secret_bytes()));
         assert!(observer.events.is_empty());
@@ -2769,7 +2601,7 @@ mod conversions {
             );
         let checked = check(&workflow, &fixture.catalog).expect("A binds to A exactly");
 
-        let err = plan(&checked, &IndexMap::new(), &fixture.catalog)
+        let err = plan(&checked, &IndexMap::new())
             .expect_err("the tool's own output disagrees with its spec");
         match err {
             PlanError::Tool {
@@ -2809,19 +2641,12 @@ mod conversions {
         );
         let checked = check(&workflow, &fixture.catalog).expect("one node, no sink");
         let inputs = IndexMap::new();
-        let planned = plan(&checked, &inputs, &fixture.catalog)
+        let planned = plan(&checked, &inputs)
             .expect("plans: the predicted output is Unknown, so nothing is wrong yet");
 
         let mut observer = RecordingObserver::new();
-        let err = apply(
-            &checked,
-            &inputs,
-            &fixture.catalog,
-            &planned,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect_err("ensure's own output disagrees with its spec");
+        let err = apply(&checked, &inputs, &planned, &Approval::Auto, &mut observer)
+            .expect_err("ensure's own output disagrees with its spec");
         match err {
             ApplyError::Tool {
                 node: got_node,
@@ -2877,7 +2702,7 @@ mod conversions {
         );
         let checked = check(&workflow, &fixture.catalog).expect("one node, no sink");
 
-        let err = plan(&checked, &IndexMap::new(), &fixture.catalog)
+        let err = plan(&checked, &IndexMap::new())
             .expect_err("the list's own misnamed element must not panic while being named");
         match err {
             PlanError::Tool {
@@ -2955,7 +2780,7 @@ mod conversions {
             Node::new(ToolName::parse("conv.emits").unwrap()),
         );
         let checked = check(&workflow, &fixture.catalog).expect("one node, no sink");
-        match plan(&checked, &IndexMap::new(), &fixture.catalog) {
+        match plan(&checked, &IndexMap::new()) {
             Err(PlanError::Tool {
                 node: got_node,
                 error,
@@ -3066,7 +2891,7 @@ mod conversions {
         let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
         let inputs = IndexMap::new();
 
-        let planned = plan(&checked, &inputs, &fixture.catalog)
+        let planned = plan(&checked, &inputs)
             .expect("plans: the value is Unknown at plan time, so nothing is wrong yet");
         let sink = planned
             .nodes
@@ -3076,15 +2901,8 @@ mod conversions {
         assert_eq!(only_b(&sink.inputs), &Value::unknown(scalar("ConvB")));
 
         let mut observer = RecordingObserver::new();
-        let err = apply(
-            &checked,
-            &inputs,
-            &fixture.catalog,
-            &planned,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect_err("ensure's impostor is not a real ConvA");
+        let err = apply(&checked, &inputs, &planned, &Approval::Auto, &mut observer)
+            .expect_err("ensure's impostor is not a real ConvA");
         match err {
             ApplyError::Tool {
                 node: got_node,

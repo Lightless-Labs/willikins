@@ -88,7 +88,7 @@ fn the_doppler_chain_plans_and_references_the_cluster() {
         scalar_input("BuildkiteClusterName", "Default cluster"),
     );
 
-    let plan = willikins_core::plan(&checked, &inputs, &catalog)
+    let plan = willikins_core::plan(&checked, &inputs)
         .unwrap_or_else(|err| panic!("plan must resolve every node: {err:?}"));
 
     let plan_json = serde_json::to_string(&plan).expect("Plan serializes");
