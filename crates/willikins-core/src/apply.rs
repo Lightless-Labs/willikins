@@ -697,6 +697,7 @@ pub fn apply(
     let mut outputs = IndexMap::new();
     let ctx = ResolveCtx {
         workflow,
+        checked_inputs: checked.inputs(),
         inputs,
         catalog,
         results: &results,
@@ -1049,6 +1050,7 @@ fn resolve_instance_inputs(
     let types = checked.edges();
     let ctx = ResolveCtx {
         workflow: checked.workflow(),
+        checked_inputs: checked.inputs(),
         inputs,
         catalog,
         results,

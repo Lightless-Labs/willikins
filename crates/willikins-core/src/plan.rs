@@ -67,7 +67,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 use crate::catalog::Catalog;
-use crate::check::{Checked, Edge};
+use crate::check::{Checked, CheckedInput, Edge};
 use crate::class::Class;
 use crate::site::Site;
 use crate::tool::{
@@ -627,12 +627,15 @@ pub(crate) enum NodeResult {
 type GateKey = (NodeName, Option<String>);
 
 /// The read-only context every binding resolution needs: the workflow (for
-/// its node and input declarations), the caller's resolved workflow
-/// inputs, the catalog (to re-derive a referenced node's tool spec), and
-/// every already-planned node's result; plus the edges `check` recorded,
-/// through which a node's input ports receive their values.
+/// its node and input declarations), `check`'s own input table (milestone
+/// 3n, decision (g5): awaited-input status, read without a second
+/// registry lookup), the caller's resolved workflow inputs, the catalog
+/// (to re-derive a referenced node's tool spec), and every already-planned
+/// node's result; plus the edges `check` recorded, through which a node's
+/// input ports receive their values.
 pub(crate) struct ResolveCtx<'a> {
     pub(crate) workflow: &'a Workflow,
+    pub(crate) checked_inputs: &'a [CheckedInput],
     pub(crate) inputs: &'a IndexMap<InputName, Value>,
     pub(crate) catalog: &'a Catalog,
     pub(crate) results: &'a HashMap<NodeName, NodeResult>,
@@ -801,7 +804,7 @@ pub(crate) fn walk(
     catalog: &Catalog,
 ) -> Result<Walk, PlanError> {
     let workflow = checked.workflow();
-    check_input_types(workflow, inputs, catalog.registry())?;
+    check_input_types(checked.inputs(), inputs)?;
     check_fixed_inputs(workflow, inputs)?;
     let types = checked.edges();
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
@@ -823,6 +826,7 @@ pub(crate) fn walk(
         let spec = tool.spec();
         let ctx = ResolveCtx {
             workflow,
+            checked_inputs: checked.inputs(),
             inputs,
             catalog,
             results: &results,
@@ -967,6 +971,7 @@ pub(crate) fn walk(
     let mut outputs = IndexMap::new();
     let ctx = ResolveCtx {
         workflow,
+        checked_inputs: checked.inputs(),
         inputs,
         catalog,
         results: &results,
@@ -1183,40 +1188,41 @@ impl GateTracking {
 }
 
 /// Parse every workflow input the caller supplied against the type
-/// `workflow` declares for it, before any node is planned
+/// `checked` declares for it, before any node is planned
 /// ([`PlanError::InputTypeMismatch`]). The value's own declared
 /// [`TypeRef`] must equal the declared one, list flag included, and every
-/// known object in it must pass the registry entry's own `TypeId` test
-/// ([`TypeRegistry::type_matches`]); a name the registry does not hold
-/// refuses too. An `Unknown` value of the declared type holds no object and
-/// is accepted, as it always was. A declared input the caller left out is
-/// not this check's business: a binding that reads it still fails with
-/// [`PlanError::MissingInput`], exactly as before. A supplied name the
-/// workflow does not declare is ignored, as before.
+/// known object in it must pass [`CheckedInput::entry`]'s own `TypeId`
+/// test -- the same test [`crate::value::TypeRegistry::type_matches`]
+/// runs, already resolved once by `check` rather than looked up here a
+/// second time (milestone 3n, decision (g5)). An `Unknown` value of the
+/// declared type holds no object and is accepted, as it always was. A
+/// declared input the caller left out is not this check's business: a
+/// binding that reads it still fails with [`PlanError::MissingInput`],
+/// exactly as before. A supplied name the workflow does not declare is
+/// ignored, as before.
 fn check_input_types(
-    workflow: &Workflow,
+    checked_inputs: &[CheckedInput],
     inputs: &IndexMap<InputName, Value>,
-    registry: &TypeRegistry,
 ) -> Result<(), PlanError> {
-    for (name, spec) in &workflow.inputs {
-        let Some(value) = inputs.get(name) else {
+    for input in checked_inputs {
+        let Some(value) = inputs.get(&input.name) else {
             continue;
         };
         let mismatch = |found: TypeRef| PlanError::InputTypeMismatch {
-            input: name.clone(),
-            expected: spec.ty.clone(),
+            input: input.name.clone(),
+            expected: input.spec.ty.clone(),
             found,
         };
-        if value.ty() != &spec.ty {
+        if value.ty() != &input.spec.ty {
             return Err(mismatch(value.ty().clone()));
         }
         let scalar = value.as_scalar().into_iter();
         let items = value.as_list().unwrap_or_default().iter().map(Arc::as_ref);
         for object in scalar.chain(items) {
-            if registry.type_matches(&spec.ty.name, object) != Some(true) {
+            if !(input.entry.matches)(object) {
                 return Err(mismatch(TypeRef {
-                    name: reported_type_name_or(object, &spec.ty.name),
-                    list: spec.ty.list,
+                    name: reported_type_name_or(object, &input.spec.ty.name),
+                    list: input.spec.ty.list,
                 }));
             }
         }
@@ -1420,13 +1426,18 @@ pub(crate) fn resolve_binding(
             // already rejects both a default and a literal for this type,
             // so the only way `name` is declared this type and absent from
             // `ctx.inputs` is exactly this case. Every other declared type
-            // still fails the plan below, unchanged.
-            let declared = ctx.workflow.inputs.get(name).unwrap_or_else(|| {
-                unreachable!("`check` rejects a reference to an undeclared input")
-            });
-            if crate::value::is_operator_acknowledgement(ctx.catalog.registry(), &declared.ty.name)
-            {
-                return Ok(Value::unknown(declared.ty.clone()));
+            // still fails the plan below, unchanged. G2: `awaited` is read
+            // from `check`'s own table rather than asked of the catalog's
+            // registry here a second time.
+            let declared = ctx
+                .checked_inputs
+                .iter()
+                .find(|input| &input.name == name)
+                .unwrap_or_else(|| {
+                    unreachable!("`check` rejects a reference to an undeclared input")
+                });
+            if declared.awaited {
+                return Ok(Value::unknown(declared.spec.ty.clone()));
             }
             Err(PlanError::MissingInput {
                 input: name.clone(),

@@ -24,9 +24,9 @@ use std::fmt;
 
 use indexmap::IndexMap;
 
-use crate::check::Checked;
+use crate::check::{Checked, CheckedInput};
 use crate::value::{TypeRef, Value};
-use crate::workflow::{InputName, InputSpec};
+use crate::workflow::InputName;
 use willikins_types::ParseError;
 
 /// One raw input value, before being checked against its workflow's
@@ -288,8 +288,12 @@ pub struct Description {
 /// call: it never touches a [`crate::Catalog`] or a [`crate::Tool`], so it
 /// cannot even accidentally do so.
 ///
-/// Walks `checked.document().inputs()` in declaration order. For each declared
-/// input:
+/// Walks `checked.inputs()` in declaration order (milestone 3n, decision
+/// (g5)) rather than re-deriving each input's registry entry and
+/// acknowledgement status from `checked.document().inputs()` a second
+/// time -- `check` already resolved both once, into
+/// [`crate::check::CheckedInput::entry`] and
+/// [`crate::check::CheckedInput::awaited`]. For each declared input:
 /// - a raw value in `partial` for a *fixed* input (milestone 2b, decision
 ///   (d6): `spec.fixed_by.is_some()`) is never parsed: it is always
 ///   [`InputError::not_settable`], whatever that value is, and
@@ -303,16 +307,15 @@ pub struct Description {
 ///   [`InputError`] carrying that parser's own message (see
 ///   [`InputError::error`] for what it may quote);
 /// - otherwise, when the input's declared type is
-///   [`willikins_types::OperatorAcknowledgement`], it is [`AwaitingInput`]
-///   rather than [`MissingInput`] (this type is never defaulted, so this
-///   check runs before the default lookup below);
+///   [`willikins_types::OperatorAcknowledgement`] (`CheckedInput::awaited`),
+///   it is [`AwaitingInput`] rather than [`MissingInput`] (this type is
+///   never defaulted, so this check runs before the default lookup below);
 /// - otherwise, a declared default fills [`Description::resolved`];
 /// - otherwise the input is [`MissingInput`].
 ///
 /// After every declared input, any name in `partial` that is not one of
-/// `checked.document().inputs()` is an [`InputError`] of its own, in
-/// `partial`'s own iteration order, appended after the declared-input
-/// errors above.
+/// `checked.inputs()` is an [`InputError`] of its own, in `partial`'s own
+/// iteration order, appended after the declared-input errors above.
 #[must_use]
 pub fn describe(checked: &Checked, partial: &PartialInputs) -> Description {
     let mut errors = Vec::new();
@@ -320,10 +323,13 @@ pub fn describe(checked: &Checked, partial: &PartialInputs) -> Description {
     let mut awaiting = Vec::new();
     let mut resolved = IndexMap::new();
 
-    for (name, spec) in checked.document().inputs() {
+    for input in checked.inputs() {
+        let name = &input.name;
+        let spec = &input.spec;
         match partial.get(name) {
             // Milestone 2b, decision (d6): a *fixed* input (the linker's
-            // own `InputSpec::fixed_by`) is never settable by a caller,
+            // own `InputSpec::fixed_by`, carried whole in
+            // `CheckedInput::spec`) is never settable by a caller,
             // whatever raw value they supplied — even one that would
             // parse to the same value the default already holds.
             // `resolved` still gets the child's own default below, the
@@ -350,24 +356,20 @@ pub fn describe(checked: &Checked, partial: &PartialInputs) -> Description {
                     error,
                 }),
             },
-            None if crate::value::is_operator_acknowledgement(
-                willikins_types::registry(),
-                &spec.ty.name,
-            ) =>
-            {
-                awaiting.push(awaiting_input(name, spec));
+            None if input.awaited => {
+                awaiting.push(awaiting_input(input));
             }
             None => match &spec.default {
                 Some(default) => {
                     resolved.insert(name.clone(), default.clone());
                 }
-                None => missing.push(missing_input(name, spec)),
+                None => missing.push(missing_input(input)),
             },
         }
     }
 
     for name in partial.keys() {
-        if !checked.document().inputs().contains_key(name) {
+        if !checked.inputs().iter().any(|input| &input.name == name) {
             errors.push(InputError {
                 input: name.clone(),
                 error: ParseError::new(
@@ -403,26 +405,23 @@ fn parse_raw(ty: &TypeRef, raw: &RawInput) -> Result<Value, ParseError> {
 }
 
 /// Build the [`MissingInput`] entry for a declared input with neither a raw
-/// value nor a default.
-///
-/// # Panics
-///
-/// Panics if `spec.ty`'s name is not in the global type registry — cannot
-/// happen for an input inside a [`Checked`] workflow, since `check` rejects
+/// value nor a default. Reads [`crate::check::CheckedInput::entry`] --
+/// `check`'s own one-time registry lookup -- rather than asking the global
+/// registry a second time and panicking if it came up empty, which this
+/// used to do (milestone 3n, decision (g5)): `entry` is always present for
+/// an input inside a [`Checked`] workflow, since `check` rejects
 /// [`crate::check::CheckError::UnregisteredInputType`] before a `Checked`
 /// value can ever exist.
-fn missing_input(name: &InputName, spec: &InputSpec) -> MissingInput {
-    let entry = willikins_types::registry()
-        .get(&spec.ty.name)
-        .unwrap_or_else(|| unreachable!("`check` already rejected an unregistered input type"));
+fn missing_input(input: &CheckedInput) -> MissingInput {
+    let entry = input.entry;
     let example = entry.info.example;
-    let prompt = build_prompt(name, entry.info.description, example);
+    let prompt = build_prompt(&input.name, entry.info.description, example);
     MissingInput {
-        name: name.clone(),
-        ty: spec.ty.clone(),
+        name: input.name.clone(),
+        ty: input.spec.ty.clone(),
         schema: entry.info.schema.clone(),
-        document_description: spec.description.clone(),
-        default: spec.default.as_ref().map(|value| {
+        document_description: input.spec.description.clone(),
+        default: input.spec.default.as_ref().map(|value| {
             value
                 .display(willikins_types::Disclosure::Masked)
                 .to_string()
@@ -434,22 +433,16 @@ fn missing_input(name: &InputName, spec: &InputSpec) -> MissingInput {
 
 /// Build the [`AwaitingInput`] entry for a declared
 /// [`willikins_types::OperatorAcknowledgement`]-typed input with no raw
-/// value supplied.
-///
-/// # Panics
-///
-/// Same as [`missing_input`]: cannot happen for an input inside a
-/// [`Checked`] workflow.
-fn awaiting_input(name: &InputName, spec: &InputSpec) -> AwaitingInput {
-    let entry = willikins_types::registry()
-        .get(&spec.ty.name)
-        .unwrap_or_else(|| unreachable!("`check` already rejected an unregistered input type"));
+/// value supplied. Same source and the same reason as [`missing_input`]:
+/// [`crate::check::CheckedInput::entry`], never the global registry.
+fn awaiting_input(input: &CheckedInput) -> AwaitingInput {
+    let entry = input.entry;
     let example = entry.info.example;
-    let prompt = build_prompt(name, entry.info.description, example);
+    let prompt = build_prompt(&input.name, entry.info.description, example);
     AwaitingInput {
-        name: name.clone(),
-        ty: spec.ty.clone(),
-        document_description: spec.description.clone(),
+        name: input.name.clone(),
+        ty: input.spec.ty.clone(),
+        document_description: input.spec.description.clone(),
         example,
         prompt,
     }
@@ -473,6 +466,7 @@ mod tests {
     use crate::check::check;
     use crate::tool::{Ensured, Inputs, Observation, Tool, ToolError};
     use crate::value::TypeName;
+    use crate::workflow::InputSpec;
     use crate::workflow::{Node, NodeName, Workflow};
     use willikins_types::{DomainType, SinkToken};
 
@@ -1060,7 +1054,16 @@ mod tests {
             willikins_types::AppleIssuerId::parse("57246542-96fe-1a63-e053-0824d011072a").unwrap();
         let name = input_name("issuer_id");
         let spec = InputSpec::new(ty("AppleIssuerId")).with_default(Value::known(issuer));
-        let missing = missing_input(&name, &spec);
+        let entry = willikins_types::registry()
+            .get(&spec.ty.name)
+            .expect("AppleIssuerId is registered");
+        let input = CheckedInput {
+            name,
+            spec,
+            entry,
+            awaited: false,
+        };
+        let missing = missing_input(&input);
         assert_eq!(missing.default, Some("5724...".to_string()));
     }
 }

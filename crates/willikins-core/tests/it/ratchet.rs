@@ -37,9 +37,13 @@ fn the_unreachable_ratchet_never_rises() {
     // post-hoc "was this node a single instance or a `for_each`'s several"
     // unwraps with a shape known up front. `plan.rs` loses its one
     // node/tool-lookup pair (-2); `apply.rs` loses its own node/tool-lookup
-    // pair plus its group-classification pair (-4). `describe.rs` is G2's,
-    // unmoved here. The plan's final targets are `plan.rs` 6, `apply.rs`
-    // 2, `describe.rs` 0 (after G7).
+    // pair plus its group-classification pair (-4). `describe.rs` is G2's.
+    // G2 gives `describe` a `CheckedInput` table (`check`'s own one-time
+    // registry lookup), which removes `missing_input`'s and
+    // `awaiting_input`'s matching pair of "`check` already rejected an
+    // unregistered input type" fallbacks (-2), leaving only the
+    // unmoved "a fixed input is always defaulted" one. The plan's final
+    // targets are `plan.rs` 6, `apply.rs` 2, `describe.rs` 0 (after G7).
     assert_eq!(
         ratchet_count("src/plan.rs"),
         30,
@@ -52,7 +56,7 @@ fn the_unreachable_ratchet_never_rises() {
     );
     assert_eq!(
         ratchet_count("src/describe.rs"),
-        3,
+        1,
         "describe.rs's unreachable ratchet moved; lower it, never raise it"
     );
 }

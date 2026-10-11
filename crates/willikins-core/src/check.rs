@@ -135,6 +135,13 @@ use willikins_types::{Description, ParseError, WorkflowName};
 pub struct Checked {
     /// The checked workflow, unchanged.
     workflow: Workflow,
+    /// Every declared workflow input, in declaration order (`InputId` is
+    /// the position in this slice -- SHARED VALUES of milestone 3n's
+    /// decision (g1)). From G2 on, `check_input_types`, `describe` and
+    /// the input-resolution path (`crate::plan::resolve_binding`) read
+    /// this instead of looking a declared input up by name in the
+    /// workflow and, for `describe`, the global registry a second time.
+    inputs: Vec<CheckedInput>,
     /// Every node, in an order where each node comes after every node it
     /// depends on. Ties are broken by declaration order.
     order: Vec<NodeName>,
@@ -259,6 +266,14 @@ impl Checked {
         &self.nodes
     }
 
+    /// Every declared workflow input, in declaration order (`InputId` is
+    /// the position in this slice; milestone 3n, decision (g1)).
+    /// Crate-private, on the same "never leaves `willikins-core`" schedule
+    /// as [`Self::nodes`]: `InputId` is minted only in `check.rs`.
+    pub(crate) fn inputs(&self) -> &[CheckedInput] {
+        &self.inputs
+    }
+
     /// The workflow's own declared [`Node`] a [`CheckedNode`] was built
     /// from. Crate-private bridge, on the same schedule as [`Self::workflow`]
     /// and [`Self::edges`]: from G1 until G3/G4 give [`Shape`] its own
@@ -288,6 +303,7 @@ impl fmt::Debug for Checked {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Checked")
             .field("name", &self.workflow.name)
+            .field("inputs", &self.inputs)
             .field("order", &self.order)
             .field("nodes", &self.nodes)
             .field("class", &self.class)
@@ -405,6 +421,66 @@ pub(crate) struct SingleId(pub(crate) u32);
 /// id to name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct EachId(pub(crate) u32);
+
+/// One declared workflow input, after `check` (milestone 3n, decision
+/// (g5)): its own [`InputSpec`], the catalog's registry entry its declared
+/// type resolved to, and whether a caller leaving it unsupplied means
+/// *awaited* rather than *missing* -- `check_input_types`, `describe` and
+/// the input-resolution path (`crate::plan::resolve_binding`) all read
+/// this instead of re-deriving the same two facts from `workflow.inputs`
+/// and the registry a second time. Crate-private -- `InputId` positions
+/// never leave `willikins-core` (SHARED VALUES).
+///
+/// `entry` is never looked up again by `describe`: `check` already refused
+/// an unregistered or secret declared type
+/// ([`CheckError::UnregisteredInputType`], [`CheckError::SecretWorkflowInput`])
+/// before a `Checked` can exist, so every declared input's type is in the
+/// catalog's registry by construction.
+///
+/// `Debug` is hand-written, not derived: [`willikins_types::registry::TypeEntry`]
+/// itself has no `Debug` (it type-erases a parser and a `TypeId` matcher to
+/// function pointers), so a derive would not compile. Prints the entry's
+/// own type name, never the whole entry.
+#[derive(Clone)]
+pub(crate) struct CheckedInput {
+    /// This input's declared name.
+    pub(crate) name: InputName,
+    /// This input's own declared shape -- including milestone 2b's
+    /// `fixed_by`, which rides here unchanged, so 2b's R1 hiding (a fixed
+    /// input is never settable, and never reported as missing) keeps
+    /// working on this table exactly as it did on `workflow.inputs`.
+    pub(crate) spec: InputSpec,
+    /// The catalog's registry entry for [`Self::spec`]'s declared type.
+    pub(crate) entry: &'static willikins_types::registry::TypeEntry,
+    /// Whether this input's declared type is
+    /// [`willikins_types::OperatorAcknowledgement`] -- computed once here,
+    /// against the catalog's own registry, rather than asked of the
+    /// global registry every time `describe` or `plan` resolves this
+    /// input.
+    pub(crate) awaited: bool,
+}
+
+impl fmt::Debug for CheckedInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CheckedInput")
+            .field("name", &self.name)
+            .field("spec", &self.spec)
+            .field("entry", &self.entry.info.name)
+            .field("awaited", &self.awaited)
+            .finish()
+    }
+}
+
+/// A declared workflow input's own id: its position in [`Checked::inputs`],
+/// in declaration order (milestone 3n, decision (g1): "`InputId` =
+/// index"). Minted only by [`check`], never leaves `willikins-core`. What a
+/// [`crate::workflow::Binding::Input`] reference resolves to (G3's
+/// `Source::Input(InputId)`), which closes the 3d "undeclared input bound"
+/// route by type: an `InputId` can only ever name one of this table's own
+/// rows. A bounds-checked index, not a proof -- see `check`'s own module
+/// doc, "Typed ids are indexes, not proofs".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct InputId(pub(crate) u32);
 
 /// A read-only view of a [`Checked`] workflow's own declared surface: its
 /// name, description, declared inputs and output names -- never its nodes.
@@ -1581,9 +1657,16 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
     // returned already -- so this is `check`'s own one-time lookup per
     // node, never repeated by `plan` or `apply` (verify item 4).
     let nodes = build_checked_nodes(workflow, catalog, &order, &for_each_elements);
+    // G2: every declared input's type was already confirmed registered and
+    // non-secret by `check_workflow_inputs` above -- an unregistered or
+    // secret type would have made `errors` non-empty and returned already
+    // -- so this, too, is one lookup per input, never repeated by `plan`
+    // or `describe`.
+    let inputs = build_checked_inputs(workflow, registry);
 
     Ok(Checked {
         workflow: workflow.clone(),
+        inputs,
         order,
         nodes,
         class,
@@ -1591,6 +1674,41 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         types,
         output_types,
     })
+}
+
+/// Build [`Checked`]'s input table, in declaration order (`InputId` is the
+/// index -- SHARED VALUES): each declared input's own [`InputSpec`], the
+/// registry entry its declared type resolved to (already confirmed
+/// present by [`check_workflow_inputs`], run before any node or this table
+/// is built), and whether it is an [`willikins_types::OperatorAcknowledgement`]
+/// awaited rather than missing.
+fn build_checked_inputs(workflow: &Workflow, registry: &'static TypeRegistry) -> Vec<CheckedInput> {
+    workflow
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(index, (name, spec))| {
+            // Minted for the same reason `build_checked_nodes` mints a
+            // `SingleId`/`EachId` per node: never read before G3 gives
+            // `Source::Input(InputId)` a real consumer, but `InputId` is
+            // always minted in declaration order, matching this table's
+            // own position (SHARED VALUES).
+            let _id = InputId(
+                u32::try_from(index)
+                    .unwrap_or_else(|_| unreachable!("more declared inputs than fit in a u32")),
+            );
+            let entry = registry.get(&spec.ty.name).unwrap_or_else(|| {
+                unreachable!("`check_workflow_inputs` already rejected an unregistered input type")
+            });
+            let awaited = crate::value::is_operator_acknowledgement(registry, &spec.ty.name);
+            CheckedInput {
+                name: name.clone(),
+                spec: spec.clone(),
+                entry,
+                awaited,
+            }
+        })
+        .collect()
 }
 
 /// Build [`Checked`]'s node table, in `order` (topological): each node's
