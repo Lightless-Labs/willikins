@@ -374,7 +374,7 @@ impl Butler {
             Ok(checked) => ValidateResponse {
                 ok: true,
                 errors: Vec::new(),
-                warnings: checked.warnings,
+                warnings: checked.warnings().to_vec(),
             },
             Err(errors) => ValidateResponse {
                 ok: false,
@@ -458,7 +458,7 @@ impl Butler {
         // always defaulted); only `resolved` needs filtering here.
         description
             .resolved
-            .retain(|name, _| match checked.workflow.inputs.get(name) {
+            .retain(|name, _| match checked.document().inputs().get(name) {
                 Some(spec) => spec.fixed_by.is_none(),
                 None => true,
             });
@@ -1354,7 +1354,7 @@ fn resolve_recorded_inputs(
         })?;
 
     let mut resolved = IndexMap::new();
-    for (name, spec) in &checked.workflow.inputs {
+    for (name, spec) in checked.document().inputs() {
         let entry = match raw.get(name) {
             Some(entry) => entry,
             None if willikins_core::value::is_operator_acknowledgement(registry, &spec.ty.name) => {

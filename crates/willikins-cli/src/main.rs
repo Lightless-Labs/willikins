@@ -338,7 +338,7 @@ pub(crate) fn build_partial_inputs(
 ) -> Result<PartialInputs, ExitCode> {
     let mut partial = PartialInputs::new();
     for arg in args {
-        let raw = match checked.workflow.inputs.get(&arg.name) {
+        let raw = match checked.document().inputs().get(&arg.name) {
             Some(spec) if spec.ty.list => RawInput::from_comma_separated(&arg.raw),
             _ => arg.value(),
         };
@@ -358,9 +358,9 @@ fn cmd_validate(file: &str, json: bool, disclosure: Disclosure) -> ExitCode {
     match load_and_check(file, &catalog, json, disclosure) {
         Ok(checked) => {
             if json {
-                render::print_json(&render::check_warnings_json(&checked.warnings), disclosure);
+                render::print_json(&render::check_warnings_json(checked.warnings()), disclosure);
             } else {
-                let text = render::check_warnings_text(&checked.warnings);
+                let text = render::check_warnings_text(checked.warnings());
                 if !text.is_empty() {
                     println!("{text}");
                 }
@@ -406,7 +406,7 @@ fn cmd_describe(file: &str, inputs: &[InputArg], json: bool, disclosure: Disclos
     // identical filter for the MCP surface.
     description
         .resolved
-        .retain(|name, _| match checked.workflow.inputs.get(name) {
+        .retain(|name, _| match checked.document().inputs().get(name) {
             Some(spec) => spec.fixed_by.is_none(),
             None => true,
         });

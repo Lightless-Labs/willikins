@@ -122,7 +122,7 @@ use crate::value::{
     Conversion, ConversionMismatch, PortType, TypeRef, TypeRegistry, Value, reported_type_name_or,
 };
 use crate::workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};
-use willikins_types::{ParseError, WorkflowName};
+use willikins_types::{Description, ParseError, WorkflowName};
 
 /// A workflow that has passed [`check`]: its topological execution order,
 /// its approval class, any non-fatal warnings, and the resolved type of
@@ -149,6 +149,118 @@ pub struct Checked {
     /// The resolved type of every workflow output, in declaration order.
     /// A literal output has no declared type to resolve and is absent.
     pub output_types: IndexMap<OutputName, TypeRef>,
+}
+
+impl Checked {
+    /// The checked workflow's own name.
+    #[must_use]
+    pub fn name(&self) -> &WorkflowName {
+        &self.workflow.name
+    }
+
+    /// A read-only view of the checked workflow's own declared surface:
+    /// its name, description, declared inputs and output names. Never the
+    /// nodes -- see [`DocumentView`].
+    #[must_use]
+    pub fn document(&self) -> DocumentView<'_> {
+        DocumentView {
+            workflow: &self.workflow,
+        }
+    }
+
+    /// The plan's approval class: see [`Self::class`]'s field doc (milestone
+    /// 1).
+    #[must_use]
+    pub fn class(&self) -> Class {
+        self.class
+    }
+
+    /// Non-fatal warnings, alongside a successful check.
+    #[must_use]
+    pub fn warnings(&self) -> &[CheckWarning] {
+        &self.warnings
+    }
+
+    /// Every node, in an order where each node comes after every node it
+    /// depends on. Ties are broken by declaration order.
+    #[must_use]
+    pub fn order(&self) -> Vec<NodeName> {
+        self.order.clone()
+    }
+
+    /// Every node `with` binding `check` validated, keyed by node then
+    /// port. See [`Self::types`]'s field doc (now private; this is the
+    /// public accessor, SHARED VALUES of milestone 3n's decision (s1)).
+    #[must_use]
+    pub fn types(&self) -> IndexMap<NodeName, IndexMap<PortName, Edge>> {
+        self.types.clone()
+    }
+
+    /// One checked edge, by node and port, or `None` when that port is
+    /// unbound (or `node` is not a node of this workflow).
+    #[must_use]
+    pub fn edge(&self, node: &NodeName, port: &PortName) -> Option<&Edge> {
+        self.types.get(node)?.get(port)
+    }
+
+    /// The resolved type of every workflow output, in declaration order.
+    #[must_use]
+    pub fn output_types(&self) -> IndexMap<OutputName, TypeRef> {
+        self.output_types.clone()
+    }
+
+    /// The checked workflow, whole -- including its nodes. Crate-private:
+    /// milestone 3n's decision (s1) names this the bridge `plan.rs`,
+    /// `apply.rs` and `describe.rs` use from task S1 until task G7, which
+    /// deletes it once those modules read the graph instead of the
+    /// document. No code outside `willikins-core` can reach a `Node` or a
+    /// `Binding` through a `Checked` even today, since `Workflow` and
+    /// `Node` are themselves only ever built by the DSL or by hand inside
+    /// this crate's own tests -- this accessor's privacy is about the
+    /// module boundary task G7 completes, not about hiding `Workflow`
+    /// from another crate.
+    pub(crate) fn workflow(&self) -> &Workflow {
+        &self.workflow
+    }
+}
+
+/// A read-only view of a [`Checked`] workflow's own declared surface: its
+/// name, description, declared inputs and output names -- never its nodes.
+/// Returned by [`Checked::document`]. Milestone 3n's decision (s1): a
+/// composite's used document's nodes are already flattened into the one
+/// graph `check` built (milestone 2b), so there is never a second
+/// document's nodes to reach from here, and nothing in this crate's own
+/// front ends (`plan`, `apply`, `describe`) needs them -- only a node's own
+/// declared inputs and outputs, which this view exposes.
+#[derive(Debug, Clone, Copy)]
+pub struct DocumentView<'a> {
+    workflow: &'a Workflow,
+}
+
+impl<'a> DocumentView<'a> {
+    /// The workflow's own name.
+    #[must_use]
+    pub fn name(&self) -> &'a WorkflowName {
+        &self.workflow.name
+    }
+
+    /// The workflow's own description, if it declared one.
+    #[must_use]
+    pub fn description(&self) -> Option<&'a Description> {
+        self.workflow.description.as_ref()
+    }
+
+    /// Every input the workflow declares, in declaration order.
+    #[must_use]
+    pub fn inputs(&self) -> &'a IndexMap<InputName, InputSpec> {
+        &self.workflow.inputs
+    }
+
+    /// The name of every output the workflow declares, in declaration
+    /// order.
+    pub fn output_names(&self) -> impl Iterator<Item = &'a OutputName> {
+        self.workflow.outputs.keys()
+    }
 }
 
 /// One checked data-flow edge into a node's input port: the binding's own

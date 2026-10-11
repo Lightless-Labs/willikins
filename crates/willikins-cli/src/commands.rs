@@ -730,7 +730,7 @@ fn cmd_apply_file(args: &ApplyArgs, file: &str, json: bool, disclosure: Disclosu
         Ok(partial) => partial,
         Err(code) => return code,
     };
-    let workflow_name = checked.workflow.name.clone();
+    let workflow_name = checked.name().clone();
 
     // Milestone 2b, decision (d8): the root, plus the whole linked
     // closure `linked.used` names, each copied in -- see

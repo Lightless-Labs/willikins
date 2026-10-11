@@ -132,8 +132,8 @@ fn doppler_project_creates_a_project_and_its_default_configs() {
     let (_state, catalog) = willikins_providers_fake::empty();
     let checked = check(&workflow, &catalog)
         .unwrap_or_else(|errors| panic!("doppler-project.yaml must check cleanly: {errors:?}"));
-    assert_eq!(checked.class, Class::Reversible);
-    assert!(checked.warnings.is_empty());
+    assert_eq!(checked.class(), Class::Reversible);
+    assert!(checked.warnings().is_empty());
 
     let inputs = resolve_inputs(
         "doppler-project",
@@ -215,7 +215,7 @@ fn doppler_backend_alone_inherits_the_shared_backend_base() {
     let workflow = load(&workflow_path("doppler-backend.yaml"));
     let checked = check(&workflow, &catalog)
         .unwrap_or_else(|errors| panic!("doppler-backend.yaml must check cleanly: {errors:?}"));
-    assert_eq!(checked.class, Class::Reversible);
+    assert_eq!(checked.class(), Class::Reversible);
 
     let inputs = resolve_inputs(
         "doppler-backend",

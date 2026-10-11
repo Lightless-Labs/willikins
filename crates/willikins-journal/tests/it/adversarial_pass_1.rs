@@ -104,7 +104,7 @@ fn record_plan<J: Journal>(
     journal
         .append(Event::PlanRecorded {
             plan_id,
-            workflow: checked.workflow.name.clone(),
+            workflow: checked.name().clone(),
             document_sha256: common::document_sha256(document_sha256),
             inputs: Redacted::from(inputs),
             plan: Redacted::from(approved),
@@ -737,7 +737,7 @@ fn the_rotation_workflow_journals_a_minted_secret_and_a_tool_failure_without_lea
             .join("rotate-service-token.yaml"),
     );
     let checked = check(&workflow, &catalog).expect("the rotation fixture checks");
-    assert_eq!(checked.class, Class::Destructive);
+    assert_eq!(checked.class(), Class::Destructive);
     let inputs = resolve_inputs(
         &checked,
         &[

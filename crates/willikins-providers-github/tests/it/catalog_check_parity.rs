@@ -83,13 +83,26 @@ fn check_resolves_the_same_types_against_the_live_and_fake_catalogs() {
         let against_live = willikins_core::check(&workflow, &live).unwrap_or_else(|errors| {
             panic!("{fixture} checks against the live catalog: {errors:?}")
         });
-        assert_eq!(against_live.types, against_fake.types, "{fixture}: types");
         assert_eq!(
-            against_live.output_types, against_fake.output_types,
+            against_live.types(),
+            against_fake.types(),
+            "{fixture}: types"
+        );
+        assert_eq!(
+            against_live.output_types(),
+            against_fake.output_types(),
             "{fixture}: output types"
         );
-        assert_eq!(against_live.order, against_fake.order, "{fixture}: order");
-        assert_eq!(against_live.class, against_fake.class, "{fixture}: class");
+        assert_eq!(
+            against_live.order(),
+            against_fake.order(),
+            "{fixture}: order"
+        );
+        assert_eq!(
+            against_live.class(),
+            against_fake.class(),
+            "{fixture}: class"
+        );
     }
 }
 

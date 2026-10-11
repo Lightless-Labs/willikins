@@ -442,7 +442,7 @@ fn the_redaction_marker_string_is_an_ordinary_text_literal() {
 
     let checked = checked(&workflow);
     assert_eq!(
-        checked.types[&node("readme")][&port("value")].ty(),
+        checked.edge(&node("readme"), &port("value")).unwrap().ty(),
         &ty("Text")
     );
 }
@@ -558,7 +558,10 @@ fn a_duplicate_with_key_collapses_to_the_last_binding() {
         Workflow::new(workflow_name("duplicate-with-key")).node(node("repo"), node_with_duplicate);
     let checked = checked(&workflow);
     assert_eq!(
-        checked.types[&node("repo")][&port("visibility")].ty(),
+        checked
+            .edge(&node("repo"), &port("visibility"))
+            .unwrap()
+            .ty(),
         &ty("RepoVisibility")
     );
 }
@@ -850,7 +853,7 @@ fn well_typed_defaults_including_unknown_are_accepted() {
         );
 
     let checked = checked(&workflow);
-    assert_eq!(checked.warnings.len(), 3);
+    assert_eq!(checked.warnings().len(), 3);
 }
 
 // ---------------------------------------------------------------------
@@ -897,25 +900,25 @@ fn one_for_each_node_referenced_by_both_step_and_keyed_resolves_to_list_and_scal
 
     let checked = checked(&workflow);
     assert_eq!(
-        checked.types[&node("token")][&port("config")].ty(),
+        checked.edge(&node("token"), &port("config")).unwrap().ty(),
         &ty("DopplerConfig")
     );
     assert_eq!(
-        checked.output_types[&output("all_configs")],
+        checked.output_types()[&output("all_configs")],
         list_ty("DopplerConfig")
     );
     // Both references are one edge from `configs`, so it is ordered first.
-    assert_eq!(checked.order, vec![node("configs"), node("token")]);
+    assert_eq!(checked.order(), vec![node("configs"), node("token")]);
 }
 /// The empty workflow is valid: nothing to order, nothing to approve.
 #[test]
 fn an_empty_workflow_is_accepted_with_an_empty_order_and_the_lowest_class() {
     let checked = checked(&Workflow::new(workflow_name("empty")));
-    assert!(checked.order.is_empty());
-    assert_eq!(checked.class, Class::Reversible);
-    assert!(checked.warnings.is_empty());
-    assert!(checked.types.is_empty());
-    assert!(checked.output_types.is_empty());
+    assert!(checked.order().is_empty());
+    assert_eq!(checked.class(), Class::Reversible);
+    assert!(checked.warnings().is_empty());
+    assert!(checked.types().is_empty());
+    assert!(checked.output_types().is_empty());
 }
 /// A workflow whose node is literally named `outputs`, with a port whose
 /// name matches a workflow output's name. Before this pass, output types
@@ -949,11 +952,14 @@ fn a_node_named_outputs_keeps_its_own_port_types() {
 
     let checked = checked(&workflow);
     assert_eq!(
-        checked.types[&node("outputs")][&port("project")].ty(),
+        checked
+            .edge(&node("outputs"), &port("project"))
+            .unwrap()
+            .ty(),
         &ty("DopplerProject"),
         "the real node's port type must survive the output of the same name"
     );
-    assert_eq!(checked.output_types[&output("project")], ty("HttpsUrl"));
+    assert_eq!(checked.output_types()[&output("project")], ty("HttpsUrl"));
 }
 /// A workflow output bound to a secret is **accepted**, deliberately.
 ///
@@ -979,11 +985,11 @@ fn a_secret_workflow_output_is_accepted_and_keeps_its_secret_type() {
 
     let checked = checked(&workflow);
     assert_eq!(
-        checked.output_types[&output("leaked")],
+        checked.output_types()[&output("leaked")],
         ty("DopplerSecretValue")
     );
     // And it is still redacted everywhere it can be printed.
-    let rendered = format!("{:?}", checked.workflow);
+    let rendered = format!("{workflow:?}");
     assert!(!rendered.contains("dp.st."));
 }
 
@@ -1050,7 +1056,7 @@ fn a_list_output_on_a_plain_node_still_binds_to_a_list_port() {
 
     let checked = checked(&workflow);
     assert_eq!(
-        checked.types[&node("sink")][&port("lines")].ty(),
+        checked.edge(&node("sink"), &port("lines")).unwrap().ty(),
         &list_ty("Text")
     );
 }
@@ -1167,7 +1173,7 @@ proptest! {
         let second = check(&workflow, &catalog);
 
         match (&first, &second) {
-            (Ok(a), Ok(b)) => prop_assert_eq!(&a.order, &b.order),
+            (Ok(a), Ok(b)) => prop_assert_eq!(a.order(), b.order()),
             (Err(a), Err(b)) => prop_assert_eq!(a, b),
             _ => prop_assert!(false, "check disagreed with itself across two runs"),
         }
@@ -1175,13 +1181,16 @@ proptest! {
         match first {
             Err(errors) => prop_assert!(!errors.is_empty(), "a rejection must name a reason"),
             Ok(checked) => {
+                let order = checked.order();
+                let types = checked.types();
+                let output_types = checked.output_types();
                 // The order is a permutation of the nodes.
-                prop_assert_eq!(checked.order.len(), workflow.nodes.len());
+                prop_assert_eq!(order.len(), workflow.nodes.len());
                 for name in workflow.nodes.keys() {
-                    prop_assert!(checked.order.contains(name));
+                    prop_assert!(order.contains(name));
                 }
                 // Every dependency comes before its dependent.
-                for (position, name) in checked.order.iter().enumerate() {
+                for (position, name) in order.iter().enumerate() {
                     let node = &workflow.nodes[name];
                     let referenced = node
                         .with
@@ -1192,8 +1201,7 @@ proptest! {
                             _ => None,
                         });
                     for dependency in referenced {
-                        let at = checked
-                            .order
+                        let at = order
                             .iter()
                             .position(|n| n == dependency)
                             .expect("a resolved reference names a node in the order");
@@ -1204,7 +1212,7 @@ proptest! {
                 // accepts a binding it silently dropped.
                 let empty = IndexMap::new();
                 for (name, node) in &workflow.nodes {
-                    let resolved = checked.types.get(name).unwrap_or(&empty);
+                    let resolved = types.get(name).unwrap_or(&empty);
                     for bound in node.with.keys() {
                         prop_assert!(
                             resolved.contains_key(bound),
@@ -1218,13 +1226,13 @@ proptest! {
                 // pass 2, finding 1).
                 for name in workflow.outputs.keys() {
                     prop_assert!(
-                        checked.output_types.contains_key(name),
+                        output_types.contains_key(name),
                         "output {name} was accepted with no resolved type",
                     );
                 }
                 // No secret landed on a port that does not accept secrets.
                 let registry = willikins_types::registry();
-                for (name, resolved) in &checked.types {
+                for (name, resolved) in &types {
                     let spec = catalog.get(&workflow.nodes[name].tool).unwrap().spec();
                     for (bound, found) in resolved {
                         if registry.is_secret(&found.ty().name) == Some(true) {

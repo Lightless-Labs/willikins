@@ -133,8 +133,9 @@ fn finding_01_every_declared_output_reaches_the_plan() {
     let catalog = empty_catalog();
     let checked = willikins_core::check(&workflow, &catalog).expect("the positive fixture checks");
 
-    let declared: Vec<&OutputName> = checked.workflow.outputs.keys().collect();
-    let typed: Vec<&OutputName> = checked.output_types.keys().collect();
+    let declared: Vec<OutputName> = checked.document().output_names().cloned().collect();
+    let output_types = checked.output_types();
+    let typed: Vec<OutputName> = output_types.keys().cloned().collect();
     assert_eq!(
         declared, typed,
         "finding 1: every declared output must have a resolved type"
@@ -153,7 +154,7 @@ fn finding_01_every_declared_output_reaches_the_plan() {
     assert!(description.errors.is_empty() && description.missing.is_empty());
     let plan = willikins_core::plan(&checked, &description.resolved, &catalog).expect("plans");
 
-    let planned: Vec<&OutputName> = plan.outputs.keys().collect();
+    let planned: Vec<OutputName> = plan.outputs.keys().cloned().collect();
     assert_eq!(
         declared, planned,
         "finding 1: every declared output must appear in Plan::outputs"
@@ -443,15 +444,19 @@ fn finding_02_an_output_referencing_a_step_named_outputs_resolves() {
 
     // The node's own port types are untouched by the workflow output...
     assert_eq!(
-        checked.types[&willikins_core::NodeName::parse("outputs").unwrap()]
-            [&willikins_core::PortName::parse("slug").unwrap()]
+        checked
+            .edge(
+                &willikins_core::NodeName::parse("outputs").unwrap(),
+                &willikins_core::PortName::parse("slug").unwrap(),
+            )
+            .unwrap()
             .ty(),
         &willikins_core::TypeRef::scalar(willikins_core::TypeName::parse("ProjectSlug").unwrap()),
         "finding 2: the step named `outputs` must keep its own port types"
     );
     // ...and the workflow output resolved to the port it actually names.
     assert_eq!(
-        checked.output_types[&output("github_repo")],
+        checked.output_types()[&output("github_repo")],
         willikins_core::TypeRef::scalar(willikins_core::TypeName::parse("DopplerProject").unwrap()),
         "finding 2: the output must resolve against the step it names"
     );
@@ -461,9 +466,10 @@ fn finding_02_an_output_referencing_a_step_named_outputs_resolves() {
     let description = willikins_core::describe(&checked, &partial);
     let plan = willikins_core::plan(&checked, &description.resolved, &empty_catalog())
         .expect("finding 2: plans");
+    let output_types = checked.output_types();
     assert_eq!(
         plan.outputs.keys().collect::<Vec<_>>(),
-        checked.output_types.keys().collect::<Vec<_>>(),
+        output_types.keys().collect::<Vec<_>>(),
         "finding 2: check and plan must agree on the output surface"
     );
 }
@@ -980,9 +986,10 @@ proptest! {
         if let Ok(plan) = planned {
             // Finding 1 and 2's invariant, from the outside: `plan` never
             // reports a smaller output surface than `check` typed.
+            let output_types = checked.output_types();
             prop_assert_eq!(
                 plan.outputs.keys().collect::<Vec<_>>(),
-                checked.output_types.keys().collect::<Vec<_>>()
+                output_types.keys().collect::<Vec<_>>()
             );
             // Redaction by construction: no rendering of a plan carries a
             // secret's bytes, only the marker.

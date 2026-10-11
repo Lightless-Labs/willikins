@@ -771,9 +771,11 @@ pub(crate) fn walk(
     inputs: &IndexMap<InputName, Value>,
     catalog: &Catalog,
 ) -> Result<Walk, PlanError> {
-    let workflow = &checked.workflow;
+    let workflow = checked.workflow();
     check_input_types(workflow, inputs, catalog.registry())?;
     check_fixed_inputs(workflow, inputs)?;
+    let order = checked.order();
+    let types = checked.types();
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut planned: Vec<PlannedNode> = Vec::new();
     // Aligned with `planned`, 1:1 (see `Walk`'s own doc); named apart from
@@ -784,7 +786,7 @@ pub(crate) fn walk(
     let mut gates = GateTracking::default();
     let mut replacing: Vec<Replacing> = Vec::new();
 
-    for name in &checked.order {
+    for name in &order {
         let node = workflow
             .nodes
             .get(name)
@@ -798,7 +800,7 @@ pub(crate) fn walk(
             inputs,
             catalog,
             results: &results,
-            edges: &checked.types,
+            edges: &types,
         };
 
         // Decision (j), point 3: a skip set is decided from the bindings
@@ -928,7 +930,7 @@ pub(crate) fn walk(
         inputs,
         catalog,
         results: &results,
-        edges: &checked.types,
+        edges: &types,
     };
     for (out_name, binding) in &workflow.outputs {
         // A literal output has no declared type to resolve against; see
@@ -948,8 +950,8 @@ pub(crate) fn walk(
             workflow: workflow.name.clone(),
             nodes: planned,
             outputs,
-            class: checked.class,
-            requires_approval: checked.class.requires_approval(),
+            class: checked.class(),
+            requires_approval: checked.class().requires_approval(),
             blocked: gates.into_blocked(),
             replacing,
         },

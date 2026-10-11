@@ -74,7 +74,7 @@ fn approval_required_refuses_without_journaling_run_started() {
     journal
         .append(Event::PlanRecorded {
             plan_id,
-            workflow: checked.workflow.name.clone(),
+            workflow: checked.name().clone(),
             document_sha256: common::document_sha256("test-sha256"),
             inputs: Redacted::from(&inputs),
             plan: Redacted::from(&approved),

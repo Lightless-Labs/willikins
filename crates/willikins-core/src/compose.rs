@@ -1554,7 +1554,7 @@ mod tests {
         let catalog = test_catalog();
         let checked = check::check(&linked.workflow, &catalog).unwrap();
         assert_eq!(
-            checked.order,
+            checked.order(),
             linked.workflow.nodes.keys().cloned().collect::<Vec<_>>(),
         );
     }

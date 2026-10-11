@@ -68,7 +68,7 @@ fn boundary_an_approval_is_not_bound_to_the_plan_it_approves() {
     let (state, catalog) = seeded_state_and_catalog();
     let workflow = common::irreversible_workflow();
     let checked = check(&workflow, &catalog).expect("the irreversible workflow checks");
-    assert_eq!(checked.class, Class::Irreversible);
+    assert_eq!(checked.class(), Class::Irreversible);
     let inputs = common::new_rust_service_inputs();
     let approved = plan(&checked, &inputs, &catalog).expect("plans against empty state");
 

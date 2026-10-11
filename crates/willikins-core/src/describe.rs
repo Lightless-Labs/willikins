@@ -288,7 +288,7 @@ pub struct Description {
 /// call: it never touches a [`crate::Catalog`] or a [`crate::Tool`], so it
 /// cannot even accidentally do so.
 ///
-/// Walks `checked.workflow.inputs` in declaration order. For each declared
+/// Walks `checked.document().inputs()` in declaration order. For each declared
 /// input:
 /// - a raw value in `partial` for a *fixed* input (milestone 2b, decision
 ///   (d6): `spec.fixed_by.is_some()`) is never parsed: it is always
@@ -310,7 +310,7 @@ pub struct Description {
 /// - otherwise the input is [`MissingInput`].
 ///
 /// After every declared input, any name in `partial` that is not one of
-/// `checked.workflow.inputs` is an [`InputError`] of its own, in
+/// `checked.document().inputs()` is an [`InputError`] of its own, in
 /// `partial`'s own iteration order, appended after the declared-input
 /// errors above.
 #[must_use]
@@ -320,7 +320,7 @@ pub fn describe(checked: &Checked, partial: &PartialInputs) -> Description {
     let mut awaiting = Vec::new();
     let mut resolved = IndexMap::new();
 
-    for (name, spec) in &checked.workflow.inputs {
+    for (name, spec) in checked.document().inputs() {
         match partial.get(name) {
             // Milestone 2b, decision (d6): a *fixed* input (the linker's
             // own `InputSpec::fixed_by`) is never settable by a caller,
@@ -367,7 +367,7 @@ pub fn describe(checked: &Checked, partial: &PartialInputs) -> Description {
     }
 
     for name in partial.keys() {
-        if !checked.workflow.inputs.contains_key(name) {
+        if !checked.document().inputs().contains_key(name) {
             errors.push(InputError {
                 input: name.clone(),
                 error: ParseError::new(

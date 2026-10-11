@@ -602,9 +602,13 @@ mod tests {
         // The root's own authored document still names its `uses:` step
         // unexpanded (`Loaded::workflow`'s own doc).
         assert!(!root.workflow.uses.is_empty());
-        // ...but `check` ran against the *linked*, flattened graph, which
-        // has no `uses:` left at all.
-        assert!(root.checked.workflow.uses.is_empty());
+        // `check` ran against the *linked*, flattened graph instead, which
+        // has no `uses:` left at all -- unassertable here after milestone
+        // 3n's S1 (2026-10-11 addendum): `check`'s own stage 0 refuses a
+        // non-empty `uses` outright (`CheckError::Unlinked`), so a
+        // `Checked` with one cannot exist, and `DocumentView` (the sealed
+        // `Checked`'s only read of the document's declared surface) has no
+        // `uses()` to read it back through anyway.
     }
 
     #[test]

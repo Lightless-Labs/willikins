@@ -435,9 +435,7 @@ fn acceptance_04_for_each() {
         .expect("acceptance test 4: the positive fixture must check cleanly");
     assert_eq!(
         positive_checked
-            .types
-            .get(&node("token"))
-            .and_then(|ports| ports.get(&port("config")))
+            .edge(&node("token"), &port("config"))
             .map(willikins_core::Edge::ty),
         Some(&ty("DopplerConfig")),
         "acceptance test 4: steps.configs[prd].config type-checks as DopplerConfig"
@@ -470,12 +468,12 @@ outputs:
     let checked = willikins_core::check(&aggregate_workflow, &catalog)
         .expect("acceptance test 4: the inline for_each aggregate document must check cleanly");
     assert_eq!(
-        checked.output_types.get(&output("one_config")),
+        checked.output_types().get(&output("one_config")),
         Some(&ty("DopplerConfig")),
         "acceptance test 4: a Keyed reference resolves to the scalar type"
     );
     assert_eq!(
-        checked.output_types.get(&output("all_configs")),
+        checked.output_types().get(&output("all_configs")),
         Some(&list_ty("DopplerConfig")),
         "acceptance test 4: a plain Step reference into a for_each node resolves to a list"
     );

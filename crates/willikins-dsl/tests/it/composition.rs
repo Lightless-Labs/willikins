@@ -458,8 +458,8 @@ fn a_child_declaring_a_defaulted_acknowledgement_gives_acknowledgement_default()
 #[test]
 fn a_root_of_only_pure_nodes_using_an_irreversible_child_has_class_irreversible() {
     let checked = check_fixture("uses-class-root.yaml").expect("must check cleanly");
-    assert_eq!(checked.class, willikins_core::Class::Irreversible);
-    assert!(checked.class.requires_approval());
+    assert_eq!(checked.class(), willikins_core::Class::Irreversible);
+    assert!(checked.class().requires_approval());
 }
 
 // ---------------------------------------------------------------------
@@ -599,12 +599,13 @@ fn characterize_composition(path: &str) -> String {
     };
 
     writeln!(report, "WARNINGS:").unwrap();
-    for warning in &checked.warnings {
+    for warning in checked.warnings() {
         writeln!(report, "- {warning}").unwrap();
     }
 
     writeln!(report, "TYPES:").unwrap();
-    for (node, ports) in &checked.types {
+    let types = checked.types();
+    for (node, ports) in &types {
         for (port, edge) in ports {
             let ty = edge.ty();
             match edge.conversion() {
@@ -617,7 +618,8 @@ fn characterize_composition(path: &str) -> String {
     }
 
     writeln!(report, "OUTPUTS:").unwrap();
-    for (name, ty) in &checked.output_types {
+    let output_types = checked.output_types();
+    for (name, ty) in &output_types {
         writeln!(report, "{name}: {ty}").unwrap();
     }
 

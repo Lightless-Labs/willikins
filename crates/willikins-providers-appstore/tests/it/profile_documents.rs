@@ -223,7 +223,7 @@ fn an_invalid_profile_plans_as_a_replacement_naming_the_profile_by_its_non_secre
     // exactly as it was before this addendum -- what changes is that the
     // plan itself now says a delete is coming, not the approval
     // requirement.
-    assert_eq!(checked.class, willikins_core::Class::Destructive);
+    assert_eq!(checked.class(), willikins_core::Class::Destructive);
     assert!(plan.requires_approval);
 }
 
@@ -475,13 +475,20 @@ fn the_profile_name_edge_carries_the_one_conversion() {
     let (_state, catalog) = willikins_providers_fake::empty();
     let checked = willikins_core::check(&workflow, &catalog)
         .unwrap_or_else(|errors| panic!("document must check cleanly: {errors:?}"));
-    let profile = &checked.types[&willikins_core::NodeName::parse("profile").unwrap()];
-    let name = &profile[&willikins_core::PortName::parse("name").unwrap()];
+    let node = willikins_core::NodeName::parse("profile").unwrap();
+    let name = checked
+        .edge(&node, &willikins_core::PortName::parse("name").unwrap())
+        .unwrap();
     assert_eq!(name.ty().to_string(), "AppleBundleIdentifier");
     let conversion = name.conversion().expect("the name edge converts");
     assert_eq!(conversion.from().as_str(), "AppleBundleIdentifier");
     assert_eq!(conversion.to().as_str(), "AppleProfileName");
-    let identifier = &profile[&willikins_core::PortName::parse("identifier").unwrap()];
+    let identifier = checked
+        .edge(
+            &node,
+            &willikins_core::PortName::parse("identifier").unwrap(),
+        )
+        .unwrap();
     assert!(identifier.conversion().is_none());
 }
 
@@ -496,8 +503,12 @@ fn a_profile_name_other_than_the_identifier_still_checks_and_plans() {
     let catalog = willikins_providers_fake::catalog(state);
     let checked = willikins_core::check(&workflow, &catalog)
         .unwrap_or_else(|errors| panic!("a different name must check: {errors:?}"));
-    let name_edge = &checked.types[&willikins_core::NodeName::parse("profile").unwrap()]
-        [&willikins_core::PortName::parse("name").unwrap()];
+    let name_edge = checked
+        .edge(
+            &willikins_core::NodeName::parse("profile").unwrap(),
+            &willikins_core::PortName::parse("name").unwrap(),
+        )
+        .unwrap();
     assert!(name_edge.conversion().is_none());
     let mut inputs = positive_inputs();
     inputs.insert(

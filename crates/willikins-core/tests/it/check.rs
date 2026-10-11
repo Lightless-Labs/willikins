@@ -685,10 +685,10 @@ fn positive_fixture_checks_successfully_with_the_expected_order_and_class() {
             .into_iter()
             .map(node)
             .collect();
-    assert_eq!(checked.order, expected_order);
-    assert_eq!(checked.class, Class::Reversible);
-    assert!(!checked.class.requires_approval());
-    assert!(checked.warnings.is_empty(), "{:?}", checked.warnings);
+    assert_eq!(checked.order(), expected_order);
+    assert_eq!(checked.class(), Class::Reversible);
+    assert!(!checked.class().requires_approval());
+    assert!(checked.warnings().is_empty(), "{:?}", checked.warnings());
 }
 
 #[test]
@@ -699,7 +699,7 @@ fn acceptance_4_keyed_reference_into_a_for_each_node_resolves_to_the_scalar_type
 
     // `token`'s `config` port is `${{ steps.configs[prd].config }}`.
     assert_eq!(
-        checked.types[&node("token")][&port("config")].ty(),
+        checked.edge(&node("token"), &port("config")).unwrap().ty(),
         &ty("DopplerConfig")
     );
 }
@@ -722,7 +722,7 @@ fn acceptance_4_plain_step_reference_into_a_for_each_node_resolves_to_a_list() {
         check(&workflow, &catalog).expect("adding a plain-Step output must still check cleanly");
 
     assert_eq!(
-        checked.output_types[&output("all_configs")],
+        checked.output_types()[&output("all_configs")],
         list_ty("DopplerConfig")
     );
 }
@@ -913,8 +913,8 @@ fn acceptance_6_a_workflow_with_an_irreversible_node_requires_approval() {
     let catalog = test_catalog();
     let checked =
         check(&workflow, &catalog).expect("adding an irreversible node must still check cleanly");
-    assert_eq!(checked.class, Class::Irreversible);
-    assert!(checked.class.requires_approval());
+    assert_eq!(checked.class(), Class::Irreversible);
+    assert!(checked.class().requires_approval());
 }
 
 #[test]
@@ -931,7 +931,7 @@ fn unused_input_produces_a_warning_not_an_error() {
     let catalog = test_catalog();
     let checked = check(&workflow, &catalog).expect("an unused input is a warning, not an error");
     assert_eq!(
-        checked.warnings,
+        checked.warnings().to_vec(),
         vec![CheckWarning::UnusedInput {
             input: input("slug")
         }]
@@ -1127,7 +1127,7 @@ fn b_bound_where_c_is_wanted_converts_one_hop() {
             Node::new(tool_name("chain.sink_c")).port(port("c"), Binding::Input(input("b"))),
         );
     let checked = check(&workflow, &chain_catalog()).expect("B must convert to C in one hop");
-    let edge = &checked.types[&node("sink")][&port("c")];
+    let edge = checked.edge(&node("sink"), &port("c")).unwrap();
     assert_eq!(edge.ty(), &ty("ChainB"));
     let conversion = edge
         .conversion()
@@ -1147,7 +1147,7 @@ fn a_bound_where_b_is_wanted_converts_one_hop() {
             Node::new(tool_name("chain.sink_b")).port(port("b"), Binding::Input(input("a"))),
         );
     let checked = check(&workflow, &chain_catalog()).expect("A must convert to B in one hop");
-    let edge = &checked.types[&node("sink")][&port("b")];
+    let edge = checked.edge(&node("sink"), &port("b")).unwrap();
     assert_eq!(edge.ty(), &ty("ChainA"));
     let conversion = edge
         .conversion()
@@ -1183,7 +1183,7 @@ fn a_document_that_spells_out_two_edges_checks() {
         panic!("a document spelling out two edges must check: {errors:?}")
     });
 
-    let echo_edge = &checked.types[&node("echo")][&port("in")];
+    let echo_edge = checked.edge(&node("echo"), &port("in")).unwrap();
     assert_eq!(echo_edge.ty(), &ty("ChainA"));
     assert_eq!(
         echo_edge.conversion().map(|c| c.to().as_str()),
@@ -1191,7 +1191,7 @@ fn a_document_that_spells_out_two_edges_checks() {
         "the first edge is one hop, A -> B"
     );
 
-    let sink_edge = &checked.types[&node("sink")][&port("b")];
+    let sink_edge = checked.edge(&node("sink"), &port("b")).unwrap();
     assert_eq!(sink_edge.ty(), &ty("ChainB"));
     assert!(
         sink_edge.conversion().is_none(),
@@ -1229,7 +1229,7 @@ fn a_literal_records_an_edge_with_no_conversion() {
         ),
     );
     let checked = check(&workflow, &catalog).expect("a matching literal must check");
-    let edge = &checked.types[&node("sink")][&port("name")];
+    let edge = checked.edge(&node("sink"), &port("name")).unwrap();
     assert_eq!(edge.ty(), &ty("AppleProfileName"));
     assert!(edge.conversion().is_none(), "a literal is never converted");
 }
@@ -1509,7 +1509,7 @@ fn list_binding_records_one_edge_per_element_with_conversion_where_needed() {
         );
     let checked = check(&workflow, &chain_catalog())
         .expect("an exact ChainB and a converting ChainA input both belong in list<ChainB>");
-    let edge = &checked.types[&node("sink")][&port("xs")];
+    let edge = checked.edge(&node("sink"), &port("xs")).unwrap();
     assert_eq!(edge.delivered(), list_ty("ChainB"));
     let elements = edge
         .elements()
@@ -1543,7 +1543,7 @@ fn an_input_used_only_inside_a_list_is_not_reported_unused() {
                 .port(port("xs"), Binding::List(vec![Binding::Input(input("a"))])),
         );
     let checked = check(&workflow, &chain_catalog()).expect("a converting element checks cleanly");
-    assert!(checked.warnings.is_empty(), "{:?}", checked.warnings);
+    assert!(checked.warnings().is_empty(), "{:?}", checked.warnings());
 }
 
 /// A `Binding::List` is never valid as a `for_each` source -- `check`

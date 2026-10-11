@@ -579,11 +579,11 @@ pub fn apply(
     // is what the run actually executes, and its class is derived from the
     // tools it uses. The approved plan's own flag still refuses on its
     // own, so a plan is never treated as less privileged than it claims.
-    if (checked.class.requires_approval() || approved.requires_approval)
+    if (checked.class().requires_approval() || approved.requires_approval)
         && matches!(approval, Approval::Auto)
     {
         return Err(ApplyError::ApprovalRequired {
-            class: checked.class,
+            class: checked.class(),
         });
     }
 
@@ -605,12 +605,13 @@ pub fn apply(
     // `checked.order` instead visits every node; its group of planned
     // instances, read from `fresh.plan.nodes`, is simply empty in that
     // case.
-    let workflow = &checked.workflow;
+    let workflow = checked.workflow();
+    let order = checked.order();
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut applied_nodes: Vec<AppliedNode> = Vec::new();
 
     let mut index = 0;
-    for name in &checked.order {
+    for name in &order {
         let node = workflow
             .nodes
             .get(name)
@@ -870,13 +871,14 @@ pub fn apply(
     }
 
     // Rule 5.
+    let types = checked.types();
     let mut outputs = IndexMap::new();
     let ctx = ResolveCtx {
         workflow,
         inputs,
         catalog,
         results: &results,
-        edges: &checked.types,
+        edges: &types,
     };
     for (out_name, binding) in &workflow.outputs {
         if matches!(binding, Binding::Literal(_)) {
@@ -995,12 +997,13 @@ fn resolve_instance_inputs(
     item: Option<&Value>,
 ) -> Result<Inputs, ApplyError> {
     let mut resolved = planned.inputs.clone();
+    let types = checked.types();
     let ctx = ResolveCtx {
-        workflow: &checked.workflow,
+        workflow: checked.workflow(),
         inputs,
         catalog,
         results,
-        edges: &checked.types,
+        edges: &types,
     };
     for (port, binding) in &node.with {
         if binding_may_change_mid_run(binding) {

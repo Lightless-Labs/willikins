@@ -27,7 +27,7 @@ fn new_rust_service_checks_against_the_fake_catalog() {
     });
 
     assert_eq!(
-        checked.order,
+        checked.order(),
         vec![
             node("names"),
             node("repo"),
@@ -37,8 +37,8 @@ fn new_rust_service_checks_against_the_fake_catalog() {
             node("ci_secret"),
         ]
     );
-    assert_eq!(checked.class, Class::Reversible);
-    assert!(checked.warnings.is_empty());
+    assert_eq!(checked.class(), Class::Reversible);
+    assert!(checked.warnings().is_empty());
 }
 
 #[test]
@@ -408,12 +408,13 @@ fn characterize(path: &str) -> String {
     };
 
     writeln!(report, "WARNINGS:").unwrap();
-    for warning in &checked.warnings {
+    for warning in checked.warnings() {
         writeln!(report, "- {warning}").unwrap();
     }
 
     writeln!(report, "TYPES:").unwrap();
-    for (node, ports) in &checked.types {
+    let types = checked.types();
+    for (node, ports) in &types {
         for (port, edge) in ports {
             // The binding's own type, exactly what `Checked::types` held
             // before milestone 3d; ` -> <to>` only when `check` recorded
@@ -429,7 +430,8 @@ fn characterize(path: &str) -> String {
     }
 
     writeln!(report, "OUTPUTS:").unwrap();
-    for (name, ty) in &checked.output_types {
+    let output_types = checked.output_types();
+    for (name, ty) in &output_types {
         writeln!(report, "{name}: {ty}").unwrap();
     }
 

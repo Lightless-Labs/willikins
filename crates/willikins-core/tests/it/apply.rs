@@ -1190,7 +1190,7 @@ fn a_cleared_approval_flag_does_not_bypass_the_gate() {
     let catalog = apply_test_catalog(Arc::clone(&state));
     let workflow = common::irreversible_workflow();
     let checked = check(&workflow, &catalog).expect("irreversible workflow checks cleanly");
-    assert_eq!(checked.class, Class::Irreversible);
+    assert_eq!(checked.class(), Class::Irreversible);
     let inputs = common::new_rust_service_inputs();
 
     let mut forged = plan(&checked, &inputs, &catalog).expect("plan against empty state succeeds");
@@ -2115,7 +2115,7 @@ mod conversions {
             .input(input("b"), InputSpec::new(scalar("ConvB")))
             .node(node("sink"), sink_b_node(Binding::Input(input("b"))));
         let checked = check(&workflow, &fixture.catalog).expect("B binds to B exactly");
-        let edge = &checked.types[&node("sink")][&port("b")];
+        let edge = checked.edge(&node("sink"), &port("b")).unwrap();
         assert!(edge.conversion().is_none());
         for value in [
             Value::known(ConvB::parse("same").unwrap()),
@@ -2151,7 +2151,7 @@ mod conversions {
             .input(input("a"), InputSpec::new(scalar("ConvA")))
             .node(node("sink"), sink_b_node(Binding::Input(input("a"))));
         let checked = check(&workflow, &fixture.catalog).expect("A converts to B in one hop");
-        let edge = &checked.types[&node("sink")][&port("b")];
+        let edge = checked.edge(&node("sink"), &port("b")).unwrap();
         assert!(edge.conversion().is_some());
         let foreign = Value::known(ConvB::parse("already").unwrap());
         assert_eq!(
@@ -2416,7 +2416,9 @@ mod conversions {
             );
         let checked = check(&workflow, &fixture.catalog).expect("A binds to A exactly");
         assert!(
-            checked.types[&node("echo")][&port("in")]
+            checked
+                .edge(&node("echo"), &port("in"))
+                .unwrap()
                 .conversion()
                 .is_none()
         );

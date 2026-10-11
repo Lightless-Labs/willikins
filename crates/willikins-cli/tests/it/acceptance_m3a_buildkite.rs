@@ -236,22 +236,23 @@ fn acceptance_11_the_document_checks_cleanly_against_the_fake_catalog() {
     .map(node)
     .collect();
     assert_eq!(
-        checked.order, expected_order,
+        checked.order(),
+        expected_order,
         "acceptance test 11: node order"
     );
     assert_eq!(
-        checked.class,
+        checked.class(),
         Class::Reversible,
         "acceptance test 11: class"
     );
     assert!(
-        !checked.class.requires_approval(),
+        !checked.class().requires_approval(),
         "acceptance test 11: a document with no irreversible node must auto-approve"
     );
     assert!(
-        checked.warnings.is_empty(),
+        checked.warnings().is_empty(),
         "acceptance test 11: {:?}",
-        checked.warnings
+        checked.warnings()
     );
 }
 
@@ -267,17 +268,22 @@ fn acceptance_11_the_document_checks_cleanly_against_the_live_shaped_catalog_wit
         .expect("acceptance test 11: must check cleanly against the live-shaped catalog too");
 
     assert_eq!(
-        checked_fake.order, checked_live.order,
+        checked_fake.order(),
+        checked_live.order(),
         "acceptance test 11: node order must agree between catalogs"
     );
     assert_eq!(
-        checked_fake.class, checked_live.class,
+        checked_fake.class(),
+        checked_live.class(),
         "acceptance test 11: class must agree between catalogs"
     );
-    for node_name in &checked_fake.order {
+    let order = checked_fake.order();
+    let types_fake = checked_fake.types();
+    let types_live = checked_live.types();
+    for node_name in &order {
         assert_eq!(
-            checked_fake.types.get(node_name),
-            checked_live.types.get(node_name),
+            types_fake.get(node_name),
+            types_live.get(node_name),
             "acceptance test 11: resolved port types for `{node_name}` must agree between \
              the fake and live-shaped catalogs"
         );
