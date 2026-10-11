@@ -536,6 +536,39 @@ Scoped gates green, in two commits: `-p willikins-core` (fmt, clippy, 243 unit +
 byte-identical, no `.snap.new`), and -- because `describe.rs` changed, and per G2's own
 addendum, which named the server suites rather than the dsl target as acceptance 12's real
 evidence -- `-p willikins-server --test it -- acceptance_read_ops:: composition_s1::`.
+**Addendum:** 2026-10-11 (task B1, coordinator sign-off per the "Needs the coordinator" section
+below). Two points not spelled out by decision (b1) or SHARED VALUES.
+
+1. **Acceptance test 11's two clauses land in two different crates' test files, not one.**
+   The fixture-driven clause (`check` on `workflows/fixtures/identifier-for-each.yaml` returns
+   exactly `IdentifierForEachSource`, and a secret source is unaffected) is
+   `crates/willikins-cli/tests/it/acceptance.rs`'s
+   `milestone_3n_acceptance_11_identifier_for_each_source_is_refused`, next to the milestone 1
+   acceptance suite's own fixture-driven `for_each` tests (`load`/`fixture`/`empty_catalog` are
+   already that file's own helpers; its own numbering is milestone 1's, so this test is named
+   `milestone_3n_acceptance_11_...` rather than reusing the bare `acceptance_11` the file's own
+   convention would otherwise suggest, to avoid colliding with that file's unrelated acceptance
+   test 11). The colliding-default clause (the same node, now with a colliding default on top of
+   an identifier-typed source, still reports only `IdentifierForEachSource`) is
+   `crates/willikins-core/tests/it/check.rs`'s
+   `acceptance_11_identifier_for_each_source_is_refused_even_with_a_colliding_default`: it needs a
+   hand-built `Workflow` (an `InputSpec` default of two colliding `AppleCertificateId`s), and the
+   characterization's "exactly one new entry" rule forbids a second fixture under
+   `workflows/fixtures/` to carry it, since that directory's every file is walked by
+   `characterization_of_every_document`.
+2. **`check_for_each`'s own doc comment and the module doc's "Error ordering" section both name
+   the full four-error order** (secret, scalar, identifier, colliding default), not only the one
+   sentence decision (b1) quotes, so a future reader of either doc comment sees the complete
+   picture without cross-referencing the other.
+
+Ratchet unaffected: this task adds a `CheckError` variant and a `check_for_each` branch, neither
+counted by `tests/it/ratchet.rs` (which tracks only `unreachable!`/`.expect(`/`.unwrap()`/`panic!`
+in `plan.rs`, `apply.rs` and `describe.rs`). Scoped gates green: `-p willikins-core` (fmt, clippy,
+244 unit + 297 `it` tests + 2 doctests), `-p willikins-dsl` (93 unit + 60 `it` tests,
+`characterization_of_every_document` gains exactly the one new entry the plan calls for, no other
+line moves, no `.snap.new`), `-p willikins-cli` (clippy plus its own test suites, including the
+four gitignored `operator_*` targets already present on this machine, all green -- the private
+half of verify item 6).
 
 ## Goal
 
