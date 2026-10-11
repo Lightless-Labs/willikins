@@ -549,6 +549,75 @@ fn a_blocked_gate_skips_its_dependents_and_leaves_every_other_branch_alone() {
     assert!(!json.contains("REDACTED"));
 }
 
+/// Milestone 3n, X1 (2026-10-11): a workflow output whose producer was
+/// skipped, or aggregates a blocked instance, is `Unknown` *of its own
+/// checked type*. Nothing ran to produce it, so the only thing typing it is
+/// the `ty` `check` stored on its `Source::Step`/`Aggregate`/`Keyed`
+/// (decision (g1): "typing an `Unknown` for a skipped node needs no catalog
+/// lookup"). The X1 pass's mutation M-D gave `Source::Step` a `list<T>` in
+/// place of its own `T` and every core and dsl test stayed green; the
+/// test above asserts only that `gate_keys` is not known. One output per
+/// source kind: `Step` onto a skipped single node, `Aggregate` onto a
+/// wholly skipped `for_each` node and onto one with a blocked instance,
+/// and `Keyed` onto a wholly skipped one.
+#[test]
+fn a_skipped_producers_workflow_outputs_are_unknown_of_their_checked_types() {
+    let (catalog, _reads) = catalog_with(HashSet::from(["stg"]));
+    let workflow = workflow()
+        .output(
+            output("downstream_value"),
+            Binding::Step {
+                node: node("downstream"),
+                port: port("value"),
+            },
+        )
+        .output(
+            output("consumer_values"),
+            Binding::Step {
+                node: node("consumer"),
+                port: port("value"),
+            },
+        )
+        .output(
+            output("consumer_dev"),
+            Binding::Keyed {
+                node: node("consumer"),
+                key: "dev".to_string(),
+                port: port("value"),
+            },
+        );
+    let checked = check(&workflow, &catalog).expect("the test graph checks cleanly");
+    let result = plan(&checked, &envs_inputs()).expect("a blocked gate never fails `plan`");
+    assert_eq!(
+        by_name(&result.nodes, "downstream", None).action,
+        Action::Skip
+    );
+    assert_eq!(
+        by_name(&result.nodes, "consumer", None).action,
+        Action::Skip
+    );
+
+    for (name, expected) in [
+        ("downstream_value", ty("EnvironmentSlug")),
+        ("consumer_values", list_ty("EnvironmentSlug")),
+        ("consumer_dev", ty("EnvironmentSlug")),
+        ("gate_keys", list_ty("EnvironmentSlug")),
+    ] {
+        let value = result.outputs.get(&output(name)).unwrap();
+        assert!(!value.is_known(), "`{name}`: nothing ran to produce it");
+        assert_eq!(
+            value.ty(),
+            &expected,
+            "`{name}`: an Unknown output is typed by its own checked source"
+        );
+        assert_eq!(
+            Some(value.ty()),
+            checked.output_types().get(&output(name)),
+            "`{name}`: the plan's output and `output_types()` agree"
+        );
+    }
+}
+
 /// A scalar gate (no `for_each`) held by one `Step` binding: the
 /// dependent is `Skip`, never read, and named in the gate's `holds_back`.
 /// `workflow()` above only ever blocks a `for_each` instance, and its
