@@ -163,6 +163,45 @@ fn the_unreachable_ratchet_never_rises() {
     );
 }
 
+/// The lines in `path` that are exactly a `#[cfg(test)]` attribute,
+/// trimmed: the lines [`non_test_body`] (and `check.rs`'s own tripwire,
+/// which splits the same way) may cut a file at.
+fn cfg_test_line_count(path: &str) -> usize {
+    let full_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    fs::read_to_string(&full_path)
+        .unwrap_or_else(|error| panic!("{}: {error}", full_path.display()))
+        .lines()
+        .filter(|line| line.trim() == "#[cfg(test)]")
+        .count()
+}
+
+/// Every count above, and `check.rs`'s comment-stripped tripwire
+/// (acceptance 7), reads only the text above a file's *first*
+/// `#[cfg(test)]` line. Any other `#[cfg(test)]` item placed before the
+/// test module -- a `use`, a helper, an empty `mod` -- would silently
+/// exempt everything below it from both: `describe.rs`'s pinned 0 stays 0
+/// however many fallbacks or registry calls follow (milestone 3n's X1
+/// pass, mutation M-A, ran exactly that and every guard stayed green).
+/// So the split itself is pinned: one `#[cfg(test)]` line, the test
+/// module's own, in each file that has a test module, and none in
+/// `apply.rs`. A new one is a stop: either it gates something below the
+/// test module, or the split above must learn to skip it first.
+#[test]
+fn each_ratchet_file_is_split_at_its_test_module_only() {
+    for (path, expected) in [
+        ("src/plan.rs", 1),
+        ("src/apply.rs", 0),
+        ("src/describe.rs", 1),
+    ] {
+        assert_eq!(
+            cfg_test_line_count(path),
+            expected,
+            "{path} gained or lost a `#[cfg(test)]` line: the ratchet and the tripwire read \
+             only the text above the first one, so an early one hides the rest of the file"
+        );
+    }
+}
+
 /// Acceptance 12's second half (milestone 3n, task G2): `describe.rs`'s
 /// non-test body calls `willikins_types::registry()` zero times.
 /// `missing_input` and `awaiting_input` used to call it directly; both now
