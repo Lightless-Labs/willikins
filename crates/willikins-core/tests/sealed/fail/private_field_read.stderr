@@ -1,10 +1,10 @@
-error[E0616]: field `types` of struct `Checked` is private
-  --> tests/sealed/fail/private_field_read.rs:11:21
+error[E0616]: field `order` of struct `Checked` is private
+  --> tests/sealed/fail/private_field_read.rs:14:21
    |
-11 |     let _ = checked.types;
+14 |     let _ = checked.order;
    |                     ^^^^^ private field
    |
-help: a method `types` also exists, call it with parentheses
+help: a method `order` also exists, call it with parentheses
    |
-11 |     let _ = checked.types();
+14 |     let _ = checked.order();
    |                          ++

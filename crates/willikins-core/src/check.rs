@@ -157,16 +157,6 @@ pub struct Checked {
     class: Class,
     /// Non-fatal warnings, alongside a successful check.
     warnings: Vec<CheckWarning>,
-    /// Every node `with` binding `check` validated, keyed by node then
-    /// port: the binding's own resolved type, and the conversion `check`
-    /// chose to deliver it to the port's type, if any ([`Edge`]). Does not
-    /// cover `for_each` bindings, and never mixes in workflow outputs
-    /// (those are [`Self::output_types`]), so a node named `outputs` keeps
-    /// its own entry.
-    types: IndexMap<NodeName, IndexMap<PortName, Edge>>,
-    /// The resolved type of every workflow output, in declaration order.
-    /// A literal output has no declared type to resolve and is absent.
-    output_types: IndexMap<OutputName, TypeRef>,
     /// Every workflow output, classified (milestone 3n, decision (g1)), in
     /// declaration order -- the same order as [`Self::output_types`], and
     /// built from exactly the same successful resolutions. From G3 on,
@@ -222,22 +212,58 @@ impl Checked {
     /// it once rather than call this per port. `plan` and `apply` no
     /// longer read this map at all (as of G4): every bound port's edge
     /// rides on its own [`PortEdge`] instead.
+    ///
+    /// From G7 on this is a view, not a copy (decision (s1)): built fresh
+    /// from [`Self::nodes`]' own [`Shape::ports`](Shape::Single::ports),
+    /// re-sorted into *declaration* order (`CheckedNode::declared_at`) --
+    /// `self.nodes` itself is topological -- so what this prints is
+    /// exactly what `plan` and `apply` consume, not a parallel copy of it
+    /// `check` kept around only for this accessor.
     #[must_use]
     pub fn types(&self) -> IndexMap<NodeName, IndexMap<PortName, Edge>> {
-        self.types.clone()
+        let mut by_declared_at: Vec<&CheckedNode> = self.nodes.iter().collect();
+        by_declared_at.sort_by_key(|node| node.declared_at);
+        by_declared_at
+            .into_iter()
+            .filter_map(|node| {
+                let ports = node_port_edges(node);
+                if ports.is_empty() {
+                    None
+                } else {
+                    Some((node.name.clone(), ports))
+                }
+            })
+            .collect()
     }
 
     /// One checked edge, by node and port, or `None` when that port is
-    /// unbound (or `node` is not a node of this workflow).
+    /// unbound (or `node` is not a node of this workflow). From G7 on,
+    /// looked up straight off [`Self::nodes`]' own ports rather than a
+    /// stored copy (same view as [`Self::types`]).
     #[must_use]
     pub fn edge(&self, node: &NodeName, port: &PortName) -> Option<&Edge> {
-        self.types.get(node)?.get(port)
+        let checked_node = self
+            .nodes
+            .iter()
+            .find(|candidate| &candidate.name == node)?;
+        match &checked_node.shape {
+            Shape::Single { ports, .. } => find_port_edge(ports, port),
+            Shape::Each { ports, .. } => find_port_edge(ports, port),
+        }
     }
 
     /// The resolved type of every workflow output, in declaration order.
+    /// From G7 on, a view over [`Self::outputs`] (decision (s1)): each
+    /// [`CheckedOutput::ty`] is exactly this map's own entry for it, the
+    /// same value `check_outputs` resolved before building the output's
+    /// `Source` -- there is no longer a second copy of it kept only for
+    /// this accessor.
     #[must_use]
     pub fn output_types(&self) -> IndexMap<OutputName, TypeRef> {
-        self.output_types.clone()
+        self.outputs
+            .iter()
+            .map(|output| (output.name.clone(), output.ty.clone()))
+            .collect()
     }
 
     /// The checked workflow, whole -- including its nodes. Crate-private:
@@ -297,8 +323,6 @@ impl fmt::Debug for Checked {
             .field("nodes", &self.nodes)
             .field("class", &self.class)
             .field("warnings", &self.warnings)
-            .field("types", &self.types)
-            .field("output_types", &self.output_types)
             .field("outputs", &self.outputs)
             .finish()
     }
@@ -417,6 +441,35 @@ impl fmt::Debug for Shape {
                 .finish(),
         }
     }
+}
+
+/// One node's own bound ports, by name, as an [`Edge`] map -- milestone 3n,
+/// decision (s1)'s `types()` view, computed once per node rather than
+/// re-walked at every call site that wants it. Empty for a node with no
+/// bound port, matching [`Checked::types`]' own "a node with no bound port
+/// has no entry" (the caller, [`Checked::types`], is what turns an empty
+/// map into a missing entry).
+fn node_port_edges(node: &CheckedNode) -> IndexMap<PortName, Edge> {
+    match &node.shape {
+        Shape::Single { ports, .. } => ports
+            .iter()
+            .map(|port_edge| (port_edge.port.clone(), port_edge.bound.edge().clone()))
+            .collect(),
+        Shape::Each { ports, .. } => ports
+            .iter()
+            .map(|port_edge| (port_edge.port.clone(), port_edge.bound.edge().clone()))
+            .collect(),
+    }
+}
+
+/// `ports`' own entry for `port`, by name -- [`Checked::edge`]'s own
+/// per-port lookup, shared between [`Shape::Single`] and [`Shape::Each`]
+/// (whose `ports` differ only in `I`).
+fn find_port_edge<'a, I>(ports: &'a [PortEdge<I>], port: &PortName) -> Option<&'a Edge> {
+    ports
+        .iter()
+        .find(|port_edge| &port_edge.port == port)
+        .map(|port_edge| port_edge.bound.edge())
 }
 
 /// A [`Shape::Single`] node's own id: an index into a `Vec<SingleResult>`
@@ -572,6 +625,18 @@ pub(crate) enum Bound<I> {
     },
 }
 
+impl<I> Bound<I> {
+    /// This port's own [`Edge`], whichever variant it is -- `Scalar` and
+    /// `List` each carry exactly one. `check`'s own public views
+    /// ([`Checked::types`], [`Checked::edge`], from G7 on) read it through
+    /// here instead of a parallel map built only for them.
+    fn edge(&self) -> &Edge {
+        match self {
+            Self::Scalar { edge, .. } | Self::List { edge, .. } => edge,
+        }
+    }
+}
+
 /// One of a node's bound ports, in the producing tool's own input order
 /// (milestone 3n, decision (g1)).
 #[derive(Clone)]
@@ -624,9 +689,8 @@ pub(crate) struct CheckedOutput {
     /// Where this output's value comes from.
     pub(crate) source: Source<Infallible>,
     /// This output's own resolved type -- exactly [`Checked::output_types`]'
-    /// own entry for this output. Unread by anything but this type's own
-    /// hand-written `Debug` until a later task's `output_types()` rewrite
-    /// (G7, "views, not copies") reads it instead of the older stored map.
+    /// own entry for this output, which reads it straight off this field
+    /// from G7 on ("views, not copies"), instead of a parallel stored map.
     pub(crate) ty: TypeRef,
 }
 
@@ -1838,8 +1902,6 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         graph: &mut graph,
         index_of: &index_of,
         used_inputs: HashSet::new(),
-        types: IndexMap::new(),
-        output_types: IndexMap::new(),
         for_each_elements: IndexMap::new(),
         pending_ports: IndexMap::new(),
         pending_for_each: IndexMap::new(),
@@ -1858,8 +1920,6 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
 
     let Resolver {
         used_inputs,
-        types,
-        output_types,
         for_each_elements,
         pending_ports,
         pending_for_each,
@@ -1911,8 +1971,6 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         nodes,
         class,
         warnings,
-        types,
-        output_types,
         outputs,
     })
 }
@@ -2519,8 +2577,7 @@ enum PendingBound {
 /// (g1)'s two-phase build -- see [`PendingSource`]'s own doc): everything
 /// [`build_checked_nodes`] needs to build a real [`PortEdge`] once ids
 /// exist, recorded by [`Resolver::check_with_port`]/[`Resolver::check_list_port`]
-/// at exactly the point either also calls [`Resolver::record_edge`] for the
-/// same port.
+/// at exactly the point each one resolves this port's own [`Edge`].
 #[derive(Clone)]
 struct PendingPort {
     port: PortName,
@@ -2540,8 +2597,6 @@ struct Resolver<'a> {
     graph: &'a mut DiGraph<NodeName, ()>,
     index_of: &'a IndexMap<NodeName, NodeIndex>,
     used_inputs: HashSet<InputName>,
-    types: IndexMap<NodeName, IndexMap<PortName, Edge>>,
-    output_types: IndexMap<OutputName, TypeRef>,
     /// Every `for_each` node's own resolved element type, recorded by
     /// [`Self::check_for_each`] on its own success path only (milestone
     /// 3n, decision (g1)): `check`'s node table reads this once every
@@ -2562,14 +2617,6 @@ struct Resolver<'a> {
 }
 
 impl<'a> Resolver<'a> {
-    /// Record `edge` as `node`'s `port`'s checked edge.
-    fn record_edge(&mut self, node: &NodeName, port: &PortName, edge: Edge) {
-        self.types
-            .entry(node.clone())
-            .or_default()
-            .insert(port.clone(), edge);
-    }
-
     /// Whether `source` — a resolved binding's `(node, port)` origin, as
     /// [`Self::resolve`] returns it — is one [`PortSpec::derived_only`]
     /// accepts: the output of an earlier node whose own tool is **not**
@@ -2718,9 +2765,13 @@ impl<'a> Resolver<'a> {
     }
 
     /// Record `node`.`port`'s pending classification and `edge` (milestone
-    /// 3n, decision (g1)), alongside [`Self::record_edge`]'s own older
-    /// entry -- called at exactly the same success points, never more and
-    /// never fewer.
+    /// 3n, decision (g1)): everything [`build_checked_nodes`] needs to
+    /// build this port's real [`PortEdge`] once ids exist. From G7 on
+    /// this is the *only* place this data is recorded -- `Checked::types`
+    /// used to keep a second, parallel copy of just `edge` via a sibling
+    /// `record_edge` call at each of this method's own call sites; that
+    /// map, and the method, are gone, and `Checked::types`/`Checked::edge`
+    /// now read this same `edge` back through `PortEdge`/`Bound` instead.
     fn record_pending_port(
         &mut self,
         node: &NodeName,
@@ -2780,7 +2831,6 @@ impl<'a> Resolver<'a> {
                 // directly (`check_literal`, above). See decision (e)'s
                 // step 2.
                 let edge = Edge::exact(value.ty().clone());
-                self.record_edge(node, port, edge.clone());
                 self.record_pending_port(
                     node,
                     port,
@@ -2838,7 +2888,6 @@ impl<'a> Resolver<'a> {
 
         if port_spec.ty.accepts(&found, self.registry) {
             let edge = Edge::exact(found);
-            self.record_edge(node, port, edge.clone());
             self.record_pending_port(
                 node,
                 port,
@@ -2872,7 +2921,6 @@ impl<'a> Resolver<'a> {
             let row = self.registry.probe_conversion(&found.name, &to.name);
             if let Some(row) = row {
                 let edge = Edge::converted(found, row);
-                self.record_edge(node, port, edge.clone());
                 self.record_pending_port(
                     node,
                     port,
@@ -2980,7 +3028,6 @@ impl<'a> Resolver<'a> {
 
         if ok {
             let edge = Edge::list(element_ty, element_edges);
-            self.record_edge(node, port, edge.clone());
             self.record_pending_port(
                 node,
                 port,
@@ -3218,14 +3265,17 @@ impl<'a> Resolver<'a> {
     }
 
     /// Check every workflow output. Errors are reported under
-    /// [`Site::Output`] (an output is not a node); resolved types go to
-    /// [`Checked::output_types`], keyed by output name, so a real node
-    /// named `outputs` cannot have its port types overwritten. A literal
-    /// output has no target type to check against, so it is refused
-    /// ([`CheckError::LiteralOutput`]) rather than accepted and dropped; a
-    /// secret output is accepted, by decision -- see
-    /// `tests/check_adversarial.rs`. Every output a successful `check`
-    /// returns therefore has an entry in [`Checked::output_types`].
+    /// [`Site::Output`] (an output is not a node); resolved types feed
+    /// [`Self::pending_outputs`], keyed by output name, so a real node
+    /// named `outputs` cannot have its port types overwritten --
+    /// [`build_checked_outputs`] reads them from there into
+    /// [`CheckedOutput::ty`], which [`Checked::output_types`] (from G7 on,
+    /// a view) reads in turn. A literal output has no target type to
+    /// check against, so it is refused ([`CheckError::LiteralOutput`])
+    /// rather than accepted and dropped; a secret output is accepted, by
+    /// decision -- see `tests/check_adversarial.rs`. Every output a
+    /// successful `check` returns therefore has an entry in
+    /// [`Checked::output_types`].
     fn check_outputs(&mut self, errors: &mut Vec<CheckError>) {
         let workflow = self.workflow;
         let not_in_for_each = ItemContext::NotInForEach;
@@ -3242,11 +3292,8 @@ impl<'a> Resolver<'a> {
             if let Some((found, _source)) =
                 self.resolve(None, &site, &not_in_for_each, binding, errors)
             {
-                self.pending_outputs.insert(
-                    out_name.clone(),
-                    (pending_source_of(binding), found.clone()),
-                );
-                self.output_types.insert(out_name.clone(), found);
+                self.pending_outputs
+                    .insert(out_name.clone(), (pending_source_of(binding), found));
             }
         }
     }
@@ -5314,10 +5361,15 @@ mod tests {
         let checked = check(&workflow, &catalog)
             .expect("AppleBundleIdentifier converts to Text; Text binds to Text exactly");
 
-        let converting_edge = checked.types[&node_name("sink1")][&port("b")].clone();
+        let converting_edge = checked
+            .edge(&node_name("sink1"), &port("b"))
+            .unwrap()
+            .clone();
         assert!(converting_edge.conversion().is_some());
         assert!(
-            checked.types[&node_name("sink2")][&port("b")]
+            checked
+                .edge(&node_name("sink2"), &port("b"))
+                .unwrap()
                 .conversion()
                 .is_none()
         );
