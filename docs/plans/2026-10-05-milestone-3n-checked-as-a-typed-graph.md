@@ -417,6 +417,125 @@ no fallback of their own. `describe.rs` untouched at 1. Scoped gates green: `-p 
 (fmt, clippy, 296 `it` tests, 2 doctests), `-p willikins-dsl` acceptance, and `-p willikins-cli
 -p willikins-server` (clippy plus their own test suites, no apply-specific subset existing in
 `willikins-server`'s tree to scope to more narrowly).
+**Addendum:** 2026-10-11 (task G7). Six points not spelled out by decision (s1) or SHARED
+VALUES.
+
+1. **`plan.rs`'s ratchet final value is 8, not SHARED VALUES' pinned 6.** `types()`,
+   `edge()` and `output_types()` are views over `checked.nodes()`/`checked.outputs()`
+   (`types()` re-sorts `nodes()` by `declared_at` to keep its declaration-order contract,
+   since `nodes()` itself is topological -- the one place this task's views do real work the
+   stored maps never needed). `pub(crate) fn workflow()` is deleted; `plan.rs`'s own last
+   caller (`walk`'s `check_fixed_inputs` and its `Plan.workflow` field) now reads
+   `checked.inputs()`/`checked.name()` instead. Both close cleanly, at zero net fallbacks.
+   (The measured drop is `plan.rs` 10 at HEAD to 8 here, not 10 to 9:
+   `check_fixed_inputs`'s own deleted `unreachable!` call carried the text
+   "`crate::describe::describe`'s own matching `unreachable!`" in its own message, so
+   deleting it removes two occurrences of the raw substring `unreachable!` the ratchet
+   counts, not one -- a quirk of substring counting, not a second deletion.)
+   But SHARED VALUES' itemized final 6 ("`replacing_entry`'s key port, the four
+   `Catalog::insert` gate ones, `plan_one`'s 'handled above'") omits two fallbacks this task
+   found still live in `plan.rs`'s non-test body: `resolve_source`'s own `Source::Item` arm
+   and `resolve_list_source`'s `edge.elements()` unwrap. Both were considered for relocation
+   (mirroring `crate::tool::Outputs::get_index`'s own precedent, G3) and reverted on review:
+   `Outputs::get_index` moved a *new* fallback G3's own refactor introduced, with nowhere
+   else to live; these two are *existing*, already-counted members of `plan.rs`'s ratchet
+   since G3 (`resolve_source`'s `Source::Item` arm) and G4 (`resolve_list_source`'s
+   `edge.elements()`) -- G3's own addendum explicitly counted the `Source::Item` arm in its
+   29, the same addendum that moved `Outputs::get_index` elsewhere. The authors had the same
+   choice available for this one and declined it. Relocating either now, by moving its text
+   out of `plan.rs` without changing its substance, would hide the value-level trust it
+   stands for rather than eliminate it -- against the milestone's own Goal: "Each case becomes
+   unrepresentable instead of moving somewhere else."
+
+   Neither can be made unrepresentable by the type system without a deeper change out of this
+   task's scope:
+   - `resolve_list_source`'s `edge.elements()` is forced by `Bound::List`'s own frozen (g1)
+     shape: `List { elements: Vec<Source<I>>, edge: Edge }` carries the whole port's list
+     `Edge`, not its own per-element edges directly, so recovering them is `Edge::elements()`'s
+     own `Option<&[Edge]>` -- `Edge` is milestone 3d's opaque type and `Bound::List`'s shape is
+     G4's landed design; changing either is a redesign, not a G7 view.
+   - `resolve_source`'s `Source::Item` arm could be made genuinely total by changing its
+     `item: Option<&Value>` parameter to a closure-typed `item: impl Fn(&I) -> Value`
+     (decision (g1)'s own suggested shape): for `I = Infallible` (a `Shape::Single` node's
+     ports, the `for_each` source itself, a workflow output), the closure is
+     `|never: &Infallible| match *never {}`, which can never be called and so can never
+     panic -- true, compile-time totality. The obstacle is `apply`'s own `erase_ports`
+     (G3): it unifies every `Group` arm onto one concrete `Source<()>` specifically so the
+     `Group` match never has to re-derive which `Shape` variant it came from (G3's addendum,
+     point 4, "the `Group` match ... has nothing left to reconcile"). Giving `Source::Item`
+     a real, provably-total resolution for the erased path needs either (a) a second,
+     per-instance-item-aware erasure for `Group::Each` specifically, which reopens exactly
+     the `Shape`-vs-`Group` reconciliation `erase_ports` exists to avoid (a `Group::Single`
+     cannot be proven, to rustc, to pair only with a `Shape::Single` node without a fallback
+     of its own, which would raise `apply.rs`'s own pinned final value of 2), or (b) adding a
+     field to `Walk`/`EachInstance` (decision (g6)'s own frozen shape) so the erased ports an
+     instance resolves against are already item-substituted before `Group` is even built --
+     a cross-cutting change to a type SHARED VALUES also freezes, well past a "views, not
+     copies" task. Both are real fixes, not relocations, but both are their own task, not
+     G7's.
+
+   Ratchet pinned at `plan.rs` 8 (`apply.rs` holds its G6 final value, 2; `describe.rs` reaches
+   its final value, 0, point 2 below). **Flagged for the coordinator**: accept 8 as this
+   milestone's final value for `plan.rs`, or schedule a follow-up (the closure-typed
+   `resolve_source` plus a `Walk`/`EachInstance` shape change, or a `Bound::List` redesign) to
+   reach 6. This answers G2's own addendum, which asked a future task to "re-read the ratchet's
+   own file-by-file math before G7 asserts final values" -- the math does not close to 6 without
+   one of those two follow-ups.
+
+2. **Both "a fixed input is always defaulted" assertions (G2's other flagged gap) are closed,
+   failing *closed* rather than open.** `plan.rs`'s `check_fixed_inputs` (now walking
+   `checked.inputs()` instead of `checked.workflow().inputs`, since `workflow()` is gone) reads
+   `spec.default.as_ref().is_none_or(|default| value != default)`: on the impossible case (no
+   default to compare against), this refuses the caller's value rather than silently accepting
+   it -- the shape G2's addendum explicitly named as the wrong way to close this
+   ("closed by deleting the check and silently accepting the bad input"). `describe.rs`'s
+   matching assertion already failed closed in the sense that matters (the `not_settable` error
+   is pushed unconditionally regardless of whether a default exists); its own rewrite is an
+   `if let Some(default) = spec.default.clone() { resolved.insert(...) }`, which on the
+   impossible case simply leaves `resolved` without an entry for that input rather than
+   panicking, with no change to what gets refused.
+
+3. **`Checked`'s hand-written `Debug` drops its `types`/`output_types` fields.** Both were
+   exact duplicates of what `nodes()`'s own `Shape`/`PortEdge`/`Bound` and `outputs()`'s own
+   `CheckedOutput::ty` already print; keeping them would have printed the same edges and types
+   twice. `check_adversarial.rs`'s redaction tests and
+   `debug_of_a_checked_workflow_compiles_and_names_every_node_and_its_tool` (acceptance 13) use
+   substring `.contains(...)` checks, not exact-string pins, so this is unaffected by either
+   test.
+
+4. **Deleting the two stored fields moves two pinned trybuild fixtures, regenerated with
+   `TRYBUILD=overwrite`** (the same "not an acceptance-6 drift, but still recorded" category
+   G1's own addendum used for `struct_literal.stderr`'s field-list growth): `struct_literal`'s
+   `.stderr` drops `types`/`output_types` from its enumeration; `private_field_read.rs`, which
+   exercised privacy by reading `checked.types`, is re-pointed at `checked.order` (still
+   private, still carries a same-named public accessor, so the error's own shape -- "a method
+   also exists, call it with parentheses" -- is byte-for-byte the same kind of message, just a
+   different field name) since the field it exercised no longer exists at all.
+
+5. **The tripwire extension (acceptance 7) is a sibling test, not a rewrite of
+   `plan_apply_and_describe_never_name_probe_conversion`.** `plan_apply_and_describe_never_name_a_binding_or_a_second_lookup`
+   checks each file's own comment-stripped *non-test* body (reusing the split
+   `tests/it/ratchet.rs`'s own `non_test_body` already uses, duplicated here since this is a
+   different compiled unit) for `Binding`, `catalog.get(` and `.workflow(`, plus `Value::parse(`
+   for `plan.rs`/`apply.rs` only (`describe.rs`'s `parse_raw` is the plan's own sanctioned
+   exception). Comment-stripping is required, not optional: `plan.rs`'s and `apply.rs`'s own
+   module docs and field comments name `Binding` in prose over a dozen times (task G6's
+   addendum, point 8, predicted exactly this), and a plain substring search over raw text would
+   false-positive on every one of them.
+
+6. **Out of this task's scope, left for D1**: `crates/willikins-server/src/startup.rs`'s own
+   doc comment on `StartupDocument::checked` links `` [`Checked::workflow`] `` -- already
+   unresolvable from outside `willikins-core` before this task (the method was `pub(crate)`),
+   and now a link to a deleted item. Rustdoc's broken-intra-doc-link lint is warn-level, not
+   gated, so nothing fails; still a stale reference worth fixing when `willikins-server` is next
+   touched.
+
+Scoped gates green, in two commits: `-p willikins-core` (fmt, clippy, 243 unit + 296 `it` tests
++ 2 doctests, no `.snap.new`), `-p willikins-dsl` (93 unit + 60 `it` tests, both
+`characterization_of_every_document` and `characterization_of_every_composition_document`
+byte-identical, no `.snap.new`), and -- because `describe.rs` changed, and per G2's own
+addendum, which named the server suites rather than the dsl target as acceptance 12's real
+evidence -- `-p willikins-server --test it -- acceptance_read_ops:: composition_s1::`.
 
 ## Goal
 
