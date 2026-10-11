@@ -468,13 +468,14 @@ pub enum PlanError {
     /// declared source type. `check` never records a conversion whose
     /// source disagrees with the binding it resolved, so this is
     /// unreachable for a `Checked` `check` itself built: it is the
-    /// backstop for a `Checked` built or edited by hand (`Checked::types`'
-    /// fields are public), covering what [`Self::InputTypeMismatch`]
-    /// cannot reach -- a converted edge moved onto another port, for
-    /// example. Follow-up to milestone 3d, 2026-09-24: the operator's own
-    /// words, "I'd much rather have it fail loudly at parsing than
-    /// silently go through," which is why this refuses rather than
-    /// silently delivering the value unconverted.
+    /// backstop for a `Checked` forged by hand -- since milestone 3n's
+    /// decision (s2), possible only inside `check.rs` itself, the one
+    /// module that can still reach `Checked`'s private fields -- covering
+    /// what [`Self::InputTypeMismatch`] cannot reach -- a converted edge
+    /// moved onto another port, for example. Follow-up to milestone 3d,
+    /// 2026-09-24: the operator's own words, "I'd much rather have it fail
+    /// loudly at parsing than silently go through," which is why this
+    /// refuses rather than silently delivering the value unconverted.
     EdgeTypeMismatch {
         /// Where the mismatched value was delivered.
         site: Site,

@@ -40,6 +40,9 @@ quote.workspace = true
 syn = { workspace = true, features = ["visit"] }
 willikins-providers-fake.workspace = true
 willikins-tools.workspace = true
+# Milestone 3n, decision (s2): the sealed-`Checked` compile-fail fixtures
+# under `tests/sealed/fail/`, driven by `tests/it/sealed_compile_fail.rs`.
+trybuild.workspace = true
 # Self dev-dependency enabling `test-support` for this crate's own
 # `tests/`, the same trick `willikins-types` uses for its `executor`
 # feature: `--all-targets` never builds a crate the way its dependents

@@ -1444,10 +1444,10 @@ mod conversions {
 
     use indexmap::IndexMap;
     use willikins_core::{
-        ApplyError, Approval, Binding, Catalog, Checked, Class, ConversionMismatch, Ensured,
-        InputName, InputSpec, Inputs, Node, NodeName, NodeStatus, Observation, Outputs, PlanError,
-        PortName, PortSpec, PortType, RecordingObserver, Site, Tool, ToolError, ToolErrorKind,
-        ToolName, ToolSpec, TypeName, TypeRef, TypeRegistry, Value, Workflow, apply, check, plan,
+        ApplyError, Approval, Binding, Catalog, Class, ConversionMismatch, Ensured, InputName,
+        InputSpec, Inputs, Node, NodeName, NodeStatus, Observation, Outputs, PlanError, PortName,
+        PortSpec, PortType, RecordingObserver, Tool, ToolError, ToolErrorKind, ToolName, ToolSpec,
+        TypeName, TypeRef, TypeRegistry, Value, Workflow, apply, check, plan,
     };
     use willikins_types::registry::TypeEntry;
     use willikins_types::{DomainType, SinkToken};
@@ -2550,109 +2550,10 @@ mod conversions {
         assert!(fixture.sink_b.ensures.lock().unwrap().is_empty());
     }
 
-    /// The backstop's own reason to exist: a `Checked` `check` never
-    /// built. `Checked::types`' fields are public precisely so a test like
-    /// this one can move a real, `check`-built converting edge onto a
-    /// different port than `check` chose it for. `plan`'s own input
-    /// parsing cannot see this -- both `a` and `c` are exactly the types
-    /// their declared inputs say -- so only `Edge::deliver`'s own backstop
-    /// catches it, at both `plan` and `apply`.
-    #[test]
-    fn a_converted_edge_moved_onto_another_port_errors_at_plan_and_apply() {
-        let fixture = fixture();
-        let workflow = Workflow::new(workflow_name("conv-forged"))
-            .input(input("a"), InputSpec::new(scalar("ConvA")))
-            .input(input("c"), InputSpec::new(scalar("ConvB")))
-            .node(node("sink1"), sink_b_node(Binding::Input(input("a"))))
-            .node(node("sink2"), sink_b_node(Binding::Input(input("c"))));
-        let checked =
-            check(&workflow, &fixture.catalog).expect("A converts to B; B binds to B exactly");
-
-        let converting_edge = checked.types[&node("sink1")][&port("b")].clone();
-        assert!(converting_edge.conversion().is_some());
-        assert!(
-            checked.types[&node("sink2")][&port("b")]
-                .conversion()
-                .is_none()
-        );
-
-        let mut forged_types = checked.types.clone();
-        forged_types
-            .get_mut(&node("sink2"))
-            .expect("sink2 has a types entry")
-            .insert(port("b"), converting_edge);
-        let forged = Checked {
-            types: forged_types,
-            ..checked.clone()
-        };
-
-        let mut inputs = IndexMap::new();
-        inputs.insert(input("a"), Value::known(a("hello")));
-        inputs.insert(input("c"), Value::known(ConvB::parse("world").unwrap()));
-
-        let plan_err = plan(&forged, &inputs, &fixture.catalog)
-            .expect_err("sink2's real ConvB does not match the moved edge's ConvA source");
-        match plan_err {
-            PlanError::EdgeTypeMismatch {
-                site,
-                expected,
-                found,
-            } => {
-                assert_eq!(
-                    site,
-                    Site::Port {
-                        node: node("sink2"),
-                        port: port("b"),
-                    }
-                );
-                assert_eq!(expected, scalar("ConvA"));
-                assert_eq!(found, scalar("ConvB"));
-            }
-            other => panic!("expected EdgeTypeMismatch, got {other:?}"),
-        }
-
-        // A genuine plan against the real (unforged) `Checked`, so `apply`
-        // has an `approved: &Plan` to diff against -- its own opening
-        // replan against the forged `Checked` is what surfaces the same
-        // refusal for `apply`, before any drift check or `ensure` call.
-        let genuine_planned =
-            plan(&checked, &inputs, &fixture.catalog).expect("the real Checked plans");
-        let mut observer = RecordingObserver::new();
-        let apply_err = apply(
-            &forged,
-            &inputs,
-            &fixture.catalog,
-            &genuine_planned,
-            &Approval::Auto,
-            &mut observer,
-        )
-        .expect_err("apply's own opening replan hits the same forged edge");
-        match apply_err {
-            ApplyError::Plan {
-                error:
-                    PlanError::EdgeTypeMismatch {
-                        site,
-                        expected,
-                        found,
-                    },
-            } => {
-                assert_eq!(
-                    site,
-                    Site::Port {
-                        node: node("sink2"),
-                        port: port("b"),
-                    }
-                );
-                assert_eq!(expected, scalar("ConvA"));
-                assert_eq!(found, scalar("ConvB"));
-            }
-            other => panic!("expected ApplyError::Plan{{EdgeTypeMismatch}}, got {other:?}"),
-        }
-        assert!(
-            fixture.sink_b.ensures.lock().unwrap().is_empty(),
-            "nothing was ever ensured"
-        );
-    }
+    // `a_converted_edge_moved_onto_another_port_errors_at_plan_and_apply`
+    // moved to `check.rs`'s own `#[cfg(test)] mod tests` (milestone 3n,
+    // decision (s2)): once `Checked`'s fields are private, only that
+    // module can still forge an edge onto the wrong port.
 
     /// Decision (f2): a *pure* tool declaring `out: ConvA` whose `read`
     /// reports a `ConvB` instead. Caught where produced, at plan time,

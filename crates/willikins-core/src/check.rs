@@ -130,25 +130,25 @@ use willikins_types::{Description, ParseError, WorkflowName};
 #[derive(Debug, Clone)]
 pub struct Checked {
     /// The checked workflow, unchanged.
-    pub workflow: Workflow,
+    workflow: Workflow,
     /// Every node, in an order where each node comes after every node it
     /// depends on. Ties are broken by declaration order.
-    pub order: Vec<NodeName>,
+    order: Vec<NodeName>,
     /// The plan's approval class: the maximum over every non-pure node's
     /// tool class, or [`Class::Reversible`] when there are none.
-    pub class: Class,
+    class: Class,
     /// Non-fatal warnings, alongside a successful check.
-    pub warnings: Vec<CheckWarning>,
+    warnings: Vec<CheckWarning>,
     /// Every node `with` binding `check` validated, keyed by node then
     /// port: the binding's own resolved type, and the conversion `check`
     /// chose to deliver it to the port's type, if any ([`Edge`]). Does not
     /// cover `for_each` bindings, and never mixes in workflow outputs
     /// (those are [`Self::output_types`]), so a node named `outputs` keeps
     /// its own entry.
-    pub types: IndexMap<NodeName, IndexMap<PortName, Edge>>,
+    types: IndexMap<NodeName, IndexMap<PortName, Edge>>,
     /// The resolved type of every workflow output, in declaration order.
     /// A literal output has no declared type to resolve and is absent.
-    pub output_types: IndexMap<OutputName, TypeRef>,
+    output_types: IndexMap<OutputName, TypeRef>,
 }
 
 impl Checked {
@@ -4185,5 +4185,142 @@ mod tests {
                  apply must apply the one check already recorded on a Checked edge"
             );
         }
+    }
+
+    /// The `EdgeTypeMismatch` backstop's own reason to exist: a `Checked`
+    /// `check` never built. Moved here from `tests/it/apply.rs` by
+    /// milestone 3n's decision (s2) -- once `Checked`'s fields are
+    /// private (this task's own second half), this module is the only
+    /// one left that can still move a real, `check`-built converting edge
+    /// onto a different port than `check` chose it for. Real production
+    /// types stand in for the integration test's own private `ConvA`/
+    /// `ConvB` fixture, which this module cannot see: `AppleBundleIdentifier`
+    /// converts to `Text` by one row the production registry already
+    /// carries (`willikins_types::lib`'s `conversion_rows`), so
+    /// `test_catalog`'s own global registry is enough -- no bespoke
+    /// conversion table needed. `plan`'s own input parsing cannot see
+    /// this -- both `a` and `c` are exactly the types their declared
+    /// inputs say -- so only `Edge::deliver`'s own backstop catches it, at
+    /// both `plan` and `apply`.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn a_converted_edge_moved_onto_another_port_errors_at_plan_and_apply() {
+        let spec = spec_of(
+            "test.sealed_sink",
+            &[("b", exact("Text"), true)],
+            &[],
+            &[],
+            Class::Reversible,
+            false,
+        );
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(Arc::new(DummyTool { spec }))
+            .expect("one tool, one insert");
+
+        let workflow = Workflow::new(workflow_name("conv-forged"))
+            .input(input_name("a"), InputSpec::new(ty("AppleBundleIdentifier")))
+            .input(input_name("c"), InputSpec::new(ty("Text")))
+            .node(
+                node_name("sink1"),
+                Node::new(tool_name("test.sealed_sink"))
+                    .port(port("b"), Binding::Input(input_name("a"))),
+            )
+            .node(
+                node_name("sink2"),
+                Node::new(tool_name("test.sealed_sink"))
+                    .port(port("b"), Binding::Input(input_name("c"))),
+            );
+        let checked = check(&workflow, &catalog)
+            .expect("AppleBundleIdentifier converts to Text; Text binds to Text exactly");
+
+        let converting_edge = checked.types[&node_name("sink1")][&port("b")].clone();
+        assert!(converting_edge.conversion().is_some());
+        assert!(
+            checked.types[&node_name("sink2")][&port("b")]
+                .conversion()
+                .is_none()
+        );
+
+        let mut forged_types = checked.types.clone();
+        forged_types
+            .get_mut(&node_name("sink2"))
+            .expect("sink2 has a types entry")
+            .insert(port("b"), converting_edge);
+        let forged = Checked {
+            types: forged_types,
+            ..checked.clone()
+        };
+
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            input_name("a"),
+            Value::known(willikins_types::AppleBundleIdentifier::parse("com.example.app").unwrap()),
+        );
+        inputs.insert(
+            input_name("c"),
+            Value::known(willikins_types::Text::parse("hello").unwrap()),
+        );
+
+        let plan_err = crate::plan::plan(&forged, &inputs, &catalog).expect_err(
+            "sink2's real Text does not match the moved edge's AppleBundleIdentifier source",
+        );
+        match plan_err {
+            crate::plan::PlanError::EdgeTypeMismatch {
+                site,
+                expected,
+                found,
+            } => {
+                assert_eq!(
+                    site,
+                    Site::Port {
+                        node: node_name("sink2"),
+                        port: port("b"),
+                    }
+                );
+                assert_eq!(expected, ty("AppleBundleIdentifier"));
+                assert_eq!(found, ty("Text"));
+            }
+            other => panic!("expected EdgeTypeMismatch, got {other:?}"),
+        }
+
+        // A genuine plan against the real (unforged) `Checked`, so `apply`
+        // has an `approved: &Plan` to diff against -- its own opening
+        // replan against the forged `Checked` is what surfaces the same
+        // refusal for `apply`, before any drift check or `ensure` call.
+        let genuine_planned =
+            crate::plan::plan(&checked, &inputs, &catalog).expect("the real Checked plans");
+        let mut observer = crate::apply::RecordingObserver::new();
+        let apply_err = crate::apply::apply(
+            &forged,
+            &inputs,
+            &catalog,
+            &genuine_planned,
+            &crate::apply::Approval::Auto,
+            &mut observer,
+        )
+        .expect_err("apply's own opening replan hits the same forged edge");
+        match apply_err {
+            crate::apply::ApplyError::Plan {
+                error:
+                    crate::plan::PlanError::EdgeTypeMismatch {
+                        site,
+                        expected,
+                        found,
+                    },
+            } => {
+                assert_eq!(
+                    site,
+                    Site::Port {
+                        node: node_name("sink2"),
+                        port: port("b"),
+                    }
+                );
+                assert_eq!(expected, ty("AppleBundleIdentifier"));
+                assert_eq!(found, ty("Text"));
+            }
+            other => panic!("expected ApplyError::Plan{{EdgeTypeMismatch}}, got {other:?}"),
+        }
+        assert!(observer.events.is_empty(), "nothing was ever ensured");
     }
 }

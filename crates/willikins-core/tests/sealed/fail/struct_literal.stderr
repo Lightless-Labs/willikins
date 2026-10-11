@@ -1,0 +1,9 @@
+error[E0451]: fields `workflow`, `order`, `class`, `warnings`, `types` and `output_types` of struct `Checked` are private
+  --> tests/sealed/fail/struct_literal.rs:13:9
+   |
+12 |     let _forged = willikins_core::Checked {
+   |                   ----------------------- in this type
+13 |         order: Vec::new(),
+   |         ^^^^^^^^^^^^^^^^^ private field
+14 |         ..checked
+   |           ^^^^^^^ fields `workflow`, `class`, `warnings`, `types` and `output_types` are private
