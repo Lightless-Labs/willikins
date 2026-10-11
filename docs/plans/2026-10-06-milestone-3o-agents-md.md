@@ -1,6 +1,7 @@
 # Milestone 3o: a document provisions a project's AGENTS.md
 
 **Created:** 2026-10-06 (from `todos/2026-10-06-provision-agents-md.md`; three research passes: the agent-instruction
+**Completed:** 2026-10-11 — the operator's app received its two approved AGENTS.md files (app root and ios/) through a second scaffold with its own marker: one signed commit, files byte-identical to the approved words; a fresh live plan reads every node NoOp (20 NoOp, 64 Compute).
 file conventions and the operator's monorepo, the facts an app file needs, and what the types allow across a `uses:`
 boundary)
 
@@ -331,3 +332,6 @@ so they run one after the other (one cargo lane on this host).
    `docs/HANDOFF.md`. A stub would be one more seeded file under the same marker.
 4. **Approve the live plan** (L1) before the apply. It makes one commit, by willikins with the project's write token,
    on the monorepo's `main`.
+
+**Addendum:** 2026-10-11 (coordinator, L1 and D1) — the operator approved the two files' words on 2026-10-09 and the live plan on 2026-10-11 (the second scaffold Create, two renders Compute, everything else NoOp). The apply made one signed commit adding the two files and the marker; both read back byte-identical to the approved texts. Before it, the monorepo's root CLAUDE.md was replaced by an identical AGENTS.md (by hand, outside willikins), so Claude Code and Codex both read nested AGENTS.md files. The stale SHARED VALUES rows (converged counts, the draft path, one render) stay superseded by the 2026-10-09 addendum rather than rewritten, as this repository's addenda do.
+
