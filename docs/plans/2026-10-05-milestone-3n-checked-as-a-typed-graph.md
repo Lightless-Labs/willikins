@@ -150,6 +150,60 @@ and the private fake-backed `operator_*` targets stayed green.
    literal scoped gate, and it stayed green (proving `check`/`plan` untouched), but it is not this acceptance
    item's own evidence. Future `describe.rs` tasks should name the server suites, not the dsl target, as acceptance
    12's byte-identical proof.
+**Addendum:** 2026-10-11 (task G3). Commit 1 only -- 3m's R4 (`resolve_pure`) has not landed (no
+`resolve_pure` anywhere in the tree), so commit 2's contingency does not apply. Five points not
+spelled out by decisions (g1)/(g2) or SHARED VALUES.
+
+1. **A two-phase build inside `check.rs`, not spelled out by (g1).** `SingleId`/`EachId` are
+   minted by `build_checked_nodes`, in topological order, *after* every node has already been
+   resolved by `Resolver`. So `Resolver::check_with_port`/`check_for_each`/`check_outputs` each
+   record a name-based `PendingSource` (`Literal(Value)`/`Input(InputName)`/`Item`/
+   `Reference{node, port}`/`Keyed{node, key, port}`) beside the `Edge` they already record, and
+   `build_checked_nodes`/`build_checked_outputs` convert each to a real `Source` in the same
+   topological pass that mints ids -- a `PendingSource::Reference`/`Keyed`'s own `node` is always
+   already in the running `id_of` map by construction (check's own module doc, "a source's id is
+   always lower than its consumer's"). `PendingSource::Reference` resolves to `Source::Step` or
+   `Source::Aggregate` depending on whether the referenced node's own id turns out `Single` or
+   `Each` -- the same branch `Resolver::resolve_reference` already takes via
+   `target_node.for_each.is_some()`, just read off `id_of` instead of re-deriving it.
+2. **Dual result tables, a G4 bridge, not named in SHARED VALUES.** `plan`'s `walk` and `apply`
+   build `Vec<SingleResult>`/`Vec<EachResult>` (new, typed, read by `resolve_source`) *alongside*
+   the older by-name `HashMap<NodeName, NodeResult>` (unchanged, still read by the list-port path
+   and by `GateTracking`, both G4/G5's). Both are pushed in lockstep, in the same topological walk,
+   so a push always lands at the id just minted. `ResolveCtx` grows `single`/`each` fields; `edges`
+   and `results` stay on the same "deleted by G7" schedule S1 and G1 already put them on.
+3. **List-bound ports keep the tool's own declared `with:` order, not "every scalar port, then
+   every list port."** The first `bind_ports` draft resolved every `PortEdge` first, then walked
+   `spec.inputs` again for list ports only -- which silently reordered `Inputs`' own insertion
+   order whenever a list-bound port sits *before* a scalar one in the tool's own declared input
+   order (caught by `-p willikins-dsl`'s characterization: `github.scaffold.ensure`'s `message`
+   moved after `files`). SHARED VALUES' "Inputs map order" row is unchanged by this task, so
+   `bind_ports` walks `spec.inputs` exactly once, per port deciding whether to resolve it through
+   `ports` (a scalar `PortEdge`, found by name) or through `node.with` directly (a
+   `Binding::List`), never both passes.
+4. **`apply`'s own `Shape`-vs-`Group` reconciliation does not cost the ratchet a new fallback.**
+   `apply_instance`'s `ports` parameter needs one concrete type (`Source<I>`'s `I` only ever
+   matters for `Source::Item`'s own payload, which `resolve_source` never reads -- the caller's
+   own `item: Option<&Value>` supplies it directly), so getting it from `Shape`'s two variants is
+   total and fallback-free; reconciling it against `Group`'s three variants is not, since nothing
+   stops a `Shape::Single` node from zipping with a `Group::Each` at the type level even though it
+   never happens by construction. The fix, `erase_ports` (`Source<I> -> Source<()>`, itself total,
+   no fallback), decouples the two matches: `ports` is resolved once from `Shape` alone, and the
+   `Group` match that follows needs nothing from `Shape` at all, so it has nothing left to
+   reconcile. `apply.rs`'s ratchet (SHARED VALUES, pinned at 5) would otherwise have risen by (at
+   least) one, which the rule forbids outright -- not a style preference.
+5. **The one new index-out-of-range backstop lives in `willikins-core::tool`, not `plan.rs`.**
+   `FilledOutputs::slot` needs *some* panic for an out-of-range `OutputSlot` (impossible by
+   construction, but not provable to rustc -- the same "indexes, not proofs" rule as every other
+   id in this milestone). Putting that one `unreachable!` in `tool::Outputs::get_index` instead of
+   in `plan.rs` keeps `plan.rs`'s own ratchet from moving for a backstop that is really about that
+   map's own shape, not about re-deriving one of `check`'s own decisions -- the same reasoning
+   SHARED VALUES already applies to `check.rs`'s own internal `unreachable!`s being out of scope.
+
+Ratchet, pinned today (lowered, never raised, per SHARED VALUES): `plan.rs` 29 (was 30 --
+`bind_ports`'s two literal-port fallbacks are gone; one new fallback in `resolve_source`'s
+`Source::Item` arm, the same shape `resolve_binding`'s matching arm already has). `apply.rs` stays
+5 (point 4, above). `describe.rs` untouched at 1.
 
 ## Goal
 
