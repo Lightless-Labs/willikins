@@ -7,7 +7,7 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-10-06) — five lanes planned together; 3k, 3n's first slice, 3l and 2b landed; next: AGENTS.md, then the rest of 3n, then 3m
+### RESUME HERE (2026-10-11) — 3k, 3n's first slice, 3l, 2b and 3o landed; next: the rest of 3n (S1 onward), then 3m
 
 - **Live state:** `main` pushed. Full gate on the 2b tree: 49 suites / 3466 tests / 0 failed, about 7 minutes.
 - **Plans** (2026-10-05, written in parallel, then one portfolio review ordered them): 3k faster gates,
@@ -21,6 +21,10 @@ compaction, before handing off, after a milestone, and after a plan change or di
   Contents API, then the signed commit); live cycle passed in the sandbox. The first commit is unsigned.
 - **2b (completed):** `uses:` composes documents, linked into one flat graph (`<step>/<node>`); the operator's
   document is split (private) into an organisation document and the app document, converged live (run `01a112cb`).
+- **3o (completed 2026-10-11):** an AGENTS.md is document work: rendered by `repo.file.render`, seeded by a
+  scaffold; an already-scaffolded project takes it through a second scaffold with its own marker. The operator's app
+  got its root and `ios/` AGENTS.md (words approved by the operator); a fresh live plan reads 20 NoOp, 64 Compute.
+  The operator's monorepo root now has AGENTS.md (identical to its old CLAUDE.md) and no CLAUDE.md.
 - **Operator decisions recorded:** teardown policy is the document's, per node, with conservative defaults (3m);
   new repositories in a real organisation are created with an org-scoped PAT in Doppler (3l); `AGENTS.md` is
   document work with the existing render and scaffold tools, content from the document
