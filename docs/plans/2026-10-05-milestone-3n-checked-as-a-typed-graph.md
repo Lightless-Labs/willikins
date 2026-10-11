@@ -204,6 +204,56 @@ Ratchet, pinned today (lowered, never raised, per SHARED VALUES): `plan.rs` 29 (
 `bind_ports`'s two literal-port fallbacks are gone; one new fallback in `resolve_source`'s
 `Source::Item` arm, the same shape `resolve_binding`'s matching arm already has). `apply.rs` stays
 5 (point 4, above). `describe.rs` untouched at 1.
+**Addendum:** 2026-10-11 (task G4). One commit (`crates/willikins-core/src/{check,plan,apply}.rs`,
+`tests/it/ratchet.rs`). Five points not spelled out by decision (g1) or the task row.
+
+1. **`check_list_literal` now returns the parsed `Value`, not just its `TypeRef`** -- the same G3
+   change `check_literal` already got, and for the same reason: `check_list_element` needs the
+   value itself to build this element's own `Source::Literal`, and `plan`/`apply` then deliver it
+   without re-parsing, exactly like a scalar literal. `PendingBound::List(Vec<PendingSource>)`
+   joins `PendingSource` (renamed field: `PendingPort.bound`, was `.source`) to carry one pending
+   source per element, built by `check_list_port`/`check_list_element` at exactly the point they
+   already record the list's own `Edge::list`, and converted to real `Source`s by
+   `build_port_edges` in the same topological pass G3's scalar ports already use.
+2. **A `Source`'s `ty` for a list element is that element's own `element_edge.ty()`, never the
+   list edge's own `ty()`** (which is the port's declared element type `T`, not what this one
+   element individually resolved to) -- the same per-source rule G3 already applies when building
+   a scalar port's `Source`. Missing this would type a skipped upstream's `Value::unknown` at the
+   wrong type whenever an element converts.
+3. **The old `Binding`-based resolver's last caller was `bind_ports`'s list-port fallback, so
+   deleting it cascades.** Once every port -- scalar or list -- resolves through `ports`/`Source`
+   with no `node.with` fallback, nothing calls `resolve_and_deliver`, the old by-name
+   `resolve_list_binding`, `resolve_binding`, `resolve_step`, `resolve_keyed`,
+   `aggregate_for_each_port`, `output_port_type` or `ResolveCtx::deliver` any more, in either
+   `plan.rs` or `apply.rs` (`apply.rs`'s own `resolve_instance_inputs` carried the only other call
+   to `resolve_and_deliver`, for its own list-port loop, now rewritten the same way). All eight go
+   in this commit, not a later one: the task row's own words, "once nothing calls it," are the
+   test for whether a deletion belongs here, not a schedule boundary. This empties `ResolveCtx` of
+   `workflow`, `catalog`, `results` and `edges` too -- its last readers were exactly those eight
+   functions -- reaching decision (g2)'s stated end state for this type (`inputs`, registry-derived
+   data, and the two typed result tables) several tasks early. `Checked::edges()` (an S1-era bridge
+   the plan's own text marked "deleted by G7") loses its last caller the same way and is deleted
+   here instead; `Checked::workflow()` is not, since `plan.rs`'s `check_fixed_inputs` and both
+   files' `declared_node`-based gate-collection path (G5's) still call it directly.
+4. **`NodeResult`, `ForEachInstance` and the by-name `results: HashMap<NodeName, NodeResult>` map
+   are now pure write-only weight, not a compile error, in both `plan.rs` and `apply.rs` -- removed
+   anyway.** Nothing reads `ctx.results` any more after point 3, so `-D warnings` only requires
+   deleting the four dead `ResolveCtx` fields; the `results` map and the `NodeResult`/
+   `ForEachInstance` values pushed into it would still compile (a `HashMap::insert` call is a use of
+   its receiver, so the lint is silent on the map itself), but `cargo check` surfaced `NodeResult`'s
+   own variant payloads and `ForEachInstance`'s three fields as "never read" once nothing resolves
+   through them either. Rather than leave a map and two types that exist only to be written to and
+   never consulted, both are deleted along with their construction, mirroring this plan's own "no
+   `#[allow(dead_code)]`, delete instead" convention elsewhere. This is a bigger cut than the task
+   row names, but it is the direct, mechanical consequence of point 3, caught by the compiler
+   itself, not a separate design choice.
+5. **Ratchet: `plan.rs` 29 -> 10, `apply.rs` and `describe.rs` unmoved at 5 and 1.** The eight
+   deleted functions in point 3 carried the bulk of `plan.rs`'s remaining `unreachable!`/
+   `unwrap_or_else` fallbacks; `apply.rs`'s own list-port loop swapped one call
+   (`resolve_and_deliver`) for another (`resolve_list_source`) with no fallback either way, so its
+   count holds exactly. Scoped gates green: `-p willikins-core` (clippy, fmt, 294 tests, 2
+   doctests) and `-p willikins-dsl` (153 tests, both characterization snapshots unchanged, no
+   `.snap.new`).
 
 ## Goal
 
