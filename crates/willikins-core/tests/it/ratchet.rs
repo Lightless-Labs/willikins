@@ -13,18 +13,35 @@ use std::path::Path;
 /// exactly how the milestone plan's own baseline (`28dc3e1`) was measured.
 const TOKENS: [&str; 4] = ["unreachable!", ".expect(", ".unwrap()", "panic!"];
 
-/// Counts the ratchet tokens in `path` (relative to this crate's root),
-/// restricted to the lines above its first top-level `#[cfg(test)]`
-/// module line, or the whole file when it has none.
-fn ratchet_count(path: &str) -> usize {
+/// `path`'s own text (relative to this crate's root), restricted to the
+/// lines above its first top-level `#[cfg(test)]` module line, or the
+/// whole file when it has none. Shared by [`ratchet_count`] and
+/// [`registry_call_count`]: both pin something about a file's non-test
+/// body only, never its tests.
+fn non_test_body(path: &str) -> String {
     let full_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
     let text = fs::read_to_string(&full_path)
         .unwrap_or_else(|error| panic!("{}: {error}", full_path.display()));
-    let body = match text.lines().position(|line| line.trim() == "#[cfg(test)]") {
+    match text.lines().position(|line| line.trim() == "#[cfg(test)]") {
         Some(index) => text.lines().take(index).collect::<Vec<_>>().join("\n"),
         None => text,
-    };
+    }
+}
+
+/// Counts the ratchet tokens in `path`'s non-test body.
+fn ratchet_count(path: &str) -> usize {
+    let body = non_test_body(path);
     TOKENS.iter().map(|token| body.matches(token).count()).sum()
+}
+
+/// Counts `willikins_types::registry()` calls in `path`'s non-test body
+/// (milestone 3n, decision (g5); acceptance 12): `describe.rs` stops
+/// consulting the global registry once `CheckedInput::entry` carries the
+/// catalog's own entry for it, computed once by `check`.
+fn registry_call_count(path: &str) -> usize {
+    non_test_body(path)
+        .matches("willikins_types::registry()")
+        .count()
 }
 
 #[test]
@@ -58,5 +75,21 @@ fn the_unreachable_ratchet_never_rises() {
         ratchet_count("src/describe.rs"),
         1,
         "describe.rs's unreachable ratchet moved; lower it, never raise it"
+    );
+}
+
+/// Acceptance 12's second half (milestone 3n, task G2): `describe.rs`'s
+/// non-test body calls `willikins_types::registry()` zero times.
+/// `missing_input` and `awaiting_input` used to call it directly; both now
+/// read `CheckedInput::entry` instead, which `check` resolved once against
+/// the catalog's own registry. The file's tests still build fixtures
+/// against the global registry (every other test file does too), so this
+/// only ever reads the non-test body, like `ratchet_count` above.
+#[test]
+fn describe_consults_no_second_registry() {
+    assert_eq!(
+        registry_call_count("src/describe.rs"),
+        0,
+        "describe.rs calls `willikins_types::registry()` outside its own tests"
     );
 }

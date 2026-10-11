@@ -1692,7 +1692,13 @@ fn build_checked_inputs(workflow: &Workflow, registry: &'static TypeRegistry) ->
             // `SingleId`/`EachId` per node: never read before G3 gives
             // `Source::Input(InputId)` a real consumer, but `InputId` is
             // always minted in declaration order, matching this table's
-            // own position (SHARED VALUES).
+            // own position (SHARED VALUES). Unlike `SingleId`/`EachId`,
+            // this one has nowhere to live yet (`CheckedInput` carries no
+            // `id` field -- SHARED VALUES' frozen shape), so a bare
+            // `InputId(index)` bound to `_id` is clippy's
+            // `no_effect_underscore_binding`: the fallible cast keeps the
+            // mint live for the lint without giving it a field to sit in
+            // before G3.
             let _id = InputId(
                 u32::try_from(index)
                     .unwrap_or_else(|_| unreachable!("more declared inputs than fit in a u32")),
