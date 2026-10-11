@@ -1875,6 +1875,29 @@ expression: snapshot
               "type": "object"
             },
             {
+              "description": "A `for_each` binding resolved to a list whose element type is\nmarked `#[domain(identifier)]` in the catalog's registry\n(`entry.info.identifier`).\n\nA `for_each` instance key is a rendered string, and also the exact\ntext a [`crate::workflow::Binding::Keyed`] reference matches\nagainst, so it cannot be masked without breaking keyed references;\nit also cannot be printed whole without breaking milestone 3i's\npromise that no document route ever prints an identifier-typed\nvalue unmasked. Refusing is the only honest answer. Checked before\n[`Self::DuplicateForEachDefault`] -- see the module docs' \"Error\nordering\" -- because that error's own `key` field would itself be\na rendered identifier here.\n\nNot one of the plan's variants; milestone 3n, decision (b1).\nReplaces milestone 3i's own document-level guard test, which\nsearched shipped documents for exactly this shape; `check` now\nrefuses it outright.",
+              "properties": {
+                "kind": {
+                  "const": "IdentifierForEachSource",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node whose `for_each` source is identifier-typed."
+                },
+                "ty": {
+                  "$ref": "#/$defs/TypeRef",
+                  "description": "The source's resolved `list<T>` type."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "ty"
+              ],
+              "type": "object"
+            },
+            {
               "description": "A `Binding::Item` was used outside any `for_each` node.",
               "properties": {
                 "kind": {
