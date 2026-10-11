@@ -1114,3 +1114,6 @@ how values reach tools.
    16 times and `apply(` 8 times, so B2 leaves them uncompilable unless the catalog argument is deleted there too.
    The plan's answer: the B2 implementer makes that one mechanical deletion locally, uncommitted, in the same step.
    The operator confirms that, or makes the edit themselves. Only needed if B2 is signed off.
+
+**Addendum:** 2026-10-11 (coordinator) — G7's ratchet question decided: plan.rs's final `unreachable!` count is **8**, accepted as this milestone's final value. The two beyond SHARED VALUES' itemized 6 (resolve_source's `Source::Item` arm, resolve_list_source's `edge.elements()` unwrap) were existing, counted fallbacks the itemization missed; removing them means reshaping `Bound::List` or the Walk/EachInstance item path, which (g1) froze. Banked as `todos/2026-10-11-plan-ratchet-last-two.md`, not reopened mid-milestone.
+
