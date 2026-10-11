@@ -343,6 +343,80 @@ usize]`/`each_names[from.0 as usize]` are bounds-checked indexes into tables siz
 from `checked.nodes()` itself, the same "indexes, not proofs" category `check`'s own module doc
 already puts every other typed id in, not a new fallback. `apply.rs` and `describe.rs` untouched
 at 5 and 1.
+**Addendum:** 2026-10-11 (task G6). Four points not spelled out by decision (g3) or SHARED
+VALUES.
+
+1. **Attribution is a sibling of `resolve_source`, not a second return value threaded through
+   it.** The task row's "attribution returned by the resolver" is read as "the typed answer is
+   derived from the same classified `Source` resolution already dispatches on", not as a literal
+   change to `resolve_source`'s own signature -- that would force every one of its six call sites
+   (including `plan`'s own `for_each`-source and workflow-output resolutions, which never need
+   attribution) to carry an unused side channel. Instead, `plan.rs` gains `source_origin` (a
+   sibling of `resolve_source`, same `Source<I>` dispatch, reading `ResolveCtx`'s two new
+   `single_names`/`each_names` tables -- the same shape `GateTracking` already builds, G5 --
+   instead of a catalog or a second lookup) and a new `pub(crate) enum UnknownOrigin { Upstream(NodeName), WorkflowInput(InputName) }`.
+   `bind_ports` and `resolve_list_source` each call it exactly once a delivered value has already
+   turned out `Unknown`, and return an `IndexMap<PortName, UnknownOrigin>` alongside the resolved
+   `Inputs`/`Value`; `plan`'s own two callers of `bind_ports` ignore it (`let (bound, _origins) =
+   ...`). `apply.rs`'s `resolve_instance_inputs` is now a thin wrapper that calls `bind_ports`
+   directly -- the exact function `plan` itself calls, fed this run's own `single`/`each` tables
+   instead of `plan`'s -- so "every port of an instance resolved from the graph" is `bind_ports`
+   itself, shared, not a second copy of its loop. This also deletes `source_may_change_mid_run`
+   outright (not just its name, already gone per the task row's own note): `bind_ports` resolves
+   every port unconditionally, so there is nothing left to decide "might this change mid-run"
+   about. This cannot surface a new `PlanError::MissingInput`/`InputTypeMismatch` at apply time
+   where there was none before: rule 2's `walk` (inside `apply`) already calls `bind_ports` on
+   every non-skipped instance, against the exact same `inputs` map, before `resolve_instance_inputs`
+   ever runs, and `Literal`/`Input`/`Item` resolution is deterministic over that map -- if `walk`
+   succeeded, resolving the same sources again cannot fail differently.
+2. **An `Unknown` port's origin is never missing**, which is what lets
+   `first_unknown_required_input` lose its `unreachable!` with no replacement fallback: a
+   `Source::Literal` or `Source::Item` is always known by construction (`check`'s own invariant),
+   so `bind_ports`/`resolve_list_source` only ever call `source_origin` on a source that is not one
+   of those two, and every other `Source` variant's own arm returns `Some`. A required port with no
+   entry in `origins` is therefore always *known*, never "unknown with no one to blame" -- the case
+   the old code's `unreachable!` asserted away is now unrepresentable rather than asserted.
+3. **List attribution is "the first element whose own delivered value is `Unknown`", not "the
+   first element of an attributable `Source` kind"** (what `classify_unknown_binding` did). The two
+   rules agree on every existing test and on acceptance 10's own fixture (a `Literal`, an `Item`,
+   then the one `Step` element, and the `Step` element is the one that is actually `Unknown`), but
+   they are not the same rule: a `Step` element that happens to resolve *known* (the upstream ran
+   and produced a value) must not be blamed over a later `Input` element that is genuinely
+   `Unknown`. `resolve_list_source` captures `source_origin` of the first element whose *delivered*
+   value is not known, inside the same loop that already decides the list's own overall
+   `unknown` flag -- so the list's `Unknown`-ness and its attribution are decided by the same
+   check, not two separate passes over `elements`.
+4. **`Checked::declared_node` is deleted in this task, not held for G7.** G5's addendum, point 5,
+   correctly named `apply.rs` as its one remaining production caller: the `node: &Node` built in
+   `apply`'s main loop and handed to `apply_instance`/`first_unknown_required_input`, for exactly
+   the `Binding`-era resolution this task deletes. (`declared_node`'s own doc comment, not G5's
+   addendum, was the stale text -- it still described a gate-collection path G5 had already moved
+   onto `checked_node.shape`.) Once that one call is gone, `declared_node`'s only caller anywhere is
+   a `#[cfg(test)]` unit test inside `check.rs` itself, which does not keep a `lib`-target method
+   alive (`cargo clippy --all-targets` builds the plain `lib` target separately from its
+   `#[cfg(test)]` one), so leaving it would be a dead-code `-D warnings` failure. Deleted together
+   with its own doc and the stale "bridge for a node's raw `Binding`s" sentence on
+   `CheckedNode::declared_at`'s doc; the one test that used it
+   (`check_builds_a_single_shape_and_an_each_shape_with_the_right_element_and_tool`) now reads
+   `checked.workflow.nodes.get_index(declared_at)` directly, which it can do with no accessor at
+   all, being itself inside `check.rs`.
+
+Acceptance test 10's new case (a list port of a `Literal`, an `Item` and an upstream `Unknown`
+attributing to the upstream node) is a pin, not new red: the old `classify_unknown_binding` already
+picked the same `Step` element here (point 3 above explains where the two rules would actually
+differ, which this fixture does not exercise). The real red this task produces is the compiler's
+own, once `classify_unknown_binding`, `source_may_change_mid_run`, `Node` and `Binding` are gone
+from `apply.rs` and every call site must compile against the new signatures -- the same "pin, not
+red" shape F1 already used for a test that could not be made to fail first.
+
+Ratchet: `apply.rs` 5 -> 2 (`check_drift`'s and `instance_drift`'s own `unreachable!`s, unmoved --
+this milestone's **final** value for the file, per SHARED VALUES, reached three tasks early since
+nothing in G7 touches `apply.rs` further). `plan.rs` holds flat at 10: `source_origin`,
+`node_names_by_shape` and the `UnknownOrigin` side channel in `bind_ports`/`resolve_list_source` add
+no fallback of their own. `describe.rs` untouched at 1. Scoped gates green: `-p willikins-core`
+(fmt, clippy, 296 `it` tests, 2 doctests), `-p willikins-dsl` acceptance, and `-p willikins-cli
+-p willikins-server` (clippy plus their own test suites, no apply-specific subset existing in
+`willikins-server`'s tree to scope to more narrowly).
 
 ## Goal
 
