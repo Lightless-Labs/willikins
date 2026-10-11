@@ -217,3 +217,24 @@ fn describe_consults_no_second_registry() {
         "describe.rs calls `willikins_types::registry()` outside its own tests"
     );
 }
+
+/// The same pin for `plan.rs` and `apply.rs` (milestone 3n, X1): from B2
+/// on, `Checked::registry` -- the catalog's own registry, captured by
+/// `check` -- is the only registry either reads, for `fill_outputs`' output
+/// check, the `for_each` keying backstop and `plan_one`'s key ports. The
+/// global one differs from it whenever a catalog is built over a local
+/// registry (`tests/it/apply.rs`'s conversion fixtures), and the X1 pass's
+/// mutations M-B1/M-B2 (one call site each, swapped to the global
+/// registry) were killed only by those fixtures. A substring count, so an
+/// import alias would evade it; it pins the obvious spelling, not intent.
+#[test]
+fn plan_and_apply_consult_no_second_registry() {
+    for path in ["src/plan.rs", "src/apply.rs"] {
+        assert_eq!(
+            registry_call_count(path),
+            0,
+            "{path} calls `willikins_types::registry()` outside its own tests: read \
+             `Checked::registry` instead"
+        );
+    }
+}
