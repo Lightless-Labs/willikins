@@ -77,7 +77,7 @@ use crate::tool::{
     Inputs, Observation, Outputs, PortName, Tool, ToolError, ToolErrorKind, ToolName, ToolSpec,
 };
 use crate::value::{PortType, TypeName, TypeRef, TypeRegistry, Value, reported_type_name_or};
-use crate::workflow::{InputName, NodeName, OutputName, Workflow};
+use crate::workflow::{InputName, NodeName, OutputName};
 
 /// What `plan` decided to do for one node instance.
 #[derive(
@@ -679,6 +679,11 @@ pub(crate) fn resolve_source<I>(
     match source {
         Source::Literal(value) => Ok(value.clone()),
         Source::Input(id) => resolve_input_source(ctx, *id),
+        // Milestone 3n, G7: honestly counted here rather than relocated
+        // to dodge SHARED VALUES' pinned 6 -- see the plan's G7 addendum
+        // for why making this provably total would reopen the
+        // `Shape`-vs-`Group` reconciliation `erase_ports` (G3) exists to
+        // avoid, and why G3's own addendum already counted this arm.
         Source::Item(_marker) => Ok(item.cloned().unwrap_or_else(|| {
             unreachable!(
                 "a Source::Item port is resolved only inside a for_each instance, which \
@@ -988,9 +993,8 @@ pub(crate) fn walk(
     inputs: &IndexMap<InputName, Value>,
     catalog: &Catalog,
 ) -> Result<Walk, PlanError> {
-    let workflow = checked.workflow();
     check_input_types(checked.inputs(), inputs)?;
-    check_fixed_inputs(workflow, inputs)?;
+    check_fixed_inputs(checked.inputs(), inputs)?;
     // Pushed in lockstep with `checked.nodes()`'s own topological walk,
     // which is exactly the order `check` minted `SingleId`/`EachId` in
     // within each kind, so a push here always lands at the id just
@@ -1202,7 +1206,7 @@ pub(crate) fn walk(
 
     Ok(Walk {
         plan: Plan {
-            workflow: workflow.name.clone(),
+            workflow: checked.name().clone(),
             nodes: planned,
             outputs,
             class: checked.class(),
@@ -1516,25 +1520,28 @@ fn check_input_types(
 /// rendering: a fixed input is never secret-typed (`check` already refuses
 /// a secret workflow input), so there is no redaction concern either way.
 fn check_fixed_inputs(
-    workflow: &Workflow,
+    checked_inputs: &[CheckedInput],
     inputs: &IndexMap<InputName, Value>,
 ) -> Result<(), PlanError> {
-    for (name, spec) in &workflow.inputs {
+    for checked_input in checked_inputs {
+        let spec = &checked_input.spec;
         if spec.fixed_by.is_none() {
             continue;
         }
-        let Some(value) = inputs.get(name) else {
+        let Some(value) = inputs.get(&checked_input.name) else {
             continue;
         };
-        let default = spec.default.as_ref().unwrap_or_else(|| {
-            unreachable!(
-                "a fixed input is always defaulted (decision (d6)): see \
-                 `crate::describe::describe`'s own matching `unreachable!`"
-            )
-        });
-        if value != default {
+        // Milestone 2b's own linker invariant (decision (d6)) is that a
+        // fixed input is always defaulted -- `spec.default` is never
+        // `None` here in practice. Trusted rather than re-asserted
+        // (milestone 3n, G7): `is_none_or` fails *closed* on the
+        // impossible case (no default to compare against still refuses
+        // the caller's value) rather than silently accepting it, which
+        // is the one shape G2's own addendum warned against ("closed by
+        // deleting the check and silently accepting the bad input").
+        if spec.default.as_ref().is_none_or(|default| value != default) {
             return Err(PlanError::InputNotSettable {
-                input: name.clone(),
+                input: checked_input.name.clone(),
             });
         }
     }
@@ -1636,6 +1643,16 @@ fn resolve_list_source<I>(
     item: Option<&Value>,
 ) -> Result<(Value, Option<UnknownOrigin>), PlanError> {
     let element_ty = edge.delivered().element();
+    // Milestone 3n, G7: this fallback stays, honestly counted against
+    // this file's own ratchet, rather than moved out to hit SHARED
+    // VALUES' pinned 6 -- see the plan's G7 addendum. `Bound::List`'s own
+    // frozen shape (decision (g1)) carries the whole list's `Edge`, not
+    // its own per-element edges directly, so recovering them is
+    // `Edge::elements()`'s own `Option`, forced by `Edge`'s opaque,
+    // milestone-3d-frozen representation -- unlike `Source::Item` (just
+    // below `resolve_source`, in this same file), there is no way to
+    // make this case unrepresentable without redesigning `Bound::List`
+    // itself, which is G4's already-landed, frozen shape.
     let element_edges = edge
         .elements()
         .unwrap_or_else(|| unreachable!("a Bound::List's own edge is always Edge::list"));

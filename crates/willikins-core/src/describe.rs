@@ -335,17 +335,20 @@ pub fn describe(checked: &Checked, partial: &PartialInputs) -> Description {
             // `resolved` still gets the child's own default below, the
             // same as if nothing had been supplied at all: a fixed input
             // is never `missing` either.
+            // The linker's own invariant (decision (d6)) is that a fixed
+            // input is always defaulted: it only fixes a used document's
+            // own unbound *defaulted* input, and refuses a required,
+            // undefaulted one as `UnboundUsesInput` before it ever
+            // reaches here. Trusted rather than re-asserted (milestone
+            // 3n, G7): `spec.default` is never `None` here in practice,
+            // so there is nothing to insert into `resolved` on a case
+            // `check` never lets through to begin with, rather than a
+            // panic re-deriving what the linker already guaranteed.
             Some(_) if spec.fixed_by.is_some() => {
                 errors.push(InputError::not_settable(name.clone()));
-                let default = spec.default.clone().unwrap_or_else(|| {
-                    unreachable!(
-                        "a fixed input is always defaulted (decision (d6)): the linker only \
-                         fixes a used document's own unbound *defaulted* input, and refuses a \
-                         required, undefaulted one as `UnboundUsesInput` before it ever reaches \
-                         here"
-                    )
-                });
-                resolved.insert(name.clone(), default);
+                if let Some(default) = spec.default.clone() {
+                    resolved.insert(name.clone(), default);
+                }
             }
             Some(raw) => match parse_raw(&spec.ty, raw) {
                 Ok(value) => {

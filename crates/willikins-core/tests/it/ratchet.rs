@@ -4,8 +4,17 @@
 //! top-level `#[cfg(test)]` module line (the whole file, for one with
 //! none), and pins today's counts. A task lowers these constants to what
 //! it leaves and never raises one. `apply.rs` reached its final value (2)
-//! at G6; after G7 this test asserts the remaining final values
-//! (`plan.rs` 6, `describe.rs` 0).
+//! at G6; `describe.rs` reaches its final value (0) at G7.
+//!
+//! `plan.rs` lands at G7 at **8**, not SHARED VALUES' pinned 6 -- see
+//! `the_unreachable_ratchet_never_rises`' own G7 comment and the plan's
+//! G7 addendum for the two fallbacks that account for the gap
+//! (`resolve_source`'s `Source::Item` arm and `resolve_list_source`'s
+//! `edge.elements()`), neither of which can be deleted or honestly
+//! relocated out of this file without either redesigning `Bound::List`'s
+//! own frozen (g1) shape or reopening the `Shape`-vs-`Group`
+//! reconciliation `erase_ports` (G3) was built to avoid. Flagged for the
+//! coordinator.
 
 use std::fs;
 use std::path::Path;
@@ -106,9 +115,40 @@ fn the_unreachable_ratchet_never_rises() {
     // milestone's final value for the file (SHARED VALUES). `plan.rs`
     // holds flat at 10: `bind_ports`'s and `resolve_list_source`'s new
     // `UnknownOrigin` side channel adds no fallback of its own.
+    //
+    // G7 (2026-10-11): `plan.rs` drops from 10 to 8, not SHARED VALUES'
+    // pinned 6 -- flagged for the coordinator, with the full reasoning in
+    // the plan's G7 addendum. One real deletion: `check_fixed_inputs`'s
+    // own "a fixed input is always defaulted" fallback (reading
+    // `CheckedInput::spec.default` through `Option::is_none_or`, which
+    // fails *closed* on the impossible case rather than trusting it
+    // silently, now that it no longer needs `Checked::workflow()` to walk
+    // `workflow.inputs` either) -- this closes the gap G2's own addendum
+    // flagged for the coordinator, and the matching `unreachable!` in
+    // `describe.rs` (below) closes the same way. Two fallbacks the task
+    // row's itemization did not list stay, honestly, right where they
+    // were: `resolve_source`'s own `Source::Item` arm and
+    // `resolve_list_source`'s `edge.elements()` unwrap. Both were
+    // considered for relocation (mirroring `crate::tool::Outputs::
+    // get_index`'s own precedent, G3) and reverted: `Outputs::get_index`
+    // moved a *new* G3 fallback that had nowhere else to live; these two
+    // are *existing*, already-counted members of this file's own ratchet
+    // since G3/G4 (G3's own addendum explicitly counted `Source::Item`
+    // here, the same addendum that moved `Outputs::get_index` elsewhere
+    // -- the authors had the same choice available for this one and
+    // declined it). Relocating either now would hide, not eliminate, the
+    // value-level trust they stand for -- see the inline comment at each
+    // one's own call site for why neither can be made unrepresentable by
+    // the type system without either redesigning `Bound::List`'s frozen
+    // shape or reopening `apply`'s `Shape`-vs-`Group` reconciliation.
+    // `apply.rs` holds flat at its own final value, reached at G6.
+    // `describe.rs` drops from 1 to 0: the same "always defaulted"
+    // fallback as `plan.rs`'s, closed the same way (fails closed too,
+    // though its own shape never risked opening: the error is pushed
+    // unconditionally either way).
     assert_eq!(
         ratchet_count("src/plan.rs"),
-        10,
+        8,
         "plan.rs's unreachable ratchet moved; lower it, never raise it"
     );
     assert_eq!(
@@ -118,7 +158,7 @@ fn the_unreachable_ratchet_never_rises() {
     );
     assert_eq!(
         ratchet_count("src/describe.rs"),
-        1,
+        0,
         "describe.rs's unreachable ratchet moved; lower it, never raise it"
     );
 }

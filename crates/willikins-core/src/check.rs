@@ -266,20 +266,6 @@ impl Checked {
             .collect()
     }
 
-    /// The checked workflow, whole -- including its nodes. Crate-private:
-    /// milestone 3n's decision (s1) names this the bridge `plan.rs`,
-    /// `apply.rs` and `describe.rs` use from task S1 until task G7, which
-    /// deletes it once those modules read the graph instead of the
-    /// document. No code outside `willikins-core` can reach a `Node` or a
-    /// `Binding` through a `Checked` even today, since `Workflow` and
-    /// `Node` are themselves only ever built by the DSL or by hand inside
-    /// this crate's own tests -- this accessor's privacy is about the
-    /// module boundary task G7 completes, not about hiding `Workflow`
-    /// from another crate.
-    pub(crate) fn workflow(&self) -> &Workflow {
-        &self.workflow
-    }
-
     /// Every node, in topological order (the same order as [`Self::order`]),
     /// with its already-resolved tool handle and [`Shape`]. Crate-private:
     /// ids are minted only in `check.rs` and never leave this crate
@@ -5310,6 +5296,123 @@ mod tests {
                 !source.contains(needle),
                 "{path} names `{needle}`: only check.rs may resolve a conversion; plan and \
                  apply must apply the one check already recorded on a Checked edge"
+            );
+        }
+    }
+
+    /// `text`'s own body, up to (not including) its first top-level
+    /// `#[cfg(test)]` module line, or the whole text when it has none --
+    /// the same split `tests/it/ratchet.rs`'s own `non_test_body` uses for
+    /// the unreachable ratchet, duplicated here (a different compiled
+    /// unit) so a file's own test fixtures -- which legitimately build a
+    /// `Binding` to feed `check` itself -- never count against the
+    /// tripwire below.
+    fn non_test_body(text: &str) -> String {
+        match text.lines().position(|line| line.trim() == "#[cfg(test)]") {
+            Some(index) => text.lines().take(index).collect::<Vec<_>>().join("\n"),
+            None => text.to_string(),
+        }
+    }
+
+    /// Strip `//` line comments and `/* ... */` block comments from
+    /// `text`, leaving double-quoted string literals untouched -- the
+    /// same algorithm `no_certificate_writes_guard.rs`'s own
+    /// `strip_comments` uses, duplicated here for the same reason as
+    /// [`non_test_body`]. Needed because plan.rs's and apply.rs's own
+    /// module docs name `Binding` by the dozen in prose (milestone 3n,
+    /// task G6's addendum, point 8): a plain substring search over raw
+    /// text would false-positive on every one of those.
+    fn strip_comments(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        let mut in_string = false;
+        while let Some(c) = chars.next() {
+            if in_string {
+                out.push(c);
+                if c == '\\' {
+                    if let Some(escaped) = chars.next() {
+                        out.push(escaped);
+                    }
+                    continue;
+                }
+                if c == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            if c == '"' {
+                in_string = true;
+                out.push(c);
+                continue;
+            }
+            if c == '/' && chars.peek() == Some(&'/') {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+                continue;
+            }
+            if c == '/' && chars.peek() == Some(&'*') {
+                chars.next(); // consume the `*`
+                let mut prev = '\0';
+                for c in chars.by_ref() {
+                    if prev == '*' && c == '/' {
+                        break;
+                    }
+                    prev = c;
+                }
+                continue;
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    /// Milestone 3n, acceptance 7 (task G7): the `probe_conversion`
+    /// tripwire above, extended. From G7 on, "no second lookup" is a type
+    /// boundary -- `DocumentView` has no nodes, and `plan.rs`/`apply.rs`
+    /// hold no `Binding` import at all -- but this stays belt-and-braces
+    /// the same way `probe_conversion`'s own grep does: even an import
+    /// smuggled back in would still fail this test. Checked against each
+    /// file's own *non-test* body (fixtures legitimately build a
+    /// `Binding` to feed `check`), comment-stripped (plan.rs's and
+    /// apply.rs's own doc comments both still name `Binding` in prose).
+    /// `describe.rs`'s `parse_raw` is excluded from the `Value::parse(`
+    /// check -- the plan's own "one sanctioned place" (acceptance 7).
+    #[test]
+    fn plan_apply_and_describe_never_name_a_binding_or_a_second_lookup() {
+        for (path, raw) in [
+            ("plan.rs", include_str!("plan.rs")),
+            ("apply.rs", include_str!("apply.rs")),
+            ("describe.rs", include_str!("describe.rs")),
+        ] {
+            let body = strip_comments(&non_test_body(raw));
+            assert!(
+                !body.contains("Binding"),
+                "{path}'s non-test code still names `Binding`: from G7 on, plan/apply/describe \
+                 see only `check`'s own typed graph"
+            );
+            assert!(
+                !body.contains("catalog.get("),
+                "{path}'s non-test code still looks a tool up in a catalog by name"
+            );
+            assert!(
+                !body.contains(".workflow("),
+                "{path}'s non-test code still reads `Checked::workflow()`, the crate-private \
+                 bridge G7 deletes"
+            );
+        }
+        for (path, raw) in [
+            ("plan.rs", include_str!("plan.rs")),
+            ("apply.rs", include_str!("apply.rs")),
+        ] {
+            let body = strip_comments(&non_test_body(raw));
+            assert!(
+                !body.contains("Value::parse("),
+                "{path}'s non-test code still parses a Value directly: `describe.rs`'s \
+                 `parse_raw` is the one sanctioned place a caller's text becomes a Value"
             );
         }
     }
