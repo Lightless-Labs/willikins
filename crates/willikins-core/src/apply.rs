@@ -29,9 +29,9 @@ use indexmap::IndexMap;
 
 use crate::check::Checked;
 use crate::class::Class;
-use crate::plan::{Action, BlockedGate, Plan, PlannedNode};
+use crate::plan::{Action, BlockedGate, Group, Plan, PlannedNode};
 use crate::plan::{
-    ForEachInstance, InstanceFingerprint, NodeResult, PlanError, ResolveCtx, fill_outputs,
+    ForEachInstance, InstanceFingerprint, NodeResult, PlanError, ResolveCtx, Walk, fill_outputs,
     resolve_and_deliver, resolve_binding, walk,
 };
 use crate::site::Site;
@@ -597,277 +597,99 @@ pub fn apply(
     #[allow(clippy::disallowed_methods)]
     let token = SinkToken::new();
 
-    // Rule 4. Walks `checked.order`, not `fresh.plan.nodes`: a `for_each`
-    // node whose source has zero items contributes no entry at all to
-    // `fresh.plan.nodes` (`plan` never expands it), so driving the walk
-    // from `fresh.plan.nodes` would skip such a node outright and leave it
-    // with no `results` entry at all — decision (f1), point 1. Walking
-    // `checked.order` instead visits every node; its group of planned
-    // instances, read from `fresh.plan.nodes`, is simply empty in that
-    // case.
+    // Rule 4. Walks `checked.nodes()`, zipped with `fresh.groups` (milestone
+    // 3n, decision (g6)): a `for_each` node whose source has zero items
+    // contributes no entry at all to `fresh.plan.nodes` (`plan` never
+    // expands it), so driving the walk from `fresh.plan.nodes` would skip
+    // such a node outright and leave it with no `results` entry at all --
+    // decision (f1), point 1. Walking `checked.nodes()` instead visits
+    // every node; its own `Group` already says whether it was wholly
+    // skipped, planned as one instance, or expanded into several, with no
+    // need to scan `fresh.plan.nodes` for a run of the same name.
     let workflow = checked.workflow();
-    let order = checked.order();
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut applied_nodes: Vec<AppliedNode> = Vec::new();
 
-    let mut index = 0;
-    for name in &order {
-        let node = workflow
-            .nodes
-            .get(name)
-            .unwrap_or_else(|| unreachable!("`checked.order` names only workflow nodes"));
-        let tool = catalog
-            .get(&node.tool)
-            .unwrap_or_else(|| unreachable!("`checked` was checked against a compatible catalog"));
+    for (checked_node, group) in checked.nodes().iter().zip(&fresh.groups) {
+        let name = &checked_node.name;
+        let node = checked.declared_node(checked_node);
+        // G1: the tool handle `check` already resolved, never a second
+        // catalog lookup by name (verify item 4).
+        let tool = checked_node.tool.as_ref();
         let spec = tool.spec();
 
-        // A whole-node `Action::Skip` (decision (j), point 3) plans as a
-        // single `PlannedNode` with `instance: None`, whatever `node.for_each`
-        // says — `plan` never expands a skipped `for_each` source. Detected
-        // once, from the group's first entry, before the inner loop: an
-        // individual `for_each` instance's own action can be `Blocked` (a
-        // gate applied per item) but never `Skip` — only the node as a whole
-        // collapses to one `Skip` entry (see `plan`'s own `GateTracking`).
-        // `fresh.plan.nodes.get(index)` is `None`, or names a *later* node,
-        // exactly when this node's own group is empty (an unskipped
-        // `for_each` with zero instances): never `Skip` in that case either,
-        // since a whole skip always plans exactly one entry.
-        let whole_skip = match fresh.plan.nodes.get(index) {
-            Some(planned) if planned.name == *name => planned.action == Action::Skip,
-            _ => false,
-        };
-
-        let mut group_end = index;
-        let mut group_outputs: Vec<(Option<String>, Outputs, bool)> = Vec::new();
-
-        while group_end < fresh.plan.nodes.len() && fresh.plan.nodes[group_end].name == *name {
-            let planned = &fresh.plan.nodes[group_end];
-            // This instance's own `for_each` item, exactly as `plan`
-            // recorded it (`None` for a node with no `for_each`) —
-            // decision (f1), point 2.
-            let item = fresh.items[group_end].as_ref();
-
-            // Classify by `planned.action` first, before any input
-            // resolution and before the `pure` branch: a `Blocked` gate
-            // (always pure) must not be reported `Computed`, and a `Skip`
-            // instance's `inputs` are empty by construction (`plan`, point
-            // 3), so resolving its bindings — or even checking a
-            // non-pure tool's required ports against them — would panic or
-            // deliver an `Unknown` through a conversion edge that expects a
-            // known value. Neither tool is called; the walk simply
-            // continues (decision (j), point 4).
-            if matches!(planned.action, Action::Blocked | Action::Skip) {
-                let outputs = planned.outputs.clone();
-                let blocked = planned.action == Action::Blocked;
-                let status = if blocked {
-                    NodeStatus::Blocked
-                } else {
-                    NodeStatus::Skipped
-                };
-                observer.on(ApplyEvent::NodeStarted {
-                    node: name.clone(),
-                    instance: planned.instance.clone(),
-                    inputs: planned.inputs.clone(),
-                });
-                observer.on(ApplyEvent::NodeFinished {
-                    node: name.clone(),
-                    instance: planned.instance.clone(),
-                    status: status.clone(),
-                    outputs: outputs.clone(),
-                });
-                applied_nodes.push(AppliedNode {
-                    name: name.clone(),
-                    instance: planned.instance.clone(),
-                    tool: spec.name.clone(),
-                    status,
-                    outputs: outputs.clone(),
-                });
-                group_outputs.push((planned.instance.clone(), outputs, blocked));
-                group_end += 1;
-                continue;
+        let node_result = match group {
+            // A whole-node `Action::Skip` (decision (j), point 3): plans
+            // as a single instance, whatever `node.for_each` says, and
+            // `apply_instance` reports it `Skipped` with no tool call --
+            // see its own `Action::Blocked | Action::Skip` arm.
+            Group::Skipped { planned } => {
+                apply_instance(
+                    checked,
+                    inputs,
+                    catalog,
+                    &results,
+                    node,
+                    tool,
+                    spec,
+                    &token,
+                    name,
+                    &fresh,
+                    *planned,
+                    None,
+                    observer,
+                    &mut applied_nodes,
+                )?;
+                NodeResult::Skipped
             }
-
-            let resolved_inputs =
-                resolve_instance_inputs(checked, inputs, catalog, &results, node, planned, item)?;
-
-            if spec.pure {
-                let outputs = planned.outputs.clone();
-                observer.on(ApplyEvent::NodeStarted {
-                    node: name.clone(),
-                    instance: planned.instance.clone(),
-                    inputs: resolved_inputs.clone(),
-                });
-                observer.on(ApplyEvent::NodeFinished {
-                    node: name.clone(),
-                    instance: planned.instance.clone(),
-                    status: NodeStatus::Computed,
-                    outputs: outputs.clone(),
-                });
-                applied_nodes.push(AppliedNode {
-                    name: name.clone(),
-                    instance: planned.instance.clone(),
-                    tool: spec.name.clone(),
-                    status: NodeStatus::Computed,
-                    outputs: outputs.clone(),
-                });
-                group_outputs.push((planned.instance.clone(), outputs, false));
-                group_end += 1;
-                continue;
+            Group::Single { planned } => {
+                let (outputs, _blocked) = apply_instance(
+                    checked,
+                    inputs,
+                    catalog,
+                    &results,
+                    node,
+                    tool,
+                    spec,
+                    &token,
+                    name,
+                    &fresh,
+                    *planned,
+                    None,
+                    observer,
+                    &mut applied_nodes,
+                )?;
+                NodeResult::Scalar(outputs)
             }
-
-            match first_unknown_required_input(spec, node, &resolved_inputs) {
-                None => {
-                    observer.on(ApplyEvent::NodeStarted {
-                        node: name.clone(),
-                        instance: planned.instance.clone(),
-                        inputs: resolved_inputs.clone(),
-                    });
-                    // Rule 4a: never run a replacement the approved plan
-                    // did not show.
-                    //
-                    // Decision (f2): `ensure`'s own outputs are checked
-                    // against `spec` here, in the same chain as `ensure`
-                    // itself failing -- the position is the same either
-                    // way, `ensure` has already run, so a refused output is
-                    // reported exactly like a tool that failed outright
-                    // (never a panic, and `applied`'s partial result is
-                    // built the same way).
-                    match refuse_unplanned_replacement(tool.as_ref(), planned, &resolved_inputs)
-                        .and_then(|()| tool.ensure(&resolved_inputs, &token))
-                        .and_then(|Ensured { outputs, changed }| {
-                            fill_outputs(catalog.registry(), spec, &outputs)
-                                .map(|outputs| (outputs, changed))
-                        }) {
-                        Ok((outputs, changed)) => {
-                            let status = if changed {
-                                NodeStatus::Created
-                            } else {
-                                NodeStatus::Unchanged
-                            };
-                            observer.on(ApplyEvent::NodeFinished {
-                                node: name.clone(),
-                                instance: planned.instance.clone(),
-                                status: status.clone(),
-                                outputs: outputs.clone(),
-                            });
-                            applied_nodes.push(AppliedNode {
-                                name: name.clone(),
-                                instance: planned.instance.clone(),
-                                tool: spec.name.clone(),
-                                status,
-                                outputs: outputs.clone(),
-                            });
-                            group_outputs.push((planned.instance.clone(), outputs, false));
-                        }
-                        Err(error) => {
-                            observer.on(ApplyEvent::NodeFinished {
-                                node: name.clone(),
-                                instance: planned.instance.clone(),
-                                status: NodeStatus::Failed {
-                                    error: error.clone(),
-                                },
-                                outputs: Outputs::new(),
-                            });
-                            applied_nodes.push(AppliedNode {
-                                name: name.clone(),
-                                instance: planned.instance.clone(),
-                                tool: spec.name.clone(),
-                                status: NodeStatus::Failed {
-                                    error: error.clone(),
-                                },
-                                outputs: Outputs::new(),
-                            });
-                            applied_nodes.extend(not_run_tail(&fresh.plan.nodes[group_end + 1..]));
-                            return Err(ApplyError::Tool {
-                                node: name.clone(),
-                                instance: planned.instance.clone(),
-                                error,
-                                applied: Box::new(Applied {
-                                    nodes: applied_nodes,
-                                    outputs: IndexMap::new(),
-                                    blocked: Vec::new(),
-                                }),
-                            });
-                        }
-                    }
-                }
-                Some(_) if matches!(planned.action, Action::NoOp) => {
-                    let outputs = planned.outputs.clone();
-                    observer.on(ApplyEvent::NodeStarted {
-                        node: name.clone(),
-                        instance: planned.instance.clone(),
-                        inputs: resolved_inputs.clone(),
-                    });
-                    observer.on(ApplyEvent::NodeFinished {
-                        node: name.clone(),
-                        instance: planned.instance.clone(),
-                        status: NodeStatus::Converged,
-                        outputs: outputs.clone(),
-                    });
-                    applied_nodes.push(AppliedNode {
-                        name: name.clone(),
-                        instance: planned.instance.clone(),
-                        tool: spec.name.clone(),
-                        status: NodeStatus::Converged,
-                        outputs: outputs.clone(),
-                    });
-                    group_outputs.push((planned.instance.clone(), outputs, false));
-                }
-                Some(UnknownRequired::Upstream { port, from }) => {
-                    applied_nodes.extend(not_run_tail(&fresh.plan.nodes[group_end + 1..]));
-                    return Err(ApplyError::UnknownInput {
-                        node: name.clone(),
-                        port,
-                        from,
-                        applied: Box::new(Applied {
-                            nodes: applied_nodes,
-                            outputs: IndexMap::new(),
-                            blocked: Vec::new(),
-                        }),
-                    });
-                }
-                Some(UnknownRequired::WorkflowInput { port, input }) => {
-                    applied_nodes.extend(not_run_tail(&fresh.plan.nodes[group_end + 1..]));
-                    return Err(ApplyError::UnknownRequiredInput {
-                        node: name.clone(),
-                        instance: planned.instance.clone(),
-                        port,
-                        input,
-                        applied: Box::new(Applied {
-                            nodes: applied_nodes,
-                            outputs: IndexMap::new(),
-                            blocked: Vec::new(),
-                        }),
-                    });
-                }
-            }
-            group_end += 1;
-        }
-
-        let node_result = if whole_skip {
-            NodeResult::Skipped
-        } else if node.for_each.is_none() {
-            let (_, outputs, _) = group_outputs
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| unreachable!("a non-for_each node has exactly one instance"));
-            NodeResult::Scalar(outputs)
-        } else {
-            NodeResult::ForEach(
-                group_outputs
-                    .into_iter()
-                    .map(|(key, outputs, blocked)| ForEachInstance {
-                        key: key.unwrap_or_else(|| {
-                            unreachable!("every for_each instance carries its own key")
-                        }),
+            Group::Each { instances } => {
+                let mut each = Vec::with_capacity(instances.len());
+                for instance in instances {
+                    let (outputs, blocked) = apply_instance(
+                        checked,
+                        inputs,
+                        catalog,
+                        &results,
+                        node,
+                        tool,
+                        spec,
+                        &token,
+                        name,
+                        &fresh,
+                        instance.planned,
+                        Some(&instance.item),
+                        observer,
+                        &mut applied_nodes,
+                    )?;
+                    each.push(ForEachInstance {
+                        key: instance.key.clone(),
                         outputs,
                         blocked,
-                    })
-                    .collect(),
-            )
+                    });
+                }
+                NodeResult::ForEach(each)
+            }
         };
         results.insert(name.clone(), node_result);
-        index = group_end;
     }
 
     // Rule 5.
@@ -897,6 +719,233 @@ pub fn apply(
         outputs,
         blocked: fresh.plan.blocked,
     })
+}
+
+/// Run one planned instance of `node`, at `planned_idx` within
+/// `fresh.plan.nodes`, and return its outputs and whether it was
+/// `Action::Blocked` -- `apply`'s own rules 4 and 4a. Shared between
+/// [`Group::Single`]'s and [`Group::Skipped`]'s one instance and each of
+/// [`Group::Each`]'s, so the classification below (blocked/skipped, pure,
+/// converged, `ensure`'d, or failed) is written once rather than per
+/// `Group` variant.
+///
+/// `item` is this instance's own `for_each` item, exactly as [`walk`]
+/// recorded it on [`EachInstance`] (`None` for a node with no `for_each`
+/// -- decision (f1), point 2; decision (g6)).
+///
+/// # Errors
+///
+/// Propagates [`ApplyError::Tool`], [`ApplyError::UnknownInput`] or
+/// [`ApplyError::UnknownRequiredInput`], each carrying every
+/// [`AppliedNode`] pushed to `applied_nodes` so far plus a `NotRun` tail
+/// for every planned instance after `planned_idx`.
+#[allow(clippy::too_many_arguments)] // one instance's worth of classification; see the doc above
+#[allow(clippy::too_many_lines)] // one instance's five outcomes (blocked/skip, pure, ensure's two, converged, two unknowns), not split further
+fn apply_instance(
+    checked: &Checked,
+    inputs: &IndexMap<InputName, Value>,
+    catalog: &Catalog,
+    results: &HashMap<NodeName, NodeResult>,
+    node: &Node,
+    tool: &dyn Tool,
+    spec: &crate::tool::ToolSpec,
+    token: &SinkToken,
+    name: &NodeName,
+    fresh: &Walk,
+    planned_idx: usize,
+    item: Option<&Value>,
+    observer: &mut dyn ApplyObserver,
+    applied_nodes: &mut Vec<AppliedNode>,
+) -> Result<(Outputs, bool), ApplyError> {
+    let planned = &fresh.plan.nodes[planned_idx];
+
+    // Classify by `planned.action` first, before any input resolution and
+    // before the `pure` branch: a `Blocked` gate (always pure) must not be
+    // reported `Computed`, and a `Skip` instance's `inputs` are empty by
+    // construction (`plan`, point 3), so resolving its bindings -- or even
+    // checking a non-pure tool's required ports against them -- would
+    // panic or deliver an `Unknown` through a conversion edge that expects
+    // a known value. Neither tool is called (decision (j), point 4).
+    if matches!(planned.action, Action::Blocked | Action::Skip) {
+        let outputs = planned.outputs.clone();
+        let blocked = planned.action == Action::Blocked;
+        let status = if blocked {
+            NodeStatus::Blocked
+        } else {
+            NodeStatus::Skipped
+        };
+        observer.on(ApplyEvent::NodeStarted {
+            node: name.clone(),
+            instance: planned.instance.clone(),
+            inputs: planned.inputs.clone(),
+        });
+        observer.on(ApplyEvent::NodeFinished {
+            node: name.clone(),
+            instance: planned.instance.clone(),
+            status: status.clone(),
+            outputs: outputs.clone(),
+        });
+        applied_nodes.push(AppliedNode {
+            name: name.clone(),
+            instance: planned.instance.clone(),
+            tool: spec.name.clone(),
+            status,
+            outputs: outputs.clone(),
+        });
+        return Ok((outputs, blocked));
+    }
+
+    let resolved_inputs =
+        resolve_instance_inputs(checked, inputs, catalog, results, node, planned, item)?;
+
+    if spec.pure {
+        let outputs = planned.outputs.clone();
+        observer.on(ApplyEvent::NodeStarted {
+            node: name.clone(),
+            instance: planned.instance.clone(),
+            inputs: resolved_inputs.clone(),
+        });
+        observer.on(ApplyEvent::NodeFinished {
+            node: name.clone(),
+            instance: planned.instance.clone(),
+            status: NodeStatus::Computed,
+            outputs: outputs.clone(),
+        });
+        applied_nodes.push(AppliedNode {
+            name: name.clone(),
+            instance: planned.instance.clone(),
+            tool: spec.name.clone(),
+            status: NodeStatus::Computed,
+            outputs: outputs.clone(),
+        });
+        return Ok((outputs, false));
+    }
+
+    match first_unknown_required_input(spec, node, &resolved_inputs) {
+        None => {
+            observer.on(ApplyEvent::NodeStarted {
+                node: name.clone(),
+                instance: planned.instance.clone(),
+                inputs: resolved_inputs.clone(),
+            });
+            // Rule 4a: never run a replacement the approved plan did not
+            // show.
+            //
+            // Decision (f2): `ensure`'s own outputs are checked against
+            // `spec` here, in the same chain as `ensure` itself failing --
+            // the position is the same either way, `ensure` has already
+            // run, so a refused output is reported exactly like a tool
+            // that failed outright (never a panic, and `applied`'s
+            // partial result is built the same way).
+            match refuse_unplanned_replacement(tool, planned, &resolved_inputs)
+                .and_then(|()| tool.ensure(&resolved_inputs, token))
+                .and_then(|Ensured { outputs, changed }| {
+                    fill_outputs(catalog.registry(), spec, &outputs)
+                        .map(|outputs| (outputs, changed))
+                }) {
+                Ok((outputs, changed)) => {
+                    let status = if changed {
+                        NodeStatus::Created
+                    } else {
+                        NodeStatus::Unchanged
+                    };
+                    observer.on(ApplyEvent::NodeFinished {
+                        node: name.clone(),
+                        instance: planned.instance.clone(),
+                        status: status.clone(),
+                        outputs: outputs.clone(),
+                    });
+                    applied_nodes.push(AppliedNode {
+                        name: name.clone(),
+                        instance: planned.instance.clone(),
+                        tool: spec.name.clone(),
+                        status,
+                        outputs: outputs.clone(),
+                    });
+                    Ok((outputs, false))
+                }
+                Err(error) => {
+                    observer.on(ApplyEvent::NodeFinished {
+                        node: name.clone(),
+                        instance: planned.instance.clone(),
+                        status: NodeStatus::Failed {
+                            error: error.clone(),
+                        },
+                        outputs: Outputs::new(),
+                    });
+                    applied_nodes.push(AppliedNode {
+                        name: name.clone(),
+                        instance: planned.instance.clone(),
+                        tool: spec.name.clone(),
+                        status: NodeStatus::Failed {
+                            error: error.clone(),
+                        },
+                        outputs: Outputs::new(),
+                    });
+                    applied_nodes.extend(not_run_tail(&fresh.plan.nodes[planned_idx + 1..]));
+                    Err(ApplyError::Tool {
+                        node: name.clone(),
+                        instance: planned.instance.clone(),
+                        error,
+                        applied: Box::new(Applied {
+                            nodes: std::mem::take(applied_nodes),
+                            outputs: IndexMap::new(),
+                            blocked: Vec::new(),
+                        }),
+                    })
+                }
+            }
+        }
+        Some(_) if matches!(planned.action, Action::NoOp) => {
+            let outputs = planned.outputs.clone();
+            observer.on(ApplyEvent::NodeStarted {
+                node: name.clone(),
+                instance: planned.instance.clone(),
+                inputs: resolved_inputs.clone(),
+            });
+            observer.on(ApplyEvent::NodeFinished {
+                node: name.clone(),
+                instance: planned.instance.clone(),
+                status: NodeStatus::Converged,
+                outputs: outputs.clone(),
+            });
+            applied_nodes.push(AppliedNode {
+                name: name.clone(),
+                instance: planned.instance.clone(),
+                tool: spec.name.clone(),
+                status: NodeStatus::Converged,
+                outputs: outputs.clone(),
+            });
+            Ok((outputs, false))
+        }
+        Some(UnknownRequired::Upstream { port, from }) => {
+            applied_nodes.extend(not_run_tail(&fresh.plan.nodes[planned_idx + 1..]));
+            Err(ApplyError::UnknownInput {
+                node: name.clone(),
+                port,
+                from,
+                applied: Box::new(Applied {
+                    nodes: std::mem::take(applied_nodes),
+                    outputs: IndexMap::new(),
+                    blocked: Vec::new(),
+                }),
+            })
+        }
+        Some(UnknownRequired::WorkflowInput { port, input }) => {
+            applied_nodes.extend(not_run_tail(&fresh.plan.nodes[planned_idx + 1..]));
+            Err(ApplyError::UnknownRequiredInput {
+                node: name.clone(),
+                instance: planned.instance.clone(),
+                port,
+                input,
+                applied: Box::new(Applied {
+                    nodes: std::mem::take(applied_nodes),
+                    outputs: IndexMap::new(),
+                    blocked: Vec::new(),
+                }),
+            })
+        }
+    }
 }
 
 /// Rule 4a (milestone 3e, adversarial pass 3, 2026-09-29): `Ok(())` unless

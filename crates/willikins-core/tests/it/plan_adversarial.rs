@@ -466,17 +466,27 @@ fn missing_inputs_are_an_error_not_a_panic_even_when_nothing_is_supplied() {
     assert!(matches!(err, PlanError::MissingInput { .. }), "{err:?}");
 }
 
-/// A catalog that does not hold the tools a `Checked` was checked against
-/// is a caller-contract violation, documented on `plan` as a panic rather
-/// than a `PlanError` (the plan document's `PlanError` list is closed).
+/// Superseded by milestone 3n's G1 (was: a catalog that does not hold the
+/// tools a `Checked` was checked against is a caller-contract violation,
+/// documented on `plan` as a panic). From G1 on, `plan` reads a node's
+/// tool handle from `CheckedNode.tool` -- the one `check` itself resolved
+/// -- and never asks `catalog` for it again; `catalog` is read only for
+/// its registry (decision (g1); decision (b2) later drops the parameter
+/// altogether). A catalog that does not hold `checked`'s tools no longer
+/// makes `plan` panic, as long as its registry still agrees with the one
+/// `check` validated against (verify item 4's own precondition).
 #[test]
-#[should_panic(expected = "compatible catalog")]
-fn planning_against_a_catalog_missing_a_tool_panics_by_contract() {
+fn planning_against_a_different_registry_compatible_catalog_no_longer_panics() {
     let (_state, fake_catalog) = empty();
     let workflow = common::new_rust_service_workflow();
     let checked = check(&workflow, &fake_catalog).unwrap();
     let other = Catalog::new(willikins_types::registry());
-    let _ = plan(&checked, &common::new_rust_service_inputs(), &other);
+    let result = plan(&checked, &common::new_rust_service_inputs(), &other);
+    assert!(
+        result.is_ok(),
+        "G1: `plan` never looks a node's tool up in `catalog` again, so a \
+         catalog missing it is no longer a panic: {result:?}"
+    );
 }
 
 /// The other half of the contract above: a workflow whose tools are not in

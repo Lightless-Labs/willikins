@@ -29,18 +29,25 @@ fn ratchet_count(path: &str) -> usize {
 
 #[test]
 fn the_unreachable_ratchet_never_rises() {
-    // Measured at HEAD (milestone 3n's S1, 2026-10-11), after F1-F3 and
-    // milestone 2b landed on top of the plan's own `28dc3e1` baseline
-    // (`plan.rs` 30, `apply.rs` 9, `describe.rs` 2): the plan's final
-    // targets are `plan.rs` 6, `apply.rs` 2, `describe.rs` 0 (after G7).
+    // Measured at HEAD (milestone 3n's G1, 2026-10-11), after S1's 32/9/3
+    // baseline: G1 gives `plan.rs` and `apply.rs` a node table with an
+    // already-resolved tool handle (`CheckedNode::tool`), so neither looks
+    // a node up in the workflow and its tool up in the catalog a second
+    // time, and `apply`'s `Walk`/`Group` (decision (g6)) replace the
+    // post-hoc "was this node a single instance or a `for_each`'s several"
+    // unwraps with a shape known up front. `plan.rs` loses its one
+    // node/tool-lookup pair (-2); `apply.rs` loses its own node/tool-lookup
+    // pair plus its group-classification pair (-4). `describe.rs` is G2's,
+    // unmoved here. The plan's final targets are `plan.rs` 6, `apply.rs`
+    // 2, `describe.rs` 0 (after G7).
     assert_eq!(
         ratchet_count("src/plan.rs"),
-        32,
+        30,
         "plan.rs's unreachable ratchet moved; lower it, never raise it"
     );
     assert_eq!(
         ratchet_count("src/apply.rs"),
-        9,
+        5,
         "apply.rs's unreachable ratchet moved; lower it, never raise it"
     );
     assert_eq!(

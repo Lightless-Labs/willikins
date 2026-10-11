@@ -750,17 +750,45 @@ pub fn plan(
 }
 
 /// What [`plan`] and [`crate::apply::apply`] share: the finished [`Plan`],
-/// plus each planned instance's own `for_each` item, aligned by index with
-/// [`Plan::nodes`] (`None` for an instance of a node with no `for_each`).
+/// plus each checked node's own group of planned instances, aligned 1:1
+/// with [`Checked::nodes`] (milestone 3n, decision (g6)).
 ///
-/// This is milestone 3n's F1 giving the walk a first, minimal shape — just
-/// enough for `apply` to pass each instance the very item `plan` itself
-/// used, instead of re-resolving with no item at all (decision (f1), point
-/// 2). G1 later gives this walk a fuller shape (decision (g6)), subsuming
-/// this one.
+/// Supersedes F1's first, minimal shape (`items: Vec<Option<Value>>`,
+/// aligned with `Plan::nodes` instead): `apply` no longer has to re-scan
+/// `Plan::nodes` by name to find a node's own instances, or reconstruct
+/// whether it was wholly skipped, a single instance, or a `for_each`'s
+/// several -- every [`Group`] already says which.
 pub(crate) struct Walk {
     pub(crate) plan: Plan,
-    pub(crate) items: Vec<Option<Value>>,
+    pub(crate) groups: Vec<Group>,
+}
+
+/// One checked node's own slice of [`Plan::nodes`] (decision (g6)),
+/// indexed by position into `Checked::nodes` -- never by name, and never
+/// reconstructed by scanning `Plan::nodes` for runs of the same name.
+pub(crate) enum Group {
+    /// A node with no `for_each`: exactly one planned instance, at this
+    /// index into [`Plan::nodes`].
+    Single { planned: usize },
+    /// A `for_each` node, not wholly skipped: one planned instance per
+    /// source item, each with the canonical key and the item [`Value`]
+    /// `plan` resolved it from -- the same item `apply` must pass back in
+    /// (decision (f1), point 2).
+    Each { instances: Vec<EachInstance> },
+    /// A node -- `for_each` or not -- forced to a single `Action::Skip`
+    /// entry because a binding of its own names an already blocked or
+    /// skipped node (decision (j), point 3): at this index into
+    /// [`Plan::nodes`].
+    Skipped { planned: usize },
+}
+
+/// One planned instance of a [`Group::Each`] node: its index into
+/// [`Plan::nodes`], its canonical key, and the item `plan` resolved it
+/// from.
+pub(crate) struct EachInstance {
+    pub(crate) planned: usize,
+    pub(crate) key: String,
+    pub(crate) item: Value,
 }
 
 /// The shared body [`plan`] and [`crate::apply::apply`] both walk: see
@@ -775,26 +803,23 @@ pub(crate) fn walk(
     let workflow = checked.workflow();
     check_input_types(workflow, inputs, catalog.registry())?;
     check_fixed_inputs(workflow, inputs)?;
-    let order = checked.order();
     let types = checked.edges();
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
     let mut planned: Vec<PlannedNode> = Vec::new();
-    // Aligned with `planned`, 1:1 (see `Walk`'s own doc); named apart from
-    // the `for_each` source's own local `items` (the matched instances'
-    // domain objects) a few lines below, which shadows this name inside
-    // its own match arm.
-    let mut plan_items: Vec<Option<Value>> = Vec::new();
+    // Aligned with `checked.nodes()`, 1:1 (see `Walk`'s own doc); named
+    // apart from the `for_each` source's own local `items` (the matched
+    // instances' domain objects) a few lines below, which shadows this
+    // name inside its own match arm.
+    let mut groups: Vec<Group> = Vec::new();
     let mut gates = GateTracking::default();
     let mut replacing: Vec<Replacing> = Vec::new();
 
-    for name in &order {
-        let node = workflow
-            .nodes
-            .get(name)
-            .unwrap_or_else(|| unreachable!("`checked.order` lists only workflow nodes"));
-        let tool = catalog
-            .get(&node.tool)
-            .unwrap_or_else(|| unreachable!("`checked` was checked against a compatible catalog"));
+    for checked_node in checked.nodes() {
+        let name = &checked_node.name;
+        let node = checked.declared_node(checked_node);
+        // G1: the tool handle `check` already resolved, never a second
+        // catalog lookup by name (verify item 4).
+        let tool = checked_node.tool.as_ref();
         let spec = tool.spec();
         let ctx = ResolveCtx {
             workflow,
@@ -823,6 +848,7 @@ pub(crate) fn walk(
         }
 
         if !causes.is_empty() {
+            let planned_idx = planned.len();
             planned.push(PlannedNode {
                 name: name.clone(),
                 instance: None,
@@ -831,7 +857,9 @@ pub(crate) fn walk(
                 inputs: Inputs::new(),
                 outputs: unknown_outputs(spec),
             });
-            plan_items.push(None);
+            groups.push(Group::Skipped {
+                planned: planned_idx,
+            });
             results.insert(name.clone(), NodeResult::Skipped);
             gates.mark_whole_skipped(name.clone(), causes);
             continue;
@@ -840,14 +868,13 @@ pub(crate) fn walk(
         let result = match &node.for_each {
             None => {
                 let bound = bind_ports(&ctx, name, node, spec, None)?;
-                let node_plan =
-                    plan_one(name, None, spec, tool.as_ref(), bound, catalog.registry())?;
+                let node_plan = plan_one(name, None, spec, tool, bound, catalog.registry())?;
                 if node_plan.action == Action::Blocked {
                     gates.mark_blocked(
                         name.clone(),
                         None,
                         spec,
-                        tool.as_ref(),
+                        tool,
                         &node_plan.inputs,
                         &node.with,
                     );
@@ -856,8 +883,11 @@ pub(crate) fn walk(
                     replacing.push(replacing_entry(name.clone(), None, spec, &node_plan.inputs));
                 }
                 let outputs = node_plan.outputs.clone();
+                let planned_idx = planned.len();
                 planned.push(node_plan);
-                plan_items.push(None);
+                groups.push(Group::Single {
+                    planned: planned_idx,
+                });
                 NodeResult::Scalar(outputs)
             }
             Some(source) => {
@@ -882,13 +912,14 @@ pub(crate) fn walk(
                     }
                 }
                 let mut instances = Vec::with_capacity(keyed.len());
+                let mut group_instances = Vec::with_capacity(keyed.len());
                 for (item_value, key) in keyed {
                     let bound = bind_ports(&ctx, name, node, spec, Some(&item_value))?;
                     let node_plan = plan_one(
                         name,
                         Some(key.clone()),
                         spec,
-                        tool.as_ref(),
+                        tool,
                         bound,
                         catalog.registry(),
                     )?;
@@ -898,7 +929,7 @@ pub(crate) fn walk(
                             name.clone(),
                             Some(key.clone()),
                             spec,
-                            tool.as_ref(),
+                            tool,
                             &node_plan.inputs,
                             &node.with,
                         );
@@ -912,13 +943,21 @@ pub(crate) fn walk(
                         ));
                     }
                     instances.push(ForEachInstance {
-                        key,
+                        key: key.clone(),
                         outputs: node_plan.outputs.clone(),
                         blocked,
                     });
+                    let planned_idx = planned.len();
                     planned.push(node_plan);
-                    plan_items.push(Some(item_value.clone()));
+                    group_instances.push(EachInstance {
+                        planned: planned_idx,
+                        key,
+                        item: item_value,
+                    });
                 }
+                groups.push(Group::Each {
+                    instances: group_instances,
+                });
                 NodeResult::ForEach(instances)
             }
         };
@@ -956,7 +995,7 @@ pub(crate) fn walk(
             blocked: gates.into_blocked(),
             replacing,
         },
-        items: plan_items,
+        groups,
     })
 }
 

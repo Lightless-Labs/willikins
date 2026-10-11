@@ -117,7 +117,7 @@ use crate::catalog::Catalog;
 use crate::class::Class;
 use crate::compose::prefixed_input;
 use crate::site::Site;
-use crate::tool::{PortName, PortSpec, ToolName, ToolSpec};
+use crate::tool::{PortName, PortSpec, Tool, ToolName, ToolSpec};
 use crate::value::{
     Conversion, ConversionMismatch, PortType, TypeRef, TypeRegistry, Value, reported_type_name_or,
 };
@@ -127,13 +127,23 @@ use willikins_types::{Description, ParseError, WorkflowName};
 /// A workflow that has passed [`check`]: its topological execution order,
 /// its approval class, any non-fatal warnings, and the resolved type of
 /// every binding `check` looked at.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is hand-written, not derived (milestone 3n, decision (s3)):
+/// [`CheckedNode`] holds `Arc<dyn Tool>`, and `dyn Tool` is not `Debug`.
+/// See [`Checked`]'s own `impl fmt::Debug` for what it prints.
+#[derive(Clone)]
 pub struct Checked {
     /// The checked workflow, unchanged.
     workflow: Workflow,
     /// Every node, in an order where each node comes after every node it
     /// depends on. Ties are broken by declaration order.
     order: Vec<NodeName>,
+    /// Every node, in the same topological order as [`Self::order`], with
+    /// the tool handle `check` resolved for it and its [`Shape`]
+    /// (milestone 3n, decision (g1)). From G1 on, `plan` and `apply` walk
+    /// this instead of looking a node and its tool up by name in the
+    /// workflow and the catalog a second time.
+    nodes: Vec<CheckedNode>,
     /// The plan's approval class: the maximum over every non-pure node's
     /// tool class, or [`Class::Reversible`] when there are none.
     class: Class,
@@ -240,7 +250,161 @@ impl Checked {
     pub(crate) fn edges(&self) -> &IndexMap<NodeName, IndexMap<PortName, Edge>> {
         &self.types
     }
+
+    /// Every node, in topological order (the same order as [`Self::order`]),
+    /// with its already-resolved tool handle and [`Shape`]. Crate-private:
+    /// ids are minted only in `check.rs` and never leave this crate
+    /// (milestone 3n, decision (g1)).
+    pub(crate) fn nodes(&self) -> &[CheckedNode] {
+        &self.nodes
+    }
+
+    /// The workflow's own declared [`Node`] a [`CheckedNode`] was built
+    /// from. Crate-private bridge, on the same schedule as [`Self::workflow`]
+    /// and [`Self::edges`]: from G1 until G3/G4 give [`Shape`] its own
+    /// ports, `plan.rs` and `apply.rs` still need a node's raw
+    /// `with`/`for_each` [`Binding`]s to resolve it, which [`Shape`] does
+    /// not carry yet. `declared_at` is a bounds-checked index into
+    /// `self.workflow.nodes`, not a proof -- see `check`'s own module doc,
+    /// "Typed ids are indexes, not proofs".
+    pub(crate) fn declared_node(&self, node: &CheckedNode) -> &Node {
+        let Some((_, declared)) = self.workflow.nodes.get_index(node.declared_at) else {
+            unreachable!("`declared_at` always indexes `workflow.nodes`")
+        };
+        declared
+    }
 }
+
+/// Hand-written (decision (s3)): [`CheckedNode`] holds `Arc<dyn Tool>`,
+/// which is not `Debug`, so `#[derive(Debug)]` does not compile once
+/// [`Checked::nodes`] exists. Prints the workflow's own name, every node's
+/// name, declared position and tool name, its [`Shape`] by kind and type,
+/// the plan class and warnings, and the checked edge/output-type tables
+/// (type information only -- [`Edge`] never holds a value). As `Shape`
+/// gains ports and sources (G3 on), a bound literal has to print as its
+/// own [`Value`]'s `Debug`, which redacts by type construction (see
+/// `Value`'s own impl) -- this type never prints a literal's raw content.
+impl fmt::Debug for Checked {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Checked")
+            .field("name", &self.workflow.name)
+            .field("order", &self.order)
+            .field("nodes", &self.nodes)
+            .field("class", &self.class)
+            .field("warnings", &self.warnings)
+            .field("types", &self.types)
+            .field("output_types", &self.output_types)
+            .finish()
+    }
+}
+
+/// One checked node: its name, its position among the workflow's declared
+/// nodes, the tool handle [`check`] resolved for it, and its [`Shape`]
+/// (milestone 3n, decision (g1)). Crate-private -- never leaves
+/// `willikins-core` (SHARED VALUES: "Ids ... never leave willikins-core").
+///
+/// `Debug` is hand-written: `tool` holds `Arc<dyn Tool>`, not `Debug`, and
+/// prints as its own tool name instead. `Clone` is still derived -- `Arc`
+/// is `Clone` regardless of what it points to.
+#[derive(Clone)]
+pub(crate) struct CheckedNode {
+    /// This node's name.
+    pub(crate) name: NodeName,
+    /// This node's index into [`Workflow::nodes`] -- declaration order,
+    /// not topological order (SHARED VALUES). The bridge for a node's raw
+    /// `Binding`s until G3/G4; see [`Checked::declared_node`].
+    pub(crate) declared_at: usize,
+    /// The tool handle [`check`] resolved against the catalog it was
+    /// given. `plan` and `apply` call through this, never through a
+    /// second catalog lookup by name (verify item 4; milestone 3n's
+    /// decision (b2) later drops the catalog parameter itself).
+    pub(crate) tool: Arc<dyn Tool>,
+    /// Whether this node runs once (`Single`) or once per `for_each` item
+    /// (`Each`), and the typed id that gives each kind its own index
+    /// space.
+    pub(crate) shape: Shape,
+}
+
+impl fmt::Debug for CheckedNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CheckedNode")
+            .field("name", &self.name)
+            .field("declared_at", &self.declared_at)
+            .field("tool", &self.tool.spec().name)
+            .field("shape", &self.shape)
+            .finish()
+    }
+}
+
+/// A node calls its tool once (`Single`) or once per item of a `for_each`
+/// list (`Each`) -- milestone 3n, decision (g1). Each kind has its own
+/// typed id, a separate index space from the other kind's, so a later
+/// task's result tables can be `Vec<SingleResult>`/`Vec<EachResult>`
+/// rather than one table either kind might index into by mistake.
+///
+/// G1 gives this `ids` and, for `Each`, the `for_each` source's own
+/// resolved element type -- not yet its ports or its source binding
+/// (`PortEdge`, `Source`): those are G3/G4's. A node with no bound port
+/// has neither today (see [`Checked::types`]' own doc) and will have an
+/// empty `ports` list once this gains one.
+#[derive(Clone)]
+pub(crate) enum Shape {
+    /// A node with no `for_each`: exactly one instance, ever.
+    Single {
+        /// This single node's own id, among every `Single` node, in
+        /// topological order.
+        id: SingleId,
+    },
+    /// A `for_each` node: one instance per item of its source list.
+    Each {
+        /// This `for_each` node's own id, among every `Each` node, in
+        /// topological order.
+        id: EachId,
+        /// The `for_each` source's resolved element type -- `check`
+        /// already rejected a secret or non-list source, so this is
+        /// always the scalar type every instance's item is a value of.
+        element: TypeRef,
+    },
+}
+
+/// Hand-written, not derived: a plain `#[derive(Debug)]` would still
+/// compile (`Shape` holds no `Arc<dyn Tool>`), but `rustc`'s dead-code
+/// analysis explicitly ignores a derived impl's own field reads, so `id`
+/// and `element` -- otherwise unread until later tasks index result
+/// tables by the former and use the latter for keying (G3) -- would be
+/// flagged dead under `-D warnings`. Printing them by hand reads them for
+/// real instead of reaching for `#[allow(dead_code)]`.
+impl fmt::Debug for Shape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Single { id } => f.debug_struct("Single").field("id", id).finish(),
+            Self::Each { id, element } => f
+                .debug_struct("Each")
+                .field("id", id)
+                .field("element", element)
+                .finish(),
+        }
+    }
+}
+
+/// A [`Shape::Single`] node's own id: an index into a `Vec<SingleResult>`
+/// a later task gives `plan`'s and `apply`'s result tables (milestone 3n,
+/// decision (g1)). Minted only by [`check`], in topological order among
+/// `Single` nodes; never leaves `willikins-core`. A bounds-checked index,
+/// not a proof -- see `check`'s own module doc, "Typed ids are indexes,
+/// not proofs".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct SingleId(pub(crate) u32);
+
+/// A [`Shape::Each`] node's own id: an index into a `Vec<EachResult>` a
+/// later task gives `plan`'s and `apply`'s result tables (milestone 3n,
+/// decision (g1)). Minted only by [`check`], in topological order among
+/// `Each` nodes; never leaves `willikins-core`. Also what a
+/// [`crate::workflow::Binding::Keyed`] reference's `Source::Keyed` will
+/// hold (G3), so "a keyed reference to a node with no `for_each`" has no
+/// id to name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct EachId(pub(crate) u32);
 
 /// A read-only view of a [`Checked`] workflow's own declared surface: its
 /// name, description, declared inputs and output names -- never its nodes.
@@ -1382,6 +1546,7 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         used_inputs: HashSet::new(),
         types: IndexMap::new(),
         output_types: IndexMap::new(),
+        for_each_elements: IndexMap::new(),
     };
 
     resolver.check_boundaries(&mut errors);
@@ -1398,6 +1563,7 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         used_inputs,
         types,
         output_types,
+        for_each_elements,
         ..
     } = resolver;
 
@@ -1410,15 +1576,74 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
     let order = topo_order(workflow, &graph, &index_of);
     let class = compute_class(workflow, &specs);
     let warnings = collect_warnings(workflow, &used_inputs);
+    // G1: every node's tool was already confirmed present in `catalog`
+    // above -- any `UnknownTool` would have made `errors` non-empty and
+    // returned already -- so this is `check`'s own one-time lookup per
+    // node, never repeated by `plan` or `apply` (verify item 4).
+    let nodes = build_checked_nodes(workflow, catalog, &order, &for_each_elements);
 
     Ok(Checked {
         workflow: workflow.clone(),
         order,
+        nodes,
         class,
         warnings,
         types,
         output_types,
     })
+}
+
+/// Build [`Checked`]'s node table, in `order` (topological): each node's
+/// own tool handle (already confirmed present -- see [`check`]'s only
+/// caller) and its [`Shape`], minting a [`SingleId`] or [`EachId`] in
+/// topological order within its own kind (SHARED VALUES).
+/// `for_each_elements` holds the resolved element type of every node that
+/// has a `for_each` -- recorded by [`Resolver::check_for_each`] on its own
+/// success path, which is the only way a node with a `for_each` reaches
+/// this function at all (any failure there pushes an error, and `check`
+/// returns before building this table).
+fn build_checked_nodes(
+    workflow: &Workflow,
+    catalog: &Catalog,
+    order: &[NodeName],
+    for_each_elements: &IndexMap<NodeName, TypeRef>,
+) -> Vec<CheckedNode> {
+    let mut next_single = 0u32;
+    let mut next_each = 0u32;
+    order
+        .iter()
+        .map(|name| {
+            let declared_at = workflow.nodes.get_index_of(name).unwrap_or_else(|| {
+                unreachable!("`order` names only nodes `workflow.nodes` itself declares")
+            });
+            let (_, node) = workflow.nodes.get_index(declared_at).unwrap_or_else(|| {
+                unreachable!("`declared_at` was just read from `get_index_of` on this same map")
+            });
+            let tool = Arc::clone(catalog.get(&node.tool).unwrap_or_else(|| {
+                unreachable!(
+                    "every node's tool was confirmed present before any error was returned"
+                )
+            }));
+            let shape = if let Some(element) = for_each_elements.get(name) {
+                let id = EachId(next_each);
+                next_each += 1;
+                Shape::Each {
+                    id,
+                    element: element.clone(),
+                }
+            } else {
+                let id = SingleId(next_single);
+                next_single += 1;
+                Shape::Single { id }
+            };
+            CheckedNode {
+                name: name.clone(),
+                declared_at,
+                tool,
+                shape,
+            }
+        })
+        .collect()
 }
 
 /// Check every declared root input, in declaration order, through
@@ -1614,6 +1839,12 @@ struct Resolver<'a> {
     used_inputs: HashSet<InputName>,
     types: IndexMap<NodeName, IndexMap<PortName, Edge>>,
     output_types: IndexMap<OutputName, TypeRef>,
+    /// Every `for_each` node's own resolved element type, recorded by
+    /// [`Self::check_for_each`] on its own success path only (milestone
+    /// 3n, decision (g1)): `check`'s node table reads this once every
+    /// node has checked clean, to tell a [`Shape::Each`] from a
+    /// [`Shape::Single`] and give the former its `element`.
+    for_each_elements: IndexMap<NodeName, TypeRef>,
 }
 
 impl<'a> Resolver<'a> {
@@ -1721,7 +1952,12 @@ impl<'a> Resolver<'a> {
             errors.push(error);
             return ItemContext::ForEachBroken;
         }
-        ItemContext::ForEachOf(ty.element())
+        let element = ty.element();
+        // Recorded only on this success path: `check`'s node table (G1)
+        // reads this once `errors` is confirmed empty, so a node that
+        // reaches that point with a `for_each` always has an entry here.
+        self.for_each_elements.insert(name.clone(), element.clone());
+        ItemContext::ForEachOf(element)
     }
 
     /// When `binding` is a workflow input carrying a known list default,
@@ -4342,5 +4578,120 @@ mod tests {
             other => panic!("expected ApplyError::Plan{{EdgeTypeMismatch}}, got {other:?}"),
         }
         assert!(observer.events.is_empty(), "nothing was ever ensured");
+    }
+
+    // ---------------------------------------------------------------------
+    // Milestone 3n, task G1: the node table (`CheckedNode`, `Shape`, typed
+    // ids). `CheckedNode`, `Shape`, `SingleId` and `EachId` are
+    // `pub(crate)`, so this test lives here rather than under `tests/it/`
+    // (an integration test compiles as a separate crate and cannot see
+    // crate-private items -- see the advisor's own note, and `check`'s
+    // module doc).
+    // ---------------------------------------------------------------------
+
+    /// Acceptance 13's groundwork and verify item 7's own shape: a node
+    /// with no `for_each` gets `Shape::Single`, a `for_each` node gets
+    /// `Shape::Each` carrying its resolved element type, both carry the
+    /// tool handle `check` resolved (never read back through the
+    /// catalog), `declared_at` is each node's own position in
+    /// `workflow.nodes`, and `Checked::declared_node` is the inverse of
+    /// that index. Ids are assigned in topological order within their own
+    /// kind (SHARED VALUES); with no edge between these two nodes,
+    /// topological order ties on declaration order, so `single` is id 0
+    /// among `Single` nodes and `each` is id 0 among `Each` nodes.
+    #[test]
+    fn check_builds_a_single_shape_and_an_each_shape_with_the_right_element_and_tool() {
+        let catalog = {
+            let mut catalog = Catalog::new(willikins_types::registry());
+            catalog
+                .insert(Arc::new(DummyTool {
+                    spec: spec_of("test.single", &[], &[], &[], Class::Reversible, true),
+                }))
+                .unwrap();
+            catalog
+                .insert(Arc::new(DummyTool {
+                    spec: spec_of("test.each", &[], &[], &[], Class::Reversible, true),
+                }))
+                .unwrap();
+            catalog
+        };
+        let workflow = Workflow::new(workflow_name("node-table"))
+            .input(input_name("ids"), InputSpec::new(list_ty("Text")))
+            .node(node_name("single"), Node::new(tool_name("test.single")))
+            .node(
+                node_name("each"),
+                Node::new(tool_name("test.each")).for_each(Binding::Input(input_name("ids"))),
+            );
+
+        let checked = check(&workflow, &catalog).expect("two independent nodes check cleanly");
+        let nodes = checked.nodes();
+        assert_eq!(
+            nodes.len(),
+            2,
+            "one CheckedNode per workflow node, no more, no fewer"
+        );
+
+        let single = nodes
+            .iter()
+            .find(|n| n.name == node_name("single"))
+            .expect("the single node has its own CheckedNode");
+        assert_eq!(single.tool.spec().name, tool_name("test.single"));
+        assert_eq!(single.declared_at, 0, "single is workflow.nodes' entry 0");
+        match &single.shape {
+            Shape::Single { id } => assert_eq!(id.0, 0, "the first Single node is id 0"),
+            Shape::Each { .. } => panic!("a node with no for_each must be Shape::Single"),
+        }
+        assert!(
+            checked.declared_node(single).for_each.is_none(),
+            "declared_node is the inverse of declared_at"
+        );
+
+        let each = nodes
+            .iter()
+            .find(|n| n.name == node_name("each"))
+            .expect("the each node has its own CheckedNode");
+        assert_eq!(each.tool.spec().name, tool_name("test.each"));
+        assert_eq!(each.declared_at, 1, "each is workflow.nodes' entry 1");
+        match &each.shape {
+            Shape::Each { id, element } => {
+                assert_eq!(id.0, 0, "the first Each node is id 0");
+                assert_eq!(*element, ty("Text"), "the for_each source's element type");
+            }
+            Shape::Single { .. } => panic!("a for_each node must be Shape::Each"),
+        }
+        assert!(
+            checked.declared_node(each).for_each.is_some(),
+            "declared_node is the inverse of declared_at"
+        );
+    }
+
+    /// Acceptance 13: `format!("{checked:?}")` must compile at all --
+    /// `CheckedNode` holds `Arc<dyn Tool>`, which is not `Debug`, so this
+    /// is only true because `Checked`'s `Debug` is hand-written (decision
+    /// (s3)) -- and it names every node and its tool. `Shape` carries no
+    /// `Source`/literal yet (G1 gives it ids and an element type only), so
+    /// there is nothing a literal's own content could leak through here;
+    /// this pins the contract G3's `Source::Literal(Value)` has to keep
+    /// once it exists, the same way `check_adversarial.rs`'s own
+    /// redaction cases pin `Value`'s.
+    #[test]
+    fn debug_of_a_checked_workflow_compiles_and_names_every_node_and_its_tool() {
+        let catalog = test_catalog();
+        let workflow = Workflow::new(workflow_name("debug-shape")).node(
+            node_name("secret"),
+            Node::new(tool_name("doppler.secret.get"))
+                .port(
+                    port("config"),
+                    Binding::Literal("example-org/prd".to_string()),
+                )
+                .port(port("name"), Binding::Literal("DB_PASSWORD".to_string())),
+        );
+
+        let checked = check(&workflow, &catalog).expect("one pure node checks cleanly");
+        let rendered = format!("{checked:?}");
+        assert!(
+            rendered.contains("secret") && rendered.contains("doppler.secret.get"),
+            "node and tool names must still print: {rendered}"
+        );
     }
 }

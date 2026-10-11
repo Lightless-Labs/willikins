@@ -1,6 +1,8 @@
 // Milestone 3n, decision (s2): outside `willikins_core::check`, a
-// `Checked { .. }` struct-update literal must not compile once its six
-// fields are private to that module.
+// `Checked { .. }` struct-update literal must not compile once its
+// fields are private to that module. The `.stderr` enumerates them all,
+// so it moves whenever a field is added (G1 added `nodes`) -- the diff is
+// always exactly the field name, nothing else.
 
 use willikins_types::DomainType;
 

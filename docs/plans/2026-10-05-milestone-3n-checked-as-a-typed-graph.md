@@ -90,6 +90,28 @@ and the private fake-backed `operator_*` targets stayed green.
    --workspace --all-targets --all-features --keep-going`, which enumerates every error across the whole workspace,
    gated targets included, in one pass. Later tasks touching call sites across the workspace (B2 above all) should
    use this form, not a plain `--all-targets` run, to see every remaining site at once.
+**Addendum:** 2026-10-11 (task G1). Three points not spelled out by decisions (g1), (g6) or (s3).
+
+1. **A third S1-to-G7 bridge, `Checked::declared_node`.** (s1) names `workflow()` and S1's own addendum names
+   `edges()`, both "deleted by G7". G1 needs a third: `Shape` carries no ports until G3/G4, so `plan.rs` and
+   `apply.rs` still need a node's raw `with`/`for_each` `Binding`s to resolve it even once they walk
+   `checked.nodes()` instead of `checked.order()`. `declared_node(&self, node: &CheckedNode) -> &Node` indexes
+   `self.workflow.nodes` by `node.declared_at` (a `let ... else { unreachable!(...) }` inside `check.rs`, not a
+   `plan.rs`/`apply.rs` assertion, so it does not count against the ratchet) and is deleted on the same G7 schedule.
+2. **`Shape`'s own `Debug` is hand-written, not derived**, for a reason beyond (s3)'s (which only covers `Checked`'s
+   and `CheckedNode`'s, forced by `Arc<dyn Tool>`). `rustc`'s dead-code lint explicitly ignores a derived impl's own
+   field reads (its diagnostic says so verbatim), so with `Shape::Each`'s `id` and `element` read by nothing but a
+   derived `Debug`/`Clone` until G3 gives them a real use, `#[derive(Debug)]` on `Shape` fails `-D warnings` on the
+   plain `lib` target (unit tests are a separate, `cfg(test)` target the dead-code pass for `lib` does not see).
+   Printing `id`/`element` by hand reads them for real rather than reaching for `#[allow(dead_code)]`.
+3. **Adding `Checked`'s seventh field moves `tests/sealed/fail/struct_literal.stderr`.** S2's trybuild fixture
+   builds `Checked { order: Vec::new(), ..checked }` and pins rustc's own enumeration of every other private field
+   in its `.stderr`; adding `nodes` makes rustc list it too, in both the explicit-field and the `..checked` halves
+   of the message. Regenerated with `TRYBUILD=overwrite`; the diff is exactly `nodes` appearing in the two field
+   lists, nothing else. `tests/sealed/fail/private_field_read.stderr` (which names only `types`) is untouched. This
+   is not an acceptance-6 "byte-identical" drift -- that item is runtime artifacts (characterization, fixtures,
+   plan JSON, journal, composition snapshot) -- but it is still a pinned file moving, so it is recorded here rather
+   than silently overwritten.
 
 ## Goal
 
