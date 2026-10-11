@@ -254,6 +254,95 @@ Ratchet, pinned today (lowered, never raised, per SHARED VALUES): `plan.rs` 29 (
    count holds exactly. Scoped gates green: `-p willikins-core` (clippy, fmt, 294 tests, 2
    doctests) and `-p willikins-dsl` (153 tests, both characterization snapshots unchanged, no
    `.snap.new`).
+**Addendum:** 2026-10-11 (task G5). Five points not spelled out by decision (g4) or SHARED
+VALUES.
+
+1. **`Source::Step`/`Aggregate`/`Keyed` carry only the producing node's typed id (G1), never its
+   name, but `GateTracking` stays `NodeName`-keyed** -- `BlockedGate` (and so the plan JSON) is
+   keyed by name, unchanged. Two tables, `single_names`/`each_names: Vec<NodeName>`, translate an
+   id straight back to its node's own name; built once, before the node loop, by filtering
+   `checked.nodes()` by `Shape` kind. This is sound because `checked.nodes()` is already in the
+   same topological order `check` minted `SingleId`/`EachId` in within each kind (SHARED VALUES),
+   so `single_names[id.0]`/`each_names[id.0]` is always that id's own node -- no separate id-to-
+   name map maintained by `check` was needed.
+2. **`Bound::List`'s per-element recursion is its own method, `collect_bound_causes`, not folded
+   into `collect_causes`.** `collect_causes` now takes a `&Source<I>` (never a `Bound<I>`), so a
+   list port's elements are walked by a second, one-line-bodied method that dispatches
+   `Bound::Scalar`'s one source or `Bound::List`'s several to the same `collect_causes`, exactly
+   mirroring today's `Binding::List` recursion.
+3. **The old `Binding::Step` arm's `self.instances` branch moved to `Source::Aggregate`, not
+   `Source::Step`.** Today's single `Binding::Step` arm served two cases the new `Source` enum
+   splits: a `Step` onto a `Shape::Single` node (never blocked per-instance -- only
+   `mark_blocked(..., None, ...)` ever populates `self.whole` for such a node, never
+   `self.instances`) and a `Step` onto a `Shape::Each` node, aggregating every instance (G1's
+   `Source::Aggregate`). `Source::Step`'s own arm therefore checks only `self.whole`;
+   `Source::Aggregate`'s checks `self.whole` and `self.instances`, inheriting the old branch
+   verbatim -- any one blocked instance still taints the whole aggregate, forcing its consumer to
+   `Skip` rather than merely resolving `Unknown` (pinned today by
+   `a_blocked_gate_skips_its_dependents_and_leaves_every_other_branch_alone`'s `consumer` case,
+   unchanged).
+4. **`mark_blocked` lost its own `spec: &ToolSpec` parameter.** Adding `checked_inputs` and
+   `ports` to resolve `awaiting_inputs` over `Source`s brought it to 8 arguments including
+   `&mut self`, one past `clippy::too_many_arguments`'s default threshold of 7. `spec` is always
+   reachable through the `tool: &dyn Tool` parameter already there (`tool.spec()`), so it was
+   never its own fact -- dropped rather than `#[allow]`ed, read once at the top of the function
+   body instead.
+5. **`plan.rs`'s local `declared_node()` call is gone, not just its two callers' bindings.**
+   `walk()`'s per-node `let node = checked.declared_node(checked_node);` existed only to read
+   `node.for_each`/`node.with` for gate-cause collection and `mark_blocked`'s `bindings` argument;
+   once both read `checked_node.shape` instead, nothing in `plan.rs` calls `declared_node` any
+   more. `Checked::declared_node` itself is untouched and still has a live caller:
+   `apply.rs` (G6's own scope), so it is not dead code crate-wide.
+
+Three more things found while landing it, worth recording so a later G task does not re-derive
+them:
+
+6. **`plan` never applies an input's own default -- only `describe` does.** The acceptance-9 test's
+   first draft hand-built an empty `IndexMap<InputName, Value>` and called `plan` directly, the
+   same shape the existing `OperatorAcknowledgement`-only ack tests use. It failed red with
+   `PlanError::MissingInput { input: "items" }`, not the expected `awaiting_inputs` swap, because
+   `items` (the `for_each` source, `list<Text>`) is not an awaited acknowledgement and so is not
+   defaulted by `resolve_input_source`; the ack tests get away with an empty map only because
+   every input they declare is awaited. The fix resolves inputs through `describe(&checked,
+   &PartialInputs::new())` first (the same shape `acceptance_7_a_linked_acknowledgement_gate_...`
+   already uses), so `items`' default lands in `description.resolved` while both acknowledgement
+   inputs stay in `awaiting`. The true red (the sorted-order swap, `[ack_a_input, ack_b_input]`
+   vs `[ack_b_input, ack_a_input]`) was then produced by temporarily disabling
+   `unresolved.sort_by_key(...)` and confirmed before restoring it.
+7. **One of the six `Binding::` doc links fully-qualified while removing `plan.rs`'s `use` import
+   cannot be qualified without moving a pinned schema snapshot.** `PlannedNode::instance`'s field
+   doc (`[`Binding::Keyed`]`) is embedded verbatim, brackets and all, as the `description` string
+   `schemars` writes into `Plan`'s and `PlannedNode`'s own JSON Schema
+   (`tests/it/schema_generation.rs`'s two insta snapshots) -- schemars copies the raw doc comment
+   text, it does not resolve or rewrite an intra-doc link. Qualifying it to
+   `` [`crate::workflow::Binding::Keyed`] `` (as the other five were, each on the module doc, a
+   private item, or `PlanError` -- which derives only `Serialize`, never `JsonSchema`) produced
+   two `.snap.new` files. Reverted to the
+   original, unqualified text to keep both snapshots byte-identical (acceptance 6); the link is
+   now unresolved (rustdoc's `broken_intra_doc_links` is warn-level, not in any gate, so nothing
+   fails). **Flagged for the coordinator:** re-pinning those two snapshots with a qualified path
+   is a deliberate, separate change for whichever task next touches `plan.rs`'s doc comments on a
+   `JsonSchema`-deriving type (`Action`, `Plan`, `PlannedNode`, `Replacing`, `BlockedGate`), not
+   something this task should do silently. The same caution applies to any future doc edit on
+   those five types.
+8. **G7's own tripwire extension (acceptance 7, "non-test `plan.rs` contains no `Binding`") needs
+   to skip comment text, not just code.** After this task, `plan.rs` names `Binding` fifteen
+   times, every one inside a `///`/`//!` doc comment or a `//` line comment: the module doc (2),
+   the now-unresolved `PlannedNode::instance` link (1), three `PlanError` variant docs (3),
+   `resolve_source`'s doc (1), `ResolveCtx`'s doc (1), `key_for_each_items`'s doc (1), `walk`'s own
+   two line comments (2), `collect_causes`'s doc (2), `collect_bound_causes`'s doc (1), and
+   `bind_ports`'s doc (1) -- zero as an executable token. The existing `probe_conversion` tripwire
+   (`check.rs`'s own unit tests) greps a whole file's raw text with `include_str!` +
+   `.contains(...)`, which would false-positive on every one of these. G7's extension needs either
+   a comment-stripping pass first or a match on the code token `Binding::`/`Binding(` rather than
+   the bare substring `Binding`.
+
+Ratchet, pinned today (unmoved, per SHARED VALUES -- lowers only): `plan.rs` stays 10. No
+`unreachable!`/`.expect(`/`.unwrap()`/`panic!` was added or removed; `single_names[from.0 as
+usize]`/`each_names[from.0 as usize]` are bounds-checked indexes into tables sized by construction
+from `checked.nodes()` itself, the same "indexes, not proofs" category `check`'s own module doc
+already puts every other typed id in, not a new fallback. `apply.rs` and `describe.rs` untouched
+at 5 and 1.
 
 ## Goal
 
