@@ -5846,6 +5846,54 @@ mod tests {
         );
     }
 
+    /// Milestone 3n's X1 adversarial pass (2026-10-11), extending
+    /// acceptance 13: the non-secret case above covers an ordinary
+    /// literal, but a *non-secret, identifier-typed* literal is a
+    /// different case `check_literal` does not refuse (only
+    /// [`CheckError::SecretLiteral`] stops a literal binding) and the
+    /// existing test never exercised. `Value`'s own `Debug` masks an
+    /// identifier (milestone 3i, decision (b4)) through
+    /// [`crate::value::Disclosure::Masked`] no matter what container holds
+    /// it, so a bound `Source::Literal(Value)` of `AppleCertificateId`
+    /// (not `AppleBundleIdentifier`, whose own `#[domain(...)]` carries no
+    /// `identifier` flag at all -- the bundle identifier string itself is
+    /// not masked, only Apple's own opaque record ids for it are) must
+    /// print only its masked prefix.
+    #[test]
+    fn debug_of_a_checked_workflow_masks_an_identifier_typed_literal() {
+        let spec = spec_of(
+            "test.id_sink",
+            &[("id", exact("AppleCertificateId"), true)],
+            &[],
+            &[],
+            Class::Reversible,
+            false,
+        );
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(Arc::new(DummyTool { spec })).unwrap();
+        let workflow = Workflow::new(workflow_name("debug-identifier-literal")).node(
+            node_name("sink"),
+            Node::new(tool_name("test.id_sink"))
+                .port(port("id"), Binding::Literal("C3RT1F1CATE9".to_string())),
+        );
+        let checked =
+            check(&workflow, &catalog).expect("an identifier literal is not a secret literal");
+        let rendered = format!("{checked:?}");
+        assert!(
+            !rendered.contains("C3RT1F1CATE9"),
+            "an identifier-typed bound literal must never print whole: {rendered}"
+        );
+        assert!(
+            rendered.contains("C3RT..."),
+            "it must print its masked prefix instead: {rendered}"
+        );
+        assert!(
+            rendered.contains("AppleCertificateId"),
+            "the port's declared type must still print, so a future change that drops the port \
+             entirely cannot pass this test by printing nothing: {rendered}"
+        );
+    }
+
     // ---------------------------------------------------------------------
     // Milestone 3n, task G3: `Source`, `PortEdge`, `Bound::Scalar`,
     // `CheckedOutput` and the `for_each` source.
