@@ -2823,6 +2823,33 @@ mod conversions {
         );
     }
 
+    /// Milestone 3n's X1 adversarial pass (2026-10-11): the F-slice pass's
+    /// own residual, "no plan-time test covers a scalar same-named
+    /// impostor" -- `a_scalar_output_on_a_list_port_is_refused_where_produced`
+    /// and its two siblings above cover the list-flag and `Unknown`-typed
+    /// gaps the `TypeId` loop alone misses, but none of the three gives a
+    /// *pure* tool a known, same-named impostor to return from `read`
+    /// itself (`Observation::Present`, checked by `fill_outputs` inside
+    /// `plan_one`, never `apply`). `apply_refuses_a_same_named_impostor_from_ensure_where_it_is_produced`,
+    /// just below, covers the same wording but only once `ensure` has
+    /// already run, at apply time -- a mutation disabling the `TypeId`
+    /// loop entirely (`check_output_type`'s `registry.type_matches` call)
+    /// is killed by that one test and `a_list_outputs_misnamed_element_is_refused_with_the_declared_name_fallback`
+    /// alone, both `apply`-time, which is exactly how a plan-time gap in
+    /// this same check would hide: this test is the plan-time half.
+    #[test]
+    fn a_known_scalar_impostor_at_plan_time_is_refused_where_produced() {
+        assert_eq!(
+            plan_refusal_for(
+                scalar("ConvA"),
+                Value::known(impostor::ConvA::parse("imp").unwrap()),
+                true,
+            ),
+            "returned output `out` as a value of another Rust type declared as `ConvA`, but \
+             its spec declares `ConvA`"
+        );
+    }
+
     /// A non-pure source whose `read` cannot predict its `out` (a
     /// `ConvA`), like `UnknownAtPlan`, but whose `ensure` returns a
     /// same-named *impostor* rather than a real `ConvA`. This is the one
