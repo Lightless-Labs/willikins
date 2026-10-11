@@ -16,14 +16,12 @@
 //! `inputs` are reused for every port bound by [`Binding::Literal`],
 //! [`Binding::Input`], and [`Binding::Item`] — none of which can change
 //! mid-run, since none of them depend on another node's output — and only
-//! a [`Binding::Step`] or [`Binding::Keyed`] port is re-resolved, against
-//! this run's own accumulating results, through the very same
-//! [`crate::plan::resolve_binding`] (and the [`crate::plan::ResolveCtx`],
-//! [`crate::plan::NodeResult`] it walks) that `plan` itself uses: one
-//! resolver, fed two different result tables, rather than a second copy of
-//! `plan`'s own logic.
-
-use std::collections::HashMap;
+//! a `Source::Step`/`Source::Aggregate`/`Source::Keyed` port (or a
+//! [`Bound::List`] holding one) is re-resolved, against this run's own
+//! accumulating typed result tables, through the very same
+//! [`crate::plan::resolve_source`] (and the [`crate::plan::ResolveCtx`] it
+//! reads) that `plan` itself uses: one resolver, fed two different result
+//! tables, rather than a second copy of `plan`'s own logic.
 
 use indexmap::IndexMap;
 
@@ -31,9 +29,8 @@ use crate::check::{Bound, Checked, Shape, Source};
 use crate::class::Class;
 use crate::plan::{Action, BlockedGate, Group, Plan, PlannedNode};
 use crate::plan::{
-    EachInstanceResult, EachResult, FilledOutputs, ForEachInstance, InstanceFingerprint,
-    NodeResult, PlanError, ResolveCtx, SingleResult, Walk, fill_outputs, resolve_and_deliver,
-    resolve_source, walk,
+    EachInstanceResult, EachResult, FilledOutputs, InstanceFingerprint, PlanError, ResolveCtx,
+    SingleResult, Walk, fill_outputs, resolve_list_source, resolve_source, walk,
 };
 use crate::site::Site;
 use crate::tool::{Ensured, Inputs, Outputs, PortName, Tool, ToolError, ToolErrorKind};
@@ -602,17 +599,15 @@ pub fn apply(
     // 3n, decision (g6)): a `for_each` node whose source has zero items
     // contributes no entry at all to `fresh.plan.nodes` (`plan` never
     // expands it), so driving the walk from `fresh.plan.nodes` would skip
-    // such a node outright and leave it with no `results` entry at all --
-    // decision (f1), point 1. Walking `checked.nodes()` instead visits
-    // every node; its own `Group` already says whether it was wholly
-    // skipped, planned as one instance, or expanded into several, with no
-    // need to scan `fresh.plan.nodes` for a run of the same name.
-    let workflow = checked.workflow();
-    let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
-    // Typed siblings of `results` (milestone 3n, decision (g1)), on the
-    // same bridge schedule as `crate::plan::walk`'s own `single`/`each`:
-    // pushed in lockstep with `checked.nodes()`, which mints
-    // `SingleId`/`EachId` in exactly this order within each kind.
+    // such a node outright -- decision (f1), point 1. Walking
+    // `checked.nodes()` instead visits every node; its own `Group` already
+    // says whether it was wholly skipped, planned as one instance, or
+    // expanded into several, with no need to scan `fresh.plan.nodes` for a
+    // run of the same name.
+    //
+    // Pushed in lockstep with `checked.nodes()`, which mints
+    // `SingleId`/`EachId` in exactly this order within each kind
+    // (milestone 3n, decision (g1)).
     let mut single_results: Vec<SingleResult> = Vec::new();
     let mut each_results: Vec<EachResult> = Vec::new();
     let mut applied_nodes: Vec<AppliedNode> = Vec::new();
@@ -640,7 +635,7 @@ pub fn apply(
         };
         let is_each = matches!(&checked_node.shape, Shape::Each { .. });
 
-        let node_result = match group {
+        match group {
             // A whole-node `Action::Skip` (decision (j), point 3): plans
             // as a single instance, whatever `node.for_each` says, and
             // `apply_instance` reports it `Skipped` with no tool call --
@@ -650,7 +645,6 @@ pub fn apply(
                     checked,
                     inputs,
                     catalog,
-                    &results,
                     &single_results,
                     &each_results,
                     node,
@@ -670,14 +664,12 @@ pub fn apply(
                 } else {
                     single_results.push(SingleResult::Skipped);
                 }
-                NodeResult::Skipped
             }
             Group::Single { planned } => {
                 let (outputs, _blocked) = apply_instance(
                     checked,
                     inputs,
                     catalog,
-                    &results,
                     &single_results,
                     &each_results,
                     node,
@@ -692,18 +684,15 @@ pub fn apply(
                     observer,
                     &mut applied_nodes,
                 )?;
-                single_results.push(SingleResult::Outputs(FilledOutputs::from(outputs.clone())));
-                NodeResult::Scalar(outputs)
+                single_results.push(SingleResult::Outputs(FilledOutputs::from(outputs)));
             }
             Group::Each { instances } => {
-                let mut each = Vec::with_capacity(instances.len());
                 let mut each_instance_results = Vec::with_capacity(instances.len());
                 for instance in instances {
                     let (outputs, blocked) = apply_instance(
                         checked,
                         inputs,
                         catalog,
-                        &results,
                         &single_results,
                         &each_results,
                         node,
@@ -718,11 +707,6 @@ pub fn apply(
                         observer,
                         &mut applied_nodes,
                     )?;
-                    each.push(ForEachInstance {
-                        key: instance.key.clone(),
-                        outputs: outputs.clone(),
-                        blocked,
-                    });
                     each_instance_results.push(EachInstanceResult {
                         key: instance.key.clone(),
                         outputs: FilledOutputs::from(outputs),
@@ -730,22 +714,15 @@ pub fn apply(
                     });
                 }
                 each_results.push(EachResult::Instances(each_instance_results));
-                NodeResult::ForEach(each)
             }
-        };
-        results.insert(name.clone(), node_result);
+        }
     }
 
     // Rule 5.
-    let types = checked.edges();
     let mut outputs = IndexMap::new();
     let ctx = ResolveCtx {
-        workflow,
         checked_inputs: checked.inputs(),
         inputs,
-        catalog,
-        results: &results,
-        edges: types,
         single: &single_results,
         each: &each_results,
     };
@@ -802,6 +779,10 @@ fn erase_ports<I>(ports: &[crate::check::PortEdge<I>]) -> Vec<crate::check::Port
                     source: erase_source(source),
                     edge: edge.clone(),
                 },
+                Bound::List { elements, edge } => Bound::List {
+                    elements: elements.iter().map(erase_source).collect(),
+                    edge: edge.clone(),
+                },
             },
         })
         .collect()
@@ -843,7 +824,6 @@ fn apply_instance(
     checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
     catalog: &Catalog,
-    results: &HashMap<NodeName, NodeResult>,
     single: &[SingleResult],
     each: &[EachResult],
     node: &Node,
@@ -896,9 +876,8 @@ fn apply_instance(
         return Ok((outputs, blocked));
     }
 
-    let resolved_inputs = resolve_instance_inputs(
-        checked, inputs, catalog, results, single, each, node, ports, planned, item,
-    )?;
+    let resolved_inputs =
+        resolve_instance_inputs(checked, inputs, single, each, ports, planned, item)?;
 
     if spec.pure {
         let outputs = planned.outputs.clone();
@@ -1120,102 +1099,92 @@ fn not_run_tail(remaining: &[PlannedNode]) -> Vec<AppliedNode> {
 
 /// Resolve `planned`'s inputs the way this run has actually gone so far:
 /// start from the values [`plan`] itself resolved (correct for every port
-/// bound by [`Binding::Literal`], [`Binding::Input`], or [`Binding::Item`],
+/// bound by a [`Source::Literal`], [`Source::Input`] or [`Source::Item`],
 /// none of which can change mid-run), then re-resolve every port whose
-/// binding [`binding_may_change_mid_run`] -- a [`Binding::Step`] or
-/// [`Binding::Keyed`], or a [`Binding::List`] holding one -- against
-/// `results`, this run's own accumulating outputs, delivering each through
-/// the edge (or, for a list, the per-element edges) `check` recorded for
-/// it, exactly as [`plan`] delivered the rest.
+/// source [`source_may_change_mid_run`] -- a `Step`, `Aggregate` or
+/// `Keyed` source, or a [`Bound::List`] holding one -- against this run's
+/// own accumulating typed result tables, delivering each through the edge
+/// (or, for a list, the per-element edges) `check` recorded for it,
+/// exactly as [`plan`] delivered the rest.
 ///
 /// `item` is this instance's own `for_each` item, exactly the [`Value`]
 /// [`crate::plan::walk`] recorded for it (`None` for a node with no
-/// `for_each`). A re-resolved [`Binding::List`] may hold a
-/// [`Binding::Item`] element beside a [`Binding::Step`] or
-/// [`Binding::Keyed`] one -- the list as a whole needs re-resolving because
-/// of the latter, but every element, including the `Item` one, is
-/// re-resolved together (decision (f1), point 2). Passing `None` here
-/// would hit `resolve_binding`'s own "`check` rejects `item` used outside
-/// a `for_each` node" panic for that element, since `check` accepted it
-/// precisely because it is inside one.
+/// `for_each`). A re-resolved [`Bound::List`] may hold a [`Source::Item`]
+/// element beside a `Step`/`Aggregate`/`Keyed` one -- the list as a whole
+/// needs re-resolving because of the latter, but every element, including
+/// the `Item` one, is re-resolved together (decision (f1), point 2).
 #[allow(clippy::too_many_arguments)] // single/each (milestone 3n, G3) join the existing shape
 fn resolve_instance_inputs(
     checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
-    catalog: &Catalog,
-    results: &HashMap<NodeName, NodeResult>,
     single: &[SingleResult],
     each: &[EachResult],
-    node: &Node,
     ports: &[crate::check::PortEdge<()>],
     planned: &PlannedNode,
     item: Option<&Value>,
 ) -> Result<Inputs, ApplyError> {
     let mut resolved = planned.inputs.clone();
-    let types = checked.edges();
     let ctx = ResolveCtx {
-        workflow: checked.workflow(),
         checked_inputs: checked.inputs(),
         inputs,
-        catalog,
-        results,
-        edges: types,
         single,
         each,
     };
-    // Scalar ports (milestone 3n, G3): a `Step`/`Keyed` source -- the only
-    // ones that can change mid-run -- is re-resolved straight off its own
-    // `Source`, through `ctx.single`/`ctx.each`, with no `Binding` match.
-    // `Literal`, `Input` and `Item` never change mid-run (see this
-    // function's own module doc), so they are skipped exactly as
-    // [`binding_may_change_mid_run`] would skip their `Binding` kind.
     for port_edge in ports {
-        let Bound::Scalar { source, edge } = &port_edge.bound;
-        if !matches!(
-            source,
-            Source::Step { .. } | Source::Aggregate { .. } | Source::Keyed { .. }
-        ) {
-            continue;
-        }
-        let site = Site::Port {
-            node: planned.name.clone(),
-            port: port_edge.port.clone(),
-        };
-        let raw = resolve_source(&ctx, source, &site, item)
-            .map_err(|error| ApplyError::Plan { error })?;
-        let delivered = edge.deliver(raw).map_err(|mismatch| ApplyError::Plan {
-            error: PlanError::EdgeTypeMismatch {
-                site,
-                expected: mismatch.expected,
-                found: mismatch.found,
-            },
-        })?;
-        resolved.insert(port_edge.port.clone(), delivered);
-    }
-    // List-bound ports have no `PortEdge` yet (G4): still resolved the
-    // older way, through `node.with` directly.
-    for (port, binding) in &node.with {
-        if matches!(binding, Binding::List(_)) && binding_may_change_mid_run(binding) {
-            let delivered = resolve_and_deliver(&ctx, &planned.name, port, binding, item)
-                .map_err(|error| ApplyError::Plan { error })?;
-            resolved.insert(port.clone(), delivered);
+        match &port_edge.bound {
+            // Scalar ports (milestone 3n, G3): a `Step`/`Aggregate`/`Keyed`
+            // source -- the only ones that can change mid-run -- is
+            // re-resolved straight off its own `Source`, through
+            // `ctx.single`/`ctx.each`, with no `Binding` match.
+            // `Literal`, `Input` and `Item` never change mid-run (see this
+            // function's own module doc), so they are skipped.
+            Bound::Scalar { source, edge } => {
+                if !source_may_change_mid_run(source) {
+                    continue;
+                }
+                let site = Site::Port {
+                    node: planned.name.clone(),
+                    port: port_edge.port.clone(),
+                };
+                let raw = resolve_source(&ctx, source, &site, item)
+                    .map_err(|error| ApplyError::Plan { error })?;
+                let delivered = edge.deliver(raw).map_err(|mismatch| ApplyError::Plan {
+                    error: PlanError::EdgeTypeMismatch {
+                        site,
+                        expected: mismatch.expected,
+                        found: mismatch.found,
+                    },
+                })?;
+                resolved.insert(port_edge.port.clone(), delivered);
+            }
+            // List ports (milestone 3n, G4): re-resolved as a whole the
+            // moment any one element may change mid-run -- the same rule
+            // the scalar case applies, over every element instead of one
+            // source.
+            Bound::List { elements, edge } => {
+                if !elements.iter().any(source_may_change_mid_run) {
+                    continue;
+                }
+                let delivered =
+                    resolve_list_source(&ctx, &planned.name, &port_edge.port, elements, edge, item)
+                        .map_err(|error| ApplyError::Plan { error })?;
+                resolved.insert(port_edge.port.clone(), delivered);
+            }
         }
     }
     Ok(resolved)
 }
 
-/// Whether `binding` can resolve to a different value partway through a
-/// run than [`plan`] itself saw: a [`Binding::Step`] or [`Binding::Keyed`]
-/// reference (an earlier node's output, re-read as this run's own nodes
-/// finish), or a [`Binding::List`] holding one anywhere among its
-/// elements. [`Binding::Input`], [`Binding::Item`], and [`Binding::Literal`]
-/// can never change mid-run — see [`resolve_instance_inputs`].
-fn binding_may_change_mid_run(binding: &Binding) -> bool {
-    match binding {
-        Binding::Step { .. } | Binding::Keyed { .. } => true,
-        Binding::List(elements) => elements.iter().any(binding_may_change_mid_run),
-        Binding::Input(_) | Binding::Item | Binding::Literal(_) => false,
-    }
+/// Whether a [`Source`] can resolve to a different value partway through a
+/// run than [`plan`] itself saw: `Step`, `Aggregate` and `Keyed` (an
+/// earlier node's output, re-read as this run's own nodes finish).
+/// `Literal`, `Input` and `Item` can never change mid-run — see
+/// [`resolve_instance_inputs`].
+fn source_may_change_mid_run<I>(source: &Source<I>) -> bool {
+    matches!(
+        source,
+        Source::Step { .. } | Source::Aggregate { .. } | Source::Keyed { .. }
+    )
 }
 
 /// Where an unknown required input's value was supposed to come from.

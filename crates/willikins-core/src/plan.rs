@@ -77,7 +77,7 @@ use crate::tool::{
     Inputs, Observation, Outputs, PortName, Tool, ToolError, ToolErrorKind, ToolName, ToolSpec,
 };
 use crate::value::{PortType, TypeName, TypeRef, TypeRegistry, Value, reported_type_name_or};
-use crate::workflow::{Binding, InputName, Node, NodeName, OutputName, Workflow};
+use crate::workflow::{Binding, InputName, NodeName, OutputName, Workflow};
 
 /// What `plan` decided to do for one node instance.
 #[derive(
@@ -595,34 +595,6 @@ impl std::fmt::Display for PlanError {
 
 impl std::error::Error for PlanError {}
 
-/// One instance of a `for_each` node: its item's canonical string (the key
-/// a [`Binding::Keyed`] matches against), its planned outputs, and whether
-/// this instance's own [`Action`] was [`Action::Blocked`] — a gate applied
-/// per item, some of whose instances may be satisfied while others are not.
-pub(crate) struct ForEachInstance {
-    pub(crate) key: String,
-    pub(crate) outputs: Outputs,
-    pub(crate) blocked: bool,
-}
-
-/// What a node resolved to, once planned: a single set of outputs for a
-/// node with no `for_each`, one set per instance for one that has it, or
-/// nothing at all for a node [`plan`] decided never to read.
-pub(crate) enum NodeResult {
-    /// A node with no `for_each`.
-    Scalar(Outputs),
-    /// A `for_each` node's instances, in source-list order.
-    ForEach(Vec<ForEachInstance>),
-    /// This whole node plans [`Action::Skip`]: either it directly binds a
-    /// blocked or skipped node, or (for a `for_each` node) its own source
-    /// does. Never read; every output port resolves
-    /// [`crate::value::ValueState::Unknown`]. Kept distinct from
-    /// `ForEach(vec![])` on purpose: an empty instance list would let
-    /// [`aggregate_for_each_port`] hand back a **known** empty list, which
-    /// is wrong — decision (j), point 3.
-    Skipped,
-}
-
 /// Identifies one [`BlockedGate`] (or, transiently, any blocked/skipped
 /// node instance while [`plan`] is walking the graph): a node name, and,
 /// for a `for_each` node, the specific instance key — `None` for a node
@@ -654,22 +626,17 @@ impl From<Outputs> for FilledOutputs {
 }
 
 /// What a [`Shape::Single`] node resolved to, indexed by its own
-/// [`SingleId`](crate::check::SingleId) (milestone 3n, decision (g1)): a
-/// typed sibling of [`NodeResult::Scalar`]/[`NodeResult::Skipped`], read by
-/// [`Source::Step`]'s own resolution instead of a second lookup by name.
-/// Bridge table, alongside the older by-name `HashMap<NodeName, NodeResult>`
-/// -- not yet a replacement for it, since the `for_each` gate-collection and
-/// list-port paths (G4/G5) still read the older one. Deleted once they do
-/// not.
+/// [`SingleId`](crate::check::SingleId) (milestone 3n, decision (g1)),
+/// read by [`Source::Step`]'s own resolution with no lookup by name.
 pub(crate) enum SingleResult {
     Outputs(FilledOutputs),
     Skipped,
 }
 
 /// One instance of a [`Shape::Each`] node's own typed result (milestone
-/// 3n, decision (g1)): mirrors [`ForEachInstance`], `outputs` as a
-/// [`FilledOutputs`] instead of a plain [`Outputs`] so [`Source::Aggregate`]/
-/// [`Source::Keyed`] can resolve by [`OutputSlot`].
+/// 3n, decision (g1)): `outputs` as a [`FilledOutputs`] instead of a
+/// plain [`Outputs`] so [`Source::Aggregate`]/[`Source::Keyed`] can
+/// resolve by [`OutputSlot`].
 pub(crate) struct EachInstanceResult {
     pub(crate) key: String,
     pub(crate) outputs: FilledOutputs,
@@ -809,65 +776,21 @@ fn resolve_keyed_source(
         })
 }
 
-/// The read-only context every binding resolution needs: the workflow (for
-/// its node and input declarations), `check`'s own input table (milestone
-/// 3n, decision (g5): awaited-input status, read without a second
-/// registry lookup), the caller's resolved workflow inputs, the catalog
-/// (to re-derive a referenced node's tool spec), and every already-planned
-/// node's result; plus the edges `check` recorded, through which a node's
-/// input ports receive their values.
-///
-/// `single` and `each` (milestone 3n, decision (g1)) are the typed
-/// siblings of `results`: [`resolve_source`] reads them by id, with no
-/// name lookup. Still alongside `results`/`edges`, not yet in place of
-/// them -- the `for_each` gate-collection and list-port paths (G4/G5)
-/// still read the older, by-name tables.
+/// The read-only context every source resolution needs (milestone 3n,
+/// decision (g1)): `check`'s own input table (decision (g5): awaited-input
+/// status, read without a second registry lookup), the caller's resolved
+/// workflow inputs, and the two typed result tables [`resolve_source`]
+/// reads an id into, with no name lookup. `workflow`, `catalog`, `results`
+/// and `edges` -- the older, by-name bridges -- are gone as of G4: once
+/// list-bound ports resolve through [`Bound::List`] too, nothing left
+/// reads them (their one remaining reader, the old `Binding`-based
+/// resolver, went with this same task). This is exactly decision (g2)'s
+/// end state for this type, reached early.
 pub(crate) struct ResolveCtx<'a> {
-    pub(crate) workflow: &'a Workflow,
     pub(crate) checked_inputs: &'a [CheckedInput],
     pub(crate) inputs: &'a IndexMap<InputName, Value>,
-    pub(crate) catalog: &'a Catalog,
-    pub(crate) results: &'a HashMap<NodeName, NodeResult>,
-    pub(crate) edges: &'a IndexMap<NodeName, IndexMap<PortName, Edge>>,
     pub(crate) single: &'a [SingleResult],
     pub(crate) each: &'a [EachResult],
-}
-
-impl ResolveCtx<'_> {
-    /// The value `node`.`port` receives: `value` delivered through the
-    /// edge `check` recorded ([`Edge::deliver`]). A missing edge means
-    /// `check` recorded no conversion for this port, so the value passes
-    /// through unchanged: that is the behaviour before milestone 3d
-    /// exactly, and needs no assertion.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PlanError::EdgeTypeMismatch`], naming `node` and `port`,
-    /// when the edge carries a conversion and `value` is not of its
-    /// declared source type. Unreachable for a `Checked` `check` itself
-    /// built; reachable through one built or edited by hand (follow-up to
-    /// milestone 3d, 2026-09-24). Never a panic, and never the value's own
-    /// content.
-    pub(crate) fn deliver(
-        &self,
-        node: &NodeName,
-        port: &PortName,
-        value: Value,
-    ) -> Result<Value, PlanError> {
-        match self.edges.get(node).and_then(|ports| ports.get(port)) {
-            Some(edge) => edge
-                .deliver(value)
-                .map_err(|mismatch| PlanError::EdgeTypeMismatch {
-                    site: Site::Port {
-                        node: node.clone(),
-                        port: port.clone(),
-                    },
-                    expected: mismatch.expected,
-                    found: mismatch.found,
-                }),
-            None => Ok(value),
-        }
-    }
 }
 
 /// Key `items`, a `for_each` node's source items, naming every one by
@@ -997,12 +920,10 @@ pub(crate) fn walk(
     let workflow = checked.workflow();
     check_input_types(checked.inputs(), inputs)?;
     check_fixed_inputs(workflow, inputs)?;
-    let types = checked.edges();
-    let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
-    // Typed siblings of `results` (milestone 3n, decision (g1)): pushed in
-    // lockstep with `checked.nodes()`'s own topological walk, which is
-    // exactly the order `check` minted `SingleId`/`EachId` in within each
-    // kind, so a push here always lands at the id just minted.
+    // Pushed in lockstep with `checked.nodes()`'s own topological walk,
+    // which is exactly the order `check` minted `SingleId`/`EachId` in
+    // within each kind, so a push here always lands at the id just
+    // minted (milestone 3n, decision (g1)).
     let mut single: Vec<SingleResult> = Vec::new();
     let mut each: Vec<EachResult> = Vec::new();
     let mut planned: Vec<PlannedNode> = Vec::new();
@@ -1022,12 +943,8 @@ pub(crate) fn walk(
         let tool = checked_node.tool.as_ref();
         let spec = tool.spec();
         let ctx = ResolveCtx {
-            workflow,
             checked_inputs: checked.inputs(),
             inputs,
-            catalog,
-            results: &results,
-            edges: types,
             single: &single,
             each: &each,
         };
@@ -1067,14 +984,13 @@ pub(crate) fn walk(
                 Shape::Single { .. } => single.push(SingleResult::Skipped),
                 Shape::Each { .. } => each.push(EachResult::Skipped),
             }
-            results.insert(name.clone(), NodeResult::Skipped);
             gates.mark_whole_skipped(name.clone(), causes);
             continue;
         }
 
-        let result = match &checked_node.shape {
+        match &checked_node.shape {
             Shape::Single { ports, .. } => {
-                let bound = bind_ports(&ctx, name, node, spec, ports, None)?;
+                let bound = bind_ports(&ctx, name, spec, ports, None)?;
                 let node_plan = plan_one(name, None, spec, tool, bound, catalog.registry())?;
                 if node_plan.action == Action::Blocked {
                     gates.mark_blocked(
@@ -1090,13 +1006,12 @@ pub(crate) fn walk(
                     replacing.push(replacing_entry(name.clone(), None, spec, &node_plan.inputs));
                 }
                 let outputs = node_plan.outputs.clone();
-                single.push(SingleResult::Outputs(FilledOutputs::from(outputs.clone())));
+                single.push(SingleResult::Outputs(FilledOutputs::from(outputs)));
                 let planned_idx = planned.len();
                 planned.push(node_plan);
                 groups.push(Group::Single {
                     planned: planned_idx,
                 });
-                NodeResult::Scalar(outputs)
             }
             Shape::Each { source, ports, .. } => {
                 let site = Site::ForEach { node: name.clone() };
@@ -1119,11 +1034,10 @@ pub(crate) fn walk(
                         });
                     }
                 }
-                let mut instances = Vec::with_capacity(keyed.len());
                 let mut each_instance_results = Vec::with_capacity(keyed.len());
                 let mut group_instances = Vec::with_capacity(keyed.len());
                 for (item_value, key) in keyed {
-                    let bound = bind_ports(&ctx, name, node, spec, ports, Some(&item_value))?;
+                    let bound = bind_ports(&ctx, name, spec, ports, Some(&item_value))?;
                     let node_plan = plan_one(
                         name,
                         Some(key.clone()),
@@ -1151,11 +1065,6 @@ pub(crate) fn walk(
                             &node_plan.inputs,
                         ));
                     }
-                    instances.push(ForEachInstance {
-                        key: key.clone(),
-                        outputs: node_plan.outputs.clone(),
-                        blocked,
-                    });
                     each_instance_results.push(EachInstanceResult {
                         key: key.clone(),
                         outputs: FilledOutputs::from(node_plan.outputs.clone()),
@@ -1173,20 +1082,14 @@ pub(crate) fn walk(
                 groups.push(Group::Each {
                     instances: group_instances,
                 });
-                NodeResult::ForEach(instances)
             }
-        };
-        results.insert(name.clone(), result);
+        }
     }
 
     let mut outputs = IndexMap::new();
     let ctx = ResolveCtx {
-        workflow,
         checked_inputs: checked.inputs(),
         inputs,
-        catalog,
-        results: &results,
-        edges: types,
         single: &single,
         each: &each,
     };
@@ -1473,127 +1376,88 @@ fn check_fixed_inputs(
     Ok(())
 }
 
-/// Resolve every one of `spec`'s input ports for `node` into an [`Inputs`]
-/// map, walking `spec.inputs` exactly once so the map's own insertion
-/// order stays the tool spec's own input order, bound ports only (SHARED
-/// VALUES, "Inputs map order"), whether a given port resolves through
-/// `ports` or through `node.with` directly: every bound **scalar** port
-/// has an entry in `ports` -- `check`'s own [`PortEdge`] table (milestone
-/// 3n, decision (g1), G3) -- resolved through [`resolve_source`] and
-/// [`Edge::deliver`], with no `Binding` match and no catalog lookup. A
-/// port bound to a [`Binding::List`] has no entry in `ports` yet (G4) and
-/// still resolves the older way, through [`resolve_list_binding`] over
-/// `node.with` directly. A port `check` did not require and `node` did
-/// not bind is simply absent from the result, either way.
+/// Resolve every one of `spec`'s input ports for `node_name` into an
+/// [`Inputs`] map, walking `spec.inputs` exactly once so the map's own
+/// insertion order stays the tool spec's own input order, bound ports only
+/// (SHARED VALUES, "Inputs map order"): every bound port, scalar or list
+/// alike, has an entry in `ports` -- `check`'s own [`PortEdge`] table
+/// (milestone 3n, decision (g1), G3/G4) -- resolved through
+/// [`resolve_source`]/[`resolve_list_source`] and [`Edge::deliver`], with
+/// no `Binding` match and no catalog lookup. A port `check` did not
+/// require and the node did not bind is simply absent from the result.
 fn bind_ports<I>(
     ctx: &ResolveCtx,
     node_name: &NodeName,
-    node: &Node,
     spec: &ToolSpec,
     ports: &[PortEdge<I>],
     item: Option<&Value>,
 ) -> Result<Inputs, PlanError> {
     let mut inputs = Inputs::new();
     for port in spec.inputs.keys() {
-        if let Some(port_edge) = ports.iter().find(|port_edge| &port_edge.port == port) {
-            let site = Site::Port {
-                node: node_name.clone(),
-                port: port.clone(),
-            };
-            let Bound::Scalar { source, edge } = &port_edge.bound;
-            let raw = resolve_source(ctx, source, &site, item)?;
-            let delivered = edge
-                .deliver(raw)
-                .map_err(|mismatch| PlanError::EdgeTypeMismatch {
-                    site,
-                    expected: mismatch.expected,
-                    found: mismatch.found,
-                })?;
-            inputs.insert(port.clone(), delivered);
-        } else if let Some(Binding::List(elements)) = node.with.get(port) {
-            let value = resolve_list_binding(ctx, node_name, port, elements, item)?;
-            inputs.insert(port.clone(), value);
+        let Some(port_edge) = ports.iter().find(|port_edge| &port_edge.port == port) else {
+            continue;
+        };
+        match &port_edge.bound {
+            Bound::Scalar { source, edge } => {
+                let site = Site::Port {
+                    node: node_name.clone(),
+                    port: port.clone(),
+                };
+                let raw = resolve_source(ctx, source, &site, item)?;
+                let delivered =
+                    edge.deliver(raw)
+                        .map_err(|mismatch| PlanError::EdgeTypeMismatch {
+                            site,
+                            expected: mismatch.expected,
+                            found: mismatch.found,
+                        })?;
+                inputs.insert(port.clone(), delivered);
+            }
+            Bound::List { elements, edge } => {
+                let value = resolve_list_source(ctx, node_name, port, elements, edge, item)?;
+                inputs.insert(port.clone(), value);
+            }
         }
     }
     Ok(inputs)
 }
 
-/// Resolve `binding`, bound at `node`.`port`, to its delivered [`Value`]:
-/// a [`Binding::List`] resolves and delivers each element through its own
-/// element edge and assembles a list ([`resolve_list_binding`]); anything
-/// else resolves through [`resolve_binding`] and delivers through the
-/// port's own edge ([`ResolveCtx::deliver`]), exactly as every binding did
-/// before milestone 3g. `item` is the current `for_each` item, when inside
-/// one.
-///
-/// # Errors
-///
-/// Whatever [`resolve_binding`] or [`ResolveCtx::deliver`] returns.
-pub(crate) fn resolve_and_deliver(
-    ctx: &ResolveCtx,
-    node: &NodeName,
-    port: &PortName,
-    binding: &Binding,
-    item: Option<&Value>,
-) -> Result<Value, PlanError> {
-    if let Binding::List(elements) = binding {
-        return resolve_list_binding(ctx, node, port, elements, item);
-    }
-    let site = Site::Port {
-        node: node.clone(),
-        port: port.clone(),
-    };
-    ctx.deliver(node, port, resolve_binding(ctx, &site, binding, item)?)
-}
-
-/// Resolve a [`Binding::List`] bound at `node`.`port` (milestone 3g,
-/// decision (a)): each element resolves in order -- a literal parses
-/// directly against the port's declared element type, exactly as `check`
-/// already validated it (never converted, like any literal); anything else
-/// goes through [`resolve_binding`], attributed to
-/// [`Site::ListElement`] -- and is delivered through that element's own
-/// edge (`check` records one per element; [`Edge::elements`]). Any element
-/// whose delivered value is [`crate::value::ValueState::Unknown`] makes the
-/// whole value `Unknown`, at `list<T>`; otherwise every element's known
-/// scalar object is assembled into one known list, in declaration order.
+/// Resolve a [`Bound::List`] port's `elements`, aligned with `edge`'s own
+/// [`Edge::elements`] (milestone 3n, G4): each element resolves through
+/// [`resolve_source`] -- a literal resolves to its own stored [`Value`]
+/// with no re-parsing, exactly like a scalar literal -- attributed to
+/// [`Site::list_element`], and is delivered through that element's own
+/// edge. Every element is resolved and delivered even once an earlier one
+/// turns out [`crate::value::ValueState::Unknown`], so a later element's
+/// own [`PlanError::EdgeTypeMismatch`] still surfaces; the whole value is
+/// `Unknown`, at `list<T>`, the moment any element is; otherwise every
+/// element's known scalar object is assembled into one known list, in
+/// declaration order.
 ///
 /// # Errors
 ///
 /// Returns [`PlanError::EdgeTypeMismatch`], attributed to the offending
 /// element, on the same backstop [`crate::check::Edge::deliver`] documents;
-/// otherwise whatever [`resolve_binding`] returns for a non-literal
-/// element.
-fn resolve_list_binding(
+/// otherwise whatever [`resolve_source`] returns for a non-literal element.
+pub(crate) fn resolve_list_source<I>(
     ctx: &ResolveCtx,
     node: &NodeName,
     port: &PortName,
-    elements: &[Binding],
+    elements: &[Source<I>],
+    edge: &Edge,
     item: Option<&Value>,
 ) -> Result<Value, PlanError> {
-    let edge = ctx
-        .edges
-        .get(node)
-        .and_then(|ports| ports.get(port))
-        .unwrap_or_else(|| unreachable!("`check` records an edge for every bound list port"));
     let element_ty = edge.delivered().element();
     let element_edges = edge
         .elements()
-        .unwrap_or_else(|| unreachable!("a Binding::List's own edge is always Edge::list"));
+        .unwrap_or_else(|| unreachable!("a Bound::List's own edge is always Edge::list"));
 
     let mut known: Vec<std::sync::Arc<dyn willikins_types::DomainObject>> =
         Vec::with_capacity(elements.len());
     let mut unknown = false;
-    for (index, (element, element_edge)) in elements.iter().zip(element_edges).enumerate() {
-        let raw = if let Binding::Literal(text) = element {
-            Value::parse(&element_ty, text).unwrap_or_else(|err| {
-                unreachable!(
-                    "`check` already validated this literal against the element type: {err}"
-                )
-            })
-        } else {
-            let site = Site::list_element(node.clone(), port.clone(), index);
-            resolve_binding(ctx, &site, element, item)?
-        };
+    for (index, (source, element_edge)) in elements.iter().zip(element_edges).enumerate() {
+        let site = Site::list_element(node.clone(), port.clone(), index);
+        let raw = resolve_source(ctx, source, &site, item)?;
         let delivered =
             element_edge
                 .deliver(raw)
@@ -1615,204 +1479,6 @@ fn resolve_list_binding(
         return Ok(Value::unknown(TypeRef::list_of(element_ty.name.clone())));
     }
     Ok(Value::known_dyn_list(element_ty.name.clone(), known))
-}
-
-/// Resolve one non-literal, non-list binding to its [`Value`].
-///
-/// `site` is only used to attribute [`PlanError::KeyNotInForEach`] to the
-/// binding's own location, never to the `for_each` node it points at.
-pub(crate) fn resolve_binding(
-    ctx: &ResolveCtx,
-    site: &Site,
-    binding: &Binding,
-    item: Option<&Value>,
-) -> Result<Value, PlanError> {
-    match binding {
-        Binding::Literal(_) => unreachable!(
-            "callers resolve a Literal directly, with the port's expected type in hand"
-        ),
-        Binding::List(_) => unreachable!(
-            "callers resolve a List directly, via resolve_and_deliver / resolve_list_binding"
-        ),
-        Binding::Item => Ok(item.cloned().unwrap_or_else(|| {
-            unreachable!("`check` rejects `item` used outside a for_each node")
-        })),
-        Binding::Input(name) => {
-            if let Some(value) = ctx.inputs.get(name) {
-                return Ok(value.clone());
-            }
-            // G3, decision (j) point 6: an `OperatorAcknowledgement` input
-            // with no value supplied is *awaited*, not missing. `check`
-            // already rejects both a default and a literal for this type,
-            // so the only way `name` is declared this type and absent from
-            // `ctx.inputs` is exactly this case. Every other declared type
-            // still fails the plan below, unchanged. G2: `awaited` is read
-            // from `check`'s own table rather than asked of the catalog's
-            // registry here a second time.
-            let declared = ctx
-                .checked_inputs
-                .iter()
-                .find(|input| &input.name == name)
-                .unwrap_or_else(|| {
-                    unreachable!("`check` rejects a reference to an undeclared input")
-                });
-            if declared.awaited {
-                return Ok(Value::unknown(declared.spec.ty.clone()));
-            }
-            Err(PlanError::MissingInput {
-                input: name.clone(),
-            })
-        }
-        Binding::Step { node, port } => Ok(resolve_step(ctx, node, port)),
-        Binding::Keyed { node, key, port } => resolve_keyed(ctx, site, node, key, port),
-    }
-}
-
-/// Resolve a `Step` reference to `node`'s `port`: that node's own output
-/// value when it has no `for_each`, the aggregation across every instance
-/// described in the module docs when it does, or
-/// [`crate::value::ValueState::Unknown`] when `node` was never read at all
-/// ([`NodeResult::Skipped`] — decision (j), point 3).
-pub(crate) fn resolve_step(ctx: &ResolveCtx, node: &NodeName, port: &PortName) -> Value {
-    match ctx
-        .results
-        .get(node)
-        .unwrap_or_else(|| unreachable!("`checked.order` plans every node before its dependents"))
-    {
-        NodeResult::Scalar(outputs) => outputs
-            .get(port)
-            .cloned()
-            .unwrap_or_else(|| unreachable!("`check` validated that this output port exists")),
-        NodeResult::ForEach(instances) => aggregate_for_each_port(ctx, node, port, instances),
-        NodeResult::Skipped => {
-            let list = ctx
-                .workflow
-                .nodes
-                .get(node)
-                .unwrap_or_else(|| unreachable!("referenced node exists per `check`"))
-                .for_each
-                .is_some();
-            Value::unknown(output_port_type(ctx, node, port, list))
-        }
-    }
-}
-
-/// The [`TypeRef`] `node`'s `port` declares: as a scalar (`as_list: false`
-/// — what a [`Binding::Keyed`] reference always resolves, since it always
-/// selects one `for_each` instance) or as a list (`as_list: true` — what a
-/// [`Binding::Step`] reference resolves when `node` has a `for_each`, the
-/// same rule [`aggregate_for_each_port`] applies when it actually has
-/// instances to aggregate). Used to type an `Unknown` value for a node
-/// [`NodeResult::Skipped`] ever reached, whose instances (if any) were never
-/// computed at all.
-fn output_port_type(ctx: &ResolveCtx, node: &NodeName, port: &PortName, as_list: bool) -> TypeRef {
-    let target = ctx
-        .workflow
-        .nodes
-        .get(node)
-        .unwrap_or_else(|| unreachable!("referenced node exists per `check`"));
-    let declared = ctx
-        .catalog
-        .get(&target.tool)
-        .unwrap_or_else(|| unreachable!("`checked` was checked against a compatible catalog"))
-        .spec()
-        .outputs
-        .get(port)
-        .unwrap_or_else(|| unreachable!("`check` validated that this output port exists"))
-        .clone();
-    if as_list {
-        TypeRef::list_of(declared.name)
-    } else {
-        declared
-    }
-}
-
-/// Aggregate every instance of a `for_each` node's `port` into one list
-/// value: known when every instance's value there is known, unknown (at
-/// `list<element>`) the moment one is not — including the moment any
-/// instance's own [`Action`] was [`Action::Blocked`], regardless of whether
-/// that instance's own value at `port` happens to be known (decision (j),
-/// point 3: "a `Step` binding aggregating a `for_each` gate is skipped if
-/// any instance is").
-pub(crate) fn aggregate_for_each_port(
-    ctx: &ResolveCtx,
-    node: &NodeName,
-    port: &PortName,
-    instances: &[ForEachInstance],
-) -> Value {
-    let target = ctx
-        .workflow
-        .nodes
-        .get(node)
-        .unwrap_or_else(|| unreachable!("referenced node exists per `check`"));
-    let target_spec = ctx
-        .catalog
-        .get(&target.tool)
-        .unwrap_or_else(|| unreachable!("`checked` was checked against a compatible catalog"))
-        .spec();
-    let element: TypeName = target_spec
-        .outputs
-        .get(port)
-        .unwrap_or_else(|| unreachable!("`check` validated that this output port exists"))
-        .name
-        .clone();
-
-    if instances.iter().any(|instance| instance.blocked) {
-        return Value::unknown(TypeRef::list_of(element));
-    }
-
-    let mut items = Vec::with_capacity(instances.len());
-    for instance in instances {
-        let value = instance
-            .outputs
-            .get(port)
-            .unwrap_or_else(|| unreachable!("every planned instance fills every output port"));
-        match value.as_scalar_arc() {
-            Some(object) => items.push(object),
-            None => return Value::unknown(TypeRef::list_of(element)),
-        }
-    }
-    Value::known_dyn_list(element, items)
-}
-
-/// Resolve a `Keyed` reference: the instance of `target`'s `for_each` node
-/// whose item renders to `key`, [`PlanError::KeyNotInForEach`] attributed to
-/// `site` when none matches, or [`crate::value::ValueState::Unknown`] when
-/// `target` was never read at all ([`NodeResult::Skipped`] — decision (j),
-/// point 3).
-pub(crate) fn resolve_keyed(
-    ctx: &ResolveCtx,
-    site: &Site,
-    target: &NodeName,
-    key: &str,
-    port: &PortName,
-) -> Result<Value, PlanError> {
-    let instances =
-        match ctx.results.get(target).unwrap_or_else(|| {
-            unreachable!("`checked.order` plans every node before its dependents")
-        }) {
-            NodeResult::ForEach(instances) => instances,
-            NodeResult::Skipped => {
-                return Ok(Value::unknown(output_port_type(ctx, target, port, false)));
-            }
-            NodeResult::Scalar(_) => {
-                unreachable!("`check` rejects a Keyed reference to a node with no for_each")
-            }
-        };
-    instances
-        .iter()
-        .find(|instance| instance.key == key)
-        .map(|instance| {
-            instance
-                .outputs
-                .get(port)
-                .cloned()
-                .unwrap_or_else(|| unreachable!("`check` validated that this output port exists"))
-        })
-        .ok_or_else(|| PlanError::KeyNotInForEach {
-            site: site.clone(),
-            key: key.to_string(),
-        })
 }
 
 /// Plan one call to `tool`: check its key ports are known, call

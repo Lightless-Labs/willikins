@@ -219,8 +219,9 @@ impl Checked {
     /// (those are [`Self::output_types`]), so a node named `outputs` keeps
     /// its own entry. Public accessor, SHARED VALUES of milestone 3n's
     /// decision (s1); owned, so a caller resolving many ports should bind
-    /// it once rather than call this per port (see [`Self::edges`] for
-    /// `plan`'s and `apply`'s own zero-copy route to the same map).
+    /// it once rather than call this per port. `plan` and `apply` no
+    /// longer read this map at all (as of G4): every bound port's edge
+    /// rides on its own [`PortEdge`] instead.
     #[must_use]
     pub fn types(&self) -> IndexMap<NodeName, IndexMap<PortName, Edge>> {
         self.types.clone()
@@ -253,18 +254,6 @@ impl Checked {
         &self.workflow
     }
 
-    /// [`Self::types`] by reference, not by clone. Crate-private, for the
-    /// same reason and on the same schedule as [`Self::workflow`]:
-    /// `plan.rs` and `apply.rs` build a [`crate::plan::ResolveCtx`] per
-    /// node (`plan`) or per instance (`apply`), and cloning the whole map
-    /// at each of those call sites would be needless copying on every
-    /// node/instance rather than once per `plan`/`apply` call. Deleted by
-    /// task G7, once those modules read per-port sources from the graph
-    /// instead of this one shared map.
-    pub(crate) fn edges(&self) -> &IndexMap<NodeName, IndexMap<PortName, Edge>> {
-        &self.types
-    }
-
     /// Every node, in topological order (the same order as [`Self::order`]),
     /// with its already-resolved tool handle and [`Shape`]. Crate-private:
     /// ids are minted only in `check.rs` and never leave this crate
@@ -290,11 +279,11 @@ impl Checked {
     }
 
     /// The workflow's own declared [`Node`] a [`CheckedNode`] was built
-    /// from. Crate-private bridge, on the same schedule as [`Self::workflow`]
-    /// and [`Self::edges`]: from G1 until G3/G4 give [`Shape`] its own
-    /// ports, `plan.rs` and `apply.rs` still need a node's raw
-    /// `with`/`for_each` [`Binding`]s to resolve it, which [`Shape`] does
-    /// not carry yet. `declared_at` is a bounds-checked index into
+    /// from. Crate-private bridge, on the same schedule as [`Self::workflow`]:
+    /// `plan.rs` and `apply.rs` still read a node's raw `for_each` binding
+    /// and `with` map through this, for the `for_each` gate-collection
+    /// path (G5's), which still classifies `Binding`s rather than
+    /// `Source`s. `declared_at` is a bounds-checked index into
     /// `self.workflow.nodes`, not a proof -- see `check`'s own module doc,
     /// "Typed ids are indexes, not proofs".
     pub(crate) fn declared_node(&self, node: &CheckedNode) -> &Node {
@@ -377,11 +366,11 @@ impl fmt::Debug for CheckedNode {
 /// G1 gave this `ids` and, for `Each`, the `for_each` source's own resolved
 /// element type. G3 gives each kind its own bound **scalar** ports
 /// (`ports`) and gives `Each` its own `for_each` source, classified
-/// (`source`) -- a node with no bound scalar port has an empty `ports`
-/// list, exactly as [`Checked::types`]' own doc already says for the older
-/// map. A port bound to a [`crate::workflow::Binding::List`] has no entry
-/// here yet: `plan` and `apply` still resolve it the old way, through
-/// [`Checked::edges`] (G4's `Bound::List`).
+/// (`source`) -- a node with no bound port has an empty `ports` list,
+/// exactly as [`Checked::types`]' own doc already says for the older map.
+/// G4 gives a [`crate::workflow::Binding::List`] port an entry here too
+/// ([`Bound::List`]), so `ports` now holds every bound port, scalar or
+/// list alike.
 #[derive(Clone)]
 pub(crate) enum Shape {
     /// A node with no `for_each`: exactly one instance, ever.
@@ -389,9 +378,9 @@ pub(crate) enum Shape {
         /// This single node's own id, among every `Single` node, in
         /// topological order.
         id: SingleId,
-        /// Every bound **scalar** port of this node's tool, in the tool
-        /// spec's own input order (SHARED VALUES' `types()` order; a list-
-        /// bound port is absent -- see this type's own doc).
+        /// Every bound port of this node's tool, scalar or list alike, in
+        /// the tool spec's own input order (SHARED VALUES' `types()`
+        /// order).
         ports: Vec<PortEdge<Infallible>>,
     },
     /// A `for_each` node: one instance per item of its source list.
@@ -408,10 +397,9 @@ pub(crate) enum Shape {
         /// already rejected a secret or non-list source, so this is
         /// always the scalar type every instance's item is a value of.
         element: TypeRef,
-        /// Every bound **scalar** port of this node's tool, in the tool
-        /// spec's own input order; a list-bound port is absent -- see this
-        /// type's own doc. A port whose binding is `${{ item }}` carries
-        /// [`Source::Item`].
+        /// Every bound port of this node's tool, scalar or list alike, in
+        /// the tool spec's own input order. A port whose binding is
+        /// `${{ item }}` carries [`Source::Item`].
         ports: Vec<PortEdge<InEach>>,
     },
 }
@@ -567,10 +555,11 @@ pub(crate) enum Source<I> {
 }
 
 /// One bound port's classified source and the [`Edge`] `check` chose to
-/// deliver it through, if the port is a scalar one (milestone 3n, decision
-/// (g1)). `Bound::List` (a [`crate::workflow::Binding::List`] port) is
-/// G4's: until then, a list-bound port has no [`PortEdge`] at all, and
-/// `plan`/`apply` still resolve it through [`Checked::edges`].
+/// deliver it through (milestone 3n, decision (g1)). `List` is G4's: a
+/// [`crate::workflow::Binding::List`] port's own elements, each classified
+/// the same way a scalar port's single source is, aligned with `edge`'s own
+/// [`Edge::elements`] (same length, same order -- `check` builds both
+/// together, in [`build_port_edges`]).
 #[derive(Debug, Clone)]
 pub(crate) enum Bound<I> {
     /// Everything but a [`crate::workflow::Binding::List`]: the classified
@@ -584,6 +573,17 @@ pub(crate) enum Bound<I> {
         /// for this port -- `check` records both, so forging one without
         /// the other (as the moved-edge backstop test now does, since G3)
         /// cannot happen by accident.
+        edge: Edge,
+    },
+    /// A [`crate::workflow::Binding::List`] port: one classified source per
+    /// element, in declaration order.
+    List {
+        /// Each element's own classified source, aligned with `edge`'s own
+        /// [`Edge::elements`] -- same length, same order.
+        elements: Vec<Source<I>>,
+        /// The whole port's own list edge ([`Edge::list`]): `edge.ty()` is
+        /// the declared element type, and `edge.elements()` is `Some`, one
+        /// entry per `elements` above, in the same order.
         edge: Edge,
     },
 }
@@ -2105,7 +2105,12 @@ fn build_source_in_each(
 
 /// [`build_source`] for every [`PendingPort`] of one node, in the tool
 /// spec's own input order (the order `pending_ports` was pushed in --
-/// `Resolver::check_node` walks `spec.inputs`).
+/// `Resolver::check_node` walks `spec.inputs`). A [`PendingBound::List`]
+/// builds one [`Source`] per element, each against *that element's own*
+/// resolved type (`element_edge.ty()`) -- never the list edge's own `ty()`,
+/// which is the port's declared element type `T` rather than what each
+/// element individually resolved to (milestone 3n, G4, the same per-source
+/// rule G3 already applies to a scalar port).
 fn build_port_edges<I>(
     pending: &[PendingPort],
     workflow: &Workflow,
@@ -2124,9 +2129,27 @@ fn build_port_edges<I>(
         .map(|p| PortEdge {
             port: p.port.clone(),
             with_position: p.with_position,
-            bound: Bound::Scalar {
-                source: build(&p.source, p.edge.ty(), workflow, specs, id_of),
-                edge: p.edge.clone(),
+            bound: match &p.bound {
+                PendingBound::Scalar(source) => Bound::Scalar {
+                    source: build(source, p.edge.ty(), workflow, specs, id_of),
+                    edge: p.edge.clone(),
+                },
+                PendingBound::List(sources) => {
+                    let element_edges = p.edge.elements().unwrap_or_else(|| {
+                        unreachable!("a PendingBound::List's own edge is always Edge::list")
+                    });
+                    let elements = sources
+                        .iter()
+                        .zip(element_edges)
+                        .map(|(source, element_edge)| {
+                            build(source, element_edge.ty(), workflow, specs, id_of)
+                        })
+                        .collect();
+                    Bound::List {
+                        elements,
+                        edge: p.edge.clone(),
+                    }
+                }
             },
         })
         .collect()
@@ -2441,8 +2464,9 @@ enum ItemContext {
 /// consumer is reached -- "a source's id is always lower than its
 /// consumer's", `check`'s own module doc).
 ///
-/// Never built for a [`Binding::List`]: its own per-element sources are
-/// G4's.
+/// One [`Binding::List`] element's own pending source is a `PendingSource`
+/// too (milestone 3n, G4) -- a list binding carries no single stand-in of
+/// its own; [`PendingBound::List`] holds one of these per element instead.
 #[derive(Clone)]
 enum PendingSource {
     /// A [`Binding::Literal`], already parsed: the [`Value`] itself, with
@@ -2469,7 +2493,10 @@ enum PendingSource {
 /// [`PendingSource`] for every [`Binding`] kind [`Resolver::resolve`]
 /// itself resolves (everything but [`Binding::Literal`] and
 /// [`Binding::List`], which never reach [`Resolver::resolve`] at all --
-/// see that method's own `unreachable!`s).
+/// see that method's own `unreachable!`s). Also the one [`check_list_port`]
+/// calls once per element of a [`Binding::List`], never on the list
+/// binding itself (its own `Literal`/nested-`List` elements are handled
+/// before this is ever reached, by [`Resolver::check_list_element`]).
 fn pending_source_of(binding: &Binding) -> PendingSource {
     match binding {
         Binding::Input(name) => PendingSource::Input(name.clone()),
@@ -2485,21 +2512,34 @@ fn pending_source_of(binding: &Binding) -> PendingSource {
         },
         Binding::Literal(_) | Binding::List(_) => unreachable!(
             "callers of pending_source_of never hold a Literal or List binding here -- \
-             a literal has its own Value in hand already, and a list's own elements are G4's"
+             a literal has its own Value in hand already, and a list's own elements are \
+             classified one at a time by check_list_element, never by passing the whole \
+             List binding to pending_source_of"
         ),
     }
 }
 
-/// One bound scalar port's pending data, by name (milestone 3n, decision
+/// One bound port's own pending classification (milestone 3n, G4): a
+/// single [`PendingSource`] for a scalar port, or one per element for a
+/// [`Binding::List`] port, aligned with [`PendingPort::edge`]'s own
+/// [`Edge::elements`].
+#[derive(Clone)]
+enum PendingBound {
+    Scalar(PendingSource),
+    List(Vec<PendingSource>),
+}
+
+/// One bound port's pending data, by name (milestone 3n, decision
 /// (g1)'s two-phase build -- see [`PendingSource`]'s own doc): everything
 /// [`build_checked_nodes`] needs to build a real [`PortEdge`] once ids
-/// exist, recorded by [`Resolver::check_with_port`] at exactly the point it
-/// also calls [`Resolver::record_edge`] for the same port.
+/// exist, recorded by [`Resolver::check_with_port`]/[`Resolver::check_list_port`]
+/// at exactly the point either also calls [`Resolver::record_edge`] for the
+/// same port.
 #[derive(Clone)]
 struct PendingPort {
     port: PortName,
     with_position: usize,
-    source: PendingSource,
+    bound: PendingBound,
     edge: Edge,
 }
 
@@ -2522,10 +2562,9 @@ struct Resolver<'a> {
     /// node has checked clean, to tell a [`Shape::Each`] from a
     /// [`Shape::Single`] and give the former its `element`.
     for_each_elements: IndexMap<NodeName, TypeRef>,
-    /// Every node's own bound **scalar** ports, by name, pending
-    /// [`build_checked_nodes`]' id-aware conversion to real [`PortEdge`]s
-    /// (milestone 3n, decision (g1), G3). A list-bound port has no entry
-    /// (G4).
+    /// Every node's own bound ports, scalar or list alike, by name,
+    /// pending [`build_checked_nodes`]' id-aware conversion to real
+    /// [`PortEdge`]s (milestone 3n, decision (g1), G3/G4).
     pending_ports: IndexMap<NodeName, Vec<PendingPort>>,
     /// Every `for_each` node's own source, by name, and its resolved type
     /// (the full `list<T>`, before `.element()`) -- pending the same
@@ -2692,7 +2731,7 @@ impl<'a> Resolver<'a> {
         None
     }
 
-    /// Record `node`.`port`'s pending scalar source and `edge` (milestone
+    /// Record `node`.`port`'s pending classification and `edge` (milestone
     /// 3n, decision (g1)), alongside [`Self::record_edge`]'s own older
     /// entry -- called at exactly the same success points, never more and
     /// never fewer.
@@ -2701,7 +2740,7 @@ impl<'a> Resolver<'a> {
         node: &NodeName,
         port: &PortName,
         with_position: usize,
-        source: PendingSource,
+        bound: PendingBound,
         edge: Edge,
     ) {
         self.pending_ports
@@ -2710,7 +2749,7 @@ impl<'a> Resolver<'a> {
             .push(PendingPort {
                 port: port.clone(),
                 with_position,
-                source,
+                bound,
                 edge,
             });
     }
@@ -2718,6 +2757,7 @@ impl<'a> Resolver<'a> {
     /// Check one `with` port: unbound-but-required, a literal, or a
     /// resolved binding checked for secrecy and type against `port_spec`.
     #[allow(clippy::too_many_arguments)] // with_position (G3) joins the existing shape, one per fact the caller already has in hand
+    #[allow(clippy::too_many_lines)] // one port's five outcomes (unbound/literal/list/secret-or-type-mismatch/exact-or-converted), not split further
     fn check_with_port(
         &mut self,
         node: &NodeName,
@@ -2759,7 +2799,7 @@ impl<'a> Resolver<'a> {
                     node,
                     port,
                     with_position,
-                    PendingSource::Literal(value),
+                    PendingBound::Scalar(PendingSource::Literal(value)),
                     edge,
                 );
             }
@@ -2767,7 +2807,15 @@ impl<'a> Resolver<'a> {
         }
 
         if let Binding::List(elements) = binding {
-            self.check_list_port(node, port, port_spec, elements, item_ctx, errors);
+            self.check_list_port(
+                node,
+                port,
+                with_position,
+                port_spec,
+                elements,
+                item_ctx,
+                errors,
+            );
             return;
         }
 
@@ -2805,7 +2853,13 @@ impl<'a> Resolver<'a> {
         if port_spec.ty.accepts(&found, self.registry) {
             let edge = Edge::exact(found);
             self.record_edge(node, port, edge.clone());
-            self.record_pending_port(node, port, with_position, pending_source_of(binding), edge);
+            self.record_pending_port(
+                node,
+                port,
+                with_position,
+                PendingBound::Scalar(pending_source_of(binding)),
+                edge,
+            );
             return;
         }
 
@@ -2837,7 +2891,7 @@ impl<'a> Resolver<'a> {
                     node,
                     port,
                     with_position,
-                    pending_source_of(binding),
+                    PendingBound::Scalar(pending_source_of(binding)),
                     edge,
                 );
                 return;
@@ -2871,10 +2925,17 @@ impl<'a> Resolver<'a> {
     /// the first; on any element error, no edge is recorded for the whole
     /// port at all (matching the scalar case, where a failed binding
     /// records nothing either).
+    ///
+    /// On success (milestone 3n, G4), also records this port's own pending
+    /// classification: one [`PendingSource`] per element, in the same
+    /// order as the [`Edge::list`] just recorded -- [`build_port_edges`]
+    /// zips the two to build this port's real [`Bound::List`].
+    #[allow(clippy::too_many_arguments)] // with_position (G4) joins check_with_port's own parameter shape
     fn check_list_port(
         &mut self,
         node: &NodeName,
         port: &PortName,
+        with_position: usize,
         port_spec: &PortSpec,
         elements: &[Binding],
         item_ctx: &ItemContext,
@@ -2910,6 +2971,7 @@ impl<'a> Resolver<'a> {
         let element_ty = list_ty.element();
 
         let mut element_edges: Vec<Edge> = Vec::with_capacity(elements.len());
+        let mut pending_sources: Vec<PendingSource> = Vec::with_capacity(elements.len());
         let mut ok = true;
         for (index, element) in elements.iter().enumerate() {
             let elem_site = Site::list_element(node.clone(), port.clone(), index);
@@ -2922,21 +2984,33 @@ impl<'a> Resolver<'a> {
                 item_ctx,
                 errors,
             ) {
-                Some(edge) => element_edges.push(edge),
+                Some((source, edge)) => {
+                    pending_sources.push(source);
+                    element_edges.push(edge);
+                }
                 None => ok = false,
             }
         }
 
         if ok {
-            self.record_edge(node, port, Edge::list(element_ty, element_edges));
+            let edge = Edge::list(element_ty, element_edges);
+            self.record_edge(node, port, edge.clone());
+            self.record_pending_port(
+                node,
+                port,
+                with_position,
+                PendingBound::List(pending_sources),
+                edge,
+            );
         }
     }
 
     /// Check one element of a [`Binding::List`] against `element_ty` (`T`),
     /// pushing an error and returning `None` on any failure, or the
-    /// element's own [`Edge`] (never converted for a literal; otherwise
-    /// exact or one-hop converted) on success. Split out of
-    /// [`Self::check_list_port`] to keep that method's own line count down.
+    /// element's own classified [`PendingSource`] and [`Edge`] (never
+    /// converted for a literal; otherwise exact or one-hop converted) on
+    /// success. Split out of [`Self::check_list_port`] to keep that
+    /// method's own line count down.
     #[allow(clippy::too_many_arguments)] // mirrors check_with_port's own parameter shape, one per fact the caller already has in hand
     fn check_list_element(
         &mut self,
@@ -2947,10 +3021,14 @@ impl<'a> Resolver<'a> {
         elem_site: &Site,
         item_ctx: &ItemContext,
         errors: &mut Vec<CheckError>,
-    ) -> Option<Edge> {
+    ) -> Option<(PendingSource, Edge)> {
         if let Binding::Literal(text) = element {
-            return check_list_literal(node, port, text, element_ty, self.registry, errors)
-                .map(Edge::exact);
+            return check_list_literal(node, port, text, element_ty, self.registry, errors).map(
+                |value| {
+                    let edge = Edge::exact(value.ty().clone());
+                    (PendingSource::Literal(value), edge)
+                },
+            );
         }
 
         // A nested list (never produced by `willikins-dsl`, which refuses
@@ -2995,7 +3073,7 @@ impl<'a> Resolver<'a> {
         }
 
         if found == *element_ty {
-            return Some(Edge::exact(found));
+            return Some((pending_source_of(element), Edge::exact(found)));
         }
 
         // One hop, scalars only -- the same rule `check_with_port` applies;
@@ -3006,7 +3084,7 @@ impl<'a> Resolver<'a> {
             .registry
             .probe_conversion(&found.name, &element_ty.name);
         if let Some(row) = row {
-            return Some(Edge::converted(found, row));
+            return Some((pending_source_of(element), Edge::converted(found, row)));
         }
 
         errors.push(CheckError::ListElementTypeMismatch {
@@ -3422,6 +3500,12 @@ fn check_literal(
 /// is exactly `github.scaffold.ensure`'s own port shape); otherwise it is
 /// parsed directly against `T`, never converted (decision (e), step 2, the
 /// same rule a scalar literal follows).
+///
+/// Returns the parsed [`Value`] itself, not just its [`TypeRef`] (milestone
+/// 3n, G4, mirroring [`check_literal`]'s own G3 change): [`check_list_element`]
+/// needs the value to build this element's own [`Source::Literal`], and
+/// `plan`/`apply` then deliver it without re-parsing, exactly like a
+/// scalar literal.
 fn check_list_literal(
     node: &NodeName,
     port: &PortName,
@@ -3429,7 +3513,7 @@ fn check_list_literal(
     element_ty: &TypeRef,
     registry: &TypeRegistry,
     errors: &mut Vec<CheckError>,
-) -> Option<TypeRef> {
+) -> Option<Value> {
     if registry.is_secret(&element_ty.name) == Some(true) {
         errors.push(CheckError::SecretLiteral {
             node: node.clone(),
@@ -3455,7 +3539,7 @@ fn check_list_literal(
     }
 
     match Value::parse(element_ty, text) {
-        Ok(value) => Some(value.ty().clone()),
+        Ok(value) => Some(value),
         Err(error) => {
             errors.push(CheckError::InvalidLiteral {
                 node: node.clone(),
@@ -5272,7 +5356,9 @@ mod tests {
             .iter_mut()
             .find(|port_edge| port_edge.port == port("b"))
             .expect("sink2 has a bound scalar port b");
-        let Bound::Scalar { edge, .. } = &mut port_edge.bound;
+        let Bound::Scalar { edge, .. } = &mut port_edge.bound else {
+            unreachable!("sink2's port b is a scalar port")
+        };
         *edge = converting_edge;
 
         let mut inputs = IndexMap::new();
@@ -5681,7 +5767,10 @@ mod tests {
 
         let Bound::Scalar {
             source: lit_source, ..
-        } = &sink_ports[0].bound;
+        } = &sink_ports[0].bound
+        else {
+            panic!("expected Bound::Scalar, got {:?}", sink_ports[0].bound);
+        };
         match lit_source {
             Source::Literal(value) => assert_eq!(
                 value.render().to_string(),
@@ -5694,7 +5783,10 @@ mod tests {
         let Bound::Scalar {
             source: input_source,
             ..
-        } = &sink_ports[1].bound;
+        } = &sink_ports[1].bound
+        else {
+            panic!("expected Bound::Scalar, got {:?}", sink_ports[1].bound);
+        };
         assert!(
             matches!(input_source, Source::Input(_)),
             "from_input is bound to the declared input `name_input`"
@@ -5703,7 +5795,10 @@ mod tests {
         let Bound::Scalar {
             source: step_source,
             ..
-        } = &sink_ports[2].bound;
+        } = &sink_ports[2].bound
+        else {
+            panic!("expected Bound::Scalar, got {:?}", sink_ports[2].bound);
+        };
         match step_source {
             Source::Step { from, .. } => assert_eq!(
                 *from, producer_id,
@@ -5714,7 +5809,10 @@ mod tests {
 
         let Bound::Scalar {
             source: agg_source, ..
-        } = &sink_ports[3].bound;
+        } = &sink_ports[3].bound
+        else {
+            panic!("expected Bound::Scalar, got {:?}", sink_ports[3].bound);
+        };
         match agg_source {
             Source::Aggregate { from, .. } => {
                 assert_eq!(*from, *looped_id, "agg names looped's own EachId");
@@ -5725,7 +5823,10 @@ mod tests {
         let Bound::Scalar {
             source: keyed_source,
             ..
-        } = &sink_ports[4].bound;
+        } = &sink_ports[4].bound
+        else {
+            panic!("expected Bound::Scalar, got {:?}", sink_ports[4].bound);
+        };
         match keyed_source {
             Source::Keyed { from, key, .. } => {
                 assert_eq!(*from, *looped_id, "keyed names looped's own EachId");
@@ -5743,6 +5844,133 @@ mod tests {
                 assert_eq!(
                     *from, producer_id,
                     "the output names producer's own SingleId"
+                );
+            }
+            other => panic!("expected Source::Step, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Milestone 3n, task G4: `Bound::List`.
+    // ---------------------------------------------------------------------
+
+    /// A list-bound port gets its own [`PortEdge`], `Bound::List`,
+    /// with one classified [`Source`] per element -- a literal
+    /// (`Source::Literal`, holding the parsed `Value`, not re-parsed), a
+    /// declared input (`Source::Input`) and a `Step` reference
+    /// (`Source::Step`) -- aligned with the recorded [`Edge::list`]'s own
+    /// [`Edge::elements`], in declaration order.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn check_builds_bound_list_with_one_source_per_element() {
+        let catalog = {
+            let mut catalog = Catalog::new(willikins_types::registry());
+            catalog
+                .insert(Arc::new(DummyTool {
+                    spec: spec_of(
+                        "test.producer",
+                        &[],
+                        &[("out", ty("Text"))],
+                        &[],
+                        Class::Reversible,
+                        true,
+                    ),
+                }))
+                .unwrap();
+            catalog
+                .insert(Arc::new(DummyTool {
+                    spec: spec_of(
+                        "test.sink",
+                        &[("items", PortType::Exact(list_ty("Text")), true)],
+                        &[],
+                        &[],
+                        Class::Reversible,
+                        true,
+                    ),
+                }))
+                .unwrap();
+            catalog
+        };
+
+        let workflow = Workflow::new(workflow_name("w"))
+            .input(input_name("name_input"), InputSpec::new(ty("Text")))
+            .node(node_name("producer"), Node::new(tool_name("test.producer")))
+            .node(
+                node_name("sink"),
+                Node::new(tool_name("test.sink")).port(
+                    port("items"),
+                    Binding::List(vec![
+                        Binding::Literal("hello".to_string()),
+                        Binding::Input(input_name("name_input")),
+                        Binding::Step {
+                            node: node_name("producer"),
+                            port: port("out"),
+                        },
+                    ]),
+                ),
+            );
+
+        let checked = check(&workflow, &catalog).expect("every list element type-checks");
+
+        let producer = checked
+            .nodes()
+            .iter()
+            .find(|n| n.name == node_name("producer"))
+            .expect("producer has its own CheckedNode");
+        let Shape::Single {
+            id: producer_id, ..
+        } = producer.shape
+        else {
+            unreachable!("producer has no for_each")
+        };
+
+        let sink = checked
+            .nodes()
+            .iter()
+            .find(|n| n.name == node_name("sink"))
+            .expect("sink has its own CheckedNode");
+        let Shape::Single { ports, .. } = &sink.shape else {
+            unreachable!("sink has no for_each")
+        };
+        assert_eq!(ports.len(), 1, "sink binds its one list port");
+        assert_eq!(ports[0].port, port("items"));
+        assert_eq!(ports[0].with_position, 0);
+
+        let Bound::List { elements, edge } = &ports[0].bound else {
+            panic!("expected Bound::List, got {:?}", ports[0].bound);
+        };
+        assert_eq!(
+            edge.ty(),
+            &ty("Text"),
+            "the edge's own type is the declared element type"
+        );
+        let element_edges = edge
+            .elements()
+            .expect("a Bound::List's own edge is always Edge::list");
+        assert_eq!(
+            elements.len(),
+            element_edges.len(),
+            "one Source per element edge"
+        );
+        assert_eq!(elements.len(), 3, "the port's own three elements");
+
+        match &elements[0] {
+            Source::Literal(value) => assert_eq!(
+                value.render().to_string(),
+                "hello",
+                "a list literal's own parsed Value is stored, not re-derived"
+            ),
+            other => panic!("expected Source::Literal, got {other:?}"),
+        }
+        assert!(
+            matches!(elements[1], Source::Input(_)),
+            "the second element is bound to the declared input `name_input`"
+        );
+        match &elements[2] {
+            Source::Step { from, .. } => {
+                assert_eq!(
+                    *from, producer_id,
+                    "the third element names producer's own SingleId"
                 );
             }
             other => panic!("expected Source::Step, got {other:?}"),

@@ -75,9 +75,24 @@ fn the_unreachable_ratchet_never_rises() {
     // call site. The one new index-out-of-range backstop
     // (`FilledOutputs::slot`'s own) lives in `willikins-core::tool`
     // instead, which this ratchet does not cover, for exactly this reason.
+    //
+    // G4 (2026-10-11): `Bound::List` gives a list-bound port its own
+    // `PortEdge` too, so `bind_ports` resolves every port -- scalar or
+    // list -- straight off `Source`/`Bound`, with no `node.with` fallback.
+    // That was the old `Binding`-based resolver's only remaining caller,
+    // so it and everything it alone kept alive go in the same commit:
+    // `resolve_and_deliver`, the old by-name `resolve_list_binding`,
+    // `resolve_binding`, `resolve_step`, `resolve_keyed`,
+    // `aggregate_for_each_port`, `output_port_type` and
+    // `ResolveCtx::deliver` -- each carrying one or more of its own
+    // `unreachable!`/`unwrap_or_else` fallbacks. `plan.rs` drops from 29
+    // to 10. `apply.rs` holds flat at 5: its own mirror
+    // (`resolve_instance_inputs`'s list-port loop) swaps `resolve_and_deliver`
+    // for the same `resolve_list_source` `plan.rs` gained, with no new
+    // fallback either way.
     assert_eq!(
         ratchet_count("src/plan.rs"),
-        29,
+        10,
         "plan.rs's unreachable ratchet moved; lower it, never raise it"
     );
     assert_eq!(
