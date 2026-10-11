@@ -27,12 +27,13 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use crate::check::Checked;
+use crate::check::{Bound, Checked, Shape, Source};
 use crate::class::Class;
 use crate::plan::{Action, BlockedGate, Group, Plan, PlannedNode};
 use crate::plan::{
-    ForEachInstance, InstanceFingerprint, NodeResult, PlanError, ResolveCtx, Walk, fill_outputs,
-    resolve_and_deliver, resolve_binding, walk,
+    EachInstanceResult, EachResult, FilledOutputs, ForEachInstance, InstanceFingerprint,
+    NodeResult, PlanError, ResolveCtx, SingleResult, Walk, fill_outputs, resolve_and_deliver,
+    resolve_source, walk,
 };
 use crate::site::Site;
 use crate::tool::{Ensured, Inputs, Outputs, PortName, Tool, ToolError, ToolErrorKind};
@@ -608,6 +609,12 @@ pub fn apply(
     // need to scan `fresh.plan.nodes` for a run of the same name.
     let workflow = checked.workflow();
     let mut results: HashMap<NodeName, NodeResult> = HashMap::new();
+    // Typed siblings of `results` (milestone 3n, decision (g1)), on the
+    // same bridge schedule as `crate::plan::walk`'s own `single`/`each`:
+    // pushed in lockstep with `checked.nodes()`, which mints
+    // `SingleId`/`EachId` in exactly this order within each kind.
+    let mut single_results: Vec<SingleResult> = Vec::new();
+    let mut each_results: Vec<EachResult> = Vec::new();
     let mut applied_nodes: Vec<AppliedNode> = Vec::new();
 
     for (checked_node, group) in checked.nodes().iter().zip(&fresh.groups) {
@@ -617,6 +624,21 @@ pub fn apply(
         // catalog lookup by name (verify item 4).
         let tool = checked_node.tool.as_ref();
         let spec = tool.spec();
+
+        // Milestone 3n, G3: `ports`' own `Source<I>` is type-erased to
+        // `Source<()>` (`erase_ports`) right here, the one place that
+        // still needs to match `Shape`'s two variants to get a concrete
+        // type at all. Erasing loses nothing `resolve_instance_inputs`
+        // needs -- `I` only ever appears in `Source::Item`'s own payload,
+        // whose *value* it never reads (this instance's own `item`
+        // parameter supplies that directly) -- and it means the `Group`
+        // match just below never has to reconcile against `Shape` a
+        // second time: every `Group` variant uses the same `ports`.
+        let ports = match &checked_node.shape {
+            Shape::Single { ports, .. } => erase_ports(ports),
+            Shape::Each { ports, .. } => erase_ports(ports),
+        };
+        let is_each = matches!(&checked_node.shape, Shape::Each { .. });
 
         let node_result = match group {
             // A whole-node `Action::Skip` (decision (j), point 3): plans
@@ -629,9 +651,12 @@ pub fn apply(
                     inputs,
                     catalog,
                     &results,
+                    &single_results,
+                    &each_results,
                     node,
                     tool,
                     spec,
+                    &ports,
                     &token,
                     name,
                     &fresh,
@@ -640,6 +665,11 @@ pub fn apply(
                     observer,
                     &mut applied_nodes,
                 )?;
+                if is_each {
+                    each_results.push(EachResult::Skipped);
+                } else {
+                    single_results.push(SingleResult::Skipped);
+                }
                 NodeResult::Skipped
             }
             Group::Single { planned } => {
@@ -648,9 +678,12 @@ pub fn apply(
                     inputs,
                     catalog,
                     &results,
+                    &single_results,
+                    &each_results,
                     node,
                     tool,
                     spec,
+                    &ports,
                     &token,
                     name,
                     &fresh,
@@ -659,19 +692,24 @@ pub fn apply(
                     observer,
                     &mut applied_nodes,
                 )?;
+                single_results.push(SingleResult::Outputs(FilledOutputs::from(outputs.clone())));
                 NodeResult::Scalar(outputs)
             }
             Group::Each { instances } => {
                 let mut each = Vec::with_capacity(instances.len());
+                let mut each_instance_results = Vec::with_capacity(instances.len());
                 for instance in instances {
                     let (outputs, blocked) = apply_instance(
                         checked,
                         inputs,
                         catalog,
                         &results,
+                        &single_results,
+                        &each_results,
                         node,
                         tool,
                         spec,
+                        &ports,
                         &token,
                         name,
                         &fresh,
@@ -682,10 +720,16 @@ pub fn apply(
                     )?;
                     each.push(ForEachInstance {
                         key: instance.key.clone(),
-                        outputs,
+                        outputs: outputs.clone(),
+                        blocked,
+                    });
+                    each_instance_results.push(EachInstanceResult {
+                        key: instance.key.clone(),
+                        outputs: FilledOutputs::from(outputs),
                         blocked,
                     });
                 }
+                each_results.push(EachResult::Instances(each_instance_results));
                 NodeResult::ForEach(each)
             }
         };
@@ -702,17 +746,16 @@ pub fn apply(
         catalog,
         results: &results,
         edges: types,
+        single: &single_results,
+        each: &each_results,
     };
-    for (out_name, binding) in &workflow.outputs {
-        if matches!(binding, Binding::Literal(_)) {
-            continue;
-        }
+    for checked_output in checked.outputs() {
         let site = Site::Output {
-            name: out_name.clone(),
+            name: checked_output.name.clone(),
         };
-        let value = resolve_binding(&ctx, &site, binding, None)
+        let value = resolve_source(&ctx, &checked_output.source, &site, None)
             .map_err(|error| ApplyError::Plan { error })?;
-        outputs.insert(out_name.clone(), value);
+        outputs.insert(checked_output.name.clone(), value);
     }
 
     Ok(Applied {
@@ -740,6 +783,60 @@ pub fn apply(
 /// [`ApplyError::UnknownRequiredInput`], each carrying every
 /// [`AppliedNode`] pushed to `applied_nodes` so far plus a `NotRun` tail
 /// for every planned instance after `planned_idx`.
+/// Type-erase `ports`' own `Source<I>` to `Source<()>` (milestone 3n,
+/// G3): `I` only ever appears in `Source::Item`'s own payload, and
+/// resolving one never reads that payload's value (the caller's own
+/// `item: Option<&Value>` supplies it directly, by convention -- see
+/// [`resolve_source`]), so erasing it loses nothing. Lets `apply`'s main
+/// loop pick `ports` once per node, from `Shape`'s two variants, with no
+/// further generic parameter for the `Group` match just below to
+/// reconcile against a second time.
+fn erase_ports<I>(ports: &[crate::check::PortEdge<I>]) -> Vec<crate::check::PortEdge<()>> {
+    ports
+        .iter()
+        .map(|port_edge| crate::check::PortEdge {
+            port: port_edge.port.clone(),
+            with_position: port_edge.with_position,
+            bound: match &port_edge.bound {
+                Bound::Scalar { source, edge } => Bound::Scalar {
+                    source: erase_source(source),
+                    edge: edge.clone(),
+                },
+            },
+        })
+        .collect()
+}
+
+/// [`erase_ports`]'s own per-source conversion.
+fn erase_source<I>(source: &Source<I>) -> Source<()> {
+    match source {
+        Source::Literal(value) => Source::Literal(value.clone()),
+        Source::Input(id) => Source::Input(*id),
+        Source::Item(_) => Source::Item(()),
+        Source::Step { from, slot, ty } => Source::Step {
+            from: *from,
+            slot: *slot,
+            ty: ty.clone(),
+        },
+        Source::Aggregate { from, slot, ty } => Source::Aggregate {
+            from: *from,
+            slot: *slot,
+            ty: ty.clone(),
+        },
+        Source::Keyed {
+            from,
+            key,
+            slot,
+            ty,
+        } => Source::Keyed {
+            from: *from,
+            key: key.clone(),
+            slot: *slot,
+            ty: ty.clone(),
+        },
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // one instance's worth of classification; see the doc above
 #[allow(clippy::too_many_lines)] // one instance's five outcomes (blocked/skip, pure, ensure's two, converged, two unknowns), not split further
 fn apply_instance(
@@ -747,9 +844,12 @@ fn apply_instance(
     inputs: &IndexMap<InputName, Value>,
     catalog: &Catalog,
     results: &HashMap<NodeName, NodeResult>,
+    single: &[SingleResult],
+    each: &[EachResult],
     node: &Node,
     tool: &dyn Tool,
     spec: &crate::tool::ToolSpec,
+    ports: &[crate::check::PortEdge<()>],
     token: &SinkToken,
     name: &NodeName,
     fresh: &Walk,
@@ -796,8 +896,9 @@ fn apply_instance(
         return Ok((outputs, blocked));
     }
 
-    let resolved_inputs =
-        resolve_instance_inputs(checked, inputs, catalog, results, node, planned, item)?;
+    let resolved_inputs = resolve_instance_inputs(
+        checked, inputs, catalog, results, single, each, node, ports, planned, item,
+    )?;
 
     if spec.pure {
         let outputs = planned.outputs.clone();
@@ -1037,12 +1138,16 @@ fn not_run_tail(remaining: &[PlannedNode]) -> Vec<AppliedNode> {
 /// would hit `resolve_binding`'s own "`check` rejects `item` used outside
 /// a `for_each` node" panic for that element, since `check` accepted it
 /// precisely because it is inside one.
+#[allow(clippy::too_many_arguments)] // single/each (milestone 3n, G3) join the existing shape
 fn resolve_instance_inputs(
     checked: &Checked,
     inputs: &IndexMap<InputName, Value>,
     catalog: &Catalog,
     results: &HashMap<NodeName, NodeResult>,
+    single: &[SingleResult],
+    each: &[EachResult],
     node: &Node,
+    ports: &[crate::check::PortEdge<()>],
     planned: &PlannedNode,
     item: Option<&Value>,
 ) -> Result<Inputs, ApplyError> {
@@ -1055,9 +1160,42 @@ fn resolve_instance_inputs(
         catalog,
         results,
         edges: types,
+        single,
+        each,
     };
+    // Scalar ports (milestone 3n, G3): a `Step`/`Keyed` source -- the only
+    // ones that can change mid-run -- is re-resolved straight off its own
+    // `Source`, through `ctx.single`/`ctx.each`, with no `Binding` match.
+    // `Literal`, `Input` and `Item` never change mid-run (see this
+    // function's own module doc), so they are skipped exactly as
+    // [`binding_may_change_mid_run`] would skip their `Binding` kind.
+    for port_edge in ports {
+        let Bound::Scalar { source, edge } = &port_edge.bound;
+        if !matches!(
+            source,
+            Source::Step { .. } | Source::Aggregate { .. } | Source::Keyed { .. }
+        ) {
+            continue;
+        }
+        let site = Site::Port {
+            node: planned.name.clone(),
+            port: port_edge.port.clone(),
+        };
+        let raw = resolve_source(&ctx, source, &site, item)
+            .map_err(|error| ApplyError::Plan { error })?;
+        let delivered = edge.deliver(raw).map_err(|mismatch| ApplyError::Plan {
+            error: PlanError::EdgeTypeMismatch {
+                site,
+                expected: mismatch.expected,
+                found: mismatch.found,
+            },
+        })?;
+        resolved.insert(port_edge.port.clone(), delivered);
+    }
+    // List-bound ports have no `PortEdge` yet (G4): still resolved the
+    // older way, through `node.with` directly.
     for (port, binding) in &node.with {
-        if binding_may_change_mid_run(binding) {
+        if matches!(binding, Binding::List(_)) && binding_may_change_mid_run(binding) {
             let delivered = resolve_and_deliver(&ctx, &planned.name, port, binding, item)
                 .map_err(|error| ApplyError::Plan { error })?;
             resolved.insert(port.clone(), delivered);

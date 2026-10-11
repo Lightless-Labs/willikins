@@ -378,6 +378,32 @@ macro_rules! port_map {
 port_map!(Inputs);
 port_map!(Outputs);
 
+impl Outputs {
+    /// The value at `index`'s position in this map's own iteration order.
+    /// `fill_outputs` and `unknown_outputs` (milestone 3n, decision (f2))
+    /// always build an `Outputs` by walking `spec.outputs` in its own
+    /// declared order, so a tool's `OutputSlot` (milestone 3n, decision
+    /// (g1): that port's position in `spec.outputs`) indexes here directly
+    /// -- see `crate::plan::FilledOutputs`, this accessor's one caller.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of range: impossible for an `OutputSlot`
+    /// `check` minted against the very same tool's `spec.outputs` this
+    /// `Outputs` was filled from (`check`'s own module doc, "indexes are
+    /// not proofs", applied here to a tool's outputs). Panicking in
+    /// `willikins-core::tool` rather than in `plan.rs`/`apply.rs` keeps
+    /// those two files' own unreachable ratchet (milestone 3n, S1 on) from
+    /// moving for a backstop that is really about this map's own shape.
+    #[must_use]
+    pub(crate) fn get_index(&self, index: usize) -> &Value {
+        self.0.get_index(index).map_or_else(
+            || unreachable!("an OutputSlot always indexes a same-shaped Outputs"),
+            |(_, value)| value,
+        )
+    }
+}
+
 /// What a tool's `read` reports about the resource its inputs identify.
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum Observation {

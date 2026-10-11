@@ -107,6 +107,7 @@
 //!   risked under time pressure.
 
 use std::collections::HashSet;
+use std::convert::Infallible;
 use std::fmt;
 use std::sync::Arc;
 
@@ -166,6 +167,12 @@ pub struct Checked {
     /// The resolved type of every workflow output, in declaration order.
     /// A literal output has no declared type to resolve and is absent.
     output_types: IndexMap<OutputName, TypeRef>,
+    /// Every workflow output, classified (milestone 3n, decision (g1)), in
+    /// declaration order -- the same order as [`Self::output_types`], and
+    /// built from exactly the same successful resolutions. From G3 on,
+    /// `plan` and `apply` read this instead of walking
+    /// [`Workflow::outputs`] a second time.
+    outputs: Vec<CheckedOutput>,
 }
 
 impl Checked {
@@ -274,6 +281,14 @@ impl Checked {
         &self.inputs
     }
 
+    /// Every workflow output, classified, in declaration order (milestone
+    /// 3n, decision (g1)). Crate-private, on the same schedule as
+    /// [`Self::nodes`]: a [`CheckedOutput`]'s `Source` holds a `SingleId`/
+    /// `EachId`/`InputId`, minted only in `check.rs`.
+    pub(crate) fn outputs(&self) -> &[CheckedOutput] {
+        &self.outputs
+    }
+
     /// The workflow's own declared [`Node`] a [`CheckedNode`] was built
     /// from. Crate-private bridge, on the same schedule as [`Self::workflow`]
     /// and [`Self::edges`]: from G1 until G3/G4 give [`Shape`] its own
@@ -310,6 +325,7 @@ impl fmt::Debug for Checked {
             .field("warnings", &self.warnings)
             .field("types", &self.types)
             .field("output_types", &self.output_types)
+            .field("outputs", &self.outputs)
             .finish()
     }
 }
@@ -358,11 +374,14 @@ impl fmt::Debug for CheckedNode {
 /// task's result tables can be `Vec<SingleResult>`/`Vec<EachResult>`
 /// rather than one table either kind might index into by mistake.
 ///
-/// G1 gives this `ids` and, for `Each`, the `for_each` source's own
-/// resolved element type -- not yet its ports or its source binding
-/// (`PortEdge`, `Source`): those are G3/G4's. A node with no bound port
-/// has neither today (see [`Checked::types`]' own doc) and will have an
-/// empty `ports` list once this gains one.
+/// G1 gave this `ids` and, for `Each`, the `for_each` source's own resolved
+/// element type. G3 gives each kind its own bound **scalar** ports
+/// (`ports`) and gives `Each` its own `for_each` source, classified
+/// (`source`) -- a node with no bound scalar port has an empty `ports`
+/// list, exactly as [`Checked::types`]' own doc already says for the older
+/// map. A port bound to a [`crate::workflow::Binding::List`] has no entry
+/// here yet: `plan` and `apply` still resolve it the old way, through
+/// [`Checked::edges`] (G4's `Bound::List`).
 #[derive(Clone)]
 pub(crate) enum Shape {
     /// A node with no `for_each`: exactly one instance, ever.
@@ -370,34 +389,59 @@ pub(crate) enum Shape {
         /// This single node's own id, among every `Single` node, in
         /// topological order.
         id: SingleId,
+        /// Every bound **scalar** port of this node's tool, in the tool
+        /// spec's own input order (SHARED VALUES' `types()` order; a list-
+        /// bound port is absent -- see this type's own doc).
+        ports: Vec<PortEdge<Infallible>>,
     },
     /// A `for_each` node: one instance per item of its source list.
     Each {
         /// This `for_each` node's own id, among every `Each` node, in
         /// topological order.
         id: EachId,
+        /// The `for_each` binding itself, classified -- never
+        /// [`Source::Item`] (`check` already rejects `${{ item }}` as a
+        /// `for_each` source, since it is resolved outside any `for_each`
+        /// scope).
+        source: Source<Infallible>,
         /// The `for_each` source's resolved element type -- `check`
         /// already rejected a secret or non-list source, so this is
         /// always the scalar type every instance's item is a value of.
         element: TypeRef,
+        /// Every bound **scalar** port of this node's tool, in the tool
+        /// spec's own input order; a list-bound port is absent -- see this
+        /// type's own doc. A port whose binding is `${{ item }}` carries
+        /// [`Source::Item`].
+        ports: Vec<PortEdge<InEach>>,
     },
 }
 
 /// Hand-written, not derived: a plain `#[derive(Debug)]` would still
 /// compile (`Shape` holds no `Arc<dyn Tool>`), but `rustc`'s dead-code
-/// analysis explicitly ignores a derived impl's own field reads, so `id`
-/// and `element` -- otherwise unread until later tasks index result
-/// tables by the former and use the latter for keying (G3) -- would be
-/// flagged dead under `-D warnings`. Printing them by hand reads them for
-/// real instead of reaching for `#[allow(dead_code)]`.
+/// analysis explicitly ignores a derived impl's own field reads, so a
+/// field read by nothing but a derive would be flagged dead under `-D
+/// warnings`. Printing every field by hand reads them for real instead of
+/// reaching for `#[allow(dead_code)]` -- `id` and `element` for the same
+/// reason as G1, `source` and `ports` because they are new this task.
 impl fmt::Debug for Shape {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Single { id } => f.debug_struct("Single").field("id", id).finish(),
-            Self::Each { id, element } => f
+            Self::Single { id, ports } => f
+                .debug_struct("Single")
+                .field("id", id)
+                .field("ports", ports)
+                .finish(),
+            Self::Each {
+                id,
+                source,
+                element,
+                ports,
+            } => f
                 .debug_struct("Each")
                 .field("id", id)
+                .field("source", source)
                 .field("element", element)
+                .field("ports", ports)
                 .finish(),
         }
     }
@@ -421,6 +465,194 @@ pub(crate) struct SingleId(pub(crate) u32);
 /// id to name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct EachId(pub(crate) u32);
+
+/// The item marker for a [`Source<I>`] that is **not** inside a `for_each`
+/// node: milestone 3n, decision (g1)'s "Item marker" row. A unit type with
+/// no values, so `Source::Item(Infallible)` can never be constructed --
+/// unlike `std::convert::Infallible` itself, this crate owns it and can
+/// derive whatever a generic `Source<I>` needs (`Debug`, `Clone`, `Copy`)
+/// without reaching into `std`'s own impls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InEach;
+
+/// A producing tool's output port, named by its position in that tool's own
+/// `spec.outputs` rather than by [`PortName`] (milestone 3n, decision
+/// (g1)): what a [`Source::Step`], [`Source::Aggregate`] or
+/// [`Source::Keyed`] indexes a later task's `FilledOutputs` with, and what
+/// [`crate::plan::FilledOutputs::slot`] (this crate's one other half) reads
+/// back. Minted only by [`check`] (see [`output_slot`]), from the
+/// producing tool's own `ToolSpec::outputs`, which is itself an `IndexMap`
+/// -- so this is the same position [`Checked::types`]' SHARED VALUES row
+/// already orders ports by, applied to a tool's *output* ports instead of
+/// its input ones. A bounds-checked index, not a proof -- see `check`'s
+/// own module doc, "Typed ids are indexes, not proofs".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct OutputSlot(pub(crate) u32);
+
+/// Where one bound port's (or `for_each` source's, or workflow output's)
+/// value comes from, classified by `check` instead of left as a
+/// [`crate::workflow::Binding`] for `plan`/`apply` to match on a second
+/// time (milestone 3n, decision (g1)).
+///
+/// `I` is [`InEach`] for a [`Shape::Each`] node's own ports (where
+/// `${{ item }}` is valid) and [`std::convert::Infallible`] everywhere
+/// else (a [`Shape::Single`] node's ports, a `for_each` source itself, and
+/// a workflow output) -- SHARED VALUES' "Item marker" row. Resolving a
+/// `Source<I>` never needs to inspect `I`'s own value: whichever caller
+/// holds the current `for_each` item (if any) supplies it directly: see
+/// `crate::plan`'s resolver.
+///
+/// `Literal` and `Input` carry everything `plan`/`apply` need to resolve
+/// them (a parsed [`Value`], or an index into [`Checked::inputs`]) with no
+/// further lookup. `Step`, `Aggregate` and `Keyed` each carry the
+/// producing node's own typed id, the output port's [`OutputSlot`], and
+/// this reference's own resolved type (`ty` -- the same type
+/// [`Resolver::resolve`] already returns, *before* whatever conversion the
+/// consuming [`Bound::Scalar`]'s own `edge` applies): used to type a
+/// [`Value::unknown`] when the producing node turns out to be
+/// [`crate::plan::NodeResult::Skipped`], with no catalog lookup.
+#[derive(Debug, Clone)]
+pub(crate) enum Source<I> {
+    /// A [`crate::workflow::Binding::Literal`], already parsed by `check`
+    /// (`check_literal` now returns the [`Value`], not just its
+    /// [`TypeRef`]) -- `plan` and `apply` deliver this same stored value
+    /// and never re-parse it.
+    Literal(Value),
+    /// A [`crate::workflow::Binding::Input`]: a declared workflow input,
+    /// named by its position in [`Checked::inputs`]. Can only ever name
+    /// one of that table's own rows -- the 3d "undeclared input bound"
+    /// route closed by type, not by an `unreachable!`.
+    Input(InputId),
+    /// A [`crate::workflow::Binding::Item`]: the current `for_each`
+    /// instance's own item. Never constructed for `I` =
+    /// [`std::convert::Infallible`] -- `check` already refuses
+    /// `${{ item }}` used outside a `for_each` node
+    /// ([`CheckError::ItemOutsideForEach`]) before any `Source` is built.
+    Item(I),
+    /// A [`crate::workflow::Binding::Step`] onto a [`Shape::Single`] node:
+    /// that node's own output.
+    Step {
+        /// The producing node's own id.
+        from: SingleId,
+        /// The output port, by position.
+        slot: OutputSlot,
+        /// This reference's own resolved type.
+        ty: TypeRef,
+    },
+    /// A [`crate::workflow::Binding::Step`] onto a [`Shape::Each`] node:
+    /// every one of that node's instances, aggregated into a list (the
+    /// module docs' "`for_each` aggregation", carried over unchanged).
+    Aggregate {
+        /// The producing node's own id.
+        from: EachId,
+        /// The output port, by position.
+        slot: OutputSlot,
+        /// This reference's own resolved type -- always `list<T>`.
+        ty: TypeRef,
+    },
+    /// A [`crate::workflow::Binding::Keyed`] reference: one instance of a
+    /// [`Shape::Each`] node, selected by its item's own canonical string.
+    Keyed {
+        /// The referenced `for_each` node's own id.
+        from: EachId,
+        /// The instance key to match -- not validated by `check` (the
+        /// binding's own doc already says so); matched against each
+        /// instance's own key at plan time, exactly as today.
+        key: String,
+        /// The output port, by position.
+        slot: OutputSlot,
+        /// This reference's own resolved type.
+        ty: TypeRef,
+    },
+}
+
+/// One bound port's classified source and the [`Edge`] `check` chose to
+/// deliver it through, if the port is a scalar one (milestone 3n, decision
+/// (g1)). `Bound::List` (a [`crate::workflow::Binding::List`] port) is
+/// G4's: until then, a list-bound port has no [`PortEdge`] at all, and
+/// `plan`/`apply` still resolve it through [`Checked::edges`].
+#[derive(Debug, Clone)]
+pub(crate) enum Bound<I> {
+    /// Everything but a [`crate::workflow::Binding::List`]: the classified
+    /// source, and the conversion (if any) `check` chose to deliver it to
+    /// the port's own declared type.
+    Scalar {
+        /// Where the value comes from.
+        source: Source<I>,
+        /// The conversion (if any) from `source`'s own resolved type to
+        /// the port's declared one. Exactly [`Checked::types`]' own entry
+        /// for this port -- `check` records both, so forging one without
+        /// the other (as the moved-edge backstop test now does, since G3)
+        /// cannot happen by accident.
+        edge: Edge,
+    },
+}
+
+/// One of a node's bound ports, in the producing tool's own input order
+/// (milestone 3n, decision (g1)).
+#[derive(Clone)]
+pub(crate) struct PortEdge<I> {
+    /// This port's own name.
+    pub(crate) port: PortName,
+    /// This port's position in the node's own authored `with:` map --
+    /// unread until milestone 3n's G5 gives `awaiting_inputs` this same
+    /// ordering (SHARED VALUES); kept live by this type's hand-written
+    /// `Debug` until then, the same reason [`Shape`]'s is hand-written.
+    pub(crate) with_position: usize,
+    /// Where this port's value comes from, and how `check` delivers it.
+    pub(crate) bound: Bound<I>,
+}
+
+/// Hand-written, not derived: a plain `#[derive(Debug)]` would still
+/// compile, but `with_position` is read by nothing else until G5 (see this
+/// type's own field doc), and `rustc`'s dead-code analysis explicitly
+/// ignores a derived impl's own field reads (`Shape`'s own hand-written
+/// `Debug`, G1, states the same rule). Printing it by hand reads it for
+/// real instead of reaching for `#[allow(dead_code)]`.
+impl<I: fmt::Debug> fmt::Debug for PortEdge<I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PortEdge")
+            .field("port", &self.port)
+            .field("with_position", &self.with_position)
+            .field("bound", &self.bound)
+            .finish()
+    }
+}
+
+/// One declared workflow output, after `check` (milestone 3n, decision
+/// (g1)): its classified source and its resolved type. `plan` and `apply`
+/// resolve [`Checked::outputs`] into [`crate::plan::Plan::outputs`]
+/// instead of walking [`Workflow::outputs`] a second time.
+///
+/// `source` is never [`Source::Literal`] or [`Source::Item`] in practice --
+/// a literal workflow output is refused outright
+/// ([`CheckError::LiteralOutput`]) before `check_outputs` ever resolves
+/// one, and `${{ item }}` is resolved outside any `for_each` node's scope,
+/// which already refuses it ([`CheckError::ItemOutsideForEach`]) -- but
+/// `Source<Infallible>` is the same generic shape every other scalar
+/// source uses, so there is no third enum to keep in sync by hand.
+#[derive(Clone)]
+pub(crate) struct CheckedOutput {
+    /// The output's own declared name.
+    pub(crate) name: OutputName,
+    /// Where this output's value comes from.
+    pub(crate) source: Source<Infallible>,
+    /// This output's own resolved type -- exactly [`Checked::output_types`]'
+    /// own entry for this output. Unread by anything but this type's own
+    /// hand-written `Debug` until a later task's `output_types()` rewrite
+    /// (G7, "views, not copies") reads it instead of the older stored map.
+    pub(crate) ty: TypeRef,
+}
+
+impl fmt::Debug for CheckedOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CheckedOutput")
+            .field("name", &self.name)
+            .field("source", &self.source)
+            .field("ty", &self.ty)
+            .finish()
+    }
+}
 
 /// One declared workflow input, after `check` (milestone 3n, decision
 /// (g5)): its own [`InputSpec`], the catalog's registry entry its declared
@@ -1623,6 +1855,9 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         types: IndexMap::new(),
         output_types: IndexMap::new(),
         for_each_elements: IndexMap::new(),
+        pending_ports: IndexMap::new(),
+        pending_for_each: IndexMap::new(),
+        pending_outputs: IndexMap::new(),
     };
 
     resolver.check_boundaries(&mut errors);
@@ -1640,6 +1875,9 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         types,
         output_types,
         for_each_elements,
+        pending_ports,
+        pending_for_each,
+        pending_outputs,
         ..
     } = resolver;
 
@@ -1655,14 +1893,30 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
     // G1: every node's tool was already confirmed present in `catalog`
     // above -- any `UnknownTool` would have made `errors` non-empty and
     // returned already -- so this is `check`'s own one-time lookup per
-    // node, never repeated by `plan` or `apply` (verify item 4).
-    let nodes = build_checked_nodes(workflow, catalog, &order, &for_each_elements);
+    // node, never repeated by `plan` or `apply` (verify item 4). G3 adds
+    // each node's own bound scalar ports and (for an `Each` node) its
+    // `for_each` source, converted from `pending_ports`/`pending_for_each`
+    // in the same topological pass that mints `SingleId`/`EachId` -- see
+    // `build_checked_nodes`' own doc for why a source's id is always
+    // already known by the time it is needed.
+    let (nodes, id_of) = build_checked_nodes(
+        workflow,
+        catalog,
+        &specs,
+        &order,
+        &for_each_elements,
+        &pending_ports,
+        &pending_for_each,
+    );
     // G2: every declared input's type was already confirmed registered and
     // non-secret by `check_workflow_inputs` above -- an unregistered or
     // secret type would have made `errors` non-empty and returned already
     // -- so this, too, is one lookup per input, never repeated by `plan`
     // or `describe`.
     let inputs = build_checked_inputs(workflow, registry);
+    // G3: every workflow output, classified -- built once every node's own
+    // id is known, exactly like a node's own ports.
+    let outputs = build_checked_outputs(workflow, &specs, &pending_outputs, &id_of);
 
     Ok(Checked {
         workflow: workflow.clone(),
@@ -1673,6 +1927,7 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
         warnings,
         types,
         output_types,
+        outputs,
     })
 }
 
@@ -1717,24 +1972,199 @@ fn build_checked_inputs(workflow: &Workflow, registry: &'static TypeRegistry) ->
         .collect()
 }
 
+/// A node's own id, whichever kind it turned out to be -- the running map
+/// [`build_checked_nodes`] and [`build_checked_outputs`] share while
+/// converting [`PendingSource`]s to real [`Source`]s. Module-private: it
+/// never appears in [`Checked`] itself, only in the plumbing that builds
+/// it.
+#[derive(Clone, Copy)]
+enum NodeId {
+    Single(SingleId),
+    Each(EachId),
+}
+
+/// The [`OutputSlot`] of `referenced`'s own `port`: its position in that
+/// node's tool's own `spec.outputs` (an `IndexMap`, so this is a real,
+/// stable position -- milestone 3n, decision (g1)).
+///
+/// # Panics
+///
+/// Panics if `referenced` has no resolved spec, or `port` is not one of
+/// its declared output ports: both are impossible for a
+/// [`PendingSource::Reference`] or [`PendingSource::Keyed`]'s own `node`/
+/// `port`, which only ever exist because [`Resolver::resolve_reference`]
+/// already confirmed the output port is there (an `UnknownNode` or
+/// `UnknownPort` error would have made `errors` non-empty and `check`
+/// would have returned before this function is ever called).
+fn output_slot(
+    specs: &IndexMap<NodeName, Option<&ToolSpec>>,
+    referenced: &NodeName,
+    port: &PortName,
+) -> OutputSlot {
+    let spec = match specs.get(referenced) {
+        Some(Some(spec)) => *spec,
+        _ => unreachable!("a PendingSource never names a node whose spec failed to resolve"),
+    };
+    let index = spec
+        .outputs
+        .get_index_of(port)
+        .unwrap_or_else(|| unreachable!("a PendingSource never names an unknown output port"));
+    OutputSlot(
+        u32::try_from(index)
+            .unwrap_or_else(|_| unreachable!("more output ports than fit in a u32")),
+    )
+}
+
+/// The [`InputId`] of `name`: its position in [`Checked::inputs`]
+/// (`workflow.inputs`' own declaration order).
+///
+/// # Panics
+///
+/// Panics if `name` is not a declared input: impossible for a
+/// [`PendingSource::Input`], which only ever exists because
+/// [`Resolver::resolve`] already confirmed `workflow.inputs.get(input)` is
+/// `Some` (an `UndeclaredInput` error would have made `errors` non-empty
+/// and `check` would have returned before this function is ever called).
+fn input_id(workflow: &Workflow, name: &InputName) -> InputId {
+    let index = workflow
+        .inputs
+        .get_index_of(name)
+        .unwrap_or_else(|| unreachable!("a PendingSource::Input never names an undeclared input"));
+    InputId(u32::try_from(index).unwrap_or_else(|_| unreachable!("more inputs than fit in a u32")))
+}
+
+/// Convert one [`PendingSource`] to a real [`Source`], now that every
+/// node's own id is known (`id_of` holds an entry for every node this
+/// `PendingSource` can possibly reference -- see [`PendingSource`]'s own
+/// doc for why).
+fn build_source<I>(
+    pending: &PendingSource,
+    ty: &TypeRef,
+    workflow: &Workflow,
+    specs: &IndexMap<NodeName, Option<&ToolSpec>>,
+    id_of: &IndexMap<NodeName, NodeId>,
+) -> Source<I> {
+    match pending {
+        PendingSource::Literal(value) => Source::Literal(value.clone()),
+        PendingSource::Input(name) => Source::Input(input_id(workflow, name)),
+        PendingSource::Item => unreachable!(
+            "`check` rejects `${{ item }}` used outside a for_each node \
+             (CheckError::ItemOutsideForEach) before any PendingSource is built from it"
+        ),
+        PendingSource::Reference { node, port } => {
+            let slot = output_slot(specs, node, port);
+            match id_of.get(node).unwrap_or_else(|| {
+                unreachable!("a PendingSource::Reference's own node is always earlier in `order`")
+            }) {
+                NodeId::Single(from) => Source::Step {
+                    from: *from,
+                    slot,
+                    ty: ty.clone(),
+                },
+                NodeId::Each(from) => Source::Aggregate {
+                    from: *from,
+                    slot,
+                    ty: ty.clone(),
+                },
+            }
+        }
+        PendingSource::Keyed { node, key, port } => {
+            let slot = output_slot(specs, node, port);
+            let NodeId::Each(from) = id_of.get(node).unwrap_or_else(|| {
+                unreachable!("a PendingSource::Keyed's own node is always earlier in `order`")
+            }) else {
+                unreachable!(
+                    "`check` rejects a Keyed reference to a node with no for_each \
+                     (CheckError::KeyedOnScalarNode) before any PendingSource is built from it"
+                )
+            };
+            Source::Keyed {
+                from: *from,
+                key: key.clone(),
+                slot,
+                ty: ty.clone(),
+            }
+        }
+    }
+}
+
+/// [`build_source`] for a [`Shape::Each`] node's own port: the one place
+/// [`PendingSource::Item`] is a real value rather than an `unreachable!`.
+fn build_source_in_each(
+    pending: &PendingSource,
+    ty: &TypeRef,
+    workflow: &Workflow,
+    specs: &IndexMap<NodeName, Option<&ToolSpec>>,
+    id_of: &IndexMap<NodeName, NodeId>,
+) -> Source<InEach> {
+    if matches!(pending, PendingSource::Item) {
+        return Source::Item(InEach);
+    }
+    build_source(pending, ty, workflow, specs, id_of)
+}
+
+/// [`build_source`] for every [`PendingPort`] of one node, in the tool
+/// spec's own input order (the order `pending_ports` was pushed in --
+/// `Resolver::check_node` walks `spec.inputs`).
+fn build_port_edges<I>(
+    pending: &[PendingPort],
+    workflow: &Workflow,
+    specs: &IndexMap<NodeName, Option<&ToolSpec>>,
+    id_of: &IndexMap<NodeName, NodeId>,
+    build: impl Fn(
+        &PendingSource,
+        &TypeRef,
+        &Workflow,
+        &IndexMap<NodeName, Option<&ToolSpec>>,
+        &IndexMap<NodeName, NodeId>,
+    ) -> Source<I>,
+) -> Vec<PortEdge<I>> {
+    pending
+        .iter()
+        .map(|p| PortEdge {
+            port: p.port.clone(),
+            with_position: p.with_position,
+            bound: Bound::Scalar {
+                source: build(&p.source, p.edge.ty(), workflow, specs, id_of),
+                edge: p.edge.clone(),
+            },
+        })
+        .collect()
+}
+
 /// Build [`Checked`]'s node table, in `order` (topological): each node's
 /// own tool handle (already confirmed present -- see [`check`]'s only
 /// caller) and its [`Shape`], minting a [`SingleId`] or [`EachId`] in
-/// topological order within its own kind (SHARED VALUES).
-/// `for_each_elements` holds the resolved element type of every node that
-/// has a `for_each` -- recorded by [`Resolver::check_for_each`] on its own
-/// success path, which is the only way a node with a `for_each` reaches
-/// this function at all (any failure there pushes an error, and `check`
-/// returns before building this table).
+/// topological order within its own kind (SHARED VALUES). `for_each_elements`
+/// holds the resolved element type of every node that has a `for_each` --
+/// recorded by [`Resolver::check_for_each`] on its own success path, which
+/// is the only way a node with a `for_each` reaches this function at all
+/// (any failure there pushes an error, and `check` returns before building
+/// this table).
+///
+/// G3 also converts `pending_ports` and `pending_for_each` into real
+/// [`Source`]s, in the same single topological pass that mints ids: a
+/// [`PendingSource::Reference`]/`Keyed` only ever names an earlier node
+/// (`check`'s own module doc, "Typed ids are indexes, not proofs" --
+/// `check` would have reported a cycle otherwise), so `id_of` already
+/// holds that node's id by the time this node's own ports are built.
+/// Returns the finished node table alongside `id_of` itself, which
+/// [`build_checked_outputs`] needs too (workflow outputs are resolved only
+/// after every node, so by definition after every node's own id exists).
 fn build_checked_nodes(
     workflow: &Workflow,
     catalog: &Catalog,
+    specs: &IndexMap<NodeName, Option<&ToolSpec>>,
     order: &[NodeName],
     for_each_elements: &IndexMap<NodeName, TypeRef>,
-) -> Vec<CheckedNode> {
+    pending_ports: &IndexMap<NodeName, Vec<PendingPort>>,
+    pending_for_each: &IndexMap<NodeName, (PendingSource, TypeRef)>,
+) -> (Vec<CheckedNode>, IndexMap<NodeName, NodeId>) {
     let mut next_single = 0u32;
     let mut next_each = 0u32;
-    order
+    let mut id_of: IndexMap<NodeName, NodeId> = IndexMap::new();
+    let empty: Vec<PendingPort> = Vec::new();
+    let nodes = order
         .iter()
         .map(|name| {
             let declared_at = workflow.nodes.get_index_of(name).unwrap_or_else(|| {
@@ -1748,17 +2178,39 @@ fn build_checked_nodes(
                     "every node's tool was confirmed present before any error was returned"
                 )
             }));
+            let own_pending = pending_ports.get(name).unwrap_or(&empty);
             let shape = if let Some(element) = for_each_elements.get(name) {
                 let id = EachId(next_each);
                 next_each += 1;
+                let (pending_source, ty) = pending_for_each.get(name).unwrap_or_else(|| {
+                    unreachable!(
+                        "`check_for_each` records a pending source on every success path \
+                         that also records `for_each_elements`"
+                    )
+                });
+                let source =
+                    build_source::<Infallible>(pending_source, ty, workflow, specs, &id_of);
+                let ports =
+                    build_port_edges(own_pending, workflow, specs, &id_of, build_source_in_each);
+                id_of.insert(name.clone(), NodeId::Each(id));
                 Shape::Each {
                     id,
+                    source,
                     element: element.clone(),
+                    ports,
                 }
             } else {
                 let id = SingleId(next_single);
                 next_single += 1;
-                Shape::Single { id }
+                let ports = build_port_edges(
+                    own_pending,
+                    workflow,
+                    specs,
+                    &id_of,
+                    build_source::<Infallible>,
+                );
+                id_of.insert(name.clone(), NodeId::Single(id));
+                Shape::Single { id, ports }
             };
             CheckedNode {
                 name: name.clone(),
@@ -1766,6 +2218,33 @@ fn build_checked_nodes(
                 tool,
                 shape,
             }
+        })
+        .collect();
+    (nodes, id_of)
+}
+
+/// Build [`Checked`]'s output table, in declaration order, converting
+/// every `pending_outputs` entry the same way [`build_checked_nodes`]
+/// converts a port's own pending source -- by the time this runs, `id_of`
+/// holds every node's id, since every workflow output is resolved only
+/// after every node (`check_outputs` runs last).
+fn build_checked_outputs(
+    workflow: &Workflow,
+    specs: &IndexMap<NodeName, Option<&ToolSpec>>,
+    pending_outputs: &IndexMap<OutputName, (PendingSource, TypeRef)>,
+    id_of: &IndexMap<NodeName, NodeId>,
+) -> Vec<CheckedOutput> {
+    workflow
+        .outputs
+        .keys()
+        .filter_map(|name| {
+            let (pending_source, ty) = pending_outputs.get(name)?;
+            let source = build_source::<Infallible>(pending_source, ty, workflow, specs, id_of);
+            Some(CheckedOutput {
+                name: name.clone(),
+                source,
+                ty: ty.clone(),
+            })
         })
         .collect()
 }
@@ -1950,6 +2429,80 @@ enum ItemContext {
     ForEachOf(TypeRef),
 }
 
+/// A bound port's, `for_each` source's, or workflow output's own
+/// [`Source`], named by the `NodeName`s it refers to rather than by the
+/// `SingleId`/`EachId`/`InputId` a real [`Source`] carries -- milestone
+/// 3n, decision (g1)'s two-phase build. `SingleId`/`EachId` are minted by
+/// [`build_checked_nodes`] in topological order, which is *after*
+/// [`Resolver`] has finished resolving every binding, so a resolution
+/// method records this name-based stand-in instead; [`build_source`]
+/// converts it to a real `Source` once the id each name was given is
+/// known (always true for a reference's own target by the time its
+/// consumer is reached -- "a source's id is always lower than its
+/// consumer's", `check`'s own module doc).
+///
+/// Never built for a [`Binding::List`]: its own per-element sources are
+/// G4's.
+#[derive(Clone)]
+enum PendingSource {
+    /// A [`Binding::Literal`], already parsed: the [`Value`] itself, with
+    /// no name to defer resolving.
+    Literal(Value),
+    /// A [`Binding::Input`]'s own input name.
+    Input(InputName),
+    /// A [`Binding::Item`].
+    Item,
+    /// A [`Binding::Step`]: resolves to [`Source::Step`] or
+    /// [`Source::Aggregate`] depending on whether `node`'s own [`Shape`]
+    /// turns out to be `Single` or `Each`.
+    Reference { node: NodeName, port: PortName },
+    /// A [`Binding::Keyed`]: always resolves to [`Source::Keyed`] (`check`
+    /// already refused one naming a node with no `for_each`,
+    /// [`CheckError::KeyedOnScalarNode`]).
+    Keyed {
+        node: NodeName,
+        key: String,
+        port: PortName,
+    },
+}
+
+/// [`PendingSource`] for every [`Binding`] kind [`Resolver::resolve`]
+/// itself resolves (everything but [`Binding::Literal`] and
+/// [`Binding::List`], which never reach [`Resolver::resolve`] at all --
+/// see that method's own `unreachable!`s).
+fn pending_source_of(binding: &Binding) -> PendingSource {
+    match binding {
+        Binding::Input(name) => PendingSource::Input(name.clone()),
+        Binding::Item => PendingSource::Item,
+        Binding::Step { node, port } => PendingSource::Reference {
+            node: node.clone(),
+            port: port.clone(),
+        },
+        Binding::Keyed { node, key, port } => PendingSource::Keyed {
+            node: node.clone(),
+            key: key.clone(),
+            port: port.clone(),
+        },
+        Binding::Literal(_) | Binding::List(_) => unreachable!(
+            "callers of pending_source_of never hold a Literal or List binding here -- \
+             a literal has its own Value in hand already, and a list's own elements are G4's"
+        ),
+    }
+}
+
+/// One bound scalar port's pending data, by name (milestone 3n, decision
+/// (g1)'s two-phase build -- see [`PendingSource`]'s own doc): everything
+/// [`build_checked_nodes`] needs to build a real [`PortEdge`] once ids
+/// exist, recorded by [`Resolver::check_with_port`] at exactly the point it
+/// also calls [`Resolver::record_edge`] for the same port.
+#[derive(Clone)]
+struct PendingPort {
+    port: PortName,
+    with_position: usize,
+    source: PendingSource,
+    edge: Edge,
+}
+
 /// Resolves bindings and accumulates the side effects of doing so: graph
 /// edges, used-input tracking, and resolved binding types. Grouped into one
 /// struct so the resolution methods below stay under a handful of
@@ -1969,6 +2522,18 @@ struct Resolver<'a> {
     /// node has checked clean, to tell a [`Shape::Each`] from a
     /// [`Shape::Single`] and give the former its `element`.
     for_each_elements: IndexMap<NodeName, TypeRef>,
+    /// Every node's own bound **scalar** ports, by name, pending
+    /// [`build_checked_nodes`]' id-aware conversion to real [`PortEdge`]s
+    /// (milestone 3n, decision (g1), G3). A list-bound port has no entry
+    /// (G4).
+    pending_ports: IndexMap<NodeName, Vec<PendingPort>>,
+    /// Every `for_each` node's own source, by name, and its resolved type
+    /// (the full `list<T>`, before `.element()`) -- pending the same
+    /// conversion as [`Self::pending_ports`].
+    pending_for_each: IndexMap<NodeName, (PendingSource, TypeRef)>,
+    /// Every workflow output's own source, by name, and its resolved
+    /// type, in declaration order -- pending the same conversion.
+    pending_outputs: IndexMap<OutputName, (PendingSource, TypeRef)>,
 }
 
 impl<'a> Resolver<'a> {
@@ -2017,9 +2582,15 @@ impl<'a> Resolver<'a> {
         let mut seen: HashSet<PortName> = HashSet::new();
         for (port, port_spec) in &spec.inputs {
             seen.insert(port.clone());
+            // `with_position` is only ever read once `binding` is `Some`
+            // (a [`PendingPort`]'s own field); for an unbound port
+            // `get_index_of` is `None` too, so `unwrap_or(0)` is never
+            // actually consulted.
+            let with_position = node.with.get_index_of(port).unwrap_or(0);
             self.check_with_port(
                 name,
                 port,
+                with_position,
                 port_spec,
                 node.with.get(port),
                 &item_ctx,
@@ -2081,6 +2652,12 @@ impl<'a> Resolver<'a> {
         // reads this once `errors` is confirmed empty, so a node that
         // reaches that point with a `for_each` always has an entry here.
         self.for_each_elements.insert(name.clone(), element.clone());
+        // G3: the `for_each` source itself, classified, pending the same
+        // id-aware conversion as a bound port (see `PendingSource`'s own
+        // doc). `ty` is the whole resolved `list<T>`, matching
+        // `Source::Aggregate`'s/`Source::Step`'s own `ty` field.
+        self.pending_for_each
+            .insert(name.clone(), (pending_source_of(binding), ty));
         ItemContext::ForEachOf(element)
     }
 
@@ -2115,12 +2692,37 @@ impl<'a> Resolver<'a> {
         None
     }
 
+    /// Record `node`.`port`'s pending scalar source and `edge` (milestone
+    /// 3n, decision (g1)), alongside [`Self::record_edge`]'s own older
+    /// entry -- called at exactly the same success points, never more and
+    /// never fewer.
+    fn record_pending_port(
+        &mut self,
+        node: &NodeName,
+        port: &PortName,
+        with_position: usize,
+        source: PendingSource,
+        edge: Edge,
+    ) {
+        self.pending_ports
+            .entry(node.clone())
+            .or_default()
+            .push(PendingPort {
+                port: port.clone(),
+                with_position,
+                source,
+                edge,
+            });
+    }
+
     /// Check one `with` port: unbound-but-required, a literal, or a
     /// resolved binding checked for secrecy and type against `port_spec`.
+    #[allow(clippy::too_many_arguments)] // with_position (G3) joins the existing shape, one per fact the caller already has in hand
     fn check_with_port(
         &mut self,
         node: &NodeName,
         port: &PortName,
+        with_position: usize,
         port_spec: &PortSpec,
         binding: Option<&Binding>,
         item_ctx: &ItemContext,
@@ -2144,14 +2746,22 @@ impl<'a> Resolver<'a> {
                 });
                 return;
             }
-            if let Some(found) =
+            if let Some(value) =
                 check_literal(node, port, text, &port_spec.ty, self.registry, errors)
             {
                 // A literal is never converted: it has no source type of
                 // its own, and it already parsed as the port's own type
                 // directly (`check_literal`, above). See decision (e)'s
                 // step 2.
-                self.record_edge(node, port, Edge::exact(found));
+                let edge = Edge::exact(value.ty().clone());
+                self.record_edge(node, port, edge.clone());
+                self.record_pending_port(
+                    node,
+                    port,
+                    with_position,
+                    PendingSource::Literal(value),
+                    edge,
+                );
             }
             return;
         }
@@ -2193,7 +2803,9 @@ impl<'a> Resolver<'a> {
         }
 
         if port_spec.ty.accepts(&found, self.registry) {
-            self.record_edge(node, port, Edge::exact(found));
+            let edge = Edge::exact(found);
+            self.record_edge(node, port, edge.clone());
+            self.record_pending_port(node, port, with_position, pending_source_of(binding), edge);
             return;
         }
 
@@ -2219,7 +2831,15 @@ impl<'a> Resolver<'a> {
             #[allow(clippy::disallowed_methods)]
             let row = self.registry.probe_conversion(&found.name, &to.name);
             if let Some(row) = row {
-                self.record_edge(node, port, Edge::converted(found, row));
+                let edge = Edge::converted(found, row);
+                self.record_edge(node, port, edge.clone());
+                self.record_pending_port(
+                    node,
+                    port,
+                    with_position,
+                    pending_source_of(binding),
+                    edge,
+                );
                 return;
             }
         }
@@ -2558,6 +3178,10 @@ impl<'a> Resolver<'a> {
             if let Some((found, _source)) =
                 self.resolve(None, &site, &not_in_for_each, binding, errors)
             {
+                self.pending_outputs.insert(
+                    out_name.clone(),
+                    (pending_source_of(binding), found.clone()),
+                );
                 self.output_types.insert(out_name.clone(), found);
             }
         }
@@ -2722,6 +3346,12 @@ impl<'a> Resolver<'a> {
 /// `RepoFile` is `repo.file.render`, so no literal may supply one); a
 /// list-typed port refuses it because no literal can supply a list;
 /// otherwise it is parsed against the port's scalar type.
+///
+/// Returns the parsed [`Value`] itself, not just its [`TypeRef`] (milestone
+/// 3n, decision (g1)): `check_with_port` needs the value both to record
+/// the edge (`value.ty()`) and to build a [`Source::Literal`], and
+/// `check_boundaries` -- the other caller -- only ever needed the type, so
+/// it drops the value.
 fn check_literal(
     node: &NodeName,
     port: &PortName,
@@ -2729,7 +3359,7 @@ fn check_literal(
     expected: &PortType,
     registry: &TypeRegistry,
     errors: &mut Vec<CheckError>,
-) -> Option<TypeRef> {
+) -> Option<Value> {
     if port_accepts_secret(expected, registry) {
         errors.push(CheckError::SecretLiteral {
             node: node.clone(),
@@ -2769,7 +3399,7 @@ fn check_literal(
     }
 
     match Value::parse(ty, text) {
-        Ok(value) => Some(value.ty().clone()),
+        Ok(value) => Some(value),
         Err(error) => {
             errors.push(CheckError::InvalidLiteral {
                 node: node.clone(),
@@ -4622,15 +5252,28 @@ mod tests {
                 .is_none()
         );
 
-        let mut forged_types = checked.types.clone();
-        forged_types
-            .get_mut(&node_name("sink2"))
-            .expect("sink2 has a types entry")
-            .insert(port("b"), converting_edge);
-        let forged = Checked {
-            types: forged_types,
-            ..checked.clone()
+        // Milestone 3n, G3: `plan` no longer delivers a scalar port
+        // through `Checked::types` at all -- it reads the edge straight
+        // off `sink2`'s own `PortEdge` (`Shape::Single::ports`), which is
+        // what must be forged for this to still exercise the backstop.
+        // `Checked::types` itself is left untouched (still correct), so
+        // this is the moved edge *moving onto the wrong port* in the only
+        // place that still matters.
+        let mut forged = checked.clone();
+        let sink2 = forged
+            .nodes
+            .iter_mut()
+            .find(|node| node.name == node_name("sink2"))
+            .expect("sink2 is one of this workflow's checked nodes");
+        let Shape::Single { ports, .. } = &mut sink2.shape else {
+            unreachable!("sink2 has no for_each")
         };
+        let port_edge = ports
+            .iter_mut()
+            .find(|port_edge| port_edge.port == port("b"))
+            .expect("sink2 has a bound scalar port b");
+        let Bound::Scalar { edge, .. } = &mut port_edge.bound;
+        *edge = converting_edge;
 
         let mut inputs = IndexMap::new();
         inputs.insert(
@@ -4762,7 +5405,13 @@ mod tests {
         assert_eq!(single.tool.spec().name, tool_name("test.single"));
         assert_eq!(single.declared_at, 0, "single is workflow.nodes' entry 0");
         match &single.shape {
-            Shape::Single { id } => assert_eq!(id.0, 0, "the first Single node is id 0"),
+            Shape::Single { id, ports } => {
+                assert_eq!(id.0, 0, "the first Single node is id 0");
+                assert!(
+                    ports.is_empty(),
+                    "test.single declares no input ports at all"
+                );
+            }
             Shape::Each { .. } => panic!("a node with no for_each must be Shape::Single"),
         }
         assert!(
@@ -4777,9 +5426,19 @@ mod tests {
         assert_eq!(each.tool.spec().name, tool_name("test.each"));
         assert_eq!(each.declared_at, 1, "each is workflow.nodes' entry 1");
         match &each.shape {
-            Shape::Each { id, element } => {
+            Shape::Each {
+                id,
+                source,
+                element,
+                ports,
+            } => {
                 assert_eq!(id.0, 0, "the first Each node is id 0");
                 assert_eq!(*element, ty("Text"), "the for_each source's element type");
+                assert!(
+                    matches!(source, Source::Input(_)),
+                    "the for_each source is bound to a declared input"
+                );
+                assert!(ports.is_empty(), "test.each declares no input ports at all");
             }
             Shape::Single { .. } => panic!("a for_each node must be Shape::Each"),
         }
@@ -4792,12 +5451,18 @@ mod tests {
     /// Acceptance 13: `format!("{checked:?}")` must compile at all --
     /// `CheckedNode` holds `Arc<dyn Tool>`, which is not `Debug`, so this
     /// is only true because `Checked`'s `Debug` is hand-written (decision
-    /// (s3)) -- and it names every node and its tool. `Shape` carries no
-    /// `Source`/literal yet (G1 gives it ids and an element type only), so
-    /// there is nothing a literal's own content could leak through here;
-    /// this pins the contract G3's `Source::Literal(Value)` has to keep
-    /// once it exists, the same way `check_adversarial.rs`'s own
-    /// redaction cases pin `Value`'s.
+    /// (s3)) -- and it names every node and its tool. From G3 on, `Shape`'s
+    /// own `ports` carry a real `Source::Literal(Value)` for each of these
+    /// two literal-bound ports, so this now exercises that path for real:
+    /// `Source<I>`'s derived `Debug` only ever forwards to `Value`'s own
+    /// (which redacts by type, never by content), so a non-secret literal
+    /// like `DB_PASSWORD` still prints -- `check` already refuses binding
+    /// any secret-accepting port to a literal at all
+    /// ([`CheckError::SecretLiteral`]), so `Source::Literal` can never
+    /// hold a secret value to leak in the first place. The genuinely
+    /// secret cases (a tool's secret *output* reaching `Source::Step`) are
+    /// `check_adversarial.rs`'s own redaction tests, unaffected by this
+    /// change and still green.
     #[test]
     fn debug_of_a_checked_workflow_compiles_and_names_every_node_and_its_tool() {
         let catalog = test_catalog();
@@ -4817,5 +5482,270 @@ mod tests {
             rendered.contains("secret") && rendered.contains("doppler.secret.get"),
             "node and tool names must still print: {rendered}"
         );
+        assert!(
+            rendered.contains("DB_PASSWORD"),
+            "a non-secret literal's own Source::Literal(Value) still prints through Value's own \
+             Debug, unredacted (only a secret-*typed* value is redacted, and a literal can never \
+             be one): {rendered}"
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Milestone 3n, task G3: `Source`, `PortEdge`, `Bound::Scalar`,
+    // `CheckedOutput` and the `for_each` source.
+    // ---------------------------------------------------------------------
+
+    /// One scalar port of each `Source` kind G3 builds, plus a
+    /// `for_each` source and a workflow output -- every case the task
+    /// touches, pinned together: a literal (`Source::Literal`, holding
+    /// the parsed `Value`), a declared input (`Source::Input`), a `Step`
+    /// onto a `Shape::Single` node (`Source::Step`), a `Step` onto a
+    /// `Shape::Each` node (`Source::Aggregate`), a `Keyed` reference
+    /// (`Source::Keyed`), the `for_each` source itself (also
+    /// `Source::Input` here), the `${{ item }}` port inside the `for_each`
+    /// node (`Source::Item`), and a workflow output resolving to
+    /// `Source::Step` (`CheckedOutput`). `with_position` is also pinned,
+    /// at the ports' own `with:` declaration order.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn check_builds_every_source_kind_from_g1s_representation() {
+        let catalog = {
+            let mut catalog = Catalog::new(willikins_types::registry());
+            catalog
+                .insert(Arc::new(DummyTool {
+                    spec: spec_of(
+                        "test.producer",
+                        &[],
+                        &[("out", ty("Text"))],
+                        &[],
+                        Class::Reversible,
+                        true,
+                    ),
+                }))
+                .unwrap();
+            catalog
+                .insert(Arc::new(DummyTool {
+                    spec: spec_of(
+                        "test.looped",
+                        &[("item_val", exact("Text"), true)],
+                        &[("val", ty("Text"))],
+                        &[],
+                        Class::Reversible,
+                        true,
+                    ),
+                }))
+                .unwrap();
+            catalog
+                .insert(Arc::new(DummyTool {
+                    spec: spec_of(
+                        "test.sink",
+                        &[
+                            ("lit", exact("Text"), true),
+                            ("from_input", exact("Text"), true),
+                            ("from_step", exact("Text"), true),
+                            ("agg", PortType::Exact(list_ty("Text")), true),
+                            ("keyed", exact("Text"), true),
+                        ],
+                        &[("done", ty("Text"))],
+                        &[],
+                        Class::Reversible,
+                        true,
+                    ),
+                }))
+                .unwrap();
+            catalog
+        };
+
+        let workflow = Workflow::new(workflow_name("g3-sources"))
+            .input(input_name("name_input"), InputSpec::new(ty("Text")))
+            .input(input_name("items"), InputSpec::new(list_ty("Text")))
+            .node(node_name("producer"), Node::new(tool_name("test.producer")))
+            .node(
+                node_name("looped"),
+                Node::new(tool_name("test.looped"))
+                    .for_each(Binding::Input(input_name("items")))
+                    .port(port("item_val"), Binding::Item),
+            )
+            .node(
+                node_name("sink"),
+                Node::new(tool_name("test.sink"))
+                    .port(port("lit"), Binding::Literal("hello".to_string()))
+                    .port(port("from_input"), Binding::Input(input_name("name_input")))
+                    .port(
+                        port("from_step"),
+                        Binding::Step {
+                            node: node_name("producer"),
+                            port: port("out"),
+                        },
+                    )
+                    .port(
+                        port("agg"),
+                        Binding::Step {
+                            node: node_name("looped"),
+                            port: port("val"),
+                        },
+                    )
+                    .port(
+                        port("keyed"),
+                        Binding::Keyed {
+                            node: node_name("looped"),
+                            key: "k".to_string(),
+                            port: port("val"),
+                        },
+                    ),
+            )
+            .output(
+                OutputName::parse("final_output").unwrap(),
+                Binding::Step {
+                    node: node_name("producer"),
+                    port: port("out"),
+                },
+            );
+
+        let checked = check(&workflow, &catalog).expect("every binding above type-checks");
+
+        let producer = checked
+            .nodes()
+            .iter()
+            .find(|n| n.name == node_name("producer"))
+            .expect("producer has its own CheckedNode");
+        let Shape::Single {
+            id: producer_id, ..
+        } = producer.shape
+        else {
+            unreachable!("producer has no for_each")
+        };
+
+        let looped = checked
+            .nodes()
+            .iter()
+            .find(|n| n.name == node_name("looped"))
+            .expect("looped has its own CheckedNode");
+        let Shape::Each {
+            id: looped_id,
+            source: looped_source,
+            ports: looped_ports,
+            ..
+        } = &looped.shape
+        else {
+            unreachable!("looped has a for_each")
+        };
+        assert!(
+            matches!(looped_source, Source::Input(_)),
+            "looped's for_each source is the declared input `items`"
+        );
+        assert_eq!(looped_ports.len(), 1, "looped binds exactly one port");
+        assert_eq!(looped_ports[0].port, port("item_val"));
+        assert_eq!(looped_ports[0].with_position, 0);
+        assert!(
+            matches!(
+                looped_ports[0].bound,
+                Bound::Scalar {
+                    source: Source::Item(_),
+                    ..
+                }
+            ),
+            "item_val is bound to `${{{{ item }}}}`"
+        );
+
+        let sink = checked
+            .nodes()
+            .iter()
+            .find(|n| n.name == node_name("sink"))
+            .expect("sink has its own CheckedNode");
+        let Shape::Single {
+            ports: sink_ports, ..
+        } = &sink.shape
+        else {
+            unreachable!("sink has no for_each")
+        };
+        assert_eq!(
+            sink_ports.len(),
+            5,
+            "sink binds every one of its five declared ports"
+        );
+        for (index, port_name) in ["lit", "from_input", "from_step", "agg", "keyed"]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                sink_ports[index].port,
+                port(port_name),
+                "ports() keeps the tool spec's own input order"
+            );
+            assert_eq!(
+                sink_ports[index].with_position, index,
+                "with_position matches this port's `with:` declaration order"
+            );
+        }
+
+        let Bound::Scalar {
+            source: lit_source, ..
+        } = &sink_ports[0].bound;
+        match lit_source {
+            Source::Literal(value) => assert_eq!(
+                value.render().to_string(),
+                "hello",
+                "the literal's own parsed Value is stored, not re-derived"
+            ),
+            other => panic!("expected Source::Literal, got {other:?}"),
+        }
+
+        let Bound::Scalar {
+            source: input_source,
+            ..
+        } = &sink_ports[1].bound;
+        assert!(
+            matches!(input_source, Source::Input(_)),
+            "from_input is bound to the declared input `name_input`"
+        );
+
+        let Bound::Scalar {
+            source: step_source,
+            ..
+        } = &sink_ports[2].bound;
+        match step_source {
+            Source::Step { from, .. } => assert_eq!(
+                *from, producer_id,
+                "from_step names producer's own SingleId"
+            ),
+            other => panic!("expected Source::Step, got {other:?}"),
+        }
+
+        let Bound::Scalar {
+            source: agg_source, ..
+        } = &sink_ports[3].bound;
+        match agg_source {
+            Source::Aggregate { from, .. } => {
+                assert_eq!(*from, *looped_id, "agg names looped's own EachId");
+            }
+            other => panic!("expected Source::Aggregate, got {other:?}"),
+        }
+
+        let Bound::Scalar {
+            source: keyed_source,
+            ..
+        } = &sink_ports[4].bound;
+        match keyed_source {
+            Source::Keyed { from, key, .. } => {
+                assert_eq!(*from, *looped_id, "keyed names looped's own EachId");
+                assert_eq!(key, "k", "the instance key rides unvalidated, as authored");
+            }
+            other => panic!("expected Source::Keyed, got {other:?}"),
+        }
+
+        assert_eq!(checked.outputs().len(), 1, "one declared output");
+        let output = &checked.outputs()[0];
+        assert_eq!(output.name, OutputName::parse("final_output").unwrap());
+        assert_eq!(output.ty, ty("Text"));
+        match &output.source {
+            Source::Step { from, .. } => {
+                assert_eq!(
+                    *from, producer_id,
+                    "the output names producer's own SingleId"
+                );
+            }
+            other => panic!("expected Source::Step, got {other:?}"),
+        }
     }
 }

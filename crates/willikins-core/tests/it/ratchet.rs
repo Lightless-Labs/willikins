@@ -61,9 +61,23 @@ fn the_unreachable_ratchet_never_rises() {
     // unregistered input type" fallbacks (-2), leaving only the
     // unmoved "a fixed input is always defaulted" one. The plan's final
     // targets are `plan.rs` 6, `apply.rs` 2, `describe.rs` 0 (after G7).
+    //
+    // G3 (2026-10-11): `plan.rs`'s old `bind_ports` (two literal-port
+    // fallbacks) is gone, replaced by scalar-port resolution straight off
+    // `Source`/`PortEdge` -- net -1 even after the one new fallback
+    // `resolve_source`'s own `Source::Item` arm needs (the same shape
+    // `resolve_binding`'s matching arm already has, for the new source
+    // path rather than the old `Binding` one). `apply.rs` holds flat:
+    // `Shape`'s two variants and `Group`'s three are reconciled once, via
+    // `erase_ports` (a total function, no fallback of its own) plus a
+    // plain `matches!` check, not via a per-arm "the other Group variant
+    // cannot happen here" fallback -- see `apply`'s own comment at the
+    // call site. The one new index-out-of-range backstop
+    // (`FilledOutputs::slot`'s own) lives in `willikins-core::tool`
+    // instead, which this ratchet does not cover, for exactly this reason.
     assert_eq!(
         ratchet_count("src/plan.rs"),
-        30,
+        29,
         "plan.rs's unreachable ratchet moved; lower it, never raise it"
     );
     assert_eq!(
