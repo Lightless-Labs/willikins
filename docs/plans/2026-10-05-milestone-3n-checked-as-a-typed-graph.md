@@ -1176,22 +1176,23 @@ implementing B2, plus the mechanical scope found by the compiler rather than by 
    own commit message already recorded the audit's result (36 files calling both `check(` and
    `plan(`/`apply(`, five with more than one `catalog` binding in scope, each read by hand, none
    planning or applying against a catalog different from the one it checked against). B2 does not
-   repeat that audit; it relies on it, per the precondition the plan itself states, and found nothing
-   in 317 call sites across 30 files that contradicted it -- every single-line `plan(...)` or
-   multi-line `apply(...)` call needed exactly one argument deleted, never a different catalog
-   substituted.
+   repeat that audit; it relies on it, per the precondition the plan itself states, and found
+   nothing at any call site that contradicted it -- every single-line `plan(...)` or multi-line
+   `apply(...)` call needed exactly one argument deleted, never a different catalog substituted.
 3. **Scope, found by the compiler rather than estimated:** `cargo check --workspace --all-targets
    --all-features --keep-going` (S1's own recommended form, widened again here since fixing one
    layer of errors always unblocked checking the next downstream crate -- four passes in total:
    `willikins-core`/`willikins-server`/`willikins-dsl`/`willikins-journal`/
    `willikins-providers-{fake,github}`, then `willikins-cli`/`willikins-providers-{appstore,
    buildkite,doppler}` once those compiled, then the two gitignored `operator_*` files once
-   `willikins-cli` itself compiled, then zero). Every one of the roughly 220 `plan`/`apply` call
-   sites the compiler found (close to the plan's own 208 + 109 estimate) was a plain argument
-   deletion; none was reported as anything else. Two test-only cleanups followed, caught by a
-   plain `cargo check`'s own unused-variable warnings rather than by `-D warnings` (which only
-   `clippy` applies): `crates/willikins-journal/tests/it/acceptance_10_journal.rs`'s `record_plan`
-   helper lost its own now-unread `catalog` parameter (it only ever forwarded it to `plan`), and
+   `willikins-cli` itself compiled, then zero). 348 call sites in total: 207 in the first pass's 21
+   tracked files, 141 in the second pass's 15 files (108 tracked, 33 in the two gitignored
+   `operator_*` files) -- 315 tracked call sites across 34 tracked files plus 33 untracked, close to
+   the plan's own 208 + 109 = 317 estimate. Every one was a plain argument deletion; none was
+   reported as anything else. Two test-only cleanups followed, caught by a plain `cargo check`'s own
+   unused-variable warnings rather than by `-D warnings` (which only `clippy` applies):
+   `crates/willikins-journal/tests/it/acceptance_10_journal.rs`'s `record_plan` helper lost its own
+   now-unread `catalog` parameter (it only ever forwarded it to `plan`), and
    `crates/willikins-core/tests/it/apply_adversarial.rs`'s thread-local `let catalog = &catalog;`
    reborrow (now-dead, since `apply` no longer takes it) was deleted.
 4. **One test's premise is now stronger than it was written for, not merely dead.**
