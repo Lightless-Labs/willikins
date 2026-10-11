@@ -16,13 +16,13 @@ use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use crate::common::{input, node, output, port, tool_name, ty, workflow_name};
+use crate::common::{input, list_ty, node, output, port, tool_name, ty, workflow_name};
 use willikins_core::{
     Action, Binding, Catalog, CatalogError, Class, Ensured, Gate, GateError, InputSpec, Inputs,
     Node, Observation, Outputs, PartialInputs, PortSpec, PortType, SinkToken, Tool, ToolError,
     ToolSpec, Uses, Value, Workflow, check, describe, link, plan,
 };
-use willikins_types::{DomainType, EnvironmentSlug};
+use willikins_types::{DomainType, EnvironmentSlug, Text};
 
 // ---------------------------------------------------------------------
 // Test tools
@@ -1169,5 +1169,265 @@ fn acceptance_7_a_linked_acknowledgement_gate_awaits_the_roots_own_input() {
         result.blocked[0].awaiting_inputs,
         vec![input("m_done")],
         "the report must name the root's own input, the one a --input flag would supply"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Acceptance 9 (milestone 3n, decision (g4), task G5): `awaiting_inputs`
+// over a `for_each` gate, sorted by `with_position` -- the node's own
+// `with:` order -- rather than the tool's own spec order, which the
+// graph's `ports` are stored in (SHARED VALUES: "awaiting_inputs order").
+// ---------------------------------------------------------------------
+
+/// A pure `for_each` gate over three ports, declared in this order in its
+/// own `ToolSpec::inputs` (`step`, `ack_a`, `ack_b`): `step` (the current
+/// item, passed through as the gate's own subject) and two
+/// `OperatorAcknowledgement` ports. `Present` iff both are known.
+struct OrderedAckGateTool {
+    spec: ToolSpec,
+}
+
+impl OrderedAckGateTool {
+    fn new() -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("step"),
+            PortSpec {
+                ty: PortType::Exact(ty("Text")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        inputs.insert(
+            port("ack_a"),
+            PortSpec {
+                ty: PortType::Exact(ty("OperatorAcknowledgement")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        inputs.insert(
+            port("ack_b"),
+            PortSpec {
+                ty: PortType::Exact(ty("OperatorAcknowledgement")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("step"), ty("Text"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name("test.ack_order"),
+                description: "Test gate: a for_each port order differs from spec order."
+                    .to_string(),
+                inputs,
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: true,
+            },
+        }
+    }
+}
+
+impl Tool for OrderedAckGateTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
+        let step = inputs
+            .get(&port("step"))
+            .expect("test always binds `step`")
+            .clone();
+        let mut outputs = Outputs::new();
+        outputs.insert(port("step"), step);
+        let both_known = inputs.get(&port("ack_a")).is_some_and(Value::is_known)
+            && inputs.get(&port("ack_b")).is_some_and(Value::is_known);
+        if both_known {
+            Ok(Observation::Present(outputs))
+        } else {
+            Ok(Observation::Absent { predicted: outputs })
+        }
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        unreachable!("this test never applies a plan")
+    }
+
+    fn gate(&self) -> Option<&Gate> {
+        Some(&ORDERED_ACK_GATE)
+    }
+}
+
+static ORDERED_ACK_GATE: Gate = Gate {
+    need: "the operator makes both acknowledgements true",
+    how: "do the two manual things, then re-run this document",
+    subject: &["step"],
+};
+
+/// A plain, non-gated tool with one scalar `Text` port, passed straight
+/// through -- used to prove a `Keyed` reference onto the one blocked
+/// instance of a `for_each` gate still propagates `Skip` and still names
+/// the gate in its `holds_back` (decision (g4): unchanged).
+struct PassthroughTextTool {
+    spec: ToolSpec,
+    reads: Arc<Mutex<u32>>,
+}
+
+impl PassthroughTextTool {
+    fn new(reads: Arc<Mutex<u32>>) -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("value"),
+            PortSpec {
+                ty: PortType::Exact(ty("Text")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("value"), ty("Text"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name("test.ack_order_downstream"),
+                description: "Test tool: passes its Text input through, counts its reads."
+                    .to_string(),
+                inputs,
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+            reads,
+        }
+    }
+}
+
+impl Tool for PassthroughTextTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
+        *self.reads.lock().unwrap() += 1;
+        let mut outputs = Outputs::new();
+        outputs.insert(
+            port("value"),
+            inputs.get(&port("value")).expect("always bound").clone(),
+        );
+        Ok(Observation::Absent { predicted: outputs })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        unreachable!("this test never applies a plan")
+    }
+}
+
+/// One `for_each` node (`gate`, over a single-item `list<Text>` input)
+/// whose `with:` map binds its three ports in `ack_b`, `step`, `ack_a`
+/// order -- the reverse of the tool's own declared `step`, `ack_a`,
+/// `ack_b` spec order (`OrderedAckGateTool::new`) -- and one `downstream`
+/// node, `Keyed` onto `gate`'s one instance, proving `holds_back` and
+/// `Skip` propagation still work over a `for_each` gate once `plan.rs`
+/// reads sources instead of bindings.
+fn ordered_ack_workflow() -> Workflow {
+    Workflow::new(workflow_name("ordered-ack-gate-test"))
+        .input(
+            input("items"),
+            InputSpec::new(list_ty("Text")).with_default(Value::known_list(vec![
+                Text::parse("do-the-thing").unwrap(),
+            ])),
+        )
+        .input(
+            input("ack_a_input"),
+            InputSpec::new(ty("OperatorAcknowledgement")),
+        )
+        .input(
+            input("ack_b_input"),
+            InputSpec::new(ty("OperatorAcknowledgement")),
+        )
+        .node(
+            node("gate"),
+            Node::new(tool_name("test.ack_order"))
+                .for_each(Binding::Input(input("items")))
+                .port(port("ack_b"), Binding::Input(input("ack_b_input")))
+                .port(port("step"), Binding::Item)
+                .port(port("ack_a"), Binding::Input(input("ack_a_input"))),
+        )
+        .node(
+            node("downstream"),
+            Node::new(tool_name("test.ack_order_downstream")).port(
+                port("value"),
+                Binding::Keyed {
+                    node: node("gate"),
+                    key: "do-the-thing".to_string(),
+                    port: port("step"),
+                },
+            ),
+        )
+}
+
+/// Acceptance 9: `awaiting_inputs` is sorted by the node's own `with:`
+/// position, not by the tool spec's input order its `ports` are stored
+/// in. Neither acknowledgement is supplied, so `gate`'s one instance is
+/// `Blocked` and both are unresolved; `with:` binds `ack_b` before
+/// `ack_a` (the reverse of the spec), so `awaiting_inputs` must list
+/// `ack_b_input` first.
+#[test]
+fn acceptance_9_awaiting_inputs_over_a_for_each_gate_keeps_with_order_not_spec_order() {
+    let workflow = ordered_ack_workflow();
+    let mut catalog = Catalog::new(willikins_types::registry());
+    catalog.insert(Arc::new(OrderedAckGateTool::new())).unwrap();
+    let reads = Arc::new(Mutex::new(0));
+    catalog
+        .insert(Arc::new(PassthroughTextTool::new(reads.clone())))
+        .unwrap();
+    let checked = check(&workflow, &catalog).expect("the test graph checks cleanly");
+
+    // `items` has a default and `plan` never applies one itself (that is
+    // `describe`'s job) -- so this test resolves through `describe` first,
+    // exactly as `acceptance_7_a_linked_acknowledgement_gate_awaits_the_roots_own_input`
+    // does, rather than hand-building an inputs map. Both `ack_a_input` and
+    // `ack_b_input` stay unsupplied (`awaiting`, never `resolved`).
+    let description = describe(&checked, &PartialInputs::new());
+    let result = plan(&checked, &description.resolved, &catalog)
+        .expect("an unsupplied OperatorAcknowledgement input must never fail `plan`");
+
+    let gate_instance = by_name(&result.nodes, "gate", Some("do-the-thing"));
+    assert_eq!(gate_instance.action, Action::Blocked);
+
+    assert_eq!(result.blocked.len(), 1);
+    let entry = &result.blocked[0];
+    assert_eq!(entry.node.as_str(), "gate");
+    assert_eq!(entry.instance.as_deref(), Some("do-the-thing"));
+    assert_eq!(
+        entry.awaiting_inputs,
+        vec![input("ack_b_input"), input("ack_a_input")],
+        "with: binds ack_b before ack_a, so awaiting_inputs must keep that order, \
+         not the tool spec's step/ack_a/ack_b order"
+    );
+
+    // `holds_back` and `Skip` propagation, unchanged: `downstream`'s
+    // `Keyed` reference onto the one blocked instance is still forced to
+    // `Skip` and never read.
+    assert_eq!(
+        by_name(&result.nodes, "downstream", None).action,
+        Action::Skip
+    );
+    assert_eq!(
+        *reads.lock().unwrap(),
+        0,
+        "a node skipped because of a Keyed reference onto a blocked for_each \
+         instance must never be read"
+    );
+    assert_eq!(
+        entry
+            .holds_back
+            .iter()
+            .map(willikins_core::NodeName::as_str)
+            .collect::<Vec<_>>(),
+        vec!["downstream"]
     );
 }

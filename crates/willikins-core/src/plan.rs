@@ -5,11 +5,11 @@
 //!
 //! # `for_each` aggregation
 //!
-//! A [`Binding::Step`] onto a `for_each` node's port aggregates every one
+//! A [`crate::workflow::Binding::Step`] onto a `for_each` node's port aggregates every one
 //! of that node's instances into a list, in source-list order: known when
 //! every instance's value at that port is known, [`crate::value::ValueState::Unknown`]
 //! (of the same `list<T>` type) the moment any instance's is not. A
-//! [`Binding::Keyed`] instead picks the one instance whose item's canonical
+//! [`crate::workflow::Binding::Keyed`] instead picks the one instance whose item's canonical
 //! string equals the given key, failing with [`PlanError::KeyNotInForEach`]
 //! naming the *referencing* site, not the `for_each` node it points at, when
 //! no instance matches — this is what acceptance test 7 pins.
@@ -77,7 +77,7 @@ use crate::tool::{
     Inputs, Observation, Outputs, PortName, Tool, ToolError, ToolErrorKind, ToolName, ToolSpec,
 };
 use crate::value::{PortType, TypeName, TypeRef, TypeRegistry, Value, reported_type_name_or};
-use crate::workflow::{Binding, InputName, NodeName, OutputName, Workflow};
+use crate::workflow::{InputName, NodeName, OutputName, Workflow};
 
 /// What `plan` decided to do for one node instance.
 #[derive(
@@ -409,7 +409,7 @@ pub enum PlanError {
     },
     /// Two of a `for_each` node's items rendered to the same canonical
     /// string, so its instances would not be distinguishable: a
-    /// [`Binding::Keyed`] reference could not say which one it means, and
+    /// [`crate::workflow::Binding::Keyed`] reference could not say which one it means, and
     /// two [`PlannedNode`]s would share a `(name, instance)` pair. Reported
     /// before any of the node's instances is read.
     DuplicateForEachKey {
@@ -668,7 +668,7 @@ pub(crate) enum EachResult {
 /// # Errors
 ///
 /// [`PlanError::MissingInput`] for an unsupplied, non-awaited
-/// [`Binding::Input`]; [`PlanError::KeyNotInForEach`], attributed to
+/// [`crate::workflow::Binding::Input`]; [`PlanError::KeyNotInForEach`], attributed to
 /// `site`, when a [`Source::Keyed`] names a key no instance has.
 pub(crate) fn resolve_source<I>(
     ctx: &ResolveCtx,
@@ -799,7 +799,7 @@ pub(crate) struct ResolveCtx<'a> {
 /// catalog `plan` was given, never a different one), rather than
 /// trusting what the item itself reports (milestone 3n, decision (f3)).
 /// Pairs each item's `Value` with the canonical string a
-/// [`Binding::Keyed`] reference matches against.
+/// [`crate::workflow::Binding::Keyed`] reference matches against.
 ///
 /// # Errors
 ///
@@ -935,9 +935,30 @@ pub(crate) fn walk(
     let mut gates = GateTracking::default();
     let mut replacing: Vec<Replacing> = Vec::new();
 
+    // Milestone 3n, G5: a `Source::Step`/`Aggregate`/`Keyed` carries only
+    // the producing node's own typed id, never its name (G1), but
+    // `GateTracking`'s own bookkeeping stays keyed by `NodeName` -- that is
+    // what `BlockedGate` (and so the plan JSON) is keyed by, unchanged.
+    // These two tables translate an id straight back to its node's name,
+    // built once from `checked.nodes()`'s own topological order, which is
+    // exactly the order `check` minted `SingleId`/`EachId` in within each
+    // kind (SHARED VALUES): `single_names[id.0]`/`each_names[id.0]` is
+    // always that id's own node.
+    let single_names: Vec<NodeName> = checked
+        .nodes()
+        .iter()
+        .filter(|checked_node| matches!(checked_node.shape, Shape::Single { .. }))
+        .map(|checked_node| checked_node.name.clone())
+        .collect();
+    let each_names: Vec<NodeName> = checked
+        .nodes()
+        .iter()
+        .filter(|checked_node| matches!(checked_node.shape, Shape::Each { .. }))
+        .map(|checked_node| checked_node.name.clone())
+        .collect();
+
     for checked_node in checked.nodes() {
         let name = &checked_node.name;
-        let node = checked.declared_node(checked_node);
         // G1: the tool handle `check` already resolved, never a second
         // catalog lookup by name (verify item 4).
         let tool = checked_node.tool.as_ref();
@@ -949,22 +970,39 @@ pub(crate) fn walk(
             each: &each,
         };
 
-        // Decision (j), point 3: a skip set is decided from the bindings
-        // *before* `bind_ports`. A node whose `for_each` source, or any
-        // `with` binding besides `Binding::Item`, names a blocked or
-        // skipped node plans `Action::Skip` as a single instance
-        // (`instance: None`) and is never read — regardless of whether it
-        // has a `for_each` of its own, since a `with` binding applies to
-        // every instance alike.
+        // Decision (j), point 3: a skip set is decided from this node's
+        // own classified sources *before* `bind_ports` -- its `for_each`
+        // source (if any) and every bound port's source(s), never a raw
+        // `Binding` (milestone 3n, decision (g4)). A node whose `for_each`
+        // source, or any bound port, names a blocked or skipped node
+        // plans `Action::Skip` as a single instance (`instance: None`) and
+        // is never read — regardless of whether it has a `for_each` of its
+        // own, since a bound port applies to every instance alike.
+        // `Source::Item` never contributes (no other node to name),
+        // matching today's "skip `Binding::Item`" rule exactly.
         let mut causes: HashSet<GateKey> = HashSet::new();
-        if let Some(source) = &node.for_each {
-            gates.collect_causes(source, &mut causes);
-        }
-        for binding in node.with.values() {
-            if matches!(binding, Binding::Item) {
-                continue;
+        match &checked_node.shape {
+            Shape::Single { ports, .. } => {
+                for port in ports {
+                    gates.collect_bound_causes(
+                        &port.bound,
+                        &single_names,
+                        &each_names,
+                        &mut causes,
+                    );
+                }
             }
-            gates.collect_causes(binding, &mut causes);
+            Shape::Each { source, ports, .. } => {
+                gates.collect_causes(source, &single_names, &each_names, &mut causes);
+                for port in ports {
+                    gates.collect_bound_causes(
+                        &port.bound,
+                        &single_names,
+                        &each_names,
+                        &mut causes,
+                    );
+                }
+            }
         }
 
         if !causes.is_empty() {
@@ -996,10 +1034,10 @@ pub(crate) fn walk(
                     gates.mark_blocked(
                         name.clone(),
                         None,
-                        spec,
                         tool,
                         &node_plan.inputs,
-                        &node.with,
+                        checked.inputs(),
+                        ports,
                     );
                 }
                 if node_plan.action == Action::Replace {
@@ -1051,10 +1089,10 @@ pub(crate) fn walk(
                         gates.mark_blocked(
                             name.clone(),
                             Some(key.clone()),
-                            spec,
                             tool,
                             &node_plan.inputs,
-                            &node.with,
+                            checked.inputs(),
+                            ports,
                         );
                     }
                     if node_plan.action == Action::Replace {
@@ -1146,11 +1184,32 @@ struct GateTracking {
 }
 
 impl GateTracking {
-    /// Whether `binding` names a node (or, for `Keyed`, a specific
+    /// Whether `source` names a node (or, for `Keyed`, a specific
     /// instance) already blocked or skipped, and if so the root gate
-    /// key(s) behind it, unioned into `causes`. `Input`, `Item`, and
-    /// `Literal` never reference another node and never contribute.
-    fn collect_causes(&self, binding: &Binding, causes: &mut HashSet<GateKey>) {
+    /// key(s) behind it, unioned into `causes` (milestone 3n, decision
+    /// (g4)): reads a classified [`Source`], never a raw
+    /// [`crate::workflow::Binding`]. `Literal`, `Input` and `Item` never
+    /// reference another node and never contribute -- `Item` is skipped
+    /// exactly as today's top-level skip was, since it can only ever name
+    /// the current `for_each` instance's own item, never another node.
+    ///
+    /// `single_names`/`each_names` translate `Step`/`Aggregate`/`Keyed`'s
+    /// own typed id straight back to the [`NodeName`] [`Self::whole`] and
+    /// [`Self::instances`] are keyed by -- a `Source` never carries a name
+    /// itself (G1). `Step` (onto a [`Shape::Single`] node) only ever
+    /// contributes through [`Self::whole`]: a `Single` node is never
+    /// blocked per instance. `Aggregate` (a `Step` onto a [`Shape::Each`]
+    /// node, aggregating every instance) contributes through
+    /// [`Self::instances`] too, exactly as today's single `Binding::Step`
+    /// arm did for that same case -- any one blocked instance taints the
+    /// whole aggregate, so its consumer is skipped, not merely `Unknown`.
+    fn collect_causes<I>(
+        &self,
+        source: &Source<I>,
+        single_names: &[NodeName],
+        each_names: &[NodeName],
+        causes: &mut HashSet<GateKey>,
+    ) {
         let root_of = |key: &GateKey| -> HashSet<GateKey> {
             self.causes_of.get(key).cloned().unwrap_or_else(|| {
                 let mut singleton = HashSet::with_capacity(1);
@@ -1158,8 +1217,15 @@ impl GateTracking {
                 singleton
             })
         };
-        match binding {
-            Binding::Step { node, .. } => {
+        match source {
+            Source::Step { from, .. } => {
+                let node = &single_names[from.0 as usize];
+                if self.whole.contains(node) {
+                    causes.extend(root_of(&(node.clone(), None)));
+                }
+            }
+            Source::Aggregate { from, .. } => {
+                let node = &each_names[from.0 as usize];
                 if self.whole.contains(node) {
                     causes.extend(root_of(&(node.clone(), None)));
                 } else if let Some(blocked) = self.instances.get(node) {
@@ -1168,7 +1234,8 @@ impl GateTracking {
                     }
                 }
             }
-            Binding::Keyed { node, key, .. } => {
+            Source::Keyed { from, key, .. } => {
+                let node = &each_names[from.0 as usize];
                 if self.whole.contains(node) {
                     causes.extend(root_of(&(node.clone(), None)));
                 } else if self
@@ -1179,12 +1246,31 @@ impl GateTracking {
                     causes.extend(root_of(&(node.clone(), Some(key.clone()))));
                 }
             }
-            Binding::List(elements) => {
-                for element in elements {
-                    self.collect_causes(element, causes);
+            Source::Literal(_) | Source::Input(_) | Source::Item(_) => {}
+        }
+    }
+
+    /// [`Self::collect_causes`] applied to one bound port's own
+    /// [`Bound`]: a [`Bound::List`]'s elements each contribute the same
+    /// way a [`crate::workflow::Binding::List`]'s used to (today's
+    /// recursion), checked independently; a [`Bound::Scalar`] is exactly
+    /// [`Self::collect_causes`] on its one source.
+    fn collect_bound_causes<I>(
+        &self,
+        bound: &Bound<I>,
+        single_names: &[NodeName],
+        each_names: &[NodeName],
+        causes: &mut HashSet<GateKey>,
+    ) {
+        match bound {
+            Bound::Scalar { source, .. } => {
+                self.collect_causes(source, single_names, each_names, causes);
+            }
+            Bound::List { elements, .. } => {
+                for source in elements {
+                    self.collect_causes(source, single_names, each_names, causes);
                 }
             }
-            Binding::Input(_) | Binding::Item | Binding::Literal(_) => {}
         }
     }
 
@@ -1199,21 +1285,31 @@ impl GateTracking {
     /// Record that `node` (or, for a `for_each` node, its `instance`) plans
     /// `Action::Blocked`, and build its [`BlockedGate`] entry.
     ///
-    /// `bindings` is the node's own `with` map (declaration order):
-    /// [`BlockedGate::awaiting_inputs`] is every [`Binding::Input`] among
-    /// them whose resolved value in `bound` is still
-    /// [`crate::value::ValueState::Unknown`] (G3: an unsupplied
-    /// [`willikins_types::OperatorAcknowledgement`]), deduplicated by name,
-    /// in `bindings`' own order.
-    fn mark_blocked(
+    /// `ports` is the node's own bound ports, in the tool spec's input
+    /// order (milestone 3n, decision (g1)): [`BlockedGate::awaiting_inputs`]
+    /// is every [`Source::Input`] among them whose resolved value in
+    /// `bound` is still [`crate::value::ValueState::Unknown`] (G3: an
+    /// unsupplied [`willikins_types::OperatorAcknowledgement`]), named
+    /// through `checked_inputs` (a `Source::Input` carries only an
+    /// [`InputId`], never a name -- G1), deduplicated by name, and sorted
+    /// by [`PortEdge::with_position`] (decision (g4); SHARED VALUES:
+    /// "today's `with:`-map order") -- `ports` itself is in the tool's own
+    /// spec order, not `with:` order, so this sort is the one place that
+    /// order is restored. A [`Bound::List`] port's elements are never
+    /// scanned, matching today's rule exactly: a list-bound input was
+    /// never named in `awaiting_inputs` either.
+    fn mark_blocked<I>(
         &mut self,
         node: NodeName,
         instance: Option<String>,
-        spec: &ToolSpec,
         tool: &dyn Tool,
         bound: &Inputs,
-        bindings: &IndexMap<PortName, Binding>,
+        checked_inputs: &[CheckedInput],
+        ports: &[PortEdge<I>],
     ) {
+        // `spec` is always reachable through `tool`, so a separate
+        // parameter was redundant.
+        let spec = tool.spec();
         let gate = tool.gate().unwrap_or_else(|| {
             unreachable!("Action::Blocked is only produced for a declared gate")
         });
@@ -1255,16 +1351,24 @@ impl GateTracking {
                 (port, rendered.render().to_string())
             })
             .collect();
-        let mut seen_inputs = HashSet::new();
-        let awaiting_inputs = bindings
+        let mut unresolved: Vec<(usize, InputName)> = ports
             .iter()
-            .filter_map(|(port, binding)| match binding {
-                Binding::Input(input) if !bound.get(port).is_some_and(Value::is_known) => {
-                    Some(input.clone())
-                }
+            .filter_map(|port_edge| match &port_edge.bound {
+                Bound::Scalar {
+                    source: Source::Input(id),
+                    ..
+                } if !bound.get(&port_edge.port).is_some_and(Value::is_known) => Some((
+                    port_edge.with_position,
+                    checked_inputs[id.0 as usize].name.clone(),
+                )),
                 _ => None,
             })
-            .filter(|input| seen_inputs.insert(input.clone()))
+            .collect();
+        unresolved.sort_by_key(|(with_position, _)| *with_position);
+        let mut seen_inputs = HashSet::new();
+        let awaiting_inputs = unresolved
+            .into_iter()
+            .filter_map(|(_, input)| seen_inputs.insert(input.clone()).then_some(input))
             .collect();
         self.index.insert(key, self.entries.len());
         self.entries.push(BlockedGate {

@@ -594,21 +594,23 @@ pub(crate) enum Bound<I> {
 pub(crate) struct PortEdge<I> {
     /// This port's own name.
     pub(crate) port: PortName,
-    /// This port's position in the node's own authored `with:` map --
-    /// unread until milestone 3n's G5 gives `awaiting_inputs` this same
-    /// ordering (SHARED VALUES); kept live by this type's hand-written
-    /// `Debug` until then, the same reason [`Shape`]'s is hand-written.
+    /// This port's position in the node's own authored `with:` map:
+    /// milestone 3n's G5 sorts [`crate::plan::BlockedGate::awaiting_inputs`]
+    /// by this field (SHARED VALUES), so a gate names its awaited inputs in
+    /// `with:` order rather than the tool spec's own input order `ports`
+    /// itself is stored in.
     pub(crate) with_position: usize,
     /// Where this port's value comes from, and how `check` delivers it.
     pub(crate) bound: Bound<I>,
 }
 
 /// Hand-written, not derived: a plain `#[derive(Debug)]` would still
-/// compile, but `with_position` is read by nothing else until G5 (see this
-/// type's own field doc), and `rustc`'s dead-code analysis explicitly
-/// ignores a derived impl's own field reads (`Shape`'s own hand-written
-/// `Debug`, G1, states the same rule). Printing it by hand reads it for
-/// real instead of reaching for `#[allow(dead_code)]`.
+/// compile (`with_position` is read for real as of G5, by
+/// [`crate::plan`]'s `mark_blocked` -- see this type's own field doc), but
+/// `rustc`'s dead-code analysis explicitly ignores a derived impl's own
+/// field reads (`Shape`'s own hand-written `Debug`, G1, states the same
+/// rule). Printing it by hand reads every field for real instead of
+/// reaching for `#[allow(dead_code)]`.
 impl<I: fmt::Debug> fmt::Debug for PortEdge<I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PortEdge")
