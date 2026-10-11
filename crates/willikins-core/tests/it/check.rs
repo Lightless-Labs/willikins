@@ -18,7 +18,7 @@ use indexmap::IndexMap;
 use willikins_core::{
     Binding, Catalog, CheckError, CheckWarning, Class, Ensured, InputSpec, Inputs, Node, NodeName,
     Observation, Outputs, PortName, PortSpec, PortType, Site, Tool, ToolError, ToolName, ToolSpec,
-    TypeName, TypeRef, TypeRegistry, Value, Workflow, check,
+    TypeName, TypeRef, TypeRegistry, Uses, Value, Workflow, check, link,
 };
 use willikins_types::{DomainType, SinkToken};
 
@@ -1628,5 +1628,98 @@ fn a_list_bound_workflow_output_is_sequence_not_allowed_here() {
         vec![CheckError::SequenceNotAllowedHere {
             site: Site::Output { name: output("x") },
         }]
+    );
+}
+
+// ---------------------------------------------------------------------
+// Milestone 3n, X1 (the independent adversarial pass, 2026-10-11):
+// acceptance 11 on the composite path. `link` flattens every `uses:` step
+// before `check` ever runs (milestone 2b), so a used document's
+// identifier-typed `for_each` must be refused exactly as a flat one is,
+// named by its linked `<step>/<node>` path -- whether the child's list
+// input is bound through the parent's `with:` or left to the child's own
+// default (a fixed input, milestone 2b decision (d6)). Built in-test
+// rather than as a fixture under `workflows/fixtures/composition/`, whose
+// every file the composition characterization walks (acceptance 6).
+// ---------------------------------------------------------------------
+
+/// A used document whose one node iterates its own `ids` input, a
+/// `list<AppleCertificateId>`, optionally defaulted.
+fn identifier_for_each_child(default: Option<Value>) -> Workflow {
+    let mut ids = InputSpec::new(list_ty("AppleCertificateId"));
+    if let Some(default) = default {
+        ids = ids.with_default(default);
+    }
+    Workflow::new(workflow_name("identifier-for-each-child"))
+        .input(input("ids"), ids)
+        .node(
+            node("loop"),
+            Node::new(tool_name("fake.irreversible.ensure"))
+                .for_each(Binding::Input(input("ids")))
+                .port(port("key"), Binding::Literal("third-thoughts".to_string())),
+        )
+}
+
+/// A root using [`identifier_for_each_child`] as step `org`, with `with`
+/// as that step's own `with:`.
+fn identifier_for_each_root(with: IndexMap<willikins_core::InputName, Binding>) -> Workflow {
+    let mut root = Workflow::new(workflow_name("identifier-for-each-root"));
+    if !with.is_empty() {
+        root = root.input(
+            input("certs"),
+            InputSpec::new(list_ty("AppleCertificateId")),
+        );
+    }
+    root.uses(
+        node("org"),
+        Uses {
+            workflow: workflow_name("identifier-for-each-child"),
+            with,
+            position: 0,
+        },
+    )
+}
+
+/// Link `root` against a resolver that knows only `child`, then check the
+/// flat graph against [`test_catalog`].
+fn check_linked(root: &Workflow, child: &Workflow) -> Vec<CheckError> {
+    let mut resolve = |name: &willikins_types::WorkflowName| match name.as_str() {
+        "identifier-for-each-child" => Ok(child.clone()),
+        other => panic!("resolver asked for an unexpected workflow: {other}"),
+    };
+    let linked = link(root, &mut resolve).expect("a well-formed composite links");
+    check(&linked.workflow, &test_catalog())
+        .expect_err("an identifier-typed for_each source must be rejected after linking too")
+}
+
+#[test]
+fn acceptance_11_a_used_documents_identifier_for_each_is_refused_after_linking() {
+    let expected = vec![CheckError::IdentifierForEachSource {
+        node: node("org/loop"),
+        ty: list_ty("AppleCertificateId"),
+    }];
+
+    // Bound by the parent's own input, through `with:`.
+    let mut with = IndexMap::new();
+    with.insert(input("ids"), Binding::Input(input("certs")));
+    assert_eq!(
+        check_linked(
+            &identifier_for_each_root(with),
+            &identifier_for_each_child(None)
+        ),
+        expected,
+        "a child's for_each over a parent-bound identifier list must be refused"
+    );
+
+    // Left unbound, so the child's own default becomes a fixed input of
+    // the flat workflow.
+    let cert = willikins_types::AppleCertificateId::parse("C3RT1F1CATE9").unwrap();
+    assert_eq!(
+        check_linked(
+            &identifier_for_each_root(IndexMap::new()),
+            &identifier_for_each_child(Some(Value::known_list(vec![cert])))
+        ),
+        expected,
+        "a child's for_each over its own fixed, defaulted identifier list must be refused"
     );
 }
