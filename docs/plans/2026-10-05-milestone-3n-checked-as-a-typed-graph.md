@@ -1213,3 +1213,26 @@ implementing B2, plus the mechanical scope found by the compiler rather than by 
    `apply(checked, inputs, approved, approval, observer)`, exactly SHARED VALUES' signatures, with
    no deprecated overload and no per-crate split.
 
+**Addendum:** 2026-10-11 (task X1). The independent adversarial pass over S1 through B2 is recorded in
+`docs/research/2026-10-11-m3n-adversarial-pass.md`. It ran eight mutations, each restored and `cmp`-identical. Six
+were killed: B1 disabled, a second registry at `plan_one` and at apply's `fill_outputs`, `Value`'s `Debug`
+revealing identifiers, `ensure` fed the planned inputs instead of the fresh ones, and a keyed reference resolving
+into the wrong instance.
+
+The two survivors were real gaps, both now closed by test-only commits:
+
+1. A stray `#[cfg(test)]` item above a file's test module exempted the rest of the file from the unreachable
+   ratchet, from describe's registry count, and from acceptance 7's tripwire. The ratchet and the tripwire share
+   that split. `c05c955` pins the number of `#[cfg(test)]` lines per counted file.
+2. Nothing pinned the type of an `Unknown` workflow output whose producer was skipped. That type is the only runtime
+   read of a `Source::Step`/`Aggregate`/`Keyed` `ty`. `61ff3f2` adds one plan-time output per source kind.
+
+Two pins were also added. `7973fb8` extends describe's "no `willikins_types::registry()`" pin to `plan.rs` and
+`apply.rs`. `39ffc11` adds acceptance 11 on the composite path: a used document's identifier `for_each` is refused
+after linking, whether the list is bound through `with:` or comes from a fixed default. These follow the earlier X1
+commits `fb36435` (plan-time scalar impostor) and `9ff46d4` (`Checked`'s `Debug` masks an identifier literal). No
+production code changed.
+
+The characterization and the composition snapshot are byte-identical, and no `.snap.new` was left. The operator's
+three fake-backed private targets are green. The live-catalog target was not run. For D1: `plan()`'s own doc still
+says "Walks `checked.order`" and carries a stale `# Panics` section.
