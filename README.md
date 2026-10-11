@@ -117,6 +117,10 @@ set by the caller. Cycles, nesting deeper than 8 and graphs over 2048 linked nod
 plan records the hash of every used document, so applying an approved plan after any of them changed
 is refused. Examples: `workflows/fixtures/composition/`.
 
+An `AGENTS.md` is a file a document renders like any other, written once by a scaffold and never
+rewritten. A project whose scaffold has already landed takes it through a second `github.scaffold.ensure`
+node with its own marker. Examples: `workflows/fixtures/agents-md/`.
+
 ## Deploy
 
 Willikins runs as one Docker image. The `Dockerfile` at the repository root builds it.

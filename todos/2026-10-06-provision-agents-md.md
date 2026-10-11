@@ -1,7 +1,7 @@
 ---
 title: Provision a project's AGENTS.md
 created: 2026-10-06
-status: pending
+status: done
 priority: medium
 area: documents
 related:
@@ -41,3 +41,5 @@ provisioning a project on the user's behalf)." AGENTS.md only, no CLAUDE.md.
 ## When
 
 After milestone 2b (it needs the organisation document), before the rest of milestone 3n.
+
+**Done 2026-10-11:** milestone 3o (`docs/plans/2026-10-06-milestone-3o-agents-md.md`): document work only, with `repo.file.render` and a second `github.scaffold.ensure` marker for an already-scaffolded project; the operator's app has its root and ios/ AGENTS.md.
