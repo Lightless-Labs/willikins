@@ -4569,11 +4569,18 @@ mod tests {
     /// twice.
     struct StubSelfRidingTool {
         spec: ToolSpec,
-        inverse: RidingInverse,
+        inverse: Box<dyn Inverse>,
     }
 
     impl StubSelfRidingTool {
         fn with_counter(calls: Arc<std::sync::atomic::AtomicUsize>) -> Arc<Self> {
+            Self::with_inverse(Box::new(RidingInverse {
+                standing: Standing::AsCreated { losing: vec![] },
+                calls,
+            }))
+        }
+
+        fn with_inverse(inverse: Box<dyn Inverse>) -> Arc<Self> {
             let mut inputs = IndexMap::new();
             inputs.insert(
                 port("id"),
@@ -4603,10 +4610,7 @@ mod tests {
                     class: Class::Reversible,
                     pure: false,
                 },
-                inverse: RidingInverse {
-                    standing: Standing::AsCreated { losing: vec![] },
-                    calls,
-                },
+                inverse,
             })
         }
     }
@@ -4645,8 +4649,103 @@ mod tests {
         }
 
         fn inverse(&self) -> Option<&dyn Inverse> {
-            Some(&self.inverse)
+            Some(self.inverse.as_ref())
         }
+    }
+
+    /// Records every instance its own `standing` is handed in
+    /// `Created::riders`, and reads `AsCreated`.
+    struct RecordingRidersInverse {
+        seen: Arc<Mutex<Vec<InstanceRef>>>,
+    }
+
+    impl Inverse for RecordingRidersInverse {
+        fn standing(&self, created: &Created<'_>) -> Result<Standing, crate::tool::ToolError> {
+            self.seen
+                .lock()
+                .unwrap()
+                .extend(created.riders.iter().map(|rider| rider.instance.clone()));
+            Ok(Standing::AsCreated { losing: vec![] })
+        }
+
+        fn delete(
+            &self,
+            _created: &Created<'_>,
+            _token: &TeardownToken,
+        ) -> Result<Deleted, crate::tool::ToolError> {
+            Ok(Deleted {
+                already_gone: false,
+            })
+        }
+    }
+
+    /// The independent adversarial pass (2026-10-12): in a mutual ride the
+    /// grounded instance's own `Created::riders` names its rider once and
+    /// never itself -- `transitive_riders` reached it back through the
+    /// rider's own match and handed a container to its own inverse as a
+    /// tolerated rider.
+    #[test]
+    fn a_mutual_rides_grounded_instance_is_never_its_own_rider() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let tool = StubSelfRidingTool::with_inverse(Box::new(RecordingRidersInverse {
+            seen: Arc::clone(&seen),
+        }));
+        let node_a = Node::new(tool.spec.name.clone())
+            .port(port("id"), Binding::Literal("example-org/a".to_string()))
+            .port(
+                port("parent"),
+                Binding::Literal("example-org/b".to_string()),
+            )
+            .teardown(TeardownPolicy::Delete { accept: vec![] });
+        let node_b = Node::new(tool.spec.name.clone())
+            .port(port("id"), Binding::Literal("example-org/b".to_string()))
+            .port(
+                port("parent"),
+                Binding::Literal("example-org/a".to_string()),
+            )
+            .teardown(TeardownPolicy::Delete { accept: vec![] });
+        let workflow = Workflow::new(workflow_name("mutual-ride-riders"))
+            .node(node("a"), node_a)
+            .node(node("b"), node_b);
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(tool as Arc<dyn Tool>).unwrap();
+        let checked = check(&workflow, &catalog)
+            .unwrap_or_else(|errors| unreachable!("must check cleanly: {errors:?}"));
+        let resolved = empty_resolved(&checked);
+        let run = facts_multi(
+            vec![
+                riding_instance(
+                    "a",
+                    Action::Create,
+                    finished(START, END, NodeStatus::Created),
+                    inputs_of(&[
+                        ("id", repo_value("example-org/a")),
+                        ("parent", repo_value("example-org/b")),
+                    ]),
+                    outputs_of(&[("id", repo_value("example-org/a"))]),
+                ),
+                riding_instance(
+                    "b",
+                    Action::Create,
+                    finished(START, END, NodeStatus::Created),
+                    inputs_of(&[
+                        ("id", repo_value("example-org/b")),
+                        ("parent", repo_value("example-org/a")),
+                    ]),
+                    outputs_of(&[("id", repo_value("example-org/b"))]),
+                ),
+            ],
+            RUN_FINISHED,
+        );
+
+        plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![InstanceRef {
+                node: node("b"),
+                instance: None,
+            }]
+        );
     }
 
     #[test]
