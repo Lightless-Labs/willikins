@@ -154,6 +154,16 @@ a fourth commit, same task:
   refused elsewhere. R7 must either add `standing: Option<StandingKind>` to `TeardownStep` (or derive it from
   `TeardownAction` plus whatever `AsCreated`'s `losing` turns out to need) in the commit that adds `StepFingerprint`
   itself, or explain in its own addendum why it does not need to.
+- **`wanted_resolvers` over-approximates decision 5 on purpose, documented on the function itself.** Decision 5 names
+  the pure nodes a `Delete` *step's* own secret `needs` ports are bound to; a step only exists for an instance
+  `plan_teardown`'s own candidate predicate admits, which needs `RunFacts`. `wanted_resolvers` has only `checked`, so
+  it reads every `teardown: delete` node's own secret `needs` ports, whatever a given run's instances actually did.
+  Safe (never an impure `read`; the only cost is evaluating a resolver chain `plan_teardown` then does not need) but
+  wider than necessary. Tightening it to the run's own candidates is task R8's call, not this one's.
+- **Also fixed, same pass:** `UnresolvableCredential`'s own message named one cause ("not bound to a pure resolver
+  chain") when the variant already covers three (an impure producer, a resolved-but-`Unknown` value, and the
+  not-yet-supported `${{ item }}` case); reworded to "not honestly bound to a pure resolver chain" so a reader is not
+  misled about which one fired.
 
 ## Goal
 
