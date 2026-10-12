@@ -1190,6 +1190,42 @@ committed separately.
   `Delete`/`Contained`/`Retained` node it creates, `by: Document` (`KEPT`/`KEPT_RIDER`) or
   `by: Tool`, exactly as decision 10's own "the point" paragraph predicts.
 
+**Addendum:** 2026-10-12 -- L1 written (not run; the coordinator runs it once), in
+`crates/willikins-providers-github/tests/live_rollback_cycle.rs` plus its `Cargo.toml` `[[test]]`
+entry and a `chrono` dev-dependency (the window/`settled_by` arithmetic). Scoped:
+`cargo clippy -p willikins-providers-github --features live-tests --all-targets -j 2 -- -D
+warnings`, green. Deviations recorded:
+
+- **Reads acceptance 16 the way milestone 3l's own L1 reads its forward cycle**: this task's own
+  scoped command names only this crate, never `willikins-core`/`willikins-dsl`, so the harness
+  calls `github.repo.ensure`'s tool and its inverse directly (building `Created` by hand, as
+  `tests/it/repo_inverse_mock.rs` does against `mockito`), never through `plan_teardown`/
+  `apply_teardown` or a document. Acceptance 16's own "from documents that say `teardown: delete`"
+  is read as the acceptance text's framing for L1-L4 as a whole, settled by L4 ("End to end through
+  the CLI"), which is the one task that is explicitly document- and CLI-shaped; L1-L3 stay
+  provider-level, exactly as 3l's `live_new_repository_cycle.rs` stayed provider-level rather than
+  routing through `willikins-dsl`/`Butler`.
+- **SHARED VALUES' "Live probe prefix" (`willikins-probe-delete-me-`) is used as written**, not
+  invented fresh: 26 characters, which leaves only 6 for a unique suffix under `ProjectSlug::MAX_LEN`
+  (32) -- too tight for a full Unix timestamp. The harness's own `probe_timestamp` derives a 5-digit
+  suffix (seconds mod 100,000) plus the one-letter sub-cycle tag, landing every probe repository
+  name at exactly 32 characters, pinned by a unit test.
+- **The push-drift sub-cycle (`-b`) pre-lands its root file by a raw Contents-API `PUT`** before
+  calling `github.scaffold.ensure`, so that call's only write is GraphQL's `createCommitOnBranch`
+  alone -- isolating verify item 1's own question (does that mutation bump `pushed_at`?) from the
+  unrelated REST write a scaffold's first write on a truly empty repository would otherwise also
+  make inside the same `ensure` call. It then sleeps `CREATION_SKEW + 10` seconds (around 130s, once
+  per run) before that push, so the push lands unambiguously after `settled_by` and `standing`
+  reports `Drifted` rather than `AsCreated` -- `pushed_at`'s own second granularity and ordinary
+  host/GitHub clock drift make a push "soon after creation" and "a push past settled_by" the same
+  thing within a few seconds, so this is not optional slack.
+- **Every `Created.inputs`'s `repo` port is built from GitHub's own reported `full_name`**
+  (`canonical_repo`, a raw `GET` right after creation), never from the identity this harness built
+  from `WILLIKINS_SANDBOX_GITHUB_ORG`: `GitHubRepoInverse::standing_from_body` (task P1) compares
+  `full_name` byte-for-byte, and `sandbox_org_from` only checks that env var case-insensitively, so
+  nothing upstream of this harness otherwise guarantees its casing matches GitHub's own canonical
+  record.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing

@@ -9,13 +9,14 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-# Compiles `tests/live_scaffold_cycle.rs` and `tests/live_new_repository_cycle.rs`
-# (milestone 3l, task L1), and nothing else -- mirrors
+# Compiles `tests/live_scaffold_cycle.rs`, `tests/live_new_repository_cycle.rs`
+# (milestone 3l, task L1) and `tests/live_rollback_cycle.rs` (milestone
+# 3m, task L1), and nothing else -- mirrors
 # `willikins-providers-doppler`'s own `live-tests` feature exactly, for
 # exactly the same reason: a plain `cargo test --workspace` must never
-# provision or delete anything against a real GitHub org. Each test is
-# `#[ignore]`d and needs `WILLIKINS_LIVE_TESTS=1` on top of the feature
-# before it makes a call. This crate's two older live tests
+# provision, drift, or delete anything against a real GitHub org. Each
+# test is `#[ignore]`d and needs `WILLIKINS_LIVE_TESTS=1` on top of the
+# feature before it makes a call. This crate's two older live tests
 # (`tests/live_write_cycle.rs`, `tests/live_probe.rs`) predate this
 # feature and stay exactly as they were -- `#[ignore]`d but always
 # compiled -- so this addition touches neither.
@@ -27,6 +28,10 @@ required-features = ["live-tests"]
 
 [[test]]
 name = "live_new_repository_cycle"
+required-features = ["live-tests"]
+
+[[test]]
+name = "live_rollback_cycle"
 required-features = ["live-tests"]
 
 [dependencies]
@@ -49,6 +54,12 @@ willikins-dsl.workspace = true
 willikins-tools.workspace = true
 mockito.workspace = true
 insta.workspace = true
+# `tests/live_rollback_cycle.rs` (milestone 3m, task L1) computes its
+# own `CreationWindow`/`settled_by` around a real `ensure` call's own
+# before/after wall-clock instants, the same `chrono::Duration` shift
+# `willikins_core::rollback`'s own private `shift` performs internally
+# (unreachable from this separate integration-test crate).
+chrono.workspace = true
 
 [lints]
 workspace = true
