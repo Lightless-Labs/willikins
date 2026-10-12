@@ -556,3 +556,78 @@ fn a_later_run_between_teardown_plan_and_apply_refuses_later_run_first() {
         "the refusal precedes TeardownStarted"
     );
 }
+
+/// Trust boundary 8 through `uses:` (the 2026-10-12 independent
+/// adversarial pass): a used document's own node keeps its policy, and
+/// flipping it to `teardown: delete` after the run -- leaving the root's
+/// own bytes untouched -- refuses `DocumentChanged`, never a teardown
+/// that deletes what the document kept when the run was approved.
+#[test]
+fn a_used_documents_policy_flipped_after_the_run_refuses_document_changed() {
+    const CHILD_KEEPS: &str = "\
+name: rollback-r8-child
+inputs:
+  project: { type: DopplerProject }
+steps:
+  proj:
+    tool: doppler.project.ensure
+    with:
+      project: ${{ inputs.project }}
+";
+    const ROOT: &str = "\
+name: rollback-r8-root
+inputs:
+  project: { type: DopplerProject }
+steps:
+  child:
+    uses: rollback-r8-child
+    with:
+      project: ${{ inputs.project }}
+";
+    let dir = tempfile::tempdir().unwrap();
+    write_docs(dir.path());
+    write_doc(dir.path(), "rollback-r8-child.yaml", CHILD_KEEPS);
+    write_doc(dir.path(), "rollback-r8-root.yaml", ROOT);
+    let (state, catalog) = willikins_providers_fake::empty();
+    let clock = common::manual_clock();
+    let (butler, journal) = common::butler_with_journal(dir.path(), catalog, clock);
+
+    let run_id = plan_and_apply(&butler, "rollback-r8-root", "r8-composite-kept");
+    let planned = butler
+        .plan_rollback(run_id, common::principal("agent"))
+        .expect("the unchanged composite plans a teardown");
+    assert_eq!(planned.teardown.steps.len(), 1);
+    assert!(
+        matches!(
+            planned.teardown.steps[0].action,
+            TeardownAction::Kept { .. }
+        ),
+        "the used document's own node keeps its default policy: {:?}",
+        planned.teardown.steps
+    );
+
+    write_doc(
+        dir.path(),
+        "rollback-r8-child.yaml",
+        &CHILD_KEEPS.replace(
+            "    tool: doppler.project.ensure\n",
+            "    tool: doppler.project.ensure\n    teardown: delete\n",
+        ),
+    );
+    let err = butler
+        .plan_rollback(run_id, common::principal("agent"))
+        .expect_err("a used document's policy changed after the run must refuse");
+    assert!(
+        matches!(err, ButlerError::DocumentChanged { .. }),
+        "{err:?}"
+    );
+    assert!(
+        refused(&journal, None, |reason| matches!(
+            reason,
+            ApplyRefusedReason::DocumentChanged
+        )),
+        "DocumentChanged must be journaled"
+    );
+    let key = willikins_providers_fake::state::doppler_project_key(&project("r8-composite-kept"));
+    assert!(state.lock().unwrap().doppler_projects.contains_key(&key));
+}
