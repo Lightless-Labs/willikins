@@ -71,8 +71,8 @@ use willikins_core::tool::helpers::{
     tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolErrorKind,
-    ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, Reversal, Side, SinkToken, Tool, ToolError,
+    ToolErrorKind, ToolSpec, Value, Within,
 };
 use willikins_types::{BuildkiteOrg, BuildkitePipelineSlug, BuildkiteToken, RepoFile};
 
@@ -308,6 +308,22 @@ impl Tool for BuildkitePipelineBootstrapEnsure {
                     },
                 }
             }
+        }
+    }
+
+    /// Milestone 3m decision 4, task P4: no delete of its own, rides out
+    /// with the pipeline it writes into (`org`→`org`, `slug`→`slug`).
+    /// This tool's own `analyze` never reads a pipeline's prior stored
+    /// configuration for anything but comparison against the bootstrap
+    /// file it was given, so when left in place outside a deleted
+    /// pipeline there is nothing recorded to restore it to.
+    fn reversal(&self) -> Reversal {
+        Reversal::Contained {
+            within: &[Within {
+                tool: "buildkite.pipeline.ensure",
+                ports: &[("org", Side::Input, "org"), ("slug", Side::Input, "slug")],
+            }],
+            otherwise: "the prior configuration is not recorded",
         }
     }
 }

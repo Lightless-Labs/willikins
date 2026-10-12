@@ -671,3 +671,26 @@ fn the_gate_and_the_writer_agree_on_equal_across_a_shared_table() {
         );
     }
 }
+
+/// Decision 4's reversal declaration itself (milestone 3m task P4):
+/// `Contained`, riding out with `buildkite.pipeline.ensure` on both
+/// `org` and `slug`.
+#[test]
+fn reversal_declares_contained_within_the_pipeline() {
+    let tool = ensure_tool_against("http://127.0.0.1:1".to_string());
+    let willikins_core::Reversal::Contained { within, otherwise } = Tool::reversal(&tool) else {
+        panic!("buildkite.pipeline.bootstrap.ensure must declare Reversal::Contained");
+    };
+    assert_eq!(within.len(), 1);
+    assert_eq!(within[0].tool, "buildkite.pipeline.ensure");
+    assert_eq!(within[0].ports.len(), 2);
+    assert_eq!(
+        within[0].ports[0],
+        ("org", willikins_core::Side::Input, "org")
+    );
+    assert_eq!(
+        within[0].ports[1],
+        ("slug", willikins_core::Side::Input, "slug")
+    );
+    assert!(!otherwise.is_empty());
+}
