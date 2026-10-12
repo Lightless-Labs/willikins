@@ -32,6 +32,14 @@ rule reads Actions secret names. Trust boundary 6 and decision 1 observe only `t
 `CheckError`s on stub tools; the document fixtures move to T2, after the fakes declare (P6). R5 splits into R5a and
 R5b, whose riding matcher F1 reuses. `rollback.rs` joins 3n's tripwires. `delete_profile` already exists and is
 reused. D0 covers `live_smoke.rs`. Scoped commands use `--test it -- <filters>`.
+**Addendum:** 2026-10-12 — X1 pass over R1 (`docs/research/2026-10-12-m3m-adversarial-pass.md`). R1 states
+capability only and defaults to `Retained`. Two declaration shapes it admitted would let a rider vouch for contents it
+never wrote, and `Catalog::insert` now refuses both on the tool's own side: a `Within` that maps no port
+(`ReversalError::WithinMapsNoPort`: "every pair is equal" holds vacuously) and a `Within` own port that is secret
+(`ReversalError::WithinPortSecret`: the journal holds only a marker, re-parsed `Unknown`, and two `Unknown`s compare
+equal). `needs` may still name a secret credential port (decision 5). Forward requirements recorded there: R5a counts
+the `LazyLock` regex's `expect` in `rollback.rs` when it adds the file to 3n's ratchet; R5b computes riding without
+unbounded recursion (a `Within` may name its own tool); P7 should land before L1-L4 run.
 
 ## Goal
 
