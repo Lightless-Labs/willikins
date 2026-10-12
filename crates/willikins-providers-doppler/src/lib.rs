@@ -53,6 +53,7 @@
 //! following it.
 
 mod client;
+mod inverse_support;
 pub mod tools;
 
 pub use client::{

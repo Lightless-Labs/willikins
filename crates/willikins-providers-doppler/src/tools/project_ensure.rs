@@ -7,7 +7,7 @@
 //! `DopplerClient::delete_project`/`list_environments`/`list_configs`/
 //! `config_has_foreign_secret_name` (task P2 commit 1).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use willikins_core::rollback::Rider;
@@ -18,12 +18,13 @@ use willikins_core::{
     Class, Created, Deleted, Ensured, Inputs, Inverse, Observation, Outputs, Reversal, SinkToken,
     Standing, Tool, ToolError, ToolSpec, Value,
 };
-use willikins_types::{
-    DomainType, DopplerConfig, DopplerConfigName, DopplerProject, DopplerTokenName, SecretName,
-    TeardownToken,
-};
+use willikins_types::{DomainType, DopplerConfigName, DopplerProject, TeardownToken};
 
 use crate::client::{DopplerClient, MANAGED_DESCRIPTION, looks_like_a_missing_project};
+use crate::inverse_support::{
+    ConfigContentsDrift, config_contents_drift, config_output, tolerated_secret_names,
+    tolerated_token_names,
+};
 
 /// `doppler.project.ensure`.
 pub struct DopplerProjectEnsure {
@@ -248,20 +249,6 @@ fn project_of(created: &Created<'_>) -> Result<DopplerProject, ToolError> {
     get(created.inputs, "project")
 }
 
-/// The `config` *output* of a rider that only ever reports its identity
-/// through an output port (`doppler.config.ensure`/`doppler.branch_config.ensure`:
-/// their own `config` is derived from `project`+`environment`/`branch`,
-/// never a port a document binds directly) — `rider.outputs`, never
-/// `rider.inputs`, and a downcast failure is read the same as "not
-/// present": a rider this crate cannot identify tolerates nothing (fail
-/// closed, never widened by guessing).
-fn config_output(outputs: &Outputs) -> Option<DopplerConfig> {
-    outputs
-        .get(&port("config"))
-        .and_then(|value| value.downcast::<DopplerConfig>())
-        .cloned()
-}
-
 /// The tolerated Doppler-side environment ids (the three defaults, plus
 /// every `doppler.config.ensure` rider's own recorded root config name —
 /// which doubles as the environment's own id, `naming::v1::doppler_root_config`'s
@@ -292,55 +279,6 @@ fn tolerated_environments_and_branch_configs(
         }
     }
     (environments, branch_configs)
-}
-
-/// Every rider `doppler.secret.set`'s own recorded `(config, name)` pair,
-/// grouped by the config's own name — the tolerated secret names
-/// [`crate::client::DopplerClient::config_has_foreign_secret_name`] takes
-/// per config. A rider whose own `config`/`name` port this crate cannot
-/// read (fails to parse, or is unbound) tolerates nothing, the same
-/// fail-closed reasoning [`config_output`] documents.
-fn tolerated_secret_names(riders: &[Rider<'_>]) -> HashMap<String, HashSet<String>> {
-    let mut by_config: HashMap<String, HashSet<String>> = HashMap::new();
-    for rider in riders {
-        if rider.tool != "doppler.secret.set" {
-            continue;
-        }
-        let Ok(config) = get::<DopplerConfig>(rider.inputs, "config") else {
-            continue;
-        };
-        let Ok(name) = get::<SecretName>(rider.inputs, "name") else {
-            continue;
-        };
-        by_config
-            .entry(config.name().to_string())
-            .or_default()
-            .insert(name.as_str().to_string());
-    }
-    by_config
-}
-
-/// Every rider `doppler.service_token.ensure`'s own recorded `(config,
-/// name)` pair, grouped by the config's own name — the same shape
-/// [`tolerated_secret_names`] builds, for token names instead.
-fn tolerated_token_names(riders: &[Rider<'_>]) -> HashMap<String, HashSet<String>> {
-    let mut by_config: HashMap<String, HashSet<String>> = HashMap::new();
-    for rider in riders {
-        if rider.tool != "doppler.service_token.ensure" {
-            continue;
-        }
-        let Ok(config) = get::<DopplerConfig>(rider.inputs, "config") else {
-            continue;
-        };
-        let Ok(name) = get::<DopplerTokenName>(rider.inputs, "name") else {
-            continue;
-        };
-        by_config
-            .entry(config.name().to_string())
-            .or_default()
-            .insert(name.as_str().to_string());
-    }
-    by_config
 }
 
 impl DopplerProjectInverse {
@@ -397,53 +335,27 @@ impl DopplerProjectInverse {
                 });
             }
 
-            let config_body = self.client.get_config(project, &config_name)?;
-
             let names_tolerated = tolerated_secrets
                 .get(config_name.as_str())
                 .cloned()
                 .unwrap_or_default();
-            let bases = config_body.inherits.unwrap_or_default();
-            if self.client.config_has_foreign_secret_name(
-                project,
-                &config_name,
-                &names_tolerated,
-                &bases,
-            )? {
-                return Ok(Standing::Drifted {
-                    what: DRIFTED_FOREIGN_SECRET,
-                });
-            }
-
-            match &config_body.inherited_by {
-                None => {
-                    return Ok(Standing::Drifted {
-                        what: DRIFTED_FOREIGN_INHERITOR,
-                    });
-                }
-                Some(entries) => {
-                    if entries
-                        .iter()
-                        .any(|entry| entry.project != project.as_str())
-                    {
-                        return Ok(Standing::Drifted {
-                            what: DRIFTED_FOREIGN_INHERITOR,
-                        });
-                    }
-                }
-            }
-
-            let tokens = self.client.list_service_tokens(project, &config_name)?;
             let tokens_tolerated = tolerated_tokens
                 .get(config_name.as_str())
                 .cloned()
                 .unwrap_or_default();
-            if tokens
-                .iter()
-                .any(|token| !tokens_tolerated.contains(&token.name))
-            {
+            if let Some(drift) = config_contents_drift(
+                &self.client,
+                project,
+                &config_name,
+                &names_tolerated,
+                &tokens_tolerated,
+            )? {
                 return Ok(Standing::Drifted {
-                    what: DRIFTED_FOREIGN_TOKEN,
+                    what: match drift {
+                        ConfigContentsDrift::Secret => DRIFTED_FOREIGN_SECRET,
+                        ConfigContentsDrift::Inheritor => DRIFTED_FOREIGN_INHERITOR,
+                        ConfigContentsDrift::Token => DRIFTED_FOREIGN_TOKEN,
+                    },
                 });
             }
         }
