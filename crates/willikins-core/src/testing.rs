@@ -22,12 +22,16 @@
 //! enables this feature for `willikins-core`'s own `tests/`, the same
 //! trick `willikins-types` uses for its `executor` feature.
 
+use indexmap::IndexMap;
 use proptest::prelude::*;
 
-use crate::value::{TypeRef, Value};
+use crate::class::Class;
+use crate::rollback::{Created, Deleted, Inverse, Reversal, Side, Standing, Within};
+use crate::tool::{Ensured, Inputs, Observation, Outputs, PortSpec, Tool, ToolError, ToolSpec};
+use crate::value::{PortType, TypeRef, Value};
 use crate::workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};
 use crate::{PortName, ToolName};
-use willikins_types::{DomainType, WorkflowName};
+use willikins_types::{DomainType, SinkToken, TeardownToken, WorkflowName};
 
 fn input(name: &str) -> InputName {
     InputName::parse(name).unwrap_or_else(|err| unreachable!("{name:?} is a valid name: {err}"))
@@ -259,4 +263,238 @@ pub fn arb_registered_value() -> impl Strategy<Value = Value> {
             }
         },
     )
+}
+
+// ---------------------------------------------------------------------
+// Reversal-declaring stub tools (milestone 3m task R3)
+// ---------------------------------------------------------------------
+//
+// [`StubDeletableTool`] and [`StubContainedTool`]: a pair a document can
+// bind to exercise teardown policy against a catalog that actually
+// admits `teardown:` (milestone 3m task T1's own stubs, and any later
+// task's). Behind `test-support`, the same reason `arb_registered_value`
+// is: a dependent crate's own tests need these as a compiled dependency,
+// not as this crate's `#[cfg(test)]` code.
+
+/// A stub [`Inverse`] that reports a fixed [`Standing`] and, on delete,
+/// `Deleted { already_gone }` matching it — never a real provider call.
+/// Shared by [`StubDeletableTool`].
+struct StubInverse {
+    standing: Standing,
+}
+
+impl Inverse for StubInverse {
+    fn standing(&self, _created: &Created<'_>) -> Result<Standing, ToolError> {
+        Ok(self.standing.clone())
+    }
+
+    fn delete(&self, _created: &Created<'_>, _token: &TeardownToken) -> Result<Deleted, ToolError> {
+        Ok(Deleted {
+            already_gone: matches!(self.standing, Standing::Gone),
+        })
+    }
+}
+
+/// A stub, non-pure tool declaring [`Reversal::Delete`] with one declared
+/// loss (`"builds"`): one input port `repo` (`GitHubRepo`, required, also
+/// its `key`), one output port of the same name and type.
+///
+/// `inverse()` returns `Some`, so [`crate::catalog::Catalog::insert`]
+/// accepts the declaration (task R3's own "`Delete` exactly when
+/// `inverse()` is `Some`" rule).
+pub struct StubDeletableTool {
+    spec: ToolSpec,
+    inverse: StubInverse,
+}
+
+impl StubDeletableTool {
+    /// A tool whose inverse reports [`Standing::Gone`] — a safe default
+    /// for a test that never calls it, and for one that reaches
+    /// `plan_teardown` without seeding anything for it to find.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_standing(Standing::Gone)
+    }
+
+    /// The same tool, with its inverse's `standing` fixed to `standing`.
+    #[must_use]
+    pub fn with_standing(standing: Standing) -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("repo"),
+            PortSpec {
+                ty: PortType::Exact(ty("GitHubRepo")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("repo"), ty("GitHubRepo"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name("test.deletable"),
+                description: "A stub tool declaring Reversal::Delete with a loss.".to_string(),
+                inputs,
+                outputs,
+                key: vec![port("repo")],
+                class: Class::Reversible,
+                pure: false,
+            },
+            inverse: StubInverse { standing },
+        }
+    }
+}
+
+impl Default for StubDeletableTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Tool for StubDeletableTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Absent {
+            predicted: Outputs::new(),
+        })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: Outputs::new(),
+            changed: true,
+        })
+    }
+
+    fn reversal(&self) -> Reversal {
+        Reversal::Delete {
+            needs: &["repo"],
+            within: &[],
+            losses: &["builds"],
+        }
+    }
+
+    fn inverse(&self) -> Option<&dyn Inverse> {
+        Some(&self.inverse)
+    }
+}
+
+/// A stub, non-pure tool declaring [`Reversal::Contained`], riding out
+/// with [`StubDeletableTool`] (its `repo` input mapped to that tool's
+/// `repo` input): the same port shape as `StubDeletableTool`, and no
+/// inverse of its own.
+pub struct StubContainedTool {
+    spec: ToolSpec,
+}
+
+impl StubContainedTool {
+    /// A tool declaring `Contained`, riding out with
+    /// [`StubDeletableTool`]'s `test.deletable`.
+    #[must_use]
+    pub fn new() -> Self {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("repo"),
+            PortSpec {
+                ty: PortType::Exact(ty("GitHubRepo")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("repo"), ty("GitHubRepo"));
+        Self {
+            spec: ToolSpec {
+                name: tool_name("test.contained"),
+                description: "A stub tool declaring Reversal::Contained.".to_string(),
+                inputs,
+                outputs,
+                key: vec![port("repo")],
+                class: Class::Reversible,
+                pure: false,
+            },
+        }
+    }
+}
+
+impl Default for StubContainedTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Tool for StubContainedTool {
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+        Ok(Observation::Absent {
+            predicted: Outputs::new(),
+        })
+    }
+
+    fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+        Ok(Ensured {
+            outputs: Outputs::new(),
+            changed: true,
+        })
+    }
+
+    fn reversal(&self) -> Reversal {
+        Reversal::Contained {
+            within: &[Within {
+                tool: "test.deletable",
+                ports: &[("repo", Side::Input, "repo")],
+            }],
+            otherwise: "left in place, outside its container",
+        }
+    }
+}
+
+#[cfg(test)]
+mod reversal_stub_tests {
+    use super::*;
+    use crate::catalog::Catalog;
+    use std::sync::Arc;
+
+    #[test]
+    fn stub_deletable_tool_is_accepted_by_catalog_insert() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(Arc::new(StubDeletableTool::new()))
+            .unwrap_or_else(|err| unreachable!("StubDeletableTool must validate: {err}"));
+    }
+
+    #[test]
+    fn stub_contained_tool_is_accepted_by_catalog_insert() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(Arc::new(StubContainedTool::new()))
+            .unwrap_or_else(|err| unreachable!("StubContainedTool must validate: {err}"));
+    }
+
+    #[test]
+    fn stub_deletable_tool_inverse_reports_the_fixed_standing() {
+        let tool = StubDeletableTool::with_standing(Standing::AsCreated {
+            losing: vec!["builds"],
+        });
+        let inverse = Tool::inverse(&tool).unwrap_or_else(|| unreachable!("Delete has Some"));
+        let inputs = Inputs::new();
+        let outputs = Outputs::new();
+        let created = Created {
+            inputs: &inputs,
+            outputs: &outputs,
+            settled_by: crate::apply::Timestamp::now(),
+        };
+        assert_eq!(
+            inverse.standing(&created).unwrap(),
+            Standing::AsCreated {
+                losing: vec!["builds"]
+            }
+        );
+    }
 }
