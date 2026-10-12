@@ -866,6 +866,31 @@ green throughout; `willikins-core`'s `teardown_token_guard`/`sink_token_guard`/`
   testing each tool in its own file rather than under `tests/it/`), so `EXPECTED_SITES` stays `1`; re-ran
   `teardown_token_guard::`/`sink_token_guard::`/`ratchet::` after landing to confirm.
 
+**Addendum:** 2026-10-12 -- T2 landed (`workflows/fixtures/teardown-not-admitted.yaml`,
+`workflows/fixtures/teardown-loss-not-declared.yaml`, and `milestone_3m_acceptance_18_teardown_not_admitted`/
+`_teardown_loss_not_declared` in `crates/willikins-cli/tests/it/acceptance.rs`) in one commit, scoped gates
+(`cargo fmt --all --check`; `cargo clippy -p willikins-cli -p willikins-dsl --all-targets -j 2 -- -D warnings`;
+`cargo test -p willikins-dsl -j 2 --no-fail-fast`; `cargo test -p willikins-cli --test it -j 2 --no-fail-fast --
+acceptance::`) green, plus a standalone re-run of `-p willikins-dsl --test it -- acceptance::
+characterization_of_every_document` alone to prove the accepted snapshot is green by itself. Two choices the row
+left open, recorded:
+- **The `Contained` tool for `teardown-not-admitted.yaml` is `doppler.config.inheritable.ensure`.** Its one input
+  port (`config: DopplerConfig`, required, not `derived_only`) takes a plain literal, so the fixture stays a single
+  node and `check` returns exactly the one `TeardownNotAdmitted`.
+  `github.actions_secret.ensure`/`doppler.secret.set` were passed over (a secret-typed `value` port needs a
+  producing node, and `secret.set`'s `config` port is `derived_only`); `github.scaffold.ensure` likewise (a
+  `RepoFile` port).
+- **"Flat and through `uses:`" is proven with no tracked `workflows/fixtures/composition/` pair.** The row names
+  exactly two new fixtures, and `characterization_of_every_composition_document`
+  (`crates/willikins-dsl/tests/it/composition.rs`) has no sanction to move for this task. Each new CLI acceptance
+  test instead builds its `uses:` root inline (`willikins_dsl::parse_document` over a literal string, linked
+  through a resolver that loads the flat fixture straight from `workflows/fixtures/`), then `check`s the linked
+  graph and asserts the same `CheckError` with the node prefixed `child/` -- proving the composite path agrees with
+  the flat one (acceptance 18's closing sentence) with no new tracked file beyond the two fixtures. The dsl
+  `acceptance.rs` characterization (which globs `workflows/fixtures/*.yaml` only, not `composition/`) gained
+  exactly the two new entries the row calls for, sorted between `template-source-input` and `type-mismatch`,
+  diffed line-by-line against the prior snapshot before accepting -- no other block moved.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
