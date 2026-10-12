@@ -97,6 +97,11 @@ impl GitHubRepoEnsure {
                 topics,
                 archived: _,
                 default_branch: _,
+                full_name: _,
+                created_at: _,
+                pushed_at: _,
+                open_issues_count: _,
+                forks_count: _,
             }) => {
                 if !topics.iter().any(|topic| topic == crate::MANAGED_TOPIC) {
                     return Ok(Observation::Foreign);

@@ -81,7 +81,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
-use willikins_core::{ToolError, ToolErrorKind};
+use willikins_core::{Timestamp, ToolError, ToolErrorKind};
 use willikins_providers_http::{
     Credential, Http, MAX_RETRY_AFTER, ProviderError, RealSleeper, Sleeper,
 };
@@ -291,6 +291,76 @@ impl GitHubClient {
     pub(crate) fn get_repo(&self, repo: &GitHubRepo) -> Result<RepoBody, ProviderError> {
         let path = repo_path(repo);
         self.retry_secondary_limit(|| self.http.get(&path))
+    }
+
+    /// `DELETE /repos/{owner}/{name}` (milestone 3m task P1, decision 4).
+    /// Answers `204` on success; GitHub's own description also documents
+    /// `403` (the org forbids member deletion), `404`, `307` and `409` —
+    /// all returned as an ordinary [`ProviderError`], never specially
+    /// interpreted here (the caller has already called [`Self::get_repo`]
+    /// through `GitHubRepoInverse::standing` and knows the repository is
+    /// `AsCreated`). Retried under [`Self::retry_secondary_limit`] like
+    /// every other call here: unlike `POST /orgs/{org}/repos` (whose own
+    /// doc explains why a `POST` cannot safely retry an ambiguous
+    /// failure), a repeated `DELETE` of the same repository is idempotent
+    /// — a retry only ever fires after GitHub's secondary rate limit
+    /// refused the request outright, before anything was deleted, so
+    /// there is no ambiguity to resolve. The one non-test caller is
+    /// `GitHubRepoInverse::delete` (`tools/repo_ensure.rs`; trust
+    /// boundary 1: never reachable from `read`, `ensure`, or a workflow
+    /// document).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_repo`].
+    // Milestone 3m task P1, commit 1: no non-test caller yet (commit 2's
+    // `GitHubRepoInverse::delete` is the first). Removed in that commit.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn delete_repo(&self, repo: &GitHubRepo) -> Result<(), ProviderError> {
+        let path = repo_path(repo);
+        self.retry_secondary_limit(|| self.http.delete(&path))
+    }
+
+    /// `GET /repos/{owner}/{repo}/actions/secrets`, reporting only each
+    /// secret's own `name` (milestone 3m decision 7: GitHub's own
+    /// `actions-secret` schema carries no value field at all, the same
+    /// fact [`Self::get_actions_secret`]'s doc already cites for the
+    /// per-name endpoint). Paginates with `per_page=100` and increasing
+    /// `page` until the running total reaches the response's own
+    /// `total_count` or a page comes back short — a repository with more
+    /// than one page of secrets must never have its later names silently
+    /// dropped, which would let a foreign name on page two pass the drift
+    /// check unnoticed (milestone 3m decision 7, trust boundary 6's "all
+    /// reads before any delete"). The one non-test caller is
+    /// `GitHubRepoInverse::standing` (`tools/repo_ensure.rs`).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_repo`].
+    // Milestone 3m task P1, commit 1: no non-test caller yet (commit 2's
+    // `GitHubRepoInverse::standing` is the first). Removed in that commit.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn list_actions_secret_names(
+        &self,
+        repo: &GitHubRepo,
+    ) -> Result<Vec<String>, ProviderError> {
+        let mut names = Vec::new();
+        let mut page: u32 = 1;
+        loop {
+            let path = format!(
+                "{}/actions/secrets?per_page=100&page={page}",
+                repo_path(repo)
+            );
+            let body: ActionsSecretsListBody =
+                self.retry_secondary_limit(|| self.http.get(&path))?;
+            let returned = body.secrets.len();
+            names.extend(body.secrets.into_iter().map(|secret| secret.name));
+            if returned == 0 || (names.len() as u64) >= body.total_count {
+                break;
+            }
+            page += 1;
+        }
+        Ok(names)
     }
 
     /// `POST /orgs/{org}/repos`. Never retried, by this client or by
@@ -870,6 +940,57 @@ pub(crate) struct RepoBody {
     /// `404` or `409`; `github.repo.ensure` never reads it.
     #[serde(default)]
     pub(crate) default_branch: Option<String>,
+    /// `full_name` (milestone 3m decision 7, task P1): compared byte for
+    /// byte against the recorded key's own `{owner}/{name}`
+    /// ([`GitHubRepo`]'s `Display`) to catch a rename or transfer `GET`
+    /// does not otherwise 3xx on. Absent on every mock fixture that
+    /// predates this field, so it defaults to `None` — which
+    /// `GitHubRepoInverse::standing` (`tools/repo_ensure.rs`) treats the
+    /// same as an outright mismatch (fail closed, never "no opinion").
+    // Milestone 3m task P1, commit 1: read nowhere yet but `observe`'s
+    // own `_`. Removed once commit 2's `GitHubRepoInverse` reads it.
+    #[cfg_attr(not(test), expect(dead_code))]
+    #[serde(default)]
+    pub(crate) full_name: Option<String>,
+    /// `created_at` (milestone 3m decisions 2 and 7, task P1): compared
+    /// against this instance's own [`crate::rollback`]-computed window.
+    /// Absent on every mock fixture that predates this field, so it
+    /// defaults to `None`, which the same caller treats as "outside the
+    /// window" (fail closed).
+    // Milestone 3m task P1, commit 1: read nowhere yet but `observe`'s
+    // own `_`. Removed once commit 2's `GitHubRepoInverse` reads it.
+    #[cfg_attr(not(test), expect(dead_code))]
+    #[serde(default)]
+    pub(crate) created_at: Option<Timestamp>,
+    /// `pushed_at` (milestone 3m decision 7, task P1): a push after
+    /// `settled_by` is drift. Absent on every mock fixture that predates
+    /// this field, so it defaults to `None`, which the same caller treats
+    /// as "cannot rule out a push since" (fail closed), never as "no
+    /// push".
+    // Milestone 3m task P1, commit 1: read nowhere yet but `observe`'s
+    // own `_`. Removed once commit 2's `GitHubRepoInverse` reads it.
+    #[cfg_attr(not(test), expect(dead_code))]
+    #[serde(default)]
+    pub(crate) pushed_at: Option<Timestamp>,
+    /// `open_issues_count` (milestone 3m decision 7, task P1): GitHub
+    /// counts open pull requests here too. Absent on every mock fixture
+    /// that predates this field, so it defaults to `None`, which the same
+    /// caller treats as "cannot rule out an open issue" (fail closed),
+    /// never as zero.
+    // Milestone 3m task P1, commit 1: read nowhere yet but `observe`'s
+    // own `_`. Removed once commit 2's `GitHubRepoInverse` reads it.
+    #[cfg_attr(not(test), expect(dead_code))]
+    #[serde(default)]
+    pub(crate) open_issues_count: Option<u64>,
+    /// `forks_count` (milestone 3m decision 7, task P1). Absent on every
+    /// mock fixture that predates this field, so it defaults to `None`,
+    /// which the same caller treats as "cannot rule out a fork" (fail
+    /// closed), never as zero.
+    // Milestone 3m task P1, commit 1: read nowhere yet but `observe`'s
+    // own `_`. Removed once commit 2's `GitHubRepoInverse` reads it.
+    #[cfg_attr(not(test), expect(dead_code))]
+    #[serde(default)]
+    pub(crate) forks_count: Option<u64>,
 }
 
 /// Deserialize `topics` treating an explicit `null` as an empty list.
@@ -887,6 +1008,33 @@ where
 pub(crate) struct PublicKeyBody {
     pub(crate) key_id: String,
     pub(crate) key: String,
+}
+
+/// GitHub's "List repository secrets" response envelope:
+/// [`GitHubClient::list_actions_secret_names`] reads `total_count` only to
+/// decide whether another page is needed, and
+/// `secrets` only for each entry's own `name` — the schema's `created_at`/
+/// `updated_at` fields are never read at all (milestone 3m decision 7:
+/// "names only").
+// Milestone 3m task P1, commit 1: constructed nowhere yet (commit 2's
+// `GitHubRepoInverse::standing` is the first, through `list_actions_secret_names`).
+// Removed in that commit.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(Debug, Deserialize)]
+struct ActionsSecretsListBody {
+    total_count: u64,
+    secrets: Vec<ActionsSecretListEntry>,
+}
+
+/// One entry of [`ActionsSecretsListBody::secrets`]: GitHub's
+/// `actions-secret` schema also carries `created_at`/`updated_at`, neither
+/// read here.
+// Milestone 3m task P1, commit 1: constructed nowhere yet. Removed once
+// commit 2's `GitHubRepoInverse` is live.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(Debug, Deserialize)]
+struct ActionsSecretListEntry {
+    name: String,
 }
 
 /// The state one declared [`RepoPath`] resolves to inside a tree
@@ -1991,5 +2139,147 @@ mod tests {
         let err = client.branch_rule_types(&repo(), &branch).unwrap_err();
         assert_eq!(err.status, Some(404));
         mock.assert();
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3m, task P1: `delete_repo`, `list_actions_secret_names`,
+    // and `RepoBody`'s decision-7 fields.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn repo_body_parses_decision_7_fields_when_present() {
+        let json = serde_json::json!({
+            "visibility": "private",
+            "topics": ["managed-by-willikins"],
+            "full_name": "acme/widget",
+            "created_at": "2026-01-01T00:00:00Z",
+            "pushed_at": "2026-01-01T00:05:00Z",
+            "open_issues_count": 0,
+            "forks_count": 0,
+        })
+        .to_string();
+        let body: RepoBody = serde_json::from_str(&json).unwrap();
+        assert_eq!(body.full_name.as_deref(), Some("acme/widget"));
+        assert_eq!(
+            body.created_at,
+            Some(Timestamp::parse("2026-01-01T00:00:00Z").unwrap())
+        );
+        assert_eq!(
+            body.pushed_at,
+            Some(Timestamp::parse("2026-01-01T00:05:00Z").unwrap())
+        );
+        assert_eq!(body.open_issues_count, Some(0));
+        assert_eq!(body.forks_count, Some(0));
+    }
+
+    /// Every mock fixture predating this milestone omits all five fields
+    /// (milestone 3m task P1's own row); this is the parse those fixtures
+    /// still take, proving the addition is backward compatible.
+    #[test]
+    fn repo_body_defaults_decision_7_fields_to_none_when_absent() {
+        let json = r#"{"visibility":"private","topics":[]}"#;
+        let body: RepoBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.full_name, None);
+        assert_eq!(body.created_at, None);
+        assert_eq!(body.pushed_at, None);
+        assert_eq!(body.open_issues_count, None);
+        assert_eq!(body.forks_count, None);
+    }
+
+    #[test]
+    fn delete_repo_sends_delete_and_succeeds_on_204() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let mock = provider
+            .mock("DELETE", "/repos/acme/widget")
+            .with_status(204)
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        client.delete_repo(&repo()).expect("204 succeeds");
+        mock.assert();
+    }
+
+    #[test]
+    fn delete_repo_propagates_a_provider_error() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        provider
+            .mock("DELETE", "/repos/acme/widget")
+            .with_status(404)
+            .with_body(serde_json::json!({"message": "Not Found"}).to_string())
+            .create();
+        let client = client_against(provider.url());
+        let err = client.delete_repo(&repo()).unwrap_err();
+        assert_eq!(err.status, Some(404));
+    }
+
+    #[test]
+    fn list_actions_secret_names_reads_names_only_on_one_page() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let mock = provider
+            .mock("GET", "/repos/acme/widget/actions/secrets?per_page=100&page=1")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "total_count": 2,
+                    "secrets": [
+                        {"name": "DOPPLER_TOKEN", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
+                        {"name": "OTHER", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
+                    ],
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let names = client.list_actions_secret_names(&repo()).unwrap();
+        assert_eq!(
+            names,
+            vec!["DOPPLER_TOKEN".to_string(), "OTHER".to_string()]
+        );
+        mock.assert();
+    }
+
+    /// A repository with more secrets than fit on one page: the second
+    /// page's own name must still come back, never silently dropped
+    /// (milestone 3m decision 7, trust boundary 6).
+    #[test]
+    fn list_actions_secret_names_follows_total_count_across_pages() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let page_1 = provider
+            .mock("GET", "/repos/acme/widget/actions/secrets?per_page=100&page=1")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "total_count": 2,
+                    "secrets": [
+                        {"name": "FIRST_PAGE", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
+                    ],
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let page_2 = provider
+            .mock("GET", "/repos/acme/widget/actions/secrets?per_page=100&page=2")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "total_count": 2,
+                    "secrets": [
+                        {"name": "SECOND_PAGE", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
+                    ],
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let names = client.list_actions_secret_names(&repo()).unwrap();
+        assert_eq!(
+            names,
+            vec!["FIRST_PAGE".to_string(), "SECOND_PAGE".to_string()]
+        );
+        page_1.assert();
+        page_2.assert();
     }
 }
