@@ -1480,3 +1480,165 @@ fn capability_gate_present_once_a_read_only_capability_is_enabled_agrees() {
     assert_eq!(shape(&live), shape(&fake));
     assert_eq!(rendered(&live), rendered(&fake));
 }
+
+/// Milestone 3m task P6: `appstore.profile.ensure`'s inverse, the live
+/// `AppstoreProfileInverse` against mocks and the fake one against
+/// `FakeState`, agree on [`Standing`]'s *variant* for the same scenario
+/// -- never on the exact `why` text, which each crate writes for its own
+/// reader, and never on the creation window (this crate's fake has no
+/// timestamps at all; `tests/it/profile_inverse_mock.rs` pins the live
+/// window behaviour alone).
+mod profile_inverse_standing_parity {
+    use super::*;
+    use willikins_core::rollback::Standing;
+    use willikins_core::{Created, Loss};
+    use willikins_types::{AppleProfileId, AppleProfileName};
+
+    fn profile_name() -> AppleProfileName {
+        AppleProfileName::parse("willikins-example-profile").unwrap()
+    }
+
+    fn profile_id() -> AppleProfileId {
+        AppleProfileId::parse("PR0F1LE1D0001").unwrap()
+    }
+
+    fn created_inputs() -> Inputs {
+        let mut inputs = Inputs::new();
+        inputs.insert(
+            PortName::parse("issuer_id").unwrap(),
+            Value::known(issuer_id()),
+        );
+        inputs.insert(PortName::parse("key_id").unwrap(), Value::known(key_id()));
+        inputs.insert(PortName::parse("key").unwrap(), Value::known(key()));
+        inputs.insert(
+            PortName::parse("identifier").unwrap(),
+            Value::known(identifier()),
+        );
+        inputs.insert(
+            PortName::parse("name").unwrap(),
+            Value::known(profile_name()),
+        );
+        inputs
+    }
+
+    fn created_outputs() -> willikins_core::Outputs {
+        let mut outputs = willikins_core::Outputs::new();
+        outputs.insert(
+            PortName::parse("profile").unwrap(),
+            Value::known(profile_id()),
+        );
+        outputs
+    }
+
+    fn created<'a>(inputs: &'a Inputs, outputs: &'a willikins_core::Outputs) -> Created<'a> {
+        Created {
+            inputs,
+            outputs,
+            window: willikins_core::rollback::CreationWindow {
+                start: willikins_core::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+                end: willikins_core::Timestamp::parse("2026-01-01T00:10:00Z").unwrap(),
+            },
+            settled_by: willikins_core::Timestamp::parse("2026-01-01T00:10:00Z").unwrap(),
+            accept: &[] as &[Loss],
+            riders: &[],
+        }
+    }
+
+    fn live_standing(provider: &MockProvider) -> Standing {
+        let tool = AppstoreProfileEnsure::new(provider.url());
+        Tool::inverse(&tool)
+            .expect("appstore.profile.ensure declares Delete")
+            .standing(&created(&created_inputs(), &created_outputs()))
+            .expect("standing never fails against a well-formed mock response")
+    }
+
+    fn fake_standing(state: FakeState) -> Standing {
+        let tool = FakeAppstoreProfileEnsure::new(Arc::new(Mutex::new(state)));
+        Tool::inverse(&tool)
+            .expect("appstore.profile.ensure declares Delete")
+            .standing(&created(&created_inputs(), &created_outputs()))
+            .expect("standing never fails against a well-formed fake state")
+    }
+
+    #[test]
+    fn both_report_gone_when_absent() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock(
+                "GET",
+                "/v1/profiles/PR0F1LE1D0001?fields[profiles]=name,createdDate,bundleId",
+            )
+            .with_status(404)
+            .with_body(serde_json::json!({"errors": []}).to_string())
+            .create();
+        assert_eq!(live_standing(&provider), Standing::Gone);
+        assert_eq!(fake_standing(FakeState::new()), Standing::Gone);
+    }
+
+    #[test]
+    fn both_report_as_created_when_present_and_ours() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock(
+                "GET",
+                "/v1/profiles/PR0F1LE1D0001?fields[profiles]=name,createdDate,bundleId",
+            )
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "data": {
+                        "type": "profiles",
+                        "id": "PR0F1LE1D0001",
+                        "attributes": {
+                            "name": "willikins-example-profile",
+                            "createdDate": "2026-01-01T00:05:00.000+00:00",
+                        },
+                        "relationships": {
+                            "bundleId": {"data": {"type": "bundleIds", "id": "T6G4XCV345"}}
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .create();
+        provider
+            .mock("GET", "/v1/bundleIds")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "data": [{
+                        "type": "bundleIds",
+                        "id": "T6G4XCV345",
+                        "attributes": {
+                            "identifier": "com.example.MyApp",
+                            "name": "third-thoughts",
+                            "platform": "UNIVERSAL",
+                        }
+                    }],
+                    "links": {"self": "https://api.appstoreconnect.apple.com/v1/bundleIds"}
+                })
+                .to_string(),
+            )
+            .create();
+        assert_eq!(
+            live_standing(&provider),
+            Standing::AsCreated { losing: Vec::new() }
+        );
+
+        let state = FakeState::new().with_apple_profile(
+            &identifier(),
+            &profile_name(),
+            "PR0F1LE1D0001",
+            "C3RT1F1CATE1",
+            "IOS_APP_STORE",
+            "ACTIVE",
+            false,
+            "fakeprofilecontentPR0F1LE1D0001==",
+        );
+        assert_eq!(
+            fake_standing(state),
+            Standing::AsCreated { losing: Vec::new() }
+        );
+    }
+}
