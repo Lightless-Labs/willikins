@@ -40,6 +40,15 @@ never wrote, and `Catalog::insert` now refuses both on the tool's own side: a `W
 equal). `needs` may still name a secret credential port (decision 5). Forward requirements recorded there: R5a counts
 the `LazyLock` regex's `expect` in `rollback.rs` when it adds the file to 3n's ratchet; R5b computes riding without
 unbounded recursion (a `Within` may name its own tool); P7 should land before L1-L4 run.
+**Addendum:** 2026-10-12 — R2 landed. The row reads "exactly one `TeardownToken::new` call site, inside
+`apply_teardown`", but `apply_teardown` is task R6 and did not exist when R2 ran, so that sentence could not be made
+literally true without inventing a throwaway stub for a capability token (exactly the shape X1's priority list warns
+against: "a delete reachable without a `TeardownToken`", minted and dropped by nothing real). Instead,
+`teardown_token_guard.rs`'s enclosing-function rule (the same per-function exemption `expose_secret_guard.rs` already
+uses for `Credential::authorize`) is live today over a pinned count, `EXPECTED_SITES: usize = 0`, proven non-vacuous
+by unit tests over hand-written sources rather than the real tree. R6 must bump `EXPECTED_SITES` to `1` in the same
+commit that adds `apply_teardown`'s own call and its `#[allow(clippy::disallowed_methods)]`; leaving either behind
+fails the guard.
 
 ## Goal
 
