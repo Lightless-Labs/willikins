@@ -30,26 +30,30 @@
 //!
 //! **Patterns.** Literally the two acceptance 14 names, `.delete(` and
 //! `.delete_with_body(`, each requiring the leading `.` so a method call
-//! (`client.delete(...)`) is never confused with a function's own
-//! definition (`fn delete(...)`, no dot before `delete`) — except
-//! `delete_with_body(` itself: `willikins-providers-http/src/http.rs`
-//! defines `Http::delete_with_body`, and that definition line *is* an
-//! occurrence of the pattern `.delete_with_body(`... no, it is not: the
-//! definition reads `pub fn delete_with_body(&self, ...)`, with no `.`
-//! before `delete_with_body`, so the dot-anchored pattern already leaves
-//! it out. (The one place a defining line *would* match is if some day a
-//! method is defined as `fn x(&self) { self.delete_with_body(...) }` on
-//! the same physical line as its own signature; nothing in this tree
-//! does that today.) Matched on comment-stripped, non-whole-line-comment
-//! text exactly as `no_gh_writes_guard.rs` strips it, so a mention of
-//! either pattern in a doc comment or prose is not a site.
+//! (`client.delete(...)`) matches and a function's own definition never
+//! does: `willikins-providers-http/src/http.rs` defines
+//! `Http::delete_with_body` as `pub fn delete_with_body(&self, ...)`,
+//! with no `.` before the name, so the dot-anchored pattern leaves that
+//! line out on its own, with no file-specific exception needed (pinned
+//! by [`the_delete_with_body_definition_has_no_leading_dot`]).
+//! Matched on comment-stripped, non-whole-line-comment text exactly as
+//! `no_gh_writes_guard.rs` strips it, so a mention of either pattern in a
+//! doc comment or prose is not a site — but the scan is not
+//! string-literal-aware (the same tradeoff that guard makes), so a
+//! pattern written inside a Rust string literal, such as a test fixture
+//! source string in a `*_guard.rs`/`*_mock.rs` file, *is* counted. A
+//! handful of [`INVENTORY`]'s own entries are exactly that (fixture
+//! strings, not real calls); their enclosing "function" is still
+//! whatever `fn` the string sits inside, read the same way as everywhere
+//! else.
 //!
 //! **Enclosing function.** The last `fn <ident>` token seen on a
 //! non-comment line at or above the hit, read top to bottom through the
 //! file — not a scoped, brace-depth-aware read. This is approximate (it
 //! would misattribute a call written after the last `fn` in a file, at
 //! module scope) but every file this walk reaches today is a flat
-//! sequence of `impl` methods with no such code, and a closure passed to
+//! sequence of `impl` methods or `#[test]` functions with no such code,
+//! and a closure passed to
 //! another call (`willikins-providers-github/src/client.rs`'s
 //! `self.retry_secondary_limit(|| self.http.delete(&path))`) has no `fn`
 //! of its own, so it correctly attributes to the method around it
