@@ -374,11 +374,11 @@ fix; the fold's own coverage; the redaction test). `-p willikins-journal`, `carg
 willikins-cli --all-targets -D warnings`, `-p willikins-server --test it -- mcp_server::`, `cargo fmt --all --check`
 and `cargo check -p willikins-types` all green. Deviations, recorded:
 - **R5a's own open item (`TeardownStep` does not carry `standing`; add it back, or explain why not, in the commit
-  that adds `StepFingerprint`) was already closed by R6**, before this task started: R6's own addendum (immediately
-  above R5a's addendum, both earlier in this file) took `StepFingerprint` over from R7 and explained, in `rollback.rs`
-  itself, why `TeardownStep` stays as it is ("`TeardownStep`s do not carry `standing`... `StepFingerprint` already
-  carries `instance`+`action` too, so nothing is lost"). Nothing left for this task to do on that specific point;
-  flagged here only because this task's own dispatch named it.
+  that adds `StepFingerprint`) was already closed by R6**, before this task started: R6's own addendum (below R5a's
+  in this file, since it landed after) took `StepFingerprint` over from R7 and explained, in `rollback.rs` itself,
+  why `TeardownStep` stays as it is ("`TeardownStep`s do not carry `standing`... `StepFingerprint` already carries
+  `instance`+`action` too, so nothing is lost"). Nothing left for this task to do on that specific point; flagged
+  here only because this task's own dispatch named it.
 - **`StepFingerprint.action` is reshaped from `TeardownAction` to a new `TeardownActionKind`, and
   `StandingKind::AsCreated.losing` moves from `Vec<&'static str>` to `Vec<String>`.** `StepFingerprint` is stored
   directly (unwrapped) on `TeardownPlanned.fingerprint`, exactly the way `InstanceFingerprint` already sits on
@@ -449,6 +449,12 @@ and `cargo check -p willikins-types` all green. Deviations, recorded:
 - **No new ratchet token, in either crate.** `rollback.rs` stays at 2 (no new `unreachable!`/`expect`/`unwrap`/
   `panic!` in non-test code; the `From` impl between `TeardownAction` and `TeardownActionKind` is exhaustive by
   construction).
+- **For R8/R9:** `Journal::pending_approvals` is unchanged, `PlanRecord`-only (the approvals page's own
+  teardown-shaped rendering is still the follow-up todo this milestone's "Out of scope" names) -- a pending
+  teardown is reachable only through `Journal::teardown(plan_id)` once its own `plan_id` is known.
+  `willikins-server`'s `Butler::decide` (`butler.rs:747`, `journal.plan(&plan_id)`) still looks up only `plans`; task
+  R8 must change it to try `journal.teardown(&plan_id)` too (`fold_approval` already resolves either kind on the
+  journal side, `decide` is the one caller left that does not).
 
 ## Goal
 
