@@ -738,6 +738,50 @@ tool's `Contained`), scoped gates (`-p willikins-providers-buildkite`: `cargo fm
   own table test or the fake catalog's own parity test; `catalog_parity.rs` in this crate exercises only `ToolSpec`
   (unaffected, since `reversal()` is not part of it) and stays green unchanged.
 
+**Addendum:** 2026-10-12 — P5 landed (`appstore.bundle_id.ensure`'s, `appstore.bundle_id_capability.ensure`'s and
+`signoz.ingestion_key.ensure`'s `Retained` declarations; `appstore.profile.ensure`'s `Delete` and inverse; decision 4's
+appstore/SigNoz rows; decision 7's appstore row; acceptance 20; verify 10) in `crates/willikins-providers-appstore` and
+`crates/willikins-providers-signoz`, two commits (the three `Retained` declarations, then the profile inverse), scoped
+gates (`-p willikins-providers-appstore -p willikins-providers-signoz`: `cargo fmt --check`, `cargo clippy
+--all-targets -D warnings`, `cargo test --test it`) green after each. Deviations and choices, recorded:
+- **Verify item 10, settled, fetched verbatim.** Apple's published `OpenAPI` description
+  (`developer.apple.com/sample-code/app-store-connect/app-store-connect-openapi-specification.zip`, fetched
+  2026-10-12) confirms `Profile.attributes.createdDate` (`format: date-time`) and
+  `Profile.relationships.bundleId.data.id` both exist; neither is marked `required`, so the inverse's own `standing`
+  treats either one's absence the same as an unparseable value -- fail closed, `NotOurs`, not "no opinion" (the same
+  reading decision 7's other rows already give a missing field). The row's own fallback ("if the profile carries no
+  creation date, P5 stops and reports") was not needed.
+- **The sparse standing read's own query is `fields[profiles]=name,createdDate,bundleId`, no `include=`.** The
+  `bundleId` relationship's own linkage (`data.id`) is already present on an ordinary sparse-fields read -- `include=`
+  only side-loads the *related resource's own attributes*, which this read never needs, unlike
+  `AppstoreClient::get_profile`'s own `include=certificates`.
+- **The first inverse in this workspace to read `Created::outputs` rather than only `Created::inputs`.** Every other
+  `Delete` tool addresses its resource by a key port that is also an *input* (a repository's owner/name, a pipeline's
+  org/slug, a Doppler project's name); a profile is addressed by App Store Connect's own opaque id, which is this
+  tool's `profile` *output*, never a `needs` port (decision 3's own struct already makes `Created::outputs` available
+  with no declaration required -- this is the first task to actually read it). `needs` therefore names only the three
+  credential ports and the two ports `standing` compares (`identifier`, `name`), never `profile`.
+- **The bundle id lookup inside `standing_from_body` reuses `AppstoreProfileEnsure::find_bundle_id` directly**
+  (module-private, same file), rather than a second copy of its byte-exact filter logic: the inverse's own
+  `AppstoreClient` is already in hand from `standing`'s own call, so no second client needs building.
+- **No loss is ever declared or reported** (`losses: &[]`, `Standing::AsCreated { losing: Vec::new() }` on every
+  success): decision 7's own row says a profile has no contents, so unlike `GitHubRepoInverse`'s or
+  `BuildkitePipelineInverse`'s own copy, `DELETE_REFUSED_NOT_AS_CREATED`'s loss clause here is always vacuously true --
+  kept anyway, for the same shape every other inverse's `delete` already uses, rather than special-cased away.
+- **`ProfileStandingResource` carries no `id` field.** The caller already knows it (the id this read was addressed
+  to); carrying one unread field was flagged dead code by the plain `lib` build and removed rather than silenced.
+- **Nineteen mock tests**, in a new `tests/it/profile_inverse_mock.rs`: the exact standing query, `Gone` on `404`,
+  `NotOurs` on a name mismatch, a bundle id mismatch (wrong id and a missing relationship outright), outside the
+  window (and missing `createdDate` outright), the `reversal()` shape, and `delete`'s three outcomes (already gone,
+  deletes, refuses as `Conflict` with no `DELETE` issued at all -- trust boundary 6).
+- **`appstore.bundle_id.ensure`'s and `appstore.bundle_id_capability.ensure`'s own "why" strings are decision 4's table
+  text verbatim**, copied character for character rather than paraphrased, per the row's own instruction.
+- **No new live App Store call, as the row requires.** No live-tests target, no manual try; the existing live write
+  cycle (which already deletes its own throwaway profiles by hand, outside rollback) is untouched.
+- **Left for P6/P7**, same as every other provider task: `appstore.profile.ensure` is not yet checked against
+  `LIVE_TOOL_NAMES`'s own table test or the fake catalog's own parity test; `catalog_parity.rs` in both crates
+  exercises only `ToolSpec` (unaffected, since `reversal()` is not part of it) and stays green unchanged.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
