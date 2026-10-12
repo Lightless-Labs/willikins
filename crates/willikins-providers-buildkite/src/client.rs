@@ -1,6 +1,8 @@
 //! [`BuildkiteClient`]: typed calls for exactly the endpoints the two
-//! Buildkite tools need, plus one extra (`delete_pipeline`) used only by
-//! the opt-in live write cycle to clean up after itself.
+//! Buildkite tools need, plus `delete_pipeline`/`get_pipeline_standing`/
+//! `has_any_build` (milestone 3m task P4): `delete_pipeline`'s own doc
+//! names its callers, both the opt-in live cycles and
+//! `buildkite.pipeline.ensure`'s own teardown inverse.
 //!
 //! No tool ever builds a URL or query string itself; every path this
 //! client builds is assembled from already-validated domain types
@@ -43,6 +45,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use willikins_core::Timestamp;
 use willikins_providers_http::{Credential, CredentialError, Http, ProviderError};
 use willikins_types::{
     BuildkiteClusterId, BuildkiteOrg, BuildkitePipelineSlug, BuildkiteToken, GitHubRepo,
@@ -395,15 +398,18 @@ impl BuildkiteClient {
 
     /// `DELETE /v2/organizations/{org}/pipelines/{slug}`.
     ///
-    /// **Used only by the opt-in live write cycle** (`tests/live_write_cycle.rs`,
-    /// behind the `live-tests` feature), to remove the pipeline it
-    /// created; no tool in this crate calls it, matching the plan's
-    /// "Pipeline update, delete, and archive tools" out-of-scope note.
-    /// `pub` rather than `pub(crate)` only because that test lives in a
-    /// separate crate (`tests/*.rs` targets link this crate as an
-    /// external dependency and cannot see `pub(crate)` items) -- the
-    /// restriction is enforced by this doc comment and by there being no
-    /// second caller, not by visibility.
+    /// **Milestone 3m task P4, superseding this doc's own prior claim
+    /// that "no tool in this crate calls it":** its one non-test caller
+    /// is now `buildkite.pipeline.ensure`'s own `BuildkitePipelineInverse::delete`
+    /// (`crate::tools::pipeline_ensure`), reached only from
+    /// `apply_teardown`, never directly from a document (milestone 3m
+    /// trust boundaries 1, 2). Also still called, as before, by the two
+    /// opt-in live cycles (`tests/live_write_cycle.rs`,
+    /// `tests/live_bootstrap_cycle.rs`, both behind the `live-tests`
+    /// feature) to remove the pipeline each created. `pub` rather than
+    /// `pub(crate)` for the same reason those two test targets already
+    /// needed it: `tests/*.rs` targets link this crate as an external
+    /// dependency and cannot see `pub(crate)` items.
     ///
     /// # Errors
     ///
@@ -415,6 +421,56 @@ impl BuildkiteClient {
     ) -> Result<(), ProviderError> {
         let path = format!("/v2/organizations/{org}/pipelines/{slug}");
         self.http.delete(&path)
+    }
+
+    /// `GET /v2/organizations/{org}/pipelines/{slug}`, the same endpoint
+    /// [`Self::get_pipeline`] reads, but deserializing only `slug`,
+    /// `description`, and `created_at` -- `BuildkitePipelineInverse::standing`'s
+    /// own response type ([`PipelineStandingBody`]), milestone 3m task
+    /// P4, decision 7's buildkite row. Its own response type rather than
+    /// a seventh field on [`PipelineBody`], for the same reason
+    /// [`Self::get_pipeline_configuration`] and
+    /// [`Self::get_pipeline_bootstrap`] already keep their own.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_pipeline`].
+    // Milestone 3m task P4, commit 1: no non-test caller yet (commit 2's
+    // `BuildkitePipelineInverse::standing` is the first). Removed in that
+    // commit.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn get_pipeline_standing(
+        &self,
+        org: &BuildkiteOrg,
+        slug: &BuildkitePipelineSlug,
+    ) -> Result<PipelineStandingBody, ProviderError> {
+        let path = format!("/v2/organizations/{org}/pipelines/{slug}");
+        self.http.get(&path)
+    }
+
+    /// `GET /v2/organizations/{org}/pipelines/{slug}/builds?per_page=1`
+    /// (milestone 3m decision 7's buildkite row; verify item 8): whether
+    /// this pipeline has ever had a build. Reads the smallest page
+    /// Buildkite's own pagination accepts and only whether the returned
+    /// array is empty -- never a build's own `id`, `commit`, `message`,
+    /// or any other field (trust boundary 7): `BuildkitePipelineInverse::standing`
+    /// needs to know *that* a build exists, never which one.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_pipeline`].
+    // Milestone 3m task P4, commit 1: no non-test caller yet (commit 2's
+    // `BuildkitePipelineInverse::standing` is the first). Removed in that
+    // commit.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn has_any_build(
+        &self,
+        org: &BuildkiteOrg,
+        slug: &BuildkitePipelineSlug,
+    ) -> Result<bool, ProviderError> {
+        let path = format!("/v2/organizations/{org}/pipelines/{slug}/builds?per_page=1");
+        let builds: Vec<serde::de::IgnoredAny> = self.http.get(&path)?;
+        Ok(!builds.is_empty())
     }
 }
 
@@ -523,6 +579,73 @@ pub(crate) struct PipelineBody {
     /// [`MANAGED_DESCRIPTION`]. Nullable: a pipeline created with no
     /// description at all.
     pub(crate) description: Option<String>,
+}
+
+/// A Buildkite pipeline's REST representation, deserializing **only**
+/// `slug`, `description`, and `created_at` -- `BuildkitePipelineInverse::standing`'s
+/// own response type (milestone 3m task P4, decision 7's buildkite row),
+/// rather than a seventh field on [`PipelineBody`], for the same reason
+/// [`PipelineConfigurationBody`]/[`PipelineBootstrapBody`] already keep
+/// their own.
+///
+/// `created_at` is read as a raw string, not
+/// `Option<willikins_core::Timestamp>` directly: Buildkite's own
+/// documented example (`pipelines.md`, fetched 2026-10-12) renders a
+/// pipeline's own `created_at` as `"2013-09-03 13:24:38 UTC"` -- a
+/// space, not a `T`, and a literal `UTC` suffix rather than an offset,
+/// **not** RFC 3339 -- unlike the *nested* `created_by.created_at` in
+/// the same example, which the same response renders as RFC 3339
+/// (`"2013-08-29T10:10:03.000Z"`): two different serializers inside one
+/// response. `willikins_core::Timestamp`'s hand-written `Deserialize` is
+/// strict RFC 3339 only, by design, so every other provider's timestamp
+/// wire shape is pinned to one grammar -- it would hard-fail
+/// deserializing this field outright, on every real response, rather
+/// than falling back to anything. [`parse_pipeline_created_at`] is
+/// tried instead, by `crate::tools::pipeline_ensure`'s own
+/// `BuildkitePipelineInverse::standing`, never here: a parse failure
+/// reads as a missing `created_at` (fail closed, decision 2), and this
+/// struct stays a plain, infallible deserialize like its two siblings
+/// above.
+// Milestone 3m task P4, commit 1: constructed nowhere yet (commit 2's
+// `BuildkitePipelineInverse::standing` is the first, through
+// `BuildkiteClient::get_pipeline_standing`). Removed in that commit.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(Debug, Deserialize)]
+pub(crate) struct PipelineStandingBody {
+    /// The pipeline's own slug, compared against the key's own (decision
+    /// 7: "the slug differs").
+    pub(crate) slug: String,
+    /// The ownership marker field, compared exactly against
+    /// [`MANAGED_DESCRIPTION`]. Nullable: a pipeline created with no
+    /// description at all.
+    pub(crate) description: Option<String>,
+    /// The pipeline's own creation date, raw -- see this struct's own
+    /// doc for why. `None` when Buildkite omits the field outright
+    /// (fails closed the same way a parse failure does).
+    pub(crate) created_at: Option<String>,
+}
+
+/// Parse a Buildkite pipeline's own `created_at` string (milestone 3m
+/// task P4; see [`PipelineStandingBody::created_at`]'s own doc for why
+/// this exists at all): [`Timestamp::parse`] (RFC 3339) is tried first,
+/// in case a live pipeline ever actually returns one -- unconfirmed by
+/// this task, flagged for the live cycle (verify item 8) -- and
+/// Buildkite's own documented `"<date> <time> UTC"` form is tried
+/// second. Any other shape, or no string at all, is `None`: never a
+/// panic, and never treated as "assume the safe case".
+// Milestone 3m task P4, commit 1: no non-test caller yet (commit 2's
+// `BuildkitePipelineInverse::standing` is the first). Removed in that
+// commit.
+#[cfg_attr(not(test), expect(dead_code))]
+#[must_use]
+pub(crate) fn parse_pipeline_created_at(raw: &str) -> Option<Timestamp> {
+    if let Ok(parsed) = Timestamp::parse(raw) {
+        return Some(parsed);
+    }
+    let naive = raw
+        .strip_suffix(" UTC")
+        .and_then(|rest| chrono::NaiveDateTime::parse_from_str(rest, "%Y-%m-%d %H:%M:%S").ok())?;
+    Some(Timestamp::from_datetime(naive.and_utc()))
 }
 
 /// A Buildkite pipeline's REST representation, deserializing **only**
@@ -781,6 +904,133 @@ mod tests {
             configuration,
             Some("steps:\n - command: \"echo hi\"".to_string())
         );
+    }
+
+    // -------------------------------------------------------------
+    // Milestone 3m task P4: PipelineStandingBody, parse_pipeline_created_at,
+    // get_pipeline_standing, has_any_build.
+    // -------------------------------------------------------------
+
+    /// [`PipelineStandingBody`] has exactly the three fields its own doc
+    /// claims -- the complementary pin, the same way
+    /// [`pipeline_configuration_body_has_exactly_one_field`] pins
+    /// [`PipelineConfigurationBody`].
+    #[test]
+    fn pipeline_standing_body_has_exactly_three_fields() {
+        let body: PipelineStandingBody = serde_json::from_str(
+            &serde_json::json!({
+                "id": "018e5a22-0000-0000-0000-000000000001",
+                "slug": "third-thoughts",
+                "description": "managed-by: willikins",
+                "created_at": "2013-09-03 13:24:38 UTC",
+                "repository": "git@github.com:lightless-labs/third-thoughts.git",
+            })
+            .to_string(),
+        )
+        .expect("deserializes, dropping the unknown `id` and `repository`");
+        let PipelineStandingBody {
+            slug,
+            description,
+            created_at,
+        } = body;
+        assert_eq!(slug, "third-thoughts");
+        assert_eq!(description, Some("managed-by: willikins".to_string()));
+        assert_eq!(created_at, Some("2013-09-03 13:24:38 UTC".to_string()));
+    }
+
+    /// Buildkite's own documented example (`pipelines.md`, fetched
+    /// 2026-10-12): a space, not a `T`, and a literal `UTC` suffix rather
+    /// than an offset.
+    #[test]
+    fn parse_pipeline_created_at_parses_buildkites_documented_form() {
+        assert_eq!(
+            parse_pipeline_created_at("2013-09-03 13:24:38 UTC"),
+            Some(Timestamp::parse("2013-09-03T13:24:38Z").unwrap())
+        );
+    }
+
+    /// Tried first, in case a live pipeline ever actually returns RFC
+    /// 3339 (verify item 8, unconfirmed by this task).
+    #[test]
+    fn parse_pipeline_created_at_also_accepts_rfc_3339() {
+        assert_eq!(
+            parse_pipeline_created_at("2026-01-01T00:00:00Z"),
+            Some(Timestamp::parse("2026-01-01T00:00:00Z").unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_pipeline_created_at_is_none_on_any_other_shape() {
+        assert_eq!(parse_pipeline_created_at("not a timestamp"), None);
+        assert_eq!(parse_pipeline_created_at("2013-09-03 13:24:38"), None);
+        assert_eq!(parse_pipeline_created_at(""), None);
+    }
+
+    #[test]
+    fn get_pipeline_standing_pins_the_same_path_as_get_pipeline() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let mock = provider
+            .mock(
+                "GET",
+                "/v2/organizations/willikins-test/pipelines/third-thoughts",
+            )
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "slug": "third-thoughts",
+                    "description": "managed-by: willikins",
+                    "created_at": "2013-09-03 13:24:38 UTC",
+                })
+                .to_string(),
+            )
+            .create();
+        let credential =
+            Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+        let client = BuildkiteClient::new(Http::new(provider.url(), Vec::new(), credential));
+        let org = BuildkiteOrg::parse("willikins-test").unwrap();
+        let slug = BuildkitePipelineSlug::parse("third-thoughts").unwrap();
+        let body = client.get_pipeline_standing(&org, &slug).unwrap();
+        assert_eq!(body.slug, "third-thoughts");
+        mock.assert();
+    }
+
+    #[test]
+    fn has_any_build_pins_the_exact_query_and_reports_false_when_empty() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        let mock = provider
+            .mock(
+                "GET",
+                "/v2/organizations/willikins-test/pipelines/third-thoughts/builds?per_page=1",
+            )
+            .with_status(200)
+            .with_body(serde_json::json!([]).to_string())
+            .create();
+        let credential =
+            Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+        let client = BuildkiteClient::new(Http::new(provider.url(), Vec::new(), credential));
+        let org = BuildkiteOrg::parse("willikins-test").unwrap();
+        let slug = BuildkitePipelineSlug::parse("third-thoughts").unwrap();
+        assert!(!client.has_any_build(&org, &slug).unwrap());
+        mock.assert();
+    }
+
+    #[test]
+    fn has_any_build_reports_true_when_the_array_is_not_empty() {
+        let mut provider = willikins_providers_http::testing::MockProvider::start();
+        provider
+            .mock(
+                "GET",
+                "/v2/organizations/willikins-test/pipelines/third-thoughts/builds?per_page=1",
+            )
+            .with_status(200)
+            .with_body(serde_json::json!([{"id": "b1", "number": 1}]).to_string())
+            .create();
+        let credential =
+            Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+        let client = BuildkiteClient::new(Http::new(provider.url(), Vec::new(), credential));
+        let org = BuildkiteOrg::parse("willikins-test").unwrap();
+        let slug = BuildkitePipelineSlug::parse("third-thoughts").unwrap();
+        assert!(client.has_any_build(&org, &slug).unwrap());
     }
 
     // -------------------------------------------------------------

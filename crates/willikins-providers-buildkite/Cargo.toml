@@ -35,6 +35,12 @@ serde_yaml_ng.workspace = true
 indexmap.workspace = true
 regex.workspace = true
 thiserror.workspace = true
+# Milestone 3m task P4: `client::parse_pipeline_created_at` parses
+# Buildkite's own non-RFC-3339 pipeline `created_at` form
+# (`"<date> <time> UTC"`), which `willikins_core::Timestamp`'s strict
+# RFC 3339 parser refuses outright. `willikins-providers-doppler` already
+# carries this same workspace dependency for its own `created_at` tests.
+chrono.workspace = true
 
 [dev-dependencies]
 willikins-providers-http = { workspace = true, features = ["test-support"] }
