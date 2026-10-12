@@ -13,8 +13,11 @@
 //! present and otherwise reporting the status alone, so this client adds
 //! no error-shape parsing of its own.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
+use willikins_core::Timestamp;
 use willikins_providers_http::{Credential, CredentialError, Http, ProviderError};
 use willikins_types::{
     DopplerConfig, DopplerConfigName, DopplerProject, DopplerProjectRole, DopplerSecretValue,
@@ -229,6 +232,93 @@ impl DopplerClient {
         Ok(())
     }
 
+    /// `DELETE /v3/projects/project` with `{"project": <name>}` in the
+    /// request body (milestone 3m task P2, decision 7's project row;
+    /// verify item 9, fetched verbatim 2026-10-12 from
+    /// `docs.doppler.com/reference/projects-delete.md`: the schema
+    /// requires `project` in the body, not the query -- unlike
+    /// [`Self::delete_environment`]/[`Self::delete_config`] below, both
+    /// of which take theirs as a query pair). Retried like every other
+    /// `DELETE` in this crate ([`Http::delete_with_body`]'s own doc): a
+    /// repeated delete of an already-gone project is harmless, and
+    /// [`willikins_core::rollback::Inverse::delete`]'s own contract (this
+    /// tool's inverse, milestone 3m task P2 commit 2) only ever reaches
+    /// this call after `standing` has confirmed the project is still
+    /// `AsCreated`.
+    ///
+    /// `pub(crate)` until task P2 commit 2's `doppler.project.ensure`
+    /// inverse becomes its one caller — see that commit's own
+    /// `#[cfg_attr(not(test), expect(dead_code))]` note on this method.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn delete_project(&self, project: &DopplerProject) -> Result<(), ProviderError> {
+        let body = DeleteProjectBody {
+            project: project.to_string(),
+        };
+        self.http.delete_with_body("/v3/projects/project", &body)
+    }
+
+    /// `DELETE /v3/environments/environment?project=<project>&environment=<id>`
+    /// (milestone 3m task P2, decision 7; verify item 9, fetched verbatim
+    /// 2026-10-12 from `docs.doppler.com/reference/environments-delete.md`).
+    ///
+    /// `environment` is the **Doppler-side environment id**, not a bare
+    /// [`EnvironmentSlug`]: [`Self::create_environment`] already sends a
+    /// [`DopplerConfigName`] (the derived root config's own name,
+    /// `naming::v1::doppler_root_config`'s snake join) as both `name` and
+    /// `slug` when it creates one, so that same already-prefixed,
+    /// snake-joined string is what Doppler stores as the environment's
+    /// own id -- a multi-word environment's `EnvironmentSlug::Display`
+    /// would print its kebab form (`pre-prod`) instead of the stored
+    /// `pre_prod`, which Doppler would then read as a different,
+    /// nonexistent environment. Callers (task P3) address an environment
+    /// the same way [`Self::list_environments`]'s own
+    /// [`EnvironmentEntry::id`] reports it.
+    ///
+    /// `pub`, not `pub(crate)`, for the same reason
+    /// [`Self::list_service_accounts`]'s own doc gives: no tool in this
+    /// milestone's own task (P2) calls this -- `doppler.config.ensure`'s
+    /// inverse is task P3's -- so this method's own mock test (in this
+    /// module, below) is its only caller until then, and a `tests/it/`
+    /// target cannot see a `pub(crate)` item at all. The restriction to a
+    /// real caller inside this crate, once P3 lands, is enforced by this
+    /// doc comment, not by visibility.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub fn delete_environment(
+        &self,
+        project: &DopplerProject,
+        environment: &DopplerConfigName,
+    ) -> Result<(), ProviderError> {
+        let path =
+            format!("/v3/environments/environment?project={project}&environment={environment}");
+        self.http.delete(&path)
+    }
+
+    /// `DELETE /v3/configs/config?project=<project>&config=<name>`
+    /// (milestone 3m task P2, decision 7; verify item 9, fetched verbatim
+    /// 2026-10-12 from `docs.doppler.com/reference/configs-delete.md`).
+    /// `pub` for the same reason [`Self::delete_environment`]'s own doc
+    /// gives: no tool in task P2 calls this (`doppler.branch_config.ensure`'s
+    /// inverse is task P3's).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`].
+    pub fn delete_config(&self, config: &DopplerConfig) -> Result<(), ProviderError> {
+        let path = format!(
+            "/v3/configs/config?project={}&config={}",
+            config.project(),
+            config.name()
+        );
+        self.http.delete(&path)
+    }
+
     /// `GET /v3/configs/config?project=<project>&config=<name>`, returning
     /// the one field `doppler.config.ensure` decides on: `root`.
     ///
@@ -254,6 +344,109 @@ impl DopplerClient {
         self.http
             .get::<ConfigEnvelope>(&path)
             .map(|envelope| envelope.config)
+    }
+
+    /// `GET /v3/environments?project=<project>&per_page=100&page=N`,
+    /// paged like [`Self::list_service_accounts`] until a page shorter
+    /// than [`LIST_PER_PAGE`] is seen (milestone 3m task P2, decision 7's
+    /// project row: "an environment other than `dev`/`stg`/`prd` or a
+    /// rider's").
+    ///
+    /// Doppler's own reference (`environments-list.md`, fetched verbatim
+    /// 2026-10-12) documents only `project` as a query parameter and
+    /// shows no `per_page`/`page` in its example request, though its
+    /// example response carries a bare `"page": 1`. This method passes
+    /// `per_page`/`page` anyway: harmless if Doppler ignores them (the
+    /// loop still terminates on a short page either way, just after more
+    /// round trips), and Doppler's own documented cap -- 15 environments
+    /// per project, Team/Enterprise, "\*case-by-case" above that -- means
+    /// one page covers every project this crate has ever provisioned.
+    /// Whether the parameter is honoured at all is left for L2 to confirm
+    /// live (this milestone's "Verify before relying on them" list).
+    ///
+    /// `pub(crate)` until task P2 commit 2's inverse becomes its caller —
+    /// see this method's own `#[cfg_attr(not(test), expect(dead_code))]`
+    /// note.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`], plus a bound error mirroring
+    /// [`Self::list_service_accounts`]'s own.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn list_environments(
+        &self,
+        project: &DopplerProject,
+    ) -> Result<Vec<EnvironmentEntry>, ProviderError> {
+        let mut environments = Vec::new();
+        for page in 1..=LIST_MAX_PAGES {
+            let path =
+                format!("/v3/environments?project={project}&per_page={LIST_PER_PAGE}&page={page}");
+            let envelope: EnvironmentsEnvelope = self.http.get(&path)?;
+            let len = envelope.environments.len();
+            environments.extend(envelope.environments);
+            if len < LIST_PER_PAGE as usize {
+                return Ok(environments);
+            }
+        }
+        Err(ProviderError::new(
+            None,
+            format!(
+                "project `{project}` has more environments than this client will page through \
+                 (more than {} at {LIST_PER_PAGE} per page)",
+                LIST_MAX_PAGES * LIST_PER_PAGE
+            ),
+        ))
+    }
+
+    /// `GET /v3/configs?project=<project>&per_page=100&page=N`, paged the
+    /// same way as [`Self::list_environments`] (milestone 3m task P2,
+    /// decision 7's project row: "a config other than those environments'
+    /// roots or a rider's"). Doppler's own reference (`configs-list.md`,
+    /// fetched verbatim 2026-10-12) documents a default `per_page` of
+    /// 20, so an unpaginated call would silently miss configs past the
+    /// first page -- unlike [`Self::list_environments`], this one is
+    /// known to need it.
+    ///
+    /// Each entry carries `created_at` (present in the list endpoint's
+    /// own example, unlike `inheritedBy`: see [`ConfigBody::inherited_by`]'s
+    /// own doc for where that field actually lives) for a future caller
+    /// (task P3's own per-tool drift rows, `doppler.config.ensure`'s and
+    /// `doppler.branch_config.ensure`'s own creation-window checks) to
+    /// read without a second client change; task P2's own drift rule
+    /// (decision 7's project row) does not read it.
+    ///
+    /// `pub(crate)` until task P2 commit 2's inverse becomes its caller —
+    /// see this method's own `#[cfg_attr(not(test), expect(dead_code))]`
+    /// note.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`], plus a bound error mirroring
+    /// [`Self::list_service_accounts`]'s own.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn list_configs(
+        &self,
+        project: &DopplerProject,
+    ) -> Result<Vec<ConfigListEntry>, ProviderError> {
+        let mut configs = Vec::new();
+        for page in 1..=LIST_MAX_PAGES {
+            let path =
+                format!("/v3/configs?project={project}&per_page={LIST_PER_PAGE}&page={page}");
+            let envelope: ConfigsEnvelope = self.http.get(&path)?;
+            let len = envelope.configs.len();
+            configs.extend(envelope.configs);
+            if len < LIST_PER_PAGE as usize {
+                return Ok(configs);
+            }
+        }
+        Err(ProviderError::new(
+            None,
+            format!(
+                "project `{project}` has more configs than this client will page through (more \
+                 than {} at {LIST_PER_PAGE} per page)",
+                LIST_MAX_PAGES * LIST_PER_PAGE
+            ),
+        ))
     }
 
     /// `POST /v3/environments?project=<project>` with `name` and `slug`
@@ -568,11 +761,14 @@ impl DopplerClient {
     /// is present in the listed array, compared to `name.as_str()` byte
     /// for byte. The listed names are never parsed as [`SecretName`] (a
     /// name Doppler's own grammar allows but willikins' refuses must not
-    /// fail this read), and the list itself never leaves this method: it
-    /// is not returned, logged, or formatted anywhere (milestone 3j, trust
-    /// boundary 2: "The list never leaves the client... No listed name
-    /// other than the one asked for reaches an output, a `ToolError`, the
-    /// journal, `tracing` or a panic message.").
+    /// fail this read), and the list itself never leaves this *client*:
+    /// it is not returned, logged, or formatted anywhere outside
+    /// [`Self::secret_names`] and this method's and
+    /// [`Self::config_has_foreign_secret_name`]'s own reduction of it to
+    /// a `bool` (milestone 3j, trust boundary 2: "The list never leaves
+    /// the client... No listed name other than the one asked for reaches
+    /// an output, a `ToolError`, the journal, `tracing` or a panic
+    /// message.").
     ///
     /// **Verify item 1, settled 2026-10-04.** Doppler's reference page
     /// does not say whether this endpoint lists a name inherited from a
@@ -598,11 +794,83 @@ impl DopplerClient {
         config: &DopplerConfigName,
         name: &SecretName,
     ) -> Result<bool, ProviderError> {
+        let body = self.secret_names(project, config)?;
+        Ok(body.names.iter().any(|listed| listed == name.as_str()))
+    }
+
+    /// `GET /v3/configs/config/secrets/names`, the same request and query
+    /// [`Self::secret_name_listed`]'s own doc describes, shared with
+    /// [`Self::config_has_foreign_secret_name`] (milestone 3m task P2)
+    /// below so the query is built in exactly one place. Returns
+    /// [`SecretNamesBody`] itself, not the bare `Vec`, so the type both
+    /// callers immediately reduce to a `bool` carries no `Debug` of its
+    /// own — the same guard [`SecretNamesBody`]'s own doc already states,
+    /// now covering this shared path too, not only the struct behind it.
+    /// Private (not even `pub(crate)`): a `tests/it/` target cannot reach
+    /// it regardless, and neither can a third caller inside this crate
+    /// that forgot to reduce it.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::get_project`]. A malformed `2xx` body is a
+    /// [`ProviderError`] carrying that status and a static message, never
+    /// the response text, from [`Http::get`]'s own parse-failure arm —
+    /// see [`Self::secret_name_listed`]'s own doc for the full reasoning.
+    fn secret_names(
+        &self,
+        project: &DopplerProject,
+        config: &DopplerConfigName,
+    ) -> Result<SecretNamesBody, ProviderError> {
         let path = format!(
             "/v3/configs/config/secrets/names?project={project}&config={config}&include_dynamic_secrets=false&include_managed_secrets=false"
         );
-        let body = self.http.get::<SecretNamesBody>(&path)?;
-        Ok(body.names.iter().any(|listed| listed == name.as_str()))
+        self.http.get::<SecretNamesBody>(&path)
+    }
+
+    /// Whether `config` carries a secret name that is neither in
+    /// `tolerated` nor present in any base named by `bases` — `config`'s
+    /// own, already-fetched `inherits` array ([`ConfigBody::inherits`]),
+    /// never a document's stated intent (milestone 3m task P2, decision
+    /// 7's project row: "not written by a rider `doppler.secret.set`
+    /// into that config or inherited"; the decision note just below the
+    /// table). One level only, the same limitation
+    /// [`crate::tools::DopplerSecretNameGate`]'s own walk documents and
+    /// for the same reason: whether Doppler permits a base to itself
+    /// inherit is unverified (that gate's module doc, "One level only").
+    ///
+    /// Never returns the names themselves — only whether a foreign one
+    /// exists — the same trust boundary 2 [`Self::secret_names`]'s own
+    /// doc names: a config's other secret names are the operator's own
+    /// layout, not this teardown's to print.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::secret_names`].
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn config_has_foreign_secret_name(
+        &self,
+        project: &DopplerProject,
+        config: &DopplerConfigName,
+        tolerated: &HashSet<String>,
+        bases: &[ConfigRefBody],
+    ) -> Result<bool, ProviderError> {
+        let mut foreign: Vec<String> = self
+            .secret_names(project, config)?
+            .names
+            .into_iter()
+            .filter(|listed| !tolerated.contains(listed))
+            .collect();
+        if foreign.is_empty() {
+            return Ok(false);
+        }
+        for base in bases {
+            let base_names = self.secret_names(&base.project, &base.config)?.names;
+            foreign.retain(|listed| !base_names.contains(listed));
+            if foreign.is_empty() {
+                return Ok(false);
+            }
+        }
+        Ok(!foreign.is_empty())
     }
 
     /// `GET /v3/workplace/service_accounts?page=N&per_page=100`, paged
@@ -1039,13 +1307,24 @@ struct ProjectEnvelope {
     project: ProjectBody,
 }
 
-/// The one field of Doppler's project object this crate consults:
+/// The fields of Doppler's project object this crate consults:
 /// `description`, used to detect the [`MANAGED_DESCRIPTION`] ownership
-/// marker. Nullable in Doppler's schema (a project created with no
-/// description at all).
+/// marker, and -- since milestone 3m task P2 -- `created_at`, compared
+/// against the teardown's own creation window (decision 2). Both
+/// nullable in Doppler's schema (a project created with no description,
+/// or a mock fixture that predates `created_at`), so both are
+/// [`Option`], `description`'s own existing shape, widened to
+/// `created_at` by `#[serde(default)]` since every pre-milestone fixture
+/// predates the field (milestone 3m task P1's `RepoBody` precedent).
+/// [`crate::tools::DopplerProjectEnsure`]'s inverse treats a missing
+/// `created_at` the same as one outside the window: fail closed, never
+/// "no opinion".
 #[derive(Debug, Deserialize)]
 pub(crate) struct ProjectBody {
     pub(crate) description: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) created_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1054,10 +1333,42 @@ struct CreateProjectBody {
     description: String,
 }
 
+/// [`DopplerClient::delete_project`]'s request body (verify item 9: the
+/// delete endpoint takes `project` in the body, not the query).
+#[derive(Debug, Serialize)]
+#[cfg_attr(not(test), expect(dead_code))]
+struct DeleteProjectBody {
+    project: String,
+}
+
 #[derive(Debug, Serialize)]
 struct CreateEnvironmentBody {
     name: String,
     slug: String,
+}
+
+/// Doppler's environments-list envelope: `{"environments": [...], "page": N}`
+/// ([`DopplerClient::list_environments`]'s own doc). `page` is never read:
+/// the loop decides whether to fetch another page from the returned
+/// page's own length, the same way [`ServiceAccountsEnvelope`] does.
+#[derive(Debug, Deserialize)]
+struct EnvironmentsEnvelope {
+    environments: Vec<EnvironmentEntry>,
+}
+
+/// One listed environment: its own Doppler-side id only (milestone 3m
+/// task P2, decision 7's project row: membership is all this tool's
+/// drift rule needs). `id` is a raw [`String`], never parsed into
+/// [`DopplerConfigName`] on the way in -- an unrelated, genuinely foreign
+/// environment might not fit that grammar at all, and failing the whole
+/// listing's parse over one entry nobody asked about is not this crate's
+/// convention (mirrors [`ServiceAccountEntry::name`]'s own reasoning).
+/// Compared against a tolerated set built the same way, as a plain
+/// string.
+#[derive(Debug, Deserialize)]
+pub(crate) struct EnvironmentEntry {
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) id: String,
 }
 
 /// [`DopplerClient::create_branch_config`]'s request body.
@@ -1066,6 +1377,41 @@ struct CreateBranchConfigBody {
     project: String,
     environment: String,
     name: String,
+}
+
+/// Doppler's configs-list envelope: `{"configs": [...], "page": N}`
+/// ([`DopplerClient::list_configs`]'s own doc). `page` is never read, as
+/// [`EnvironmentsEnvelope`]'s own doc explains.
+#[derive(Debug, Deserialize)]
+struct ConfigsEnvelope {
+    configs: Vec<ConfigListEntry>,
+}
+
+/// One listed config, in the shape the *list* endpoint actually returns
+/// it -- `name`, `root`, `environment`, `created_at`, and nothing else
+/// ([`DopplerClient::list_configs`]'s own doc: the list endpoint's
+/// example carries none of [`ConfigBody`]'s `inheritable`/`inherits`/
+/// `inherited_by`, which only the single-config `GET` this crate already
+/// has (`DopplerClient::get_config`) returns). `name`/`environment` are
+/// raw [`String`]s, the same reasoning [`EnvironmentEntry::id`]'s own doc
+/// gives: an entry nobody asked about must not fail the whole listing's
+/// parse for not fitting a grammar it was never promised to follow.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ConfigListEntry {
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) name: String,
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) root: bool,
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) environment: String,
+    /// Read by no tool yet: milestone 3m task P2's own drift rule
+    /// (decision 7's project row) does not check a config's own creation
+    /// window, only membership. Carried now so a later task (P3's own
+    /// per-tool rows, "the environment's `created_at` outside the
+    /// window") needs no second client change.
+    #[serde(default)]
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) created_at: Option<Timestamp>,
 }
 
 /// Doppler's config envelope: `{"config": {...}}`.
@@ -1078,25 +1424,46 @@ struct ConfigEnvelope {
 /// which separates an environment's own root config from a branch config
 /// under it, and — since `doppler.config.inheritable.ensure` and
 /// `doppler.config.inherits.ensure` — `inheritable` and `inherits`. All
-/// three are [`Option`] rather than defaulted, so a missing key *and* an
+/// are [`Option`] rather than defaulted, so a missing key *and* an
 /// explicit `null` both land on the same, safe answer ("not proven")
 /// instead of one of them failing the whole parse — the same shape
-/// [`ProjectBody::description`] uses. `inheritedBy` and `inheriting` are
-/// deliberately left out: no tool reads them (research note section
-/// "Config Inheritance": both answer bodies carry all four, but only
-/// `inheritable` and `inherits` name what a config was *asked* to be,
-/// which is the half `ensure` compares against). `environment` was added
-/// for `doppler.branch_config.ensure`: the same name-collision risk
+/// [`ProjectBody::description`] uses. `environment` was added for
+/// `doppler.branch_config.ensure`: the same name-collision risk
 /// `doppler.config.ensure`'s own `root` check guards against (a config
 /// sitting at the right string but the wrong logical place) applies to a
 /// literal branch name too, so that tool's `Present` also requires this
 /// field to equal the environment it was asked to ensure under.
+///
+/// `inherited_by` (milestone 3m task P2, decision 7's project row: "a
+/// config with `inheritedBy` naming a config outside this project") was
+/// left out entirely until this task — Doppler's own reference omits it
+/// from both the `configs-get`/`configs-create` example bodies, but the
+/// milestone 2 live write cycle observed it on every config `GET` live,
+/// alongside `inheritable`/`inheriting`/`inherits`
+/// (`docs/research/2026-09-12-m2-dependencies.md`, "Config Inheritance";
+/// `fixtures/doppler/README.md`'s own `inheritedBy: []` rows, confirmed
+/// live 2026-09-21). `#[serde(default)]` for the same reason as the three
+/// fields above — every fixture that predates this task lacks the key —
+/// but read fail-closed, never "no opinion": `None` (an absent key, which
+/// a real response never actually sends) reads the same as "some config
+/// outside this project inherits it", since this crate cannot rule that
+/// out without the field. Typed as [`ConfigRefRaw`], not [`ConfigRefBody`]:
+/// an entry here is whoever happens to inherit from this config, never
+/// something this document asked for (the opposite of `inherits`, which
+/// *is* the document's own intent and so may fail the parse on a bad
+/// entry the same way [`ConfigRefBody`]'s own doc explains); a foreign
+/// inheritor with a project name outside this crate's own grammar must
+/// still read as `Drifted`, not an opaque "the response body did not
+/// parse".
 #[derive(Debug, Deserialize)]
 pub(crate) struct ConfigBody {
     pub(crate) root: Option<bool>,
     pub(crate) environment: Option<String>,
     pub(crate) inheritable: Option<bool>,
     pub(crate) inherits: Option<Vec<ConfigRefBody>>,
+    #[serde(default, rename = "inheritedBy")]
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) inherited_by: Option<Vec<ConfigRefRaw>>,
 }
 
 /// One entry of a config object's `inherits` array: the project and
@@ -1111,6 +1478,22 @@ pub(crate) struct ConfigBody {
 pub(crate) struct ConfigRefBody {
     pub(crate) project: DopplerProject,
     pub(crate) config: DopplerConfigName,
+}
+
+/// [`ConfigBody::inherited_by`]'s own entry shape: the same two fields as
+/// [`ConfigRefBody`], raw [`String`]s rather than [`DopplerProject`]/
+/// [`DopplerConfigName`] — see that field's own doc for why. No `Debug`
+/// derive beyond the default (nothing here is a secret, and a foreign
+/// inheritor's name is no more sensitive than any other config name this
+/// crate already prints), unlike [`SecretNamesBody`], whose own
+/// restriction is about a config's *contents*, never its neighbours'
+/// names.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ConfigRefRaw {
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) project: String,
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) config: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1363,7 +1746,7 @@ mod tests {
     // secret_name_listed (milestone 3j task B1)
     // -----------------------------------------------------------------
 
-    use willikins_providers_http::testing::{MockProvider, load_fixture};
+    use willikins_providers_http::testing::{MockProvider, json_body, load_fixture};
     use willikins_types::DomainType;
 
     /// A listed name that must never surface in any `Err`'s message or
@@ -1718,5 +2101,387 @@ mod tests {
             !format!("{err:?}").contains(WILLIKINS_LEAK_MARKER_NAME),
             "{err:?}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // ProjectBody.created_at / ConfigBody.inherited_by
+    // (milestone 3m task P2, decision 2 and decision 7's project row)
+    // -----------------------------------------------------------------
+
+    /// Verify item 6's mock-level answer: Doppler's own documented
+    /// example (`projects-get.md`, fetched 2026-09-29) carries
+    /// millisecond fractional seconds (`.476Z`), which RFC 3339 (and so
+    /// `chrono::DateTime::parse_from_rfc3339`, `Timestamp::parse`'s own
+    /// implementation) already accepts — pinned here rather than assumed,
+    /// since every other `created_at` test in this file (and in
+    /// [`DopplerClient::list_environments`]/[`DopplerClient::list_configs`]'s
+    /// own tests) uses a whole-second example instead.
+    #[test]
+    fn get_project_parses_dopplers_millisecond_created_at() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/projects/project")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "project".into(),
+                "shared_keys".into(),
+            ))
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "project": {
+                        "description": MANAGED_DESCRIPTION,
+                        "created_at": "2019-11-19T07:19:00.476Z",
+                    }
+                })
+                .to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let body = client.get_project(&project()).unwrap();
+        assert_eq!(
+            body.created_at,
+            Some(Timestamp::parse("2019-11-19T07:19:00.476Z").unwrap())
+        );
+    }
+
+    #[test]
+    fn get_project_created_at_is_none_when_the_fixture_predates_the_field() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/projects/project")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "project".into(),
+                "shared_keys".into(),
+            ))
+            .with_status(200)
+            .with_body(
+                serde_json::json!({"project": {"description": MANAGED_DESCRIPTION}}).to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let body = client.get_project(&project()).unwrap();
+        assert_eq!(body.created_at, None);
+    }
+
+    /// Milestone 3m task P2, decision 7's project row: "a config with
+    /// `inheritedBy` naming a config outside this project" — this is the
+    /// field that makes that check possible at all.
+    #[test]
+    fn get_config_parses_inherited_by() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/configs/config")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("project".into(), "shared_keys".into()),
+                mockito::Matcher::UrlEncoded("config".into(), "prd".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "config": {
+                        "root": true,
+                        "inheritedBy": [{"project": "child", "config": "prd"}],
+                    }
+                })
+                .to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let body = client.get_config(&project(), &config()).unwrap();
+        let inherited_by = body.inherited_by.unwrap();
+        assert_eq!(inherited_by.len(), 1);
+        assert_eq!(inherited_by[0].project.as_str(), "child");
+        assert_eq!(inherited_by[0].config.as_str(), "prd");
+    }
+
+    #[test]
+    fn get_config_inherited_by_is_none_when_the_fixture_predates_the_field() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/configs/config")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("project".into(), "shared_keys".into()),
+                mockito::Matcher::UrlEncoded("config".into(), "prd".into()),
+            ]))
+            .with_status(200)
+            .with_body(serde_json::json!({"config": {"root": true}}).to_string())
+            .create();
+        let client = client_against(provider.url());
+        let body = client.get_config(&project(), &config()).unwrap();
+        assert!(body.inherited_by.is_none());
+    }
+
+    // -----------------------------------------------------------------
+    // delete_project / delete_environment / delete_config
+    // (milestone 3m task P2, decision 7; verify item 9)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn delete_project_sends_the_expected_body_and_succeeds_on_200() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("DELETE", "/v3/projects/project")
+            .match_body(json_body(serde_json::json!({"project": "shared_keys"})))
+            .with_status(200)
+            .with_body(serde_json::json!({"success": true}).to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        client.delete_project(&project()).unwrap();
+        mock.assert();
+    }
+
+    #[test]
+    fn delete_environment_sends_the_expected_query() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("DELETE", "/v3/environments/environment")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("project".into(), "shared_keys".into()),
+                mockito::Matcher::UrlEncoded("environment".into(), "prd".into()),
+            ]))
+            .with_status(200)
+            .with_body(serde_json::json!({"success": true}).to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        client
+            .delete_environment(&project(), &DopplerConfigName::parse("prd").unwrap())
+            .unwrap();
+        mock.assert();
+    }
+
+    #[test]
+    fn delete_config_sends_the_expected_query() {
+        let mut provider = MockProvider::start();
+        let mock = provider
+            .mock("DELETE", "/v3/configs/config")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("project".into(), "shared_keys".into()),
+                mockito::Matcher::UrlEncoded("config".into(), "prd".into()),
+            ]))
+            .with_status(200)
+            .with_body(serde_json::json!({"success": true}).to_string())
+            .expect(1)
+            .create();
+        let client = client_against(provider.url());
+        let doppler_config =
+            DopplerConfig::new(project(), DopplerConfigName::parse("prd").unwrap());
+        client.delete_config(&doppler_config).unwrap();
+        mock.assert();
+    }
+
+    // -----------------------------------------------------------------
+    // list_environments / list_configs (milestone 3m task P2, decision 7)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn list_environments_returns_every_listed_id() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/environments")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("project".into(), "shared_keys".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), LIST_PER_PAGE.to_string()),
+                mockito::Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "environments": [
+                        {"id": "dev", "created_at": "2026-01-01T00:00:00Z"},
+                        {"id": "stg", "created_at": "2026-01-01T00:00:00Z"},
+                        {"id": "prd", "created_at": "2026-01-01T00:00:00Z"},
+                    ],
+                    "page": 1,
+                })
+                .to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let ids: Vec<String> = client
+            .list_environments(&project())
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(ids, vec!["dev", "stg", "prd"]);
+    }
+
+    #[test]
+    fn list_environments_pages_until_a_short_page() {
+        let mut provider = MockProvider::start();
+        let full_page: Vec<_> = (0..LIST_PER_PAGE)
+            .map(|i| serde_json::json!({"id": format!("env-{i}")}))
+            .collect();
+        provider
+            .mock("GET", "/v3/environments")
+            .match_query(mockito::Matcher::UrlEncoded("page".into(), "1".into()))
+            .with_status(200)
+            .with_body(serde_json::json!({"environments": full_page, "page": 1}).to_string())
+            .create();
+        provider
+            .mock("GET", "/v3/environments")
+            .match_query(mockito::Matcher::UrlEncoded("page".into(), "2".into()))
+            .with_status(200)
+            .with_body(serde_json::json!({"environments": [{"id": "last"}], "page": 2}).to_string())
+            .create();
+        let client = client_against(provider.url());
+        let ids: Vec<String> = client
+            .list_environments(&project())
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(ids.len(), LIST_PER_PAGE as usize + 1);
+        assert_eq!(ids.last().unwrap(), "last");
+    }
+
+    #[test]
+    fn list_configs_returns_root_environment_and_created_at() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/configs")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("project".into(), "shared_keys".into()),
+                mockito::Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "configs": [
+                        {
+                            "name": "prd",
+                            "root": true,
+                            "environment": "prd",
+                            "created_at": "2026-01-01T00:00:00Z",
+                        },
+                    ],
+                    "page": 1,
+                })
+                .to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let configs = client.list_configs(&project()).unwrap();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].name, "prd");
+        assert!(configs[0].root);
+        assert_eq!(configs[0].environment, "prd");
+        assert_eq!(
+            configs[0].created_at,
+            Some(Timestamp::parse("2026-01-01T00:00:00Z").unwrap())
+        );
+    }
+
+    #[test]
+    fn list_configs_pages_until_a_short_page() {
+        let mut provider = MockProvider::start();
+        let full_page: Vec<_> = (0..LIST_PER_PAGE)
+            .map(|i| serde_json::json!({"name": format!("c{i}"), "root": false, "environment": "dev"}))
+            .collect();
+        provider
+            .mock("GET", "/v3/configs")
+            .match_query(mockito::Matcher::UrlEncoded("page".into(), "1".into()))
+            .with_status(200)
+            .with_body(serde_json::json!({"configs": full_page, "page": 1}).to_string())
+            .create();
+        provider
+            .mock("GET", "/v3/configs")
+            .match_query(mockito::Matcher::UrlEncoded("page".into(), "2".into()))
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "configs": [{"name": "last", "root": false, "environment": "dev"}],
+                    "page": 2,
+                })
+                .to_string(),
+            )
+            .create();
+        let client = client_against(provider.url());
+        let configs = client.list_configs(&project()).unwrap();
+        assert_eq!(configs.len(), LIST_PER_PAGE as usize + 1);
+        assert_eq!(configs.last().unwrap().name, "last");
+    }
+
+    // -----------------------------------------------------------------
+    // config_has_foreign_secret_name (milestone 3m task P2, decision 7's
+    // project row; the decision note on inherited names)
+    // -----------------------------------------------------------------
+
+    fn mock_names(
+        provider: &mut MockProvider,
+        project_name: &str,
+        config_name: &str,
+        names: &[&str],
+    ) {
+        provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("project".into(), project_name.into()),
+                mockito::Matcher::UrlEncoded("config".into(), config_name.into()),
+            ]))
+            .with_status(200)
+            .with_body(serde_json::json!({ "names": names }).to_string())
+            .create();
+    }
+
+    #[test]
+    fn config_has_foreign_secret_name_is_false_when_every_name_is_tolerated() {
+        let mut provider = MockProvider::start();
+        mock_names(&mut provider, "shared_keys", "prd", &["DATABASE_URL"]);
+        let client = client_against(provider.url());
+        let tolerated: HashSet<String> = ["DATABASE_URL".to_string()].into_iter().collect();
+        let foreign = client
+            .config_has_foreign_secret_name(&project(), &config(), &tolerated, &[])
+            .unwrap();
+        assert!(!foreign);
+    }
+
+    #[test]
+    fn config_has_foreign_secret_name_is_true_for_a_hand_set_name() {
+        let mut provider = MockProvider::start();
+        mock_names(&mut provider, "shared_keys", "prd", &["HAND_SET"]);
+        let client = client_against(provider.url());
+        let foreign = client
+            .config_has_foreign_secret_name(&project(), &config(), &HashSet::new(), &[])
+            .unwrap();
+        assert!(foreign);
+    }
+
+    /// The decision note: a name visible only through an inherited base
+    /// is not drift. `bases` names a base this config's own `inherits`
+    /// array (as [`DopplerClient::get_config`] reads it) actually holds,
+    /// never a document's stated intent.
+    #[test]
+    fn config_has_foreign_secret_name_is_false_when_the_name_is_in_an_inherited_base() {
+        let mut provider = MockProvider::start();
+        mock_names(&mut provider, "shared_keys", "prd", &["FROM_BASE"]);
+        mock_names(&mut provider, "github", "example-org", &["FROM_BASE"]);
+        let client = client_against(provider.url());
+        let base = ConfigRefBody {
+            project: DopplerProject::parse("github").unwrap(),
+            config: DopplerConfigName::parse("example-org").unwrap(),
+        };
+        let foreign = client
+            .config_has_foreign_secret_name(&project(), &config(), &HashSet::new(), &[base])
+            .unwrap();
+        assert!(!foreign);
+    }
+
+    #[test]
+    fn config_has_foreign_secret_name_is_true_when_absent_from_every_base() {
+        let mut provider = MockProvider::start();
+        mock_names(&mut provider, "shared_keys", "prd", &["HAND_SET"]);
+        mock_names(&mut provider, "github", "example-org", &["SOMETHING_ELSE"]);
+        let client = client_against(provider.url());
+        let base = ConfigRefBody {
+            project: DopplerProject::parse("github").unwrap(),
+            config: DopplerConfigName::parse("example-org").unwrap(),
+        };
+        let foreign = client
+            .config_has_foreign_secret_name(&project(), &config(), &HashSet::new(), &[base])
+            .unwrap();
+        assert!(foreign);
     }
 }
