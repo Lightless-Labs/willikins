@@ -8,6 +8,23 @@
 //! thing again end to end through real fixtures and a real `apply` run;
 //! this test isolates the claim to the journal crate's own construction
 //! rules, per this crate's module docs.
+//!
+//! Milestone 3m task R7's own half of acceptance 9 ("seeds a secret into
+//! a credential port of a teardown's `Created`, and into a rider
+//! `secret.set`'s value port, and finds no byte of either in any line")
+//! is split here: the `Created`/`Rider`-through-`PlanError::NameTaken`
+//! chain is covered below, through `TeardownFinished`'s own
+//! `Redacted<TeardownApplyError>` -- the one place this crate's own
+//! teardown event types can carry a secret at all, since neither
+//! `willikins_core::Teardown` nor `StepFingerprint` has any `Value`-bearing
+//! field by construction (see `TeardownPlanned`'s own sample below). A
+//! rider's own secret port never reaches *any* journal event: `Created`
+//! and `Rider` are `willikins-core`-internal types an inverse's own
+//! `standing`/`delete` sees in-process, at teardown apply time, and never
+//! serialized anywhere -- already proven in `rollback.rs`'s own test
+//! suite (`Created.riders`' secret ports are `Value::Unknown` by
+//! construction, decision 3), not something this crate's own types could
+//! even be asked to redact.
 
 use indexmap::IndexMap;
 
@@ -142,6 +159,29 @@ fn events_carrying_the_secret() -> Vec<Event> {
                 }],
             },
         },
+        // The one real risk in this event's own shape: `TeardownFinished`'s
+        // `Failed` outcome carries a `Redacted<TeardownApplyError>`, and
+        // `TeardownApplyError::Replan` nests a `TeardownError`, which can
+        // itself nest a `PlanError` -- `PlanError::NameTaken`'s own `key:
+        // Inputs` is the one place a secret value could ride along this
+        // chain (a key port's value need not be non-secret). Mirrors
+        // `redacted.rs`'s own
+        // `teardown_apply_error_redacts_a_secret_in_a_chained_plan_error`,
+        // here through the real `Event`/`Entry` wire path this file checks
+        // every other sample through.
+        Event::TeardownFinished {
+            run_id,
+            outcome: willikins_journal::TeardownOutcome::Failed {
+                error: Redacted::from(&willikins_core::TeardownApplyError::from(
+                    willikins_core::TeardownError::from(willikins_core::PlanError::NameTaken {
+                        node: node("token"),
+                        tool: willikins_core::ToolName::parse("doppler.service_token.ensure")
+                            .unwrap(),
+                        key: inputs_with_secret.clone(),
+                    }),
+                )),
+            },
+        },
     ]
 }
 
@@ -177,4 +217,33 @@ fn no_event_that_could_carry_the_secret_leaks_it() {
         let debug = format!("{entry:?}");
         assert!(!debug.contains(&marker()), "Debug leaked: {debug}");
     }
+}
+
+/// `TeardownPlanned`'s own half of acceptance 9, held apart from
+/// [`events_carrying_the_secret`]'s loop above (milestone 3m task R7):
+/// that loop also asserts every sample shows a `"REDACTED"` marker, so it
+/// isn't vacuously passing, but neither `willikins_core::Teardown` nor
+/// `StepFingerprint` has any `Value`-bearing field to seed one into -- see
+/// this file's own module doc. This test instead proves the positive: a
+/// real `Teardown`/`Vec<StepFingerprint>` serializes at all, with no
+/// marker expected either way.
+#[test]
+fn teardown_planned_serializes_with_no_value_bearing_field_to_leak_through() {
+    let entry = willikins_journal::Entry {
+        seq: 1,
+        at: willikins_journal::Timestamp::now(),
+        event: Event::TeardownPlanned {
+            plan_id: PlanId::new(),
+            of_run: RunId::new(),
+            workflow: workflow_name("wf"),
+            document_sha256: common::document_sha256("sha"),
+            teardown: Redacted::from(&willikins_core::Teardown { steps: Vec::new() }),
+            fingerprint: Vec::new(),
+            class: Class::Destructive,
+            requires_approval: true,
+            principal: willikins_journal::PrincipalId::parse("agent-0123456789ab").unwrap(),
+        },
+    };
+    let line = serde_json::to_string(&entry).expect("Entry must serialize");
+    assert!(!line.contains(&marker()), "{line}");
 }
