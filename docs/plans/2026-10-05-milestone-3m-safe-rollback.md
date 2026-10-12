@@ -1380,6 +1380,23 @@ here:** `-b`/`-c`'s raw `POST .../builds` needs `write_builds` on the sandbox Bu
 plan's own "Needs the operator" item 3 confirms only pipeline deletion scope, not build creation --
 confirm before running this cycle.
 
+**Addendum:** 2026-10-12 -- the independent X1 pass over the whole milestone
+(`docs/research/2026-10-12-m3m-adversarial-pass-independent.md`). Two defects, fixed test-first:
+- **A rider matching several containers was decided by the first one only** (`7429187`). `doppler.branch_config.ensure`
+  sits inside both its project and its environment; with the project kept and the environment deleted, a branch
+  under `teardown: delete` became its own `Delete` that the environment never tolerated (a live refusal), and a kept
+  branch was listed `Kept` while its environment was deleted -- decision 3a's refusal never fired, and the fake
+  catalog applied it. Riding now considers every match (one that goes away decides, then a kept one), a rider is
+  tolerated by every container it sits in, `not_reversible` combines matches the same way, and a container is never
+  handed itself as a rider (`535c8a9`).
+- **LIFO was checked only at plan time** (`b81a8d0`). A later run of the same workflow made between a teardown's plan
+  and its apply did not stop the apply. `apply_rollback` now refuses `LaterRunFirst` before re-observing anything.
+Also pinned: a used document's policy flipped after the run refuses `DocumentChanged` at `plan_rollback` (`59ae1ea`).
+Eight mutations, each killed. Left for the coordinator, in the record's residual list: `AlreadyRolledBack` is not
+re-checked at apply (the fingerprint refuses it, as drift); two nodes on one natural key with conflicting policies;
+the forward plan over-warns for a would-be transit rider; and `apply_teardown` can in principle return `Err` after a
+delete.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
