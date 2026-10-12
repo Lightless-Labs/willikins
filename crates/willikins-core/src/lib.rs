@@ -19,6 +19,7 @@ pub mod describe;
 pub mod disclosure;
 pub mod plan;
 pub mod reported;
+pub mod rollback;
 pub mod site;
 #[cfg(feature = "test-support")]
 pub mod testing;
@@ -43,6 +44,7 @@ pub use plan::{
     Action, BlockedGate, InstanceFingerprint, Plan, PlanError, PlannedNode, Replacing, plan,
 };
 pub use reported::Reported;
+pub use rollback::{Reversal, ReversalError, Side, UNDECLARED, Within};
 pub use site::{ListElementSite, Site};
 /// Generic tool-authoring helpers (port/type construction, input checks,
 /// `ToolError` constructors) shared by every tool crate downstream of

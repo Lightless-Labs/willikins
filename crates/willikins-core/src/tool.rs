@@ -606,6 +606,21 @@ pub trait Tool: Send + Sync {
         let _ = inputs;
         Ok(false)
     }
+
+    /// This tool's declared [`crate::rollback::Reversal`]: what `ensure`'s
+    /// effect can be undone, and how. `Retained { why:
+    /// crate::rollback::UNDECLARED }` by default -- a tool-declared hook
+    /// in the manner of [`Tool::gate`], [`Tool::replaces`] and
+    /// [`Tool::updates`], so no existing tool, catalog entry or document
+    /// is affected until a tool opts in. Capability only: whether a run's
+    /// own teardown undoes it is the document's own policy (milestone 3m,
+    /// `docs/plans/2026-10-05-milestone-3m-safe-rollback.md`, decision
+    /// 3a), never a field of this declaration.
+    fn reversal(&self) -> crate::rollback::Reversal {
+        crate::rollback::Reversal::Retained {
+            why: crate::rollback::UNDECLARED,
+        }
+    }
 }
 
 #[cfg(test)]
