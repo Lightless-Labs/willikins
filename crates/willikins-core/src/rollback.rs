@@ -4447,7 +4447,20 @@ mod tests {
     /// and `repo_b`, both under the given policy -- for the "stop at the
     /// first failure" test, where teardown order (reverse of
     /// `facts.instances`) puts `repo_b` first.
-    fn checked_lossy_pair(tool: Arc<StubLossyTool>, policy: TeardownPolicy) -> Checked {
+    /// A three-node `test.lossy` workflow sharing one tool/inverse,
+    /// `repo_a` and `repo_b` under the given policy (for the "stop at
+    /// the first failure" test, where teardown order -- reverse of
+    /// `facts.instances` -- puts `repo_b` first), plus a third node,
+    /// `repo_c`, declaring no `teardown:` at all (the conservative
+    /// default) -- for pinning that a non-`Delete` step stays `Listed`
+    /// even *after* a `Delete` failure, not only before one. `repo_c` is
+    /// declared first, so it is the *last* teardown step, after both of
+    /// `repo_a`/`repo_b`'s.
+    fn checked_lossy_trio(tool: Arc<StubLossyTool>, policy: TeardownPolicy) -> Checked {
+        let node_c = Node::new(ToolName::parse("test.lossy").unwrap()).port(
+            port("repo"),
+            Binding::Literal("example-org/repo-c".to_string()),
+        );
         let node_a = Node::new(ToolName::parse("test.lossy").unwrap())
             .port(
                 port("repo"),
@@ -4460,13 +4473,14 @@ mod tests {
                 Binding::Literal("example-org/repo-b".to_string()),
             )
             .teardown(policy);
-        let workflow = Workflow::new(workflow_name("apply-teardown-pair-test"))
+        let workflow = Workflow::new(workflow_name("apply-teardown-trio-test"))
+            .node(node("repo_c"), node_c)
             .node(node("repo_a"), node_a)
             .node(node("repo_b"), node_b);
         let mut catalog = Catalog::new(willikins_types::registry());
         catalog.insert(tool as Arc<dyn Tool>).unwrap();
         check(&workflow, &catalog).unwrap_or_else(|errors| {
-            unreachable!("a two-node lossy workflow must check cleanly: {errors:?}")
+            unreachable!("a three-node lossy workflow must check cleanly: {errors:?}")
         })
     }
 
@@ -4635,10 +4649,20 @@ mod tests {
     fn a_delete_failure_stops_the_run_and_later_delete_steps_are_not_run() {
         let inverse = ObservableInverse::new(Standing::AsCreated { losing: vec![] });
         let tool = StubLossyTool::new(Arc::clone(&inverse));
-        let checked = checked_lossy_pair(tool, TeardownPolicy::Delete { accept: vec![] });
+        let checked = checked_lossy_trio(tool, TeardownPolicy::Delete { accept: vec![] });
         let resolved = empty_resolved(&checked);
         let run = facts_multi(
             vec![
+                // Declared (and placed) first, so it is the *last*
+                // teardown step: a non-`Delete` step after a `Delete`
+                // failure, not only before one.
+                riding_instance(
+                    "repo_c",
+                    Action::Update,
+                    finished(START, END, NodeStatus::Created),
+                    inputs_of(&[]),
+                    outputs_of(&[]),
+                ),
                 riding_instance(
                     "repo_a",
                     Action::Create,
@@ -4657,19 +4681,24 @@ mod tests {
             RUN_FINISHED,
         );
         let (_, approved) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
-        assert_eq!(approved.len(), 2);
+        assert_eq!(approved.len(), 3);
 
-        // Both steps are approved as plain `Delete`s; now make `delete`
-        // itself refuse every call (an unaccepted loss on every
+        // `repo_a`/`repo_b` are approved as plain `Delete`s; now make
+        // `delete` itself refuse every call (an unaccepted loss on every
         // observation), so the *first* one `apply_teardown` runs fails.
         inverse.set_delete_standing(Standing::AsCreated {
             losing: vec!["builds"],
         });
 
         let outcomes = apply_teardown(&approved, &run, &checked, &resolved).unwrap();
-        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes.len(), 3);
         assert!(matches!(outcomes[0], TeardownStepOutcome::Failed { .. }));
         assert_eq!(outcomes[1], TeardownStepOutcome::NotRun);
+        // `repo_c`'s own `Retained` step, after the failure: `Listed`,
+        // never `NotRun` -- decision 8's "`Listed` for every non-delete
+        // step" is unconditional, whatever its own position relative to
+        // a failure.
+        assert_eq!(outcomes[2], TeardownStepOutcome::Listed);
         assert_eq!(inverse.delete_calls(), 1);
     }
 

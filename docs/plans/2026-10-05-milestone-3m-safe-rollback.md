@@ -310,11 +310,16 @@ own 2026-10-12 addendum required). Deviations, recorded:
   never `unwrap`/`expect`/`unreachable!`/`panic!`: by construction none of these cases can actually happen once
   `approved == fresh` has just been checked, but `apply_teardown` trusts no caller's data blindly, so the ratchet
   gains nothing from this task (it stays at 2).
-- **"Listed for every non-delete step" is read as unconditional, pinned by its own test.** Decision 8's own two
-  clauses ("a delete failure stops the run, and later steps are `NotRun`" vs. "`Listed` for every non-delete step")
-  read ambiguously taken alone; this task reads `NotRun` as reserved for a `Delete` step that never got its own
-  `delete` call because an earlier one failed, and every non-`Delete` step is `Listed`, whatever its own position
-  relative to a failure — pinned by `a_delete_failure_stops_the_run_and_later_delete_steps_are_not_run`.
+- **"Listed for every non-delete step" is read as unconditional.** Decision 8's own two clauses ("a delete failure
+  stops the run, and later steps are `NotRun`" vs. "`Listed` for every non-delete step") read ambiguously taken
+  alone; this task reads `NotRun` as reserved for a `Delete` step that never got its own `delete` call because an
+  earlier one failed, and every non-`Delete` step is `Listed`, whatever its own position relative to a failure.
+  `apply_teardown`'s own check order (`!Delete` → `Listed`, checked before `stopped` → `NotRun`) makes this true by
+  construction; `a_delete_failure_stops_the_run_and_later_delete_steps_are_not_run` pins the *before* case
+  (`checked_lossy_trio`'s own `repo_c`, an `Update`-actioned `Retained` step declared first so it is the *last*
+  teardown step, `Listed` even after `repo_a`/`repo_b`'s own failure) -- a same-day advisor-pass finding, closed
+  without a second test: one case already proves the unconditional reading, since the check order is what decides
+  both, not the position.
 - **Acceptance 21's core half is two separate tests, not one**, because the row's own two clauses are two different
   moments: `delete_itself_refuses_an_unaccepted_loss_appearing_only_at_delete_time` (the re-plan still agrees with
   `approved`; only `delete`'s own, later re-observation finds the loss, so `delete` itself returns `Conflict` and the
