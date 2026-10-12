@@ -83,8 +83,8 @@ use willikins_core::tool::helpers::{
     tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, PortSpec, PortType, SinkToken, Tool, ToolError,
-    ToolErrorKind, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, PortSpec, PortType, Reversal, Side, SinkToken,
+    Tool, ToolError, ToolErrorKind, ToolSpec, Value, Within,
 };
 use willikins_types::{
     CommitHeadline, DomainType, GitBranchName, GitHubRepo, GitHubToken, RepoFile, RepoPath,
@@ -948,6 +948,21 @@ impl Tool for GitHubScaffoldEnsure {
                     }
                 }
             }
+        }
+    }
+
+    /// Milestone 3m decision 4, task P1: no delete of its own, rides out
+    /// with the repository it commits into (`repo` → `repo`). Reverting
+    /// a landed scaffold commit is a new forward change the document must
+    /// make (decision 4's own "Why"), never an undo this tool declares.
+    fn reversal(&self) -> Reversal {
+        Reversal::Contained {
+            within: &[Within {
+                tool: "github.repo.ensure",
+                ports: &[("repo", Side::Input, "repo")],
+            }],
+            otherwise: "a scaffold is a commit on a branch; reverting it is a new forward \
+                        change the document must make",
         }
     }
 }

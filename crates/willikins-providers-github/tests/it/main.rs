@@ -19,5 +19,6 @@ mod live_write_cycle;
 mod redaction;
 mod repo_ensure_mock;
 mod repo_get_mock;
+mod repo_inverse_mock;
 mod scaffold_ensure_mock;
 mod scaffold_fake_agrees_with_live;

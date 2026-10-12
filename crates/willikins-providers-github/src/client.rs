@@ -313,9 +313,6 @@ impl GitHubClient {
     /// # Errors
     ///
     /// See [`Self::get_repo`].
-    // Milestone 3m task P1, commit 1: no non-test caller yet (commit 2's
-    // `GitHubRepoInverse::delete` is the first). Removed in that commit.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn delete_repo(&self, repo: &GitHubRepo) -> Result<(), ProviderError> {
         let path = repo_path(repo);
         self.retry_secondary_limit(|| self.http.delete(&path))
@@ -337,9 +334,6 @@ impl GitHubClient {
     /// # Errors
     ///
     /// See [`Self::get_repo`].
-    // Milestone 3m task P1, commit 1: no non-test caller yet (commit 2's
-    // `GitHubRepoInverse::standing` is the first). Removed in that commit.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn list_actions_secret_names(
         &self,
         repo: &GitHubRepo,
@@ -947,9 +941,6 @@ pub(crate) struct RepoBody {
     /// predates this field, so it defaults to `None` — which
     /// `GitHubRepoInverse::standing` (`tools/repo_ensure.rs`) treats the
     /// same as an outright mismatch (fail closed, never "no opinion").
-    // Milestone 3m task P1, commit 1: read nowhere yet but `observe`'s
-    // own `_`. Removed once commit 2's `GitHubRepoInverse` reads it.
-    #[cfg_attr(not(test), expect(dead_code))]
     #[serde(default)]
     pub(crate) full_name: Option<String>,
     /// `created_at` (milestone 3m decisions 2 and 7, task P1): compared
@@ -957,9 +948,6 @@ pub(crate) struct RepoBody {
     /// Absent on every mock fixture that predates this field, so it
     /// defaults to `None`, which the same caller treats as "outside the
     /// window" (fail closed).
-    // Milestone 3m task P1, commit 1: read nowhere yet but `observe`'s
-    // own `_`. Removed once commit 2's `GitHubRepoInverse` reads it.
-    #[cfg_attr(not(test), expect(dead_code))]
     #[serde(default)]
     pub(crate) created_at: Option<Timestamp>,
     /// `pushed_at` (milestone 3m decision 7, task P1): a push after
@@ -967,9 +955,6 @@ pub(crate) struct RepoBody {
     /// this field, so it defaults to `None`, which the same caller treats
     /// as "cannot rule out a push since" (fail closed), never as "no
     /// push".
-    // Milestone 3m task P1, commit 1: read nowhere yet but `observe`'s
-    // own `_`. Removed once commit 2's `GitHubRepoInverse` reads it.
-    #[cfg_attr(not(test), expect(dead_code))]
     #[serde(default)]
     pub(crate) pushed_at: Option<Timestamp>,
     /// `open_issues_count` (milestone 3m decision 7, task P1): GitHub
@@ -977,18 +962,12 @@ pub(crate) struct RepoBody {
     /// that predates this field, so it defaults to `None`, which the same
     /// caller treats as "cannot rule out an open issue" (fail closed),
     /// never as zero.
-    // Milestone 3m task P1, commit 1: read nowhere yet but `observe`'s
-    // own `_`. Removed once commit 2's `GitHubRepoInverse` reads it.
-    #[cfg_attr(not(test), expect(dead_code))]
     #[serde(default)]
     pub(crate) open_issues_count: Option<u64>,
     /// `forks_count` (milestone 3m decision 7, task P1). Absent on every
     /// mock fixture that predates this field, so it defaults to `None`,
     /// which the same caller treats as "cannot rule out a fork" (fail
     /// closed), never as zero.
-    // Milestone 3m task P1, commit 1: read nowhere yet but `observe`'s
-    // own `_`. Removed once commit 2's `GitHubRepoInverse` reads it.
-    #[cfg_attr(not(test), expect(dead_code))]
     #[serde(default)]
     pub(crate) forks_count: Option<u64>,
 }
@@ -1016,10 +995,6 @@ pub(crate) struct PublicKeyBody {
 /// `secrets` only for each entry's own `name` — the schema's `created_at`/
 /// `updated_at` fields are never read at all (milestone 3m decision 7:
 /// "names only").
-// Milestone 3m task P1, commit 1: constructed nowhere yet (commit 2's
-// `GitHubRepoInverse::standing` is the first, through `list_actions_secret_names`).
-// Removed in that commit.
-#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug, Deserialize)]
 struct ActionsSecretsListBody {
     total_count: u64,
@@ -1029,9 +1004,6 @@ struct ActionsSecretsListBody {
 /// One entry of [`ActionsSecretsListBody::secrets`]: GitHub's
 /// `actions-secret` schema also carries `created_at`/`updated_at`, neither
 /// read here.
-// Milestone 3m task P1, commit 1: constructed nowhere yet. Removed once
-// commit 2's `GitHubRepoInverse` is live.
-#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug, Deserialize)]
 struct ActionsSecretListEntry {
     name: String,

@@ -429,3 +429,21 @@ fn read_authorizes_with_the_bound_token_port_not_the_default_credential() {
         "Bearer ghp_theboundtoken"
     );
 }
+
+/// Milestone 3m decision 4, task P1: `Contained`, riding out with
+/// `github.repo.ensure`'s own `repo` input port.
+#[test]
+fn reversal_declares_contained_within_the_repository() {
+    let tool = GitHubActionsSecretEnsure::new(client_against("http://127.0.0.1:1".to_string()));
+    let willikins_core::Reversal::Contained { within, otherwise } = Tool::reversal(&tool) else {
+        panic!("github.actions_secret.ensure must declare Reversal::Contained");
+    };
+    assert_eq!(within.len(), 1);
+    assert_eq!(within[0].tool, "github.repo.ensure");
+    assert_eq!(within[0].ports.len(), 1);
+    assert_eq!(
+        within[0].ports[0],
+        ("repo", willikins_core::Side::Input, "repo")
+    );
+    assert!(!otherwise.is_empty());
+}

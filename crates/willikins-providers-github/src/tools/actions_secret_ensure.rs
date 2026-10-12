@@ -17,7 +17,8 @@ use willikins_core::tool::helpers::{
     any_secret, exact, get, get_optional, invalid, port, require_present, tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec,
+    Class, Ensured, Inputs, Observation, Outputs, Reversal, Side, SinkToken, Tool, ToolError,
+    ToolSpec, Within,
 };
 use willikins_types::{ActionsSecretName, GitHubRepo, GitHubToken};
 
@@ -119,5 +120,21 @@ impl Tool for GitHubActionsSecretEnsure {
             outputs: Outputs::new(),
             changed: true,
         })
+    }
+
+    /// Milestone 3m decision 4, task P1: no delete of its own, rides out
+    /// with the repository it was written into (`repo` → `repo`). This
+    /// tool always writes and never reads a secret's prior value (even
+    /// `read` above only reports existence), so when left in place
+    /// outside a deleted repository there is nothing to restore it to.
+    fn reversal(&self) -> Reversal {
+        Reversal::Contained {
+            within: &[Within {
+                tool: "github.repo.ensure",
+                ports: &[("repo", Side::Input, "repo")],
+            }],
+            otherwise: "it always writes, and its prior value, if any, is never read, so it \
+                        cannot be restored",
+        }
     }
 }
