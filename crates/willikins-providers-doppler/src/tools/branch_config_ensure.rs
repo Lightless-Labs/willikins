@@ -71,22 +71,29 @@
 
 use std::sync::Arc;
 
+use willikins_core::rollback::{Side, Within};
 use willikins_core::tool::helpers::{
     conflict, exact, get, invalid, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Created, Deleted, Ensured, Inputs, Inverse, Observation, Outputs, Reversal, SinkToken,
+    Standing, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{
-    DomainType, DopplerConfig, DopplerConfigName, DopplerProject, EnvironmentSlug,
+    DomainType, DopplerConfig, DopplerConfigName, DopplerProject, EnvironmentSlug, TeardownToken,
+    naming,
 };
 
-use crate::client::{DopplerClient, looks_like_a_missing_project};
+use crate::client::{DopplerClient, MANAGED_DESCRIPTION, looks_like_a_missing_project};
+use crate::inverse_support::{
+    ConfigContentsDrift, config_contents_drift, tolerated_secret_names, tolerated_token_names,
+};
 
 /// `doppler.branch_config.ensure`.
 pub struct DopplerBranchConfigEnsure {
     spec: ToolSpec,
     client: Arc<DopplerClient>,
+    inverse: DopplerBranchConfigInverse,
 }
 
 impl DopplerBranchConfigEnsure {
@@ -99,6 +106,9 @@ impl DopplerBranchConfigEnsure {
         inputs.insert(port("branch"), exact("DopplerConfigName", true));
         let mut outputs = indexmap::IndexMap::new();
         outputs.insert(port("config"), scalar("DopplerConfig"));
+        let inverse = DopplerBranchConfigInverse {
+            client: Arc::clone(&client),
+        };
         Self {
             spec: ToolSpec {
                 name: tool_name("doppler.branch_config.ensure"),
@@ -112,6 +122,7 @@ impl DopplerBranchConfigEnsure {
                 pure: false,
             },
             client,
+            inverse,
         }
     }
 
@@ -232,6 +243,181 @@ impl Tool for DopplerBranchConfigEnsure {
                     },
                 }
             }
+        }
+    }
+
+    /// Milestone 3m decisions 4, 5, task P3: deletable, riding out with
+    /// either `doppler.project.ensure` (the whole project goes) or
+    /// `doppler.config.ensure` (just this one environment goes) --
+    /// decision 4's table lists both. `needs` names `project`,
+    /// `environment` and `branch`: no optional, document-bound
+    /// credential port of its own.
+    fn reversal(&self) -> Reversal {
+        Reversal::Delete {
+            needs: &["project", "environment", "branch"],
+            within: &[
+                Within {
+                    tool: "doppler.project.ensure",
+                    ports: &[("project", Side::Input, "project")],
+                },
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: &[
+                        ("project", Side::Input, "project"),
+                        ("environment", Side::Input, "environment"),
+                    ],
+                },
+            ],
+            losses: &[],
+        }
+    }
+
+    fn inverse(&self) -> Option<&dyn Inverse> {
+        Some(&self.inverse)
+    }
+}
+
+/// [`Standing::NotOurs`]: the project's own `description` no longer
+/// carries the [`MANAGED_DESCRIPTION`] marker.
+const NOT_OURS_LOST_THE_MARKER: &str =
+    "the project's description no longer carries the managed-by: willikins marker";
+
+/// [`Standing::NotOurs`]: the config at this derived name is no longer
+/// this branch (`root` is `true`, or its own `environment` field names a
+/// different one).
+const NOT_OURS_NOT_THIS_BRANCH: &str =
+    "the config at this name is no longer this environment's branch config";
+
+/// [`Standing::NotOurs`]: the branch config's own `created_at` falls
+/// outside this instance's creation window (decision 2).
+const NOT_OURS_OUTSIDE_WINDOW: &str =
+    "the branch config's own creation date falls outside this run's creation window";
+
+/// [`Standing::Drifted`]: the config carries a secret name this run's
+/// own riders did not create.
+const DRIFTED_FOREIGN_SECRET: &str =
+    "the config carries a secret name this run's own riders did not create";
+
+/// [`Standing::Drifted`]: the config is inherited by a config outside
+/// this project.
+const DRIFTED_FOREIGN_INHERITOR: &str = "the config is inherited by a config outside this project";
+
+/// [`Standing::Drifted`]: the config carries a service token this run's
+/// own riders did not create.
+const DRIFTED_FOREIGN_TOKEN: &str =
+    "the config carries a service token this run's own riders did not create";
+
+/// [`crate::tool::helpers::conflict`]'s message when [`Inverse::delete`]
+/// is called on anything but [`Standing::Gone`] or a fully accepted
+/// [`Standing::AsCreated`].
+const DELETE_REFUSED_NOT_AS_CREATED: &str = "the config has changed since this run created it, \
+     or is no longer ours; the teardown will not delete it";
+
+/// The `project`/`environment`/`branch` key ports, re-resolved from the
+/// journal (decision 2): exactly `Created::inputs`, never read a second
+/// time from anywhere else.
+fn branch_of(
+    created: &Created<'_>,
+) -> Result<(DopplerProject, EnvironmentSlug, DopplerConfigName), ToolError> {
+    let project = get(created.inputs, "project")?;
+    let environment = get(created.inputs, "environment")?;
+    let branch = get(created.inputs, "branch")?;
+    Ok((project, environment, branch))
+}
+
+/// `doppler.branch_config.ensure`'s inverse (milestone 3m task P3,
+/// decisions 4, 7). Never a catalog tool in its own right, never
+/// reachable except from `apply_teardown` (trust boundaries 1, 2).
+struct DopplerBranchConfigInverse {
+    client: Arc<DopplerClient>,
+}
+
+impl Inverse for DopplerBranchConfigInverse {
+    /// **Gone, read two ways** -- the same reasoning
+    /// `DopplerConfigInverse::standing`'s own doc gives: a missing
+    /// project is `Gone` outright, and a project that is still ours but
+    /// no longer lists a config at this derived name is `Gone` too
+    /// (hand-deleted, or an earlier teardown step already did it).
+    fn standing(&self, created: &Created<'_>) -> Result<Standing, ToolError> {
+        let (project, environment, branch) = branch_of(created)?;
+        let env_id = naming::v1::doppler_root_config(&project, &environment);
+        let env_id = env_id.name();
+        let name = DopplerBranchConfigEnsure::full_name(&environment, &branch)?;
+
+        match self.client.get_project(&project) {
+            Err(err) if looks_like_a_missing_project(&err) => return Ok(Standing::Gone),
+            Err(err) => return Err(err.into()),
+            Ok(body) if body.description.as_deref() != Some(MANAGED_DESCRIPTION) => {
+                return Ok(Standing::NotOurs {
+                    why: NOT_OURS_LOST_THE_MARKER,
+                });
+            }
+            Ok(_) => {}
+        }
+
+        let configs = self.client.list_configs(&project)?;
+        let Some(entry) = configs.iter().find(|entry| entry.name == name.as_str()) else {
+            return Ok(Standing::Gone);
+        };
+        if entry.root || entry.environment != env_id.as_str() {
+            return Ok(Standing::NotOurs {
+                why: NOT_OURS_NOT_THIS_BRANCH,
+            });
+        }
+        let in_window = entry
+            .created_at
+            .is_some_and(|at| at >= created.window.start && at <= created.window.end);
+        if !in_window {
+            return Ok(Standing::NotOurs {
+                why: NOT_OURS_OUTSIDE_WINDOW,
+            });
+        }
+
+        let tolerated_secrets = tolerated_secret_names(created.riders)
+            .remove(name.as_str())
+            .unwrap_or_default();
+        let tolerated_tokens = tolerated_token_names(created.riders)
+            .remove(name.as_str())
+            .unwrap_or_default();
+        if let Some(drift) = config_contents_drift(
+            &self.client,
+            &project,
+            &name,
+            &tolerated_secrets,
+            &tolerated_tokens,
+        )? {
+            return Ok(Standing::Drifted {
+                what: match drift {
+                    ConfigContentsDrift::Secret => DRIFTED_FOREIGN_SECRET,
+                    ConfigContentsDrift::Inheritor => DRIFTED_FOREIGN_INHERITOR,
+                    ConfigContentsDrift::Token => DRIFTED_FOREIGN_TOKEN,
+                },
+            });
+        }
+
+        Ok(Standing::AsCreated { losing: Vec::new() })
+    }
+
+    fn delete(&self, created: &Created<'_>, _token: &TeardownToken) -> Result<Deleted, ToolError> {
+        match self.standing(created)? {
+            Standing::Gone => Ok(Deleted { already_gone: true }),
+            Standing::AsCreated { losing }
+                if losing.iter().all(|loss| {
+                    created
+                        .accept
+                        .iter()
+                        .any(|accepted| accepted.as_str() == *loss)
+                }) =>
+            {
+                let (project, environment, branch) = branch_of(created)?;
+                let name = DopplerBranchConfigEnsure::full_name(&environment, &branch)?;
+                self.client
+                    .delete_config(&DopplerConfig::new(project, name))?;
+                Ok(Deleted {
+                    already_gone: false,
+                })
+            }
+            _ => Err(conflict(DELETE_REFUSED_NOT_AS_CREATED)),
         }
     }
 }

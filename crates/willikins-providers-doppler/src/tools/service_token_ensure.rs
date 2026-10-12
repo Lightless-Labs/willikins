@@ -7,18 +7,23 @@
 
 use std::sync::Arc;
 
-use willikins_core::tool::helpers::{exact, get, port, require_present, scalar, tool_name};
-use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+use willikins_core::rollback::{Side, Within};
+use willikins_core::tool::helpers::{
+    conflict, exact, get, port, require_present, scalar, tool_name,
 };
-use willikins_types::{DopplerConfig, DopplerTokenName};
+use willikins_core::{
+    Class, Created, Deleted, Ensured, Inputs, Inverse, Observation, Outputs, Reversal, SinkToken,
+    Standing, Tool, ToolError, ToolSpec, Value,
+};
+use willikins_types::{DopplerConfig, DopplerTokenName, TeardownToken};
 
-use crate::client::{DopplerClient, looks_like_a_missing_project};
+use crate::client::{DopplerClient, MANAGED_DESCRIPTION, looks_like_a_missing_project};
 
 /// `doppler.service_token.ensure`.
 pub struct DopplerServiceTokenEnsure {
     spec: ToolSpec,
     client: Arc<DopplerClient>,
+    inverse: DopplerServiceTokenInverse,
 }
 
 impl DopplerServiceTokenEnsure {
@@ -30,6 +35,9 @@ impl DopplerServiceTokenEnsure {
         inputs.insert(port("name"), exact("DopplerTokenName", true));
         let mut outputs = indexmap::IndexMap::new();
         outputs.insert(port("token"), scalar("DopplerServiceToken"));
+        let inverse = DopplerServiceTokenInverse {
+            client: Arc::clone(&client),
+        };
         Self {
             spec: ToolSpec {
                 name: tool_name("doppler.service_token.ensure"),
@@ -41,6 +49,7 @@ impl DopplerServiceTokenEnsure {
                 pure: false,
             },
             client,
+            inverse,
         }
     }
 
@@ -201,5 +210,180 @@ impl Tool for DopplerServiceTokenEnsure {
             outputs,
             changed: true,
         })
+    }
+
+    /// Milestone 3m decisions 4, 5, task P3: deletable, riding out with
+    /// whichever of `doppler.config.ensure`/`doppler.branch_config.ensure`
+    /// produced this token's own `config` -- decision 4's table lists
+    /// both, since a token can sit in either a root or a branch config.
+    /// `needs` names only `config` and `name`: `config` already carries
+    /// the project (`DopplerConfig::project`), and this tool holds no
+    /// optional, document-bound credential port of its own.
+    fn reversal(&self) -> Reversal {
+        Reversal::Delete {
+            needs: &["config", "name"],
+            within: &[
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: &[("config", Side::Output, "config")],
+                },
+                Within {
+                    tool: "doppler.branch_config.ensure",
+                    ports: &[("config", Side::Output, "config")],
+                },
+            ],
+            losses: &[],
+        }
+    }
+
+    fn inverse(&self) -> Option<&dyn Inverse> {
+        Some(&self.inverse)
+    }
+}
+
+/// [`Standing::NotOurs`]: the project's own `description` no longer
+/// carries the [`MANAGED_DESCRIPTION`] marker.
+const NOT_OURS_LOST_THE_MARKER: &str =
+    "the project's description no longer carries the managed-by: willikins marker";
+
+/// [`Standing::NotOurs`]: a token by this name exists, but its own
+/// `created_at` falls outside this instance's creation window (decision
+/// 2) -- including an entry that omitted `created_at` outright (fail
+/// closed).
+const NOT_OURS_OUTSIDE_WINDOW: &str =
+    "the token's own creation date falls outside this run's creation window";
+
+/// [`Standing::Drifted`]: more than one token is listed at this
+/// `(config, name)` pair -- this inverse cannot tell which one this run
+/// minted, so it deletes neither.
+const DRIFTED_MULTIPLE_TOKENS: &str =
+    "more than one service token is listed at this config and name";
+
+/// [`crate::tool::helpers::conflict`]'s message when [`Inverse::delete`]
+/// is called on anything but [`Standing::Gone`] or a fully accepted
+/// [`Standing::AsCreated`].
+const DELETE_REFUSED_NOT_AS_CREATED: &str = "the token has changed since this run created it, \
+     or is no longer ours; the teardown will not delete it";
+
+/// The `config`/`name` key ports, re-resolved from the journal (decision
+/// 2): exactly `Created::inputs`, never read a second time from
+/// anywhere else.
+fn token_of(created: &Created<'_>) -> Result<(DopplerConfig, DopplerTokenName), ToolError> {
+    let config = get(created.inputs, "config")?;
+    let name = get(created.inputs, "name")?;
+    Ok((config, name))
+}
+
+/// `doppler.service_token.ensure`'s inverse (milestone 3m task P3,
+/// decisions 4, 7). Never a catalog tool in its own right, never
+/// reachable except from `apply_teardown` (trust boundaries 1, 2).
+struct DopplerServiceTokenInverse {
+    client: Arc<DopplerClient>,
+}
+
+impl DopplerServiceTokenInverse {
+    /// Decision 7's `doppler.service_token.ensure` row. Doppler's own
+    /// list endpoint is the only read this tool has (no single-token
+    /// `GET`), so standing and the slug `delete` needs are found
+    /// together: `Ok((Standing::AsCreated { .. }, Some(slug)))` is the
+    /// only case `delete` may act on; every other `Standing` carries
+    /// `None`.
+    ///
+    /// **Zero matches reads `Gone`, not `NotOurs`.** The row's own
+    /// wording ("no token ... created in the window") could be read
+    /// either way, but `Gone` is the universal "this resource is
+    /// already gone" reading every other inverse in this crate gives an
+    /// absent resource (decision 6), and it is the only reading under
+    /// which a second teardown of the same run (decision 8's resume
+    /// case) still succeeds once this step's own first delete already
+    /// removed it. `NotOurs` is reserved for a token that still exists
+    /// by this name but was created outside the window -- a name this
+    /// run's token shares with something else entirely. Recorded as an
+    /// addendum to this milestone's plan.
+    fn locate(&self, created: &Created<'_>) -> Result<(Standing, Option<String>), ToolError> {
+        let (config, name) = token_of(created)?;
+
+        match self.client.get_project(config.project()) {
+            Err(err) if looks_like_a_missing_project(&err) => return Ok((Standing::Gone, None)),
+            Err(err) => return Err(err.into()),
+            Ok(body) if body.description.as_deref() != Some(MANAGED_DESCRIPTION) => {
+                return Ok((
+                    Standing::NotOurs {
+                        why: NOT_OURS_LOST_THE_MARKER,
+                    },
+                    None,
+                ));
+            }
+            Ok(_) => {}
+        }
+
+        let tokens = match self
+            .client
+            .list_service_tokens(config.project(), config.name())
+        {
+            Ok(tokens) => tokens,
+            Err(err) if looks_like_a_missing_project(&err) => Vec::new(),
+            Err(err) => return Err(err.into()),
+        };
+        let matching: Vec<_> = tokens
+            .iter()
+            .filter(|entry| entry.name == name.as_str())
+            .collect();
+
+        match matching.as_slice() {
+            [] => Ok((Standing::Gone, None)),
+            [one] => {
+                let in_window = one
+                    .created_at
+                    .is_some_and(|at| at >= created.window.start && at <= created.window.end);
+                if in_window {
+                    Ok((
+                        Standing::AsCreated { losing: Vec::new() },
+                        Some(one.slug.clone()),
+                    ))
+                } else {
+                    Ok((
+                        Standing::NotOurs {
+                            why: NOT_OURS_OUTSIDE_WINDOW,
+                        },
+                        None,
+                    ))
+                }
+            }
+            _ => Ok((
+                Standing::Drifted {
+                    what: DRIFTED_MULTIPLE_TOKENS,
+                },
+                None,
+            )),
+        }
+    }
+}
+
+impl Inverse for DopplerServiceTokenInverse {
+    fn standing(&self, created: &Created<'_>) -> Result<Standing, ToolError> {
+        Ok(self.locate(created)?.0)
+    }
+
+    fn delete(&self, created: &Created<'_>, _token: &TeardownToken) -> Result<Deleted, ToolError> {
+        match self.locate(created)? {
+            (Standing::Gone, _) => Ok(Deleted { already_gone: true }),
+            (Standing::AsCreated { losing }, Some(slug))
+                if losing.iter().all(|loss| {
+                    created
+                        .accept
+                        .iter()
+                        .any(|accepted| accepted.as_str() == *loss)
+                }) =>
+            {
+                let (config, _name) = token_of(created)?;
+                self.client
+                    .delete_service_token(config.project(), config.name(), &slug)?;
+                Ok(Deleted {
+                    already_gone: false,
+                })
+            }
+            _ => Err(conflict(DELETE_REFUSED_NOT_AS_CREATED)),
+        }
     }
 }
