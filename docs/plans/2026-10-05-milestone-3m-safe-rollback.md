@@ -603,6 +603,82 @@ choices, recorded:
   hand, the same way milestone 3m's own `repo_inverse_mock.rs` did before P1 landed `github.repo.ensure`'s
   `Within` declarations.
 
+**Addendum:** 2026-10-12 — P3 landed (`doppler.config.ensure`'s, `doppler.branch_config.ensure`'s and
+`doppler.service_token.ensure`'s inverses; decision 7's three remaining per-tool rows; the
+`Contained`/`Retained` declarations of the other five non-pure Doppler tools; acceptance 12) in
+`crates/willikins-providers-doppler` alone, four commits (0a2c9ec the hoist, ba54da9 the client, c48d897
+the three inverses, 3bf53f1 the five declarations), scoped gates (`-p willikins-providers-doppler`:
+`cargo fmt --check`, `cargo clippy --all-targets -D warnings`, `cargo test`) green after each and at the
+end. Deviations and choices, recorded:
+- **Hoisted P2's own per-config drift walk before writing a second and third copy.** `config_output`,
+  `tolerated_secret_names`, `tolerated_token_names` and the `get_config` → `config_has_foreign_secret_name`
+  → `inherited_by` → `list_service_tokens` body (new `inverse_support::config_contents_drift`, returning a
+  `ConfigContentsDrift` enum so each caller keeps its own `&'static str` reason text) moved out of
+  `project_ensure.rs` into a new crate-private `inverse_support` module, reused by `config_ensure.rs`
+  (scoped to one environment's configs) and `branch_config_ensure.rs` (scoped to the one config). Proved
+  behaviour-preserving by running `project_inverse_mock::` before and after: all 50 tests passed
+  unmodified, since they match on `Standing`'s variant alone (`Standing::Drifted { .. }`), never its `what`
+  text.
+- **`doppler.config.ensure`'s own window check reads the matching `ConfigListEntry::created_at`, not a
+  new field on `EnvironmentEntry`.** Decision 7's row says "the environment's own creation date", but
+  Doppler's environments-list response (fetched verbatim 2026-10-12, `environments-list.md`) does carry a
+  `created_at` per entry — this task chose *not* to add it to `EnvironmentEntry` anyway: P2's own addendum
+  had already carried `ConfigListEntry::created_at` specifically "so a later task... needs no second
+  client change", and an environment's root config is created in the same `POST` as the environment
+  itself (`create_environment`'s own doc), so the two timestamps are the same instant in practice. Using
+  the entry the membership walk already fetches avoids a second client method and a second round trip.
+  Recorded here since the row's literal wording and the implementation's own data source are not the
+  same field.
+- **`doppler.config.ensure`'s membership and contents walk is scoped to the environment, not the whole
+  project** (decision 7's own "scoped to the environment"): `list_configs(project)` is still one call over
+  every config in the project (no narrower endpoint exists), but only entries whose own `environment`
+  field equals the target's derived root name are read for drift at all — a `dev` config is never
+  consulted while rolling back `prd`'s own root
+  (`standing_never_reads_a_config_in_another_environment`). The comparison uses the raw, already-prefixed
+  id `list_configs`/`create_environment` actually store (the same string `naming::v1::doppler_root_config`
+  derives), never `EnvironmentSlug::Display`'s kebab form — unlike `branch_config_ensure.rs`'s own
+  pre-existing `observe` (`body.environment.as_deref() == Some(environment.to_string())`), a latent
+  divergence for a multi-word environment this task did not touch or fix, since it predates P3 and no
+  acceptance test here exercises a multi-word environment's own teardown.
+- **`doppler.branch_config.ensure`'s own `within` names both `doppler.project.ensure` and
+  `doppler.config.ensure`**, exactly as decision 4's table row lists them: a branch config rides with
+  whichever container this run actually deletes, the project or just its own environment.
+- **Gone is read by absence from `list_configs`/`list_service_tokens`, for all three new inverses, never
+  by a dedicated single-resource `GET`** (Doppler has none for an environment or a token). Each inverse's
+  own `standing` treats "the project/config is ours but this resource is no longer listed" the same as a
+  missing project: `Standing::Gone`, never `NotOurs` — the same universal "already gone, skip it" reading
+  decision 6 gives every other absent resource, and the one reading under which decision 8's resume case
+  (a second teardown of the same run, after this step's own delete already succeeded) still converges.
+- **`doppler.service_token.ensure`'s own zero-match case reads `Gone`, not `NotOurs`, resolving an
+  ambiguity in decision 7's own row text.** The row says `NotOurs` when "no token at `(config, name)`
+  created in the window", which literally covers both "a token exists here but outside the window" and "no
+  token exists here at all". Doppler's service token API has no single-token `GET` to disambiguate the
+  way `github.repo.ensure`'s and `doppler.project.ensure`'s own 404s already do, only the list. This task
+  reads the zero-match case as `Gone` (consistent with every other inverse's own "absence is gone" rule
+  above, and required for resume to work for this tool too: after this step's own `delete` succeeds, the
+  token is no longer listed, so a second teardown plan of the same run must not refuse over its own prior
+  success) and reserves `NotOurs` for "a token by this name exists but its own `created_at` falls outside
+  the window" (a name this run's own token happens to share with something created at a different time).
+  `locate`, a private helper shared by `standing` and `delete`, resolves both the `Standing` and the
+  slug `delete` needs from one list read, since no `Standing` variant can carry the slug itself.
+- **No inverse declares a loss** (all three `losses: &[]`): decision 4's table names a loss only for
+  `buildkite.pipeline.ensure` (task P4). Every `delete` still writes the `losing.iter().all(...)` check
+  against `created.accept` the documented `Inverse::delete` contract names, vacuously true today, the
+  same choice P1/P2 already made for their own loss-free tools.
+- **The five `Contained`/`Retained` declarations add no inverse**: `Catalog::insert`'s "`Delete` exactly
+  when `inverse()` is `Some`" rule (task R3) is untouched. `doppler.config.inheritable.ensure`,
+  `doppler.config.inherits.ensure` and `doppler.secret.set` each ride with either config tool (own `config`
+  input → either tool's `config` output); `doppler.project_member.ensure` rides with
+  `doppler.project.ensure`'s own `project` input; `doppler.service_token.rotate` is `Retained` with decision
+  4's own exact wording ("the revoked token cannot be restored").
+- **No ratchet, tripwire or guard touched.** Nothing here changes `willikins-core`. Every `TeardownToken::new()`
+  call (three per inverse's own `delete` tests) is under `tests/it/`, exempt from `teardown_token_guard.rs`'s
+  walk, each carrying its own `#[allow(clippy::disallowed_methods)]`.
+- **Left for P6/P7**: no Doppler tool is yet checked against `LIVE_TOOL_NAMES`'s own table test or the
+  fake catalog's own parity test (both later tasks); `catalog_check_parity.rs`/`catalog_parity.rs` in this
+  crate exercise only `ToolSpec` and `check`'s own type resolution, neither of which reads `Reversal` at
+  all, so this task's own declarations needed no change there.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
