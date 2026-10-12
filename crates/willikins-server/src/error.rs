@@ -8,7 +8,10 @@
 use std::fmt;
 
 use willikins_core::describe::{InputError, MissingInput};
-use willikins_core::{CheckError, Class, InputName, NodeName, PlanError};
+use willikins_core::{
+    CheckError, Class, InputName, InstanceRef, NodeName, PlanError, TeardownApplyError,
+    TeardownError,
+};
 use willikins_dsl::DocumentError;
 use willikins_journal::{PlanId, RunId};
 use willikins_types::{ParseError, ProposeError, WorkflowName};
@@ -251,9 +254,81 @@ pub enum ButlerError {
         /// The refusal.
         error: ProposeError,
     },
+    /// `plan_rollback` was called with a `run_id` this journal has no
+    /// `RunStarted` *or* `TeardownStarted` event for at all (milestone 3m
+    /// task R8). Distinct from [`Self::NotAForwardRun`], which names a
+    /// `run_id` the journal does recognise, as a teardown's own run.
+    /// Never journaled: there is no plan to attribute the refusal to, and
+    /// nothing in the milestone's own refusal list (decision 8) names
+    /// this case -- a caller is expected to pass a `run_id` it actually
+    /// got from `Butler::apply`.
+    UnknownRun {
+        /// The unrecognised id.
+        run_id: RunId,
+    },
+    /// `plan_rollback`'s own `run_id` names a *teardown's* own run, never
+    /// a forward one (milestone 3m decision 8): planning or applying a
+    /// rollback of a rollback is not a thing this design has a rule for.
+    NotAForwardRun {
+        /// The teardown run `run_id` actually names.
+        run_id: RunId,
+    },
+    /// The run `plan_rollback` names has no `RunFinished` of its own: it
+    /// is still going, or the process that ran it died mid-way (milestone
+    /// 3m decision 8). Its own `settled_by` (decision 2) is undefined, so
+    /// a teardown of it cannot be planned yet.
+    RunUnfinished {
+        /// The unfinished run.
+        run_id: RunId,
+    },
+    /// This run was already rolled back once, by a teardown that finished
+    /// successfully (milestone 3m decision 8).
+    AlreadyRolledBack {
+        /// The run id of the teardown that already succeeded.
+        teardown_run_id: RunId,
+    },
+    /// A *later* forward run of the same workflow, in this same journal,
+    /// created something and has not itself been rolled back yet
+    /// (milestone 3m decision 8, "why LIFO per workflow"): that later
+    /// run's own teardown is the only one that knows what it added on top
+    /// of what this run created, so this run's own rollback must wait for
+    /// it.
+    LaterRunFirst {
+        /// The later run that must be rolled back first.
+        run_id: RunId,
+    },
+    /// `plan_teardown_fingerprint` itself refused or failed (milestone 3m
+    /// decisions 5, 6): a drifted or refused candidate, an unresolvable
+    /// credential, or a tool failure while merely observing. Never
+    /// journaled: decision 6's own rule, "nothing is recorded as
+    /// approvable" -- the same way a first `Butler::plan`'s own
+    /// [`Self::Plan`] failure is not journaled either.
+    Teardown {
+        /// The failure. Boxed for the same `clippy::result_large_err`
+        /// reason [`Self::Plan`]'s own `error` is.
+        error: Box<TeardownError>,
+    },
+    /// `apply_teardown`'s own re-plan or per-step secret re-resolution
+    /// failed outright at apply time (milestone 3m decision 8) -- never
+    /// drift (see [`Self::TeardownDrift`]) and never a `Delete` step's own
+    /// failure (which is part of a successful [`crate::TeardownRunResult`],
+    /// not this type): a document defect, or a tool failure while merely
+    /// re-observing, discovered between approval and apply.
+    TeardownApply {
+        /// The failure. Boxed for the same reason as [`Self::Teardown`].
+        error: Box<TeardownApplyError>,
+    },
+    /// The freshly re-observed teardown disagrees with what was approved
+    /// (milestone 3m decision 8): a different step, action, or standing.
+    /// Nothing was deleted.
+    TeardownDrift {
+        /// The first instance whose re-observation disagreed.
+        instance: InstanceRef,
+    },
 }
 
 impl fmt::Display for ButlerError {
+    #[allow(clippy::too_many_lines)] // one message per variant; milestone 3m task R8 pushed it over 100
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownPlan { plan_id } => write!(f, "no plan `{plan_id}` is recorded"),
@@ -337,6 +412,30 @@ impl fmt::Display for ButlerError {
             ),
             Self::InvalidProjectName { error } => write!(f, "{error}"),
             Self::SlugProposal { error } => write!(f, "{error}"),
+            Self::UnknownRun { run_id } => write!(f, "no run `{run_id}` is recorded"),
+            Self::NotAForwardRun { run_id } => {
+                write!(f, "run `{run_id}` is itself a teardown, not a forward run")
+            }
+            Self::RunUnfinished { run_id } => {
+                write!(
+                    f,
+                    "run `{run_id}` has not finished; it cannot be rolled back yet"
+                )
+            }
+            Self::AlreadyRolledBack { teardown_run_id } => write!(
+                f,
+                "this run was already rolled back by teardown run `{teardown_run_id}`"
+            ),
+            Self::LaterRunFirst { run_id } => write!(
+                f,
+                "a later run of this workflow, `{run_id}`, must be rolled back first"
+            ),
+            Self::Teardown { error } => write!(f, "{error}"),
+            Self::TeardownApply { error } => write!(f, "{error}"),
+            Self::TeardownDrift { instance } => write!(
+                f,
+                "{instance}: the current state no longer matches the approved teardown; nothing was deleted"
+            ),
         }
     }
 }
@@ -384,6 +483,14 @@ mod tests {
         RateLimited,
         InvalidProjectName,
         SlugProposal,
+        UnknownRun,
+        NotAForwardRun,
+        RunUnfinished,
+        AlreadyRolledBack,
+        LaterRunFirst,
+        Teardown,
+        TeardownApply,
+        TeardownDrift,
     );
 
     fn plan_id() -> PlanId {
@@ -469,6 +576,28 @@ mod tests {
             ButlerError::SlugProposal {
                 error: ProposeError::NoWords {
                     input: "!!!".to_string(),
+                },
+            },
+            ButlerError::UnknownRun { run_id: run_id() },
+            ButlerError::NotAForwardRun { run_id: run_id() },
+            ButlerError::RunUnfinished { run_id: run_id() },
+            ButlerError::AlreadyRolledBack {
+                teardown_run_id: run_id(),
+            },
+            ButlerError::LaterRunFirst { run_id: run_id() },
+            ButlerError::Teardown {
+                error: Box::new(TeardownError::UnresolvableCredential {
+                    node: node_name(),
+                    port: willikins_core::PortName::parse("token").unwrap(),
+                }),
+            },
+            ButlerError::TeardownApply {
+                error: Box::new(TeardownApplyError::Drift),
+            },
+            ButlerError::TeardownDrift {
+                instance: InstanceRef {
+                    node: node_name(),
+                    instance: None,
                 },
             },
         ]

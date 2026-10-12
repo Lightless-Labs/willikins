@@ -18,6 +18,7 @@ mod http;
 mod mcp;
 mod rate_limit;
 mod read_ops;
+mod rollback;
 mod startup;
 mod types;
 
@@ -40,7 +41,9 @@ pub use mcp::{
 };
 pub use read_ops::{DocumentSource, ProposeSlugResponse, ValidateResponse};
 pub use startup::{InputSummary, StartupError, WorkflowSummary};
-pub use types::{ApprovalRequirement, PlanResponse, RunHandle};
+pub use types::{
+    ApprovalRequirement, PlanResponse, RunHandle, TeardownPlanResponse, TeardownRunResult,
+};
 
 // Re-exported so a downstream crate (task 10b, task 11) never needs its
 // own direct dependency on `willikins-journal` just to name a `PlanId`,

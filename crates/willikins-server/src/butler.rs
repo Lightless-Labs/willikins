@@ -54,12 +54,14 @@ use indexmap::IndexMap;
 use willikins_core::describe::PartialInputs;
 use willikins_core::disclosure::mask_json;
 use willikins_core::{
-    Applied, ApplyError, Approval, Catalog, Checked, InputName, PlanError, ToolError,
-    ToolErrorKind, ToolName, TypeRef, TypeRegistry, Value,
+    Applied, ApplyError, Approval, Catalog, Checked, InputName, InstanceRef, PlanError,
+    TeardownApplyError, TeardownError, TeardownStepOutcome, ToolError, ToolErrorKind, ToolName,
+    TypeRef, TypeRegistry, Value,
 };
 use willikins_journal::{
-    Append, ApplyRefusedReason, ApprovalState, Clock, Entry, Event, Journal, PlanId, PlanRecord,
-    PrincipalId, Reason, Redacted, RunId, RunRecord, continue_run_and_journal,
+    Append, ApplyRefusedReason, ApprovalState, Clock, DriftReasonKind, Entry, Event, Journal,
+    PlanId, PlanRecord, PrincipalId, Reason, Redacted, RunId, RunRecord, TeardownOutcome,
+    TeardownRecord, continue_run_and_journal,
 };
 use willikins_types::{DomainType, ParseError, WorkflowName};
 
@@ -67,8 +69,11 @@ use crate::document;
 use crate::drift::{self, DriftDetail};
 use crate::error::{ButlerError, ExpiryWindow};
 use crate::read_ops::{DocumentSource, ProposeSlugResponse, ValidateResponse};
+use crate::rollback::{build_run_instances, first_step_drift, run_created_something};
 use crate::startup::{self, StartupError, WorkflowSummary};
-use crate::types::{ApprovalRequirement, PlanResponse, RunHandle};
+use crate::types::{
+    ApprovalRequirement, PlanResponse, RunHandle, TeardownPlanResponse, TeardownRunResult,
+};
 
 /// A journal shared between `Butler` and the background thread a run
 /// continues on.
@@ -744,17 +749,26 @@ impl Butler {
         let now = self.clock.now();
         let mut journal = self.journal_lock();
 
-        let record = journal
+        // Milestone 3m task R8: `plan_id` names either a forward plan or
+        // a teardown plan -- the two live in one `PlanId` namespace, each
+        // id minted for exactly one kind, so trying `plan` first and
+        // falling back to `teardown` is never ambiguous (the same rule
+        // `willikins_journal::journal::fold_approval` already follows on
+        // the replay side). Only the four fields this check needs are
+        // pulled out, since the two record types otherwise differ.
+        let fields = journal
             .plan(&plan_id)
+            .map(PendingDecisionFields::from)
+            .or_else(|| journal.teardown(&plan_id).map(PendingDecisionFields::from))
             .ok_or(ButlerError::UnknownPlan { plan_id })?;
 
-        if !record.requires_approval || record.applied.is_some() {
+        if !fields.requires_approval || fields.applied.is_some() {
             return Err(ButlerError::NotPendingApproval { plan_id });
         }
-        if !matches!(record.approval, ApprovalState::Pending) {
+        if !matches!(fields.approval, ApprovalState::Pending) {
             return Err(ButlerError::AlreadyDecided { plan_id });
         }
-        if elapsed_between(record.recorded_at, now) > self.approval_window {
+        if elapsed_between(fields.recorded_at, now) > self.approval_window {
             return Err(ButlerError::PlanExpired {
                 window: ExpiryWindow::Approval,
             });
@@ -1231,11 +1245,563 @@ impl Butler {
             RunState::Idle | RunState::Preparing => None,
         }
     }
+
+    // -------------------------------------------------------------
+    // rollback (milestone 3m task R8)
+    // -------------------------------------------------------------
+
+    /// Plan a teardown of `run_id` (milestone 3m task R8; decisions 1, 2,
+    /// 5, 6, 8): rebuild that run's own
+    /// [`willikins_core::rollback::RunFacts`] from this journal, reload
+    /// and re-`check` the workflow document at the run's own recorded
+    /// hash (trust boundary 5, exactly as [`Self::reload_and_check`]
+    /// already does for a forward [`Self::apply`]), re-resolve every
+    /// `Delete` step's own secret `needs` port from the document's pure
+    /// resolver nodes (decision 5, never from the journal), and compute
+    /// the teardown (decision 6).
+    ///
+    /// Every refusal below is journaled as `ApplyRefused` (decision 8's
+    /// own "Refusals at teardown plan time" list), the same way
+    /// [`Self::apply`]'s own pre-run checks already are -- but, unlike
+    /// [`Self::apply`], this teardown's own [`PlanId`] is not minted until
+    /// a [`willikins_core::Teardown`] has actually been computed: minting
+    /// one up front, win or lose, would journal most of these refusals
+    /// under an id neither [`willikins_journal::Journal::plan`] nor
+    /// [`willikins_journal::Journal::teardown`] can ever resolve -- an
+    /// audit line nobody could look up. Each refusal is instead journaled
+    /// under an id that already resolves: the run's own forward
+    /// `plan_id` for `RunUnfinished`/`AlreadyRolledBack`/`LaterRunFirst`/
+    /// `DocumentChanged`, or the teardown's own (already-recorded)
+    /// `plan_id` for `NotAForwardRun`. [`ButlerError::UnknownRun`] and
+    /// [`TeardownError::Refused`] (decision 6: "nothing is recorded as
+    /// approvable") are left unjournaled: neither has any id to attribute
+    /// a line to.
+    ///
+    /// # Errors
+    ///
+    /// [`ButlerError::UnknownRun`] when `run_id` names no run or teardown
+    /// run at all; [`ButlerError::NotAForwardRun`] when it names a
+    /// teardown's own run; [`ButlerError::RunUnfinished`] when the run has
+    /// no `RunFinished` yet; [`ButlerError::AlreadyRolledBack`] when a
+    /// teardown of it already succeeded; [`ButlerError::LaterRunFirst`]
+    /// when a later run of the same workflow created something and has
+    /// not itself been rolled back (decision 8, "why LIFO per workflow");
+    /// [`ButlerError::DocumentChanged`] when the document no longer
+    /// reloads and re-checks exactly as recorded; [`ButlerError::Journal`]
+    /// when this run's own recorded inputs or per-instance values cannot
+    /// be read back; [`ButlerError::Teardown`] when re-resolving a secret
+    /// credential or computing the teardown itself fails or refuses.
+    pub fn plan_rollback(
+        &self,
+        run_id: RunId,
+        principal: PrincipalId,
+    ) -> Result<TeardownPlanResponse, ButlerError> {
+        let result = self.plan_rollback_inner(run_id, &principal);
+        self.record_tool_call("rollback_plan", None, principal, result.is_ok());
+        result
+    }
+
+    /// The run id of a later forward run of `workflow`, started after
+    /// `after`, that created something (milestone 3m decision 8, "why
+    /// LIFO per workflow") and has not itself been rolled back -- `None`
+    /// when no such run exists. `excluding` is `run_id` itself, never
+    /// compared against.
+    /// The run id of a later forward run of `workflow`, after `excluding`
+    /// in this journal's own append order, that created something
+    /// (milestone 3m decision 8, "why LIFO per workflow") and has not
+    /// itself been rolled back -- `None` when no such run exists or
+    /// `excluding` itself is not recorded.
+    ///
+    /// "Later" is this journal's own `RunStarted` append order
+    /// (`journal.runs()`'s own order, an `IndexMap`'s insertion order),
+    /// never wall-clock time: two runs a test (or a fast-moving caller)
+    /// starts in the same clock tick must still order deterministically,
+    /// and append order is the one thing that can never tie.
+    fn later_run_first(&self, workflow: &WorkflowName, excluding: RunId) -> Option<RunId> {
+        let journal = self.journal_lock();
+        let runs = journal.runs();
+        let excluding_at = runs.iter().position(|run| run.run_id == excluding)?;
+        for run in &runs[excluding_at + 1..] {
+            if run.rolled_back_by.is_some() {
+                continue;
+            }
+            let Some(plan) = journal.plan(&run.plan_id) else {
+                continue;
+            };
+            if plan.workflow != *workflow {
+                continue;
+            }
+            if run_created_something(&plan.fingerprint, &run.nodes) {
+                return Some(run.run_id);
+            }
+        }
+        None
+    }
+
+    #[allow(clippy::too_many_lines)] // one operation, the ordered refusal checks this method's own doc spells out; splitting would scatter the sequence
+    fn plan_rollback_inner(
+        &self,
+        run_id: RunId,
+        principal: &PrincipalId,
+    ) -> Result<TeardownPlanResponse, ButlerError> {
+        let Some(run_record) = self.journal_lock().run(&run_id) else {
+            // A `TeardownStarted` names the teardown's own `plan_id` --
+            // already resolvable (`journal.teardown` finds it), unlike a
+            // truly unknown `run_id`, which journals nothing at all: see
+            // `ButlerError::UnknownRun`'s own doc.
+            let teardown_plan_id =
+                self.journal_lock()
+                    .entries()
+                    .iter()
+                    .find_map(|entry| match &entry.event {
+                        Event::TeardownStarted {
+                            run_id: r, plan_id, ..
+                        } if *r == run_id => Some(*plan_id),
+                        _ => None,
+                    });
+            return match teardown_plan_id {
+                Some(plan_id) => {
+                    self.refuse_apply(
+                        plan_id,
+                        principal.clone(),
+                        ApplyRefusedReason::NotAForwardRun,
+                    );
+                    Err(ButlerError::NotAForwardRun { run_id })
+                }
+                None => Err(ButlerError::UnknownRun { run_id }),
+            };
+        };
+        let forward_plan_id = run_record.plan_id;
+
+        let Some(finished_at) = run_record.finished_at else {
+            self.refuse_apply(
+                forward_plan_id,
+                principal.clone(),
+                ApplyRefusedReason::RunUnfinished,
+            );
+            return Err(ButlerError::RunUnfinished { run_id });
+        };
+        if let Some(teardown_run_id) = run_record.rolled_back_by {
+            self.refuse_apply(
+                forward_plan_id,
+                principal.clone(),
+                ApplyRefusedReason::AlreadyRolledBack {
+                    run_id: teardown_run_id,
+                },
+            );
+            return Err(ButlerError::AlreadyRolledBack { teardown_run_id });
+        }
+
+        let Some(forward_plan) = self.journal_lock().plan(&forward_plan_id) else {
+            return Err(ButlerError::UnknownPlan {
+                plan_id: forward_plan_id,
+            });
+        };
+
+        if let Some(later) = self.later_run_first(&forward_plan.workflow, run_id) {
+            self.refuse_apply(
+                forward_plan_id,
+                principal.clone(),
+                ApplyRefusedReason::LaterRunFirst { run_id: later },
+            );
+            return Err(ButlerError::LaterRunFirst { run_id: later });
+        }
+
+        let Ok(checked) = self.reload_and_check(&forward_plan) else {
+            self.refuse_apply(
+                forward_plan_id,
+                principal.clone(),
+                ApplyRefusedReason::DocumentChanged,
+            );
+            return Err(ButlerError::DocumentChanged {
+                workflow: forward_plan.workflow.clone(),
+            });
+        };
+
+        let resolved_inputs =
+            resolve_recorded_inputs(&checked, &forward_plan.inputs, self.catalog.registry())?;
+
+        let entries_snapshot: Vec<Entry> = self.journal_lock().entries().to_vec();
+        let instances = build_run_instances(&entries_snapshot, run_id, &forward_plan.fingerprint)
+            .map_err(|error| ButlerError::Journal { error })?;
+        let facts = willikins_core::rollback::RunFacts {
+            finished_at,
+            inputs: resolved_inputs,
+            instances,
+        };
+
+        let wanted = willikins_core::rollback::wanted_resolvers(&checked);
+        let resolved = willikins_core::plan::resolve_pure(&checked, &facts.inputs, &wanted)
+            .map_err(|error| ButlerError::Teardown {
+                error: Box::new(TeardownError::from(error)),
+            })?;
+
+        let (teardown, fingerprint) =
+            willikins_core::rollback::plan_teardown_fingerprint(&facts, &checked, &resolved)
+                .map_err(|error| ButlerError::Teardown {
+                    error: Box::new(error),
+                })?;
+
+        // Minted only now, win or lose below this point: every refusal
+        // above this line is journaled under the *forward* run's own,
+        // already-resolvable `plan_id` (or the teardown's, for
+        // `NotAForwardRun`) -- see this method's own doc. `TeardownError::Refused`
+        // itself (decision 6) never reaches here at all.
+        let plan_id = PlanId::new();
+        let recorded = self.append(Event::TeardownPlanned {
+            plan_id,
+            of_run: run_id,
+            workflow: forward_plan.workflow.clone(),
+            document_sha256: forward_plan.document_sha256.clone(),
+            teardown: Redacted::from(&teardown),
+            fingerprint,
+            class: willikins_core::Class::Destructive,
+            requires_approval: true,
+            principal: principal.clone(),
+        })?;
+
+        Ok(TeardownPlanResponse {
+            plan_id,
+            teardown,
+            expires_at: expires_at(recorded.at, self.approval_window),
+        })
+    }
+
+    /// Apply an approved teardown (milestone 3m task R8, decision 8's
+    /// apply): mirrors [`Self::apply`]'s own pre-run checks (claim the
+    /// single-apply slot, reload and re-check the document, verify the
+    /// approval and its window), re-plans the teardown from the same
+    /// facts and refuses [`ButlerError::TeardownDrift`] before anything is
+    /// deleted (trust boundary 6), then calls
+    /// [`willikins_core::rollback::apply_teardown`], journaling one
+    /// `TeardownStepFinished` per step and a closing `TeardownFinished`.
+    ///
+    /// **Runs synchronously**, unlike [`Self::apply`]: there is no
+    /// `TeardownRunRecord`/per-step replay view to poll yet (task R7's
+    /// own addendum, "a later task that does need a teardown's own
+    /// per-step replay should add it as its own view"), so a
+    /// [`RunHandle`] here would be unpollable, and every provider this
+    /// milestone's own acceptance tests exercise (the fake catalog) never
+    /// blocks. A later task driving this against a live provider may
+    /// want to move it onto its own thread, the way [`Self::apply`]
+    /// already does; recorded as a deviation from that pattern, not done
+    /// here on spec.
+    ///
+    /// # Errors
+    ///
+    /// [`ButlerError::UnknownPlan`], [`ButlerError::AlreadyApplied`],
+    /// [`ButlerError::RunInProgress`], [`ButlerError::ApplyPreparing`],
+    /// [`ButlerError::DocumentChanged`], [`ButlerError::PlanExpired`],
+    /// [`ButlerError::ApprovalRequired`],
+    /// [`ButlerError::RecordedInputUnreadable`],
+    /// [`ButlerError::TeardownDrift`], [`ButlerError::Teardown`] (a
+    /// re-resolution failure, defensive -- see this method's own body),
+    /// or [`ButlerError::TeardownApply`] (`apply_teardown`'s own re-plan
+    /// failed outright, after `TeardownStarted` was already journaled).
+    #[allow(clippy::too_many_lines)] // one operation, the ordered refusal checks `apply`'s own twin already spells out the same way
+    pub fn apply_rollback(
+        &self,
+        plan_id: PlanId,
+        principal: PrincipalId,
+    ) -> Result<TeardownRunResult, ButlerError> {
+        let result = self.apply_rollback_inner(plan_id, principal.clone());
+        self.record_tool_call("rollback_apply", None, principal, result.is_ok());
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn apply_rollback_inner(
+        &self,
+        plan_id: PlanId,
+        principal: PrincipalId,
+    ) -> Result<TeardownRunResult, ButlerError> {
+        let Some(record) = self.journal_lock().teardown(&plan_id) else {
+            self.refuse_apply(plan_id, principal, ApplyRefusedReason::UnknownPlan);
+            return Err(ButlerError::UnknownPlan { plan_id });
+        };
+
+        // Held for this whole synchronous call (see this method's own
+        // doc): never `commit`ted, since there is no run thread to clear
+        // the slot. `_guard`'s `Drop` returns it to `RunState::Idle` on
+        // every way out of this function below -- an early refusal, a
+        // `?`, or a panic -- the same discipline `Butler::apply` relies
+        // on between claiming the slot and `commit`ting it. A concurrent
+        // `apply`/`apply_rollback` sees `ApplyPreparing` for the whole
+        // call, never `RunInProgress`: there is no run id to report until
+        // this call itself returns one. Recorded as a deviation.
+        let _guard = match ApplyGuard::claim(&self.run_lock) {
+            Ok(guard) => guard,
+            Err(RunState::Running(run_id)) => {
+                self.refuse_apply(
+                    plan_id,
+                    principal,
+                    ApplyRefusedReason::RunInProgress { run_id },
+                );
+                return Err(ButlerError::RunInProgress { run_id });
+            }
+            Err(RunState::Preparing) => {
+                self.refuse_apply(plan_id, principal, ApplyRefusedReason::ApplyPreparing);
+                return Err(ButlerError::ApplyPreparing);
+            }
+            Err(RunState::Idle) => unreachable!("claim only fails on a taken slot"),
+        };
+
+        let applied_now = self
+            .journal_lock()
+            .teardown(&plan_id)
+            .and_then(|record| record.applied);
+        if let Some(run_id) = applied_now {
+            self.refuse_apply(plan_id, principal, ApplyRefusedReason::AlreadyApplied);
+            return Err(ButlerError::AlreadyApplied { plan_id, run_id });
+        }
+
+        let document_changed = || ButlerError::DocumentChanged {
+            workflow: record.workflow.clone(),
+        };
+
+        let Some(forward_run) = self.journal_lock().run(&record.of_run) else {
+            self.refuse_apply(plan_id, principal, ApplyRefusedReason::DocumentChanged);
+            return Err(document_changed());
+        };
+        let Some(forward_plan) = self.journal_lock().plan(&forward_run.plan_id) else {
+            self.refuse_apply(plan_id, principal, ApplyRefusedReason::DocumentChanged);
+            return Err(document_changed());
+        };
+        let Ok(checked) = self.reload_and_check(&forward_plan) else {
+            self.refuse_apply(plan_id, principal, ApplyRefusedReason::DocumentChanged);
+            return Err(document_changed());
+        };
+
+        match &record.approval {
+            ApprovalState::Pending => {
+                if self.elapsed_since(record.recorded_at) > self.approval_window {
+                    self.refuse_apply(plan_id, principal, ApplyRefusedReason::PlanExpired);
+                    return Err(ButlerError::PlanExpired {
+                        window: ExpiryWindow::Approval,
+                    });
+                }
+                self.refuse_apply(plan_id, principal, ApplyRefusedReason::ApprovalRequired);
+                return Err(ButlerError::ApprovalRequired {
+                    class: record.class,
+                });
+            }
+            ApprovalState::Rejected { .. } => {
+                self.refuse_apply(plan_id, principal, ApplyRefusedReason::ApprovalRequired);
+                return Err(ButlerError::ApprovalRequired {
+                    class: record.class,
+                });
+            }
+            ApprovalState::Automatic => {
+                if self.elapsed_since(record.recorded_at) > self.apply_window {
+                    self.refuse_apply(plan_id, principal, ApplyRefusedReason::PlanExpired);
+                    return Err(ButlerError::PlanExpired {
+                        window: ExpiryWindow::Apply,
+                    });
+                }
+            }
+            ApprovalState::Granted { at, .. } => {
+                if self.elapsed_since(*at) > self.apply_window {
+                    self.refuse_apply(plan_id, principal, ApplyRefusedReason::PlanExpired);
+                    return Err(ButlerError::PlanExpired {
+                        window: ExpiryWindow::Apply,
+                    });
+                }
+            }
+        }
+
+        let resolved_inputs = match resolve_recorded_inputs(
+            &checked,
+            &forward_plan.inputs,
+            self.catalog.registry(),
+        ) {
+            Ok(inputs) => inputs,
+            Err(error) => {
+                let input = match &error {
+                    ButlerError::RecordedInputUnreadable { input, .. } => Some(input.clone()),
+                    _ => None,
+                };
+                self.refuse_apply(
+                    plan_id,
+                    principal,
+                    ApplyRefusedReason::RecordedInputUnreadable { input },
+                );
+                return Err(error);
+            }
+        };
+
+        let entries_snapshot: Vec<Entry> = self.journal_lock().entries().to_vec();
+        let instances = match build_run_instances(
+            &entries_snapshot,
+            record.of_run,
+            &forward_plan.fingerprint,
+        ) {
+            Ok(instances) => instances,
+            Err(error) => return Err(ButlerError::Journal { error }),
+        };
+        let Some(finished_at) = forward_run.finished_at else {
+            // Defensive: `plan_rollback` already refused `RunUnfinished`
+            // before a `TeardownPlanned` for this run could ever exist.
+            return Err(ButlerError::RunUnfinished {
+                run_id: record.of_run,
+            });
+        };
+        let facts = willikins_core::rollback::RunFacts {
+            finished_at,
+            inputs: resolved_inputs,
+            instances,
+        };
+
+        let wanted = willikins_core::rollback::wanted_resolvers(&checked);
+        // Defensive from here down: `plan_rollback` already computed this
+        // same `resolved`/`fresh` pair once, successfully, against the
+        // same document hash this `reload_and_check` just re-verified. A
+        // failure here names a document defect or a tool failure
+        // discovered while merely re-observing, not drift -- see
+        // `ButlerError::Teardown`'s own doc; neither case has a dedicated
+        // `ApplyRefusedReason` (R7 added one only for the four refusals
+        // decision 8's own list names), so it is reported but not
+        // journaled, the same choice this method's own doc makes.
+        let resolved = match willikins_core::plan::resolve_pure(&checked, &facts.inputs, &wanted) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                return Err(ButlerError::Teardown {
+                    error: Box::new(TeardownError::from(error)),
+                });
+            }
+        };
+        let fresh = match willikins_core::rollback::plan_teardown_fingerprint(
+            &facts, &checked, &resolved,
+        ) {
+            Ok((_, fingerprint)) => fingerprint,
+            Err(error) => {
+                return Err(ButlerError::Teardown {
+                    error: Box::new(error),
+                });
+            }
+        };
+
+        // Re-observed independently of `apply_teardown`'s own internal
+        // comparison (trust boundary 6), so a disagreement can be
+        // journaled with the instance it concerns --
+        // `TeardownApplyError::Drift` itself carries none. The redundant
+        // second observation `apply_teardown` makes below is the same
+        // "redundant provider reads, never a redundant write" cost
+        // `Self::apply`'s own doc already accepts for a forward run.
+        if let Some(instance) = first_step_drift(&record.fingerprint, &fresh) {
+            self.refuse_apply(
+                plan_id,
+                principal,
+                ApplyRefusedReason::Drift {
+                    node: instance.node.clone(),
+                    instance: instance.instance.clone(),
+                    kind: DriftReasonKind::Standing,
+                },
+            );
+            return Err(ButlerError::TeardownDrift { instance });
+        }
+
+        let run_id = RunId::new();
+        self.append(Event::TeardownStarted {
+            run_id,
+            plan_id,
+            of_run: record.of_run,
+            principal: principal.clone(),
+        })?;
+
+        let outcomes = match willikins_core::rollback::apply_teardown(
+            &record.fingerprint,
+            &facts,
+            &checked,
+            &resolved,
+        ) {
+            Ok(outcomes) => outcomes,
+            Err(error) => {
+                let _ = self.append(Event::TeardownFinished {
+                    run_id,
+                    outcome: TeardownOutcome::Failed {
+                        error: Redacted::from(&error),
+                    },
+                });
+                return Err(ButlerError::TeardownApply {
+                    error: Box::new(error),
+                });
+            }
+        };
+
+        let mut steps: Vec<(InstanceRef, TeardownStepOutcome)> = Vec::with_capacity(outcomes.len());
+        let mut failure: Option<TeardownApplyError> = None;
+        for (fp, outcome) in record.fingerprint.iter().zip(outcomes) {
+            let _ = self.append(Event::TeardownStepFinished {
+                run_id,
+                node: fp.instance.node.clone(),
+                instance: fp.instance.instance.clone(),
+                status: outcome.clone(),
+            });
+            if let TeardownStepOutcome::Failed { error } = &outcome {
+                failure.get_or_insert(TeardownApplyError::Step {
+                    instance: fp.instance.clone(),
+                    error: error.clone(),
+                });
+            }
+            steps.push((fp.instance.clone(), outcome));
+        }
+
+        let succeeded = failure.is_none();
+        let teardown_outcome = match failure {
+            None => TeardownOutcome::Succeeded,
+            Some(error) => TeardownOutcome::Failed {
+                error: Redacted::from(&error),
+            },
+        };
+        self.append(Event::TeardownFinished {
+            run_id,
+            outcome: teardown_outcome,
+        })?;
+
+        Ok(TeardownRunResult {
+            run_id,
+            steps,
+            succeeded,
+        })
+    }
 }
 
 enum Decision {
     Grant(PrincipalId),
     Reject(PrincipalId, Reason),
+}
+
+/// The four fields [`Butler::decide`] needs, read off either a
+/// [`PlanRecord`] or a [`TeardownRecord`] (milestone 3m task R8): the two
+/// record types otherwise differ, but an approval decision cares about
+/// exactly these.
+struct PendingDecisionFields {
+    requires_approval: bool,
+    applied: Option<RunId>,
+    approval: ApprovalState,
+    recorded_at: willikins_journal::Timestamp,
+}
+
+impl From<PlanRecord> for PendingDecisionFields {
+    fn from(record: PlanRecord) -> Self {
+        Self {
+            requires_approval: record.requires_approval,
+            applied: record.applied,
+            approval: record.approval,
+            recorded_at: record.recorded_at,
+        }
+    }
+}
+
+impl From<TeardownRecord> for PendingDecisionFields {
+    fn from(record: TeardownRecord) -> Self {
+        Self {
+            requires_approval: record.requires_approval,
+            applied: record.applied,
+            approval: record.approval,
+            recorded_at: record.recorded_at,
+        }
+    }
 }
 
 /// The single-apply slot: what `apply` is doing, if anything.

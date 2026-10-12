@@ -30,5 +30,6 @@ mod mcp_server;
 mod plan_failure_message;
 mod readme_variables;
 mod reversal_table;
+mod rollback_r8;
 mod send_sync;
 mod serve_http_deploy_pins;

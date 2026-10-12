@@ -40,3 +40,46 @@ pub struct RunHandle {
     /// The started run's id.
     pub run_id: RunId,
 }
+
+/// What [`crate::Butler::plan_rollback`] returns (milestone 3m task R8).
+/// Always requires approval and is always [`willikins_core::Class::Destructive`]
+/// (SHARED VALUES: "Teardown class... always `Class::Destructive`;
+/// `requires_approval` always `true`"), so unlike [`PlanResponse`] this
+/// carries no `class`/`requires_approval` field of its own -- a caller
+/// that needs to say so in a fixed sentence can simply say so.
+///
+/// No `JsonSchema`: `willikins_core::Teardown` itself has only `Serialize`
+/// (deliberately, see its own doc), so a type holding one could not
+/// derive `JsonSchema` either; this is server-internal today (the MCP
+/// `rollback_plan` tool, the approvals page's own teardown rendering, and
+/// the CLI are future work -- see the milestone plan's "Out of scope").
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TeardownPlanResponse {
+    /// This teardown's fresh id, in the same [`PlanId`] namespace a
+    /// forward plan's own id comes from.
+    pub plan_id: PlanId,
+    /// The teardown itself, for display.
+    pub teardown: willikins_core::Teardown,
+    /// When this teardown stops being approvable: the approval window's
+    /// end, measured from when it was recorded.
+    pub expires_at: Timestamp,
+}
+
+/// What [`crate::Butler::apply_rollback`] returns once the teardown run has
+/// finished (milestone 3m task R8). Unlike [`RunHandle`], this is
+/// returned only once the run is over: see that method's own doc for why
+/// it runs synchronously rather than on a background thread.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TeardownRunResult {
+    /// This teardown run's id, in the same [`RunId`] namespace a forward
+    /// run's own id comes from -- never [`willikins_journal::journal::TeardownRecord::of_run`],
+    /// which names what it undoes.
+    pub run_id: RunId,
+    /// Every step's own outcome, in the approved teardown's own order.
+    pub steps: Vec<(
+        willikins_core::InstanceRef,
+        willikins_core::TeardownStepOutcome,
+    )>,
+    /// Whether every step ran (or was already gone) with no failure.
+    pub succeeded: bool,
+}
