@@ -22,6 +22,7 @@ mod fake_agrees_with_live;
 mod live_catalog;
 mod live_probe;
 mod project_ensure_mock;
+mod project_inverse_mock;
 mod project_member_client_mock;
 mod project_member_ensure_mock;
 mod provider_messages;

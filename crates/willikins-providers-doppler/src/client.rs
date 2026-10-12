@@ -246,14 +246,12 @@ impl DopplerClient {
     /// this call after `standing` has confirmed the project is still
     /// `AsCreated`.
     ///
-    /// `pub(crate)` until task P2 commit 2's `doppler.project.ensure`
-    /// inverse becomes its one caller — see that commit's own
-    /// `#[cfg_attr(not(test), expect(dead_code))]` note on this method.
+    /// `pub(crate)`: `doppler.project.ensure`'s own inverse (task P2
+    /// commit 2) is its one caller.
     ///
     /// # Errors
     ///
     /// See [`Self::get_project`].
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn delete_project(&self, project: &DopplerProject) -> Result<(), ProviderError> {
         let body = DeleteProjectBody {
             project: project.to_string(),
@@ -364,15 +362,13 @@ impl DopplerClient {
     /// Whether the parameter is honoured at all is left for L2 to confirm
     /// live (this milestone's "Verify before relying on them" list).
     ///
-    /// `pub(crate)` until task P2 commit 2's inverse becomes its caller —
-    /// see this method's own `#[cfg_attr(not(test), expect(dead_code))]`
-    /// note.
+    /// `pub(crate)`: `doppler.project.ensure`'s own inverse (task P2
+    /// commit 2) is its caller.
     ///
     /// # Errors
     ///
     /// See [`Self::get_project`], plus a bound error mirroring
     /// [`Self::list_service_accounts`]'s own.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn list_environments(
         &self,
         project: &DopplerProject,
@@ -415,15 +411,13 @@ impl DopplerClient {
     /// read without a second client change; task P2's own drift rule
     /// (decision 7's project row) does not read it.
     ///
-    /// `pub(crate)` until task P2 commit 2's inverse becomes its caller —
-    /// see this method's own `#[cfg_attr(not(test), expect(dead_code))]`
-    /// note.
+    /// `pub(crate)`: `doppler.project.ensure`'s own inverse (task P2
+    /// commit 2) is its caller.
     ///
     /// # Errors
     ///
     /// See [`Self::get_project`], plus a bound error mirroring
     /// [`Self::list_service_accounts`]'s own.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn list_configs(
         &self,
         project: &DopplerProject,
@@ -850,7 +844,6 @@ impl DopplerClient {
     /// # Errors
     ///
     /// See [`Self::secret_names`].
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn config_has_foreign_secret_name(
         &self,
         project: &DopplerProject,
@@ -1335,7 +1328,6 @@ struct ProjectEnvelope {
 pub(crate) struct ProjectBody {
     pub(crate) description: Option<String>,
     #[serde(default)]
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) created_at: Option<Timestamp>,
 }
 
@@ -1348,7 +1340,6 @@ struct CreateProjectBody {
 /// [`DopplerClient::delete_project`]'s request body (verify item 9: the
 /// delete endpoint takes `project` in the body, not the query).
 #[derive(Debug, Serialize)]
-#[cfg_attr(not(test), expect(dead_code))]
 struct DeleteProjectBody {
     project: String,
 }
@@ -1379,7 +1370,6 @@ struct EnvironmentsEnvelope {
 /// string.
 #[derive(Debug, Deserialize)]
 pub(crate) struct EnvironmentEntry {
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) id: String,
 }
 
@@ -1410,11 +1400,8 @@ struct ConfigsEnvelope {
 /// parse for not fitting a grammar it was never promised to follow.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ConfigListEntry {
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) name: String,
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) root: bool,
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) environment: String,
     /// Read by no tool yet: milestone 3m task P2's own drift rule
     /// (decision 7's project row) does not check a config's own creation
@@ -1474,7 +1461,6 @@ pub(crate) struct ConfigBody {
     pub(crate) inheritable: Option<bool>,
     pub(crate) inherits: Option<Vec<ConfigRefBody>>,
     #[serde(default, rename = "inheritedBy")]
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) inherited_by: Option<Vec<ConfigRefRaw>>,
 }
 
@@ -1502,8 +1488,12 @@ pub(crate) struct ConfigRefBody {
 /// names.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ConfigRefRaw {
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) project: String,
+    /// Read by no tool yet: the project's own drift rule (decision 7's
+    /// project row) only ever compares `project`. Carried for a later
+    /// task's own environment- or config-scoped `inheritedBy` row, which
+    /// may need to name which config outside this project inherits, not
+    /// only confirm that one does.
     #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) config: String,
 }
