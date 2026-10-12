@@ -68,7 +68,7 @@ pub struct Within {
 /// existing tool, catalog entry or document changes until a tool opts in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reversal {
-    /// [`crate::tool::Tool::inverse`] (milestone 3m task R3) deletes this
+    /// `inverse()` (milestone 3m task R3) deletes this
     /// resource. `needs` names the input ports the delete needs (key
     /// ports and credential ports). `within` names the containers this
     /// instance rides out with when this run deletes one of them too.
