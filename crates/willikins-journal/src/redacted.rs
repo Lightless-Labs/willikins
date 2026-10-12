@@ -88,6 +88,16 @@ impl Redactable for IndexMap<willikins_core::OutputName, willikins_core::Value> 
     const KIND: &'static str = "ResolvedOutputs";
 }
 
+impl sealed::Sealed for willikins_core::Teardown {}
+impl Redactable for willikins_core::Teardown {
+    const KIND: &'static str = "Teardown";
+}
+
+impl sealed::Sealed for willikins_core::TeardownApplyError {}
+impl Redactable for willikins_core::TeardownApplyError {
+    const KIND: &'static str = "TeardownApplyError";
+}
+
 /// A `T` that has already gone through its own redacting `Serialize` and
 /// is stored here as the resulting JSON. See the module docs for why this
 /// exists and what it does and does not let back in.
@@ -231,5 +241,41 @@ mod tests {
         map.insert(OutputName::parse("repo_url").unwrap(), Value::unknown(ty));
         let redacted = Redacted::from(&map);
         assert!(redacted.as_json().is_object());
+    }
+
+    /// Milestone 3m task R7: a secret reaching [`willikins_core::Teardown`]
+    /// through [`willikins_core::TeardownApplyError`]'s own nested, also
+    /// `Value`-bearing [`willikins_core::PlanError::NameTaken`] (a key
+    /// port's value, which need not be non-secret) still redacts, the same
+    /// way `willikins_core::Value`'s own `Serialize` redacts it anywhere
+    /// else -- `Redacted<TeardownApplyError>` adds no second redaction
+    /// path to remember, it only sidesteps `TeardownApplyError`'s own
+    /// missing `Deserialize`.
+    #[test]
+    fn teardown_apply_error_redacts_a_secret_in_a_chained_plan_error() {
+        let marker = "CANARY".repeat(7);
+        let mut key = willikins_core::Inputs::new();
+        key.insert(
+            willikins_core::PortName::parse("token").unwrap(),
+            Value::known(
+                willikins_types::DopplerServiceToken::parse(&format!("dp.st.prd.{marker}"))
+                    .unwrap(),
+            ),
+        );
+        let plan_error = willikins_core::PlanError::NameTaken {
+            node: willikins_core::NodeName::parse("repo").unwrap(),
+            tool: willikins_core::ToolName::parse("github.repo.ensure").unwrap(),
+            key,
+        };
+        let apply_error = willikins_core::TeardownApplyError::from(
+            willikins_core::TeardownError::from(plan_error),
+        );
+        let redacted = Redacted::from(&apply_error);
+        let json = serde_json::to_string(&redacted).unwrap();
+        assert!(
+            !json.contains(&marker),
+            "a secret key value leaked through TeardownApplyError: {json}"
+        );
+        assert!(json.contains("REDACTED"), "no redaction marker: {json}");
     }
 }
