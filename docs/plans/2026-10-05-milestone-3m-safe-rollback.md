@@ -248,6 +248,24 @@ stays at 2, below). Deviations from the row, recorded:
   `{Created,Failed,Unchanged}` universe), and this function specifically is the "matched nothing, or its match does
   not change its own fate" path — decision 6's own capability × policy × standing path, unchanged.
 
+**Addendum:** 2026-10-12 — a same-day review of R5b above found two gaps, fixed in two more commits, same task:
+- **`Created.riders` was asserted only indirectly.** `StubProjectTool` could only hold a fixed-`Standing`
+  `RidingInverse`, so `config_rides_with_the_project_created_in_the_same_run` and
+  `a_transit_rider_two_hops_down_still_reaches_the_root_container` proved the `RidesWith`/`Delete` labels and the call
+  counts, never that the rider actually reached the container's own `Created.riders`: a `transitive_riders` bug
+  returning nothing would have left every assertion in both tests green. Fixed by giving `StubProjectTool` any
+  `Inverse` (mirroring `StubConfigTool`) and switching both tests' project to a `ToleranceInverse` that checks the
+  real count (1, then 2 across the transitive hop). A third test, `a_failed_rider_rides_but_is_never_tolerated`,
+  exercises `riders_of`'s own `wrote` filter directly: a `NotRun` rider never reaches a `RideView` at all
+  (`build_ride_views` requires a finished instance), so the existing `NotRun` acceptance test never actually ran that
+  filter's own line; `Failed` does reach one and is excluded by it. Both mutations (`transitive_riders` returning
+  `Vec::new()`; `riders_of` dropping its own `wrote` check) were run by hand against the fixed tests and caught by
+  exactly the test built to catch each one, and nothing else.
+- **A note for F1, not yet acted on.** `Recorded` and `rides_with` are `rollback.rs`-private today; the Recorded/
+  RideView split above was built so `Plan::not_reversible` (task F1) can call `rides_with` directly over a forward
+  plan's own instances, with no `RunInstance`. F1's own commit should promote both to `pub(crate)` (`Recorded`'s
+  fields included) rather than duplicate either.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
