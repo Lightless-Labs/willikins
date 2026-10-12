@@ -186,3 +186,9 @@ coordinator's.
    them, while the live inverse refuses on them and Doppler's own delete may cascade them (verify 3, L2). After F1 the
    core rule no longer depends on that provider rule for a kept branch, but the fake still under-reports environment
    contents. Recorded for P6's parity list.
+7. **F1's fix waits for every matched container, so a cycle can hide a deleted one.** Suppose a rider matches a
+   container already resolved as going away, and also a cycle partner through a `Within` that names its own tool.
+   The rider then stalls on the partner, and the tie-break forces it standalone, so it ignores the container it
+   should ride. First-match riding would have ridden that container if its `Within` was declared first.
+   `combined_forward_settled` has the same shape. No live tool names itself (P7's table pins this), so the case is
+   theoretical. A dominance rule would close it: resolve as soon as any resolved container goes away.
