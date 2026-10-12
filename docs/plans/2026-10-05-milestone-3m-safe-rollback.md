@@ -529,6 +529,80 @@ warnings`, `cargo test`) green for both. Deviations and choices, recorded:
   per the clippy row's own instruction -- the same convention `SinkToken::new()` already uses
   throughout this crate's tests.
 
+**Addendum:** 2026-10-12 — P2 landed (`doppler.project.ensure`'s inverse; decision 7's project row;
+acceptance 12) in `crates/willikins-providers-doppler` alone, three commits (89e2083 the client,
+c659109 a same-day fix, 5b6d8f3 the tool), scoped gates (`-p willikins-providers-doppler`: `cargo fmt
+--check`, `cargo clippy --all-targets -D warnings`, `cargo test`) green for all three. Deviations and
+choices, recorded:
+- **`delete_environment` takes a `&DopplerConfigName`, not the `&EnvironmentSlug` trust boundary 3's
+  own table names.** `create_environment` already sends a `DopplerConfigName` (the derived root
+  config's own snake-joined name, `naming::v1::doppler_root_config`) as both `name` and `slug` when it
+  creates an environment, so that is the string Doppler actually stores as the environment's own id --
+  a multi-word environment's `EnvironmentSlug::Display` would print its kebab form (`pre-prod`)
+  instead of the stored `pre_prod`, naming a different, nonexistent environment. `list_environments`'s
+  own `EnvironmentEntry::id` reports the same string back, so a future caller (task P3) addresses an
+  environment by exactly what it was listed as.
+- **`inheritedBy` lives on the single-config `GET` (`DopplerClient::get_config`), never on the list
+  endpoint** (`DopplerClient::list_configs`) -- confirmed by fetching `configs-list.md` verbatim
+  2026-10-12: its own example and schema carry neither `inheritedBy` nor `inherits`/`inheritable`,
+  only `name`/`root`/`locked`/timestamps/`environment`/`project`. So `standing_from_body` makes one
+  `get_config` call per tolerated config, reading `inherits` (for `config_has_foreign_secret_name`'s
+  own base walk) and `inherited_by` (decision 7's own row) off the same response, never two separate
+  reads for the two fields.
+- **A new verify item, not yet in the milestone's own numbered list**: `GET /v3/environments`'s
+  reference (`environments-list.md`, fetched verbatim 2026-10-12) documents only a `project` query
+  parameter, with no `per_page`/`page` in its example request, though its example response carries a
+  bare `"page": 1`. `list_environments` sends `per_page`/`page` anyway (harmless either way: the loop
+  still terminates on a short page whether or not Doppler honours them, just after more round trips if
+  it does not), and Doppler's own documented environments-per-project cap (15, Team/Enterprise,
+  "\*case-by-case" above that) means one page covers every project this crate provisions regardless.
+  Left for L2 to confirm live, alongside the milestone's existing verify items.
+- **`config_has_foreign_secret_name`'s one-level base walk tolerates a base this token can no longer
+  see** (a `404`, or the `400` `looks_like_a_missing_project` already recognises), mirroring
+  `DopplerSecretNameGate`'s own step 2 exactly rather than failing the whole project's standing with a
+  transport error over one base that is no longer there. This was not how commit 1 first shipped it (a
+  bare `?` on every base read); found and fixed same-day, test-first, before commit 2 — c659109.
+- **`ConfigBody::inherited_by`'s entries are a raw `ConfigRefRaw { project: String, config: String }`,
+  not the grammar-validated `ConfigRefBody` `inherits` already uses.** `inherits` is the document's own
+  stated intent (`doppler.config.inherits.ensure` wrote it), so a malformed entry there is this crate's
+  own bug; `inheritedBy` is whoever happens to depend on this config, never something this run asked
+  for, so a foreign inheritor with a project name outside this crate's own grammar must still read as
+  `Drifted` (decision 7's own reason), not an opaque "the response body did not parse" that leaves an
+  operator guessing. `config_has_foreign_secret_name` and `inherited_by`'s own membership check both
+  compare raw strings for exactly this reason.
+- **`Gone` is read through `looks_like_a_missing_project`, not a bare `404`** — the only tool in this
+  crate whose inverse needed to decide this at all (every other Doppler tool's own future inverse,
+  task P3, inherits the same question). A `400` "no access" for a project that genuinely exists but
+  sits outside this token's grant is read the same as `Gone`: safe (under-deletion: `delete` is never
+  called on a resource this reading cannot prove is actually gone), the same reading every other read
+  in this crate already gives the identical ambiguity.
+- **`needs: &["project"]` alone.** Unlike `github.repo.ensure`'s `token`, this tool holds no optional,
+  document-bound credential port — every call goes through the one client the tool was built with — so
+  decision 5's resolver-chain machinery has nothing to resolve here.
+- **Two fields stay deliberately dead**, documented on themselves for a later task rather than wired in
+  on spec: `ConfigListEntry::created_at` (task P2's own drift rule, decision 7's project row, checks
+  config membership only, never a config's own creation window — task P3's `doppler.config.ensure`/
+  `doppler.branch_config.ensure` rows need it) and `ConfigRefRaw::config` (the project's own check
+  compares only `inheritedBy`'s `project` field; naming *which* config outside the project inherits is
+  not this row's own concern).
+- **Verify item 6's mock-level answer**: a direct `get_project`/`get_config` unit test in `client.rs`
+  parses Doppler's own documented millisecond shape (`2019-11-19T07:19:00.476Z`-style fractional
+  seconds) through `Timestamp::parse`, confirming `chrono::DateTime::parse_from_rfc3339` already
+  accepts it (RFC 3339 permits fractional seconds); `project_inverse_mock.rs`'s own happy-path test
+  uses the same shape end to end, through `standing()`.
+- **`DopplerClient::secret_names` now returns `SecretNamesBody` itself, not a bare `Vec<String>`**,
+  shared by `secret_name_listed` and the new `config_has_foreign_secret_name` — milestone 3j's trust
+  boundary 2 ("the list never leaves the client") holds for the shared path the same way it already
+  held for the struct behind it: a type with no `Debug` is harder to leak by accident than a plain
+  `Vec<String>`, which always has one.
+- **Riders are read fail-closed throughout**: a rider whose own `config`/`name` port this crate cannot
+  parse, or whose `config` *output* this crate cannot downcast (`doppler.config.ensure`/
+  `doppler.branch_config.ensure`, which report their identity only through an output port), tolerates
+  nothing rather than being guessed at. No Doppler tool declares a real `Reversal`/`Within` of its own
+  yet (task P3), so every rider-tolerance test in `project_inverse_mock.rs` builds its own `Rider` by
+  hand, the same way milestone 3m's own `repo_inverse_mock.rs` did before P1 landed `github.repo.ensure`'s
+  `Within` declarations.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
