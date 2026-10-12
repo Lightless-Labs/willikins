@@ -955,13 +955,35 @@ fn decide_standalone(
 // Riding (milestone 3m task R5b, decisions 3, 3a)
 // ---------------------------------------------------------------------
 
-/// One instance, reduced to exactly what [`rides_with`] and the ride
-/// fixed point below need (milestone 3m task R5b). Never tied to
-/// [`RunInstance`] alone: `Plan::not_reversible` (task F1) matches the
-/// very same way over a forward `Plan`'s own recorded instances, before
-/// any run exists, so the matcher itself ([`rides_with`]) takes this
-/// neutral view, never a `RunInstance`.
+/// One instance, reduced to exactly what [`rides_with`] needs (milestone
+/// 3m task R5b): its own tool name, identity, and recorded values on both
+/// sides. Never tied to [`RunInstance`]: `Plan::not_reversible` (task F1)
+/// matches the very same way over a forward `Plan`'s own recorded
+/// instances, before any run exists, which has no `RunInstance` or
+/// `RunProgress` to build one from. [`RideView`] wraps one of these with
+/// the journal-only facts riding's own fixed point needs besides.
+struct Recorded<'a> {
+    /// This instance's own tool name.
+    tool: &'a str,
+    /// This instance's own identity.
+    instance: crate::apply::InstanceRef,
+    /// This instance's own recorded, non-secret inputs; secret ones
+    /// `Unknown`.
+    inputs: &'a crate::tool::Inputs,
+    /// This instance's own recorded, non-secret outputs; secret ones
+    /// `Unknown`.
+    outputs: &'a crate::tool::Outputs,
+}
+
+/// One instance, reduced to exactly what the ride fixed point below needs
+/// on top of [`Recorded`] (milestone 3m task R5b): the checked node its
+/// own tool and policy come from, the journal facts behind it, and
+/// whether this run's own record of it is a candidate, a transit rider,
+/// or neither.
 struct RideView<'a> {
+    /// This instance's own recorded identity and values -- what
+    /// [`rides_with`] alone needs.
+    recorded: Recorded<'a>,
     /// The checked node this instance's own tool and policy come from.
     checked_node: &'a crate::check::CheckedNode,
     /// The journal facts this instance's own view comes from -- also
@@ -969,8 +991,6 @@ struct RideView<'a> {
     /// ride resolver's own filtered sequence) is never confused with an
     /// index into `facts.instances` itself.
     run_instance: &'a RunInstance,
-    /// This instance's own identity.
-    instance: crate::apply::InstanceRef,
     /// Whether this run's own record of this instance is something a
     /// container must tolerate (decision 3's "riding is not tolerance"):
     /// finished `Created`, or `Create`+`Unchanged` in transit. `false`
@@ -995,12 +1015,15 @@ struct RideView<'a> {
 /// [`crate::value::Value::is_known`]`() == false`: two `Unknown`s of one
 /// type compare equal (`value.rs`), so a port neither this run's rider
 /// nor the container ever bound (an unstarted `NotRun` instance's own
-/// empty recorded inputs, say) must never ride by default.
-fn rides_with(within: &Within, rider: &RideView, container: &RideView) -> bool {
+/// empty recorded inputs, say) must never ride by default. Takes a
+/// [`Recorded`], never a [`RideView`]: the one thing `Plan::not_reversible`
+/// (task F1) will call this same function with, over a forward plan's
+/// own instances, which carry no [`RunInstance`].
+fn rides_with(within: &Within, rider: &Recorded, container: &Recorded) -> bool {
     if rider.instance == container.instance {
         return false;
     }
-    if container.checked_node.tool.spec().name.as_str() != within.tool {
+    if container.tool != within.tool {
         return false;
     }
     within.ports.iter().all(|&(own_port, side, their_port)| {
@@ -1010,12 +1033,12 @@ fn rides_with(within: &Within, rider: &RideView, container: &RideView) -> bool {
         ) else {
             return false;
         };
-        let Some(own_value) = rider.run_instance.inputs.get(&own_port) else {
+        let Some(own_value) = rider.inputs.get(&own_port) else {
             return false;
         };
         let their_value = match side {
-            Side::Input => container.run_instance.inputs.get(&their_port),
-            Side::Output => container.run_instance.outputs.get(&their_port),
+            Side::Input => container.inputs.get(&their_port),
+            Side::Output => container.outputs.get(&their_port),
         };
         let Some(their_value) = their_value else {
             return false;
@@ -1041,7 +1064,7 @@ fn within_list(view: &RideView) -> &'static [Within] {
 fn find_container(views: &[RideView], me: usize) -> Option<usize> {
     for within in within_list(&views[me]) {
         for (idx, container) in views.iter().enumerate() {
-            if idx != me && rides_with(within, &views[me], container) {
+            if idx != me && rides_with(within, &views[me].recorded, &container.recorded) {
                 return Some(idx);
             }
         }
@@ -1093,10 +1116,10 @@ fn transitive_riders<'a>(
         }
         visited[idx] = true;
         collected.push(Rider {
-            tool: views[idx].checked_node.tool.spec().name.as_str(),
-            instance: &views[idx].instance,
-            inputs: &views[idx].run_instance.inputs,
-            outputs: &views[idx].run_instance.outputs,
+            tool: views[idx].recorded.tool,
+            instance: &views[idx].recorded.instance,
+            inputs: views[idx].recorded.inputs,
+            outputs: views[idx].recorded.outputs,
         });
         stack.extend(riders_of[idx].iter().copied());
     }
@@ -1212,7 +1235,7 @@ fn try_resolve(
         return Ok(None);
     };
     let view = &views[idx];
-    let container_ref = views[container].instance.clone();
+    let container_ref = views[container].recorded.instance.clone();
     // Decision 3a's "must say `teardown: delete` or refuse" rule applies
     // only to a genuine `Delete`-capable candidate, never to a transit
     // rider (`view.transit`) or a `Contained` instance.
@@ -1349,12 +1372,17 @@ fn build_ride_views<'a>(
                 return None;
             }
             Some(RideView {
+                recorded: Recorded {
+                    tool: checked_node.tool.spec().name.as_str(),
+                    instance: crate::apply::InstanceRef {
+                        node: instance.node.clone(),
+                        instance: instance.instance.clone(),
+                    },
+                    inputs: &instance.inputs,
+                    outputs: &instance.outputs,
+                },
                 checked_node,
                 run_instance: instance,
-                instance: crate::apply::InstanceRef {
-                    node: instance.node.clone(),
-                    instance: instance.instance.clone(),
-                },
                 wrote,
                 transit,
             })
@@ -2810,20 +2838,23 @@ mod tests {
             )
         }
 
-        fn view<'a>(checked: &'a Checked, node_name: &str, run: &'a RunInstance) -> RideView<'a> {
-            RideView {
-                checked_node: checked
-                    .nodes()
-                    .iter()
-                    .find(|n| n.name.as_str() == node_name)
-                    .unwrap_or_else(|| unreachable!("{node_name} must exist")),
-                run_instance: run,
+        /// All `rides_with` itself ever reads, built the same way
+        /// `build_ride_views` builds one's own `Recorded`: the tool name
+        /// comes from `checked`'s own node, never guessed.
+        fn view<'a>(checked: &'a Checked, node_name: &str, run: &'a RunInstance) -> Recorded<'a> {
+            let checked_node = checked
+                .nodes()
+                .iter()
+                .find(|n| n.name.as_str() == node_name)
+                .unwrap_or_else(|| unreachable!("{node_name} must exist"));
+            Recorded {
+                tool: checked_node.tool.spec().name.as_str(),
                 instance: crate::apply::InstanceRef {
                     node: node(node_name),
                     instance: None,
                 },
-                wrote: true,
-                transit: false,
+                inputs: &run.inputs,
+                outputs: &run.outputs,
             }
         }
 
