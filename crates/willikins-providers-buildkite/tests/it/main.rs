@@ -17,4 +17,5 @@ mod fake_agrees_with_live;
 mod live_probe;
 mod pipeline_bootstrap_ensure_mock;
 mod pipeline_ensure_mock;
+mod pipeline_inverse_mock;
 mod redaction;

@@ -435,10 +435,6 @@ impl BuildkiteClient {
     /// # Errors
     ///
     /// See [`Self::get_pipeline`].
-    // Milestone 3m task P4, commit 1: no non-test caller yet (commit 2's
-    // `BuildkitePipelineInverse::standing` is the first). Removed in that
-    // commit.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn get_pipeline_standing(
         &self,
         org: &BuildkiteOrg,
@@ -459,10 +455,6 @@ impl BuildkiteClient {
     /// # Errors
     ///
     /// See [`Self::get_pipeline`].
-    // Milestone 3m task P4, commit 1: no non-test caller yet (commit 2's
-    // `BuildkitePipelineInverse::standing` is the first). Removed in that
-    // commit.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn has_any_build(
         &self,
         org: &BuildkiteOrg,
@@ -606,10 +598,6 @@ pub(crate) struct PipelineBody {
 /// reads as a missing `created_at` (fail closed, decision 2), and this
 /// struct stays a plain, infallible deserialize like its two siblings
 /// above.
-// Milestone 3m task P4, commit 1: constructed nowhere yet (commit 2's
-// `BuildkitePipelineInverse::standing` is the first, through
-// `BuildkiteClient::get_pipeline_standing`). Removed in that commit.
-#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug, Deserialize)]
 pub(crate) struct PipelineStandingBody {
     /// The pipeline's own slug, compared against the key's own (decision
@@ -633,10 +621,6 @@ pub(crate) struct PipelineStandingBody {
 /// Buildkite's own documented `"<date> <time> UTC"` form is tried
 /// second. Any other shape, or no string at all, is `None`: never a
 /// panic, and never treated as "assume the safe case".
-// Milestone 3m task P4, commit 1: no non-test caller yet (commit 2's
-// `BuildkitePipelineInverse::standing` is the first). Removed in that
-// commit.
-#[cfg_attr(not(test), expect(dead_code))]
 #[must_use]
 pub(crate) fn parse_pipeline_created_at(raw: &str) -> Option<Timestamp> {
     if let Ok(parsed) = Timestamp::parse(raw) {
