@@ -1,7 +1,7 @@
 ---
 title: Turn Checked into a typed graph that plan, apply and describe consume
 created: 2026-09-23
-status: pending
+status: done
 priority: medium
 area: core/check
 related:
@@ -105,3 +105,6 @@ until `Checked::workflow` is needed only for its name and inputs.
 - A tool's own outputs are not type-checked where they are produced, and a misnamed object in a
   tool's list output still panics in `for_each` keying.
 
+**Done 2026-10-11:** milestone 3n (`docs/plans/2026-10-05-milestone-3n-checked-as-a-typed-graph.md`). `Checked` is
+sealed; `plan`, `apply` and `describe` read its typed graph and take no catalog; `check` refuses an identifier-typed
+`for_each` source. Left: `todos/2026-10-11-plan-ratchet-last-two.md`.

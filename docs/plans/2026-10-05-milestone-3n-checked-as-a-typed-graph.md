@@ -3,6 +3,7 @@
 **Created:** 2026-10-05 (the typed-graph lane of the operator's "what's next? We can explore multiple lanes in
 parallel"; source `todos/2026-09-23-checked-as-a-typed-graph.md`)
 **Reviewed:** 2026-10-05 (portfolio review of the five plans of 2026-10-05: 3k, 2b, 3l, 3m, 3n)
+**Completed:** 2026-10-11
 **Addendum:** 2026-10-05 — portfolio review. Order confirmed and extended: 3k first, then F1–F3, then 3l, then 2b,
 then S1 onward, then 3m last, so 3m's `rollback.rs`, `resolve_pure` and `not_reversible` are written against the
 sealed graph. Fixes: F3 has three test-only `known_dyn` callers, not two (`value.rs`'s own tests too); B1's commit 1
@@ -1236,3 +1237,17 @@ production code changed.
 The characterization and the composition snapshot are byte-identical, and no `.snap.new` was left. The operator's
 three fake-backed private targets are green. The live-catalog target was not run. For D1: `plan()`'s own doc still
 says "Walks `checked.order`" and carries a stale `# Panics` section.
+**Addendum:** 2026-10-11 — D1 (coordinator), closing the milestone. The full four-command workspace gate is green on
+the X1 tree (50 test binaries, no `.snap.new`); before it, the coordinator regenerated the server's MCP tool-list
+snapshot for B1's new `CheckError` variant (`b06eb05`). D1 wrote: `check.rs`'s module doc gains "The checked graph"
+and the adversarial pass's three residuals under "Known gaps" (B1 had already updated "Error ordering");
+`plan()`'s doc no longer says it walks `checked.order` and its `# Panics` section now states the sealed-graph
+contract; `startup.rs`'s dangling link to the deleted `Checked::workflow` is gone; CLAUDE.md and AGENTS.md carry
+the invariant; the design doc's type-system section gains the typed-graph bullet; pass 1's "Handed to pass 2"
+row on a secret returned on a non-secret port is marked closed by F2; the source todo is done. Final ratchet:
+plan.rs 8 (accepted, not 6; `todos/2026-10-11-plan-ratchet-last-two.md`, which now also records the ratchet's
+four-spelling reach), apply.rs 2, describe.rs 0. `apply()`'s `# Panics` said it panics on a `checked`/`approved`
+mismatch, the way `plan` did; neither does since G1 (a mismatch is drift), so both docs now state the sealed-graph
+contract, in words the ratchet does not count. `cargo doc` with broken intra-doc links denied found 16 in
+`willikins-core` and `willikins-server`; D1 fixed the five 3n left in `apply.rs` and `startup.rs`. The other 11
+predate 3n and are not gated.

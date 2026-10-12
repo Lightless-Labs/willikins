@@ -15,3 +15,9 @@ Milestone 3n's ratchet pins plan.rs at 8 `unreachable!` sites; its plan aimed fo
 first needs a closure-typed item resolver (and a Walk/EachInstance shape change so apply does not need
 `erase_ports`); removing the second needs `Bound::List` to carry its element edges without an `Option`.
 See the plan's G7 addendum for the reasoning. Lower the ratchet constant when done.
+
+## The ratchet's own reach
+
+Milestone 3n's adversarial pass (`docs/research/2026-10-11-m3n-adversarial-pass.md`) found the ratchet counts four
+exact spellings (`unreachable!`, `.expect(`, `.unwrap()`, `panic!`). `Option::unwrap(x)`, slice indexing, `assert!`,
+`todo!` and `unimplemented!` go uncounted. Widen it when the count is lowered, or say why not.

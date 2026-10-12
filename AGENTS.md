@@ -55,6 +55,9 @@ Read `docs/plans/2026-09-11-willikins-design.md` before changing anything in `cr
 - The type registry refuses secret types for any literal or input, regardless of element count.
 - A conversion is registered only through `conversions!`, only from a total `From` impl, never
   secret-to-public and never identifier-to-plain (both compile errors), and is resolved by a single probe, never a search.
+- `Checked` is built only by `check`; `plan`, `apply` and `describe` read its typed graph and never a
+  `Binding`. They take no `Catalog` and look nothing up by name. A `for_each` over identifier-typed
+  values is refused by `check`, because its instance keys would print whole.
 - Workflow documents and templates are privileged content: run only from a trusted ref.
 - A used document is found by name in its parent's trusted source; no secret enters one; its
   nodes are named `<step>/<node>`.

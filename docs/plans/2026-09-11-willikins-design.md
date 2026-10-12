@@ -67,6 +67,11 @@ a secret. The agent plans; the butler acts.
   public-to-secret row is admitted by the type rule but must state, in its own plan, why it does
   not reopen the "no secret input types" path. Resolution is one hop: `check` probes the table
   once per edge and records the chosen conversion on the edge; `plan` and `apply` never look it up.
+- `check` turns a document into a sealed, typed graph (milestone 3n, 2026-10-11): each node's tool
+  handle, its `for_each` shape, and every port's edge beside the source it reads. `plan`, `apply` and
+  `describe` consume that graph and take no catalog, so no second lookup can disagree with the one
+  `check` made. The graph is unforgeable outside `check`: its fields are private and a struct literal
+  of it does not compile.
 
 ### Tool contract
 

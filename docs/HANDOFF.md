@@ -7,16 +7,23 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-10-11) — 3k, 3n's first slice, 3l, 2b and 3o landed; next: the rest of 3n (S1 onward), then 3m
+### RESUME HERE (2026-10-11) — 3k, 3n, 3l, 2b and 3o landed; next: 3m (safe rollback), its Tasks table revised first
 
-- **Live state:** `main` pushed. Full gate on the 2b tree: 49 suites / 3466 tests / 0 failed, about 7 minutes.
+- **Live state:** `main` pushed. Full gate on the 3n tree: 50 test binaries, all green, about 7 minutes.
+- **Next: 3m.** Before running it, revise `docs/plans/2026-10-05-milestone-3m-safe-rollback.md`'s Tasks table for
+  the document-level teardown policy its addendum records (per-node `teardown:`, conservative defaults, tools declare
+  their inverses; the profile tool gains a delete-by-recorded-id inverse; the pipeline inverse reports builds). The
+  operator's document declares retain for profiles and refuse for the pipeline. Then run it with the runner.
 - **Plans** (2026-10-05, written in parallel, then one portfolio review ordered them): 3k faster gates,
   3n checked as a typed graph, 3l new repositories, 2b composition, 3m safe rollback. Order: 3k, 3n F1-F3, 3l, 2b,
   then the AGENTS.md todo, the rest of 3n (S1 onward), and 3m last.
 - **3k (completed):** one integration-test binary per crate (`crates/<crate>/tests/it/<module>.rs`, declared in
   `tests/it/main.rs`, guarded by `test_layout_guard`); the test run went 251 s to 108 s, 167 test executables to 16.
-- **3n F1-F3:** two apply panics fixed, tool outputs checked against the spec where produced, no Value named by
-  itself (`known_dyn_as` takes a registry).
+- **3n (completed 2026-10-11):** `Checked` is a sealed typed graph (private fields, built only by `check`); `plan`,
+  `apply` and `describe` read it and take no catalog; `check` refuses a `for_each` over identifier-typed values.
+  F1-F3 first: two apply panics fixed, tool outputs checked where produced, `known_dyn_as` takes a registry. The
+  unreachable ratchet ends at plan.rs 8 (not 6), apply.rs 2, describe.rs 0; the last two are a low-priority todo.
+  The operator's private `operator_*` tests were updated locally for B2's signatures (untracked) and pass.
 - **3l (completed):** a document can create a repository and scaffold it on the first run (first file through the
   Contents API, then the signed commit); live cycle passed in the sandbox. The first commit is unsigned.
 - **2b (completed):** `uses:` composes documents, linked into one flat graph (`<step>/<node>`); the operator's
@@ -774,11 +781,13 @@ regenerated from that frontmatter; a todo marked `done` leaves it.
 | `todos/2026-09-20-ios-scaffolding-step-and-entitlements-as-inputs.md` | open | medium | The iOS scaffolding step: entitlements are inputs, the build system is the document |
 | `todos/2026-09-20-remote-mcp-from-a-phone.md` | open | high | Usable from a phone: self-describing workflows and enumerable input values |
 | `todos/2026-09-22-secrecy-inference.md` | pending | high | Infer secrecy from use sites instead of declaring it at the source |
-| `todos/2026-09-23-checked-as-a-typed-graph.md` | pending | medium | Turn Checked into a typed graph that plan, apply and describe consume |
+| `todos/2026-09-23-checked-as-a-typed-graph.md` | done | medium | Turn Checked into a typed graph that plan, apply and describe consume |
 | `todos/2026-09-29-deterministic-safe-rollback.md` | pending | medium | Deterministic, safe rollback of what a run created |
 | `todos/2026-09-29-open-source-agent-tools.md` | pending | medium | Provision the operator's two open-source, self-hostable tools for AI agents |
 | `todos/2026-10-05-reusable-ios-app-document.md` | pending | medium | A reusable iOS-app document, and the RepoPath derivation it needs |
-| `todos/2026-10-06-provision-agents-md.md` | pending | medium | Provision a project's AGENTS.md |
+| `todos/2026-10-06-provision-agents-md.md` | done | medium | Provision a project's AGENTS.md |
+| `todos/2026-10-11-plan-ratchet-last-two.md` | pending | low | Remove plan.rs's last two counted fallbacks (ratchet 8 to 6) |
+| `todos/2026-10-11-readable-repofile-view.md` | pending | medium | A readable multi-line view of rendered files in plan text and on the approvals page |
 
 ## How Work Is Verified
 
