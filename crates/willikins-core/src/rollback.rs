@@ -9,11 +9,20 @@
 //! validates a `Reversal` declaration on the tool's own side only, the
 //! same way it validates a [`crate::tool::Gate`] (milestone 3m task R1).
 //!
-//! The rest of this module — the `Inverse` trait, `Created`, `Standing`,
-//! `plan_teardown`, `apply_teardown` — lands in later milestone 3m tasks
-//! (R3, R5a, R5b, R6), against this file.
+//! [`Inverse`], [`Created`], [`Standing`] and [`Deleted`] (milestone 3m
+//! task R3) are the shape an inverse works with; `plan_teardown` and
+//! `apply_teardown` — lands in later milestone 3m tasks (R5a, R5b, R6) —
+//! against this file. `Created` is missing three fields decision 3's
+//! design names (`window`, `riders`, `accept`): their types do not exist
+//! yet (`CreationWindow` and `Rider` are task R5a/R5b's, `Loss` is task
+//! T1's, in `workflow.rs`). See the plan's 2026-10-12 addendum (R3) for
+//! which task adds which field; `Inverse::delete`'s documented contract
+//! already states the rule those fields will carry, so their arrival
+//! changes no contract, only the type that can express it.
 
 use std::sync::LazyLock;
+
+use willikins_types::TeardownToken;
 
 /// The pattern every [`Reversal::Delete`] loss name must match: unlike
 /// [`crate::tool::PortName`], no digit — a loss is a fixed English word
@@ -152,6 +161,131 @@ pub enum ReversalError {
     /// tool has no external state, so nothing about it can be undone.
     #[error("a pure tool must not declare a reversal")]
     PureToolDeclaresReversal,
+    /// The tool declares `Reversal::Delete` but [`crate::tool::Tool::inverse`]
+    /// returns `None`: `Delete` promises a working `inverse()`, so
+    /// nothing can ever carry it out.
+    #[error("reversal declares `Delete` but `Tool::inverse` returns `None`")]
+    DeleteWithoutInverse,
+    /// [`crate::tool::Tool::inverse`] returns `Some`, but the tool's
+    /// reversal is not `Delete`: an inverse with nothing to call it would
+    /// be dead code, and a future `Contained`/`Retained` tool that grows
+    /// one without updating its `Reversal` would silently never run it.
+    #[error("`Tool::inverse` returns `Some` but reversal does not declare `Delete`")]
+    InverseWithoutDelete,
+}
+
+/// What an [`Inverse::standing`] call found when it looked at the
+/// resource [`Created`] describes, before any delete (milestone 3m
+/// decision 3). Carries no secret and no arbitrary value (trust boundary
+/// 5): a [`Standing::NotOurs`]/[`Standing::Drifted`] reason is always a
+/// fixed `&'static str`, the same discipline as [`crate::tool::Gate::need`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Standing {
+    /// The resource still looks like what this run created: at the run's
+    /// recorded key and non-key values, inside its creation window.
+    /// `losing` names every declared [`Reversal::Delete`] loss (e.g. a
+    /// Buildkite pipeline's `"builds"`) the resource currently reports —
+    /// empty when it reports none. Whether a delete may proceed despite a
+    /// non-empty `losing` is the node's own accepted losses, decided by
+    /// the caller (milestone 3m decision 3a), never by this type.
+    AsCreated {
+        /// The declared losses this resource currently reports, each one
+        /// of this tool's own `Reversal::Delete::losses` names.
+        losing: Vec<&'static str>,
+    },
+    /// The resource no longer exists: deleting it is a no-op.
+    Gone,
+    /// A resource exists at this natural key, but it is not the one this
+    /// run created — created outside the run's window, or someone
+    /// else's.
+    NotOurs {
+        /// Why it is not this run's, fixed and non-secret.
+        why: &'static str,
+    },
+    /// The resource exists and is ours, but it has changed since this run
+    /// created it in a way a delete would silently destroy (a push, a
+    /// hand-set secret, an inheriting config).
+    Drifted {
+        /// What changed, fixed and non-secret.
+        what: &'static str,
+    },
+}
+
+/// What [`Inverse::delete`] reports after deleting the resource, or
+/// finding it already gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deleted {
+    /// Whether the resource was already gone when `delete` observed it,
+    /// so nothing was actually deleted this call.
+    pub already_gone: bool,
+}
+
+/// What a [`Reversal::Delete`] tool's inverse is given to work with: the
+/// journal's own record of what this run created, re-resolved just
+/// enough to delete it (milestone 3m decisions 2 and 5). Debug only —
+/// unlike [`crate::tool::Inputs`]/[`crate::tool::Outputs`], whose own
+/// `Serialize` already redacts a secret, nothing serializes a `Created`
+/// directly: a teardown never journals one (trust boundary 7).
+///
+/// This is R3's shape; three more fields land as later milestone 3m tasks
+/// reach the types they need: the creation window (task R5a), the
+/// tolerated riders (task R5b) and the node's accepted losses (task T1,
+/// which also defines `Loss`). See this module's doc and the plan's
+/// 2026-10-12 addendum (R3).
+#[derive(Debug)]
+pub struct Created<'a> {
+    /// Exactly this tool's declared `Reversal::Delete::needs` ports:
+    /// non-secret values taken from the journal, secret ones re-resolved
+    /// (decision 5).
+    pub inputs: &'a crate::tool::Inputs,
+    /// The run's recorded non-secret outputs; secret ones `Unknown`.
+    pub outputs: &'a crate::tool::Outputs,
+    /// The point after which this run's own, later change to a resource
+    /// still counts as this run's doing, rather than drift (decision 2):
+    /// the run's `RunFinished.at` plus the creation-window skew.
+    pub settled_by: crate::apply::Timestamp,
+}
+
+/// A [`Reversal::Delete`] tool's inverse: observes a resource's
+/// [`Standing`], or deletes it. Implemented beside the tool itself, never
+/// registered as a catalog tool in its own right (trust boundary 1).
+/// [`crate::catalog::Catalog::insert`] requires a `Delete` reversal to
+/// have one, and requires a `Contained`/`Retained` reversal not to
+/// (milestone 3m task R3).
+pub trait Inverse: Send + Sync {
+    /// Observe the resource `created` describes, without changing
+    /// anything. Takes no token: a teardown plan calls this before
+    /// approval, and the only way to mint a
+    /// [`willikins_types::TeardownToken`] is `apply_teardown` (trust
+    /// boundary 2).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::tool::ToolError`] when the underlying provider
+    /// cannot be queried.
+    fn standing(&self, created: &Created<'_>) -> Result<Standing, crate::tool::ToolError>;
+
+    /// Delete the resource `created` describes.
+    ///
+    /// # Contract
+    ///
+    /// An implementation observes first, the same discipline
+    /// [`crate::tool::Tool::ensure`] already follows: any [`Standing`]
+    /// but [`Standing::AsCreated`] is
+    /// [`crate::tool::ToolErrorKind::Conflict`], so is `AsCreated` with a
+    /// declared loss the node has not accepted, and [`Standing::Gone`] is
+    /// `Ok(Deleted { already_gone: true })` rather than an error — a
+    /// resumed teardown calls this on a step it already deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::tool::ToolError`] on the same terms as `standing`,
+    /// and as the contract above describes.
+    fn delete(
+        &self,
+        created: &Created<'_>,
+        token: &TeardownToken,
+    ) -> Result<Deleted, crate::tool::ToolError>;
 }
 
 #[cfg(test)]

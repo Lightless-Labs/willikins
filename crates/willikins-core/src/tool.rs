@@ -621,6 +621,17 @@ pub trait Tool: Send + Sync {
             why: crate::rollback::UNDECLARED,
         }
     }
+
+    /// This tool's [`crate::rollback::Inverse`], if its [`Tool::reversal`]
+    /// is [`crate::rollback::Reversal::Delete`]. `None` by default -- a
+    /// tool-declared hook in the manner of [`Tool::gate`], so no existing
+    /// tool, catalog entry or document is affected until a tool opts in.
+    /// [`crate::catalog::Catalog::insert`] requires this to return `Some`
+    /// exactly when `reversal()` is `Delete` (milestone 3m task R3): never
+    /// for `Contained` or `Retained`, and never `None` for `Delete`.
+    fn inverse(&self) -> Option<&dyn crate::rollback::Inverse> {
+        None
+    }
 }
 
 #[cfg(test)]
