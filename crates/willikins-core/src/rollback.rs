@@ -23,7 +23,7 @@
 //! instance the run named -- never from the resolution the fixed point
 //! below produces -- so a [`Rider`] is attached to [`Created::riders`]
 //! purely on typed-equal recorded values and "wrote or found something",
-//! and the fixed point ([`resolve_actions`]) only decides, from that same
+//! and the fixed point (`resolve_actions`) only decides, from that same
 //! static matching, whether *this* instance itself rides out, is kept
 //! with its container, or stands on its own.
 
@@ -286,7 +286,7 @@ pub struct Deleted {
 /// inside) a [`Reversal::Delete`] instance's own container, per that
 /// instance's own declared [`Within`] (milestone 3m decisions 3, 3a).
 /// Carries only its journal-recorded, non-secret values, re-parsed by
-/// declared type -- never resolved through [`Secrets`]: "no rider port is
+/// declared type -- never resolved through `Secrets`: "no rider port is
 /// ever added to `resolve_pure`'s `wanted`" (decision 5). A secret port
 /// of a rider's own is left exactly as the journal keeps it,
 /// [`crate::value::Value::unknown`].
@@ -1395,7 +1395,7 @@ fn build_ride_views<'a>(
 ///
 /// Steps come out in reverse of `facts.instances`' own (forward,
 /// applied-plan) order. Per candidate, capability × policy × standing ×
-/// riding decides the action (decisions 6, 3, 3a; [`resolve_actions`]):
+/// riding decides the action (decisions 6, 3, 3a; `resolve_actions`):
 /// a gate instance the run found satisfied is [`TeardownAction::MadeByHand`]
 /// (decision 4); `Replace`/`Update` is always [`TeardownAction::Retained`]
 /// (decision 1); a `Create`d, `Create`+`Failed` or `Create`+`Unchanged`
@@ -2527,18 +2527,16 @@ mod tests {
     }
 
     /// A stub, top-level `Delete` tool with no `within`: `project` (key),
-    /// one port.
+    /// one port. Holds any [`Inverse`], like [`StubConfigTool`]: tests
+    /// that need `Created.riders` to actually reach a real assertion use
+    /// a [`ToleranceInverse`] here, never only a fixed [`RidingInverse`].
     struct StubProjectTool {
         spec: ToolSpec,
-        inverse: RidingInverse,
+        inverse: Box<dyn Inverse>,
     }
 
     impl StubProjectTool {
-        fn with_counter(
-            tool_name: &str,
-            standing: Standing,
-            calls: Arc<std::sync::atomic::AtomicUsize>,
-        ) -> Arc<Self> {
+        fn with_inverse(tool_name: &str, inverse: Box<dyn Inverse>) -> Arc<Self> {
             let mut inputs = IndexMap::new();
             inputs.insert(
                 port("project"),
@@ -2560,8 +2558,16 @@ mod tests {
                     class: Class::Reversible,
                     pure: false,
                 },
-                inverse: RidingInverse { standing, calls },
+                inverse,
             })
+        }
+
+        fn with_counter(
+            tool_name: &str,
+            standing: Standing,
+            calls: Arc<std::sync::atomic::AtomicUsize>,
+        ) -> Arc<Self> {
+            Self::with_inverse(tool_name, Box::new(RidingInverse { standing, calls }))
         }
     }
 
@@ -2596,7 +2602,7 @@ mod tests {
         }
 
         fn inverse(&self) -> Option<&dyn Inverse> {
-            Some(&self.inverse)
+            Some(self.inverse.as_ref())
         }
     }
 
@@ -3009,10 +3015,16 @@ mod tests {
     #[test]
     fn config_rides_with_the_project_created_in_the_same_run() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let project = StubProjectTool::with_counter(
+        // Tolerates exactly one rider: `config` really must reach
+        // `Created.riders`, not merely be labelled `RidesWith` -- a
+        // `transitive_riders` bug that returned nothing would mismatch
+        // this and refuse instead of deleting.
+        let project = StubProjectTool::with_inverse(
             "test.project",
-            Standing::AsCreated { losing: vec![] },
-            Arc::clone(&calls),
+            Box::new(ToleranceInverse {
+                expected_riders: 1,
+                calls: Arc::clone(&calls),
+            }),
         );
         let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let config = StubConfigTool::with_standing(Standing::Gone, Arc::clone(&config_calls));
@@ -3251,10 +3263,16 @@ mod tests {
     #[test]
     fn a_transit_rider_two_hops_down_still_reaches_the_root_container() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let project = StubProjectTool::with_counter(
+        // Tolerates exactly two riders: the `Unchanged` root config
+        // (direct) and the secret (transitively, through it) -- a
+        // `transitive_riders` bug that stopped at the direct match would
+        // mismatch this (1, not 2) and refuse instead of deleting.
+        let project = StubProjectTool::with_inverse(
             "test.project",
-            Standing::AsCreated { losing: vec![] },
-            Arc::clone(&calls),
+            Box::new(ToleranceInverse {
+                expected_riders: 2,
+                calls: Arc::clone(&calls),
+            }),
         );
         let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         // Tolerates exactly one rider: the secret, reached transitively
@@ -3351,6 +3369,97 @@ mod tests {
         // (it rode, so it was never itself observed).
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(config_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Decision 3's "riding is not tolerance": a rider that structurally
+    /// matches but `Failed` is still listed `RidesWith` (every matching
+    /// instance is), yet never reaches `Created.riders` -- unlike a
+    /// `NotRun` rider (which never even builds a `RideView` at all, so it
+    /// never exercises `riders_of`'s own `wrote` check), `Failed` is the
+    /// one status that reaches that check and is excluded by it.
+    #[test]
+    fn a_failed_rider_rides_but_is_never_tolerated() {
+        let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Expects zero riders: the `Failed` secret structurally matches
+        // but must not count -- a `riders_of` bug that dropped the
+        // `wrote` filter would count it (1) and mismatch this, refusing
+        // instead of deleting.
+        let config = StubConfigTool::with_inverse(Box::new(ToleranceInverse {
+            expected_riders: 0,
+            calls: Arc::clone(&config_calls),
+        }));
+        let project = StubProjectTool::with_counter(
+            "test.project",
+            Standing::Gone,
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        );
+        let secret = StubSecretTool::new();
+        let checked = checked_riding(
+            project,
+            Arc::clone(&config),
+            secret,
+            TeardownPolicy::Delete { accept: vec![] },
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+
+        // No `project` instance: `config` is standalone.
+        let config_value = repo_value("org/the-config");
+        let config_run = riding_instance(
+            "config",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("config", config_value.clone()),
+                ("project", repo_value("org/pre-existing")),
+            ]),
+            outputs_of(&[("config", config_value.clone())]),
+        );
+        let secret_run = riding_instance(
+            "secret",
+            Action::Create,
+            finished(
+                START,
+                END,
+                NodeStatus::Failed {
+                    error: crate::tool::ToolError {
+                        kind: crate::tool::ToolErrorKind::Provider,
+                        message: "boom".to_string(),
+                    },
+                },
+            ),
+            inputs_of(&[
+                ("secret", repo_value("org/the-secret")),
+                ("config", config_value.clone()),
+            ]),
+            Outputs::new(),
+        );
+        let run = facts_multi(vec![config_run, secret_run], RUN_FINISHED);
+
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        let config_ref = InstanceRef {
+            node: node("config"),
+            instance: None,
+        };
+        assert_eq!(
+            teardown.steps,
+            vec![
+                TeardownStep {
+                    instance: InstanceRef {
+                        node: node("secret"),
+                        instance: None
+                    },
+                    action: TeardownAction::RidesWith {
+                        container: config_ref.clone()
+                    },
+                },
+                TeardownStep {
+                    instance: config_ref,
+                    action: TeardownAction::Delete { uncertain: false },
+                },
+            ]
+        );
+        assert_eq!(config_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     /// Acceptance 5: the same run with the project kept lists the config
