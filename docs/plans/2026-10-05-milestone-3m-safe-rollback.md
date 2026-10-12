@@ -169,7 +169,8 @@ a fourth commit, same task:
 alone (`-p willikins-core`: `cargo fmt --check`, `clippy --all-targets -D warnings`, `cargo test`, all green; the ratchet
 stays at 2, below). Deviations from the row, recorded:
 - **Riding's own structural match is computed once, independent of the fixed point that decides each instance's own
-  action.** The row and the X1 addendum both describe riding as a fixed point "seeded from `Delete` steps", which reads
+  action.** The coordinator's own dispatch for this task (never the plan's row or the X1 addendum, which says only
+  "without unbounded recursion") described computing riding "as a fixed point seeded from `Delete` steps", which reads
   as if the *step* (a resolved action) seeds riding. That cannot work: a container's own `standing()` call needs its
   own tolerated riders (`Created::riders`) *before* it is known whether that call will even return `AsCreated` (let
   alone `Delete`), so nothing yet resolved can seed anything. The actual implementation splits the two: `container_of`
@@ -179,10 +180,20 @@ stays at 2, below). Deviations from the row, recorded:
   `transitive_riders` (both wrote-filtered) read off that structure to build a `Created.riders` for any instance that
   ends up calling `standing`, whatever its own eventual label. Only the **label** each instance itself receives
   (`RidesWith`/`Kept`/standalone) is a fixed point (`resolve_actions`), consulting what `container_of[idx]` already
-  settled to. The "seeded from `Delete` steps" language in the X1 addendum is better read as "seeded from whichever
-  instances need no other instance's own resolution first" (a `Retained` tool, an unmatched instance, or one whose
-  single `Within` entry matches nothing) — those resolve immediately and everything else's resolution bottoms out in
-  one of them, transitively.
+  settled to. The dispatch's "seeded from `Delete` steps" is better read as "seeded from whichever instances need no
+  other instance's own resolution first" (a `Retained` tool, an unmatched instance, or one whose single `Within`
+  entry matches nothing) — those resolve immediately and everything else's resolution bottoms out in one of them,
+  transitively.
+- **A `teardown: delete` rider is never itself observed; only the chain's own grounding instance calls `standing`.**
+  Trust boundary 6 is marked normative and says "the teardown plan observes every candidate whose node says
+  `teardown: delete`"; decision 6 reads differently, splitting the two ("Riders follow decision 3a" is its own,
+  separate sentence from "one whose node says to delete it is observed"), and decision 3's own "riding is not
+  tolerance" paragraph only ever asks the *container's* inverse to tolerate a rider, never asks the rider's own
+  inverse anything. This task reads decision 6 over trust boundary 6 where they disagree: a `RidesWith` step's own
+  `standing` is never called (pinned by `config_rides_with_the_project_created_in_the_same_run`'s `config_calls == 0`
+  and the X1 mutual-ride test's single `standing` call total). Flagged for R6, whose own re-observe-before-apply must
+  make the same choice consistently: re-observe only what plan time observed (every chain's own grounding instance),
+  never a step whose action is `RidesWith`.
 - **`plan_teardown`'s main loop is now two phases, not one reverse pass.** Riding "needs no graph" (decision 3), but a
   rider can still structurally precede its container in reverse `Plan::nodes` order (dependents come first) while that
   container's own resolution is exactly what the rider's own label depends on. `resolve_actions` resolves every
