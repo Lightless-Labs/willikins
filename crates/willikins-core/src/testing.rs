@@ -489,6 +489,7 @@ mod reversal_stub_tests {
             inputs: &inputs,
             outputs: &outputs,
             settled_by: crate::apply::Timestamp::now(),
+            accept: &[],
         };
         assert_eq!(
             inverse.standing(&created).unwrap(),

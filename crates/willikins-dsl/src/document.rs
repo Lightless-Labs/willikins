@@ -158,6 +158,12 @@ pub struct StepDecl {
     /// decision (a)).
     #[serde(default, deserialize_with = "deserialize_with_map")]
     pub with: IndexMap<String, WithValue>,
+    /// This step's declared teardown policy (milestone 3m decision 3a):
+    /// `retain`, `delete`, or `{ delete: { accept: [...] } }`. Never set
+    /// on a `uses:` step -- refused in `willikins_dsl::add_uses_step`;
+    /// the used document's own nodes declare their own policy.
+    #[serde(default)]
+    pub teardown: Option<TeardownDecl>,
 }
 
 /// Adds the `oneOf` milestone 2b decision (d1) requires to [`StepDecl`]'s
@@ -181,12 +187,27 @@ pub struct StepDecl {
 /// the branch for a `null` field fails on type instead of passing on
 /// presence, so the schema agrees with the parser on every case: neither
 /// set, either `null`, or both set as strings.
+///
+/// The `uses` branch also pins `teardown` to `"null"` (milestone 3m
+/// decision 3a): a `uses:` step has no `teardown:` of its own --
+/// `willikins_dsl::add_uses_step` refuses one present, the same way
+/// `document_to_workflow` refuses `for_each` there -- so the published
+/// schema must refuse one too, the same "pin the type, not just require
+/// absence" technique as `tool`/`uses` above, since `teardown: null` and
+/// an absent `teardown:` key are the one shape `document_to_workflow`
+/// treats alike (both deserialize `Option<TeardownDecl>` to `None`).
 fn step_decl_exactly_one_of_tool_or_uses(schema: &mut schemars::Schema) {
     schema.insert(
         "oneOf".to_string(),
         serde_json::json!([
             { "required": ["tool"], "properties": { "tool": { "type": "string" } } },
-            { "required": ["uses"], "properties": { "uses": { "type": "string" } } },
+            {
+                "required": ["uses"],
+                "properties": {
+                    "uses": { "type": "string" },
+                    "teardown": { "type": "null" },
+                },
+            },
         ]),
     );
 }
@@ -335,6 +356,146 @@ impl<'de> Deserialize<'de> for WithString {
         }
 
         deserializer.deserialize_any(WithStringVisitor)
+    }
+}
+
+/// A step's raw `teardown:` declaration (milestone 3m decision 3a): one of
+/// three forms -- `retain`, `delete`, or `{ delete: { accept: [...] } }`.
+///
+/// `Deserialize` is hand-written, not derived, for the same reason
+/// [`WithValue`]'s is: a generic `#[serde(untagged)]` mismatch would read
+/// "data did not match any variant" instead of naming what `teardown:`
+/// may actually be. This type pins only the *shape* -- turning a bare
+/// `delete` into an empty `accept` list, and validating each accepted
+/// loss name against the required pattern, is `willikins-dsl`'s
+/// `document_to_workflow`'s job (a located `DocumentError::Semantic`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TeardownDecl {
+    /// `teardown: retain`.
+    Retain,
+    /// `teardown: delete`, with no `accept:`.
+    Delete,
+    /// `teardown: { delete: { accept: [...] } }`, carrying the raw,
+    /// not-yet-validated loss names.
+    DeleteAccept(Vec<String>),
+}
+
+/// What [`TeardownDecl`]'s `Deserialize` and `JsonSchema` both say the
+/// field admits, shared so the two descriptions cannot drift apart.
+const TEARDOWN_EXPECTING: &str = "`retain`, `delete`, or a mapping `{ delete: { accept: [...] } }`";
+
+impl<'de> Deserialize<'de> for TeardownDecl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct TeardownDeclVisitor;
+
+        impl<'de> Visitor<'de> for TeardownDeclVisitor {
+            type Value = TeardownDecl;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{TEARDOWN_EXPECTING}")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                match value {
+                    "retain" => Ok(TeardownDecl::Retain),
+                    "delete" => Ok(TeardownDecl::Delete),
+                    other => Err(de::Error::custom(format!(
+                        "teardown must be {TEARDOWN_EXPECTING}, found {other:?}"
+                    ))),
+                }
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_str(&value)
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let Some(key) = map.next_key::<String>()? else {
+                    return Err(de::Error::custom(format!(
+                        "teardown mapping must be {TEARDOWN_EXPECTING}, found an empty mapping"
+                    )));
+                };
+                if key != "delete" {
+                    return Err(de::Error::custom(format!(
+                        "teardown mapping must be {TEARDOWN_EXPECTING}, found key {key:?}"
+                    )));
+                }
+                let body: TeardownDeleteBody = map.next_value()?;
+                if map.next_key::<String>()?.is_some() {
+                    return Err(de::Error::custom(format!(
+                        "teardown mapping must be {TEARDOWN_EXPECTING}, found more than one key"
+                    )));
+                }
+                Ok(TeardownDecl::DeleteAccept(body.accept))
+            }
+
+            fn visit_seq<A>(self, _seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                Err(de::Error::custom(format!(
+                    "teardown must be {TEARDOWN_EXPECTING}, found a sequence"
+                )))
+            }
+        }
+
+        deserializer.deserialize_any(TeardownDeclVisitor)
+    }
+}
+
+/// The nested body of `teardown: { delete: { accept: [...] } }`. Not
+/// reachable outside [`TeardownDecl`]'s own `Deserialize`, so it needs no
+/// `JsonSchema` of its own -- [`TeardownDecl`]'s hand-written impl spells
+/// the whole shape out, the same way [`WithString`] needs none either.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TeardownDeleteBody {
+    /// The losses this node's policy accepts, by raw name.
+    #[serde(default)]
+    accept: Vec<String>,
+}
+
+impl schemars::JsonSchema for TeardownDecl {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("TeardownDecl")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "anyOf": [
+                { "const": "retain" },
+                { "const": "delete" },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["delete"],
+                    "properties": {
+                        "delete": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "accept": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                },
+                            },
+                        },
+                    },
+                },
+            ],
+        })
     }
 }
 
@@ -588,6 +749,81 @@ steps:
                 .contains("values must be strings or references"),
             "{err}"
         );
+    }
+
+    /// Milestone 3m decision 3a: the three `teardown:` forms all parse.
+    #[test]
+    fn teardown_parses_all_three_forms() {
+        let retain = "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: {}, teardown: retain }
+";
+        let document: Document = serde_yaml_ng::from_str(retain).unwrap();
+        assert_eq!(document.steps["a"].teardown, Some(TeardownDecl::Retain));
+
+        let delete = "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: {}, teardown: delete }
+";
+        let document: Document = serde_yaml_ng::from_str(delete).unwrap();
+        assert_eq!(document.steps["a"].teardown, Some(TeardownDecl::Delete));
+
+        let delete_accept = "\
+name: demo
+steps:
+  a:
+    tool: naming.v1
+    with: {}
+    teardown: { delete: { accept: [builds] } }
+";
+        let document: Document = serde_yaml_ng::from_str(delete_accept).unwrap();
+        assert_eq!(
+            document.steps["a"].teardown,
+            Some(TeardownDecl::DeleteAccept(vec!["builds".to_string()]))
+        );
+    }
+
+    /// A step with no `teardown:` at all parses as `None`, not any of the
+    /// three forms.
+    #[test]
+    fn teardown_absent_parses_as_none() {
+        let yaml = "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: {} }
+";
+        let document: Document = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(document.steps["a"].teardown, None);
+    }
+
+    /// An unrecognised string, a sequence, and a mapping with the wrong
+    /// key or more than one key are all refused with a message naming
+    /// what `teardown:` may actually be, never a generic serde message.
+    #[test]
+    fn teardown_malformed_shapes_are_rejected_with_a_located_message() {
+        for (yaml, needle) in [
+            (
+                "name: demo\nsteps:\n  a: { tool: naming.v1, with: {}, teardown: bogus }\n",
+                "teardown must be",
+            ),
+            (
+                "name: demo\nsteps:\n  a: { tool: naming.v1, with: {}, teardown: [one, two] }\n",
+                "teardown must be",
+            ),
+            (
+                "name: demo\nsteps:\n  a: { tool: naming.v1, with: {}, teardown: { retain: {} } }\n",
+                "teardown mapping must be",
+            ),
+            (
+                "name: demo\nsteps:\n  a: { tool: naming.v1, with: {}, teardown: { delete: { accept: [builds] }, retain: {} } }\n",
+                "teardown mapping must be",
+            ),
+        ] {
+            let err = serde_yaml_ng::from_str::<Document>(yaml).unwrap_err();
+            assert!(err.to_string().contains(needle), "{err}");
+        }
     }
 
     /// Decision (a): `for_each:` never accepts a sequence -- its field

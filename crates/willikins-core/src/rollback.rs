@@ -12,13 +12,14 @@
 //! [`Inverse`], [`Created`], [`Standing`] and [`Deleted`] (milestone 3m
 //! task R3) are the shape an inverse works with; `plan_teardown` and
 //! `apply_teardown` — lands in later milestone 3m tasks (R5a, R5b, R6) —
-//! against this file. `Created` is missing three fields decision 3's
-//! design names (`window`, `riders`, `accept`): their types do not exist
-//! yet (`CreationWindow` and `Rider` are task R5a/R5b's, `Loss` is task
-//! T1's, in `workflow.rs`). See the plan's 2026-10-12 addendum (R3) for
-//! which task adds which field; `Inverse::delete`'s documented contract
-//! already states the rule those fields will carry, so their arrival
-//! changes no contract, only the type that can express it.
+//! against this file. `Created` is still missing two fields decision 3's
+//! design names (`window`, `riders`): their types do not exist yet
+//! (`CreationWindow` and `Rider` are task R5a/R5b's). `accept` (whose type,
+//! [`crate::workflow::Loss`], task T1 adds to `workflow.rs`) is now
+//! present. See the plan's 2026-10-12 addendum (R3) for which task adds
+//! which field; `Inverse::delete`'s documented contract already states the
+//! rule those fields will carry, so their arrival changes no contract,
+//! only the type that can express it.
 
 use std::sync::LazyLock;
 
@@ -26,8 +27,12 @@ use willikins_types::TeardownToken;
 
 /// The pattern every [`Reversal::Delete`] loss name must match: unlike
 /// [`crate::tool::PortName`], no digit — a loss is a fixed English word
-/// ("builds"), never a generated identifier.
-const LOSS_NAME_PATTERN: &str = "^[a-z][a-z_]*$";
+/// ("builds"), never a generated identifier. `pub(crate)` so
+/// [`crate::workflow::Loss`] (milestone 3m task T1) can build on the same
+/// pattern rather than duplicating it — a node's accepted losses must
+/// never drift from the names a tool's `Reversal::Delete::losses` can
+/// actually declare.
+pub(crate) const LOSS_NAME_PATTERN: &str = "^[a-z][a-z_]*$";
 
 pub(crate) static LOSS_NAME_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(LOSS_NAME_PATTERN).expect("LOSS_NAME_PATTERN is valid"));
@@ -227,11 +232,10 @@ pub struct Deleted {
 /// `Serialize` already redacts a secret, nothing serializes a `Created`
 /// directly: a teardown never journals one (trust boundary 7).
 ///
-/// This is R3's shape; three more fields land as later milestone 3m tasks
-/// reach the types they need: the creation window (task R5a), the
-/// tolerated riders (task R5b) and the node's accepted losses (task T1,
-/// which also defines `Loss`). See this module's doc and the plan's
-/// 2026-10-12 addendum (R3).
+/// This is R3's shape, plus T1's `accept`; two more fields land as later
+/// milestone 3m tasks reach the types they need: the creation window
+/// (task R5a) and the tolerated riders (task R5b). See this module's doc
+/// and the plan's 2026-10-12 addendum (R3).
 #[derive(Debug)]
 pub struct Created<'a> {
     /// Exactly this tool's declared `Reversal::Delete::needs` ports:
@@ -244,6 +248,13 @@ pub struct Created<'a> {
     /// still counts as this run's doing, rather than drift (decision 2):
     /// the run's `RunFinished.at` plus the creation-window skew.
     pub settled_by: crate::apply::Timestamp,
+    /// The node's own accepted losses (milestone 3m decision 3a): empty
+    /// under a plain `teardown: delete`. Each entry is one of this
+    /// tool's own declared `Reversal::Delete::losses` names — `check`
+    /// (`CheckError::TeardownLossNotDeclared`) refuses any other name
+    /// before a workflow is ever checked, so an inverse may trust that
+    /// every entry here is one of its own.
+    pub accept: &'a [crate::workflow::Loss],
 }
 
 /// A [`Reversal::Delete`] tool's inverse: observes a resource's

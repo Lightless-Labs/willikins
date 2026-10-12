@@ -11,6 +11,7 @@ use std::sync::LazyLock;
 
 use indexmap::IndexMap;
 
+use crate::rollback::{LOSS_NAME_PATTERN, LOSS_NAME_REGEX};
 use crate::tool::{PortName, ToolName};
 use crate::value::{TypeRef, Value};
 
@@ -146,6 +147,46 @@ workflow_identifier!(
     SEGMENT_NAME_REGEX,
     "The name of a workflow output: `snake_case`, starting with a letter."
 );
+workflow_identifier!(
+    Loss,
+    LOSS_NAME_PATTERN,
+    LOSS_NAME_PATTERN,
+    LOSS_NAME_REGEX,
+    "A declared, named loss a `teardown: delete` node accepts (milestone \
+     3m decision 3a): what a delete would destroy that this run itself \
+     never makes, e.g. a Buildkite pipeline's `builds`. Matches the same \
+     pattern as `crate::rollback::Reversal::Delete`'s own `losses` \
+     entries (`^[a-z][a-z_]*$`) — `crate::check::check`'s \
+     `TeardownLossNotDeclared` refuses a name a node accepts that the \
+     tool never declares, never a malformed one (this type already \
+     refused that)."
+);
+
+/// A node's declared teardown policy (milestone 3m decision 3a): whether
+/// *this document's own node* wants `ensure`'s effect undone on rollback.
+/// Capability is the tool's own [`crate::rollback::Reversal`]; this is the
+/// document's decision on top of it — a `Reversal` never says whether to
+/// delete, and a `TeardownPolicy` never says what a tool can do.
+/// [`crate::check::check`] validates one against the other
+/// ([`crate::check::CheckError::TeardownNotAdmitted`],
+/// [`crate::check::CheckError::TeardownLossNotDeclared`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TeardownPolicy {
+    /// The default (also what [`Node::teardown`]'s absence becomes on
+    /// [`crate::check::CheckedNode`]): this node's resource is never
+    /// deleted by a teardown, whatever its tool can undo.
+    Retain,
+    /// Delete this node's resource on rollback. `accept` names the losses
+    /// (each one of the tool's own declared
+    /// `crate::rollback::Reversal::Delete::losses`) this node's policy
+    /// tolerates a delete destroying — empty under a plain
+    /// `teardown: delete`.
+    Delete {
+        /// The losses this node's policy accepts.
+        accept: Vec<Loss>,
+    },
+}
 
 /// The declared shape of one workflow input.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -254,16 +295,27 @@ pub struct Node {
     pub for_each: Option<Binding>,
     /// This node's input port bindings, in declaration order.
     pub with: IndexMap<PortName, Binding>,
+    /// This node's declared teardown policy (milestone 3m decision 3a).
+    /// `None` when the document declares nothing — the conservative
+    /// default; `crate::check::check` turns that into
+    /// [`TeardownPolicy::Retain`] on `crate::check::CheckedNode`. A
+    /// `uses:` step carries no policy of its own (refused by
+    /// `willikins-dsl`); the linker (`crate::compose::link`) carries a
+    /// linked node's own `teardown:` through unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teardown: Option<TeardownPolicy>,
 }
 
 impl Node {
-    /// A node calling `tool`, with no `for_each` and no bound ports.
+    /// A node calling `tool`, with no `for_each`, no bound ports, and no
+    /// declared teardown policy.
     #[must_use]
     pub fn new(tool: ToolName) -> Self {
         Self {
             tool,
             for_each: None,
             with: IndexMap::new(),
+            teardown: None,
         }
     }
 
@@ -278,6 +330,13 @@ impl Node {
     #[must_use]
     pub fn port(mut self, port: PortName, binding: Binding) -> Self {
         self.with.insert(port, binding);
+        self
+    }
+
+    /// Declare this node's teardown policy (milestone 3m decision 3a).
+    #[must_use]
+    pub fn teardown(mut self, policy: TeardownPolicy) -> Self {
+        self.teardown = Some(policy);
         self
     }
 }

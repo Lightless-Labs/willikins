@@ -49,12 +49,12 @@ use std::path::Path;
 
 use indexmap::IndexMap;
 use willikins_core::{
-    Binding, InputName, InputSpec, Node, NodeName, OutputName, PortName, ToolName, TypeRef, Uses,
-    Value, Workflow,
+    Binding, InputName, InputSpec, Loss, Node, NodeName, OutputName, PortName, TeardownPolicy,
+    ToolName, TypeRef, Uses, Value, Workflow,
 };
 use willikins_types::DomainType;
 
-pub use document::{DefaultValue, Document, InputDecl, StepDecl, WithValue};
+pub use document::{DefaultValue, Document, InputDecl, StepDecl, TeardownDecl, WithValue};
 
 /// The greatest size, in bytes, of a document source [`parse_document`]
 /// will attempt to parse at all.
@@ -490,6 +490,11 @@ fn add_tool_step(
         node = node.for_each(binding);
     }
 
+    if let Some(raw_teardown) = &decl.teardown {
+        let policy = parse_teardown(raw_teardown, &format!("{path}.teardown"))?;
+        node = node.teardown(policy);
+    }
+
     for (raw_port, raw_value) in &decl.with {
         let port_path = format!("{path}.with.{raw_port}");
         let port = PortName::parse(raw_port)
@@ -523,6 +528,17 @@ fn add_uses_step(
             format!("{path}.for_each"),
             "a `uses:` step may not have a `for_each` (milestone 2b decision (d12)); use a \
              separate root document per item instead",
+        ));
+    }
+    // Milestone 3m decision 3a: a `uses:` step has no `teardown:` of its
+    // own -- the used document's own nodes declare their own policy, and
+    // a parent that could set one here would widen (or narrow) that
+    // policy without the used document's author ever seeing it.
+    if decl.teardown.is_some() {
+        return Err(DocumentError::semantic(
+            format!("{path}.teardown"),
+            "a `uses:` step may not have a `teardown:` (milestone 3m decision 3a); the used \
+             document's own nodes declare their own policy",
         ));
     }
     let used_workflow = willikins_types::WorkflowName::parse(raw_workflow)
@@ -575,6 +591,33 @@ fn parse_with_binding(raw_value: &WithValue, path: &str) -> Result<Binding, Docu
                 .map(|(index, item)| parse_reference_value(item, &format!("{path}[{index}]")))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Binding::List(elements))
+        }
+    }
+}
+
+/// Convert a step's raw `teardown:` declaration (milestone 3m decision
+/// 3a) into a [`willikins_core::workflow::TeardownPolicy`]: a bare
+/// `delete` becomes an empty `accept` list, and each `delete: { accept:
+/// [...] }` entry is validated against [`Loss`]'s own pattern as a
+/// located [`DocumentError::semantic`] at `{path}.delete.accept[<index>]`.
+fn parse_teardown(raw: &TeardownDecl, path: &str) -> Result<TeardownPolicy, DocumentError> {
+    match raw {
+        TeardownDecl::Retain => Ok(TeardownPolicy::Retain),
+        TeardownDecl::Delete => Ok(TeardownPolicy::Delete { accept: Vec::new() }),
+        TeardownDecl::DeleteAccept(names) => {
+            let accept = names
+                .iter()
+                .enumerate()
+                .map(|(index, raw_loss)| {
+                    Loss::parse(raw_loss).map_err(|err| {
+                        DocumentError::semantic(
+                            format!("{path}.delete.accept[{index}]"),
+                            err.reason,
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(TeardownPolicy::Delete { accept })
         }
     }
 }
@@ -1263,6 +1306,148 @@ steps:
   a: { tool: naming.v1, with: {} }
 ";
         parse_document(source).expect("a null description parses");
+    }
+
+    /// Milestone 3m decision 3a: all three `teardown:` forms convert into
+    /// the core [`willikins_core::workflow::TeardownPolicy`] the DSL is
+    /// supposed to build.
+    #[test]
+    fn teardown_converts_into_the_core_workflow() {
+        let json = workflow_json(
+            "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: {}, teardown: retain }
+  b: { tool: naming.v1, with: {}, teardown: delete }
+  c:
+    tool: naming.v1
+    with: {}
+    teardown: { delete: { accept: [builds] } }
+",
+        );
+        assert_eq!(json["nodes"]["a"]["teardown"]["kind"], "retain");
+        assert_eq!(json["nodes"]["b"]["teardown"]["kind"], "delete");
+        assert_eq!(
+            json["nodes"]["b"]["teardown"]["accept"],
+            serde_json::json!([])
+        );
+        assert_eq!(json["nodes"]["c"]["teardown"]["kind"], "delete");
+        assert_eq!(
+            json["nodes"]["c"]["teardown"]["accept"],
+            serde_json::json!(["builds"])
+        );
+
+        // A step with no `teardown:` at all carries no field, matching
+        // `Node::teardown`'s `skip_serializing_if`.
+        let json = workflow_json(
+            "\
+name: demo
+steps:
+  a: { tool: naming.v1, with: {} }
+",
+        );
+        assert!(json["nodes"]["a"].get("teardown").is_none());
+    }
+
+    /// An invalid loss name is a located semantic error naming its own
+    /// index in `accept`.
+    #[test]
+    fn teardown_accept_with_an_invalid_loss_name_is_a_located_semantic_error() {
+        let err = parse_document(
+            "\
+name: demo
+steps:
+  a:
+    tool: naming.v1
+    with: {}
+    teardown: { delete: { accept: [ok_loss, Bad-Loss] } }
+",
+        )
+        .unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Semantic { path, .. } => {
+                assert_eq!(path, "steps.a.teardown.delete.accept[1]");
+            }
+            DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a semantic error")
+            }
+        }
+    }
+
+    /// Milestone 3m decision 3a: a `uses:` step may not have a
+    /// `teardown:` of its own.
+    #[test]
+    fn teardown_on_a_uses_step_is_refused() {
+        let err = parse_document(
+            "\
+name: demo
+steps:
+  org:
+    uses: example-org
+    teardown: delete
+",
+        )
+        .unwrap_err();
+        match err.kind {
+            DocumentErrorKind::Semantic { path, message } => {
+                assert_eq!(path, "steps.org.teardown");
+                assert!(message.contains("uses:"), "{message}");
+            }
+            DocumentErrorKind::Yaml { .. } | DocumentErrorKind::TooLarge { .. } => {
+                panic!("expected a semantic error")
+            }
+        }
+    }
+
+    /// Acceptance 18 (core half): the published schema admits every one
+    /// of `teardown:`'s three forms, and the parser agrees with it.
+    #[test]
+    fn the_published_schema_admits_teardowns_three_forms() {
+        for source in [
+            "name: demo\nsteps:\n  a: { tool: naming.v1, with: {}, teardown: retain }\n",
+            "name: demo\nsteps:\n  a: { tool: naming.v1, with: {}, teardown: delete }\n",
+            "name: demo\nsteps:\n  a: { tool: naming.v1, with: {}, teardown: { delete: { accept: [builds] } } }\n",
+        ] {
+            parse_document(source).unwrap_or_else(|err| panic!("{source}: {err}"));
+        }
+
+        let schema = serde_json::to_value(document_schema()).unwrap();
+        // `teardown:` is `Option<TeardownDecl>`, so its own field schema is
+        // schemars' usual `anyOf [ref, null]`; `TeardownDecl`'s own three
+        // shapes live at the `$ref` target, `$defs.TeardownDecl`.
+        let teardown_field = &schema["$defs"]["StepDecl"]["properties"]["teardown"];
+        assert_eq!(
+            teardown_field["anyOf"][0]["$ref"], "#/$defs/TeardownDecl",
+            "{teardown_field}"
+        );
+        assert_eq!(
+            teardown_field["anyOf"][1]["type"], "null",
+            "{teardown_field}"
+        );
+
+        let teardown = &schema["$defs"]["TeardownDecl"];
+        let any_of = teardown["anyOf"]
+            .as_array()
+            .expect("TeardownDecl's schema is anyOf three shapes");
+        assert_eq!(any_of.len(), 3, "{teardown}");
+        assert_eq!(any_of[0]["const"], "retain");
+        assert_eq!(any_of[1]["const"], "delete");
+        assert_eq!(any_of[2]["type"], "object");
+        assert_eq!(
+            any_of[2]["properties"]["delete"]["properties"]["accept"]["type"],
+            "array"
+        );
+
+        // The `uses` branch's own pin: `teardown` there admits only
+        // `null`, never one of the three forms above.
+        let one_of = schema["$defs"]["StepDecl"]["oneOf"]
+            .as_array()
+            .expect("StepDecl's oneOf");
+        let uses_branch = one_of
+            .iter()
+            .find(|branch| branch["required"] == serde_json::json!(["uses"]))
+            .expect("the uses branch");
+        assert_eq!(uses_branch["properties"]["teardown"]["type"], "null");
     }
 
     /// `$schema` declares the dialect of a schema *document*; a subschema

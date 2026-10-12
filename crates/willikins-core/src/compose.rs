@@ -479,6 +479,12 @@ fn flatten(
                         .iter()
                         .map(|(port, b)| (port.clone(), embed(b, step, subst)))
                         .collect(),
+                    // Milestone 3m decision 3a: a used document's own
+                    // nodes carry their own `teardown:` through the
+                    // linker unchanged -- a `uses:` step has none of its
+                    // own to widen it with (`willikins-dsl` refuses the
+                    // field there).
+                    teardown: node.teardown.clone(),
                 };
                 nodes.insert(prefixed_node(step, child_node), embedded);
             }
@@ -512,6 +518,10 @@ fn flatten(
                 tool: node.tool.clone(),
                 for_each,
                 with,
+                // Milestone 3m decision 3a: this level's own node keeps
+                // its own `teardown:` unchanged -- the linker only
+                // rewrites bindings, never policy.
+                teardown: node.teardown.clone(),
             };
             nodes.insert(name.clone(), rewritten);
         }

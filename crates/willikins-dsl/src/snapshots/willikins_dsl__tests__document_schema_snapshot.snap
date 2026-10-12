@@ -123,6 +123,17 @@ expression: json
           ],
           "default": null
         },
+        "teardown": {
+          "description": "This step's declared teardown policy (milestone 3m decision 3a):\n`retain`, `delete`, or `{ delete: { accept: [...] } }`. Never set\non a `uses:` step -- refused in `willikins_dsl::add_uses_step`;\nthe used document's own nodes declare their own policy.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TeardownDecl"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tool": {
           "description": "The tool this step calls, such as `github.repo.ensure`. Exactly\none of `tool` or `uses` must be set.",
           "type": [
@@ -161,12 +172,46 @@ expression: json
         },
         {
           "properties": {
+            "teardown": {
+              "type": "null"
+            },
             "uses": {
               "type": "string"
             }
           },
           "required": [
             "uses"
+          ]
+        }
+      ]
+    },
+    "TeardownDecl": {
+      "anyOf": [
+        {
+          "const": "retain"
+        },
+        {
+          "const": "delete"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "delete": {
+              "type": "object",
+              "properties": {
+                "accept": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "delete"
           ]
         }
       ]

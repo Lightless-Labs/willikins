@@ -148,7 +148,9 @@ use crate::tool::{PortName, PortSpec, Tool, ToolName, ToolSpec};
 use crate::value::{
     Conversion, ConversionMismatch, PortType, TypeRef, TypeRegistry, Value, reported_type_name_or,
 };
-use crate::workflow::{Binding, InputName, InputSpec, Node, NodeName, OutputName, Workflow};
+use crate::workflow::{
+    Binding, InputName, InputSpec, Node, NodeName, OutputName, TeardownPolicy, Workflow,
+};
 use willikins_types::{Description, ParseError, WorkflowName};
 
 /// A workflow that has passed [`check`]: its topological execution order,
@@ -388,6 +390,12 @@ pub(crate) struct CheckedNode {
     /// (`Each`), and the typed id that gives each kind its own index
     /// space.
     pub(crate) shape: Shape,
+    /// This node's teardown policy (milestone 3m decision 3a):
+    /// [`Node::teardown`]'s own value, or [`TeardownPolicy::Retain`] when
+    /// the document declared nothing. [`check`] has already confirmed
+    /// this agrees with the node's tool by the time a [`Checked`] exists
+    /// at all.
+    pub(crate) teardown: TeardownPolicy,
 }
 
 impl fmt::Debug for CheckedNode {
@@ -397,6 +405,7 @@ impl fmt::Debug for CheckedNode {
             .field("declared_at", &self.declared_at)
             .field("tool", &self.tool.spec().name)
             .field("shape", &self.shape)
+            .field("teardown", &self.teardown)
             .finish()
     }
 }
@@ -2345,11 +2354,20 @@ fn build_checked_nodes(
                 id_of.insert(name.clone(), NodeId::Single(id));
                 Shape::Single { id, ports }
             };
+            // Milestone 3m decision 3a: `None` (the document declared
+            // nothing) becomes the conservative default, `Retain` --
+            // never read as "ask the tool". A later task (T1 commit 2)
+            // validates a declared policy against the tool's own
+            // `Reversal` before `check` ever returns a `Checked`, so by
+            // the time this runs any disagreement has already made
+            // `errors` non-empty above.
+            let teardown = node.teardown.clone().unwrap_or(TeardownPolicy::Retain);
             CheckedNode {
                 name: name.clone(),
                 declared_at,
                 tool,
                 shape,
+                teardown,
             }
         })
         .collect();
