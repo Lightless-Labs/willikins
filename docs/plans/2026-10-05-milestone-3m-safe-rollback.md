@@ -82,6 +82,47 @@ needs, the same discipline R6 owes `EXPECTED_SITES` above. R3 also added two stu
 `inverse()`) and `StubContainedTool` (`Reversal::Contained`, riding out with the first), for T1's own stubs line to
 bind in a document.
 
+**Addendum:** 2026-10-12 — R5a landed (`plan_teardown`, three commits: the 3n guard registrations, `RunFacts`'/
+`Teardown`'s own types plus `Created::window`, then `plan_teardown` itself). Deviations from the row, each recorded
+here rather than left silent:
+- **`RunFacts`'s own shape** (node, instance key, action, `RunProgress` — `NotFinished { started: Option<Timestamp> }`
+  or `Finished { started, finished, status }` — recorded inputs/outputs) is this task's own invention: the row names
+  the type but not its fields. `RunProgress::NotFinished { started: None }` folds the journal replay's own synthesized
+  `NodeStatus::NotRun` (a planned instance the run never reached) together with "never started at all" — both mean
+  nothing was created, and R8's own journal-replay caller is better placed to tell them apart in its own terms than
+  `RunFacts` is forced to here.
+- **Two helper types not in the row**, both private to `rollback.rs`: `Secrets<'a>` (bundles `checked`/`resolved`/
+  `facts`/`single_names`/`each_names` so `build_needs_inputs`/`resolve_secret_source` stay under clippy's
+  `too_many_arguments`) and `Decision` (`Step(TeardownAction)` / `Refused(&'static str)`, what `decide_candidate`
+  returns per candidate) and `decide_candidate` itself, extracted out of `plan_teardown`'s own body so neither
+  function tripped clippy's `too_many_lines`. None of these change the row's own SHARED VALUES surface
+  (`RunFacts`/`Teardown`/`TeardownStep`/`TeardownAction`/`TeardownError` are exactly as specified).
+- **A `${{ item }}`-bound secret `needs` port is not yet resolvable.** Decision 5 only asks for a pure resolver
+  chain's `Source::Step`/`Aggregate`/`Keyed`; a credential bound directly to a `for_each` node's own item would need
+  that instance's own recorded item value, which `RunFacts` does not carry (no landed or planned tool binds a
+  credential this way). `resolve_secret_source` reports `TeardownError::UnresolvableCredential` for it rather than
+  guessing or widening `RunFacts` on spec. Flagged for whichever later task first needs it.
+- **`Reversal::Contained`'s own placeholder.** R5b (riding) has not landed; until it does, a `Contained` instance's
+  own `TeardownAction` is `Retained { why: otherwise }` — the tool's own "left in place" reason, never a real rider
+  decision. R5b's own row already says it "replaces this placeholder with a real rider decision", so this is not a
+  new deviation, only flagged here for a reader of `rollback.rs` alone.
+- **`rollback.rs` joins 3n's three guards** (the row's own last sentence) at a baseline of 2, not the file's
+  pre-R5a 1: one pre-existing `.expect(` (`LOSS_NAME_REGEX`'s `LazyLock::new`) plus one new `unreachable!` in
+  `decide_candidate` for `Catalog::insert`'s own "`Delete` exactly when `inverse()` is `Some`" invariant (R3), which
+  is not visible to the type system at that call site — the same "honestly counted rather than reached for" choice
+  `plan.rs`'s own G7 addendum already made for its two remaining fallbacks.
+- **`StubDeletableTool` (testing.rs, test-support) gains a `standing_calls()` counter** (an `Arc<AtomicUsize>` shared
+  by its `StubInverse`), via a new `with_standing_and_counter` constructor `with_standing` now delegates to: acceptance
+  4, 6 and 19 all assert "zero `standing` calls" for a kept or already-refused candidate, which needs a count, not an
+  inference. `testing.rs` is not covered by any ratchet or tripwire, so this adds no guard obligation.
+- **Acceptance tests 4, 6 and 19 live in `rollback.rs`'s own `#[cfg(test)]` module**, not `tests/it/`: each builds a
+  one-node `Checked` from `StubDeletableTool`/`StubContainedTool` and a trivial `resolve_pure`-built `Resolved`, the
+  same "needs a crate-private type, so it cannot live in `tests/it/`" reasoning R4's own addendum already gives for
+  `resolve_pure`'s tests.
+- **Not done here, left to the row that owns it:** riding (`TeardownAction::RidesWith`, transit riders, a kept
+  candidate inside a deleted container) is R5b's; the opus adversarial pass (X1) has not run over this task's own
+  code yet.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
