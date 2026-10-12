@@ -45,7 +45,9 @@ pub use plan::{
 };
 pub use reported::Reported;
 pub use rollback::{
-    Created, Deleted, Inverse, Reversal, ReversalError, Side, Standing, UNDECLARED, Within,
+    Created, Deleted, Inverse, Reversal, ReversalError, Side, Standing, StandingKind,
+    StepFingerprint, Teardown, TeardownAction, TeardownActionKind, TeardownApplyError,
+    TeardownError, TeardownStep, TeardownStepOutcome, UNDECLARED, Within,
 };
 pub use site::{ListElementSite, Site};
 /// Generic tool-authoring helpers (port/type construction, input checks,

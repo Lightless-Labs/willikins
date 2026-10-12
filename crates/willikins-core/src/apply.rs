@@ -188,7 +188,15 @@ pub struct Applied {
 /// Carried by [`DriftKind::Instance`], which is the only place two
 /// fingerprints can disagree about *which* instance sits at a position
 /// rather than about that instance's content.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+///
+/// `Deserialize` and `JsonSchema` (milestone 3m task R7) so this type can
+/// sit inside [`crate::rollback::StepFingerprint`], stored directly
+/// (unwrapped) on a journal event the same way
+/// [`crate::plan::InstanceFingerprint`] already is: both fields are
+/// already owned, so round-tripping adds no new redaction obligation.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct InstanceRef {
     /// The node.
     pub node: NodeName,

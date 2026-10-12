@@ -487,7 +487,19 @@ pub struct RunInstance {
 /// action [`plan_teardown`] decided for it. Never built outside
 /// `plan_teardown`'s own `Ok`: a [`TeardownError::Refused`] carries no
 /// `Teardown` at all ("nothing is recorded as approvable").
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Serialize` only (milestone 3m task R7), the same deliberate half of
+/// the usual pair [`crate::plan::Plan`] and [`crate::tool::Outputs`]
+/// already carry: this type, and [`TeardownStep`]/[`TeardownAction`]
+/// beneath it, exist so `willikins_journal::Redacted<Teardown>` can
+/// serialize one (`willikins-journal`'s own `redacted.rs` adds the
+/// `Redactable` impl, since its sealing module is private to that file).
+/// Never `Deserialize`: a `Redacted<T>` never reconstructs a live `T` (see
+/// that type's own module doc), and [`TeardownAction::Kept`]'s and
+/// [`TeardownAction::Retained`]'s own `why: &'static str` could not round
+/// trip anyway. The journal's own byte-exact comparison at apply time
+/// uses [`StepFingerprint`] instead, which is built to round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Teardown {
     /// Every step, in the order they would run: the reverse of the
     /// applied plan's own order.
@@ -495,7 +507,7 @@ pub struct Teardown {
 }
 
 /// One instance's own place in a [`Teardown`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct TeardownStep {
     /// The instance.
     pub instance: crate::apply::InstanceRef,
@@ -504,7 +516,8 @@ pub struct TeardownStep {
 }
 
 /// What one [`TeardownStep`] does (SHARED VALUES).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TeardownAction {
     /// Call the tool's own `inverse().delete`. `uncertain` is set when
     /// the create that made this resource itself finished
@@ -577,7 +590,20 @@ pub enum TeardownAction {
 /// R6's own row is the first that actually needs it ("compare
 /// fingerprints... standing kinds and losses included"), ahead of R7's
 /// journal work. See this task's own plan addendum.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `losing` is `Vec<String>`, not SHARED VALUES' own `Vec<&'static str>`
+/// (milestone 3m task R7, recorded in that task's own plan addendum):
+/// [`StepFingerprint`] is stored directly (unwrapped) on a journal event,
+/// the same way [`crate::plan::InstanceFingerprint`] already is, so it
+/// must round-trip through `Deserialize` -- and `serde` has no way to
+/// produce a `&'static str` back out of a deserializer without leaking
+/// memory on every replay. The *names themselves* are still exactly the
+/// tool's own declared [`Reversal::Delete::losses`] strings, just owned
+/// here; comparing them by content (`==`) works the same either way.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StandingKind {
     /// [`Standing::Gone`] was observed.
     Gone,
@@ -585,8 +611,69 @@ pub enum StandingKind {
     /// currently reported (empty when none).
     AsCreated {
         /// The declared losses this observation reported.
-        losing: Vec<&'static str>,
+        losing: Vec<String>,
     },
+}
+
+/// A discriminant-only mirror of [`TeardownAction`] for
+/// [`StepFingerprint::action`] (milestone 3m task R7, recorded in that
+/// task's own plan addendum): keeps exactly what decides whether a fresh
+/// re-observation still agrees with what was approved (decision 8) --
+/// which variant, [`Self::Delete`]'s own `uncertain` flag, and
+/// [`Self::RidesWith`]'s own `container` -- and drops each variant's own
+/// purely descriptive `why`/`need` text, which is `&'static str` (cannot
+/// round-trip through `Deserialize`, the same reason [`StandingKind`]
+/// above moved off it) and carries no identity of its own: the *display*
+/// text for the same step, at the same code path, is already shown to the
+/// operator via [`Teardown`] (`willikins_journal::Redacted<Teardown>`),
+/// and decision 8's own "`StepFingerprint.action` carries the
+/// discriminant, so a step the document keeps and one the tool cannot
+/// undo never compare equal" already holds without it -- `Kept` and
+/// `Retained` are different variants of this enum regardless of any
+/// payload.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TeardownActionKind {
+    /// Mirrors [`TeardownAction::Delete`].
+    Delete {
+        /// See [`TeardownAction::Delete::uncertain`].
+        uncertain: bool,
+    },
+    /// Mirrors [`TeardownAction::RidesWith`].
+    RidesWith {
+        /// See [`TeardownAction::RidesWith::container`].
+        container: crate::apply::InstanceRef,
+    },
+    /// Mirrors [`TeardownAction::Gone`].
+    Gone,
+    /// Mirrors [`TeardownAction::Kept`], without its own `why`.
+    Kept,
+    /// Mirrors [`TeardownAction::Retained`], without its own `why`.
+    Retained,
+    /// Mirrors [`TeardownAction::MadeByHand`], without its own `need`.
+    MadeByHand,
+    /// Mirrors [`TeardownAction::Unfinished`].
+    Unfinished,
+}
+
+impl From<&TeardownAction> for TeardownActionKind {
+    fn from(action: &TeardownAction) -> Self {
+        match action {
+            TeardownAction::Delete { uncertain } => Self::Delete {
+                uncertain: *uncertain,
+            },
+            TeardownAction::RidesWith { container } => Self::RidesWith {
+                container: container.clone(),
+            },
+            TeardownAction::Gone => Self::Gone,
+            TeardownAction::Kept { .. } => Self::Kept,
+            TeardownAction::Retained { .. } => Self::Retained,
+            TeardownAction::MadeByHand { .. } => Self::MadeByHand,
+            TeardownAction::Unfinished => Self::Unfinished,
+        }
+    }
 }
 
 /// One step's own fingerprint (milestone 3m decision 8, SHARED VALUES
@@ -602,20 +689,41 @@ pub enum StandingKind {
 ///
 /// Bundles `node` and `instance` into one [`crate::apply::InstanceRef`]
 /// rather than SHARED VALUES' own two separate fields, matching
-/// [`TeardownStep::instance`]'s own shape -- a deviation recorded in this
-/// task's own plan addendum, not a change of meaning.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// [`TeardownStep::instance`]'s own shape -- a deviation recorded in R6's
+/// own plan addendum, not a change of meaning.
+///
+/// `Serialize`/`Deserialize`/`JsonSchema` (milestone 3m task R7): this
+/// type is stored directly (unwrapped) on `willikins_journal::Event`'s
+/// `TeardownPlanned.fingerprint`, exactly the way
+/// [`crate::plan::InstanceFingerprint`] already sits on `PlanRecorded`'s
+/// own `fingerprint` -- so a restarted `willikins-server` can read back a
+/// typed, comparable fingerprint from the journal at apply time, the same
+/// way it already does for a forward run's drift check. `action` is
+/// [`TeardownActionKind`], not [`TeardownAction`] itself, for exactly the
+/// reason that type's own doc gives.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct StepFingerprint {
     /// The instance.
     pub instance: crate::apply::InstanceRef,
-    /// What `plan_teardown` decided for it.
-    pub action: TeardownAction,
+    /// What `plan_teardown` decided for it, as a discriminant.
+    pub action: TeardownActionKind,
     /// What its own `standing()` call reported, if it called one at all.
     pub standing: Option<StandingKind>,
 }
 
 /// Why [`plan_teardown`] could not produce an approvable [`Teardown`].
-#[derive(Debug, Clone, thiserror::Error)]
+///
+/// `Serialize` (milestone 3m task R7), the same one-way half
+/// [`Teardown`] itself carries and for the same reason: nested inside
+/// [`TeardownApplyError::Replan`], this is what
+/// `willikins_journal::Redacted<TeardownApplyError>` wraps for
+/// `TeardownFinished`'s own `Failed` outcome. Never `Deserialize`: a
+/// `Redacted<T>` never reconstructs a live `T`, and `Refused`'s own
+/// `&'static str` reasons could not round-trip anyway.
+#[derive(Debug, Clone, thiserror::Error, serde::Serialize)]
+#[serde(tag = "kind")]
 pub enum TeardownError {
     /// At least one candidate's own standing refuses the whole teardown
     /// (decision 6): no `Teardown` is ever built when this is returned.
@@ -644,8 +752,21 @@ pub enum TeardownError {
     },
     /// Resolving a secret `needs` port's own pure resolver chain failed
     /// the same way [`crate::plan::resolve_pure`] itself can.
-    #[error("resolving a teardown step's credential failed: {0}")]
-    Resolve(#[from] crate::plan::PlanError),
+    ///
+    /// A struct variant with one named field, like [`Self::Tool`] below
+    /// and [`crate::apply::ApplyError::Plan`] -- not a tuple variant
+    /// (milestone 3m task R7): this enum is now internally tagged
+    /// (`#[serde(tag = "kind")]`) for `willikins_journal::Redacted`, and
+    /// [`crate::plan::PlanError`] carries its own `kind` tag too; nesting
+    /// it under a named field avoids the two tags colliding in one JSON
+    /// object. `#[from]` works the same on a named field, so every `?`
+    /// call site is unchanged.
+    #[error("resolving a teardown step's credential failed: {error}")]
+    Resolve {
+        /// The failure.
+        #[from]
+        error: crate::plan::PlanError,
+    },
     /// A `Delete` tool's own `inverse().standing` call failed.
     #[error("{instance}: {error}")]
     Tool {
@@ -1000,7 +1121,7 @@ fn decide_standalone(
                 let standing_kind = match &standing {
                     Standing::Gone => Some(StandingKind::Gone),
                     Standing::AsCreated { losing } => Some(StandingKind::AsCreated {
-                        losing: losing.clone(),
+                        losing: losing.iter().map(ToString::to_string).collect(),
                     }),
                     Standing::NotOurs { .. } | Standing::Drifted { .. } => None,
                 };
@@ -1494,13 +1615,14 @@ fn record_step(
     action: TeardownAction,
     standing: Option<StandingKind>,
 ) {
+    let action_kind = TeardownActionKind::from(&action);
     steps.push(TeardownStep {
         instance: instance.clone(),
-        action: action.clone(),
+        action,
     });
     fingerprint.push(StepFingerprint {
         instance,
-        action,
+        action: action_kind,
         standing,
     });
 }
@@ -1725,10 +1847,15 @@ pub fn plan_teardown_fingerprint(
 // ---------------------------------------------------------------------
 
 /// What [`apply_teardown`] ran -- or chose not to run -- one approved
-/// [`StepFingerprint`] into (milestone 3m decision 8): core's own,
-/// not-yet-serialized terms for the five outcomes
-/// `TeardownStepFinished` (task R7) will journal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// [`StepFingerprint`] into (milestone 3m decision 8): the five outcomes
+/// `TeardownStepFinished` (task R7) journals directly, unwrapped, the
+/// same way [`crate::apply::NodeStatus`] already sits on `NodeFinished`
+/// (that type's own doc: its only payload, `ToolError`, is "a plain
+/// message with no secret obligation of its own").
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TeardownStepOutcome {
     /// A `Delete` step's own `inverse().delete` deleted the resource.
     Deleted,
@@ -1758,7 +1885,16 @@ pub enum TeardownStepOutcome {
 /// step's own failure is [`TeardownStepOutcome::Failed`], part of the
 /// `Ok` result, not this type (decision 8: "a delete failure stops the
 /// run", never the whole call).
-#[derive(Debug, Clone, thiserror::Error)]
+///
+/// `Serialize` (milestone 3m task R7): `willikins_journal::Redacted` wraps
+/// this for `TeardownFinished`'s own `Failed` outcome, the same one-way
+/// half [`Teardown`] and [`TeardownError`] already carry and for the same
+/// reason -- see those types' own docs. `Replan` is a struct variant for
+/// exactly [`TeardownError::Resolve`]'s own reason: this enum is now
+/// internally tagged too, and nesting the inner, also-tagged
+/// `TeardownError` under a named field avoids the collision.
+#[derive(Debug, Clone, thiserror::Error, serde::Serialize)]
+#[serde(tag = "kind")]
 pub enum TeardownApplyError {
     /// Re-planning this teardown from the same facts, checked document
     /// and resolved credentials `approved` itself came from failed
@@ -1767,8 +1903,12 @@ pub enum TeardownApplyError {
     /// makes) or while re-resolving a `Delete` step's own secret `needs`
     /// port a second time, just before calling `delete`. Never drift: a
     /// document defect, or a tool failure while merely observing.
-    #[error("{0}")]
-    Replan(#[from] TeardownError),
+    #[error("{error}")]
+    Replan {
+        /// The failure.
+        #[from]
+        error: TeardownError,
+    },
     /// The freshly re-observed teardown disagrees with what was approved
     /// (milestone 3m decision 8): a different step, a different action,
     /// or the same action with a different `standing` -- a loss that
@@ -1950,7 +2090,7 @@ pub fn apply_teardown(
     let mut outcomes = Vec::with_capacity(approved.len());
     let mut stopped = false;
     for step in approved {
-        if !matches!(step.action, TeardownAction::Delete { .. }) {
+        if !matches!(step.action, TeardownActionKind::Delete { .. }) {
             outcomes.push(TeardownStepOutcome::Listed);
             continue;
         }
@@ -4523,7 +4663,7 @@ mod tests {
         });
 
         let err = apply_teardown(&approved, &run, &checked, &resolved).unwrap_err();
-        assert!(matches!(err, TeardownApplyError::Replan(_)), "{err:?}");
+        assert!(matches!(err, TeardownApplyError::Replan { .. }), "{err:?}");
         assert_eq!(inverse.delete_calls(), 0);
     }
 
@@ -4868,5 +5008,111 @@ mod tests {
         let err = apply_teardown(&approved, &run, &checked, &resolved).unwrap_err();
         assert!(matches!(err, TeardownApplyError::Drift), "{err:?}");
         assert_eq!(inverse.delete_calls(), 0);
+    }
+
+    // -------------------------------------------------------------
+    // Serde round trips (milestone 3m task R7)
+    // -------------------------------------------------------------
+
+    /// A real [`StepFingerprint`] (built the same way
+    /// `plan_teardown_fingerprint` builds one for a caller) round-trips
+    /// through JSON unchanged -- the property `willikins-journal`'s own
+    /// `TeardownPlanned.fingerprint: Vec<StepFingerprint>` relies on to
+    /// read a typed, comparable fingerprint back out of a replayed
+    /// journal at apply time, the same way it already does for
+    /// `PlanRecorded.fingerprint: Vec<InstanceFingerprint>`.
+    #[test]
+    fn step_fingerprint_round_trips_through_json() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::AsCreated {
+            losing: vec!["builds"],
+        }));
+        let checked = checked_with(
+            Arc::clone(&tool),
+            Some(TeardownPolicy::Delete {
+                accept: vec![crate::workflow::Loss::parse("builds").unwrap()],
+            }),
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let (_, fingerprint) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
+        assert_eq!(fingerprint.len(), 1);
+
+        let json = serde_json::to_string(&fingerprint).expect("StepFingerprint serializes");
+        let back: Vec<StepFingerprint> =
+            serde_json::from_str(&json).expect("StepFingerprint deserializes");
+        assert_eq!(back, fingerprint);
+        assert_eq!(
+            back[0].standing,
+            Some(StandingKind::AsCreated {
+                losing: vec!["builds".to_string()],
+            })
+        );
+    }
+
+    /// Every [`TeardownStepOutcome`] variant round-trips through JSON --
+    /// the property `willikins-journal`'s own
+    /// `TeardownStepFinished.status` relies on.
+    #[test]
+    fn every_teardown_step_outcome_round_trips_through_json() {
+        for outcome in [
+            TeardownStepOutcome::Deleted,
+            TeardownStepOutcome::AlreadyGone,
+            TeardownStepOutcome::Failed {
+                error: crate::tool::ToolError {
+                    kind: crate::tool::ToolErrorKind::Provider,
+                    message: "boom".to_string(),
+                },
+            },
+            TeardownStepOutcome::NotRun,
+            TeardownStepOutcome::Listed,
+        ] {
+            let json = serde_json::to_string(&outcome).expect("TeardownStepOutcome serializes");
+            let back: TeardownStepOutcome =
+                serde_json::from_str(&json).expect("TeardownStepOutcome deserializes");
+            assert_eq!(back, outcome, "{json}");
+        }
+    }
+
+    /// A real [`Teardown`] serializes (one-way: no `Deserialize`, see that
+    /// type's own doc) without panicking, the shape
+    /// `willikins_journal::Redacted<Teardown>` relies on for
+    /// `TeardownPlanned.teardown`.
+    #[test]
+    fn teardown_serializes_one_way() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::Gone));
+        let checked = checked_with(tool, Some(TeardownPolicy::Delete { accept: vec![] }));
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let (teardown, _) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
+        let json = serde_json::to_value(&teardown).expect("Teardown serializes");
+        assert_eq!(json["steps"][0]["action"]["kind"], "gone");
+    }
+
+    /// A [`TeardownApplyError::Drift`] serializes (one-way) with a
+    /// `"kind"` tag -- the shape
+    /// `willikins_journal::Redacted<TeardownApplyError>` relies on for
+    /// `TeardownFinished`'s own `Failed` outcome. `Replan`'s own nested,
+    /// also-tagged `TeardownError` is a named field, not a tuple, so the
+    /// two tags never collide in one JSON object (this task's own plan
+    /// addendum).
+    #[test]
+    fn teardown_apply_error_serializes_with_no_tag_collision() {
+        let drift = TeardownApplyError::Drift;
+        let json = serde_json::to_value(&drift).expect("TeardownApplyError serializes");
+        assert_eq!(json["kind"], "Drift");
+
+        let replan = TeardownApplyError::from(TeardownError::UnresolvableCredential {
+            node: node("repo"),
+            port: crate::tool::PortName::parse("token").unwrap(),
+        });
+        let json = serde_json::to_value(&replan).expect("TeardownApplyError::Replan serializes");
+        assert_eq!(json["kind"], "Replan");
+        assert_eq!(json["error"]["kind"], "UnresolvableCredential");
     }
 }
