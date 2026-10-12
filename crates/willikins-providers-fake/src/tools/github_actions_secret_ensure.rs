@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
+use willikins_core::rollback::{Reversal, Side, Within};
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec,
 };
@@ -91,6 +92,40 @@ impl Tool for GitHubActionsSecretEnsure {
             outputs: Outputs::new(),
             changed: true,
         })
+    }
+
+    /// Milestone 3m task P6: equal to the live tool's own declaration
+    /// (decision 4), field for field.
+    fn reversal(&self) -> Reversal {
+        Reversal::Contained {
+            within: &[Within {
+                tool: "github.repo.ensure",
+                ports: &[("repo", Side::Input, "repo")],
+            }],
+            otherwise: "it always writes, and its prior value, if any, is never read, so it \
+                        cannot be restored",
+        }
+    }
+}
+
+#[cfg(test)]
+mod reversal_tests {
+    use super::*;
+
+    #[test]
+    fn declares_contained_within_the_repo() {
+        let tool = GitHubActionsSecretEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+        assert_eq!(
+            tool.reversal(),
+            Reversal::Contained {
+                within: &[Within {
+                    tool: "github.repo.ensure",
+                    ports: &[("repo", Side::Input, "repo")],
+                }],
+                otherwise: "it always writes, and its prior value, if any, is never read, so it \
+                            cannot be restored",
+            }
+        );
     }
 }
 

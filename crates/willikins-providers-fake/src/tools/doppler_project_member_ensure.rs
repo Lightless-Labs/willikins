@@ -371,6 +371,39 @@ impl Tool for DopplerProjectMemberEnsure {
             }
         }
     }
+
+    /// Milestone 3m task P6: equal to the live tool's own declaration
+    /// (decision 4), field for field.
+    fn reversal(&self) -> willikins_core::rollback::Reversal {
+        willikins_core::rollback::Reversal::Contained {
+            within: &[willikins_core::rollback::Within {
+                tool: "doppler.project.ensure",
+                ports: &[("project", willikins_core::rollback::Side::Input, "project")],
+            }],
+            otherwise: "adds or raises a role; the prior role is not recorded",
+        }
+    }
+}
+
+#[cfg(test)]
+mod reversal_tests {
+    use super::*;
+    use willikins_core::rollback::{Reversal, Side, Within};
+
+    #[test]
+    fn declares_contained_within_the_project() {
+        let tool = DopplerProjectMemberEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+        assert_eq!(
+            tool.reversal(),
+            Reversal::Contained {
+                within: &[Within {
+                    tool: "doppler.project.ensure",
+                    ports: &[("project", Side::Input, "project")],
+                }],
+                otherwise: "adds or raises a role; the prior role is not recorded",
+            }
+        );
+    }
 }
 
 #[cfg(test)]

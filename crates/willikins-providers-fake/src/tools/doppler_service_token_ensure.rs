@@ -13,18 +13,20 @@ use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
+use willikins_core::rollback::{Created, Deleted, Inverse, Reversal, Side, Standing, Within};
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
-use willikins_types::{DopplerConfig, DopplerTokenName};
+use willikins_types::{DopplerConfig, DopplerTokenName, TeardownToken};
 
 use crate::state::{FakeState, doppler_service_token_key};
-use crate::support::{exact, get, port, require_present, scalar, tool_name};
+use crate::support::{conflict, exact, get, port, require_present, scalar, tool_name};
 
 /// `doppler.service_token.ensure`.
 pub struct DopplerServiceTokenEnsure {
     spec: ToolSpec,
     state: Arc<Mutex<FakeState>>,
+    inverse: DopplerServiceTokenInverse,
 }
 
 impl DopplerServiceTokenEnsure {
@@ -50,6 +52,9 @@ impl DopplerServiceTokenEnsure {
                 key: vec![port("config"), port("name")],
                 class: Class::Reversible,
                 pure: false,
+            },
+            inverse: DopplerServiceTokenInverse {
+                state: state.clone(),
             },
             state,
         }
@@ -117,6 +122,89 @@ impl Tool for DopplerServiceTokenEnsure {
                 outputs,
                 changed: true,
             })
+        }
+    }
+
+    /// Milestone 3m task P6: equal to the live tool's own declaration
+    /// (decision 4), field for field.
+    fn reversal(&self) -> Reversal {
+        Reversal::Delete {
+            needs: &["config", "name"],
+            within: &[
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: &[("config", Side::Output, "config")],
+                },
+                Within {
+                    tool: "doppler.branch_config.ensure",
+                    ports: &[("config", Side::Output, "config")],
+                },
+            ],
+            losses: &[],
+        }
+    }
+
+    fn inverse(&self) -> Option<&dyn Inverse> {
+        Some(&self.inverse)
+    }
+}
+
+/// `doppler.service_token.ensure`'s fake inverse (milestone 3m task P6).
+/// Never a catalog tool in its own right, never reachable except from
+/// `apply_teardown` (trust boundaries 1, 2).
+///
+/// No timestamps exist anywhere in this crate's state, and
+/// [`crate::state::FakeState::doppler_service_tokens`] records existence
+/// alone (a `HashSet`), so neither the live inverse's "created outside
+/// the window" `NotOurs` row nor its "more than one token at
+/// `(config, name)`" `Drifted` row is reachable here -- the zero-match
+/// case reads [`Standing::Gone`] (the P3 addendum's own reading of
+/// decision 7, required for resume to work), and a present token is
+/// always [`Standing::AsCreated`].
+struct DopplerServiceTokenInverse {
+    state: Arc<Mutex<FakeState>>,
+}
+
+/// [`crate::support::conflict`]'s message when [`Inverse::delete`] is
+/// called on anything but [`Standing::Gone`] or a fully accepted
+/// [`Standing::AsCreated`].
+const DELETE_REFUSED_NOT_AS_CREATED: &str = "the token has changed since this run created it, or is no longer ours; the teardown will \
+     not delete it";
+
+impl Inverse for DopplerServiceTokenInverse {
+    fn standing(&self, created: &Created<'_>) -> Result<Standing, ToolError> {
+        let config: DopplerConfig = get(created.inputs, "config")?;
+        let name: DopplerTokenName = get(created.inputs, "name")?;
+        let key = doppler_service_token_key(&config, &name);
+        let state = self.state.lock().unwrap();
+        if state.doppler_service_tokens.contains(&key) {
+            Ok(Standing::AsCreated { losing: Vec::new() })
+        } else {
+            Ok(Standing::Gone)
+        }
+    }
+
+    fn delete(&self, created: &Created<'_>, _token: &TeardownToken) -> Result<Deleted, ToolError> {
+        match self.standing(created)? {
+            Standing::Gone => Ok(Deleted { already_gone: true }),
+            Standing::AsCreated { losing }
+                if losing.iter().all(|loss| {
+                    created
+                        .accept
+                        .iter()
+                        .any(|accepted| accepted.as_str() == *loss)
+                }) =>
+            {
+                let config: DopplerConfig = get(created.inputs, "config")?;
+                let name: DopplerTokenName = get(created.inputs, "name")?;
+                let key = doppler_service_token_key(&config, &name);
+                let mut state = self.state.lock().unwrap();
+                state.doppler_service_tokens.remove(&key);
+                Ok(Deleted {
+                    already_gone: false,
+                })
+            }
+            _ => Err(conflict(DELETE_REFUSED_NOT_AS_CREATED)),
         }
     }
 }
@@ -278,5 +366,91 @@ mod tests {
             2,
             "both the failed and the successful attempt must count"
         );
+    }
+
+    /// Milestone 3m task P6: the fake inverse's own unit tests.
+    mod inverse {
+        use super::*;
+        use willikins_core::Timestamp;
+        use willikins_core::rollback::{CreationWindow, Standing};
+
+        fn window() -> CreationWindow {
+            CreationWindow {
+                start: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+                end: Timestamp::parse("2026-01-01T00:10:00Z").unwrap(),
+            }
+        }
+
+        fn created(inputs: &Inputs) -> Created<'_> {
+            Created {
+                inputs,
+                outputs: Box::leak(Box::new(Outputs::new())),
+                window: window(),
+                settled_by: window().end,
+                accept: &[],
+                riders: &[],
+            }
+        }
+
+        #[test]
+        fn declares_delete_within_either_config_tool() {
+            assert_eq!(
+                tool().reversal(),
+                Reversal::Delete {
+                    needs: &["config", "name"],
+                    within: &[
+                        Within {
+                            tool: "doppler.config.ensure",
+                            ports: &[("config", Side::Output, "config")],
+                        },
+                        Within {
+                            tool: "doppler.branch_config.ensure",
+                            ports: &[("config", Side::Output, "config")],
+                        },
+                    ],
+                    losses: &[],
+                }
+            );
+        }
+
+        #[test]
+        fn standing_reports_gone_when_absent() {
+            let tool = tool();
+            let inverse = Tool::inverse(&tool).unwrap();
+            assert_eq!(
+                inverse.standing(&created(&full_inputs())).unwrap(),
+                Standing::Gone
+            );
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods)] // a test mints its own token
+        fn standing_as_created_then_delete_removes_the_token() {
+            let tool = tool();
+            let sink = SinkToken::new();
+            tool.ensure(&full_inputs(), &sink).unwrap();
+            let inverse = Tool::inverse(&tool).unwrap();
+            assert_eq!(
+                inverse.standing(&created(&full_inputs())).unwrap(),
+                Standing::AsCreated { losing: Vec::new() }
+            );
+            let token = willikins_types::TeardownToken::new();
+            let deleted = inverse.delete(&created(&full_inputs()), &token).unwrap();
+            assert!(!deleted.already_gone);
+            assert_eq!(
+                inverse.standing(&created(&full_inputs())).unwrap(),
+                Standing::Gone
+            );
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods)] // a test mints its own token
+        fn delete_on_an_already_gone_token_reports_already_gone() {
+            let tool = tool();
+            let inverse = Tool::inverse(&tool).unwrap();
+            let token = willikins_types::TeardownToken::new();
+            let deleted = inverse.delete(&created(&full_inputs()), &token).unwrap();
+            assert!(deleted.already_gone);
+        }
     }
 }

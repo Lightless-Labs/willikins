@@ -83,6 +83,52 @@ impl Tool for DopplerConfigInheritableEnsure {
             changed,
         })
     }
+
+    /// Milestone 3m task P6: equal to the live tool's own declaration
+    /// (decision 4), field for field.
+    fn reversal(&self) -> willikins_core::rollback::Reversal {
+        willikins_core::rollback::Reversal::Contained {
+            within: &[
+                willikins_core::rollback::Within {
+                    tool: "doppler.config.ensure",
+                    ports: &[("config", willikins_core::rollback::Side::Output, "config")],
+                },
+                willikins_core::rollback::Within {
+                    tool: "doppler.branch_config.ensure",
+                    ports: &[("config", willikins_core::rollback::Side::Output, "config")],
+                },
+            ],
+            otherwise: "a flag on an existing config; whether it was already set is not recorded",
+        }
+    }
+}
+
+#[cfg(test)]
+mod reversal_tests {
+    use super::*;
+    use willikins_core::rollback::{Reversal, Side, Within};
+
+    #[test]
+    fn declares_contained_within_either_config_tool() {
+        let tool = DopplerConfigInheritableEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+        assert_eq!(
+            tool.reversal(),
+            Reversal::Contained {
+                within: &[
+                    Within {
+                        tool: "doppler.config.ensure",
+                        ports: &[("config", Side::Output, "config")],
+                    },
+                    Within {
+                        tool: "doppler.branch_config.ensure",
+                        ports: &[("config", Side::Output, "config")],
+                    },
+                ],
+                otherwise: "a flag on an existing config; whether it was already set is not \
+                            recorded",
+            }
+        );
+    }
 }
 
 #[cfg(test)]

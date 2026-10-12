@@ -253,6 +253,43 @@ impl Tool for FakeBuildkitePipelineBootstrapEnsure {
             }
         }
     }
+
+    /// Milestone 3m task P6: equal to the live tool's own declaration
+    /// (decision 4), field for field.
+    fn reversal(&self) -> willikins_core::rollback::Reversal {
+        willikins_core::rollback::Reversal::Contained {
+            within: &[willikins_core::rollback::Within {
+                tool: "buildkite.pipeline.ensure",
+                ports: &[
+                    ("org", willikins_core::rollback::Side::Input, "org"),
+                    ("slug", willikins_core::rollback::Side::Input, "slug"),
+                ],
+            }],
+            otherwise: "the prior configuration is not recorded",
+        }
+    }
+}
+
+#[cfg(test)]
+mod reversal_tests {
+    use super::*;
+    use willikins_core::rollback::{Reversal, Side, Within};
+
+    #[test]
+    fn declares_contained_within_the_pipeline() {
+        let tool =
+            FakeBuildkitePipelineBootstrapEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+        assert_eq!(
+            tool.reversal(),
+            Reversal::Contained {
+                within: &[Within {
+                    tool: "buildkite.pipeline.ensure",
+                    ports: &[("org", Side::Input, "org"), ("slug", Side::Input, "slug")],
+                }],
+                otherwise: "the prior configuration is not recorded",
+            }
+        );
+    }
 }
 
 #[cfg(test)]

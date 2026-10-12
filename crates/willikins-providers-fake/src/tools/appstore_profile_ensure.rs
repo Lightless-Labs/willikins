@@ -15,12 +15,13 @@ use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
+use willikins_core::rollback::{Created, Deleted, Inverse, Reversal, Standing};
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{
     AppleBundleIdentifier, AppleCertificateId, AppleProfileContent, AppleProfileId,
-    AppleProfileName, AppleProfileType, DomainType,
+    AppleProfileName, AppleProfileType, DomainType, TeardownToken,
 };
 
 use crate::state::{AppleProfileRecord, FakeState, apple_profile_key};
@@ -30,6 +31,7 @@ use crate::support::{conflict, exact, get, not_found, port, require_present, sca
 pub struct FakeAppstoreProfileEnsure {
     spec: ToolSpec,
     state: Arc<Mutex<FakeState>>,
+    inverse: FakeAppstoreProfileInverse,
 }
 
 impl FakeAppstoreProfileEnsure {
@@ -61,6 +63,9 @@ impl FakeAppstoreProfileEnsure {
                 key: vec![port("identifier"), port("name")],
                 class: Class::Destructive,
                 pure: false,
+            },
+            inverse: FakeAppstoreProfileInverse {
+                state: state.clone(),
             },
             state,
         }
@@ -299,6 +304,117 @@ impl Tool for FakeAppstoreProfileEnsure {
             }
         }
     }
+
+    /// Milestone 3m task P6: equal to the live tool's own declaration
+    /// (decisions 4, 5), field for field.
+    fn reversal(&self) -> Reversal {
+        Reversal::Delete {
+            needs: &["issuer_id", "key_id", "key", "identifier", "name"],
+            within: &[],
+            losses: &[],
+        }
+    }
+
+    fn inverse(&self) -> Option<&dyn Inverse> {
+        Some(&self.inverse)
+    }
+}
+
+/// `appstore.profile.ensure`'s fake inverse (milestone 3m task P6). Never
+/// a catalog tool in its own right, never reachable except from
+/// `apply_teardown` (trust boundaries 1, 2).
+///
+/// No timestamps exist anywhere in this crate's state, so unlike the
+/// live inverse this never consults a creation window. Like the live
+/// inverse, this is addressed by the id recorded on [`Created::outputs`]
+/// (the `profile` output), never a `needs` port: a profile carries no
+/// natural key of its own (decision 4's own "why").
+struct FakeAppstoreProfileInverse {
+    state: Arc<Mutex<FakeState>>,
+}
+
+/// [`Standing::NotOurs`]: a profile record with this id exists, but
+/// under a different `(identifier, name)` key than this run recorded.
+const NOT_OURS: &str = "the profile's name or bundle id differs from the run's recorded ones";
+
+/// [`crate::support::conflict`]'s message when [`Inverse::delete`] is
+/// called on anything but [`Standing::Gone`] or a fully accepted
+/// [`Standing::AsCreated`].
+const DELETE_REFUSED_NOT_AS_CREATED: &str = "the profile has changed since this run created it, or is no longer ours; the teardown \
+     will not delete it";
+
+impl FakeAppstoreProfileInverse {
+    /// The profile id this run recorded, from `created.outputs`'s own
+    /// `profile` port -- never a `needs` port (see this struct's own
+    /// doc).
+    fn id_of(created: &Created<'_>) -> Result<AppleProfileId, ToolError> {
+        created
+            .outputs
+            .get(&port("profile"))
+            .and_then(|value| value.downcast::<AppleProfileId>())
+            .cloned()
+            .ok_or_else(|| not_found("this run's own recorded `profile` output is missing"))
+    }
+
+    /// Find the record with `id`, wherever it lives in
+    /// `state.apple_profiles`, alongside the exact key it lives under.
+    fn find<'s>(
+        state: &'s FakeState,
+        id: &AppleProfileId,
+    ) -> Option<(&'s str, &'s AppleProfileRecord)> {
+        state.apple_profiles.iter().find_map(|(key, records)| {
+            records
+                .iter()
+                .find(|record| record.id == id.as_str())
+                .map(|record| (key.as_str(), record))
+        })
+    }
+}
+
+impl Inverse for FakeAppstoreProfileInverse {
+    fn standing(&self, created: &Created<'_>) -> Result<Standing, ToolError> {
+        let id = Self::id_of(created)?;
+        let identifier: AppleBundleIdentifier = get(created.inputs, "identifier")?;
+        let name: AppleProfileName = get(created.inputs, "name")?;
+        let state = self.state.lock().unwrap();
+        match Self::find(&state, &id) {
+            None => Ok(Standing::Gone),
+            Some((key, _)) if key == apple_profile_key(&identifier, &name) => {
+                Ok(Standing::AsCreated { losing: Vec::new() })
+            }
+            Some(_) => Ok(Standing::NotOurs { why: NOT_OURS }),
+        }
+    }
+
+    fn delete(&self, created: &Created<'_>, _token: &TeardownToken) -> Result<Deleted, ToolError> {
+        match self.standing(created)? {
+            Standing::Gone => Ok(Deleted { already_gone: true }),
+            Standing::AsCreated { losing }
+                if losing.iter().all(|loss| {
+                    created
+                        .accept
+                        .iter()
+                        .any(|accepted| accepted.as_str() == *loss)
+                }) =>
+            {
+                let id = Self::id_of(created)?;
+                let identifier: AppleBundleIdentifier = get(created.inputs, "identifier")?;
+                let name: AppleProfileName = get(created.inputs, "name")?;
+                let mut state = self.state.lock().unwrap();
+                let key = apple_profile_key(&identifier, &name);
+                if let Some(records) = state.apple_profiles.get_mut(&key) {
+                    records.retain(|record| record.id != id.as_str());
+                    if records.is_empty() {
+                        state.apple_profiles.remove(&key);
+                    }
+                }
+                Ok(Deleted {
+                    already_gone: false,
+                })
+            }
+            _ => Err(conflict(DELETE_REFUSED_NOT_AS_CREATED)),
+        }
+    }
 }
 
 /// A monotonically increasing count of every profile record seeded or
@@ -414,5 +530,116 @@ mod tests {
             tool.read(&inputs()).unwrap(),
             Observation::Present(_)
         ));
+    }
+
+    fn bundle_id_seeded_state() -> FakeState {
+        FakeState::new().with_apple_bundle_id(
+            &identifier(),
+            &willikins_types::AppleBundleIdName::parse("example").unwrap(),
+            &willikins_types::AppleBundleIdPlatform::parse("UNIVERSAL").unwrap(),
+        )
+    }
+
+    /// Milestone 3m task P6: the fake inverse's own unit tests.
+    mod inverse {
+        use super::*;
+        use willikins_core::Timestamp;
+        use willikins_core::rollback::{CreationWindow, Standing};
+
+        fn window() -> CreationWindow {
+            CreationWindow {
+                start: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+                end: Timestamp::parse("2026-01-01T00:10:00Z").unwrap(),
+            }
+        }
+
+        fn created<'a>(inputs: &'a Inputs, outputs: &'a Outputs) -> Created<'a> {
+            Created {
+                inputs,
+                outputs,
+                window: window(),
+                settled_by: window().end,
+                accept: &[],
+                riders: &[],
+            }
+        }
+
+        #[test]
+        fn declares_delete_with_no_within_and_no_loss() {
+            let tool = tool_with(FakeState::new());
+            assert_eq!(
+                tool.reversal(),
+                Reversal::Delete {
+                    needs: &["issuer_id", "key_id", "key", "identifier", "name"],
+                    within: &[],
+                    losses: &[],
+                }
+            );
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods)] // a test mints its own token
+        fn standing_as_created_then_delete_removes_the_profile() {
+            let tool = tool_with(bundle_id_seeded_state());
+            let sink = SinkToken::new();
+            let ensured = tool.ensure(&inputs(), &sink).unwrap();
+            let inverse = Tool::inverse(&tool).unwrap();
+            assert_eq!(
+                inverse
+                    .standing(&created(&inputs(), &ensured.outputs))
+                    .unwrap(),
+                Standing::AsCreated { losing: Vec::new() }
+            );
+            let token = willikins_types::TeardownToken::new();
+            let deleted = inverse
+                .delete(&created(&inputs(), &ensured.outputs), &token)
+                .unwrap();
+            assert!(!deleted.already_gone);
+            assert_eq!(
+                inverse
+                    .standing(&created(&inputs(), &ensured.outputs))
+                    .unwrap(),
+                Standing::Gone
+            );
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods)] // a test mints its own token
+        fn standing_reports_not_ours_when_the_id_lives_under_a_different_name() {
+            let tool = tool_with(bundle_id_seeded_state());
+            let sink = SinkToken::new();
+            let ensured = tool.ensure(&inputs(), &sink).unwrap();
+            // A second profile, same identifier, a different name,
+            // reusing the first's own recorded outputs (same id) -- the
+            // shape `standing` must catch: the id now lives under a key
+            // other than this `Created`'s own `(identifier, name)`.
+            let other_name = AppleProfileName::parse("willikins-other-profile").unwrap();
+            let mut other_inputs = inputs();
+            other_inputs.insert(PortName::parse("name").unwrap(), Value::known(other_name));
+            let inverse = Tool::inverse(&tool).unwrap();
+            assert_eq!(
+                inverse
+                    .standing(&created(&other_inputs, &ensured.outputs))
+                    .unwrap(),
+                Standing::NotOurs { why: NOT_OURS }
+            );
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods)] // a test mints its own token
+        fn delete_on_an_already_gone_profile_reports_already_gone() {
+            let tool = tool_with(bundle_id_seeded_state());
+            let sink = SinkToken::new();
+            let ensured = tool.ensure(&inputs(), &sink).unwrap();
+            let inverse = Tool::inverse(&tool).unwrap();
+            let token = willikins_types::TeardownToken::new();
+            inverse
+                .delete(&created(&inputs(), &ensured.outputs), &token)
+                .unwrap();
+            let deleted = inverse
+                .delete(&created(&inputs(), &ensured.outputs), &token)
+                .unwrap();
+            assert!(deleted.already_gone);
+        }
     }
 }

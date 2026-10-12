@@ -14,11 +14,12 @@ use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
+use willikins_core::rollback::{Created, Deleted, Inverse, Reversal, Standing};
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
 use willikins_types::{
-    BuildkiteClusterId, BuildkiteOrg, BuildkitePipelineSlug, DomainType, GitHubRepo,
+    BuildkiteClusterId, BuildkiteOrg, BuildkitePipelineSlug, DomainType, GitHubRepo, TeardownToken,
 };
 
 use crate::state::{BuildkitePipelineRecord, FakeState, buildkite_pipeline_key};
@@ -46,6 +47,7 @@ pub(crate) const FROZEN_UPLOAD_CONFIGURATION: &str =
 pub struct FakeBuildkitePipelineEnsure {
     spec: ToolSpec,
     state: Arc<Mutex<FakeState>>,
+    inverse: BuildkitePipelineInverse,
 }
 
 impl FakeBuildkitePipelineEnsure {
@@ -75,6 +77,9 @@ impl FakeBuildkitePipelineEnsure {
                 key: vec![port("org"), port("slug")],
                 class: Class::Reversible,
                 pure: false,
+            },
+            inverse: BuildkitePipelineInverse {
+                state: state.clone(),
             },
             state,
         }
@@ -175,6 +180,96 @@ impl Tool for FakeBuildkitePipelineEnsure {
                     changed: true,
                 })
             }
+        }
+    }
+
+    /// Milestone 3m task P6: equal to the live tool's own declaration
+    /// (decisions 4, 5), field for field.
+    fn reversal(&self) -> Reversal {
+        Reversal::Delete {
+            needs: &["org", "slug", "token"],
+            within: &[],
+            losses: &["builds"],
+        }
+    }
+
+    fn inverse(&self) -> Option<&dyn Inverse> {
+        Some(&self.inverse)
+    }
+}
+
+/// `buildkite.pipeline.ensure`'s fake inverse (milestone 3m task P6).
+/// Never a catalog tool in its own right, never reachable except from
+/// `apply_teardown` (trust boundaries 1, 2).
+///
+/// No timestamps exist anywhere in this crate's state, so unlike the
+/// live inverse this never consults a creation window.
+struct BuildkitePipelineInverse {
+    state: Arc<Mutex<FakeState>>,
+}
+
+/// [`Standing::NotOurs`]: a pipeline record exists at this key, but its
+/// own `ours` flag is `false` -- this fake's single collapsed row for
+/// every live "not ours" case.
+const NOT_OURS: &str = "the pipeline is not ours";
+
+/// [`crate::support::conflict`]'s message when [`Inverse::delete`] is
+/// called on anything but [`Standing::Gone`] or a fully accepted
+/// [`Standing::AsCreated`] -- mirrors the live inverse's own constant.
+const DELETE_REFUSED_NOT_AS_CREATED: &str = "the pipeline has changed since this run created it, or is no longer ours; the teardown \
+     will not delete it";
+
+impl BuildkitePipelineInverse {
+    fn key_of(created: &Created<'_>) -> Result<String, ToolError> {
+        let org: BuildkiteOrg = get(created.inputs, "org")?;
+        let slug: BuildkitePipelineSlug = get(created.inputs, "slug")?;
+        Ok(buildkite_pipeline_key(&org, &slug))
+    }
+}
+
+impl Inverse for BuildkitePipelineInverse {
+    fn standing(&self, created: &Created<'_>) -> Result<Standing, ToolError> {
+        let key = Self::key_of(created)?;
+        let state = self.state.lock().unwrap();
+        match state.buildkite_pipelines.get(&key) {
+            None => Ok(Standing::Gone),
+            Some(record) if !record.ours => Ok(Standing::NotOurs { why: NOT_OURS }),
+            Some(_) => {
+                let builds = state
+                    .buildkite_pipeline_builds
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(0);
+                let losing = if builds > 0 {
+                    vec!["builds"]
+                } else {
+                    Vec::new()
+                };
+                Ok(Standing::AsCreated { losing })
+            }
+        }
+    }
+
+    fn delete(&self, created: &Created<'_>, _token: &TeardownToken) -> Result<Deleted, ToolError> {
+        match self.standing(created)? {
+            Standing::Gone => Ok(Deleted { already_gone: true }),
+            Standing::AsCreated { losing }
+                if losing.iter().all(|loss| {
+                    created
+                        .accept
+                        .iter()
+                        .any(|accepted| accepted.as_str() == *loss)
+                }) =>
+            {
+                let key = Self::key_of(created)?;
+                let mut state = self.state.lock().unwrap();
+                state.buildkite_pipelines.remove(&key);
+                state.buildkite_pipeline_builds.remove(&key);
+                Ok(Deleted {
+                    already_gone: false,
+                })
+            }
+            _ => Err(conflict(DELETE_REFUSED_NOT_AS_CREATED)),
         }
     }
 }
@@ -317,5 +412,174 @@ mod tests {
         assert_eq!(err.kind, willikins_core::ToolErrorKind::Conflict);
         let observation = tool.read(&inputs()).unwrap();
         assert!(matches!(observation, Observation::Foreign));
+    }
+
+    /// Milestone 3m task P6: the fake inverse's own unit tests.
+    mod inverse {
+        use super::*;
+        use willikins_core::Timestamp;
+        use willikins_core::rollback::{CreationWindow, Standing};
+
+        fn window() -> CreationWindow {
+            CreationWindow {
+                start: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+                end: Timestamp::parse("2026-01-01T00:10:00Z").unwrap(),
+            }
+        }
+
+        fn created<'a>(inputs: &'a Inputs, outputs: &'a Outputs) -> Created<'a> {
+            Created {
+                inputs,
+                outputs,
+                window: window(),
+                settled_by: window().end,
+                accept: &[],
+                riders: &[],
+            }
+        }
+
+        #[test]
+        fn declares_delete_with_the_builds_loss() {
+            let tool = FakeBuildkitePipelineEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+            assert_eq!(
+                tool.reversal(),
+                Reversal::Delete {
+                    needs: &["org", "slug", "token"],
+                    within: &[],
+                    losses: &["builds"],
+                }
+            );
+        }
+
+        #[test]
+        fn standing_reports_gone_when_absent() {
+            let tool = FakeBuildkitePipelineEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+            let inverse = Tool::inverse(&tool).unwrap();
+            let outputs = Outputs::new();
+            assert_eq!(
+                inverse.standing(&created(&inputs(), &outputs)).unwrap(),
+                Standing::Gone
+            );
+        }
+
+        #[test]
+        fn standing_reports_as_created_with_no_loss_when_no_builds() {
+            let state = Arc::new(Mutex::new(FakeState::new().with_buildkite_pipeline(
+                &org(),
+                &slug(),
+                BuildkitePipelineRecord {
+                    repository: ssh_repository_url(&repo()),
+                    cluster_id: cluster().to_string(),
+                    ours: true,
+                    configuration: String::new(),
+                },
+            )));
+            let tool = FakeBuildkitePipelineEnsure::new(state);
+            let inverse = Tool::inverse(&tool).unwrap();
+            let outputs = Outputs::new();
+            assert_eq!(
+                inverse.standing(&created(&inputs(), &outputs)).unwrap(),
+                Standing::AsCreated { losing: Vec::new() }
+            );
+        }
+
+        #[test]
+        fn standing_reports_the_builds_loss_when_builds_exist() {
+            let state = Arc::new(Mutex::new(
+                FakeState::new()
+                    .with_buildkite_pipeline(
+                        &org(),
+                        &slug(),
+                        BuildkitePipelineRecord {
+                            repository: ssh_repository_url(&repo()),
+                            cluster_id: cluster().to_string(),
+                            ours: true,
+                            configuration: String::new(),
+                        },
+                    )
+                    .with_buildkite_builds(&org(), &slug(), 3),
+            ));
+            let tool = FakeBuildkitePipelineEnsure::new(state);
+            let inverse = Tool::inverse(&tool).unwrap();
+            let outputs = Outputs::new();
+            assert_eq!(
+                inverse.standing(&created(&inputs(), &outputs)).unwrap(),
+                Standing::AsCreated {
+                    losing: vec!["builds"]
+                }
+            );
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods)] // a test mints its own token
+        fn delete_refuses_an_unaccepted_build_loss() {
+            let state = Arc::new(Mutex::new(
+                FakeState::new()
+                    .with_buildkite_pipeline(
+                        &org(),
+                        &slug(),
+                        BuildkitePipelineRecord {
+                            repository: ssh_repository_url(&repo()),
+                            cluster_id: cluster().to_string(),
+                            ours: true,
+                            configuration: String::new(),
+                        },
+                    )
+                    .with_buildkite_builds(&org(), &slug(), 1),
+            ));
+            let tool = FakeBuildkitePipelineEnsure::new(state.clone());
+            let inverse = Tool::inverse(&tool).unwrap();
+            let outputs = Outputs::new();
+            let token = willikins_types::TeardownToken::new();
+            let err = inverse
+                .delete(&created(&inputs(), &outputs), &token)
+                .unwrap_err();
+            assert_eq!(err.kind, willikins_core::ToolErrorKind::Conflict);
+            assert!(
+                state
+                    .lock()
+                    .unwrap()
+                    .buildkite_pipelines
+                    .contains_key(&buildkite_pipeline_key(&org(), &slug()))
+            );
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods)] // a test mints its own token
+        fn delete_removes_the_pipeline_and_its_build_count() {
+            let state = Arc::new(Mutex::new(
+                FakeState::new()
+                    .with_buildkite_pipeline(
+                        &org(),
+                        &slug(),
+                        BuildkitePipelineRecord {
+                            repository: ssh_repository_url(&repo()),
+                            cluster_id: cluster().to_string(),
+                            ours: true,
+                            configuration: String::new(),
+                        },
+                    )
+                    .with_buildkite_builds(&org(), &slug(), 2),
+            ));
+            let tool = FakeBuildkitePipelineEnsure::new(state.clone());
+            let inverse = Tool::inverse(&tool).unwrap();
+            let outputs = Outputs::new();
+            let accepted = vec![willikins_core::Loss::parse("builds").unwrap()];
+            let created = Created {
+                inputs: &inputs(),
+                outputs: &outputs,
+                window: window(),
+                settled_by: window().end,
+                accept: &accepted,
+                riders: &[],
+            };
+            let token = willikins_types::TeardownToken::new();
+            let deleted = inverse.delete(&created, &token).unwrap();
+            assert!(!deleted.already_gone);
+            let locked = state.lock().unwrap();
+            let key = buildkite_pipeline_key(&org(), &slug());
+            assert!(!locked.buildkite_pipelines.contains_key(&key));
+            assert!(!locked.buildkite_pipeline_builds.contains_key(&key));
+        }
     }
 }

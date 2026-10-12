@@ -532,6 +532,41 @@ impl Tool for GitHubScaffoldEnsure {
             }
         }
     }
+
+    /// Milestone 3m task P6: equal to the live tool's own declaration
+    /// (decision 4), field for field.
+    fn reversal(&self) -> willikins_core::rollback::Reversal {
+        willikins_core::rollback::Reversal::Contained {
+            within: &[willikins_core::rollback::Within {
+                tool: "github.repo.ensure",
+                ports: &[("repo", willikins_core::rollback::Side::Input, "repo")],
+            }],
+            otherwise: "a scaffold is a commit on a branch; reverting it is a new forward \
+                        change the document must make",
+        }
+    }
+}
+
+#[cfg(test)]
+mod reversal_tests {
+    use super::*;
+    use willikins_core::rollback::{Reversal, Side, Within};
+
+    #[test]
+    fn declares_contained_within_the_repo() {
+        let tool = GitHubScaffoldEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+        assert_eq!(
+            tool.reversal(),
+            Reversal::Contained {
+                within: &[Within {
+                    tool: "github.repo.ensure",
+                    ports: &[("repo", Side::Input, "repo")],
+                }],
+                otherwise: "a scaffold is a commit on a branch; reverting it is a new forward \
+                            change the document must make",
+            }
+        );
+    }
 }
 
 #[cfg(test)]

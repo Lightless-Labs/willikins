@@ -60,6 +60,7 @@
 //! is still created fresh. A project that is already present and ours is
 //! left alone: `ensure` never re-seeds its configs.
 
+mod inverse_support;
 pub mod state;
 mod support;
 pub mod tools;

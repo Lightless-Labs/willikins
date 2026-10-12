@@ -184,6 +184,33 @@ impl Tool for FakeAppstoreBundleIdEnsure {
             Observation::Foreign => unreachable!("this fake's own observe never returns Foreign"),
         }
     }
+
+    /// Milestone 3m task P6: equal to the live tool's own declaration
+    /// (decision 4), the exact `why` text that decision's table gives.
+    fn reversal(&self) -> willikins_core::rollback::Reversal {
+        willikins_core::rollback::Reversal::Retained {
+            why: "App Store identity the operator keeps: no ownership marker exists, and \
+                  deleting an identifier takes its capabilities and profiles with it",
+        }
+    }
+}
+
+#[cfg(test)]
+mod reversal_tests {
+    use super::*;
+    use willikins_core::rollback::Reversal;
+
+    #[test]
+    fn declares_retained() {
+        let tool = FakeAppstoreBundleIdEnsure::new(Arc::new(Mutex::new(FakeState::new())));
+        assert_eq!(
+            tool.reversal(),
+            Reversal::Retained {
+                why: "App Store identity the operator keeps: no ownership marker exists, and \
+                      deleting an identifier takes its capabilities and profiles with it",
+            }
+        );
+    }
 }
 
 #[cfg(test)]

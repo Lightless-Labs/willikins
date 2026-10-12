@@ -1,13 +1,15 @@
 //! `github.repo.ensure`: creates (in memory) a GitHub repository.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
+use willikins_core::rollback::{Created, Deleted, Inverse, Reversal, Standing};
 use willikins_core::{
     Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
 };
-use willikins_types::{GitHubRepo, RepoVisibility};
+use willikins_types::{GitHubRepo, RepoVisibility, TeardownToken};
 
 use crate::state::{FakeState, GitHubRepoRecord, repo_key};
 use crate::support::{conflict, exact, get, port, require_present, scalar, tool_name};
@@ -16,6 +18,7 @@ use crate::support::{conflict, exact, get, port, require_present, scalar, tool_n
 pub struct GitHubRepoEnsure {
     spec: ToolSpec,
     state: Arc<Mutex<FakeState>>,
+    inverse: GitHubRepoInverse,
 }
 
 impl GitHubRepoEnsure {
@@ -43,6 +46,9 @@ impl GitHubRepoEnsure {
                 key: vec![port("repo")],
                 class: Class::Reversible,
                 pure: false,
+            },
+            inverse: GitHubRepoInverse {
+                state: state.clone(),
             },
             state,
         }
@@ -150,6 +156,135 @@ impl Tool for GitHubRepoEnsure {
                     changed: true,
                 })
             }
+        }
+    }
+
+    /// Milestone 3m task P6: equal to the live tool's own declaration
+    /// (decisions 4, 5), field for field --
+    /// `tests/catalog_parity.rs` (in `willikins-providers-github`) pins
+    /// the two `Reversal`s equal.
+    fn reversal(&self) -> Reversal {
+        Reversal::Delete {
+            needs: &["repo", "token"],
+            within: &[],
+            losses: &[],
+        }
+    }
+
+    fn inverse(&self) -> Option<&dyn Inverse> {
+        Some(&self.inverse)
+    }
+}
+
+/// `github.repo.ensure`'s fake inverse (milestone 3m task P6). Never a
+/// catalog tool in its own right, never reachable except from
+/// `apply_teardown` (trust boundaries 1, 2) -- the same rule the live
+/// tool's own `GitHubRepoInverse` follows.
+///
+/// This fake carries no timestamp anywhere, so unlike the live inverse it
+/// never consults `created.window`/`settled_by` at all: every
+/// `NotOurs`/`Drifted` row below is this crate's own model of decision
+/// 7's *ownership* and *contents* rules only, never its timing rule. The
+/// mock tests in `willikins-providers-github`'s own `*_inverse_mock.rs`
+/// are what pin the live tool's window behaviour; this fake's own unit
+/// tests below pin everything else.
+struct GitHubRepoInverse {
+    state: Arc<Mutex<FakeState>>,
+}
+
+/// [`Standing::NotOurs`]: no repository record exists at this key, or
+/// one exists but its own `ours` flag is `false` -- this fake's single
+/// collapsed row for every live "not ours" case (renamed, transferred,
+/// lost the topic): it has no `full_name`/topics field to tell them
+/// apart, only the one `ours` bit.
+const NOT_OURS: &str = "the repository is not ours, or has been renamed or transferred away";
+
+/// [`Standing::Drifted`]: the repository carries an Actions secret name
+/// this run's own riders did not create.
+const DRIFTED_FOREIGN_ACTIONS_SECRET: &str =
+    "the repository carries an Actions secret this run's own riders did not create";
+
+/// [`crate::support::conflict`]'s message when [`Inverse::delete`] is
+/// called on anything but [`Standing::Gone`] or a fully accepted
+/// [`Standing::AsCreated`] -- mirrors the live inverse's own constant of
+/// the same shape.
+const DELETE_REFUSED_NOT_AS_CREATED: &str = "the repository has changed since this run created it, or is no longer ours; the teardown \
+     will not delete it";
+
+impl GitHubRepoInverse {
+    /// The `repo` key port, re-resolved from the journal (decision 2):
+    /// exactly `Created::inputs`, never read a second time from anywhere
+    /// else -- mirrors the live inverse's own `repo_of`.
+    fn repo_of(created: &Created<'_>) -> Result<GitHubRepo, ToolError> {
+        get(created.inputs, "repo")
+    }
+
+    /// Decision 7's ownership and contents rows, past the point
+    /// `standing` has already confirmed a record exists and is ours.
+    fn standing_from_record(
+        state: &FakeState,
+        repo: &GitHubRepo,
+        created: &Created<'_>,
+    ) -> Standing {
+        let tolerated: HashSet<String> = created
+            .riders
+            .iter()
+            .filter(|rider| rider.tool == "github.actions_secret.ensure")
+            .filter_map(|rider| {
+                get::<willikins_types::ActionsSecretName>(rider.inputs, "name").ok()
+            })
+            .map(|name| name.as_str().to_string())
+            .collect();
+        let prefix = format!("{repo}#");
+        let foreign = state
+            .github_actions_secrets
+            .iter()
+            .filter_map(|key| key.strip_prefix(&prefix))
+            .any(|name| !tolerated.contains(name));
+        if foreign {
+            return Standing::Drifted {
+                what: DRIFTED_FOREIGN_ACTIONS_SECRET,
+            };
+        }
+        Standing::AsCreated { losing: Vec::new() }
+    }
+}
+
+impl Inverse for GitHubRepoInverse {
+    fn standing(&self, created: &Created<'_>) -> Result<Standing, ToolError> {
+        let repo = Self::repo_of(created)?;
+        let state = self.state.lock().unwrap();
+        match state.github_repos.get(&repo_key(&repo)) {
+            None => Ok(Standing::Gone),
+            Some(record) if !record.ours => Ok(Standing::NotOurs { why: NOT_OURS }),
+            Some(_) => Ok(Self::standing_from_record(&state, &repo, created)),
+        }
+    }
+
+    fn delete(&self, created: &Created<'_>, _token: &TeardownToken) -> Result<Deleted, ToolError> {
+        match self.standing(created)? {
+            Standing::Gone => Ok(Deleted { already_gone: true }),
+            Standing::AsCreated { losing }
+                if losing.iter().all(|loss| {
+                    created
+                        .accept
+                        .iter()
+                        .any(|accepted| accepted.as_str() == *loss)
+                }) =>
+            {
+                let repo = Self::repo_of(created)?;
+                let mut state = self.state.lock().unwrap();
+                state.github_repos.remove(&repo_key(&repo));
+                let prefix = format!("{repo}#");
+                state
+                    .github_actions_secrets
+                    .retain(|key| !key.starts_with(&prefix));
+                state.scaffolds.retain(|key, _| !key.starts_with(&prefix));
+                Ok(Deleted {
+                    already_gone: false,
+                })
+            }
+            _ => Err(conflict(DELETE_REFUSED_NOT_AS_CREATED)),
         }
     }
 }
@@ -391,5 +526,241 @@ mod tests {
             .clone();
         assert_eq!(record.branches, Some(Vec::new()));
         assert_eq!(record.default_branch, None);
+    }
+
+    /// Milestone 3m task P6: the fake inverse's own unit tests, parallel
+    /// to the live `GitHubRepoInverse`'s mock tests but against
+    /// `FakeState` directly, and never consulting a window (this crate
+    /// has none).
+    mod inverse {
+        use super::*;
+        use willikins_core::rollback::{CreationWindow, Rider, Standing};
+        use willikins_core::{InstanceRef, NodeName, Timestamp};
+        use willikins_types::ActionsSecretName;
+
+        fn window() -> CreationWindow {
+            CreationWindow {
+                start: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+                end: Timestamp::parse("2026-01-01T00:10:00Z").unwrap(),
+            }
+        }
+
+        fn created<'a>(
+            inputs: &'a Inputs,
+            outputs: &'a Outputs,
+            riders: &'a [Rider<'a>],
+        ) -> Created<'a> {
+            Created {
+                inputs,
+                outputs,
+                window: window(),
+                settled_by: window().end,
+                accept: &[],
+                riders,
+            }
+        }
+
+        #[test]
+        fn declares_delete_with_no_within_and_no_loss() {
+            assert_eq!(
+                tool().reversal(),
+                Reversal::Delete {
+                    needs: &["repo", "token"],
+                    within: &[],
+                    losses: &[],
+                }
+            );
+        }
+
+        #[test]
+        fn standing_reports_gone_when_absent() {
+            let tool = tool();
+            let inverse = Tool::inverse(&tool).unwrap();
+            let inputs = Inputs::new();
+            let mut inputs = inputs;
+            inputs.insert(PortName::parse("repo").unwrap(), Value::known(repo()));
+            let outputs = Outputs::new();
+            assert_eq!(
+                inverse.standing(&created(&inputs, &outputs, &[])).unwrap(),
+                Standing::Gone
+            );
+        }
+
+        #[test]
+        fn standing_reports_not_ours_when_foreign() {
+            let state = Arc::new(Mutex::new(FakeState::new().with_repo(
+                &repo(),
+                RepoVisibility::Private,
+                false,
+            )));
+            let tool = GitHubRepoEnsure::new(state);
+            let inverse = Tool::inverse(&tool).unwrap();
+            let mut inputs = Inputs::new();
+            inputs.insert(PortName::parse("repo").unwrap(), Value::known(repo()));
+            let outputs = Outputs::new();
+            assert_eq!(
+                inverse.standing(&created(&inputs, &outputs, &[])).unwrap(),
+                Standing::NotOurs { why: NOT_OURS }
+            );
+        }
+
+        #[test]
+        fn standing_reports_as_created_when_ours_and_no_foreign_secret() {
+            let state = Arc::new(Mutex::new(FakeState::new().with_repo(
+                &repo(),
+                RepoVisibility::Private,
+                true,
+            )));
+            let tool = GitHubRepoEnsure::new(state);
+            let inverse = Tool::inverse(&tool).unwrap();
+            let mut inputs = Inputs::new();
+            inputs.insert(PortName::parse("repo").unwrap(), Value::known(repo()));
+            let outputs = Outputs::new();
+            assert_eq!(
+                inverse.standing(&created(&inputs, &outputs, &[])).unwrap(),
+                Standing::AsCreated { losing: Vec::new() }
+            );
+        }
+
+        #[test]
+        fn standing_reports_drifted_on_an_untolerated_actions_secret() {
+            let state = Arc::new(Mutex::new(
+                FakeState::new()
+                    .with_repo(&repo(), RepoVisibility::Private, true)
+                    .with_actions_secret(&repo(), &ActionsSecretName::parse("TOKEN").unwrap()),
+            ));
+            let tool = GitHubRepoEnsure::new(state);
+            let inverse = Tool::inverse(&tool).unwrap();
+            let mut inputs = Inputs::new();
+            inputs.insert(PortName::parse("repo").unwrap(), Value::known(repo()));
+            let outputs = Outputs::new();
+            assert_eq!(
+                inverse.standing(&created(&inputs, &outputs, &[])).unwrap(),
+                Standing::Drifted {
+                    what: DRIFTED_FOREIGN_ACTIONS_SECRET
+                }
+            );
+        }
+
+        #[test]
+        fn standing_tolerates_an_actions_secret_a_rider_created() {
+            let state = Arc::new(Mutex::new(
+                FakeState::new()
+                    .with_repo(&repo(), RepoVisibility::Private, true)
+                    .with_actions_secret(&repo(), &ActionsSecretName::parse("TOKEN").unwrap()),
+            ));
+            let tool = GitHubRepoEnsure::new(state);
+            let inverse = Tool::inverse(&tool).unwrap();
+            let mut inputs = Inputs::new();
+            inputs.insert(PortName::parse("repo").unwrap(), Value::known(repo()));
+            let outputs = Outputs::new();
+            let rider_instance = InstanceRef {
+                node: NodeName::parse("secret").unwrap(),
+                instance: None,
+            };
+            let mut rider_inputs = Inputs::new();
+            rider_inputs.insert(
+                PortName::parse("name").unwrap(),
+                Value::known(ActionsSecretName::parse("TOKEN").unwrap()),
+            );
+            let rider_outputs = Outputs::new();
+            let riders = [Rider {
+                tool: "github.actions_secret.ensure",
+                instance: &rider_instance,
+                inputs: &rider_inputs,
+                outputs: &rider_outputs,
+            }];
+            assert_eq!(
+                inverse
+                    .standing(&created(&inputs, &outputs, &riders))
+                    .unwrap(),
+                Standing::AsCreated { losing: Vec::new() }
+            );
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods)] // a test mints its own token
+        fn delete_removes_the_repo_and_its_actions_secrets_and_scaffolds() {
+            let state = Arc::new(Mutex::new(
+                FakeState::new()
+                    .with_repo(&repo(), RepoVisibility::Private, true)
+                    .with_actions_secret(&repo(), &ActionsSecretName::parse("TOKEN").unwrap())
+                    .with_scaffold_files(
+                        &repo(),
+                        &willikins_types::GitBranchName::parse("main").unwrap(),
+                        &[("README.md", "hi")],
+                    ),
+            ));
+            let tool = GitHubRepoEnsure::new(state.clone());
+            let inverse = Tool::inverse(&tool).unwrap();
+            let mut inputs = Inputs::new();
+            inputs.insert(PortName::parse("repo").unwrap(), Value::known(repo()));
+            let outputs = Outputs::new();
+            // The one Actions secret is a rider this run itself created
+            // (decision 3's "riding is not tolerance"), so `standing`
+            // tolerates it rather than refusing as drift.
+            let rider_instance = InstanceRef {
+                node: NodeName::parse("secret").unwrap(),
+                instance: None,
+            };
+            let mut rider_inputs = Inputs::new();
+            rider_inputs.insert(
+                PortName::parse("name").unwrap(),
+                Value::known(ActionsSecretName::parse("TOKEN").unwrap()),
+            );
+            let rider_outputs = Outputs::new();
+            let riders = [Rider {
+                tool: "github.actions_secret.ensure",
+                instance: &rider_instance,
+                inputs: &rider_inputs,
+                outputs: &rider_outputs,
+            }];
+            let token = willikins_types::TeardownToken::new();
+            let deleted = inverse
+                .delete(&created(&inputs, &outputs, &riders), &token)
+                .unwrap();
+            assert!(!deleted.already_gone);
+            let locked = state.lock().unwrap();
+            assert!(!locked.github_repos.contains_key(&repo_key(&repo())));
+            assert!(locked.github_actions_secrets.is_empty());
+            assert!(locked.scaffolds.is_empty());
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods)] // a test mints its own token
+        fn delete_on_an_already_gone_repo_reports_already_gone() {
+            let tool = tool();
+            let inverse = Tool::inverse(&tool).unwrap();
+            let mut inputs = Inputs::new();
+            inputs.insert(PortName::parse("repo").unwrap(), Value::known(repo()));
+            let outputs = Outputs::new();
+            let token = willikins_types::TeardownToken::new();
+            let deleted = inverse
+                .delete(&created(&inputs, &outputs, &[]), &token)
+                .unwrap();
+            assert!(deleted.already_gone);
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods)] // a test mints its own token
+        fn delete_refuses_a_drifted_repo_and_changes_nothing() {
+            let state = Arc::new(Mutex::new(
+                FakeState::new()
+                    .with_repo(&repo(), RepoVisibility::Private, true)
+                    .with_actions_secret(&repo(), &ActionsSecretName::parse("TOKEN").unwrap()),
+            ));
+            let tool = GitHubRepoEnsure::new(state.clone());
+            let inverse = Tool::inverse(&tool).unwrap();
+            let mut inputs = Inputs::new();
+            inputs.insert(PortName::parse("repo").unwrap(), Value::known(repo()));
+            let outputs = Outputs::new();
+            let token = willikins_types::TeardownToken::new();
+            let err = inverse
+                .delete(&created(&inputs, &outputs, &[]), &token)
+                .unwrap_err();
+            assert_eq!(err.kind, willikins_core::ToolErrorKind::Conflict);
+            let locked = state.lock().unwrap();
+            assert!(locked.github_repos.contains_key(&repo_key(&repo())));
+        }
     }
 }

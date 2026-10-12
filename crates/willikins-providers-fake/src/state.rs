@@ -323,6 +323,22 @@ impl SecretsMap {
     pub fn insert(&mut self, key: String, value: DopplerSecretValue) -> Option<DopplerSecretValue> {
         self.0.insert(key, value)
     }
+
+    /// Every seeded key, milestone 3m task P6: `DopplerProjectInverse`'s
+    /// (and friends') own fake twin needs to enumerate a config's secret
+    /// names without ever reading a value back out, the same "names
+    /// only" shape the live provider's own drift read keeps.
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &String> {
+        self.0.keys()
+    }
+
+    /// Remove every entry whose key starts with `prefix`, milestone 3m
+    /// task P6: a `Reversal::Delete` inverse's own cascade (a project or
+    /// config going removes everything recorded under its own key
+    /// prefix, never a foreign sibling's).
+    pub(crate) fn remove_prefixed(&mut self, prefix: &str) {
+        self.0.retain(|key, _| !key.starts_with(prefix));
+    }
 }
 
 impl Serialize for SecretsMap {
@@ -599,6 +615,17 @@ pub struct FakeState {
     /// Buildkite pipelines, keyed by `"<org>/<slug>"`
     /// ([`buildkite_pipeline_key`]).
     pub buildkite_pipelines: HashMap<String, BuildkitePipelineRecord>,
+    /// How many builds each Buildkite pipeline reports, keyed the same
+    /// way as [`Self::buildkite_pipelines`] -- milestone 3m task P6: a
+    /// separate map, rather than a seventh field on
+    /// [`BuildkitePipelineRecord`], so every existing struct literal of
+    /// that type in this crate (its own `ensure` create path, every test
+    /// fixture) stays unchanged. Absent or `0` means no builds, the same
+    /// as the live provider's own empty list; `buildkite.pipeline.ensure`'s
+    /// fake inverse reports any non-zero count here as the declared loss
+    /// `"builds"` (decision 3a), mirroring the live tool's
+    /// `has_any_build`.
+    pub buildkite_pipeline_builds: HashMap<String, u32>,
     /// App Store Connect bundle ids, keyed by their identifier string
     /// ([`AppleBundleIdentifier::as_str`]) -- App Store Connect's own
     /// natural key (research note, section 2). No `Foreign` concept
@@ -1042,6 +1069,22 @@ impl FakeState {
     ) -> Self {
         self.buildkite_pipelines
             .insert(buildkite_pipeline_key(org, slug), record);
+        self
+    }
+
+    /// Seed a Buildkite pipeline's own build count -- milestone 3m task
+    /// P6, [`Self::buildkite_pipeline_builds`]'s own doc. Does not seed
+    /// the pipeline itself; pair with [`Self::with_buildkite_pipeline`]
+    /// when the test also needs the pipeline to exist.
+    #[must_use]
+    pub fn with_buildkite_builds(
+        mut self,
+        org: &BuildkiteOrg,
+        slug: &BuildkitePipelineSlug,
+        count: u32,
+    ) -> Self {
+        self.buildkite_pipeline_builds
+            .insert(buildkite_pipeline_key(org, slug), count);
         self
     }
 
