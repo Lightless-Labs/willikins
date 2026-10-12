@@ -366,6 +366,90 @@ same task, same file:
   in its own `{ }` block first, never the match scrutinee directly, so the arm's own re-lock cannot deadlock on a
   guard the match statement might otherwise still be holding.)
 
+**Addendum:** 2026-10-12 — R7 landed (the journal, decision 8, acceptance 9) in four commits:
+`crates/willikins-core/src/rollback.rs`+`apply.rs`+`lib.rs` (core's own journal-safety fixes), then three in
+`willikins-journal` (`Teardown`/`TeardownApplyError` join `Redactable`; the four events, the new `ApplyRefusedReason`
+variants, `DriftReasonKind::Standing`, `TeardownRecord`, `RunRecord::rolled_back_by`, and every downstream compile
+fix; the fold's own coverage; the redaction test). `-p willikins-journal`, `cargo clippy -p willikins-server -p
+willikins-cli --all-targets -D warnings`, `-p willikins-server --test it -- mcp_server::`, `cargo fmt --all --check`
+and `cargo check -p willikins-types` all green. Deviations, recorded:
+- **R5a's own open item (`TeardownStep` does not carry `standing`; add it back, or explain why not, in the commit
+  that adds `StepFingerprint`) was already closed by R6**, before this task started: R6's own addendum (immediately
+  above R5a's addendum, both earlier in this file) took `StepFingerprint` over from R7 and explained, in `rollback.rs`
+  itself, why `TeardownStep` stays as it is ("`TeardownStep`s do not carry `standing`... `StepFingerprint` already
+  carries `instance`+`action` too, so nothing is lost"). Nothing left for this task to do on that specific point;
+  flagged here only because this task's own dispatch named it.
+- **`StepFingerprint.action` is reshaped from `TeardownAction` to a new `TeardownActionKind`, and
+  `StandingKind::AsCreated.losing` moves from `Vec<&'static str>` to `Vec<String>`.** `StepFingerprint` is stored
+  directly (unwrapped) on `TeardownPlanned.fingerprint`, exactly the way `InstanceFingerprint` already sits on
+  `PlanRecorded.fingerprint` -- so it must round-trip through `Deserialize` for a restarted `willikins-server` (task
+  R8) to read back a typed, comparable fingerprint from the journal at apply time, the same way `apply` already does
+  for a forward run's drift check. `serde` cannot produce a `&'static str` back out of a deserializer without
+  leaking memory on every replay, so every `&'static str` payload (`TeardownAction::Kept`/`Retained`/`MadeByHand`'s
+  own `why`/`need`, `StandingKind::AsCreated`'s own `losing` names) had to go. `TeardownActionKind` keeps exactly the
+  discriminant and the two payloads that carry identity (`Delete::uncertain`, `RidesWith::container`), dropping each
+  variant's own display text -- already shown to the operator via `Redacted<Teardown>` -- and this is no loss of the
+  safety property decision 8 names: `StepFingerprint.action` already keeps `Kept` and `Retained` apart as different
+  enum variants, whatever payload either carries. `TeardownAction`/`Teardown`/`TeardownStep` themselves are
+  unchanged, still the rich, display-oriented types `rollback.rs`'s own tests build and compare directly; only the
+  parallel, round-tripping `StepFingerprint`/`StandingKind` moved. `InstanceRef` (`apply.rs`) gained `Deserialize`/
+  `JsonSchema` for the same reason -- both fields were already owned, so this is a pure addition.
+- **`TeardownError::Resolve` and `TeardownApplyError::Replan` move from tuple variants to struct variants with one
+  named field** (`Resolve { error: PlanError }`, `Replan { error: TeardownError }`, `#[from]` on the field, same as
+  before): both enums are now internally tagged (`#[serde(tag = "kind")]`, for `willikins_journal::Redacted`), and
+  each one's single payload is *itself* internally tagged the same way (`PlanError`/`TeardownError`), so a tuple
+  variant's own tag insertion would collide with the nested value's own `"kind"` key in one JSON object. A struct
+  variant with a named field avoids this exactly the way `willikins_core::ApplyError::Plan { error: PlanError }`
+  already does. `#[from]` works the same on a named field, so every `?` call site (`resolve_source(...)?` in
+  `rollback.rs`) and the one test matching `TeardownApplyError::Replan { .. }` needed no behavioural change, only the
+  pattern's own shape.
+- **`TeardownFinished`'s `Failed` outcome carries `Redacted<willikins_core::TeardownApplyError>`, not the type
+  directly** (`TeardownOutcome`, a new type mirroring `Outcome` with no `Blocked` equivalent -- a teardown has no
+  gate to block on, trust boundary 1). `TeardownApplyError` (and the `TeardownError`/`PlanError` it can nest through
+  `Replan`) has no `Deserialize`, for the same reason `Teardown` itself does not (its own `&'static str` payloads),
+  so `Event` could not derive `Deserialize` either were this field stored unwrapped -- exactly `Outcome::Failed`'s own
+  reason for wrapping `ApplyError`. `Teardown` and `TeardownApplyError` both join `Redactable`'s sealed set in
+  `willikins-journal/src/redacted.rs` (the only place that can: its `sealed` module is private to that file).
+  `redacted.rs` gains a test proving a secret planted in `PlanError::NameTaken`'s own `key: Inputs` (the one
+  `Value`-bearing field reachable through `TeardownApplyError::Replan`'s own nesting) does not leak when wrapped --
+  not a second redaction path, the same guarantee `willikins_core::Value`'s own `Serialize` already gives every other
+  `Redacted<T>`.
+- **No `TeardownRunRecord`/per-step replay view.** `TeardownRecord` mirrors `PlanRecord` (approval state, `applied`
+  set on `TeardownStarted`), but a teardown run's own per-instance progress (`TeardownStepFinished`) has no replay
+  view yet: nothing in this task's own row or acceptance 9 asks for one, and resuming a half-finished teardown
+  (decision 8, "what it deleted reads `Gone`") works through live re-observation (`standing()`), never through
+  reading the journal's own per-step history back. `RunRecord::rolled_back_by` is the one cross-run fact a later task
+  (R8's `AlreadyRolledBack` refusal) needs, and it is set directly: `fold_teardown_started` records each teardown
+  run's own `of_run` in a transient map (mirroring `FinishedNodes`'s own transience), and a `TeardownFinished{Succeeded}`
+  reads it back to set the undone run's own `RunRecord.rolled_back_by` to the teardown run's id. A later task that
+  does need a teardown's own per-step replay should add it as its own view, not assume one exists here.
+- **`fold_approval` resolves a `plan_id` against `plans` first, then `teardowns`.** The two live in one `PlanId`
+  namespace and an id is minted for exactly one kind of record (never both), so this is never ambiguous; mirrors
+  `Journal::teardown` sitting beside `Journal::plan` and `ReplayedJournal::teardown` beside `ReplayedJournal::plan`.
+- **No duplicate-event guard added for the four new events in `file.rs`'s own corrupt-file check**, unlike
+  `PlanRecorded`/`RunStarted`/`RunFinished`/`NodeFinished`. Acceptance 9 asks only that every new event round-trips
+  and that the pre-milestone fixture still replays; a hand-edited file duplicating a `TeardownPlanned`/`TeardownStarted`/
+  `TeardownFinished` line is not a case any acceptance test here exercises. Flagged as a gap a later task (or X1's
+  own adversarial pass) may want to close, not silently dropped.
+- **Acceptance 9's redaction test is split, per this task's own module doc in `redaction_by_construction.rs`.** The
+  shared `events_carrying_the_secret()` loop also asserts every sample shows a `"REDACTED"` marker (so it is never
+  vacuously passing); `TeardownFinished`'s own chain (through `PlanError::NameTaken`) joins that loop, since it is
+  the one real risk in these new event shapes. `TeardownPlanned` cannot be seeded at all -- neither `Teardown` nor
+  `StepFingerprint` has a `Value`-bearing field -- so it gets its own, separate test that only asserts no leak, with
+  no marker expected either way. The acceptance text's "into a rider `secret.set`'s value port" half is a
+  core-level guarantee already proven in `rollback.rs`'s own test suite (`Created.riders`' secret ports are
+  `Value::Unknown` by construction, decision 3): `Created`/`Rider` are `willikins-core`-internal, seen only
+  in-process by an inverse's own `standing`/`delete`, and never serialized by any journal event type at all -- not
+  something this crate's own types could be asked to redact.
+- **`StandingKind`/`TeardownActionKind`/`StepFingerprint`/`Teardown`/`TeardownStep`/`TeardownAction`/`TeardownError`/
+  `TeardownApplyError`/`TeardownStepOutcome` join `willikins_core`'s flat `pub use rollback::{...}` re-export list**
+  in `lib.rs`, matching `Reversal`/`Within`'s own precedent (every other substantial public type from this module is
+  named there, not only reachable through the `rollback` submodule path) -- `RunFacts`/`RunInstance`/`RunProgress`
+  stay un-re-exported, since nothing in this task needs them from outside `willikins-core` (task R8's own call).
+- **No new ratchet token, in either crate.** `rollback.rs` stays at 2 (no new `unreachable!`/`expect`/`unwrap`/
+  `panic!` in non-test code; the `From` impl between `TeardownAction` and `TeardownActionKind` is exhaustive by
+  construction).
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
