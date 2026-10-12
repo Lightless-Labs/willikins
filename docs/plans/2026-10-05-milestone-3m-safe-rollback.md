@@ -331,6 +331,27 @@ own 2026-10-12 addendum required). Deviations, recorded:
   documented `Inverse::delete` contract for real (`Gone` → already-gone; `AsCreated` with every loss accepted →
   deletes; anything else → `Conflict`) — the first stub in this file to do so.
 
+**Addendum:** 2026-10-12 — a same-day review of R6 above (advisor pass, before X1) found one gap: no test exercised
+`apply_teardown` with a rider in play, leaving untested exactly the half of trust boundary 6 that is not true by
+construction at *delete* time (`delete_one`'s own rebuild of `Created.riders` is a second, independent computation
+from `decide_standalone`'s), and the "never a `RidesWith` step on its own" rule at apply time specifically. Fixed,
+same task, same file:
+- **`apply_teardown_lists_a_rider_and_hands_its_container_the_same_riders_at_delete`**, reusing
+  `config_rides_with_the_project_created_in_the_same_run`'s own fixture (`checked_riding`/`facts_multi`): asserts the
+  outcomes (`Listed` then `Deleted`, in `approved`'s own reverse-plan order), that the rider's own inverse sees zero
+  calls at apply time (not just zero at plan time), and that the container's own `delete` is handed
+  `created.riders.len() == 1` -- the one rider its own `standing` already tolerated.
+- **A new local fixture, `RidingDeleteInverse`** (combines `ToleranceInverse`'s own riders check with recording what
+  `delete` itself was handed): neither existing riding inverse lets a test see `Created.riders` at delete time.
+- **`RidingInverse::delete` now also increments its own shared `calls` counter**, not only `standing`: every
+  pre-existing test using it only ever calls `plan_teardown` (`delete` was unreachable), so no existing assertion
+  changes, but a new test asserting "this inverse's own `delete` was never called" needs the counter to actually
+  reflect that.
+- **`a_resource_recreated_after_a_gone_approval_refuses_as_drift`**, pinning that `apply_teardown`'s own re-plan
+  re-observes a `Gone` step too, not only the `Delete` ones: a resource someone recreated after a `Gone` approval
+  must still refuse. A design that only re-ran `approved`'s own `Delete` steps through a fresh `standing` call,
+  rather than calling `plan_teardown_steps` in full, would have missed this.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing

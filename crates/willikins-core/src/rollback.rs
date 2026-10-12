@@ -2922,6 +2922,14 @@ mod tests {
             _created: &Created<'_>,
             _token: &TeardownToken,
         ) -> Result<Deleted, crate::tool::ToolError> {
+            // Milestone 3m task R6: shares `calls` with `standing` rather
+            // than adding a second counter -- every pre-existing test
+            // using this inverse only ever calls `plan_teardown` (never
+            // `apply_teardown`), so `delete` was never reached and this
+            // changes none of their own assertions; a later test that
+            // asserts "this inverse's own `delete` was never called"
+            // needs `calls` to actually reflect that.
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(Deleted {
                 already_gone: matches!(self.standing, Standing::Gone),
             })
@@ -4644,5 +4652,173 @@ mod tests {
         assert!(matches!(outcomes[0], TeardownStepOutcome::Failed { .. }));
         assert_eq!(outcomes[1], TeardownStepOutcome::NotRun);
         assert_eq!(inverse.delete_calls(), 1);
+    }
+
+    /// An inverse combining [`ToleranceInverse`]'s own riders check with
+    /// recording what `delete` itself was handed (milestone 3m task R6):
+    /// neither existing riding fixture lets a test see `Created.riders`
+    /// at *delete* time, only at `standing` time, and `delete_one`'s own
+    /// rebuild of them (a second, independent computation from the one
+    /// `decide_standalone` used at plan time) deserves its own pin, not
+    /// just a passing assertion that *something* got deleted.
+    struct RidingDeleteInverse {
+        expected_riders: usize,
+        standing_calls: Arc<std::sync::atomic::AtomicUsize>,
+        delete_calls: Arc<std::sync::atomic::AtomicUsize>,
+        delete_riders_seen: Arc<std::sync::Mutex<Option<usize>>>,
+    }
+
+    impl Inverse for RidingDeleteInverse {
+        fn standing(&self, created: &Created<'_>) -> Result<Standing, crate::tool::ToolError> {
+            self.standing_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if created.riders.len() == self.expected_riders {
+                Ok(Standing::AsCreated { losing: vec![] })
+            } else {
+                Ok(Standing::Drifted {
+                    what: "an untolerated secret name",
+                })
+            }
+        }
+
+        fn delete(
+            &self,
+            created: &Created<'_>,
+            _token: &TeardownToken,
+        ) -> Result<Deleted, crate::tool::ToolError> {
+            self.delete_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.delete_riders_seen.lock().unwrap() = Some(created.riders.len());
+            Ok(Deleted {
+                already_gone: false,
+            })
+        }
+    }
+
+    /// Acceptance 5, 7 together, through `apply_teardown`: a config rides
+    /// with the project it was created alongside. At apply time, the
+    /// `RidesWith` step is `Listed` (never its own `delete` call, never
+    /// even its own `standing`), and the project's own `delete` is handed
+    /// exactly the rider `standing` already tolerated -- `delete_one`'s
+    /// own rebuild of `Created.riders` agrees with `decide_standalone`'s.
+    #[test]
+    fn apply_teardown_lists_a_rider_and_hands_its_container_the_same_riders_at_delete() {
+        let standing_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let delete_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let delete_riders_seen = Arc::new(std::sync::Mutex::new(None));
+        let project = StubProjectTool::with_inverse(
+            "test.project",
+            Box::new(RidingDeleteInverse {
+                expected_riders: 1,
+                standing_calls: Arc::clone(&standing_calls),
+                delete_calls: Arc::clone(&delete_calls),
+                delete_riders_seen: Arc::clone(&delete_riders_seen),
+            }),
+        );
+        let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let config = StubConfigTool::with_standing(Standing::Gone, Arc::clone(&config_calls));
+        let secret = StubSecretTool::new();
+        let checked = checked_riding(
+            Arc::clone(&project),
+            Arc::clone(&config),
+            secret,
+            TeardownPolicy::Delete { accept: vec![] },
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+
+        let project_value = repo_value("org/the-project");
+        let project_run = riding_instance(
+            "project",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[("project", project_value.clone())]),
+            outputs_of(&[("project", project_value.clone())]),
+        );
+        let config_run = riding_instance(
+            "config",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("config", repo_value("org/the-config")),
+                ("project", project_value.clone()),
+            ]),
+            outputs_of(&[("config", repo_value("org/the-config"))]),
+        );
+        let run = facts_multi(vec![project_run, config_run], RUN_FINISHED);
+
+        let (teardown, approved) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
+        let project_ref = InstanceRef {
+            node: node("project"),
+            instance: None,
+        };
+        let config_ref = InstanceRef {
+            node: node("config"),
+            instance: None,
+        };
+        assert_eq!(
+            teardown.steps,
+            vec![
+                TeardownStep {
+                    instance: config_ref,
+                    action: TeardownAction::RidesWith {
+                        container: project_ref.clone(),
+                    },
+                },
+                TeardownStep {
+                    instance: project_ref,
+                    action: TeardownAction::Delete { uncertain: false },
+                },
+            ]
+        );
+        assert_eq!(standing_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let outcomes = apply_teardown(&approved, &run, &checked, &resolved).unwrap();
+        assert_eq!(
+            outcomes,
+            vec![TeardownStepOutcome::Listed, TeardownStepOutcome::Deleted]
+        );
+        // The `RidesWith` step's own container (`test.config`'s inverse)
+        // never saw a `delete` call -- nor even a second `standing` one
+        // (trust boundary 6, as R5b's addendum reworded it: never a
+        // `RidesWith` step on its own).
+        assert_eq!(config_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        // The project's own `delete` ran exactly once, handed exactly the
+        // one rider its own `standing` already tolerated.
+        assert_eq!(delete_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(*delete_riders_seen.lock().unwrap(), Some(1));
+    }
+
+    /// `apply_teardown`'s own re-plan re-observes a `Gone` step too, not
+    /// only `Delete` ones: a resource someone recreated after approval
+    /// (`Gone` at approval, `AsCreated` now) must still refuse, which a
+    /// loop over `approved`'s own `Delete` steps alone would miss.
+    #[test]
+    fn a_resource_recreated_after_a_gone_approval_refuses_as_drift() {
+        let inverse = ObservableInverse::new(Standing::Gone);
+        let tool = StubLossyTool::new(Arc::clone(&inverse));
+        let checked = checked_lossy(tool, TeardownPolicy::Delete { accept: vec![] });
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let (teardown, approved) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None,
+                },
+                action: TeardownAction::Gone,
+            }]
+        );
+
+        inverse.set_plan_standing(Standing::AsCreated { losing: vec![] });
+
+        let err = apply_teardown(&approved, &run, &checked, &resolved).unwrap_err();
+        assert!(matches!(err, TeardownApplyError::Drift), "{err:?}");
+        assert_eq!(inverse.delete_calls(), 0);
     }
 }
