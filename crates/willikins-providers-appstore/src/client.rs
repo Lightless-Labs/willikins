@@ -562,6 +562,29 @@ impl AppstoreClient {
         Ok(response.data)
     }
 
+    /// `GET /v1/profiles/{id}?fields[profiles]=name,createdDate,bundleId` --
+    /// milestone 3m task P5's own sparse standing read (decision 7's
+    /// appstore row, verify item 10): `name` and `createdDate` to compare
+    /// against this run's own recorded ones and creation window, and the
+    /// `bundleId` relationship's linkage (its `id` alone -- the relationship
+    /// object's own `data` block already carries that id with no
+    /// `include=` needed, since this read never side-loads the related
+    /// bundle id resource itself). Deliberately never asks for
+    /// `profileContent`, `certificates` or `devices`: a teardown's own read
+    /// is strictly narrower than [`Self::get_profile`]'s.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::list_bundle_ids`].
+    pub(crate) fn get_profile_standing(
+        &self,
+        id: &AppleProfileId,
+    ) -> Result<ProfileStandingResource, ProviderError> {
+        let path = format!("/v1/profiles/{id}?fields[profiles]=name,createdDate,bundleId");
+        let response: ProfileStandingResponse = self.http.get(&path)?;
+        Ok(response.data)
+    }
+
     /// `POST /v1/profiles`, `data.type` `profiles`, attributes `name` +
     /// `profileType`, relationships `bundleId` (one) and `certificates`
     /// (exactly one) -- **no `devices` key at all** (decision (b): the
@@ -1015,6 +1038,57 @@ struct ProfileListResponse {
     data: Vec<ProfileResource>,
     /// See [`BundleIdListResponse::links`] -- same reasoning.
     links: Option<Links>,
+}
+
+/// One `profiles` resource's attributes, [`AppstoreClient::get_profile_standing`]'s
+/// own sparse shape -- `name` and `createdDate` only, never
+/// `profileContent` (milestone 3m task P5). `created_date` is `Option`,
+/// not defaulted: Apple's published schema does not mark it required, and
+/// a response that omits or malforms it must fail closed (decision 2,
+/// `appstore.profile.ensure`'s own inverse reads `None` the same as an
+/// unparseable value -- outside the creation window).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ProfileStandingAttributes {
+    pub(crate) name: String,
+    #[serde(rename = "createdDate")]
+    pub(crate) created_date: Option<String>,
+}
+
+/// The `bundleId` relationship, read side, on the sparse standing read
+/// alone -- a to-one relationship, so its own `data` (when present at
+/// all) is one object, never an array like [`CertificatesRelationship`]'s.
+/// Reuses [`RelationshipDataRef`] since only `id` is ever read from it.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct BundleIdRelationship {
+    #[serde(default)]
+    pub(crate) data: Option<RelationshipDataRef>,
+}
+
+/// A `profiles` resource's `relationships` object, [`AppstoreClient::get_profile_standing`]'s
+/// own sparse shape -- `bundleId` only, never `certificates`: a separate
+/// type from [`ProfileRelationships`] for the identical reason that one
+/// is separate from the write-side relationship types.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ProfileStandingRelationships {
+    #[serde(default, rename = "bundleId")]
+    pub(crate) bundle_id: Option<BundleIdRelationship>,
+}
+
+/// One `profiles` resource, as [`AppstoreClient::get_profile_standing`]
+/// reads it. No `id` field: the caller already knows it (it is the very
+/// id this read was addressed to), and the journal-recorded
+/// [`willikins_types::AppleProfileId`] this run created is read from
+/// `Created::outputs`, never echoed back from this response.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ProfileStandingResource {
+    pub(crate) attributes: ProfileStandingAttributes,
+    #[serde(default)]
+    pub(crate) relationships: Option<ProfileStandingRelationships>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProfileStandingResponse {
+    data: ProfileStandingResource,
 }
 
 #[derive(Debug, Serialize)]

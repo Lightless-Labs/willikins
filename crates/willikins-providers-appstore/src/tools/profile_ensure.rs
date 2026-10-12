@@ -100,16 +100,16 @@
 //! `fields[profiles]` deliberately omits both.
 
 use willikins_core::tool::helpers::{
-    conflict, exact, get, not_found, port, require_present, scalar, tool_name,
+    conflict, exact, get, invalid, known, not_found, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolErrorKind,
-    ToolSpec, TypeName, TypeRef, Value,
+    Class, Created, Deleted, Ensured, Inputs, Inverse, Observation, Outputs, Reversal, SinkToken,
+    Standing, Timestamp, Tool, ToolError, ToolErrorKind, ToolSpec, TypeName, TypeRef, Value,
 };
 use willikins_types::{
     AppleBundleIdId, AppleBundleIdentifier, AppleCertificateId, AppleIssuerId, AppleKeyId,
     AppleProfileContent, AppleProfileId, AppleProfileName, AppleProfileType, AppleSigningKey,
-    DomainType,
+    DomainType, TeardownToken,
 };
 
 use crate::client::{AppstoreClient, BundleIdResource, ProfileResource, client_for};
@@ -118,6 +118,7 @@ use crate::client::{AppstoreClient, BundleIdResource, ProfileResource, client_fo
 pub struct AppstoreProfileEnsure {
     spec: ToolSpec,
     base_url: String,
+    inverse: AppstoreProfileInverse,
 }
 
 impl AppstoreProfileEnsure {
@@ -140,6 +141,7 @@ impl AppstoreProfileEnsure {
         let mut outputs = indexmap::IndexMap::new();
         outputs.insert(port("profile"), scalar("AppleProfileId"));
         outputs.insert(port("content"), scalar("AppleProfileContent"));
+        let base_url = base_url.into();
         Self {
             spec: ToolSpec {
                 name: tool_name("appstore.profile.ensure"),
@@ -157,7 +159,10 @@ impl AppstoreProfileEnsure {
                 class: Class::Destructive,
                 pure: false,
             },
-            base_url: base_url.into(),
+            inverse: AppstoreProfileInverse {
+                base_url: base_url.clone(),
+            },
+            base_url,
         }
     }
 
@@ -590,6 +595,175 @@ impl Tool for AppstoreProfileEnsure {
                     },
                 )
             }
+        }
+    }
+
+    /// Milestone 3m decisions 4, 7, task P5: deletable, by the id this
+    /// run recorded ([`AppstoreProfileInverse::profile_id_of`] reads it
+    /// from `created.outputs`, never a second lookup by key). `needs`
+    /// names every input port the inverse reads from `created.inputs`:
+    /// the three credential ports (`key` is the one secret port here,
+    /// decision 5's own reasoning for `github.repo.ensure`'s `token`),
+    /// plus `identifier` and `name`, both of which `standing` compares
+    /// against what the resource now reports. No container
+    /// (`within: &[]`): a profile cascades nothing it was never given.
+    /// No declared loss: decision 7's own row reports none, a profile
+    /// has no contents of its own to lose.
+    fn reversal(&self) -> Reversal {
+        Reversal::Delete {
+            needs: &["issuer_id", "key_id", "key", "identifier", "name"],
+            within: &[],
+            losses: &[],
+        }
+    }
+
+    fn inverse(&self) -> Option<&dyn Inverse> {
+        Some(&self.inverse)
+    }
+}
+
+/// `appstore.profile.ensure`'s inverse (milestone 3m task P5, decisions
+/// 4, 7). Never a catalog tool in its own right, never reachable except
+/// from `apply_teardown` (trust boundaries 1, 2). Mints its own
+/// [`AppstoreClient`] per call from `created.inputs`' credential ports,
+/// mirroring [`AppstoreProfileEnsure::new`]'s own reason for holding no
+/// client or credential at construction time.
+struct AppstoreProfileInverse {
+    base_url: String,
+}
+
+/// [`Standing::NotOurs`]: the profile's own `name` no longer matches the
+/// key this run recorded -- including a response that omitted it
+/// outright (fail closed, decision 7).
+const NOT_OURS_NAME_DIFFERS: &str =
+    "the profile's own name no longer matches the key this run recorded";
+
+/// [`Standing::NotOurs`]: the profile's `bundleId` relationship no
+/// longer resolves to the bundle identifier this run recorded --
+/// including a relationship this read could not resolve at all (the
+/// identifier is no longer registered, or the relationship's own `data`
+/// was missing or unparseable; fail closed either way).
+const NOT_OURS_BUNDLE_ID_DIFFERS: &str =
+    "the profile's own bundle id relationship no longer matches the identifier this run recorded";
+
+/// [`Standing::NotOurs`]: the profile's own `createdDate` falls outside
+/// this instance's creation window (decision 2) -- including a response
+/// that omitted it, or whose value this module could not parse as RFC
+/// 3339, outright (fail closed, verify item 10).
+const NOT_OURS_OUTSIDE_WINDOW: &str =
+    "the profile's own creation date falls outside this run's creation window";
+
+/// [`crate::tool::helpers::conflict`]'s message when [`Inverse::delete`]
+/// is called on anything but [`Standing::Gone`] or a fully accepted
+/// [`Standing::AsCreated`] -- the documented contract every real inverse
+/// in this workspace honours (mirrors `GitHubRepoInverse`'s own constant
+/// of the same shape).
+const DELETE_REFUSED_NOT_AS_CREATED: &str = "the profile has changed since this run created it, or is no longer ours; the teardown \
+     will not delete it";
+
+impl AppstoreProfileInverse {
+    /// The `AppleProfileId` this run recorded, read from
+    /// `created.outputs` -- the one value this inverse needs that is an
+    /// *output*, never a `needs` port (decision 3: `Created::outputs` is
+    /// always available, with no declaration required).
+    fn profile_id_of(created: &Created<'_>) -> Result<AppleProfileId, ToolError> {
+        let value = created
+            .outputs
+            .get(&port("profile"))
+            .ok_or_else(|| invalid("output port `profile` is required"))?;
+        known(value, "profile")
+    }
+
+    /// The client this call should use, minted fresh from `created.inputs`'
+    /// own `issuer_id`/`key_id`/`key` -- the same three ports `read`/`ensure`
+    /// resolve from a tool call's own `Inputs` (decision 5).
+    fn client(&self, created: &Created<'_>) -> Result<AppstoreClient, ToolError> {
+        let issuer_id: AppleIssuerId = get(created.inputs, "issuer_id")?;
+        let key_id: AppleKeyId = get(created.inputs, "key_id")?;
+        let key: AppleSigningKey = get(created.inputs, "key")?;
+        client_for(&self.base_url, &issuer_id, &key_id, &key)
+    }
+
+    /// Decision 7's appstore row, past the point `standing` has already
+    /// confirmed the profile exists: `name`, then the `bundleId`
+    /// relationship (re-resolved from the recorded `identifier` through
+    /// [`AppstoreProfileEnsure::find_bundle_id`], the same byte-exact
+    /// lookup `read`/`ensure` already use), then the creation window.
+    /// `created.riders` is never read here: decision 7 gives this tool no
+    /// contents rule of its own, and reports no loss either -- a profile
+    /// has nothing this run's own riders could have written.
+    fn standing_from_body(
+        client: &AppstoreClient,
+        created: &Created<'_>,
+        body: &crate::client::ProfileStandingResource,
+    ) -> Result<Standing, ToolError> {
+        let name: AppleProfileName = get(created.inputs, "name")?;
+        if body.attributes.name != name.to_string() {
+            return Ok(Standing::NotOurs {
+                why: NOT_OURS_NAME_DIFFERS,
+            });
+        }
+        let identifier: AppleBundleIdentifier = get(created.inputs, "identifier")?;
+        let related_id = body
+            .relationships
+            .as_ref()
+            .and_then(|relationships| relationships.bundle_id.as_ref())
+            .and_then(|bundle_id| bundle_id.data.as_ref())
+            .map(|data| data.id.as_str());
+        let matches_identifier = match AppstoreProfileEnsure::find_bundle_id(client, &identifier)? {
+            Some(bundle_id_resource) => related_id == Some(bundle_id_resource.id.as_str()),
+            None => false,
+        };
+        if !matches_identifier {
+            return Ok(Standing::NotOurs {
+                why: NOT_OURS_BUNDLE_ID_DIFFERS,
+            });
+        }
+        let in_window = body
+            .attributes
+            .created_date
+            .as_deref()
+            .and_then(|raw| Timestamp::parse(raw).ok())
+            .is_some_and(|at| at >= created.window.start && at <= created.window.end);
+        if !in_window {
+            return Ok(Standing::NotOurs {
+                why: NOT_OURS_OUTSIDE_WINDOW,
+            });
+        }
+        Ok(Standing::AsCreated { losing: Vec::new() })
+    }
+}
+
+impl Inverse for AppstoreProfileInverse {
+    fn standing(&self, created: &Created<'_>) -> Result<Standing, ToolError> {
+        let profile_id = Self::profile_id_of(created)?;
+        let client = self.client(created)?;
+        match client.get_profile_standing(&profile_id) {
+            Err(err) if err.status == Some(404) => Ok(Standing::Gone),
+            Err(err) => Err(err.into()),
+            Ok(body) => Self::standing_from_body(&client, created, &body),
+        }
+    }
+
+    fn delete(&self, created: &Created<'_>, _token: &TeardownToken) -> Result<Deleted, ToolError> {
+        match self.standing(created)? {
+            Standing::Gone => Ok(Deleted { already_gone: true }),
+            Standing::AsCreated { losing }
+                if losing.iter().all(|loss| {
+                    created
+                        .accept
+                        .iter()
+                        .any(|accepted| accepted.as_str() == *loss)
+                }) =>
+            {
+                let profile_id = Self::profile_id_of(created)?;
+                let client = self.client(created)?;
+                client.delete_profile(&profile_id)?;
+                Ok(Deleted {
+                    already_gone: false,
+                })
+            }
+            _ => Err(conflict(DELETE_REFUSED_NOT_AS_CREATED)),
         }
     }
 }

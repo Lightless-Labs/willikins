@@ -17,4 +17,5 @@ mod no_certificate_writes_guard;
 mod profile_create_response_shapes;
 mod profile_documents;
 mod profile_ensure_mock;
+mod profile_inverse_mock;
 mod redaction;
