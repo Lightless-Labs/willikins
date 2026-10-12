@@ -1312,6 +1312,59 @@ base) rather than deriving it fresh. Deviations recorded:
   crates/willikins-providers-github/tests/live_rollback_cycle.rs::step_5_manual_cleanup_and_recount .delete(
   ```
 
+**Addendum:** 2026-10-12 -- L3 landed (`buildkite.pipeline.ensure`'s own live rollback cycle,
+`crates/willikins-providers-buildkite/tests/live_rollback_cycle.rs`, read "as L1": provider-level,
+calling the tool and its inverse directly, never through a document or `plan_teardown`/`apply_teardown`).
+Written and compiling, **never run by this task** -- the coordinator runs it once. Scoped gate
+`cargo clippy -p willikins-providers-buildkite --features live-tests --all-targets -j 2 -- -D
+warnings` green; `cargo test -p willikins-core --test it -j 2 -- teardown_token_guard::
+secret_literal_guard::` (30 tests) green over the new file, mirroring L1's own gate list; the
+file's own four non-`#[ignore]`d unit tests (the slug/window/`local_parse_pipeline_created_at`
+pins) green under `cargo test -p willikins-providers-buildkite --features live-tests --test
+live_rollback_cycle -j 2`. Deviations, recorded:
+- **Three sub-cycles, not L1's/L2's three-or-four:** `-a` (clean rollback: `standing` reports
+  `AsCreated` with no losing names, `delete` succeeds, a raw `GET` afterwards is `404`), `-b` (an
+  unaccepted build loss: a build is triggered through a raw `POST
+  .../pipelines/{slug}/builds` -- no tool in this crate has a method for this at all, decision 4's
+  table declares no `buildkite.build.*` tool -- `standing` reports `AsCreated { losing: ["builds"]
+  }`, `delete` with `Created::accept` empty refuses as a `Conflict`, deleted by hand) and `-c` (the
+  same build loss, this time with `Created::accept` carrying `Loss::parse("builds")`: `delete`
+  succeeds despite the build). Acceptance 16's own "push, a hand-set secret" drift mechanics are
+  GitHub's and Doppler's; `buildkite.pipeline.ensure` declares no contents rule of its own
+  (decision 7's buildkite row; P4's own addendum: "`created.riders` is never read here"), so the
+  one drift this tool's inverse can ever report live is the declared `builds` loss (decision 3a),
+  which this task reads as acceptance 16's own "drift" for this provider, not a gap against it.
+- **Verify item 8's open question, settled.** P4's own addendum left "which form a live pipeline's
+  `created_at` actually sends" to this task. `-a`'s own raw `GET` records which of
+  `local_parse_pipeline_created_at`'s two forms (a copy of `client.rs`'s private
+  `parse_pipeline_created_at`, extended to report which branch matched, since that is exactly what
+  this verify item asks) a real pipeline's response parses under, printed at run time rather than
+  assumed; both branches stay live in the parser either way, so a result that turns out to be the
+  non-RFC-3339 form changes nothing once the coordinator runs this cycle and records the answer.
+  The builds-listing endpoint and `DELETE`'s success are the same `-b`/hand-cleanup exercise this
+  task's own module doc describes.
+- **No sandbox-org literal check, unlike L1's `sandbox_org_from`.** This crate's two pre-existing
+  live cycles (`tests/live_write_cycle.rs`, `tests/live_bootstrap_cycle.rs`) read
+  `WILLIKINS_SANDBOX_BUILDKITE_ORG` directly with no fixed organisation literal to validate it
+  against; this task follows that existing crate precedent rather than importing GitHub's stricter
+  one (inherited there from milestone 3l's own L1), since nothing else in this crate names the
+  sandbox org anywhere. Recorded as a deliberate choice, not an oversight, since L1's own doc names
+  the check as "unchanged" from its forebear and a reader could otherwise expect the same shape
+  here.
+- **Buildkite's own "Create a Build" endpoint** (`POST
+  /v2/organizations/{org}/pipelines/{slug}/builds`, minimal body `commit`/`branch`) was fetched
+  verbatim from `buildkite.com/docs/apis/rest-api/builds.md` on 2026-10-12 for this task, alongside
+  P4's own already-fetched "List builds" confirmation; no tool or client method in this crate
+  gained one, since decision 4's table declares no tool that creates a build -- this task's own
+  raw `POST` is the one write in the file with no existing client method to reuse, the same
+  "raw request" reasoning the file's own module doc gives for every read.
+- **`crates/willikins-cli/tests/it/delete_call_sites_guard.rs`'s `INVENTORY` extended** in a
+  second, coordinator-sanctioned commit after L3's own: the five L1 sites and eleven L2 sites
+  listed just above, plus this task's own three (all `.delete(`, one call site each, no
+  multiplicities): `step_2_clean_rollback`, `step_3_unaccepted_build_loss`,
+  `step_4_accepted_build_loss`. `cargo test -p willikins-cli --test it -j 2 --
+  delete_call_sites_guard::` green afterward.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
