@@ -102,17 +102,15 @@
 //! end.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::Value as Json;
 use willikins_core::rollback::{CREATION_SKEW, CreationWindow};
 use willikins_core::{
     Created, Inputs, Inverse, Loss, Outputs, PortName, SinkToken, Standing, Timestamp, Tool,
     ToolErrorKind, Value,
 };
 use willikins_providers_buildkite::{
-    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineEnsure, credential_from_env,
-    http_client,
+    BuildkiteClient, BuildkiteClusterGet, BuildkitePipelineEnsure, credential_from_env, http_client,
 };
 use willikins_providers_http::Http;
 use willikins_types::{
@@ -152,8 +150,12 @@ fn unix_seconds() -> u64 {
 /// `GitHubRepo`'s 32) needs no truncation trick here.
 fn build_slug(timestamp: u64, tag: &str) -> BuildkitePipelineSlug {
     let name = format!("{PROBE_PREFIX}{timestamp}{tag}");
-    BuildkitePipelineSlug::parse(&name)
-        .unwrap_or_else(|err| panic!("`{name}` must be a valid BuildkitePipelineSlug: {}", err.reason))
+    BuildkitePipelineSlug::parse(&name).unwrap_or_else(|err| {
+        panic!(
+            "`{name}` must be a valid BuildkitePipelineSlug: {}",
+            err.reason
+        )
+    })
 }
 
 /// The sandbox Buildkite org this cycle runs against, from
@@ -163,9 +165,8 @@ fn build_slug(timestamp: u64, tag: &str) -> BuildkitePipelineSlug {
 fn sandbox_org() -> BuildkiteOrg {
     let value = std::env::var("WILLIKINS_SANDBOX_BUILDKITE_ORG")
         .expect("WILLIKINS_SANDBOX_BUILDKITE_ORG is set");
-    BuildkiteOrg::parse(&value).unwrap_or_else(|err| {
-        panic!("`{value}` is not a valid BuildkiteOrg: {}", err.reason)
-    })
+    BuildkiteOrg::parse(&value)
+        .unwrap_or_else(|err| panic!("`{value}` is not a valid BuildkiteOrg: {}", err.reason))
 }
 
 /// A repository this cycle's pipelines point at. Buildkite stores this as
@@ -243,11 +244,25 @@ fn local_parse_pipeline_created_at(raw: &str) -> Option<(Timestamp, &'static str
     let naive = raw
         .strip_suffix(" UTC")
         .and_then(|rest| chrono::NaiveDateTime::parse_from_str(rest, "%Y-%m-%d %H:%M:%S").ok())?;
-    Some((Timestamp::from_datetime(naive.and_utc()), "buildkite documented form"))
+    Some((
+        Timestamp::from_datetime(naive.and_utc()),
+        "buildkite documented form",
+    ))
 }
 
-/// `GET /v2/organizations/{org}/pipelines/{slug}`, raw.
-fn get_pipeline_raw(raw: &Http, org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) -> Json {
+/// `GET /v2/organizations/{org}/pipelines/{slug}`, raw, deserializing
+/// only `created_at` -- trust boundary 7 (this crate's own
+/// `PipelineBody`/`PipelineStandingBody` precedent, which
+/// `tests/live_bootstrap_cycle.rs`'s own `BuildCounts` doc restates for
+/// raw test reads too): a real response also carries `provider.webhook_url`
+/// and `configuration`, so this file never deserializes the whole body
+/// into a generic value, here or anywhere else below.
+#[derive(serde::Deserialize)]
+struct CreatedAtOnly {
+    created_at: Option<String>,
+}
+
+fn get_pipeline_raw(raw: &Http, org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) -> CreatedAtOnly {
     raw.get(&format!("/v2/organizations/{org}/pipelines/{slug}"))
         .unwrap_or_else(|err| panic!("GET of `{org}/{slug}` failed (status {:?})", err.status))
 }
@@ -256,10 +271,10 @@ fn get_pipeline_raw(raw: &Http, org: &BuildkiteOrg, slug: &BuildkitePipelineSlug
 /// non-null `created_at`, and it must parse under
 /// [`local_parse_pipeline_created_at`]. Returns which form matched, for
 /// the caller to print.
-fn assert_created_at_present_and_parseable(body: &Json) -> &'static str {
+fn assert_created_at_present_and_parseable(body: &CreatedAtOnly) -> &'static str {
     let raw = body
-        .get("created_at")
-        .and_then(Json::as_str)
+        .created_at
+        .as_deref()
         .unwrap_or_else(|| panic!("verify item 8: the pipeline's raw GET carried no `created_at`"));
     let (_, form) = local_parse_pipeline_created_at(raw).unwrap_or_else(|| {
         panic!("verify item 8: `created_at` ({raw:?}) parsed under neither RFC 3339 nor Buildkite's documented form")
@@ -273,14 +288,17 @@ fn assert_created_at_present_and_parseable(body: &Json) -> &'static str {
 /// `branch: "main"`. No tool in this crate has a method for this at all
 /// (decision 4's table declares no `buildkite.build.*` tool), so this is
 /// the one write in this file that is not exercising an existing client
-/// method.
+/// method. The response (a full build object nesting the pipeline, which
+/// itself carries `provider.webhook_url`/`configuration`) is discarded
+/// into `IgnoredAny`, never parsed into a generic value -- trust
+/// boundary 7, same reasoning as [`CreatedAtOnly`].
 fn trigger_a_build(raw: &Http, org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) {
     let body = serde_json::json!({
         "commit": "HEAD",
         "branch": "main",
         "message": "willikins live rollback cycle (L3): throwaway build, never inspected past existence",
     });
-    raw.post::<Json>(
+    raw.post::<serde::de::IgnoredAny>(
         &format!("/v2/organizations/{org}/pipelines/{slug}/builds"),
         &body,
     )
@@ -294,10 +312,13 @@ fn trigger_a_build(raw: &Http, org: &BuildkiteOrg, slug: &BuildkitePipelineSlug)
 
 /// `GET /v2/organizations/{org}/pipelines/{slug}/builds?per_page=1`, raw
 /// -- this file's own copy of `has_any_build`'s own query (`pub(crate)`,
-/// unreachable from this separate integration-test crate). Verify item
-/// 8's other half.
+/// unreachable from this separate integration-test crate), including its
+/// `Vec<IgnoredAny>` deserialize: verify item 8's other half, and trust
+/// boundary 7 again (a build object carries no credential of its own,
+/// but `has_any_build`'s own doc already settled on `IgnoredAny` for the
+/// same "needs only the length" reason this copy keeps).
 fn has_any_build_raw(raw: &Http, org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) -> bool {
-    let builds: Vec<Json> = raw
+    let builds: Vec<serde::de::IgnoredAny> = raw
         .get(&format!(
             "/v2/organizations/{org}/pipelines/{slug}/builds?per_page=1"
         ))
@@ -348,10 +369,7 @@ fn list_pipeline_slugs(raw: &Http, org: &BuildkiteOrg) -> Vec<String> {
 /// `resolve_default_cluster`.
 fn resolve_default_cluster(cluster_tool: &BuildkiteClusterGet, org: &BuildkiteOrg) -> Value {
     let mut inputs = Inputs::new();
-    inputs.insert(
-        PortName::parse("org").unwrap(),
-        Value::known(org.clone()),
-    );
+    inputs.insert(PortName::parse("org").unwrap(), Value::known(org.clone()));
     inputs.insert(
         PortName::parse("name").unwrap(),
         Value::known(BuildkiteClusterName::parse("Default cluster").unwrap()),
@@ -371,14 +389,8 @@ fn resolve_default_cluster(cluster_tool: &BuildkiteClusterGet, org: &BuildkiteOr
 /// `buildkite.pipeline.ensure`'s own inputs for one real `ensure` call.
 fn ensure_inputs(org: &BuildkiteOrg, slug: &BuildkitePipelineSlug, cluster: Value) -> Inputs {
     let mut inputs = Inputs::new();
-    inputs.insert(
-        PortName::parse("org").unwrap(),
-        Value::known(org.clone()),
-    );
-    inputs.insert(
-        PortName::parse("slug").unwrap(),
-        Value::known(slug.clone()),
-    );
+    inputs.insert(PortName::parse("org").unwrap(), Value::known(org.clone()));
+    inputs.insert(PortName::parse("slug").unwrap(), Value::known(slug.clone()));
     inputs.insert(PortName::parse("repo").unwrap(), Value::known(repo()));
     inputs.insert(PortName::parse("cluster").unwrap(), cluster);
     inputs
@@ -391,14 +403,8 @@ fn ensure_inputs(org: &BuildkiteOrg, slug: &BuildkitePipelineSlug, cluster: Valu
 /// the two key ports `BuildkitePipelineInverse::org_of`/`slug_of` read.
 fn created_inputs(org: &BuildkiteOrg, slug: &BuildkitePipelineSlug) -> Inputs {
     let mut inputs = Inputs::new();
-    inputs.insert(
-        PortName::parse("org").unwrap(),
-        Value::known(org.clone()),
-    );
-    inputs.insert(
-        PortName::parse("slug").unwrap(),
-        Value::known(slug.clone()),
-    );
+    inputs.insert(PortName::parse("org").unwrap(), Value::known(org.clone()));
+    inputs.insert(PortName::parse("slug").unwrap(), Value::known(slug.clone()));
     inputs
 }
 
@@ -445,7 +451,11 @@ struct DeleteGuard {
 }
 
 impl DeleteGuard {
-    fn new(client: Arc<BuildkiteClient>, org: BuildkiteOrg, slugs: [BuildkitePipelineSlug; 3]) -> Self {
+    fn new(
+        client: Arc<BuildkiteClient>,
+        org: BuildkiteOrg,
+        slugs: [BuildkitePipelineSlug; 3],
+    ) -> Self {
         Self {
             client,
             org,
@@ -539,7 +549,12 @@ fn step_1_count_and_refuse_leftovers(raw: &Http, org: &BuildkiteOrg) -> usize {
 /// item 8's own `created_at` field, confirms `standing` reports
 /// `AsCreated` with no losing names, deletes through the inverse, and
 /// confirms a raw `GET` afterwards is `404`.
-fn step_2_clean_rollback(cycle: &mut Cycle, org: &BuildkiteOrg, slug: &BuildkitePipelineSlug, cluster: Value) {
+fn step_2_clean_rollback(
+    cycle: &mut Cycle,
+    org: &BuildkiteOrg,
+    slug: &BuildkitePipelineSlug,
+    cluster: Value,
+) {
     let before = Timestamp::now();
     let ensured = cycle
         .pipeline_ensure
@@ -551,7 +566,10 @@ fn step_2_clean_rollback(cycle: &mut Cycle, org: &BuildkiteOrg, slug: &Buildkite
             )
         });
     let after = Timestamp::now();
-    assert!(ensured.changed, "step 2: creating `-a` must report changed: true");
+    assert!(
+        ensured.changed,
+        "step 2: creating `-a` must report changed: true"
+    );
 
     let raw_body = get_pipeline_raw(&cycle.raw, org, slug);
     let form = assert_created_at_present_and_parseable(&raw_body);
@@ -584,7 +602,10 @@ fn step_2_clean_rollback(cycle: &mut Cycle, org: &BuildkiteOrg, slug: &Buildkite
         "step 2: deleting a freshly created pipeline must not report already_gone"
     );
 
-    match cycle.raw.get::<Json>(&format!("/v2/organizations/{org}/pipelines/{slug}")) {
+    match cycle
+        .raw
+        .get::<serde::de::IgnoredAny>(&format!("/v2/organizations/{org}/pipelines/{slug}"))
+    {
         Err(err) if err.status == Some(404) => {}
         Ok(_) => panic!("step 2: `-a` still exists after the inverse's own delete"),
         Err(err) => panic!(
@@ -709,7 +730,10 @@ fn step_4_accepted_build_loss(
 
     let token = teardown_token();
     let deleted = inverse(&cycle.pipeline_ensure)
-        .delete(&created(&inputs, &outputs, window, settled_by, &accept), &token)
+        .delete(
+            &created(&inputs, &outputs, window, settled_by, &accept),
+            &token,
+        )
         .unwrap_or_else(|err| {
             panic!(
                 "step 4: delete of `-c` must succeed once the document accepts the \"builds\" \
@@ -722,7 +746,10 @@ fn step_4_accepted_build_loss(
         "step 4: deleting a pipeline that still has its build must not report already_gone"
     );
 
-    match cycle.raw.get::<Json>(&format!("/v2/organizations/{org}/pipelines/{slug}")) {
+    match cycle
+        .raw
+        .get::<serde::de::IgnoredAny>(&format!("/v2/organizations/{org}/pipelines/{slug}"))
+    {
         Err(err) if err.status == Some(404) => {}
         Ok(_) => panic!("step 4: `-c` still exists after the inverse's own delete"),
         Err(err) => panic!(
@@ -759,7 +786,10 @@ fn step_5_manual_cleanup_and_recount(
                 err.status
             )
         });
-    match cycle.raw.get::<Json>(&format!("/v2/organizations/{org}/pipelines/{slug_b}")) {
+    match cycle
+        .raw
+        .get::<serde::de::IgnoredAny>(&format!("/v2/organizations/{org}/pipelines/{slug_b}"))
+    {
         Err(err) if err.status == Some(404) => {}
         Ok(_) => panic!("step 5: `-b` still exists after its hand DELETE"),
         Err(err) => panic!(
@@ -886,25 +916,18 @@ fn creation_window_and_settled_by_apply_the_skew_on_the_right_side() {
 /// tag this file's own copy adds.
 #[test]
 fn local_parse_pipeline_created_at_tries_rfc3339_then_buildkites_documented_form() {
-    let (rfc3339, form) = local_parse_pipeline_created_at("2026-01-01T00:00:00Z")
-        .expect("RFC 3339 must parse");
+    let (rfc3339, form) =
+        local_parse_pipeline_created_at("2026-01-01T00:00:00Z").expect("RFC 3339 must parse");
     assert_eq!(rfc3339, Timestamp::parse("2026-01-01T00:00:00Z").unwrap());
     assert_eq!(form, "rfc3339");
 
     let (documented, form) = local_parse_pipeline_created_at("2013-09-03 13:24:38 UTC")
         .expect("Buildkite's documented form must parse");
-    assert_eq!(documented, Timestamp::parse("2013-09-03T13:24:38Z").unwrap());
+    assert_eq!(
+        documented,
+        Timestamp::parse("2013-09-03T13:24:38Z").unwrap()
+    );
     assert_eq!(form, "buildkite documented form");
 
     assert_eq!(local_parse_pipeline_created_at("not a timestamp"), None);
-}
-
-/// A sleep helper this file's own doc comments reference but that no test
-/// here actually calls -- `Duration` stays imported for a future reader
-/// who wants to add a window-edge sub-cycle (`tests/it/pipeline_inverse_mock.rs`
-/// already proves that arm on mocks); kept as a compile-time pin that the
-/// import is still exactly `std::time::Duration`, not a renamed re-export.
-#[test]
-fn duration_import_is_std_time_duration() {
-    let _: Duration = Duration::from_secs(1);
 }
