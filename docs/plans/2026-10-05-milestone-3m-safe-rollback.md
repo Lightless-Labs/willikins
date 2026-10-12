@@ -1365,6 +1365,21 @@ live_rollback_cycle -j 2`. Deviations, recorded:
   `step_4_accepted_build_loss`. `cargo test -p willikins-cli --test it -j 2 --
   delete_call_sites_guard::` green afterward.
 
+**Addendum:** 2026-10-12 — a same-day review of L3 above found two gaps, fixed in a fourth commit,
+same task: `cargo fmt --check` was never run before the first commit (CLAUDE.md's own four-command
+gate names it separately from clippy and test); and `-b`/`-c`'s raw pipeline/build `GET`/`POST`
+responses deserialized into `serde_json::Value`, contradicting this crate's own trust boundary 7
+discipline (`tests/live_bootstrap_cycle.rs`'s `BuildCounts`/`PipelineSlugOnly`: a real response
+carries `provider.webhook_url`/`configuration`, so a raw test read uses a narrow struct or
+`IgnoredAny`, never a generic value). Both fixed; a `Duration` import kept alive only by its own
+"pin the import" test was also removed (R2's/R3's own addenda already refuse exactly this kind of
+throwaway scaffold). Re-ran green: the scoped clippy gate, `cargo fmt -p
+willikins-providers-buildkite -p willikins-cli --check`, and the file's own three (not four, after
+dropping the `Duration` test) non-`#[ignore]`d unit tests. **Left for the coordinator, not fixed
+here:** `-b`/`-c`'s raw `POST .../builds` needs `write_builds` on the sandbox Buildkite token; the
+plan's own "Needs the operator" item 3 confirms only pipeline deletion scope, not build creation --
+confirm before running this cycle.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
