@@ -10,16 +10,21 @@
 //! same way it validates a [`crate::tool::Gate`] (milestone 3m task R1).
 //!
 //! [`Inverse`], [`Created`], [`Standing`] and [`Deleted`] (milestone 3m
-//! task R3) are the shape an inverse works with; `plan_teardown` and
-//! `apply_teardown` — lands in later milestone 3m tasks (R5a, R5b, R6) —
-//! against this file. `Created` is still missing two fields decision 3's
-//! design names (`window`, `riders`): their types do not exist yet
-//! (`CreationWindow` and `Rider` are task R5a/R5b's). `accept` (whose type,
-//! [`crate::workflow::Loss`], task T1 adds to `workflow.rs`) is now
-//! present. See the plan's 2026-10-12 addendum (R3) for which task adds
-//! which field; `Inverse::delete`'s documented contract already states the
-//! rule those fields will carry, so their arrival changes no contract,
-//! only the type that can express it.
+//! task R3) are the shape an inverse works with. [`plan_teardown`]
+//! (milestone 3m task R5a) computes a [`Teardown`] from one run's own
+//! [`RunFacts`], over a [`crate::check::Checked`] document and the
+//! [`crate::plan::Resolved`] pure-resolver closure
+//! [`crate::plan::resolve_pure`] evaluated for it — [`wanted_resolvers`]
+//! is the seam a caller (`willikins-server`'s future
+//! `Butler::plan_rollback`, task R8) uses to compute that closure's own
+//! `wanted` set from `checked` alone. `apply_teardown` (milestone 3m task
+//! R6) still lands in a later commit. `Created` is still missing one
+//! field decision 3's design names, `riders: &'a [Rider<'a>]`: `Rider`'s
+//! type does not exist yet (milestone 3m task R5b's). See the plan's
+//! 2026-10-12 addendum (R3) for which task adds which field;
+//! `Inverse::delete`'s documented contract already states the rule that
+//! field will carry, so its arrival changes no contract, only the type
+//! that can express it.
 
 use std::sync::LazyLock;
 
@@ -508,14 +513,14 @@ pub enum TeardownError {
         /// Every refusing instance and why.
         steps: Vec<(crate::apply::InstanceRef, &'static str)>,
     },
-    /// A `Delete` tool's secret `needs` port is bound to something a
-    /// teardown's pure resolver closure cannot honestly read: a node
-    /// that is not itself pure, or (not yet supported; see this
-    /// variant's own call site) the current `for_each` item (decision
-    /// 5).
+    /// A `Delete` tool's secret `needs` port cannot be honestly
+    /// re-resolved (decision 5): bound to a node that is not itself pure,
+    /// bound (however many pure hops away) to an impure node's own
+    /// output, or (not yet supported; see this variant's own call site)
+    /// the current `for_each` item.
     #[error(
-        "node `{node}` port `{port}` cannot be re-resolved by a teardown: it is not bound to a \
-         pure resolver chain"
+        "node `{node}` port `{port}` cannot be re-resolved by a teardown: it is not honestly \
+         bound to a pure resolver chain"
     )]
     UnresolvableCredential {
         /// The node.
@@ -620,6 +625,18 @@ fn source_producer_name<I>(
 /// to a `Step`/`Aggregate`/`Keyed` source names a producer. May repeat a
 /// name; [`crate::plan::resolve_pure`]'s own `wanted` is read into a
 /// `HashSet` regardless.
+///
+/// **Over-approximates decision 5 on purpose.** Decision 5 names the
+/// pure nodes a `Delete` *step's* own secret `needs` ports are bound to
+/// — but a step only exists for an instance `plan_teardown`'s own
+/// candidate predicate admits, which needs the run's `RunFacts`, not
+/// just `checked`. This function has no `RunFacts`, so it reads every
+/// `teardown: delete` node's own `needs` ports, whatever a given run's
+/// instances actually did. Safe (`resolve_pure` still never calls an
+/// impure tool's `read`; the only cost is evaluating a resolver chain
+/// `plan_teardown` then does not end up needing) but wider than
+/// necessary. Tightening it to the run's own candidates is a caller's
+/// call (task R8), not this function's.
 pub fn wanted_resolvers(checked: &crate::check::Checked) -> Vec<crate::workflow::NodeName> {
     let (single_names, each_names) = crate::plan::node_names_by_shape(checked);
     let mut wanted = Vec::new();
