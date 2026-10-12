@@ -98,17 +98,17 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use serde_json::Value as Json;
 
-use willikins_core::rollback::{CreationWindow, CREATION_SKEW};
+use willikins_core::rollback::{CREATION_SKEW, CreationWindow};
 use willikins_core::{
     Created, Inputs, Inverse, Outputs, PortName, Standing, Timestamp, Tool, ToolErrorKind, Value,
 };
 use willikins_providers_github::{
-    credential_from_env, http_client, GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure,
-    GitHubScaffoldEnsure,
+    GitHubActionsSecretEnsure, GitHubClient, GitHubRepoEnsure, GitHubScaffoldEnsure,
+    credential_from_env, http_client,
 };
 use willikins_providers_http::Http;
 use willikins_types::{
