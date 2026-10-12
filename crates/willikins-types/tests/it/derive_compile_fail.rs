@@ -37,6 +37,12 @@
 //! willikins-types` (no `--tests`, so no dev-dependency feature
 //! unification) succeeding with `executor` off — which every gate that
 //! isn't `--all-targets`/`cargo test` already exercises.
+//!
+//! Milestone 3m's `TeardownToken` (also `src/sink.rs`, acceptance test 2)
+//! is the identical mechanism and carries the identical limitation, for
+//! the same reason: this crate's own dev-dependency on itself with
+//! `executor` on means a `trybuild` fixture here would have the feature
+//! regardless of what it "should" have.
 #[test]
 fn compile_fail() {
     let t = trybuild::TestCases::new();

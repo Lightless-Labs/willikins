@@ -23,6 +23,8 @@ pub mod sink;
 
 /// Capability token gating access to secret values; see [`sink::SinkToken`].
 pub use sink::SinkToken;
+/// Capability token gating a teardown delete; see [`sink::TeardownToken`].
+pub use sink::TeardownToken;
 
 pub use disclosure::{Disclosure, IDENTIFIER_PREFIX_CHARS, mask_identifier};
 pub use object::{DomainObject, Rendered, downcast};
