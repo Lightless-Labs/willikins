@@ -67,8 +67,8 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 use crate::check::{
-    Bound, Checked, CheckedInput, EachId, Edge, InputId, OutputSlot, PortEdge, Shape, SingleId,
-    Source,
+    Bound, Checked, CheckedInput, CheckedNode, EachId, Edge, InputId, OutputSlot, PortEdge, Shape,
+    SingleId, Source,
 };
 use crate::class::Class;
 use crate::site::Site;
@@ -1894,15 +1894,348 @@ fn output_type_mismatch(port: &PortName, expected: &TypeRef, found: &TypeRef) ->
     }
 }
 
+/// What [`resolve_pure`] evaluated (milestone 3m, decision 5): the same
+/// typed result tables [`ResolveCtx`] reads, limited to the backward
+/// closure a teardown's secret credential ports actually need. Most
+/// entries stay [`SingleResult::Skipped`]/[`EachResult::Skipped`] on
+/// purpose — a node outside the closure, pure or not, is never read
+/// (decision 5: "evaluating every pure node would make deleting a GitHub
+/// repository need App Store credentials"). Opaque outside this crate: a
+/// caller elsewhere (`willikins-server`'s future `Butler::plan_rollback`,
+/// task R8) threads this straight on to the future
+/// `crate::rollback::plan_teardown` (task R5a), which resolves a specific
+/// port's own `Source` against it through [`Self::ctx`].
+///
+/// `ctx` and these fields are read only by this module's own tests until
+/// task R5a's `plan_teardown` lands and reads them from real, non-test
+/// code: the plain `lib` build (no `--cfg test`) never sees that test
+/// module, so without the `expect` below it would flag both as dead.
+/// `expect` (not `allow`) is self-removing: the moment R5a calls `ctx()`
+/// from outside `#[cfg(test)]`, the lib build errors on an unfulfilled
+/// lint expectation, and R5a's own commit must delete both attributes --
+/// the same discipline R2's `EXPECTED_SITES = 0` already uses (plan
+/// addendum, 2026-10-12).
+#[cfg_attr(not(test), expect(dead_code))]
+pub struct Resolved {
+    single: Vec<SingleResult>,
+    each: Vec<EachResult>,
+    single_names: Vec<NodeName>,
+    each_names: Vec<NodeName>,
+}
+
+impl Resolved {
+    /// A [`ResolveCtx`] borrowing `self`'s own tables plus `checked`'s own
+    /// input table and `inputs`, for a caller inside this crate
+    /// (`crate::rollback::plan_teardown`, task R5a) to resolve a `Delete`
+    /// step's secret `needs` port's own [`Source`] against, through
+    /// [`resolve_source`] — exactly how [`plan`]/[`crate::apply::apply`]
+    /// resolve every other port, with no second walk and no catalog
+    /// lookup. `checked` and `inputs` must be the same pair given to the
+    /// [`resolve_pure`] call that produced `self`.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn ctx<'a>(
+        &'a self,
+        checked: &'a Checked,
+        inputs: &'a IndexMap<InputName, Value>,
+    ) -> ResolveCtx<'a> {
+        ResolveCtx {
+            checked_inputs: checked.inputs(),
+            inputs,
+            single: &self.single,
+            each: &self.each,
+            single_names: &self.single_names,
+            each_names: &self.each_names,
+        }
+    }
+}
+
+/// Which table a [`Source`]'s own producer (if it names one at all)
+/// indexes into — [`node_readable`] and [`needed_producers`] both only
+/// ever care which table, never a `Source`'s own `I` or output type.
+enum Producer {
+    Single(SingleId),
+    Each(EachId),
+}
+
+/// `source`'s own producer: `None` for [`Source::Literal`],
+/// [`Source::Input`] and [`Source::Item`], which never reference another
+/// node.
+fn source_producer<I>(source: &Source<I>) -> Option<Producer> {
+    match source {
+        Source::Literal(_) | Source::Input(_) | Source::Item(_) => None,
+        Source::Step { from, .. } => Some(Producer::Single(*from)),
+        Source::Aggregate { from, .. } | Source::Keyed { from, .. } => Some(Producer::Each(*from)),
+    }
+}
+
+/// Calls `visit` with every [`Source`] one of `ports`' own bound ports
+/// carries: a [`Bound::Scalar`]'s one source, or a [`Bound::List`]'s own
+/// elements, each in declaration order. The same traversal
+/// `GateTracking::collect_bound_causes` already does for the skip
+/// cascade, duplicated here because this one visits a typed `Source`
+/// directly, never a [`crate::workflow::Binding`] or a `GateKey`.
+fn visit_port_sources<I>(ports: &[PortEdge<I>], mut visit: impl FnMut(&Source<I>)) {
+    for port in ports {
+        match &port.bound {
+            Bound::Scalar { source, .. } => visit(source),
+            Bound::List { elements, .. } => {
+                for source in elements {
+                    visit(source);
+                }
+            }
+        }
+    }
+}
+
+/// Whether [`resolve_pure`] could ever read `checked_node` at all
+/// (milestone 3m, decision 5): its own tool is pure, and its `for_each`
+/// source (if any) and every bound port traces back, through
+/// [`Source::Step`]/[`Source::Aggregate`]/[`Source::Keyed`] only, to an
+/// already-readable producer. `single_readable`/`each_readable` hold that
+/// answer for every node [`resolve_pure`] has already processed, in the
+/// same topological order `checked.nodes()` is already in, so a
+/// producer's own answer is always known by the time its consumer is
+/// checked (producers come first). [`Source::Literal`], [`Source::Input`]
+/// and [`Source::Item`] never block readability — only a `Source` that
+/// names another node can.
+fn node_readable(
+    checked_node: &CheckedNode,
+    single_readable: &[bool],
+    each_readable: &[bool],
+) -> bool {
+    if !checked_node.tool.spec().pure {
+        return false;
+    }
+    let mut ok = true;
+    let mut check = |producer: Option<Producer>| match producer {
+        Some(Producer::Single(id)) => ok &= single_readable[id.0 as usize],
+        Some(Producer::Each(id)) => ok &= each_readable[id.0 as usize],
+        None => {}
+    };
+    match &checked_node.shape {
+        Shape::Single { ports, .. } => {
+            visit_port_sources(ports, |source| check(source_producer(source)));
+        }
+        Shape::Each { source, ports, .. } => {
+            check(source_producer(source));
+            visit_port_sources(ports, |source| check(source_producer(source)));
+        }
+    }
+    ok
+}
+
+/// Every producer `checked_node`'s own `for_each` source (if any) and
+/// bound ports name, by [`NodeName`] (milestone 3m, decision 5's
+/// backward closure), inserted into `needed`. The caller only calls this
+/// for a node it has already confirmed is itself pure (SHARED VALUES),
+/// so a name this function adds is always reached without crossing a
+/// non-pure boundary — tracing into a non-pure node's own further
+/// ancestors would widen the closure decision 5 deliberately keeps
+/// narrow, for no benefit: nothing past it is ever read anyway.
+fn needed_producers(
+    checked_node: &CheckedNode,
+    single_names: &[NodeName],
+    each_names: &[NodeName],
+    needed: &mut HashSet<NodeName>,
+) {
+    let mut record = |producer: Option<Producer>| match producer {
+        Some(Producer::Single(id)) => {
+            needed.insert(single_names[id.0 as usize].clone());
+        }
+        Some(Producer::Each(id)) => {
+            needed.insert(each_names[id.0 as usize].clone());
+        }
+        None => {}
+    };
+    match &checked_node.shape {
+        Shape::Single { ports, .. } => {
+            visit_port_sources(ports, |source| record(source_producer(source)));
+        }
+        Shape::Each { source, ports, .. } => {
+            record(source_producer(source));
+            visit_port_sources(ports, |source| record(source_producer(source)));
+        }
+    }
+}
+
+/// Evaluate exactly the pure resolver chain a teardown's `Delete` steps'
+/// secret `needs` ports read (milestone 3m, decision 5): `wanted` names
+/// the pure producer nodes those ports are directly bound to; this
+/// function adds their own pure ancestors — a backward closure over
+/// [`Source::Step`]/[`Source::Aggregate`]/[`Source::Keyed`] edges, never
+/// crossing a non-pure node — and evaluates every node in it, nothing
+/// else, reusing [`bind_ports`] and [`resolve_source`] over `checked`'s
+/// own graph exactly as [`plan`] does: no [`crate::workflow::Binding`],
+/// no catalog lookup, no second probe of the conversion table.
+///
+/// Every node this closure reaches but cannot honestly read — not pure
+/// itself, or itself bound to a producer that is not readable — resolves
+/// [`Value::unknown`] wherever something else's `Source` names it
+/// ([`resolve_source`]'s own existing `Skipped` arms) and is never read:
+/// not an impure tool's `read`, and not a pure one's either, when its own
+/// inputs are not honestly resolvable (decision 5: "A pure node bound to
+/// an impure node's output resolves `Unknown` and is not read"). A pure
+/// node `wanted` never names and that nothing needed depends on is left
+/// exactly the same way — evaluating it would cost a live call this
+/// teardown has no reason to make.
+///
+/// `inputs` are the run's own recorded workflow inputs (decision 5),
+/// resolved exactly as [`plan`] resolves them: a caller rebuilds them with
+/// `Butler`'s own `parse_recorded_value` before calling this.
+///
+/// A name in `wanted` that is not one of `checked`'s own nodes is a
+/// no-op, not an error: deriving `wanted` from `checked`'s own graph (a
+/// `Delete` step's `needs` port's own producer) is the caller's
+/// contract, the same way an unbound optional port is simply absent
+/// rather than refused.
+///
+/// # Errors
+///
+/// Whatever [`bind_ports`]/[`resolve_source`] return while evaluating a
+/// node in the closure: [`PlanError::MissingInput`],
+/// [`PlanError::EdgeTypeMismatch`], [`PlanError::KeyNotInForEach`], or
+/// [`PlanError::ForEachUnknown`]/[`PlanError::DuplicateForEachKey`] for a
+/// `for_each` resolver; or [`PlanError::Tool`]/[`PlanError::NameTaken`]/
+/// [`PlanError::AttributeMismatch`] from a pure tool's own `read` (a pure
+/// tool has an empty key, so the latter two should never actually occur,
+/// but nothing stops a `read` implementation from reporting them anyway).
+pub fn resolve_pure(
+    checked: &Checked,
+    inputs: &IndexMap<InputName, Value>,
+    wanted: &[NodeName],
+) -> Result<Resolved, PlanError> {
+    let (single_names, each_names) = node_names_by_shape(checked);
+
+    // Pass 1 (forward, topological order -- producers before consumers):
+    // whether each node could ever be read at all, by position only,
+    // from earlier answers alone.
+    let mut single_readable: Vec<bool> = Vec::new();
+    let mut each_readable: Vec<bool> = Vec::new();
+    for checked_node in checked.nodes() {
+        let readable = node_readable(checked_node, &single_readable, &each_readable);
+        match &checked_node.shape {
+            Shape::Single { .. } => single_readable.push(readable),
+            Shape::Each { .. } => each_readable.push(readable),
+        }
+    }
+
+    // Pass 2 (backward, reverse topological order): `wanted` plus every
+    // pure ancestor reachable from it without ever crossing a non-pure
+    // node.
+    let mut needed: HashSet<NodeName> = wanted.iter().cloned().collect();
+    for checked_node in checked.nodes().iter().rev() {
+        if !needed.contains(&checked_node.name) || !checked_node.tool.spec().pure {
+            continue;
+        }
+        needed_producers(checked_node, &single_names, &each_names, &mut needed);
+    }
+
+    // Pass 3 (forward): read exactly the nodes that are both needed and
+    // readable; every other position stays `Skipped`, so every
+    // `SingleId`/`EachId` a `Source` elsewhere names still resolves (to
+    // `Value::unknown`, `resolve_source`'s own existing rule for a
+    // `Skipped` producer).
+    let mut single: Vec<SingleResult> = Vec::new();
+    let mut each: Vec<EachResult> = Vec::new();
+    let mut single_idx = 0usize;
+    let mut each_idx = 0usize;
+    for checked_node in checked.nodes() {
+        let name = &checked_node.name;
+        let tool = checked_node.tool.as_ref();
+        let spec = tool.spec();
+        let ctx = ResolveCtx {
+            checked_inputs: checked.inputs(),
+            inputs,
+            single: &single,
+            each: &each,
+            single_names: &single_names,
+            each_names: &each_names,
+        };
+        match &checked_node.shape {
+            Shape::Single { ports, .. } => {
+                let read = needed.contains(name) && single_readable[single_idx];
+                single_idx += 1;
+                let result = if read {
+                    let (bound, _origins) = bind_ports(&ctx, name, spec, ports, None)?;
+                    let node_plan = plan_one(name, None, spec, tool, bound, checked.registry())?;
+                    SingleResult::Outputs(FilledOutputs::from(node_plan.outputs))
+                } else {
+                    SingleResult::Skipped
+                };
+                single.push(result);
+            }
+            Shape::Each { source, ports, .. } => {
+                let read = needed.contains(name) && each_readable[each_idx];
+                each_idx += 1;
+                let result = if read {
+                    let site = Site::ForEach { node: name.clone() };
+                    let source_value = resolve_source(&ctx, source, &site, None)?;
+                    let Some(items) = source_value.as_list() else {
+                        return Err(PlanError::ForEachUnknown { node: name.clone() });
+                    };
+                    let element = source_value.ty().element().name;
+                    let keyed = key_for_each_items(name, &element, items, checked.registry())?;
+                    let mut seen: HashSet<&str> = HashSet::with_capacity(keyed.len());
+                    for (_, key) in &keyed {
+                        if !seen.insert(key.as_str()) {
+                            return Err(PlanError::DuplicateForEachKey {
+                                node: name.clone(),
+                                key: key.clone(),
+                            });
+                        }
+                    }
+                    let mut instances = Vec::with_capacity(keyed.len());
+                    for (item_value, key) in keyed {
+                        let (bound, _origins) =
+                            bind_ports(&ctx, name, spec, ports, Some(&item_value))?;
+                        let node_plan = plan_one(
+                            name,
+                            Some(key.clone()),
+                            spec,
+                            tool,
+                            bound,
+                            checked.registry(),
+                        )?;
+                        instances.push(EachInstanceResult {
+                            key,
+                            outputs: FilledOutputs::from(node_plan.outputs),
+                            blocked: node_plan.action == Action::Blocked,
+                        });
+                    }
+                    EachResult::Instances(instances)
+                } else {
+                    EachResult::Skipped
+                };
+                each.push(result);
+            }
+        }
+    }
+
+    Ok(Resolved {
+        single,
+        each,
+        single_names,
+        each_names,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for [`Plan::fingerprint`] -- task 4a's acceptance test 8,
-    //! the unit half. The rest of `plan`'s own behaviour is exercised by
-    //! `tests/plan.rs` and `tests/plan_adversarial.rs` against the fake
-    //! catalog; these two tests need nothing beyond a hand-built `Plan`, so
-    //! they live here instead.
+    //! the unit half -- and for [`resolve_pure`] (milestone 3m, task R4,
+    //! acceptance 3). Both need nothing `tests/it/` can reach: fingerprint
+    //! needs only a hand-built `Plan`, and `resolve_pure`'s own test
+    //! doubles below assert on `Resolved`'s private tables and build a
+    //! `Source` by hand, both crate-private. The rest of `plan`'s own
+    //! behaviour is exercised by `tests/plan.rs` and
+    //! `tests/plan_adversarial.rs` against the fake catalog.
 
     use super::*;
+    use crate::catalog::Catalog;
+    use crate::check::check;
+    use crate::tool::{Ensured, Gate, PortSpec};
+    use crate::workflow::{Binding, Node, Workflow};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use willikins_types::DomainType;
 
     fn node(name: &str) -> NodeName {
@@ -2086,5 +2419,369 @@ mod tests {
         let a = plan_with_secret("first-secret-value");
         let b = plan_with_secret("second-secret-value-entirely");
         assert_eq!(a.fingerprint(), b.fingerprint());
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3m, task R4, acceptance 3: `resolve_pure`.
+    // -----------------------------------------------------------------
+
+    /// A pure or impure test tool (`spec.pure`, `gate` set independently
+    /// of it below) whose `read` counts its own calls and computes its
+    /// outputs from `inputs` with a plain `fn` pointer, so a resolver
+    /// chain's second node can prove it really received the first node's
+    /// own output rather than a coincidentally-matching literal.
+    struct CountingTool {
+        spec: ToolSpec,
+        gate: Option<Gate>,
+        reads: Arc<AtomicUsize>,
+        compute: fn(&Inputs) -> Outputs,
+    }
+
+    impl Tool for CountingTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, inputs: &Inputs) -> Result<Observation, ToolError> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Ok(Observation::Absent {
+                predicted: (self.compute)(inputs),
+            })
+        }
+
+        fn ensure(
+            &self,
+            _inputs: &Inputs,
+            _token: &willikins_types::SinkToken,
+        ) -> Result<Ensured, ToolError> {
+            unreachable!("resolve_pure never calls ensure")
+        }
+
+        fn gate(&self) -> Option<&Gate> {
+            self.gate.as_ref()
+        }
+    }
+
+    fn text_ty() -> TypeRef {
+        TypeRef::scalar(TypeName::parse("Text").unwrap())
+    }
+
+    fn text_port(required: bool) -> PortSpec {
+        PortSpec {
+            ty: PortType::Exact(text_ty()),
+            required,
+            derived_only: false,
+        }
+    }
+
+    fn text(value: &str) -> Value {
+        Value::known(willikins_types::Text::parse(value).unwrap())
+    }
+
+    /// A pure, non-gate tool: no key, [`Class::Reversible`] (`ToolSpec::
+    /// validate`'s own rule for a pure tool).
+    fn pure_tool(
+        name: &str,
+        inputs: &[(&str, bool)],
+        outputs: &[&str],
+        compute: fn(&Inputs) -> Outputs,
+    ) -> Arc<CountingTool> {
+        let mut in_map = IndexMap::new();
+        for (port_name, required) in inputs {
+            in_map.insert(port(port_name), text_port(*required));
+        }
+        let mut out_map = IndexMap::new();
+        for port_name in outputs {
+            out_map.insert(port(port_name), text_ty());
+        }
+        Arc::new(CountingTool {
+            spec: ToolSpec {
+                name: tool(name),
+                description: "test".to_string(),
+                inputs: in_map,
+                outputs: out_map,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: true,
+            },
+            gate: None,
+            reads: Arc::new(AtomicUsize::new(0)),
+            compute,
+        })
+    }
+
+    /// A pure **gate** (`Catalog::insert`'s `validate_gate` requires
+    /// `spec.pure`): decision 5's "pure includes gates that read
+    /// providers". An empty `subject` is a valid gate declaration.
+    fn pure_gate(
+        name: &str,
+        outputs: &[&str],
+        compute: fn(&Inputs) -> Outputs,
+    ) -> Arc<CountingTool> {
+        let mut out_map = IndexMap::new();
+        for port_name in outputs {
+            out_map.insert(port(port_name), text_ty());
+        }
+        Arc::new(CountingTool {
+            spec: ToolSpec {
+                name: tool(name),
+                description: "test".to_string(),
+                inputs: IndexMap::new(),
+                outputs: out_map,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: true,
+            },
+            gate: Some(Gate {
+                need: "test gate",
+                how: "test",
+                subject: &[],
+            }),
+            reads: Arc::new(AtomicUsize::new(0)),
+            compute,
+        })
+    }
+
+    /// An impure tool: `ensure` would actually change something, so
+    /// `resolve_pure` must never call its `read` either.
+    fn impure_tool(
+        name: &str,
+        outputs: &[&str],
+        compute: fn(&Inputs) -> Outputs,
+    ) -> Arc<CountingTool> {
+        let mut out_map = IndexMap::new();
+        for port_name in outputs {
+            out_map.insert(port(port_name), text_ty());
+        }
+        Arc::new(CountingTool {
+            spec: ToolSpec {
+                name: tool(name),
+                description: "test".to_string(),
+                inputs: IndexMap::new(),
+                outputs: out_map,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: false,
+            },
+            gate: None,
+            reads: Arc::new(AtomicUsize::new(0)),
+            compute,
+        })
+    }
+
+    fn no_inputs(_inputs: &Inputs) -> Outputs {
+        Outputs::new()
+    }
+
+    /// Acceptance 3's first half: a resolver chain (`env.get` -> `parse`)
+    /// is evaluated, and a pure gate stub that `wanted` never names and
+    /// nothing needed depends on is never read at all.
+    #[test]
+    fn resolve_pure_evaluates_a_resolver_chain_and_excludes_an_unwanted_pure_node() {
+        let env_get = pure_tool("test.env_get", &[], &["value"], |_inputs| {
+            let mut outputs = Outputs::new();
+            outputs.insert(port("value"), text("raw-from-env"));
+            outputs
+        });
+        let parse = pure_tool("test.parse", &[("raw", true)], &["parsed"], |inputs| {
+            let raw = inputs
+                .get(&port("raw"))
+                .unwrap()
+                .downcast::<willikins_types::Text>()
+                .expect("raw is always a known Text in this test")
+                .as_str()
+                .to_string();
+            let mut outputs = Outputs::new();
+            outputs.insert(port("parsed"), text(&format!("parsed:{raw}")));
+            outputs
+        });
+        let unused_gate = pure_gate("test.unused_gate", &["ready"], no_inputs);
+
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(Arc::clone(&env_get) as _).unwrap();
+        catalog.insert(Arc::clone(&parse) as _).unwrap();
+        catalog.insert(Arc::clone(&unused_gate) as _).unwrap();
+
+        let workflow = Workflow::new(workflow_name("resolve-pure-chain"))
+            .node(node("env_get"), Node::new(tool("test.env_get")))
+            .node(
+                node("parse"),
+                Node::new(tool("test.parse")).port(
+                    port("raw"),
+                    Binding::Step {
+                        node: node("env_get"),
+                        port: port("value"),
+                    },
+                ),
+            )
+            .node(node("unused_gate"), Node::new(tool("test.unused_gate")));
+        let checked = check(&workflow, &catalog).expect("a simple pure chain checks cleanly");
+
+        let inputs = IndexMap::new();
+        let resolved = resolve_pure(&checked, &inputs, &[node("parse")]).unwrap();
+
+        assert_eq!(
+            env_get.reads.load(Ordering::SeqCst),
+            1,
+            "env_get is parse's own pure ancestor"
+        );
+        assert_eq!(
+            parse.reads.load(Ordering::SeqCst),
+            1,
+            "parse is named by wanted"
+        );
+        assert_eq!(
+            unused_gate.reads.load(Ordering::SeqCst),
+            0,
+            "unused_gate is outside the wanted closure and must never be read"
+        );
+
+        // The chain's own value really flowed end to end, through
+        // `bind_ports`/`resolve_source`, not a coincidence.
+        let parse_id = match checked
+            .nodes()
+            .iter()
+            .find(|n| n.name == node("parse"))
+            .unwrap()
+            .shape
+        {
+            Shape::Single { id, .. } => id,
+            Shape::Each { .. } => panic!("parse has no for_each"),
+        };
+        let source: Source<std::convert::Infallible> = Source::Step {
+            from: parse_id,
+            slot: OutputSlot(0),
+            ty: text_ty(),
+        };
+        let ctx = resolved.ctx(&checked, &inputs);
+        let value = resolve_source(
+            &ctx,
+            &source,
+            &Site::ForEach {
+                node: node("parse"),
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(value, text("parsed:raw-from-env"));
+    }
+
+    /// Acceptance 3's second half: a pure node bound to an impure node's
+    /// output is never read either, and resolves `Value::unknown` -- the
+    /// impure node itself is never read, exactly as it never is for any
+    /// node outside the closure.
+    #[test]
+    fn resolve_pure_leaves_a_pure_node_bound_to_an_impure_output_unknown_and_unread() {
+        let impure = impure_tool("test.impure", &["token"], |_inputs| {
+            let mut outputs = Outputs::new();
+            outputs.insert(port("token"), text("impure-secret"));
+            outputs
+        });
+        let on_impure = pure_tool(
+            "test.on_impure",
+            &[("value", true)],
+            &["computed"],
+            |inputs| {
+                let mut outputs = Outputs::new();
+                outputs.insert(
+                    port("computed"),
+                    inputs.get(&port("value")).unwrap().clone(),
+                );
+                outputs
+            },
+        );
+
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(Arc::clone(&impure) as _).unwrap();
+        catalog.insert(Arc::clone(&on_impure) as _).unwrap();
+
+        let workflow = Workflow::new(workflow_name("resolve-pure-boundary"))
+            .node(node("impure"), Node::new(tool("test.impure")))
+            .node(
+                node("on_impure"),
+                Node::new(tool("test.on_impure")).port(
+                    port("value"),
+                    Binding::Step {
+                        node: node("impure"),
+                        port: port("token"),
+                    },
+                ),
+            );
+        let checked = check(&workflow, &catalog).expect("a pure node may bind an impure output");
+
+        let inputs = IndexMap::new();
+        let resolved = resolve_pure(&checked, &inputs, &[node("on_impure")]).unwrap();
+
+        assert_eq!(
+            impure.reads.load(Ordering::SeqCst),
+            0,
+            "resolve_pure must never call an impure tool's read"
+        );
+        assert_eq!(
+            on_impure.reads.load(Ordering::SeqCst),
+            0,
+            "a pure node bound to an impure output is not read either"
+        );
+
+        let on_impure_id = match checked
+            .nodes()
+            .iter()
+            .find(|n| n.name == node("on_impure"))
+            .unwrap()
+            .shape
+        {
+            Shape::Single { id, .. } => id,
+            Shape::Each { .. } => panic!("on_impure has no for_each"),
+        };
+        let source: Source<std::convert::Infallible> = Source::Step {
+            from: on_impure_id,
+            slot: OutputSlot(0),
+            ty: text_ty(),
+        };
+        let ctx = resolved.ctx(&checked, &inputs);
+        let value = resolve_source(
+            &ctx,
+            &source,
+            &Site::ForEach {
+                node: node("on_impure"),
+            },
+            None,
+        )
+        .unwrap();
+        assert!(
+            !value.is_known(),
+            "an unread node's output must resolve Unknown"
+        );
+    }
+
+    /// Acceptance 3, hardened: `wanted` can itself name an impure node
+    /// directly (not merely reach one as an ancestor) -- pass 2 records
+    /// it as needed (harmless: nothing is read from `needed` alone) and
+    /// does not propagate past it (it is not pure), and pass 3 never
+    /// reads it, since `node_readable` returns `false` the moment
+    /// `spec.pure` is `false`.
+    #[test]
+    fn resolve_pure_never_reads_an_impure_node_even_when_wanted_names_it_directly() {
+        let impure = impure_tool("test.impure", &["token"], |_inputs| {
+            let mut outputs = Outputs::new();
+            outputs.insert(port("token"), text("impure-secret"));
+            outputs
+        });
+
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(Arc::clone(&impure) as _).unwrap();
+
+        let workflow = Workflow::new(workflow_name("resolve-pure-wanted-impure"))
+            .node(node("impure"), Node::new(tool("test.impure")));
+        let checked = check(&workflow, &catalog).expect("one impure node checks cleanly");
+
+        let inputs = IndexMap::new();
+        resolve_pure(&checked, &inputs, &[node("impure")]).unwrap();
+
+        assert_eq!(
+            impure.reads.load(Ordering::SeqCst),
+            0,
+            "wanted naming an impure node directly must still never read it"
+        );
     }
 }
