@@ -5642,12 +5642,21 @@ mod tests {
     /// apply.rs's own doc comments both still name `Binding` in prose).
     /// `describe.rs`'s `parse_raw` is excluded from the `Value::parse(`
     /// check -- the plan's own "one sanctioned place" (acceptance 7).
+    ///
+    /// Milestone 3m, task R5a: `rollback.rs` joins this list too.
+    /// `plan_teardown` reads `Checked::nodes()`'s own typed graph (tool
+    /// handles, `Shape`, `CheckedNode::teardown`) exactly the way
+    /// `plan`/`apply`/`describe` do from G1 on, and resolves a `Delete`
+    /// step's secret `needs` port through `crate::plan::resolve_pure`'s
+    /// own `Resolved::ctx` -- never a `Binding`, never a second catalog
+    /// lookup by name.
     #[test]
     fn plan_apply_and_describe_never_name_a_binding_or_a_second_lookup() {
         for (path, raw) in [
             ("plan.rs", include_str!("plan.rs")),
             ("apply.rs", include_str!("apply.rs")),
             ("describe.rs", include_str!("describe.rs")),
+            ("rollback.rs", include_str!("rollback.rs")),
         ] {
             let body = strip_comments(&non_test_body(raw));
             assert!(

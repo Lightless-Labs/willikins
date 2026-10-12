@@ -161,6 +161,18 @@ fn the_unreachable_ratchet_never_rises() {
         0,
         "describe.rs's unreachable ratchet moved; lower it, never raise it"
     );
+    // Milestone 3m, task R5a: `rollback.rs` joins the ratchet, pinned at
+    // its own baseline before `plan_teardown` lands -- the one
+    // `.expect(` already there (`LOSS_NAME_REGEX`'s own `LazyLock::new`).
+    // `plan_teardown`'s own commit raises this to 2 (a `Catalog::insert`
+    // invariant -- `Delete` implies `Tool::inverse()` is `Some` -- not
+    // visible to the type system at that call site) in the same commit
+    // that adds the fallback, never before.
+    assert_eq!(
+        ratchet_count("src/rollback.rs"),
+        1,
+        "rollback.rs's unreachable ratchet moved; lower it, never raise it"
+    );
 }
 
 /// The lines in `path` that are exactly a `#[cfg(test)]` attribute,
@@ -192,6 +204,8 @@ fn each_ratchet_file_is_split_at_its_test_module_only() {
         ("src/plan.rs", 1),
         ("src/apply.rs", 0),
         ("src/describe.rs", 1),
+        // Milestone 3m, task R5a: `rollback.rs`'s own single `mod tests`.
+        ("src/rollback.rs", 1),
     ] {
         assert_eq!(
             cfg_test_line_count(path),
@@ -229,7 +243,10 @@ fn describe_consults_no_second_registry() {
 /// import alias would evade it; it pins the obvious spelling, not intent.
 #[test]
 fn plan_and_apply_consult_no_second_registry() {
-    for path in ["src/plan.rs", "src/apply.rs"] {
+    // Milestone 3m, task R5a: `rollback.rs` reads secrecy only through
+    // `Checked::registry()` (`Catalog::insert`'s own validated registry),
+    // never the global one, on the same schedule as `plan.rs`/`apply.rs`.
+    for path in ["src/plan.rs", "src/apply.rs", "src/rollback.rs"] {
         assert_eq!(
             registry_call_count(path),
             0,
