@@ -352,6 +352,13 @@ fn standing_reports_drifted_on_a_foreign_branch_config_in_the_environment() {
             serde_json::json!({"name": "prd_hand_set", "root": false, "environment": "prd", "created_at": "2026-01-01T00:05:00Z"}),
         ],
     );
+    // Membership is checked before contents (trust boundary 6): a config
+    // this run did not create refuses before its own secret names,
+    // inheritedBy or tokens are ever read.
+    let config_get = provider
+        .mock("GET", "/v3/configs/config")
+        .expect(0)
+        .create();
     let tool = DopplerConfigEnsure::new(client_against(provider.url()));
     let inputs = created_inputs();
     let outputs = Outputs::new();
@@ -359,6 +366,7 @@ fn standing_reports_drifted_on_a_foreign_branch_config_in_the_environment() {
         standing(&tool, &created(&inputs, &outputs, &[])),
         Standing::Drifted { .. }
     ));
+    config_get.assert();
 }
 
 /// A branch config this run's own rider `doppler.branch_config.ensure`

@@ -674,6 +674,14 @@ end. Deviations and choices, recorded:
 - **No ratchet, tripwire or guard touched.** Nothing here changes `willikins-core`. Every `TeardownToken::new()`
   call (three per inverse's own `delete` tests) is under `tests/it/`, exempt from `teardown_token_guard.rs`'s
   walk, each carrying its own `#[allow(clippy::disallowed_methods)]`.
+- **`delete` re-observes via a full `standing` call, the same contract P1/P2's own inverses honour** ("observes
+  first, as `ensure` does", `Inverse::delete`'s own doc): by the time any of these three inverses' `delete`
+  runs, `apply_teardown` (R6) has already re-planned and compared fingerprints once; `delete` then repeats
+  the entire walk a third time (one project `GET`, one `list_configs`, and one `get_config`/`secret_names`/
+  `list_service_tokens` triple per tolerated config, for `config.ensure`'s own environment-wide case).
+  Correct, not a bug, and the same cost P2's own project-wide inverse already pays — recorded here only so
+  a reader of `rollback.rs`'s own apply-time cost is not surprised that `config.ensure`'s `delete` on an
+  environment with several branch configs issues that many requests for one `DELETE`.
 - **Left for P6/P7**: no Doppler tool is yet checked against `LIVE_TOOL_NAMES`'s own table test or the
   fake catalog's own parity test (both later tasks); `catalog_check_parity.rs`/`catalog_parity.rs` in this
   crate exercise only `ToolSpec` and `check`'s own type resolution, neither of which reads `Reversal` at
