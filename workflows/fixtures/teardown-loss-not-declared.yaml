@@ -1,0 +1,20 @@
+# Negative fixture. Milestone 3m, task T2 (decision 3a; acceptance 18's document half,
+# now that the fake tools declare their Reversal, milestone 3m task P6): `accept:
+# [builds]` on `github.repo.ensure`, which never declares a `builds` loss (only
+# `buildkite.pipeline.ensure` does). Accepting a name the tool can never report would
+# be a promise that can never matter, and would silently admit a typo for the one loss
+# name that does. Pinned by `milestone_3m_acceptance_18_teardown_loss_not_declared`
+# (crates/willikins-cli/tests/it/acceptance.rs), both loaded flat and linked under an
+# inline `uses:` wrapper, where the same error reappears with this node's name
+# prefixed `child/` -- the composite path agrees with the flat one. `check` returns
+# exactly one error:
+#   CheckError::TeardownLossNotDeclared { node: repo, loss: builds }
+name: teardown-loss-not-declared
+description: An accept entry naming a loss github.repo.ensure never declares.
+steps:
+  repo:
+    tool: github.repo.ensure
+    with:
+      repo: example-org/example-repo
+      visibility: private
+    teardown: { delete: { accept: [builds] } }

@@ -547,6 +547,14 @@ CHECK ERRORS:
 CHECK ERRORS:
 - kind=UnderivedBinding display=node `sink`, port `config`: this port may only be bound to the output of an earlier, non-pure node — never a literal, a workflow input, a for_each item, or a pure node's output json={"kind":"UnderivedBinding","node":"sink","port":"config"}
 
+=== workflows/fixtures/teardown-loss-not-declared.yaml ===
+CHECK ERRORS:
+- kind=TeardownLossNotDeclared display=node `repo`: accepted loss `builds` is not one of its tool's declared losses json={"kind":"TeardownLossNotDeclared","node":"repo","loss":"builds"}
+
+=== workflows/fixtures/teardown-not-admitted.yaml ===
+CHECK ERRORS:
+- kind=TeardownNotAdmitted display=node `base_config_gate`: tool `doppler.config.inheritable.ensure` does not declare `Reversal::Delete`, so it cannot admit a `teardown:` policy json={"kind":"TeardownNotAdmitted","node":"base_config_gate","tool":"doppler.config.inheritable.ensure"}
+
 === workflows/fixtures/template-source-default.yaml ===
 CHECK ERRORS:
 - kind=DisallowedInputType display=input `template`: declared type `TemplateSource` may never be a workflow input or a default; it is privileged, trusted-ref document content json={"kind":"DisallowedInputType","input":"template","ty":"TemplateSource"}

@@ -2369,3 +2369,90 @@ fn milestone_2_acceptance_08_a_secret_rotated_between_plan_and_apply_is_not_drif
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// Milestone 3m, decision 3a; acceptance test 18 (task T2, the document
+// half, now that the fake tools declare their `Reversal`, task P6):
+// `check` validates a node's declared `teardown:` against its tool's own
+// `Reversal` -- `CheckError::TeardownNotAdmitted` and
+// `CheckError::TeardownLossNotDeclared` -- both flat and through an
+// inline `uses:` wrapper. The wrapper is built in Rust rather than as a
+// tracked `workflows/fixtures/composition/` pair: this task's row names
+// exactly two new fixtures, and a tracked root would be a third (see the
+// plan's dated addendum).
+// ---------------------------------------------------------------------
+
+/// Link `fixture_name.yaml` (a flat fixture already named by `fixture()`)
+/// under an inline `uses:` wrapper named `child`, resolving the use
+/// straight from `workflows/fixtures/` -- no tracked composition
+/// fixture -- then `check` the linked graph against the real fake
+/// catalog. Proves the "composite path agrees with the flat one" clause
+/// of acceptance 18: the same `CheckError` reappears with this node's
+/// name prefixed `child/`.
+fn check_through_uses(fixture_name: &str) -> Vec<CheckError> {
+    let root_source =
+        format!("name: {fixture_name}-root\nsteps:\n  child:\n    uses: {fixture_name}\n");
+    let root = willikins_dsl::parse_document(&root_source)
+        .unwrap_or_else(|err| panic!("{fixture_name}: inline uses: root failed to parse: {err}"));
+
+    let mut resolve =
+        |name: &willikins_types::WorkflowName| -> Result<Workflow, willikins_core::ResolveFailure> {
+            if name.to_string() == fixture_name {
+                Ok(load(&fixture(&format!("{fixture_name}.yaml"))))
+            } else {
+                Err(willikins_core::ResolveFailure::NotFound)
+            }
+        };
+    let linked = willikins_core::link(&root, &mut resolve)
+        .unwrap_or_else(|errs| panic!("{fixture_name}: expected to link, got {errs:?}"));
+
+    willikins_core::check(&linked.workflow, &empty_catalog()).unwrap_err()
+}
+
+#[test]
+fn milestone_3m_acceptance_18_teardown_not_admitted() {
+    let catalog = empty_catalog();
+
+    let flat = load(&fixture("teardown-not-admitted.yaml"));
+    assert_eq!(
+        willikins_core::check(&flat, &catalog).unwrap_err(),
+        vec![CheckError::TeardownNotAdmitted {
+            node: node("base_config_gate"),
+            tool: tool_name("doppler.config.inheritable.ensure"),
+        }],
+        "milestone 3m acceptance test 18: TeardownNotAdmitted, flat"
+    );
+
+    assert_eq!(
+        check_through_uses("teardown-not-admitted"),
+        vec![CheckError::TeardownNotAdmitted {
+            node: node("child/base_config_gate"),
+            tool: tool_name("doppler.config.inheritable.ensure"),
+        }],
+        "milestone 3m acceptance test 18: TeardownNotAdmitted, through uses:"
+    );
+}
+
+#[test]
+fn milestone_3m_acceptance_18_teardown_loss_not_declared() {
+    let catalog = empty_catalog();
+
+    let flat = load(&fixture("teardown-loss-not-declared.yaml"));
+    assert_eq!(
+        willikins_core::check(&flat, &catalog).unwrap_err(),
+        vec![CheckError::TeardownLossNotDeclared {
+            node: node("repo"),
+            loss: willikins_core::Loss::parse("builds").unwrap(),
+        }],
+        "milestone 3m acceptance test 18: TeardownLossNotDeclared, flat"
+    );
+
+    assert_eq!(
+        check_through_uses("teardown-loss-not-declared"),
+        vec![CheckError::TeardownLossNotDeclared {
+            node: node("child/repo"),
+            loss: willikins_core::Loss::parse("builds").unwrap(),
+        }],
+        "milestone 3m acceptance test 18: TeardownLossNotDeclared, through uses:"
+    );
+}

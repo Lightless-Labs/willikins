@@ -1,0 +1,19 @@
+# Negative fixture. Milestone 3m, task T2 (decision 3a; acceptance 18's document half,
+# now that the fake tools declare their Reversal, milestone 3m task P6): `teardown:
+# delete` on a node whose tool declares only `Reversal::Contained`
+# (`doppler.config.inheritable.ensure`). A contained node rides out with its container
+# whatever it says, so a policy declared here would be a promise `check` can never
+# keep. Pinned by `milestone_3m_acceptance_18_teardown_not_admitted`
+# (crates/willikins-cli/tests/it/acceptance.rs), both loaded flat and linked under an
+# inline `uses:` wrapper, where the same error reappears with this node's name
+# prefixed `child/` -- the composite path agrees with the flat one. `check` returns
+# exactly one error:
+#   CheckError::TeardownNotAdmitted { node: base_config_gate, tool: doppler.config.inheritable.ensure }
+name: teardown-not-admitted
+description: A teardown policy declared on a node whose tool only admits Reversal::Contained.
+steps:
+  base_config_gate:
+    tool: doppler.config.inheritable.ensure
+    with:
+      config: third-thoughts/prd
+    teardown: delete
