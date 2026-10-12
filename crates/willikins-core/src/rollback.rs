@@ -130,6 +130,17 @@ pub enum ReversalError {
         /// The container tool the empty `Within` names.
         tool: String,
     },
+    /// A `Within`'s own-side port is secret: [`crate::value::PortType::AnySecret`]
+    /// or a type the registry marks secret. The journal keeps no secret's
+    /// bytes (a redaction marker, re-parsed as `Unknown`), and two
+    /// `Unknown`s of one type compare equal, so a secret pair holds for
+    /// any two instances: it can only widen riding, never tell two
+    /// containers apart.
+    #[error("reversal `within` port `{port}` is secret, so it cannot tell two instances apart")]
+    WithinPortSecret {
+        /// The offending `within` entry.
+        port: String,
+    },
     /// A `Reversal::Delete`'s `losses` entry does not match the required
     /// pattern `^[a-z][a-z_]*$`.
     #[error("reversal loss `{loss}` does not match the required pattern `^[a-z][a-z_]*$`")]

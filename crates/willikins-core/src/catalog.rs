@@ -89,12 +89,11 @@ impl Catalog {
                     error,
                 })?;
         }
-        Self::validate_reversal(tool.spec(), &tool.reversal()).map_err(|error| {
-            CatalogError::Reversal {
+        self.validate_reversal(tool.spec(), &tool.reversal())
+            .map_err(|error| CatalogError::Reversal {
                 name: name.clone(),
                 error,
-            }
-        })?;
+            })?;
         if self.tools.contains_key(&name) {
             return Err(CatalogError::Duplicate(name));
         }
@@ -141,8 +140,9 @@ impl Catalog {
     /// This tool's own side of its [`crate::rollback::Reversal`]
     /// declaration (milestone 3m decision 3): every `needs` port and the
     /// left side of every `within` pair must name one of the tool's own
-    /// input ports, every loss name must match the required pattern, and
-    /// a pure tool's reversal must be the default
+    /// input ports (a `within` one also non-secret, and each `within`
+    /// mapping at least one port), every loss name must match the required
+    /// pattern, and a pure tool's reversal must be the default
     /// ([`crate::rollback::Reversal::Retained`] with
     /// [`crate::rollback::UNDECLARED`]) — a pure tool has no external
     /// state, so nothing about it can be undone. The container side of a
@@ -150,7 +150,7 @@ impl Catalog {
     /// `validate_gate`, cannot see: that is checked elsewhere (milestone
     /// 3m's declaration table test over `LIVE_TOOL_NAMES`, and the
     /// fake-catalog parity test).
-    fn validate_reversal(spec: &ToolSpec, reversal: &Reversal) -> Result<(), ReversalError> {
+    fn validate_reversal(&self, spec: &ToolSpec, reversal: &Reversal) -> Result<(), ReversalError> {
         if spec.pure {
             return match reversal {
                 Reversal::Retained { why } if *why == crate::rollback::UNDECLARED => Ok(()),
@@ -168,7 +168,7 @@ impl Catalog {
                         .map_err(|port| ReversalError::NeedsNotAnInput { port })?;
                 }
                 for within in *within {
-                    Self::validate_within_own_side(spec, within)?;
+                    self.validate_within_own_side(spec, within)?;
                 }
                 for loss in *losses {
                     if !crate::rollback::LOSS_NAME_REGEX.is_match(loss) {
@@ -184,7 +184,7 @@ impl Catalog {
                 otherwise: _,
             } => {
                 for within in *within {
-                    Self::validate_within_own_side(spec, within)?;
+                    self.validate_within_own_side(spec, within)?;
                 }
                 Ok(())
             }
@@ -209,8 +209,14 @@ impl Catalog {
     /// mapping would match every container instance, since "every pair is
     /// equal" holds vacuously), and every `(own_port, side,
     /// container_port)` triple's `own_port` must name one of `spec`'s own
-    /// input ports.
-    fn validate_within_own_side(spec: &ToolSpec, within: &Within) -> Result<(), ReversalError> {
+    /// input ports, of a non-secret type: the journal keeps only a
+    /// redaction marker for a secret, re-parsed as `Unknown`, so a secret
+    /// pair would compare equal for any two instances.
+    fn validate_within_own_side(
+        &self,
+        spec: &ToolSpec,
+        within: &Within,
+    ) -> Result<(), ReversalError> {
         if within.ports.is_empty() {
             return Err(ReversalError::WithinMapsNoPort {
                 tool: within.tool.to_string(),
@@ -219,6 +225,18 @@ impl Catalog {
         for &(own_port, _side, _container_port) in within.ports {
             Self::validate_own_input_port(spec, own_port)
                 .map_err(|port| ReversalError::WithinNotAnInput { port })?;
+            let secret = PortName::parse(own_port)
+                .ok()
+                .and_then(|port| spec.inputs.get(&port))
+                .is_some_and(|port_spec| match &port_spec.ty {
+                    PortType::AnySecret => true,
+                    PortType::Exact(ty) => self.registry.is_secret(&ty.name) == Some(true),
+                });
+            if secret {
+                return Err(ReversalError::WithinPortSecret {
+                    port: own_port.to_string(),
+                });
+            }
         }
         Ok(())
     }
@@ -415,6 +433,32 @@ mod tests {
                 spec: DummyEnsureTool::new().spec,
                 reversal,
             }
+        }
+
+        /// [`Self::stateful`], plus two secret input ports: `value`, of
+        /// the registered secret type `DopplerSecretValue`, and `any`, of
+        /// [`PortType::AnySecret`].
+        fn stateful_with_secret_inputs(reversal: Reversal) -> Self {
+            let mut spec = DummyEnsureTool::new().spec;
+            spec.inputs.insert(
+                PortName::parse("value").unwrap(),
+                PortSpec {
+                    ty: PortType::Exact(TypeRef::scalar(
+                        TypeName::parse("DopplerSecretValue").unwrap(),
+                    )),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            spec.inputs.insert(
+                PortName::parse("any").unwrap(),
+                PortSpec {
+                    ty: PortType::AnySecret,
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            Self { spec, reversal }
         }
     }
 
@@ -735,5 +779,73 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // Milestone 3m's X1 pass over R1 (2026-10-12): the journal keeps only a
+    // redaction marker for a secret, re-parsed as `Unknown`, and two
+    // `Unknown`s of one type compare equal. A `Within` pair on a secret own
+    // port therefore matches any two instances. Refused at insert, as
+    // `validate_gate` refuses a secret subject. `needs` stays free to name
+    // a secret credential port (decision 5).
+
+    #[test]
+    fn insert_rejects_a_within_own_side_port_of_a_secret_type() {
+        assert_eq!(
+            willikins_types::registry().is_secret(&TypeName::parse("DopplerSecretValue").unwrap()),
+            Some(true)
+        );
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful_with_secret_inputs(Reversal::Contained {
+            within: &[Within {
+                tool: "test.container",
+                ports: &[
+                    ("repo", Side::Input, "repo"),
+                    ("value", Side::Input, "value"),
+                ],
+            }],
+            otherwise: "left in place",
+        });
+        let err = catalog.insert(Arc::new(tool)).unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Reversal {
+                error: ReversalError::WithinPortSecret { ref port },
+                ..
+            } if port == "value"
+        ));
+    }
+
+    #[test]
+    fn insert_rejects_a_within_own_side_port_of_any_secret() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful_with_secret_inputs(Reversal::Delete {
+            needs: &[],
+            within: &[Within {
+                tool: "test.container",
+                ports: &[("any", Side::Output, "any")],
+            }],
+            losses: &[],
+        });
+        let err = catalog.insert(Arc::new(tool)).unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Reversal {
+                error: ReversalError::WithinPortSecret { ref port },
+                ..
+            } if port == "any"
+        ));
+    }
+
+    #[test]
+    fn insert_accepts_a_secret_needs_port() {
+        // A credential port is secret by design (decision 5): `needs` may
+        // name one; only `within` may not.
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful_with_secret_inputs(Reversal::Delete {
+            needs: &["repo", "value", "any"],
+            within: &[],
+            losses: &[],
+        });
+        catalog.insert(Arc::new(tool)).unwrap();
     }
 }
