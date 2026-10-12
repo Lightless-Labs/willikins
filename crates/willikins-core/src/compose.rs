@@ -2608,6 +2608,56 @@ mod tests {
         );
     }
 
+    /// The refusal half of the same claim: `check_teardown_policies`
+    /// reaches a linked node's `teardown:` under its *prefixed* name, not
+    /// its unlinked one -- a renaming bug in the linker (dropping or
+    /// misattributing `teardown` while rewriting a node's name) is
+    /// exactly what this proves is absent.
+    #[test]
+    fn a_used_documents_undeclared_loss_is_refused_under_its_prefixed_name() {
+        let mut catalog = test_catalog();
+        catalog
+            .insert(Arc::new(crate::testing::StubDeletableTool::new()))
+            .unwrap();
+
+        let child = Workflow::new(wf_name("undeclared-loss-child")).node(
+            node("leaf"),
+            Node::new(tool("test.deletable"))
+                .port(
+                    port("repo"),
+                    Binding::Literal("example-org/example-repo".to_string()),
+                )
+                .teardown(crate::workflow::TeardownPolicy::Delete {
+                    accept: vec![crate::workflow::Loss::parse("issues").unwrap()],
+                }),
+        );
+
+        let root = Workflow::new(wf_name("root")).uses(
+            node("child"),
+            Uses {
+                workflow: wf_name("undeclared-loss-child"),
+                with: IndexMap::new(),
+                position: 0,
+            },
+        );
+
+        let linked = link(&root, &mut |name| match name.as_str() {
+            "undeclared-loss-child" => Ok(child.clone()),
+            other => panic!("resolver asked for an unexpected workflow: {other}"),
+        })
+        .expect("a single uses: step with no alias links cleanly");
+
+        let errors = check::check(&linked.workflow, &catalog).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::TeardownLossNotDeclared {
+                node: node("child/leaf"),
+                loss: crate::workflow::Loss::parse("issues").unwrap(),
+            }],
+            "the error names the node under its linked, prefixed name"
+        );
+    }
+
     /// A chain of `uses:` steps declared in reverse dependency order (`s0`
     /// reads `s1`'s output, `s1` reads `s2`'s, and so on) must link on a
     /// thread with tokio's default 2 MiB stack: the server runs every MCP
