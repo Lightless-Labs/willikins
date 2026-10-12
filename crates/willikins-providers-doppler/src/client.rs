@@ -272,23 +272,18 @@ impl DopplerClient {
     /// own id -- a multi-word environment's `EnvironmentSlug::Display`
     /// would print its kebab form (`pre-prod`) instead of the stored
     /// `pre_prod`, which Doppler would then read as a different,
-    /// nonexistent environment. Callers (task P3) address an environment
-    /// the same way [`Self::list_environments`]'s own
-    /// [`EnvironmentEntry::id`] reports it.
+    /// nonexistent environment. `doppler.config.ensure`'s own inverse
+    /// (task P3) addresses an environment the same way
+    /// [`Self::list_environments`]'s own [`EnvironmentEntry::id`] reports
+    /// it.
     ///
-    /// `pub`, not `pub(crate)`, for the same reason
-    /// [`Self::list_service_accounts`]'s own doc gives: no tool in this
-    /// milestone's own task (P2) calls this -- `doppler.config.ensure`'s
-    /// inverse is task P3's -- so this method's own mock test (in this
-    /// module, below) is its only caller until then, and a `tests/it/`
-    /// target cannot see a `pub(crate)` item at all. The restriction to a
-    /// real caller inside this crate, once P3 lands, is enforced by this
-    /// doc comment, not by visibility.
+    /// `pub(crate)`: `doppler.config.ensure`'s own inverse (task P3) is
+    /// its one caller.
     ///
     /// # Errors
     ///
     /// See [`Self::get_project`].
-    pub fn delete_environment(
+    pub(crate) fn delete_environment(
         &self,
         project: &DopplerProject,
         environment: &DopplerConfigName,
@@ -301,14 +296,14 @@ impl DopplerClient {
     /// `DELETE /v3/configs/config?project=<project>&config=<name>`
     /// (milestone 3m task P2, decision 7; verify item 9, fetched verbatim
     /// 2026-10-12 from `docs.doppler.com/reference/configs-delete.md`).
-    /// `pub` for the same reason [`Self::delete_environment`]'s own doc
-    /// gives: no tool in task P2 calls this (`doppler.branch_config.ensure`'s
-    /// inverse is task P3's).
+    ///
+    /// `pub(crate)`: `doppler.branch_config.ensure`'s own inverse (task
+    /// P3) is its one caller.
     ///
     /// # Errors
     ///
     /// See [`Self::get_project`].
-    pub fn delete_config(&self, config: &DopplerConfig) -> Result<(), ProviderError> {
+    pub(crate) fn delete_config(&self, config: &DopplerConfig) -> Result<(), ProviderError> {
         let path = format!(
             "/v3/configs/config?project={}&config={}",
             config.project(),
@@ -405,14 +400,16 @@ impl DopplerClient {
     ///
     /// Each entry carries `created_at` (present in the list endpoint's
     /// own example, unlike `inheritedBy`: see [`ConfigBody::inherited_by`]'s
-    /// own doc for where that field actually lives) for a future caller
-    /// (task P3's own per-tool drift rows, `doppler.config.ensure`'s and
-    /// `doppler.branch_config.ensure`'s own creation-window checks) to
-    /// read without a second client change; task P2's own drift rule
-    /// (decision 7's project row) does not read it.
+    /// own doc for where that field actually lives), read by
+    /// `doppler.config.ensure`'s and `doppler.branch_config.ensure`'s own
+    /// creation-window checks (task P3) with no second client change;
+    /// task P2's own drift rule (decision 7's project row) does not read
+    /// it.
     ///
-    /// `pub(crate)`: `doppler.project.ensure`'s own inverse (task P2
-    /// commit 2) is its caller.
+    /// `pub(crate)`: `doppler.project.ensure`'s own inverse (task P2) and
+    /// `doppler.config.ensure`'s own inverse (task P3) both call this;
+    /// `doppler.branch_config.ensure`'s own inverse (task P3) calls it
+    /// for the one entry it needs.
     ///
     /// # Errors
     ///
@@ -1403,13 +1400,15 @@ pub(crate) struct ConfigListEntry {
     pub(crate) name: String,
     pub(crate) root: bool,
     pub(crate) environment: String,
-    /// Read by no tool yet: milestone 3m task P2's own drift rule
-    /// (decision 7's project row) does not check a config's own creation
-    /// window, only membership. Carried now so a later task (P3's own
-    /// per-tool rows, "the environment's `created_at` outside the
-    /// window") needs no second client change.
+    /// Milestone 3m task P2's own drift rule (decision 7's project row)
+    /// does not check a config's own creation window, only membership.
+    /// Task P3's own `doppler.config.ensure`/`doppler.branch_config.ensure`
+    /// rows ("the environment's/the config's `created_at` outside the
+    /// window") read it instead, since the single-config `GET`
+    /// ([`ConfigBody`]) carries no timestamp of its own -- see
+    /// `tools::config_ensure`'s own `NOT_OURS_OUTSIDE_WINDOW` doc for why
+    /// this entry's `created_at` stands in for "the environment's own".
     #[serde(default)]
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) created_at: Option<Timestamp>,
 }
 
@@ -1527,13 +1526,19 @@ struct TokensEnvelope {
     tokens: Vec<TokenListEntry>,
 }
 
-/// One listed service token: `name` (to match against) and `slug` (to
-/// revoke by). The list response omits `key` and `access` entirely
-/// (research note section 3).
+/// One listed service token: `name` (to match against), `slug` (to
+/// revoke by), and `created_at` (milestone 3m task P3,
+/// `doppler.service_token.ensure`'s own inverse: decision 7's own row,
+/// "no token at `(config, name)` created in the window" -- fetched
+/// verbatim 2026-10-12 from `service_tokens-list.md`, whose example
+/// entry carries all three). The list response omits `key` and `access`
+/// entirely (research note section 3).
 #[derive(Debug, Deserialize)]
 pub(crate) struct TokenListEntry {
     pub(crate) name: String,
     pub(crate) slug: String,
+    #[serde(default)]
+    pub(crate) created_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Serialize)]
