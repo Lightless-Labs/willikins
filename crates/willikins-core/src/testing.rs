@@ -485,10 +485,15 @@ mod reversal_stub_tests {
         let inverse = Tool::inverse(&tool).unwrap_or_else(|| unreachable!("Delete has Some"));
         let inputs = Inputs::new();
         let outputs = Outputs::new();
+        let now = crate::apply::Timestamp::now();
         let created = Created {
             inputs: &inputs,
             outputs: &outputs,
-            settled_by: crate::apply::Timestamp::now(),
+            window: crate::rollback::CreationWindow {
+                start: now,
+                end: now,
+            },
+            settled_by: now,
             accept: &[],
         };
         assert_eq!(
