@@ -60,6 +60,22 @@ fn buildkite_pipeline_bootstrap_ensure_spec_equals_the_fake_tools() {
     assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
 }
 
+/// Milestone 3m task P6: the live and fake `Reversal` declarations of
+/// both non-pure non-gate tools this crate registers are equal.
+/// `Reversal` is not part of `ToolSpec`, so the spec-equality tests above
+/// never exercised this.
+#[test]
+fn reversal_declarations_equal_the_fake_tools() {
+    let live = BuildkitePipelineEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::FakeBuildkitePipelineEnsure::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = BuildkitePipelineBootstrapEnsure::new(test_client());
+    let fake =
+        willikins_providers_fake::tools::FakeBuildkitePipelineBootstrapEnsure::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+}
+
 #[test]
 fn every_spec_validates_against_the_type_registry() {
     for spec in [

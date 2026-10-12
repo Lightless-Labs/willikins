@@ -1031,3 +1031,167 @@ fn bootstrap_ensure_agrees_when_the_stored_configuration_is_null() {
     assert_eq!(live_updates, fake_updates);
     assert!(live_updates);
 }
+
+/// Milestone 3m task P6: `buildkite.pipeline.ensure`'s inverse, the live
+/// `BuildkitePipelineInverse` against mocks and the fake one against
+/// `FakeState`, agree on [`Standing`]'s *variant* for the same scenario
+/// -- never on the exact `why`/`what` text, which each crate writes for
+/// its own reader, and never on the creation window (this crate has no
+/// timestamps in its fake state at all; `tests/it/pipeline_inverse_mock.rs`
+/// pins the live window behaviour alone).
+mod pipeline_inverse_standing_parity {
+    use super::*;
+    use willikins_core::rollback::{CreationWindow, Standing};
+    use willikins_core::{Created, Outputs, Timestamp};
+    use willikins_providers_fake::state::BuildkitePipelineRecord as FakePipelineRecord;
+
+    fn created_inputs() -> Inputs {
+        let mut inputs = Inputs::new();
+        inputs.insert(PortName::parse("org").unwrap(), Value::known(org()));
+        inputs.insert(PortName::parse("slug").unwrap(), Value::known(slug()));
+        inputs
+    }
+
+    fn window() -> CreationWindow {
+        CreationWindow {
+            start: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            end: Timestamp::parse("2026-01-01T00:10:00Z").unwrap(),
+        }
+    }
+
+    fn created(inputs: &Inputs) -> Created<'_> {
+        Created {
+            inputs,
+            outputs: Box::leak(Box::new(Outputs::new())),
+            window: window(),
+            settled_by: window().end,
+            accept: &[],
+            riders: &[],
+        }
+    }
+
+    fn pipeline_path() -> &'static str {
+        "/v2/organizations/willikins-test/pipelines/third-thoughts"
+    }
+
+    fn builds_path() -> &'static str {
+        "/v2/organizations/willikins-test/pipelines/third-thoughts/builds?per_page=1"
+    }
+
+    fn live_standing(provider: &mut MockProvider) -> Standing {
+        let credential =
+            Credential::for_testing("WILLIKINS_TEST_BUILDKITE_TOKEN", "bkua_testtoken");
+        let http = Http::new(provider.url(), Vec::new(), credential);
+        let tool = BuildkitePipelineEnsure::new(Arc::new(BuildkiteClient::new(http)));
+        Tool::inverse(&tool)
+            .expect("buildkite.pipeline.ensure declares Delete")
+            .standing(&created(&created_inputs()))
+            .expect("standing never fails against a well-formed mock response")
+    }
+
+    fn fake_standing(state: FakeState) -> Standing {
+        let tool = FakeBuildkitePipelineEnsure::new(Arc::new(Mutex::new(state)));
+        Tool::inverse(&tool)
+            .expect("buildkite.pipeline.ensure declares Delete")
+            .standing(&created(&created_inputs()))
+            .expect("standing never fails against a well-formed fake state")
+    }
+
+    #[test]
+    fn both_report_gone_when_absent() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", pipeline_path())
+            .with_status(404)
+            .with_body(serde_json::json!({"message": "Not Found"}).to_string())
+            .create();
+        assert_eq!(live_standing(&mut provider), Standing::Gone);
+        assert_eq!(fake_standing(FakeState::new()), Standing::Gone);
+    }
+
+    #[test]
+    fn both_report_as_created_with_no_loss_when_there_are_no_builds() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", pipeline_path())
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "slug": "third-thoughts",
+                    "description": "managed-by: willikins",
+                    "created_at": "2026-01-01T00:05:00Z",
+                })
+                .to_string(),
+            )
+            .create();
+        provider
+            .mock("GET", builds_path())
+            .with_status(200)
+            .with_body(serde_json::json!([]).to_string())
+            .create();
+        assert_eq!(
+            live_standing(&mut provider),
+            Standing::AsCreated { losing: Vec::new() }
+        );
+        let state = FakeState::new().with_buildkite_pipeline(
+            &org(),
+            &slug(),
+            FakePipelineRecord {
+                repository: ssh_repository_url(&repo()),
+                cluster_id: CLUSTER_ID.to_string(),
+                ours: true,
+                configuration: UPLOAD_CONFIGURATION.to_string(),
+            },
+        );
+        assert_eq!(
+            fake_standing(state),
+            Standing::AsCreated { losing: Vec::new() }
+        );
+    }
+
+    #[test]
+    fn both_report_the_builds_loss_when_a_build_exists() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", pipeline_path())
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "slug": "third-thoughts",
+                    "description": "managed-by: willikins",
+                    "created_at": "2026-01-01T00:05:00Z",
+                })
+                .to_string(),
+            )
+            .create();
+        provider
+            .mock("GET", builds_path())
+            .with_status(200)
+            .with_body(serde_json::json!([{"id": "b1", "number": 1}]).to_string())
+            .create();
+        assert_eq!(
+            live_standing(&mut provider),
+            Standing::AsCreated {
+                losing: vec!["builds"]
+            }
+        );
+        let state = FakeState::new()
+            .with_buildkite_pipeline(
+                &org(),
+                &slug(),
+                FakePipelineRecord {
+                    repository: ssh_repository_url(&repo()),
+                    cluster_id: CLUSTER_ID.to_string(),
+                    ours: true,
+                    configuration: UPLOAD_CONFIGURATION.to_string(),
+                },
+            )
+            .with_buildkite_builds(&org(), &slug(), 1);
+        assert_eq!(
+            fake_standing(state),
+            Standing::AsCreated {
+                losing: vec!["builds"]
+            }
+        );
+    }
+}
