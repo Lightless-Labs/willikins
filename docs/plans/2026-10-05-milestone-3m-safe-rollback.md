@@ -790,6 +790,82 @@ gates (`-p willikins-providers-appstore -p willikins-providers-signoz`: `cargo f
   is P3's own count. This addendum's own first draft said "Nineteen mock tests" above; it is thirteen (now, after a
   same-day addition of the two edge tests this addendum's own review added) -- "nineteen" is P1's own count.
 
+**Addendum:** 2026-10-12 -- P6 landed (fake twins: the same declarations on every fake tool, fake inverses for the
+seven `Delete` tools, the container-side `Within` check over the fake catalog, and standing-row parity in the five
+provider crates' `catalog_parity.rs`/`fake_agrees_with_live.rs`) in `crates/willikins-providers-fake` plus the five
+live crates, scoped gates (`-p willikins-providers-fake`: `cargo fmt --check`, `cargo clippy --all-targets -D
+warnings`, `cargo test`; then `cargo fmt`/`clippy --all-targets -D warnings` and `cargo test -p
+willikins-providers-github -p willikins-providers-doppler -p willikins-providers-buildkite -p
+willikins-providers-appstore -p willikins-providers-signoz --test it -j 2 -- catalog_parity:: fake_agrees_with_live::`)
+green throughout; `willikins-core`'s `teardown_token_guard`/`sink_token_guard`/`ratchet` tests re-run and still green
+(`EXPECTED_SITES` stays `1`: every new `TeardownToken::new`/`SinkToken::new` call in this task lives inside a
+`#[cfg(test)]` module). Deviations and choices, recorded:
+- **Every fake inverse skips the window rule entirely, as the row itself says to.** `FakeState` carries no
+  timestamp anywhere, so `created.window`/`created.settled_by` are threaded through every fake `Created` fixture
+  (fixed constants) but never read by any fake `standing()`. Each live crate's own `*_inverse_mock.rs` still pins
+  the live window behaviour; the new `fake_agrees_with_live.rs` parity tests hold only inside both sides' windows.
+- **`doppler.project.ensure`'s fake inverse collapses decision 7's two "foreign environment"/"foreign config"
+  `Drifted` rows into one.** `FakeState::doppler_configs` has no separate concept of a Doppler "environment": every
+  config under a project's key prefix is checked against one tolerated-name set (the three defaults plus every
+  rider `doppler.config.ensure`/`doppler.branch_config.ensure` output's own name), not two.
+- **A new crate-private `inverse_support.rs`** (mirroring `willikins_providers_doppler::inverse_support`'s shape
+  exactly, computed instead against `FakeState`) is shared by the project, config, and branch-config inverses:
+  `tolerated_secret_names`/`tolerated_token_names` (keyed by a config's bare name, matching the live crate's own
+  choice, not its full `"project/name"` string), `config_contents_drift` (secret names, one level of inheritance,
+  service tokens, and `inheritedBy` computed by *reverse*-scanning `FakeState::doppler_config_inherits` for any
+  entry outside the config's own project -- the live crate reads this directly off the provider's own
+  `inheritedBy` field, which the fake has no equivalent of), and `remove_config` (one config's own delete cascade:
+  secrets, secret writes, variables, service tokens, and the config's own three membership sets).
+- **`doppler.config.ensure`'s and `doppler.branch_config.ensure`'s fake inverses have no fake equivalent of the live
+  rows "the project lacks the marker" (environment) / "`root` is true" / "`environment` differs" (branch) --
+  `FakeState::doppler_configs` is membership-only, the same limit this crate's own `fake_agrees_with_live.rs`
+  already documented for `doppler.branch_config.ensure`'s `Foreign` case before this task. Only "the project is not
+  ours" is reachable in the fake; `fake_agrees_with_live.rs`'s own project-inverse parity module proves it anyway.
+- **`doppler.service_token.ensure`'s fake inverse has no fake equivalent of the live "more than one token at
+  `(config, name)`" `Drifted` row at all**: `FakeState::doppler_service_tokens` is a `HashSet`, so two tokens at one
+  key cannot be expressed; documented on the inverse rather than faked. The zero-match case reads `Gone` (task P3's
+  own addendum already settled this reading of decision 7 for the live tool; the fake inverse follows it too, for
+  the same resume-safety reason).
+- **`buildkite.pipeline.ensure`'s fake "builds" count is a new, separate `FakeState` map
+  (`buildkite_pipeline_builds: HashMap<String, u32>`) plus a `with_buildkite_builds` seeding helper, not a seventh
+  field on `BuildkitePipelineRecord`.** A new field on that struct would have forced every existing struct literal
+  of it in this crate (the `ensure` create path, every test fixture in three other tool modules) to name it;
+  `#[serde(default)]` only changes deserialization, never a Rust struct literal's own requirements. The separate map
+  touches none of that existing code.
+- **`appstore.profile.ensure`'s fake inverse is addressed by `Created::outputs`' own `profile` id, never a `needs`
+  port** -- mirroring the live inverse (P5), which decision 4's own table already explains ("a profile is addressed
+  by App Store Connect's own opaque id... this tool's `profile` output, never a `needs` port"). `standing` searches
+  every seeded/created record across `FakeState::apple_profiles` for the matching id, then compares the key it
+  lives under against `apple_profile_key(created.inputs' identifier, name)`: found under a different key is
+  `NotOurs`, found under the exact key is `AsCreated`, not found anywhere is `Gone`.
+- **The container-side `Within` check (decision 3's own "checked... by P6 over the fake catalog") is a fresh
+  implementation**, `crates/willikins-providers-fake/tests/it/within_container_check.rs`, not a reuse of P7's
+  table test: P7 (`willikins-server`'s `reversal_table.rs` over `LIVE_TOOL_NAMES`) has not landed yet. Three tests:
+  every named container tool is registered in the fake catalog, every mapped port exists on its stated `Side` with
+  the same `TypeRef` as the rider's own port, and a non-vacuousness check that at least one `Within` entry exists
+  to walk at all.
+- **`catalog_parity.rs` gains one `reversal_declarations_equal_the_fake_tools` test per crate** (every non-pure,
+  non-gate tool; `signoz` gets its own singular-named test), asserting `Tool::reversal()` equality directly --
+  `Reversal` carries no secret and derives `PartialEq`, so this is a plain `assert_eq!`, unlike the existing
+  spec-equality tests' JSON-serialize-then-compare dance (`ToolSpec` has no `PartialEq`). `fake_agrees_with_live.rs`
+  gains one new module per crate with an inverse (`github`, `doppler` (project only), `buildkite`, `appstore`):
+  `Gone`-when-absent and `AsCreated`-when-present-and-ours in every case, plus `NotOurs` (github, doppler) and the
+  `builds` loss (buildkite) where the fixture is cheap to build. Not exhaustive over every row of decision 7 (the
+  live crates' own `*_inverse_mock.rs` files already prove every row against the *live* inverse alone; this task's
+  own parity tests prove that the *fake* inverse's variant-level answer agrees with the live one for the scenarios
+  it can still express) -- `doppler.config.ensure`/`doppler.branch_config.ensure`/`doppler.service_token.ensure` get
+  no new `fake_agrees_with_live.rs` module: their own fake inverse's full behaviour is already covered by this
+  task's own inline unit tests in `willikins-providers-fake`, and the live crate's own project-inverse parity module
+  already proves the shared `inverse_support.rs` logic those three reuse.
+- **`FakeState` gains two small, crate-private `SecretsMap` methods** (`keys`, `remove_prefixed`) for
+  `inverse_support.rs`'s own secret-name enumeration and delete cascade -- names only, never a value, the same
+  "existence, never bytes" discipline every other read of `SecretsMap` in this crate already keeps.
+- **No ratchet, tripwire, or guard file in `willikins-core` changed.** `teardown_token_guard.rs`'s own walk
+  reaches every crate under `crates/`, including this one, but every new `TeardownToken::new`/`SinkToken::new` call
+  this task adds lives inside a `#[cfg(test)]` module (inline, following this crate's own existing convention of
+  testing each tool in its own file rather than under `tests/it/`), so `EXPECTED_SITES` stays `1`; re-ran
+  `teardown_token_guard::`/`sink_token_guard::`/`ratchet::` after landing to confirm.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
