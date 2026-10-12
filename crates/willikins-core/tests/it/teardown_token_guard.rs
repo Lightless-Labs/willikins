@@ -516,6 +516,7 @@ fn all_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn every_teardown_token_new_call_site_is_apply_teardown_a_test_item_or_a_tests_file() {
     let mut violations = Vec::new();
     let mut allow_attrs = 0;
+    let mut reached_rollback_rs = false;
 
     for crate_dir in crate_dirs() {
         let src = crate_dir.join("src");
@@ -529,12 +530,12 @@ fn every_teardown_token_new_call_site_is_apply_teardown_a_test_item_or_a_tests_f
         } else {
             continue;
         };
-        let exempt_path =
-            if crate_dir.file_name().and_then(|n| n.to_str()) == Some("willikins-core") {
-                rollback_rs_relative()
-            } else {
-                PathBuf::from("__no_exempt_module__")
-            };
+        let is_core = crate_dir.file_name().and_then(|n| n.to_str()) == Some("willikins-core");
+        let exempt_path = if is_core {
+            rollback_rs_relative()
+        } else {
+            PathBuf::from("__no_exempt_module__")
+        };
         let visited = walk_crate(
             &root,
             &exempt_path,
@@ -542,6 +543,9 @@ fn every_teardown_token_new_call_site_is_apply_teardown_a_test_item_or_a_tests_f
             &mut violations,
             &mut allow_attrs,
         );
+        if is_core && visited.iter().any(|p| p.ends_with("rollback.rs")) {
+            reached_rollback_rs = true;
+        }
 
         let mut every_file = Vec::new();
         all_rs_files(&crate_dir, &mut every_file);
@@ -552,6 +556,13 @@ fn every_teardown_token_new_call_site_is_apply_teardown_a_test_item_or_a_tests_f
             walk_single_file(&path, &exempt_path, EXEMPT_FN_NAMES, &mut violations);
         }
     }
+
+    assert!(
+        reached_rollback_rs,
+        "this walk never reached willikins-core/src/rollback.rs: the exemption rule above is \
+         vacuous for the real tree (update this test if rollback.rs moved or stopped being \
+         declared from lib.rs's module graph)"
+    );
 
     assert!(
         violations.is_empty(),
