@@ -341,8 +341,9 @@ exactly what it will delete and what it cannot undo.
 5. **No value in a reason.** Every drift and refusal reason is a `&'static str`, like `Gate::need`. A teardown step
    names its subject only through non-secret `Value`s, which every output surface masks or redacts as usual.
 6. **All reads before any delete.** As `deploy/teardown.sh` did: the teardown plan observes every candidate whose node
-   says `teardown: delete` (decision 6), and the executor re-observes all of them before the first delete; each
-   `delete` observes once more on its own. A kept or `Retained` step is never observed.
+   says `teardown: delete` and that is not itself a rider (decision 6), and the executor re-observes all of them before
+   the first delete; each `delete` observes once more on its own. A rider is covered by its container's observation,
+   whose drift rule must account for it (decisions 3, 7). A kept or `Retained` step is never observed.
 7. **A secret is never journaled for a teardown.** Credentials are re-resolved from the document's pure resolver
    nodes at teardown time (decision 5). They are never read back from the journal, which holds only redaction markers
    for them.
