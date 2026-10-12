@@ -161,16 +161,14 @@ fn the_unreachable_ratchet_never_rises() {
         0,
         "describe.rs's unreachable ratchet moved; lower it, never raise it"
     );
-    // Milestone 3m, task R5a: `rollback.rs` joins the ratchet, pinned at
-    // its own baseline before `plan_teardown` lands -- the one
-    // `.expect(` already there (`LOSS_NAME_REGEX`'s own `LazyLock::new`).
-    // `plan_teardown`'s own commit raises this to 2 (a `Catalog::insert`
-    // invariant -- `Delete` implies `Tool::inverse()` is `Some` -- not
-    // visible to the type system at that call site) in the same commit
-    // that adds the fallback, never before.
+    // Milestone 3m, task R5a: `rollback.rs` joins the ratchet. Two
+    // fallbacks: `LOSS_NAME_REGEX`'s own `LazyLock::new` (pre-existing),
+    // and `plan_teardown`'s own -- a `Catalog::insert` invariant
+    // (`Delete` implies `Tool::inverse()` is `Some`) not visible to the
+    // type system at that call site.
     assert_eq!(
         ratchet_count("src/rollback.rs"),
-        1,
+        2,
         "rollback.rs's unreachable ratchet moved; lower it, never raise it"
     );
 }

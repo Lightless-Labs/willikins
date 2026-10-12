@@ -278,13 +278,18 @@ pub fn arb_registered_value() -> impl Strategy<Value = Value> {
 
 /// A stub [`Inverse`] that reports a fixed [`Standing`] and, on delete,
 /// `Deleted { already_gone }` matching it — never a real provider call.
-/// Shared by [`StubDeletableTool`].
+/// Shared by [`StubDeletableTool`]. Counts its own `standing` calls
+/// (milestone 3m task R5a, acceptance 4 and 6: a kept or refused-earlier
+/// candidate must call `standing` zero times).
 struct StubInverse {
     standing: Standing,
+    standing_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Inverse for StubInverse {
     fn standing(&self, _created: &Created<'_>) -> Result<Standing, ToolError> {
+        self.standing_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self.standing.clone())
     }
 
@@ -319,6 +324,20 @@ impl StubDeletableTool {
     /// The same tool, with its inverse's `standing` fixed to `standing`.
     #[must_use]
     pub fn with_standing(standing: Standing) -> Self {
+        Self::with_standing_and_counter(
+            standing,
+            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        )
+    }
+
+    /// The same tool, sharing `standing_calls` with the caller so it can
+    /// read how many times `standing` was called after the fact
+    /// (milestone 3m task R5a, acceptance 4 and 6).
+    #[must_use]
+    pub fn with_standing_and_counter(
+        standing: Standing,
+        standing_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Self {
         let mut inputs = IndexMap::new();
         inputs.insert(
             port("repo"),
@@ -340,8 +359,20 @@ impl StubDeletableTool {
                 class: Class::Reversible,
                 pure: false,
             },
-            inverse: StubInverse { standing },
+            inverse: StubInverse {
+                standing,
+                standing_calls,
+            },
         }
+    }
+
+    /// How many times this tool's inverse's `standing` has been called so
+    /// far (milestone 3m task R5a, acceptance 4 and 6).
+    #[must_use]
+    pub fn standing_calls(&self) -> usize {
+        self.inverse
+            .standing_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

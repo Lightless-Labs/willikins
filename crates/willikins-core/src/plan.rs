@@ -1906,16 +1906,9 @@ fn output_type_mismatch(port: &PortName, expected: &TypeRef, found: &TypeRef) ->
 /// `crate::rollback::plan_teardown` (task R5a), which resolves a specific
 /// port's own `Source` against it through [`Self::ctx`].
 ///
-/// `ctx` and these fields are read only by this module's own tests until
-/// task R5a's `plan_teardown` lands and reads them from real, non-test
-/// code: the plain `lib` build (no `--cfg test`) never sees that test
-/// module, so without the `expect` below it would flag both as dead.
-/// `expect` (not `allow`) is self-removing: the moment R5a calls `ctx()`
-/// from outside `#[cfg(test)]`, the lib build errors on an unfulfilled
-/// lint expectation, and R5a's own commit must delete both attributes --
-/// the same discipline R2's `EXPECTED_SITES = 0` already uses (plan
+/// `crate::rollback::plan_teardown` (task R5a) is this type's and
+/// [`Self::ctx`]'s own non-test caller, from R5a's own commit on (plan
 /// addendum, 2026-10-12).
-#[cfg_attr(not(test), expect(dead_code))]
 pub struct Resolved {
     single: Vec<SingleResult>,
     each: Vec<EachResult>,
@@ -1932,7 +1925,6 @@ impl Resolved {
     /// resolve every other port, with no second walk and no catalog
     /// lookup. `checked` and `inputs` must be the same pair given to the
     /// [`resolve_pure`] call that produced `self`.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn ctx<'a>(
         &'a self,
         checked: &'a Checked,

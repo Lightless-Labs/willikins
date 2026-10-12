@@ -70,15 +70,8 @@ pub struct CreationWindow {
 /// `at` shifted by `seconds` (positive or negative). The one place this
 /// module adds or subtracts [`CREATION_SKEW`] from a recorded
 /// [`crate::apply::Timestamp`] — [`CreationWindow::start`]/`end` and
-/// [`Created::settled_by`] (milestone 3m decision 2) all go through this.
-///
-/// `plan_teardown` is this function's first non-test caller and lands in
-/// a later commit of this same task; until then only this module's own
-/// tests call it, so the plain `lib` build (no `--cfg test`) would flag
-/// it dead without the attribute below — self-removing the moment that
-/// commit adds the real call, the same discipline milestone 3m task R4's
-/// `Resolved`/`ctx` already uses (plan addendum, 2026-10-12).
-#[cfg_attr(not(test), expect(dead_code))]
+/// [`Created::settled_by`] (milestone 3m decision 2) all go through this,
+/// from [`plan_teardown`] on.
 fn shift(at: crate::apply::Timestamp, seconds: i64) -> crate::apply::Timestamp {
     crate::apply::Timestamp::from_datetime(*at.as_datetime() + chrono::Duration::seconds(seconds))
 }
@@ -545,6 +538,386 @@ pub enum TeardownError {
     },
 }
 
+/// [`TeardownAction::Retained`]'s `why` for an instance planned
+/// [`crate::plan::Action::Replace`] or [`crate::plan::Action::Update`]
+/// (milestone 3m decision 1): the prior state at this key cannot be
+/// restored either way, whatever the tool's own [`Reversal`] says.
+const CHANGED_IN_PLACE: &str = "changed in place, or replaced; the prior state cannot be restored";
+
+/// `checked`'s own node named `name`, if any.
+fn find_checked_node<'a>(
+    checked: &'a crate::check::Checked,
+    name: &crate::workflow::NodeName,
+) -> Option<&'a crate::check::CheckedNode> {
+    checked.nodes().iter().find(|node| &node.name == name)
+}
+
+/// Whether `checked`'s own node named `name` is pure (milestone 3m
+/// decision 5). `false` for a name `checked` has no node for -- never
+/// actually reached from [`Secrets::resolve_secret_source`]: every
+/// `Source::Step`/`Aggregate`/`Keyed` it resolves names a producer
+/// `check` itself already resolved against this same `checked`.
+fn node_is_pure(checked: &crate::check::Checked, name: &crate::workflow::NodeName) -> bool {
+    find_checked_node(checked, name).is_some_and(|node| node.tool.spec().pure)
+}
+
+/// `port`'s own scalar [`crate::check::Source`], if `ports` binds it to
+/// one (never a `Bound::List` -- a credential port is always scalar) and
+/// binds it at all. `None` for an unbound port: decision 5's own
+/// "falls back to its execution-context credential" for an optional one.
+fn scalar_source<'a, I>(
+    ports: &'a [crate::check::PortEdge<I>],
+    port: &crate::tool::PortName,
+) -> Option<&'a crate::check::Source<I>> {
+    ports
+        .iter()
+        .find(|edge| &edge.port == port)
+        .and_then(|edge| match &edge.bound {
+            crate::check::Bound::Scalar { source, .. } => Some(source),
+            crate::check::Bound::List { .. } => None,
+        })
+}
+
+/// Everything [`decide_candidate`] needs to re-resolve a `Delete` step's
+/// own secret `needs` ports (milestone 3m decision 5), bundled so neither
+/// it nor [`Secrets::build_needs_inputs`] trips clippy's own
+/// too-many-arguments lint.
+struct Secrets<'a> {
+    checked: &'a crate::check::Checked,
+    resolved: &'a crate::plan::Resolved,
+    facts: &'a RunFacts,
+    single_names: &'a [crate::workflow::NodeName],
+    each_names: &'a [crate::workflow::NodeName],
+}
+
+impl Secrets<'_> {
+    /// Resolve one `Delete` step's secret `needs` port's own bound
+    /// `source` (milestone 3m decision 5): a literal or a declared
+    /// workflow input resolves the same way
+    /// [`crate::plan::resolve_pure`] itself resolves one; a step,
+    /// aggregate or keyed reference resolves only when its own producer
+    /// node is pure -- `self.resolved`'s own tables hold a value for it
+    /// only then (`resolve_pure`'s own backward closure never reads past
+    /// a non-pure node) -- and otherwise is
+    /// [`TeardownError::UnresolvableCredential`]. A `${{ item }}`-bound
+    /// credential port is the same error: resolving it would need this
+    /// instance's own recorded `for_each` item, which [`RunFacts`] does
+    /// not carry (no current tool needs one; flagged for a follow-up
+    /// rather than widened on a guess -- see the plan's 2026-10-12 R5a
+    /// addendum).
+    fn resolve_secret_source<I>(
+        &self,
+        node: &crate::workflow::NodeName,
+        port: &crate::tool::PortName,
+        source: &crate::check::Source<I>,
+        site: &crate::site::Site,
+    ) -> Result<crate::value::Value, TeardownError> {
+        let unresolvable = || TeardownError::UnresolvableCredential {
+            node: node.clone(),
+            port: port.clone(),
+        };
+        match source {
+            crate::check::Source::Item(_) => return Err(unresolvable()),
+            crate::check::Source::Step { from, .. } => {
+                if !node_is_pure(self.checked, &self.single_names[from.0 as usize]) {
+                    return Err(unresolvable());
+                }
+            }
+            crate::check::Source::Aggregate { from, .. }
+            | crate::check::Source::Keyed { from, .. } => {
+                if !node_is_pure(self.checked, &self.each_names[from.0 as usize]) {
+                    return Err(unresolvable());
+                }
+            }
+            crate::check::Source::Literal(_) | crate::check::Source::Input(_) => {}
+        }
+        let ctx = self.resolved.ctx(self.checked, &self.facts.inputs);
+        crate::plan::resolve_source(&ctx, source, site, None).map_err(TeardownError::from)
+    }
+
+    /// Every one of `needs`' own ports, resolved for a [`Created`]
+    /// (milestone 3m decision 5): a non-secret port's value comes
+    /// straight from `instance`'s own recorded, re-parsed inputs; a
+    /// secret one is re-resolved through [`Self::resolve_secret_source`],
+    /// and left unbound when the document never bound it at all.
+    fn build_needs_inputs(
+        &self,
+        instance: &RunInstance,
+        checked_node: &crate::check::CheckedNode,
+        needs: &'static [&'static str],
+    ) -> Result<crate::tool::Inputs, TeardownError> {
+        let mut built = crate::tool::Inputs::new();
+        for &needs_port in needs {
+            let Ok(port) = crate::tool::PortName::parse(needs_port) else {
+                continue;
+            };
+            let is_secret = checked_node
+                .tool
+                .spec()
+                .inputs
+                .get(&port)
+                .is_some_and(|spec| match &spec.ty {
+                    crate::value::PortType::AnySecret => true,
+                    crate::value::PortType::Exact(ty) => {
+                        self.checked.registry().is_secret(&ty.name) == Some(true)
+                    }
+                });
+            if is_secret {
+                let site = crate::site::Site::Port {
+                    node: instance.node.clone(),
+                    port: port.clone(),
+                };
+                let resolved_value = match &checked_node.shape {
+                    crate::check::Shape::Single { ports, .. } => {
+                        scalar_source(ports, &port).map(|source| {
+                            self.resolve_secret_source(&instance.node, &port, source, &site)
+                        })
+                    }
+                    crate::check::Shape::Each { ports, .. } => {
+                        scalar_source(ports, &port).map(|source| {
+                            self.resolve_secret_source(&instance.node, &port, source, &site)
+                        })
+                    }
+                };
+                if let Some(value) = resolved_value.transpose()? {
+                    built.insert(port, value);
+                }
+            } else if let Some(value) = instance.inputs.get(&port) {
+                built.insert(port, value.clone());
+            }
+        }
+        Ok(built)
+    }
+}
+
+/// What capability × policy × standing decided for one `Create`d or
+/// `Create`+`Failed` candidate (milestone 3m decision 6).
+enum Decision {
+    /// A step to record.
+    Step(TeardownAction),
+    /// A refusal reason to collect ([`TeardownError::Refused`]).
+    Refused(&'static str),
+}
+
+/// Decide `checked_node`'s own action for one `Create`d or `Create`+
+/// `Failed` candidate instance (milestone 3m decision 6): capability
+/// ([`Reversal`]) first, then the node's own policy ([`TeardownPolicy`]),
+/// then -- only under `Delete` -- its inverse's own `standing`, and
+/// decision 3a's loss rules.
+fn decide_candidate(
+    secrets: &Secrets,
+    instance: &RunInstance,
+    checked_node: &crate::check::CheckedNode,
+    started: crate::apply::Timestamp,
+    finished: crate::apply::Timestamp,
+    uncertain: bool,
+) -> Result<Decision, TeardownError> {
+    match checked_node.tool.reversal() {
+        Reversal::Retained { why } => Ok(Decision::Step(TeardownAction::Retained { why })),
+        Reversal::Contained { otherwise, .. } => {
+            Ok(Decision::Step(TeardownAction::Retained { why: otherwise }))
+        }
+        Reversal::Delete { needs, losses, .. } => match &checked_node.teardown {
+            crate::workflow::TeardownPolicy::Retain => {
+                Ok(Decision::Step(TeardownAction::Kept { why: KEPT }))
+            }
+            crate::workflow::TeardownPolicy::Delete { accept } => {
+                let window = CreationWindow {
+                    start: shift(started, -CREATION_SKEW),
+                    end: shift(finished, CREATION_SKEW),
+                };
+                let settled_by = shift(secrets.facts.finished_at, CREATION_SKEW);
+                let needs_inputs = secrets.build_needs_inputs(instance, checked_node, needs)?;
+                let created = Created {
+                    inputs: &needs_inputs,
+                    outputs: &instance.outputs,
+                    window,
+                    settled_by,
+                    accept,
+                };
+                // `Catalog::insert` requires a `Delete` reversal to have
+                // `Some(inverse())` (milestone 3m task R3); not visible
+                // to the type system at this call site.
+                let inverse = checked_node.tool.inverse().unwrap_or_else(|| {
+                    unreachable!("Catalog::insert requires a Delete reversal to have Some(inverse)")
+                });
+                let standing = inverse
+                    .standing(&created)
+                    .map_err(|error| TeardownError::Tool {
+                        instance: crate::apply::InstanceRef {
+                            node: instance.node.clone(),
+                            instance: instance.instance.clone(),
+                        },
+                        error,
+                    })?;
+                Ok(match standing {
+                    Standing::Gone => Decision::Step(TeardownAction::Gone),
+                    Standing::NotOurs { why } => Decision::Refused(why),
+                    Standing::Drifted { what } => Decision::Refused(what),
+                    Standing::AsCreated { losing } => {
+                        // Fail safe: a loss the tool reports but never
+                        // declared is treated as drift (decision 3a).
+                        if let Some(undeclared) =
+                            losing.iter().copied().find(|loss| !losses.contains(loss))
+                        {
+                            Decision::Refused(undeclared)
+                        } else if let Some(unaccepted) = losing
+                            .iter()
+                            .copied()
+                            .find(|loss| !accept.iter().any(|a| a.as_str() == *loss))
+                        {
+                            Decision::Refused(unaccepted)
+                        } else {
+                            Decision::Step(TeardownAction::Delete { uncertain })
+                        }
+                    }
+                })
+            }
+        },
+    }
+}
+
+/// Compute a teardown plan from one applied run's own journal facts
+/// (milestone 3m decisions 1, 2, 3a, 4's gate rows, and 6).
+///
+/// Steps come out in reverse of `facts.instances`' own (forward,
+/// applied-plan) order. Per candidate, capability × policy × standing
+/// decides the action (decision 6): a gate instance the run found
+/// satisfied is [`TeardownAction::MadeByHand`] (decision 4); `Replace`/
+/// `Update` is always [`TeardownAction::Retained`] (decision 1); a
+/// `Create`d or `Create`+`Failed` instance whose tool is
+/// [`Reversal::Retained`] is `Retained` for the tool's own reason, and
+/// one whose tool is [`Reversal::Contained`] is `Retained` for
+/// `otherwise` (milestone 3m task R5b replaces this placeholder with a
+/// real rider decision); one whose tool is [`Reversal::Delete`] and whose
+/// node keeps it (`TeardownPolicy::Retain`) is [`TeardownAction::Kept`],
+/// never observed; one whose node says to delete it is observed through
+/// `standing`, and becomes [`TeardownAction::Gone`],
+/// [`TeardownAction::Delete`] (`uncertain` when the create itself
+/// finished `Failed`), or a refusal, per decision 3a's loss rules. A
+/// started instance with no `NodeFinished` is [`TeardownAction::Unfinished`]
+/// (decisions 1, 2), unconditionally. Every other candidate (a `Create`
+/// that finished `Unchanged`, `Converged`, `NotRun`, `Skipped` or
+/// `Blocked`, or any `Compute`/`NoOp`/`Skip` instance that is not a
+/// satisfied gate) is not a step at all.
+///
+/// A `Create`+`Unchanged` instance's own transit-riding is milestone 3m
+/// task R5b's, not this function's: it produces no step here.
+///
+/// # Errors
+///
+/// [`TeardownError::Refused`] when any observed candidate's standing
+/// refuses (decision 6): every refusing instance is collected, not only
+/// the first -- trust boundary 6 observes every delete-policy candidate
+/// before any delete, plan time included, so this function never returns
+/// on the first refusal it finds. [`TeardownError::UnresolvableCredential`]
+/// or [`TeardownError::Resolve`] when a `Delete` step's own secret
+/// `needs` port cannot be honestly re-resolved (decision 5); either one
+/// stops this function immediately, since it names a document defect,
+/// never drift. [`TeardownError::Tool`] when a `Delete` tool's own
+/// `inverse().standing` call itself fails.
+pub fn plan_teardown(
+    facts: &RunFacts,
+    checked: &crate::check::Checked,
+    resolved: &crate::plan::Resolved,
+) -> Result<Teardown, TeardownError> {
+    let (single_names, each_names) = crate::plan::node_names_by_shape(checked);
+    let secrets = Secrets {
+        checked,
+        resolved,
+        facts,
+        single_names: &single_names,
+        each_names: &each_names,
+    };
+    let mut steps: Vec<TeardownStep> = Vec::new();
+    let mut refusals: Vec<(crate::apply::InstanceRef, &'static str)> = Vec::new();
+
+    for instance in facts.instances.iter().rev() {
+        let Some(checked_node) = find_checked_node(checked, &instance.node) else {
+            continue;
+        };
+        let instance_ref = crate::apply::InstanceRef {
+            node: instance.node.clone(),
+            instance: instance.instance.clone(),
+        };
+
+        // Decision 4's gate rows: pure, so never `Create`-actioned.
+        if let Some(gate) = checked_node.tool.gate() {
+            if let RunProgress::Finished { status, .. } = &instance.progress
+                && matches!(status, crate::apply::NodeStatus::Computed)
+            {
+                steps.push(TeardownStep {
+                    instance: instance_ref,
+                    action: TeardownAction::MadeByHand { need: gate.need },
+                });
+            }
+            continue;
+        }
+
+        match instance.action {
+            crate::plan::Action::Compute
+            | crate::plan::Action::NoOp
+            | crate::plan::Action::Skip
+            | crate::plan::Action::Blocked => continue,
+            crate::plan::Action::Replace | crate::plan::Action::Update => {
+                steps.push(TeardownStep {
+                    instance: instance_ref,
+                    action: TeardownAction::Retained {
+                        why: CHANGED_IN_PLACE,
+                    },
+                });
+                continue;
+            }
+            crate::plan::Action::Create => {}
+        }
+
+        let (started, finished, status) = match &instance.progress {
+            RunProgress::NotFinished { started } => {
+                if started.is_some() {
+                    steps.push(TeardownStep {
+                        instance: instance_ref,
+                        action: TeardownAction::Unfinished,
+                    });
+                }
+                continue;
+            }
+            RunProgress::Finished {
+                started,
+                finished,
+                status,
+            } => (*started, *finished, status),
+        };
+
+        let uncertain = match status {
+            crate::apply::NodeStatus::Created => false,
+            crate::apply::NodeStatus::Failed { .. } => true,
+            // `Unchanged` (transit riding is task R5b's), `Converged`,
+            // `Blocked`, `Skipped`, `NotRun`, `Computed`: not a step.
+            _ => continue,
+        };
+
+        match decide_candidate(
+            &secrets,
+            instance,
+            checked_node,
+            started,
+            finished,
+            uncertain,
+        )? {
+            Decision::Step(action) => steps.push(TeardownStep {
+                instance: instance_ref,
+                action,
+            }),
+            Decision::Refused(why) => refusals.push((instance_ref, why)),
+        }
+    }
+
+    if !refusals.is_empty() {
+        return Err(TeardownError::Refused { steps: refusals });
+    }
+    Ok(Teardown { steps })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,5 +959,449 @@ mod tests {
             earlier,
             crate::apply::Timestamp::parse("2026-10-11T23:58:00+00:00").unwrap()
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3m, task R5a, acceptance 4, 6, 19: `plan_teardown`.
+    // -----------------------------------------------------------------
+
+    use crate::ToolName;
+    use crate::apply::{InstanceRef, NodeStatus, Timestamp};
+    use crate::catalog::Catalog;
+    use crate::check::{Checked, check};
+    use crate::plan::{Action, resolve_pure};
+    use crate::testing::StubDeletableTool;
+    use crate::tool::{Inputs, Outputs, PortName};
+    use crate::workflow::{Binding, Loss, Node, NodeName, TeardownPolicy, Workflow};
+    use indexmap::IndexMap;
+    use std::sync::Arc;
+    use willikins_types::DomainType;
+
+    fn node(name: &str) -> NodeName {
+        NodeName::parse(name).unwrap()
+    }
+
+    fn workflow_name(name: &str) -> willikins_types::WorkflowName {
+        willikins_types::WorkflowName::parse(name).unwrap()
+    }
+
+    fn ts(at: &str) -> Timestamp {
+        Timestamp::parse(at).unwrap()
+    }
+
+    /// A one-node workflow: `repo`, calling `tool`, `repo` port bound to
+    /// a literal `GitHubRepo`, with `policy` as its own `teardown:`
+    /// (`None` leaves the field unset — the conservative default).
+    fn checked_with(tool: Arc<StubDeletableTool>, policy: Option<TeardownPolicy>) -> Checked {
+        let mut repo_node = Node::new(ToolName::parse("test.deletable").unwrap()).port(
+            PortName::parse("repo").unwrap(),
+            Binding::Literal("example-org/example-repo".to_string()),
+        );
+        if let Some(policy) = policy {
+            repo_node = repo_node.teardown(policy);
+        }
+        let workflow = Workflow::new(workflow_name("rollback-test")).node(node("repo"), repo_node);
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(tool as Arc<dyn crate::tool::Tool>).unwrap();
+        check(&workflow, &catalog).unwrap_or_else(|errors| {
+            unreachable!("a one-node Delete-capable workflow must check cleanly: {errors:?}")
+        })
+    }
+
+    /// A trivial, empty `Resolved`: every test here declares `needs:
+    /// &["repo"]`, a non-secret port, so no pure resolver chain is ever
+    /// read.
+    fn empty_resolved(checked: &Checked) -> crate::plan::Resolved {
+        resolve_pure(checked, &IndexMap::new(), &[]).unwrap()
+    }
+
+    fn facts(instance: RunInstance, finished_at: &str) -> RunFacts {
+        RunFacts {
+            finished_at: ts(finished_at),
+            inputs: IndexMap::new(),
+            instances: vec![instance],
+        }
+    }
+
+    fn instance(action: Action, progress: RunProgress) -> RunInstance {
+        RunInstance {
+            node: node("repo"),
+            instance: None,
+            action,
+            progress,
+            inputs: Inputs::new(),
+            outputs: Outputs::new(),
+        }
+    }
+
+    fn finished(started: &str, finished: &str, status: NodeStatus) -> RunProgress {
+        RunProgress::Finished {
+            started: ts(started),
+            finished: ts(finished),
+            status,
+        }
+    }
+
+    const START: &str = "2026-10-12T00:00:00+00:00";
+    const END: &str = "2026-10-12T00:01:00+00:00";
+    const RUN_FINISHED: &str = "2026-10-12T00:02:00+00:00";
+
+    /// Acceptance 4: `Create` + `Created` is a candidate -- under a plain
+    /// `teardown: delete`, `Standing::Gone` gives `Gone`.
+    #[test]
+    fn create_plus_created_is_a_candidate() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::Gone));
+        let checked = checked_with(
+            Arc::clone(&tool),
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None
+                },
+                action: TeardownAction::Gone,
+            }]
+        );
+        assert_eq!(tool.standing_calls(), 1);
+    }
+
+    /// Acceptance 4: `Update` + `Created` is not a candidate -- always
+    /// `Retained`, whatever the tool or policy.
+    #[test]
+    fn update_plus_created_is_retained_not_a_candidate() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::Gone));
+        let checked = checked_with(
+            Arc::clone(&tool),
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Update, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None
+                },
+                action: TeardownAction::Retained {
+                    why: CHANGED_IN_PLACE
+                },
+            }]
+        );
+        assert_eq!(tool.standing_calls(), 0);
+    }
+
+    /// Acceptance 4: `Replace` + `Created` is not a candidate -- same as
+    /// `Update`.
+    #[test]
+    fn replace_plus_created_is_retained_not_a_candidate() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::Gone));
+        let checked = checked_with(
+            Arc::clone(&tool),
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Replace, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None
+                },
+                action: TeardownAction::Retained {
+                    why: CHANGED_IN_PLACE
+                },
+            }]
+        );
+        assert_eq!(tool.standing_calls(), 0);
+    }
+
+    /// Acceptance 4: `NoOp` + `Unchanged` is not a candidate -- not this
+    /// run's doing at all, so it is not even a step.
+    #[test]
+    fn noop_plus_unchanged_is_not_a_step() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::Gone));
+        let checked = checked_with(
+            Arc::clone(&tool),
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::NoOp, finished(START, END, NodeStatus::Unchanged)),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert!(teardown.steps.is_empty());
+        assert_eq!(tool.standing_calls(), 0);
+    }
+
+    /// Acceptance 4: `Create` + `Failed`, standing `AsCreated`, gives
+    /// `Delete { uncertain: true }` -- the create may have landed before
+    /// the failure.
+    #[test]
+    fn create_plus_failed_as_created_gives_uncertain_delete() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::AsCreated {
+            losing: vec![],
+        }));
+        let checked = checked_with(
+            Arc::clone(&tool),
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(
+                Action::Create,
+                finished(
+                    START,
+                    END,
+                    NodeStatus::Failed {
+                        error: crate::tool::ToolError {
+                            kind: crate::tool::ToolErrorKind::Provider,
+                            message: "boom".to_string(),
+                        },
+                    },
+                ),
+            ),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None
+                },
+                action: TeardownAction::Delete { uncertain: true },
+            }]
+        );
+    }
+
+    /// Acceptance 4: a started, unfinished instance in a finished run is
+    /// `Unfinished`, and never deletes -- `standing` is never called.
+    #[test]
+    fn started_but_unfinished_instance_is_unfinished_and_never_deleted() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::Gone));
+        let checked = checked_with(
+            Arc::clone(&tool),
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(
+                Action::Create,
+                RunProgress::NotFinished {
+                    started: Some(ts(START)),
+                },
+            ),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None
+                },
+                action: TeardownAction::Unfinished,
+            }]
+        );
+        assert_eq!(tool.standing_calls(), 0);
+    }
+
+    /// Acceptance 4: a kept `Create` + `Failed` is `Kept`, with zero
+    /// `standing` calls -- a kept resource's drift is not this
+    /// teardown's concern (decision 6).
+    #[test]
+    fn kept_create_plus_failed_is_kept_with_no_standing_calls() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::AsCreated {
+            losing: vec![],
+        }));
+        // No `teardown:` declared at all -- the conservative default.
+        let checked = checked_with(Arc::clone(&tool), None);
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(
+                Action::Create,
+                finished(
+                    START,
+                    END,
+                    NodeStatus::Failed {
+                        error: crate::tool::ToolError {
+                            kind: crate::tool::ToolErrorKind::Provider,
+                            message: "boom".to_string(),
+                        },
+                    },
+                ),
+            ),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None
+                },
+                action: TeardownAction::Kept { why: KEPT },
+            }]
+        );
+        assert_eq!(tool.standing_calls(), 0);
+    }
+
+    /// Acceptance 19: the default deletes nothing. A document with no
+    /// `teardown:` anywhere plans a teardown with no `Delete` step and
+    /// calls no inverse.
+    #[test]
+    fn the_default_policy_deletes_nothing() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::Gone));
+        let checked = checked_with(Arc::clone(&tool), None);
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert!(
+            teardown
+                .steps
+                .iter()
+                .all(|step| !matches!(step.action, TeardownAction::Delete { .. }))
+        );
+        assert_eq!(tool.standing_calls(), 0);
+    }
+
+    /// Acceptance 6: one `Drifted` step refuses the whole teardown, with
+    /// no `Teardown` ever built.
+    #[test]
+    fn a_drifted_step_refuses_the_whole_teardown() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::Drifted {
+            what: "a push after this run",
+        }));
+        let checked = checked_with(
+            Arc::clone(&tool),
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let err = plan_teardown(&run, &checked, &resolved).unwrap_err();
+        match err {
+            TeardownError::Refused { steps } => {
+                assert_eq!(steps.len(), 1);
+                assert_eq!(steps[0].1, "a push after this run");
+            }
+            other => panic!("expected Refused, got {other:?}"),
+        }
+    }
+
+    /// Acceptance 6: a pipeline-shaped tool whose inverse reports
+    /// `builds` under a plain `teardown: delete` refuses; with
+    /// `accept: [builds]` it is a `Delete`.
+    #[test]
+    fn an_unaccepted_loss_refuses_but_an_accepted_one_deletes() {
+        let plain_tool = Arc::new(StubDeletableTool::with_standing(Standing::AsCreated {
+            losing: vec!["builds"],
+        }));
+        let checked = checked_with(
+            Arc::clone(&plain_tool),
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let err = plan_teardown(&run, &checked, &resolved).unwrap_err();
+        match err {
+            TeardownError::Refused { steps } => {
+                assert_eq!(
+                    steps,
+                    vec![(
+                        InstanceRef {
+                            node: node("repo"),
+                            instance: None
+                        },
+                        "builds"
+                    )]
+                );
+            }
+            other => panic!("expected Refused, got {other:?}"),
+        }
+
+        let accepting_tool = Arc::new(StubDeletableTool::with_standing(Standing::AsCreated {
+            losing: vec!["builds"],
+        }));
+        let checked = checked_with(
+            Arc::clone(&accepting_tool),
+            Some(TeardownPolicy::Delete {
+                accept: vec![Loss::parse("builds").unwrap()],
+            }),
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None
+                },
+                action: TeardownAction::Delete { uncertain: false },
+            }]
+        );
+    }
+
+    /// Acceptance 6: a drifted resource on a kept node refuses nothing --
+    /// its inverse is never called at all.
+    #[test]
+    fn a_drifted_resource_on_a_kept_node_refuses_nothing() {
+        let tool = Arc::new(StubDeletableTool::with_standing(Standing::Drifted {
+            what: "a push after this run",
+        }));
+        let checked = checked_with(Arc::clone(&tool), Some(TeardownPolicy::Retain));
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None
+                },
+                action: TeardownAction::Kept { why: KEPT },
+            }]
+        );
+        assert_eq!(tool.standing_calls(), 0);
     }
 }
