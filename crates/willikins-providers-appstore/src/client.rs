@@ -630,14 +630,16 @@ impl AppstoreClient {
 
     /// `DELETE /v1/profiles/{id}`.
     ///
-    /// Two callers: the opt-in live write cycle (`tests/live_write_cycle.rs`,
+    /// Three callers: the opt-in live write cycle (`tests/live_write_cycle.rs`,
     /// behind the `live-tests` feature), which removes every throwaway
-    /// profile it created; and, since the 2026-09-28 replace-when-INVALID
-    /// addendum, `appstore.profile.ensure`'s own `ensure`, which deletes an
-    /// `INVALID` profile at its exact `(identifier, name)` key before
-    /// creating fresh (see that tool's own module doc). `pub`, not
-    /// `pub(crate)`, mirroring [`Self::delete_bundle_id`]'s own doc
-    /// exactly.
+    /// profile it created; `appstore.profile.ensure`'s own `ensure`
+    /// (since the 2026-09-28 replace-when-INVALID addendum), which
+    /// deletes an `INVALID` profile at its exact `(identifier, name)` key
+    /// before creating fresh (see that tool's own module doc); and, since
+    /// milestone 3m task P5, `AppstoreProfileInverse::delete`, by the id
+    /// the run recorded, once `standing` has confirmed it is still
+    /// `AsCreated`. `pub`, not `pub(crate)`, mirroring
+    /// [`Self::delete_bundle_id`]'s own doc exactly.
     ///
     /// # Errors
     ///

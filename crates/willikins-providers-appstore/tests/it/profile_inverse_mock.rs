@@ -113,6 +113,9 @@ fn mock_bundle_id_list(provider: &mut MockProvider, body: &serde_json::Value) ->
 /// A standing-read body matching [`identifier`]/[`name`], inside
 /// [`window`], with its `bundleId` relationship pointing at
 /// `bundle_id_list_one`'s own row (`T6G4XCV345`) -- the `AsCreated` case.
+/// `createdDate`'s own shape (`.000+00:00`, not a bare `Z`) matches
+/// `profile_get_present_healthy.json`'s own `expirationDate`, Apple's
+/// actual wire shape for a `date-time` attribute on this resource.
 fn as_created_body() -> serde_json::Value {
     serde_json::json!({
         "data": {
@@ -120,7 +123,7 @@ fn as_created_body() -> serde_json::Value {
             "id": "PR0F1LE1D0001",
             "attributes": {
                 "name": "willikins-example-profile",
-                "createdDate": "2026-01-01T00:05:00Z",
+                "createdDate": "2026-01-01T00:05:00.000+00:00",
             },
             "relationships": {
                 "bundleId": {"data": {"type": "bundleIds", "id": "T6G4XCV345"}}
@@ -250,10 +253,10 @@ fn standing_reports_not_ours_when_the_bundle_id_relationship_is_missing_outright
 }
 
 #[test]
-fn standing_reports_not_ours_when_created_date_is_outside_the_window() {
+fn standing_reports_not_ours_when_created_date_is_one_second_outside_the_window() {
     let mut provider = MockProvider::start();
     let mut body = as_created_body();
-    body["data"]["attributes"]["createdDate"] = serde_json::json!("2026-01-01T00:10:01Z");
+    body["data"]["attributes"]["createdDate"] = serde_json::json!("2026-01-01T00:10:01.000+00:00");
     provider
         .mock("GET", standing_path())
         .with_status(200)
@@ -267,6 +270,50 @@ fn standing_reports_not_ours_when_created_date_is_outside_the_window() {
         standing(&tool, &created(&inputs, &outputs, &[])),
         Standing::NotOurs { .. }
     ));
+}
+
+/// The lower edge, mirroring the upper-edge test above: one second before
+/// the window's own start is `NotOurs`.
+#[test]
+fn standing_reports_not_ours_when_created_date_is_one_second_before_the_window() {
+    let mut provider = MockProvider::start();
+    let mut body = as_created_body();
+    body["data"]["attributes"]["createdDate"] = serde_json::json!("2025-12-31T23:59:59.000+00:00");
+    provider
+        .mock("GET", standing_path())
+        .with_status(200)
+        .with_body(body.to_string())
+        .create();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    let inputs = created_inputs();
+    let outputs = created_outputs();
+    assert!(matches!(
+        standing(&tool, &created(&inputs, &outputs, &[])),
+        Standing::NotOurs { .. }
+    ));
+}
+
+/// The same instant as the window's own end is still inside it (an
+/// inclusive window): `AsCreated`, never `NotOurs`.
+#[test]
+fn standing_reports_as_created_when_created_date_is_exactly_the_windows_end() {
+    let mut provider = MockProvider::start();
+    let mut body = as_created_body();
+    body["data"]["attributes"]["createdDate"] = serde_json::json!("2026-01-01T00:10:00.000+00:00");
+    provider
+        .mock("GET", standing_path())
+        .with_status(200)
+        .with_body(body.to_string())
+        .create();
+    mock_bundle_id_list(&mut provider, &fixture("bundle_id_list_one"));
+    let tool = AppstoreProfileEnsure::new(provider.url());
+    let inputs = created_inputs();
+    let outputs = created_outputs();
+    assert_eq!(
+        standing(&tool, &created(&inputs, &outputs, &[])),
+        Standing::AsCreated { losing: Vec::new() }
+    );
 }
 
 /// A response that omits `createdDate` outright fails closed: never "in
