@@ -1934,6 +1934,23 @@ pub enum TeardownApplyError {
         /// What is inconsistent.
         why: &'static str,
     },
+    /// A `Delete` step's own `inverse().delete` call failed (milestone 3m
+    /// task R8). Never returned by [`apply_teardown`] itself -- a step's
+    /// own failure is part of its `Ok` result, as
+    /// [`TeardownStepOutcome::Failed`] -- this variant exists only so a
+    /// caller that journals the whole teardown run's own outcome (decision
+    /// 8's `TeardownFinished`, `willikins-server`'s future
+    /// `Butler::apply_rollback`) has a `TeardownApplyError` to wrap the
+    /// failing step's own [`crate::tool::ToolError`] in, the same way
+    /// [`crate::apply::ApplyError::Tool`] wraps a forward run's own failed
+    /// `ensure` call.
+    #[error("{instance}: {error}")]
+    Step {
+        /// The step that failed.
+        instance: crate::apply::InstanceRef,
+        /// The failure.
+        error: crate::tool::ToolError,
+    },
 }
 
 /// Re-resolve and `delete` one approved `Delete` step, named by
