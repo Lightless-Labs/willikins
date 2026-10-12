@@ -165,6 +165,78 @@ a fourth commit, same task:
   not-yet-supported `${{ item }}` case); reworded to "not honestly bound to a pure resolver chain" so a reader is not
   misled about which one fired.
 
+**Addendum:** 2026-10-12 — R5b landed (riding, decisions 3 and 3a, acceptance 5), in `crates/willikins-core/src/rollback.rs`
+alone (`-p willikins-core`: `cargo fmt --check`, `clippy --all-targets -D warnings`, `cargo test`, all green; the ratchet
+stays at 2, below). Deviations from the row, recorded:
+- **Riding's own structural match is computed once, independent of the fixed point that decides each instance's own
+  action.** The row and the X1 addendum both describe riding as a fixed point "seeded from `Delete` steps", which reads
+  as if the *step* (a resolved action) seeds riding. That cannot work: a container's own `standing()` call needs its
+  own tolerated riders (`Created::riders`) *before* it is known whether that call will even return `AsCreated` (let
+  alone `Delete`), so nothing yet resolved can seed anything. The actual implementation splits the two: `container_of`
+  (one match per instance, by [`rides_with`] alone, over every instance `build_ride_views` admits, regardless of
+  status) is pure structure, computed up front from recorded values alone, exactly as decision 3 already says ("riding
+  is computed over all of the run's instances... the mapping is deterministic and needs no graph"); `riders_of`/
+  `transitive_riders` (both wrote-filtered) read off that structure to build a `Created.riders` for any instance that
+  ends up calling `standing`, whatever its own eventual label. Only the **label** each instance itself receives
+  (`RidesWith`/`Kept`/standalone) is a fixed point (`resolve_actions`), consulting what `container_of[idx]` already
+  settled to. The "seeded from `Delete` steps" language in the X1 addendum is better read as "seeded from whichever
+  instances need no other instance's own resolution first" (a `Retained` tool, an unmatched instance, or one whose
+  single `Within` entry matches nothing) — those resolve immediately and everything else's resolution bottoms out in
+  one of them, transitively.
+- **`plan_teardown`'s main loop is now two phases, not one reverse pass.** Riding "needs no graph" (decision 3), but a
+  rider can still structurally precede its container in reverse `Plan::nodes` order (dependents come first) while that
+  container's own resolution is exactly what the rider's own label depends on. `resolve_actions` resolves every
+  `Create`-actioned, `Created`/`Failed`/`Unchanged` instance first, in whatever order its own dependencies allow (never
+  `facts.instances`' own order); `plan_teardown` then walks `facts.instances` in reverse exactly as before, now reading
+  each instance's own precomputed `Resolution` from a `HashMap<usize, Resolution>` keyed by its original `facts`
+  index, to keep the output's own step order unchanged.
+- **`RidesWith`'s own `container` names the *direct* structural match, never the root it may chain up to**, so a token
+  inside a config inside a project rides with the config, not the project — the project's own `Created.riders` still
+  sees it, transitively (`a_transit_rider_two_hops_down_still_reaches_the_root_container`, pinning exactly this for the
+  `new-rust-service` shape decision 3 names). Not stated either way by the row; picked once, pinned, recorded here per
+  the X1 addendum's own instruction.
+- **Decision 3a states two distinct rules for a `Delete`-capable rider that structurally matches a *kept* container**,
+  and this task trusts the longer, normative decision text over acceptance 5's one-line paraphrase ("lists the config
+  and the secret `Kept`") where the two disagree: (1) a node with **no policy of its own reason to be kept** (`Contained`,
+  or a non-candidate transit rider) that matches a kept container is `Kept { why: KEPT_RIDER }`; (2) a genuine
+  `Delete`-capable **candidate** whose own `teardown: delete` matches a kept container is its own standalone `Delete`
+  step (decision 3a's own last sentence: "whose container is kept is its own `Delete` step") — kept-ness here is never
+  inherited, only mirrored when the rider has no say of its own. Both are pinned by their own test
+  (`riders_of_a_kept_project_are_kept_and_nothing_is_observed` for the first; the new
+  `a_delete_capable_rider_whose_container_is_kept_is_its_own_delete_step` for the second), since acceptance 5's own
+  sentence names only the first and a reader of the row alone would reasonably expect the second to behave the same
+  way.
+- **The mutual-ride cycle (X1's own forward requirement) is broken by a deterministic tie-break, not a depth bound.**
+  `resolve_actions` runs its own relaxation to a fixed point; if any instance is left unresolved once a full pass makes
+  no progress, the earliest such instance (by its own position in the ride resolver's filtered sequence, itself
+  `facts.instances`' own order restricted to this task's candidate/transit universe) is force-resolved exactly as if
+  it matched nothing at all. A forced resolution is never itself pending, so it always breaks the cycle, and it can
+  only ever *ground* a chain, never fabricate a second, independent `Delete` out of a match that was never real.
+  Pinned by `a_within_naming_its_own_tool_never_produces_a_mutual_ride`: two instances of one tool whose own `Within`
+  names that same tool, each matching the other, resolve to exactly one `Delete` and one `RidesWith`, and `standing`
+  is called exactly once.
+- **New `SHARED VALUES` constants:** `KEPT_RIDER` ("its container is kept by the document", `TeardownAction::Kept`'s
+  `why` for the first rule above) and `RIDER_KEPT_INSIDE_DELETED_CONTAINER` ("a node the document keeps is inside a
+  container it deletes", decision 3a's own refusal reason, exact string as written there).
+- **`Reversal::Contained`'s own R5a-era placeholder is gone.** Every `Contained` instance now gets a real rider
+  decision (`RidesWith`, `Kept { why: KEPT_RIDER }`, or its own `otherwise`), never the blanket `Retained { why:
+  otherwise }` R5a's addendum flagged as standing in for this task.
+- **No new ratchet token.** The one `unreachable!` the row's own shape might have invited (unwrapping
+  `resolve_actions`' internal `Vec<Option<Resolution>>` once its own loop has proven every entry `Some`) is instead a
+  bare `.flatten()`: the loop's own exit condition already *is* the proof, so nothing needs asserting at the point
+  nothing can go wrong. `rollback.rs` holds at 2 (R5a's own two: `LOSS_NAME_REGEX`'s `expect` and `decide_standalone`'s
+  — renamed from `decide_candidate`, same call — `Catalog::insert` invariant).
+- **Riding's own test fixtures (`StubProjectTool`/`StubConfigTool`/`StubSecretTool`/`StubSelfRidingTool`,
+  `RidingInverse`/`ToleranceInverse`) live in `rollback.rs`'s own `#[cfg(test)]` module, not `testing.rs`'s
+  `test-support`.** R5b's own acceptance 5 is scoped `-p willikins-core` alone, unlike R3's `StubDeletableTool`/
+  `StubContainedTool` (which T1's own `-p willikins-dsl`/`-p willikins-cli` stub-line tests also bind); nothing outside
+  this crate needs a tool that rides today. A later task that does should promote what it needs rather than duplicate
+  it.
+- **`decide_candidate` is renamed `decide_standalone`** (same behaviour, plus a new `riders: &[Rider<'_>]` parameter
+  threaded into `Created`): "candidate" now means something broader in this file (the ride resolver's own `Create`+
+  `{Created,Failed,Unchanged}` universe), and this function specifically is the "matched nothing, or its match does
+  not change its own fate" path — decision 6's own capability × policy × standing path, unchanged.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
