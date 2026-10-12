@@ -526,6 +526,7 @@ mod reversal_stub_tests {
             },
             settled_by: now,
             accept: &[],
+            riders: &[],
         };
         assert_eq!(
             inverse.standing(&created).unwrap(),

@@ -11,20 +11,21 @@
 //!
 //! [`Inverse`], [`Created`], [`Standing`] and [`Deleted`] (milestone 3m
 //! task R3) are the shape an inverse works with. [`plan_teardown`]
-//! (milestone 3m task R5a) computes a [`Teardown`] from one run's own
-//! [`RunFacts`], over a [`crate::check::Checked`] document and the
-//! [`crate::plan::Resolved`] pure-resolver closure
+//! (milestone 3m tasks R5a and R5b) computes a [`Teardown`] from one
+//! run's own [`RunFacts`], over a [`crate::check::Checked`] document and
+//! the [`crate::plan::Resolved`] pure-resolver closure
 //! [`crate::plan::resolve_pure`] evaluated for it — [`wanted_resolvers`]
 //! is the seam a caller (`willikins-server`'s future
 //! `Butler::plan_rollback`, task R8) uses to compute that closure's own
 //! `wanted` set from `checked` alone. `apply_teardown` (milestone 3m task
-//! R6) still lands in a later commit. `Created` is still missing one
-//! field decision 3's design names, `riders: &'a [Rider<'a>]`: `Rider`'s
-//! type does not exist yet (milestone 3m task R5b's). See the plan's
-//! 2026-10-12 addendum (R3) for which task adds which field;
-//! `Inverse::delete`'s documented contract already states the rule that
-//! field will carry, so its arrival changes no contract, only the type
-//! that can express it.
+//! R6) still lands in a later commit. Riding (milestone 3m task R5b,
+//! decisions 3 and 3a) is computed once, structurally, over every
+//! instance the run named -- never from the resolution the fixed point
+//! below produces -- so a [`Rider`] is attached to [`Created::riders`]
+//! purely on typed-equal recorded values and "wrote or found something",
+//! and the fixed point ([`resolve_actions`]) only decides, from that same
+//! static matching, whether *this* instance itself rides out, is kept
+//! with its container, or stands on its own.
 
 use std::sync::LazyLock;
 
@@ -49,8 +50,24 @@ pub const UNDECLARED: &str = "this tool declares no reversal";
 /// [`TeardownAction::Kept`]'s `why` under a node's own default policy
 /// (milestone 3m decision 3a): the document declared no `teardown:` at
 /// all, so the conservative default — retain — applies. A rider of a kept
-/// container gets a different, R5b-owned reason instead (decision 3a).
+/// container gets [`KEPT_RIDER`] instead (decision 3a).
 pub const KEPT: &str = "the document keeps it (no teardown: delete)";
+
+/// [`TeardownAction::Kept`]'s `why` for a [`Reversal::Contained`] or
+/// transit rider whose matched container is itself [`TeardownAction::Kept`]
+/// (milestone 3m decision 3a): "its container is kept by the document".
+/// A `Delete`-capable candidate's own `teardown: retain` always gives
+/// [`KEPT`] instead, whatever it matches or does not.
+pub const KEPT_RIDER: &str = "its container is kept by the document";
+
+/// [`TeardownError::Refused`]'s reason for a `Delete`-capable candidate
+/// whose own node keeps it (`teardown: retain`, explicit or default)
+/// while it structurally rides inside a container this teardown deletes
+/// (milestone 3m decision 3a): the document cannot keep something inside
+/// a container it deletes, and silently deleting it anyway would break
+/// the conservative default.
+pub const RIDER_KEPT_INSIDE_DELETED_CONTAINER: &str =
+    "a node the document keeps is inside a container it deletes";
 
 /// How many seconds either side of an instance's own recorded
 /// `NodeStarted.at`/`NodeFinished.at` still count as this run's own doing
@@ -265,6 +282,36 @@ pub struct Deleted {
     pub already_gone: bool,
 }
 
+/// One instance this run recorded that structurally rides with (or
+/// inside) a [`Reversal::Delete`] instance's own container, per that
+/// instance's own declared [`Within`] (milestone 3m decisions 3, 3a).
+/// Carries only its journal-recorded, non-secret values, re-parsed by
+/// declared type -- never resolved through [`Secrets`]: "no rider port is
+/// ever added to `resolve_pure`'s `wanted`" (decision 5). A secret port
+/// of a rider's own is left exactly as the journal keeps it,
+/// [`crate::value::Value::unknown`].
+///
+/// Included here only when this run's own record of it is something a
+/// container must tolerate: finished [`crate::apply::NodeStatus::Created`],
+/// or `Create`+[`crate::apply::NodeStatus::Unchanged`] in transit
+/// (decision 3's "riding is not tolerance"). A rider two or more `Within`
+/// hops away from the container being observed (a token inside a config
+/// inside a project) is still carried here, by the same transitive
+/// closure over structural matching -- never only its own direct
+/// container's riders.
+#[derive(Debug, Clone, Copy)]
+pub struct Rider<'a> {
+    /// The rider's own tool name.
+    pub tool: &'a str,
+    /// The rider's own instance identity.
+    pub instance: &'a crate::apply::InstanceRef,
+    /// The rider's own recorded, non-secret inputs; secret ones `Unknown`.
+    pub inputs: &'a crate::tool::Inputs,
+    /// The rider's own recorded, non-secret outputs; secret ones
+    /// `Unknown`.
+    pub outputs: &'a crate::tool::Outputs,
+}
+
 /// What a [`Reversal::Delete`] tool's inverse is given to work with: the
 /// journal's own record of what this run created, re-resolved just
 /// enough to delete it (milestone 3m decisions 2 and 5). Debug only —
@@ -272,10 +319,8 @@ pub struct Deleted {
 /// `Serialize` already redacts a secret, nothing serializes a `Created`
 /// directly: a teardown never journals one (trust boundary 7).
 ///
-/// This is R3's shape, plus T1's `accept` and R5a's `window`; one more
-/// field lands once milestone 3m task R5b reaches the type it needs: the
-/// tolerated riders. See this module's doc and the plan's 2026-10-12
-/// addendum (R3).
+/// This is R3's shape, plus T1's `accept`, R5a's `window` and R5b's
+/// `riders`.
 #[derive(Debug)]
 pub struct Created<'a> {
     /// Exactly this tool's declared `Reversal::Delete::needs` ports:
@@ -301,6 +346,10 @@ pub struct Created<'a> {
     /// before a workflow is ever checked, so an inverse may trust that
     /// every entry here is one of its own.
     pub accept: &'a [crate::workflow::Loss],
+    /// What this run recorded riding inside this instance (milestone 3m
+    /// decisions 3, 3a): tolerated contents only -- see [`Rider`]'s own
+    /// doc. Empty for a container nothing this run rode into.
+    pub riders: &'a [Rider<'a>],
 }
 
 /// A [`Reversal::Delete`] tool's inverse: observes a resource's
@@ -459,10 +508,13 @@ pub enum TeardownAction {
         /// have landed.
         uncertain: bool,
     },
-    /// This instance rides out with `container`'s own delete (decision
-    /// 3). Never produced by this task's own `plan_teardown` — milestone
-    /// 3m task R5b computes riding; the variant exists now because
-    /// [`TeardownStep`]'s own shape is SHARED VALUES across both tasks.
+    /// This instance structurally rides out with `container`'s own delete
+    /// (decision 3, milestone 3m task R5b): `container` is the instance
+    /// this one's own declared [`Within`] matched directly, which may
+    /// itself be a `RidesWith` (a token inside a config inside a
+    /// project). Never called through `inverse().standing`/`delete` on
+    /// its own: its container's own inverse is the one that observes and
+    /// deletes it, tolerating it as a [`Rider`].
     RidesWith {
         /// The container instance this one rides out with.
         container: crate::apply::InstanceRef,
@@ -472,17 +524,16 @@ pub enum TeardownAction {
     /// The document keeps it (decision 3a): never observed, so a step
     /// with this action called no `standing`.
     Kept {
-        /// Why it is kept — [`KEPT`] under the node's own default policy;
-        /// a rider of a kept container (milestone 3m task R5b) gets a
-        /// different fixed reason.
+        /// Why it is kept — [`KEPT`] under the node's own default policy,
+        /// or [`KEPT_RIDER`] for a rider whose matched container is
+        /// itself `Kept`.
         why: &'static str,
     },
     /// The tool itself cannot undo this: `why` is its own declared
-    /// [`Reversal::Retained::why`]. Also stands in, for now, for a
-    /// [`Reversal::Contained`] instance's own [`Reversal::Contained::otherwise`]
-    /// — milestone 3m task R5b replaces that placeholder with a real
-    /// rider decision (riding out with a container being deleted, or
-    /// this same `Retained` otherwise).
+    /// [`Reversal::Retained::why`], or a [`Reversal::Contained`]
+    /// instance's own [`Reversal::Contained::otherwise`] when nothing
+    /// this run deletes matches its declared [`Within`] (milestone 3m
+    /// task R5b).
     Retained {
         /// Why the tool cannot undo it.
         why: &'static str,
@@ -682,7 +733,7 @@ pub fn wanted_resolvers(checked: &crate::check::Checked) -> Vec<crate::workflow:
     wanted
 }
 
-/// Everything [`decide_candidate`] needs to re-resolve a `Delete` step's
+/// Everything [`decide_standalone`] needs to re-resolve a `Delete` step's
 /// own secret `needs` ports (milestone 3m decision 5), bundled so neither
 /// it nor [`Secrets::build_needs_inputs`] trips clippy's own
 /// too-many-arguments lint.
@@ -816,17 +867,23 @@ enum Decision {
 }
 
 /// Decide `checked_node`'s own action for one `Create`d or `Create`+
-/// `Failed` candidate instance (milestone 3m decision 6): capability
-/// ([`Reversal`]) first, then the node's own policy ([`TeardownPolicy`]),
-/// then -- only under `Delete` -- its inverse's own `standing`, and
-/// decision 3a's loss rules.
-fn decide_candidate(
+/// `Failed` candidate instance that structurally rides with nothing being
+/// deleted or kept (milestone 3m decision 6): capability ([`Reversal`])
+/// first, then the node's own policy ([`TeardownPolicy`]), then -- only
+/// under `Delete` -- its inverse's own `standing`, and decision 3a's loss
+/// rules. `riders` is this instance's own structurally matched, tolerated
+/// contents (milestone 3m task R5b, decision 3) -- attached to
+/// [`Created::riders`] exactly when this reversal is `Delete` and its
+/// policy says to delete, the only case that ever observes a resource at
+/// all.
+fn decide_standalone(
     secrets: &Secrets,
     instance: &RunInstance,
     checked_node: &crate::check::CheckedNode,
     started: crate::apply::Timestamp,
     finished: crate::apply::Timestamp,
     uncertain: bool,
+    riders: &[Rider<'_>],
 ) -> Result<Decision, TeardownError> {
     match checked_node.tool.reversal() {
         Reversal::Retained { why } => Ok(Decision::Step(TeardownAction::Retained { why })),
@@ -850,6 +907,7 @@ fn decide_candidate(
                     window,
                     settled_by,
                     accept,
+                    riders,
                 };
                 // `Catalog::insert` requires a `Delete` reversal to have
                 // `Some(inverse())` (milestone 3m task R3); not visible
@@ -893,44 +951,452 @@ fn decide_candidate(
     }
 }
 
+// ---------------------------------------------------------------------
+// Riding (milestone 3m task R5b, decisions 3, 3a)
+// ---------------------------------------------------------------------
+
+/// One instance, reduced to exactly what [`rides_with`] and the ride
+/// fixed point below need (milestone 3m task R5b). Never tied to
+/// [`RunInstance`] alone: `Plan::not_reversible` (task F1) matches the
+/// very same way over a forward `Plan`'s own recorded instances, before
+/// any run exists, so the matcher itself ([`rides_with`]) takes this
+/// neutral view, never a `RunInstance`.
+struct RideView<'a> {
+    /// The checked node this instance's own tool and policy come from.
+    checked_node: &'a crate::check::CheckedNode,
+    /// The journal facts this instance's own view comes from -- also
+    /// `decide_standalone`'s own `instance` parameter, so `idx` (into the
+    /// ride resolver's own filtered sequence) is never confused with an
+    /// index into `facts.instances` itself.
+    run_instance: &'a RunInstance,
+    /// This instance's own identity.
+    instance: crate::apply::InstanceRef,
+    /// Whether this run's own record of this instance is something a
+    /// container must tolerate (decision 3's "riding is not tolerance"):
+    /// finished `Created`, or `Create`+`Unchanged` in transit. `false`
+    /// for `Failed`, `NotRun`, `Skipped`, `Blocked` or an unfinished
+    /// instance -- each wrote nothing this run can vouch for.
+    wrote: bool,
+    /// Whether this instance is a transit rider (`Create`+`Unchanged`,
+    /// decision 1) rather than a genuine candidate (`Create`+`Created` or
+    /// `Create`+`Failed`): a transit rider never has its own standalone
+    /// `Delete`, and decision 3a's "must say `teardown: delete` or
+    /// refuse" rule never applies to it.
+    transit: bool,
+}
+
+/// Whether `within`'s own mapped ports hold equal, known values between
+/// `rider` (always the left, own-port side) and `container` (`within`'s
+/// declared [`Side`]) -- milestone 3m decisions 3 and 3a's "typed
+/// equality on recorded values". `within.tool` must name `container`'s
+/// own tool, and `rider` is never matched against itself (a `Within` may
+/// name its own tool -- milestone 3m's 2026-10-12 X1 addendum). Neither
+/// side ever counts as a match when it is
+/// [`crate::value::Value::is_known`]`() == false`: two `Unknown`s of one
+/// type compare equal (`value.rs`), so a port neither this run's rider
+/// nor the container ever bound (an unstarted `NotRun` instance's own
+/// empty recorded inputs, say) must never ride by default.
+fn rides_with(within: &Within, rider: &RideView, container: &RideView) -> bool {
+    if rider.instance == container.instance {
+        return false;
+    }
+    if container.checked_node.tool.spec().name.as_str() != within.tool {
+        return false;
+    }
+    within.ports.iter().all(|&(own_port, side, their_port)| {
+        let (Ok(own_port), Ok(their_port)) = (
+            crate::tool::PortName::parse(own_port),
+            crate::tool::PortName::parse(their_port),
+        ) else {
+            return false;
+        };
+        let Some(own_value) = rider.run_instance.inputs.get(&own_port) else {
+            return false;
+        };
+        let their_value = match side {
+            Side::Input => container.run_instance.inputs.get(&their_port),
+            Side::Output => container.run_instance.outputs.get(&their_port),
+        };
+        let Some(their_value) = their_value else {
+            return false;
+        };
+        own_value.is_known() && their_value.is_known() && own_value == their_value
+    })
+}
+
+/// `view`'s own declared [`Within`] list, by its tool's [`Reversal`]
+/// (empty for [`Reversal::Retained`], which never rides).
+fn within_list(view: &RideView) -> &'static [Within] {
+    match view.checked_node.tool.reversal() {
+        Reversal::Delete { within, .. } | Reversal::Contained { within, .. } => within,
+        Reversal::Retained { .. } => &[],
+    }
+}
+
+/// The first instance among `views` that `me`'s own declared `Within`
+/// list matches, trying each declared entry in order and, within one
+/// entry, every other instance in `views`' own order (milestone 3m task
+/// R5b: deterministic, and needs no graph, per decision 3). `None` when
+/// no declared entry matches anything this run named at all.
+fn find_container(views: &[RideView], me: usize) -> Option<usize> {
+    for within in within_list(&views[me]) {
+        for (idx, container) in views.iter().enumerate() {
+            if idx != me && rides_with(within, &views[me], container) {
+                return Some(idx);
+            }
+        }
+    }
+    None
+}
+
+/// Every instance's own direct matched container, by structural matching
+/// alone (milestone 3m decision 3: "riding is computed over all of the
+/// run's instances, whatever their action or status"). Independent of
+/// any instance's own eventual teardown action -- see this module's doc.
+fn container_of(views: &[RideView]) -> Vec<Option<usize>> {
+    (0..views.len())
+        .map(|me| find_container(views, me))
+        .collect()
+}
+
+/// `container_of`'s own reverse image, filtered to riders a container
+/// must tolerate (`view.wrote`, decision 3's "riding is not tolerance").
+fn riders_of(views: &[RideView], container_of: &[Option<usize>]) -> Vec<Vec<usize>> {
+    let mut riders = vec![Vec::new(); views.len()];
+    for (idx, container) in container_of.iter().enumerate() {
+        if let Some(container) = container
+            && views[idx].wrote
+        {
+            riders[*container].push(idx);
+        }
+    }
+    riders
+}
+
+/// Every instance riding inside `start`, directly or transitively
+/// (milestone 3m decision 3: a token inside a config inside a project
+/// must still reach the project's own `Created::riders`). `visited`
+/// guards the one case two instances can ride each other
+/// (`riders_of`/`container_of` forming a 2-cycle): each index is
+/// collected at most once.
+fn transitive_riders<'a>(
+    start: usize,
+    riders_of: &[Vec<usize>],
+    views: &'a [RideView<'a>],
+) -> Vec<Rider<'a>> {
+    let mut collected = Vec::new();
+    let mut visited = vec![false; views.len()];
+    let mut stack = riders_of[start].clone();
+    while let Some(idx) = stack.pop() {
+        if visited[idx] {
+            continue;
+        }
+        visited[idx] = true;
+        collected.push(Rider {
+            tool: views[idx].checked_node.tool.spec().name.as_str(),
+            instance: &views[idx].instance,
+            inputs: &views[idx].run_instance.inputs,
+            outputs: &views[idx].run_instance.outputs,
+        });
+        stack.extend(riders_of[idx].iter().copied());
+    }
+    collected
+}
+
+/// What the ride fixed point below settled one instance to, for its own
+/// riders' sake (milestone 3m task R5b): whether its own resource goes
+/// away, is kept by the document, or neither.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Settled {
+    /// This instance's own resource goes away this teardown: a genuine
+    /// `Delete`, or [`TeardownAction::RidesWith`] something that does. A
+    /// rider matching this instance rides with it in turn.
+    GoesAway,
+    /// The document keeps this instance (decision 3a): a rider matching
+    /// it is [`KEPT_RIDER`]-kept too, never refused, and never rides.
+    Kept,
+    /// Anything else (`Retained`, `Gone`, a refusal, or no step at all):
+    /// a rider matching this is decided exactly as if it matched
+    /// nothing.
+    Other,
+}
+
+/// One instance's own resolved place in the ride fixed point: its
+/// [`Settled`] state (for its own riders) and the [`Decision`] it itself
+/// produces, if any (`None` for "not a step at all").
+struct Resolution {
+    settled: Settled,
+    outcome: Option<Decision>,
+}
+
+impl Resolution {
+    fn other(outcome: Option<Decision>) -> Self {
+        Self {
+            settled: Settled::Other,
+            outcome,
+        }
+    }
+}
+
+/// Decide every instance's own place in the teardown (milestone 3m
+/// decisions 1, 2, 3, 3a, 4's gate rows, 6): gates, `Compute`/`NoOp`/
+/// `Skip`/`Blocked`, `Replace`/`Update` and an unfinished instance settle
+/// on their own, exactly as before milestone 3m task R5b. Every other
+/// `Create`-actioned instance (`Created`, `Failed`, or `Unchanged` in
+/// transit) is resolved against [`container_of`]`[idx]`'s own
+/// [`Resolution`] once that is known -- in any order, never only reverse
+/// `Plan::nodes` order, since riding needs no graph (decision 3) and a
+/// container can be declared, and resolved, after its rider in that
+/// order. A pass that makes no progress with instances still unresolved
+/// means two or more ride each other with nothing else grounding either
+/// (the X1 addendum's own risk): the earliest such index is force-decided
+/// as if it matched nothing at all, which can only ever break a cycle,
+/// never produce a mutual ride (milestone 3m task R5b's own acceptance
+/// test pins this).
+fn resolve_actions(
+    secrets: &Secrets,
+    views: &[RideView],
+    container_of: &[Option<usize>],
+    riders_of: &[Vec<usize>],
+) -> Result<Vec<Resolution>, TeardownError> {
+    let mut resolved: Vec<Option<Resolution>> = (0..views.len()).map(|_| None).collect();
+
+    loop {
+        let mut progress = false;
+        for idx in 0..views.len() {
+            if resolved[idx].is_some() {
+                continue;
+            }
+            if let Some(resolution) =
+                try_resolve(secrets, views, idx, container_of[idx], riders_of, &resolved)?
+            {
+                resolved[idx] = Some(resolution);
+                progress = true;
+            }
+        }
+        if progress {
+            continue;
+        }
+        // Force the earliest unresolved index to ignore its own match
+        // (the only way two instances could still be stuck on each
+        // other): breaks any cycle, since a forced resolution can never
+        // itself be pending.
+        let Some(stuck) = resolved.iter().position(Option::is_none) else {
+            break;
+        };
+        resolved[stuck] = Some(standalone_resolution(secrets, views, stuck, riders_of)?);
+    }
+
+    // Every entry is `Some` here: the `loop` above only `break`s once
+    // `resolved.iter().position(Option::is_none)` itself finds none.
+    // `flatten` keeps exactly that already-proven-complete sequence, with
+    // no fallback for the case it cannot reach.
+    Ok(resolved.into_iter().flatten().collect())
+}
+
+/// Try to resolve `idx`, given what is resolved so far; `None` when its
+/// own matched container is itself still unresolved (try again next
+/// pass).
+fn try_resolve(
+    secrets: &Secrets,
+    views: &[RideView],
+    idx: usize,
+    container: Option<usize>,
+    riders_of: &[Vec<usize>],
+    resolved: &[Option<Resolution>],
+) -> Result<Option<Resolution>, TeardownError> {
+    let Some(container) = container else {
+        return standalone_resolution(secrets, views, idx, riders_of).map(Some);
+    };
+    let Some(container_resolution) = &resolved[container] else {
+        return Ok(None);
+    };
+    let view = &views[idx];
+    let container_ref = views[container].instance.clone();
+    // Decision 3a's "must say `teardown: delete` or refuse" rule applies
+    // only to a genuine `Delete`-capable candidate, never to a transit
+    // rider (`view.transit`) or a `Contained` instance.
+    let candidate =
+        !view.transit && matches!(view.checked_node.tool.reversal(), Reversal::Delete { .. });
+    match container_resolution.settled {
+        Settled::GoesAway => {
+            if candidate {
+                match &view.checked_node.teardown {
+                    crate::workflow::TeardownPolicy::Retain => {
+                        return Ok(Some(Resolution::other(Some(Decision::Refused(
+                            RIDER_KEPT_INSIDE_DELETED_CONTAINER,
+                        )))));
+                    }
+                    crate::workflow::TeardownPolicy::Delete { .. } => {}
+                }
+            }
+            Ok(Some(Resolution {
+                settled: Settled::GoesAway,
+                outcome: Some(Decision::Step(TeardownAction::RidesWith {
+                    container: container_ref,
+                })),
+            }))
+        }
+        Settled::Kept => {
+            if candidate {
+                // "A `Delete`-capable candidate under `teardown: delete`
+                // whose container is kept is its own `Delete` step"
+                // (decision 3a): decide exactly as if it matched nothing.
+                return standalone_resolution(secrets, views, idx, riders_of).map(Some);
+            }
+            Ok(Some(Resolution {
+                settled: Settled::Kept,
+                outcome: Some(Decision::Step(TeardownAction::Kept { why: KEPT_RIDER })),
+            }))
+        }
+        Settled::Other => standalone_resolution(secrets, views, idx, riders_of).map(Some),
+    }
+}
+
+/// Resolve `idx` as if it matched no container at all: a genuine
+/// candidate's own capability × policy × standing (via
+/// [`decide_standalone`], attaching its own transitive riders), a
+/// `Contained` instance's `otherwise`, or -- for a transit rider with no
+/// match -- no step at all (decision 1: "nothing was created").
+fn standalone_resolution(
+    secrets: &Secrets,
+    views: &[RideView],
+    idx: usize,
+    riders_of: &[Vec<usize>],
+) -> Result<Resolution, TeardownError> {
+    let view = &views[idx];
+    let instance = view.run_instance;
+    let Some((started, finished, status)) = instance_window(instance) else {
+        // Never reached: every `RideView` here comes from a `Finished`
+        // instance (`build_ride_views` only builds one for those).
+        return Ok(Resolution::other(None));
+    };
+    if matches!(status, crate::apply::NodeStatus::Unchanged) {
+        // A transit rider matching nothing: decision 1's "not this
+        // node's creation", so it is not a step at all.
+        return Ok(Resolution::other(None));
+    }
+    let uncertain = matches!(status, crate::apply::NodeStatus::Failed { .. });
+    let riders = transitive_riders(idx, riders_of, views);
+    let decision = decide_standalone(
+        secrets,
+        instance,
+        view.checked_node,
+        started,
+        finished,
+        uncertain,
+        &riders,
+    )?;
+    let settled = match &decision {
+        Decision::Step(TeardownAction::Delete { .. }) => Settled::GoesAway,
+        Decision::Step(TeardownAction::Kept { .. }) => Settled::Kept,
+        _ => Settled::Other,
+    };
+    Ok(Resolution {
+        settled,
+        outcome: Some(decision),
+    })
+}
+
+/// `instance`'s own `(started, finished, status)` when it finished at
+/// all; `None` for [`RunProgress::NotFinished`] (never reached from the
+/// ride resolver, which only ever builds a [`RideView`] for a finished
+/// instance).
+fn instance_window(
+    instance: &RunInstance,
+) -> Option<(
+    crate::apply::Timestamp,
+    crate::apply::Timestamp,
+    &crate::apply::NodeStatus,
+)> {
+    match &instance.progress {
+        RunProgress::Finished {
+            started,
+            finished,
+            status,
+        } => Some((*started, *finished, status)),
+        RunProgress::NotFinished { .. } => None,
+    }
+}
+
+/// Every `Create`-actioned, finished instance of `facts` whose status is
+/// `Created`, `Failed` or `Unchanged` (milestone 3m task R5b: the ride
+/// resolver's own candidate and transit-rider universe), reduced to a
+/// [`RideView`] -- `None` for every other instance, which the ride
+/// resolver never touches: `plan_teardown`'s own main loop still decides
+/// gates, `Compute`/`NoOp`/`Skip`/`Blocked`, `Replace`/`Update` and an
+/// unfinished instance exactly as before this task.
+fn build_ride_views<'a>(
+    checked: &'a crate::check::Checked,
+    facts: &'a RunFacts,
+) -> Vec<Option<RideView<'a>>> {
+    facts
+        .instances
+        .iter()
+        .map(|instance| {
+            let checked_node = find_checked_node(checked, &instance.node)?;
+            if checked_node.tool.gate().is_some()
+                || !matches!(instance.action, crate::plan::Action::Create)
+            {
+                return None;
+            }
+            let (_, _, status) = instance_window(instance)?;
+            let transit = matches!(status, crate::apply::NodeStatus::Unchanged);
+            let wrote = transit || matches!(status, crate::apply::NodeStatus::Created);
+            if !wrote && !matches!(status, crate::apply::NodeStatus::Failed { .. }) {
+                // `Converged`, `Blocked`, `Skipped`, `NotRun`, `Computed`:
+                // outside the ride resolver's own universe (decision 1).
+                return None;
+            }
+            Some(RideView {
+                checked_node,
+                run_instance: instance,
+                instance: crate::apply::InstanceRef {
+                    node: instance.node.clone(),
+                    instance: instance.instance.clone(),
+                },
+                wrote,
+                transit,
+            })
+        })
+        .collect()
+}
+
 /// Compute a teardown plan from one applied run's own journal facts
-/// (milestone 3m decisions 1, 2, 3a, 4's gate rows, and 6).
+/// (milestone 3m decisions 1, 2, 3, 3a, 4's gate rows, and 6).
 ///
 /// Steps come out in reverse of `facts.instances`' own (forward,
-/// applied-plan) order. Per candidate, capability × policy × standing
-/// decides the action (decision 6): a gate instance the run found
-/// satisfied is [`TeardownAction::MadeByHand`] (decision 4); `Replace`/
-/// `Update` is always [`TeardownAction::Retained`] (decision 1); a
-/// `Create`d or `Create`+`Failed` instance whose tool is
-/// [`Reversal::Retained`] is `Retained` for the tool's own reason, and
-/// one whose tool is [`Reversal::Contained`] is `Retained` for
-/// `otherwise` (milestone 3m task R5b replaces this placeholder with a
-/// real rider decision); one whose tool is [`Reversal::Delete`] and whose
-/// node keeps it (`TeardownPolicy::Retain`) is [`TeardownAction::Kept`],
-/// never observed; one whose node says to delete it is observed through
-/// `standing`, and becomes [`TeardownAction::Gone`],
-/// [`TeardownAction::Delete`] (`uncertain` when the create itself
-/// finished `Failed`), or a refusal, per decision 3a's loss rules. A
-/// started instance with no `NodeFinished` is [`TeardownAction::Unfinished`]
-/// (decisions 1, 2), unconditionally. Every other candidate (a `Create`
-/// that finished `Unchanged`, `Converged`, `NotRun`, `Skipped` or
-/// `Blocked`, or any `Compute`/`NoOp`/`Skip` instance that is not a
-/// satisfied gate) is not a step at all.
-///
-/// A `Create`+`Unchanged` instance's own transit-riding is milestone 3m
-/// task R5b's, not this function's: it produces no step here.
+/// applied-plan) order. Per candidate, capability × policy × standing ×
+/// riding decides the action (decisions 6, 3, 3a; [`resolve_actions`]):
+/// a gate instance the run found satisfied is [`TeardownAction::MadeByHand`]
+/// (decision 4); `Replace`/`Update` is always [`TeardownAction::Retained`]
+/// (decision 1); a `Create`d, `Create`+`Failed` or `Create`+`Unchanged`
+/// instance is resolved against what it structurally rides with (decision
+/// 3): `Retained` for a tool that cannot undo it, [`TeardownAction::RidesWith`]
+/// a container that itself goes away, [`TeardownAction::Kept`] for a
+/// rider of a kept container or a node the document keeps outright, a
+/// refusal when the document keeps a candidate riding inside a container
+/// this teardown deletes (decision 3a), or -- matching nothing -- its own
+/// standalone `Delete`/`Gone`/refusal (observed through `standing`, with
+/// its own riders tolerated) or, for an unmatched transit rider, no step
+/// at all. A started instance with no `NodeFinished` is
+/// [`TeardownAction::Unfinished`] (decisions 1, 2), unconditionally.
+/// Every other instance (a `Create` that finished `Converged`, `NotRun`,
+/// `Skipped` or `Blocked`, or any `Compute`/`NoOp`/`Skip` instance that is
+/// not a satisfied gate) is not a step at all.
 ///
 /// # Errors
 ///
 /// [`TeardownError::Refused`] when any observed candidate's standing
-/// refuses (decision 6): every refusing instance is collected, not only
-/// the first -- trust boundary 6 observes every delete-policy candidate
-/// before any delete, plan time included, so this function never returns
-/// on the first refusal it finds. [`TeardownError::UnresolvableCredential`]
-/// or [`TeardownError::Resolve`] when a `Delete` step's own secret
-/// `needs` port cannot be honestly re-resolved (decision 5); either one
-/// stops this function immediately, since it names a document defect,
-/// never drift. [`TeardownError::Tool`] when a `Delete` tool's own
+/// refuses (decision 6), including decision 3a's "kept inside a deleted
+/// container": every refusing instance is collected, not only the first
+/// -- trust boundary 6 observes every delete-policy candidate before any
+/// delete, plan time included, so this function never returns on the
+/// first refusal it finds. [`TeardownError::UnresolvableCredential`] or
+/// [`TeardownError::Resolve`] when a `Delete` step's own secret `needs`
+/// port cannot be honestly re-resolved (decision 5); either one stops
+/// this function immediately, since it names a document defect, never
+/// drift. [`TeardownError::Tool`] when a `Delete` tool's own
 /// `inverse().standing` call itself fails.
 pub fn plan_teardown(
     facts: &RunFacts,
@@ -945,10 +1411,29 @@ pub fn plan_teardown(
         single_names: &single_names,
         each_names: &each_names,
     };
+
+    let ride_views = build_ride_views(checked, facts);
+    // The ride resolver's own universe: `Create`-actioned, finished,
+    // `Created`/`Failed`/`Unchanged` instances only (every `Some` entry
+    // above). `container_of`/`riders_of` index this sub-sequence, not
+    // `facts.instances` itself, so riding needs no graph over the full
+    // run (decision 3) and a gate or a `Replace`/`Update` instance is
+    // never a candidate container or rider.
+    let (ride_indices, ride_views): (Vec<usize>, Vec<RideView>) = ride_views
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, view)| view.map(|view| (idx, view)))
+        .unzip();
+    let container_of = container_of(&ride_views);
+    let riders_of = riders_of(&ride_views, &container_of);
+    let resolutions = resolve_actions(&secrets, &ride_views, &container_of, &riders_of)?;
+    let mut by_facts_index: std::collections::HashMap<usize, Resolution> =
+        ride_indices.into_iter().zip(resolutions).collect();
+
     let mut steps: Vec<TeardownStep> = Vec::new();
     let mut refusals: Vec<(crate::apply::InstanceRef, &'static str)> = Vec::new();
 
-    for instance in facts.instances.iter().rev() {
+    for (facts_idx, instance) in facts.instances.iter().enumerate().rev() {
         let Some(checked_node) = find_checked_node(checked, &instance.node) else {
             continue;
         };
@@ -987,44 +1472,36 @@ pub fn plan_teardown(
             crate::plan::Action::Create => {}
         }
 
-        let (started, finished, status) = match &instance.progress {
-            RunProgress::NotFinished { started } => {
-                if started.is_some() {
-                    steps.push(TeardownStep {
-                        instance: instance_ref,
-                        action: TeardownAction::Unfinished,
-                    });
-                }
-                continue;
-            }
-            RunProgress::Finished {
-                started,
-                finished,
-                status,
-            } => (*started, *finished, status),
-        };
+        if matches!(
+            instance.progress,
+            RunProgress::NotFinished { started: None }
+        ) {
+            continue;
+        }
+        if matches!(
+            instance.progress,
+            RunProgress::NotFinished { started: Some(_) }
+        ) {
+            steps.push(TeardownStep {
+                instance: instance_ref,
+                action: TeardownAction::Unfinished,
+            });
+            continue;
+        }
 
-        let uncertain = match status {
-            crate::apply::NodeStatus::Created => false,
-            crate::apply::NodeStatus::Failed { .. } => true,
-            // `Unchanged` (transit riding is task R5b's), `Converged`,
-            // `Blocked`, `Skipped`, `NotRun`, `Computed`: not a step.
-            _ => continue,
+        let Some(resolution) = by_facts_index.remove(&facts_idx) else {
+            // Not in the ride resolver's own universe at all (status
+            // `Converged`, `Blocked`, `Skipped` or `NotRun`): nothing was
+            // created (decision 1).
+            continue;
         };
-
-        match decide_candidate(
-            &secrets,
-            instance,
-            checked_node,
-            started,
-            finished,
-            uncertain,
-        )? {
-            Decision::Step(action) => steps.push(TeardownStep {
+        match resolution.outcome {
+            Some(Decision::Step(action)) => steps.push(TeardownStep {
                 instance: instance_ref,
                 action,
             }),
-            Decision::Refused(why) => refusals.push((instance_ref, why)),
+            Some(Decision::Refused(why)) => refusals.push((instance_ref, why)),
+            None => {}
         }
     }
 
@@ -1093,7 +1570,7 @@ mod tests {
     use crate::workflow::{Binding, Loss, Node, NodeName, TeardownPolicy, Workflow};
     use indexmap::IndexMap;
     use std::sync::{Arc, Mutex};
-    use willikins_types::{DomainType, DopplerServiceToken, SinkToken};
+    use willikins_types::{DomainType, DopplerServiceToken, GitHubRepo, SinkToken};
 
     fn node(name: &str) -> NodeName {
         NodeName::parse(name).unwrap()
@@ -1907,5 +2384,1274 @@ mod tests {
             .unwrap_or_else(|errors| unreachable!("must check cleanly: {errors:?}"));
 
         assert!(wanted_resolvers(&checked).is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3m, task R5b: riding (decisions 3, 3a; acceptance 5).
+    // -----------------------------------------------------------------
+
+    fn repo_value(s: &str) -> Value {
+        Value::known(GitHubRepo::parse(s).unwrap_or_else(|err| unreachable!("{s:?}: {err}")))
+    }
+
+    fn inputs_of(pairs: &[(&str, Value)]) -> Inputs {
+        let mut inputs = Inputs::new();
+        for (p, v) in pairs {
+            inputs.insert(port(p), v.clone());
+        }
+        inputs
+    }
+
+    fn outputs_of(pairs: &[(&str, Value)]) -> Outputs {
+        let mut outputs = Outputs::new();
+        for (p, v) in pairs {
+            outputs.insert(port(p), v.clone());
+        }
+        outputs
+    }
+
+    /// A `RunInstance` for `name`, with explicit recorded inputs/outputs
+    /// -- unlike [`instance`], which hardcodes node `"repo"` and empty
+    /// port maps: riding needs real recorded values to match against
+    /// (decision 3's "typed equality on recorded values").
+    fn riding_instance(
+        name: &str,
+        action: Action,
+        progress: RunProgress,
+        inputs: Inputs,
+        outputs: Outputs,
+    ) -> RunInstance {
+        RunInstance {
+            node: node(name),
+            instance: None,
+            action,
+            progress,
+            inputs,
+            outputs,
+        }
+    }
+
+    fn facts_multi(instances: Vec<RunInstance>, finished_at: &str) -> RunFacts {
+        RunFacts {
+            finished_at: ts(finished_at),
+            inputs: IndexMap::new(),
+            instances,
+        }
+    }
+
+    /// Shared by [`StubProjectTool`] and [`StubConfigTool`]: a fixed
+    /// `Standing` and a shared call counter (acceptance 5, 6, 19's own
+    /// "zero `standing` calls" assertions, extended to riding: a step
+    /// that rides is never itself observed).
+    struct RidingInverse {
+        standing: Standing,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Inverse for RidingInverse {
+        fn standing(&self, _created: &Created<'_>) -> Result<Standing, crate::tool::ToolError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.standing.clone())
+        }
+
+        fn delete(
+            &self,
+            _created: &Created<'_>,
+            _token: &TeardownToken,
+        ) -> Result<Deleted, crate::tool::ToolError> {
+            Ok(Deleted {
+                already_gone: matches!(self.standing, Standing::Gone),
+            })
+        }
+    }
+
+    /// An inverse that tolerates exactly `expected_riders` of
+    /// `Created::riders` and reports `Drifted` otherwise (milestone 3m
+    /// task R5b, acceptance 5's "a `NotRun` `secret.set` plus a hand-set
+    /// secret at its name refuses"): stands in for a real provider read
+    /// that finds one content this run's own riders do not account for.
+    struct ToleranceInverse {
+        expected_riders: usize,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Inverse for ToleranceInverse {
+        fn standing(&self, created: &Created<'_>) -> Result<Standing, crate::tool::ToolError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if created.riders.len() == self.expected_riders {
+                Ok(Standing::AsCreated { losing: vec![] })
+            } else {
+                Ok(Standing::Drifted {
+                    what: "an untolerated secret name",
+                })
+            }
+        }
+
+        fn delete(
+            &self,
+            _created: &Created<'_>,
+            _token: &TeardownToken,
+        ) -> Result<Deleted, crate::tool::ToolError> {
+            Ok(Deleted {
+                already_gone: false,
+            })
+        }
+    }
+
+    /// A stub, top-level `Delete` tool with no `within`: `project` (key),
+    /// one port.
+    struct StubProjectTool {
+        spec: ToolSpec,
+        inverse: RidingInverse,
+    }
+
+    impl StubProjectTool {
+        fn with_counter(
+            tool_name: &str,
+            standing: Standing,
+            calls: Arc<std::sync::atomic::AtomicUsize>,
+        ) -> Arc<Self> {
+            let mut inputs = IndexMap::new();
+            inputs.insert(
+                port("project"),
+                PortSpec {
+                    ty: PortType::Exact(ty("GitHubRepo")),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            let mut outputs = IndexMap::new();
+            outputs.insert(port("project"), ty("GitHubRepo"));
+            Arc::new(Self {
+                spec: ToolSpec {
+                    name: ToolName::parse(tool_name).unwrap(),
+                    description: "stub project tool (milestone 3m task R5b)".to_string(),
+                    inputs,
+                    outputs,
+                    key: vec![port("project")],
+                    class: Class::Reversible,
+                    pure: false,
+                },
+                inverse: RidingInverse { standing, calls },
+            })
+        }
+    }
+
+    impl Tool for StubProjectTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, crate::tool::ToolError> {
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+
+        fn ensure(
+            &self,
+            _inputs: &Inputs,
+            _token: &SinkToken,
+        ) -> Result<Ensured, crate::tool::ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+
+        fn reversal(&self) -> Reversal {
+            Reversal::Delete {
+                needs: &["project"],
+                within: &[],
+                losses: &[],
+            }
+        }
+
+        fn inverse(&self) -> Option<&dyn Inverse> {
+            Some(&self.inverse)
+        }
+    }
+
+    /// A stub `Delete` tool riding within `test.project`'s own `project`
+    /// port: `config` (key), `project` (its own ride-matching input).
+    struct StubConfigTool {
+        spec: ToolSpec,
+        inverse: Box<dyn Inverse>,
+    }
+
+    impl StubConfigTool {
+        fn with_inverse(inverse: Box<dyn Inverse>) -> Arc<Self> {
+            let mut inputs = IndexMap::new();
+            inputs.insert(
+                port("config"),
+                PortSpec {
+                    ty: PortType::Exact(ty("GitHubRepo")),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            inputs.insert(
+                port("project"),
+                PortSpec {
+                    ty: PortType::Exact(ty("GitHubRepo")),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            let mut outputs = IndexMap::new();
+            outputs.insert(port("config"), ty("GitHubRepo"));
+            Arc::new(Self {
+                spec: ToolSpec {
+                    name: ToolName::parse("test.config").unwrap(),
+                    description: "stub config tool (milestone 3m task R5b)".to_string(),
+                    inputs,
+                    outputs,
+                    key: vec![port("config")],
+                    class: Class::Reversible,
+                    pure: false,
+                },
+                inverse,
+            })
+        }
+
+        fn with_standing(
+            standing: Standing,
+            calls: Arc<std::sync::atomic::AtomicUsize>,
+        ) -> Arc<Self> {
+            Self::with_inverse(Box::new(RidingInverse { standing, calls }))
+        }
+    }
+
+    impl Tool for StubConfigTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, crate::tool::ToolError> {
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+
+        fn ensure(
+            &self,
+            _inputs: &Inputs,
+            _token: &SinkToken,
+        ) -> Result<Ensured, crate::tool::ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+
+        fn reversal(&self) -> Reversal {
+            Reversal::Delete {
+                needs: &["config"],
+                within: &[Within {
+                    tool: "test.project",
+                    ports: &[("project", Side::Input, "project")],
+                }],
+                losses: &[],
+            }
+        }
+
+        fn inverse(&self) -> Option<&dyn Inverse> {
+            Some(self.inverse.as_ref())
+        }
+    }
+
+    /// A stub `Contained` tool riding within `test.config`'s own `config`
+    /// port: `secret` (key), `config` (its own ride-matching input). No
+    /// inverse: `Contained` never has one.
+    struct StubSecretTool {
+        spec: ToolSpec,
+    }
+
+    impl StubSecretTool {
+        fn new() -> Arc<Self> {
+            let mut inputs = IndexMap::new();
+            inputs.insert(
+                port("secret"),
+                PortSpec {
+                    ty: PortType::Exact(ty("GitHubRepo")),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            inputs.insert(
+                port("config"),
+                PortSpec {
+                    ty: PortType::Exact(ty("GitHubRepo")),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            let mut outputs = IndexMap::new();
+            outputs.insert(port("secret"), ty("GitHubRepo"));
+            Arc::new(Self {
+                spec: ToolSpec {
+                    name: ToolName::parse("test.secret").unwrap(),
+                    description: "stub secret tool (milestone 3m task R5b)".to_string(),
+                    inputs,
+                    outputs,
+                    key: vec![port("secret")],
+                    class: Class::Reversible,
+                    pure: false,
+                },
+            })
+        }
+    }
+
+    impl Tool for StubSecretTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, crate::tool::ToolError> {
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+
+        fn ensure(
+            &self,
+            _inputs: &Inputs,
+            _token: &SinkToken,
+        ) -> Result<Ensured, crate::tool::ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+
+        fn reversal(&self) -> Reversal {
+            Reversal::Contained {
+                within: &[Within {
+                    tool: "test.config",
+                    ports: &[("config", Side::Input, "config")],
+                }],
+                otherwise: "left in place, outside its container",
+            }
+        }
+    }
+
+    /// A `project`/`config`/`secret` three-node document (milestone 3m
+    /// task R5b's own riding fixtures). Binding literal values are
+    /// arbitrary (`check` only needs them syntactically valid): riding
+    /// matches on each `RunInstance`'s own recorded values, never on a
+    /// check-time binding (decision 3, "needs no graph").
+    fn checked_riding(
+        project: Arc<StubProjectTool>,
+        config: Arc<StubConfigTool>,
+        secret: Arc<StubSecretTool>,
+        project_policy: TeardownPolicy,
+        config_policy: Option<TeardownPolicy>,
+    ) -> Checked {
+        let project_node = Node::new(project.spec.name.clone())
+            .port(
+                port("project"),
+                Binding::Literal("example-org/example-project".to_string()),
+            )
+            .teardown(project_policy);
+        let mut config_node = Node::new(config.spec.name.clone())
+            .port(
+                port("config"),
+                Binding::Literal("example-org/example-config".to_string()),
+            )
+            .port(
+                port("project"),
+                Binding::Literal("example-org/example-project".to_string()),
+            );
+        if let Some(policy) = config_policy {
+            config_node = config_node.teardown(policy);
+        }
+        let secret_node = Node::new(secret.spec.name.clone())
+            .port(
+                port("secret"),
+                Binding::Literal("example-org/example-secret".to_string()),
+            )
+            .port(
+                port("config"),
+                Binding::Literal("example-org/example-config".to_string()),
+            );
+        let workflow = Workflow::new(workflow_name("riding-test"))
+            .node(node("project"), project_node)
+            .node(node("config"), config_node)
+            .node(node("secret"), secret_node);
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(project as Arc<dyn Tool>).unwrap();
+        catalog.insert(config as Arc<dyn Tool>).unwrap();
+        catalog.insert(secret as Arc<dyn Tool>).unwrap();
+        check(&workflow, &catalog)
+            .unwrap_or_else(|errors| unreachable!("riding workflow must check cleanly: {errors:?}"))
+    }
+
+    /// `rides_with` unit tests: typed equality, `Unknown` never matching,
+    /// a `Within` never matching its own instance, and `Side::Output`
+    /// reading the container's own outputs.
+    mod rides_with_tests {
+        use super::*;
+
+        fn checked_pair() -> (Checked, Arc<std::sync::atomic::AtomicUsize>) {
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let project =
+                StubProjectTool::with_counter("test.project", Standing::Gone, Arc::clone(&calls));
+            let config = StubConfigTool::with_standing(Standing::Gone, Arc::clone(&calls));
+            let secret = StubSecretTool::new();
+            (
+                checked_riding(
+                    project,
+                    config,
+                    secret,
+                    TeardownPolicy::Delete { accept: vec![] },
+                    Some(TeardownPolicy::Delete { accept: vec![] }),
+                ),
+                calls,
+            )
+        }
+
+        fn view<'a>(checked: &'a Checked, node_name: &str, run: &'a RunInstance) -> RideView<'a> {
+            RideView {
+                checked_node: checked
+                    .nodes()
+                    .iter()
+                    .find(|n| n.name.as_str() == node_name)
+                    .unwrap_or_else(|| unreachable!("{node_name} must exist")),
+                run_instance: run,
+                instance: crate::apply::InstanceRef {
+                    node: node(node_name),
+                    instance: None,
+                },
+                wrote: true,
+                transit: false,
+            }
+        }
+
+        #[test]
+        fn equal_typed_values_ride() {
+            let (checked, _calls) = checked_pair();
+            let project_run = riding_instance(
+                "project",
+                Action::Create,
+                finished(START, END, NodeStatus::Created),
+                inputs_of(&[("project", repo_value("org/same"))]),
+                outputs_of(&[("project", repo_value("org/same"))]),
+            );
+            let config_run = riding_instance(
+                "config",
+                Action::Create,
+                finished(START, END, NodeStatus::Created),
+                inputs_of(&[
+                    ("config", repo_value("org/config")),
+                    ("project", repo_value("org/same")),
+                ]),
+                outputs_of(&[("config", repo_value("org/config"))]),
+            );
+            let project_view = view(&checked, "project", &project_run);
+            let config_view = view(&checked, "config", &config_run);
+            let within = Within {
+                tool: "test.project",
+                ports: &[("project", Side::Input, "project")],
+            };
+            assert!(rides_with(&within, &config_view, &project_view));
+        }
+
+        #[test]
+        fn mismatched_values_do_not_ride() {
+            let (checked, _calls) = checked_pair();
+            let project_run = riding_instance(
+                "project",
+                Action::Create,
+                finished(START, END, NodeStatus::Created),
+                inputs_of(&[("project", repo_value("org/one"))]),
+                outputs_of(&[("project", repo_value("org/one"))]),
+            );
+            let config_run = riding_instance(
+                "config",
+                Action::Create,
+                finished(START, END, NodeStatus::Created),
+                inputs_of(&[
+                    ("config", repo_value("org/config")),
+                    ("project", repo_value("org/two")),
+                ]),
+                outputs_of(&[("config", repo_value("org/config"))]),
+            );
+            let project_view = view(&checked, "project", &project_run);
+            let config_view = view(&checked, "config", &config_run);
+            let within = Within {
+                tool: "test.project",
+                ports: &[("project", Side::Input, "project")],
+            };
+            assert!(!rides_with(&within, &config_view, &project_view));
+        }
+
+        #[test]
+        fn unknown_values_never_ride() {
+            let (checked, _calls) = checked_pair();
+            let unknown = Value::unknown(ty("GitHubRepo"));
+            let project_run = riding_instance(
+                "project",
+                Action::Create,
+                finished(START, END, NodeStatus::Created),
+                inputs_of(&[("project", unknown.clone())]),
+                outputs_of(&[("project", unknown.clone())]),
+            );
+            let config_run = riding_instance(
+                "config",
+                Action::Create,
+                finished(START, END, NodeStatus::Created),
+                inputs_of(&[
+                    ("config", repo_value("org/config")),
+                    ("project", unknown.clone()),
+                ]),
+                outputs_of(&[("config", repo_value("org/config"))]),
+            );
+            let project_view = view(&checked, "project", &project_run);
+            let config_view = view(&checked, "config", &config_run);
+            let within = Within {
+                tool: "test.project",
+                ports: &[("project", Side::Input, "project")],
+            };
+            // Both sides carry the *same* `Unknown` value, which `Value`'s
+            // own `PartialEq` holds equal -- `rides_with` must still
+            // refuse, since neither side is `is_known`.
+            assert!(!rides_with(&within, &config_view, &project_view));
+        }
+
+        #[test]
+        fn an_instance_never_rides_with_itself() {
+            let (checked, _calls) = checked_pair();
+            let run = riding_instance(
+                "project",
+                Action::Create,
+                finished(START, END, NodeStatus::Created),
+                inputs_of(&[("project", repo_value("org/same"))]),
+                outputs_of(&[("project", repo_value("org/same"))]),
+            );
+            let project_view = view(&checked, "project", &run);
+            let within = Within {
+                tool: "test.project",
+                ports: &[("project", Side::Input, "project")],
+            };
+            assert!(!rides_with(&within, &project_view, &project_view));
+        }
+
+        #[test]
+        fn side_output_reads_the_containers_own_output() {
+            let (checked, _calls) = checked_pair();
+            // The container's own `project` *input* differs from its
+            // `project` *output* -- only `Side::Output` matches here.
+            let project_run = riding_instance(
+                "project",
+                Action::Create,
+                finished(START, END, NodeStatus::Created),
+                inputs_of(&[("project", repo_value("org/input-side"))]),
+                outputs_of(&[("project", repo_value("org/output-side"))]),
+            );
+            let config_run = riding_instance(
+                "config",
+                Action::Create,
+                finished(START, END, NodeStatus::Created),
+                inputs_of(&[
+                    ("config", repo_value("org/config")),
+                    ("project", repo_value("org/output-side")),
+                ]),
+                outputs_of(&[("config", repo_value("org/config"))]),
+            );
+            let project_view = view(&checked, "project", &project_run);
+            let config_view = view(&checked, "config", &config_run);
+            let input_side = Within {
+                tool: "test.project",
+                ports: &[("project", Side::Input, "project")],
+            };
+            let output_side = Within {
+                tool: "test.project",
+                ports: &[("project", Side::Output, "project")],
+            };
+            assert!(!rides_with(&input_side, &config_view, &project_view));
+            assert!(rides_with(&output_side, &config_view, &project_view));
+        }
+    }
+
+    /// Acceptance 5: a config rides with the project created in the same
+    /// run, and the project's own inverse tolerates it (`Created.riders`).
+    #[test]
+    fn config_rides_with_the_project_created_in_the_same_run() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let project = StubProjectTool::with_counter(
+            "test.project",
+            Standing::AsCreated { losing: vec![] },
+            Arc::clone(&calls),
+        );
+        let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let config = StubConfigTool::with_standing(Standing::Gone, Arc::clone(&config_calls));
+        let secret = StubSecretTool::new();
+        let checked = checked_riding(
+            Arc::clone(&project),
+            Arc::clone(&config),
+            secret,
+            TeardownPolicy::Delete { accept: vec![] },
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+
+        let project_value = repo_value("org/the-project");
+        let project_run = riding_instance(
+            "project",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[("project", project_value.clone())]),
+            outputs_of(&[("project", project_value.clone())]),
+        );
+        let config_run = riding_instance(
+            "config",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("config", repo_value("org/the-config")),
+                ("project", project_value.clone()),
+            ]),
+            outputs_of(&[("config", repo_value("org/the-config"))]),
+        );
+        let run = facts_multi(vec![project_run, config_run], RUN_FINISHED);
+
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        let project_ref = InstanceRef {
+            node: node("project"),
+            instance: None,
+        };
+        let config_ref = InstanceRef {
+            node: node("config"),
+            instance: None,
+        };
+        assert_eq!(
+            teardown.steps,
+            vec![
+                TeardownStep {
+                    instance: config_ref,
+                    action: TeardownAction::RidesWith {
+                        container: project_ref.clone()
+                    },
+                },
+                TeardownStep {
+                    instance: project_ref,
+                    action: TeardownAction::Delete { uncertain: false },
+                },
+            ]
+        );
+        // The config rode with the project; the project's own `standing`
+        // tolerated it, and the config's own `standing` was never called
+        // at all (a rider is never itself observed).
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(config_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Acceptance 5: a config with no `teardown:` inside a deleted
+    /// project refuses the teardown with decision 3a's own reason.
+    #[test]
+    fn a_kept_config_inside_a_deleted_project_refuses() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let project = StubProjectTool::with_counter(
+            "test.project",
+            Standing::AsCreated { losing: vec![] },
+            Arc::clone(&calls),
+        );
+        let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let config = StubConfigTool::with_standing(Standing::Gone, Arc::clone(&config_calls));
+        let secret = StubSecretTool::new();
+        // No `teardown:` at all on `config`: the conservative default,
+        // `retain`.
+        let checked = checked_riding(
+            Arc::clone(&project),
+            Arc::clone(&config),
+            secret,
+            TeardownPolicy::Delete { accept: vec![] },
+            None,
+        );
+        let resolved = empty_resolved(&checked);
+
+        let project_value = repo_value("org/the-project");
+        let project_run = riding_instance(
+            "project",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[("project", project_value.clone())]),
+            outputs_of(&[("project", project_value.clone())]),
+        );
+        let config_run = riding_instance(
+            "config",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("config", repo_value("org/the-config")),
+                ("project", project_value.clone()),
+            ]),
+            outputs_of(&[("config", repo_value("org/the-config"))]),
+        );
+        let run = facts_multi(vec![project_run, config_run], RUN_FINISHED);
+
+        let err = plan_teardown(&run, &checked, &resolved).unwrap_err();
+        match err {
+            TeardownError::Refused { steps } => {
+                assert_eq!(steps.len(), 1);
+                assert_eq!(steps[0].0.node, node("config"));
+                assert_eq!(steps[0].1, RIDER_KEPT_INSIDE_DELETED_CONTAINER);
+            }
+            other => panic!("expected Refused, got {other:?}"),
+        }
+        // A kept candidate's own standing is never called, whether it
+        // rides into something or not.
+        assert_eq!(config_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Acceptance 5: a `NotRun` `secret.set` plus a hand-set secret at
+    /// its name refuses -- the config's own inverse tolerates exactly the
+    /// riders this run's own record vouches for, never the `NotRun` one.
+    #[test]
+    fn a_notrun_rider_plus_an_untolerated_content_refuses() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let project =
+            StubProjectTool::with_counter("test.project", Standing::Gone, Arc::clone(&calls));
+        let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // The stand-in provider read expects one tolerated rider (as if
+        // this run's own `secret.set` had run); since it did not, the
+        // config's own riders are empty and this refuses.
+        let config = StubConfigTool::with_inverse(Box::new(ToleranceInverse {
+            expected_riders: 1,
+            calls: Arc::clone(&config_calls),
+        }));
+        let secret = StubSecretTool::new();
+        let checked = checked_riding(
+            project,
+            Arc::clone(&config),
+            secret,
+            TeardownPolicy::Delete { accept: vec![] },
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+
+        // No `project` instance in this run's own facts (pre-existing,
+        // never a candidate container): `config` is standalone, so its
+        // own `standing` really is called, with its own real riders.
+        let config_run = riding_instance(
+            "config",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("config", repo_value("org/the-config")),
+                ("project", repo_value("org/pre-existing")),
+            ]),
+            outputs_of(&[("config", repo_value("org/the-config"))]),
+        );
+        let secret_run = riding_instance(
+            "secret",
+            Action::Create,
+            RunProgress::NotFinished { started: None },
+            Inputs::new(),
+            Outputs::new(),
+        );
+        let run = facts_multi(vec![config_run, secret_run], RUN_FINISHED);
+
+        let err = plan_teardown(&run, &checked, &resolved).unwrap_err();
+        match err {
+            TeardownError::Refused { steps } => {
+                assert_eq!(steps.len(), 1);
+                assert_eq!(steps[0].0.node, node("config"));
+                assert_eq!(steps[0].1, "an untolerated secret name");
+            }
+            other => panic!("expected Refused, got {other:?}"),
+        }
+    }
+
+    /// Acceptance 5: a config inside a pre-existing project (not a
+    /// candidate at all this run) is its own standalone `Delete`.
+    #[test]
+    fn a_config_inside_a_pre_existing_project_is_its_own_delete() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let project =
+            StubProjectTool::with_counter("test.project", Standing::Gone, Arc::clone(&calls));
+        let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let config = StubConfigTool::with_standing(
+            Standing::AsCreated { losing: vec![] },
+            Arc::clone(&config_calls),
+        );
+        let secret = StubSecretTool::new();
+        let checked = checked_riding(
+            project,
+            Arc::clone(&config),
+            secret,
+            TeardownPolicy::Delete { accept: vec![] },
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+
+        // No `project` instance in this run's own facts at all: it is
+        // pre-existing, never a candidate container.
+        let config_run = riding_instance(
+            "config",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("config", repo_value("org/the-config")),
+                ("project", repo_value("org/pre-existing")),
+            ]),
+            outputs_of(&[("config", repo_value("org/the-config"))]),
+        );
+        let run = facts_multi(vec![config_run], RUN_FINISHED);
+
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("config"),
+                    instance: None
+                },
+                action: TeardownAction::Delete { uncertain: false },
+            }]
+        );
+        assert_eq!(config_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Acceptance 5: a `Create`+`Unchanged` root config is a transit
+    /// rider, and a secret set into it rides with the project too, two
+    /// `Within` hops away (the `new-rust-service` shape): the project's
+    /// own `Created.riders` must see it transitively.
+    #[test]
+    fn a_transit_rider_two_hops_down_still_reaches_the_root_container() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let project = StubProjectTool::with_counter(
+            "test.project",
+            Standing::AsCreated { losing: vec![] },
+            Arc::clone(&calls),
+        );
+        let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Tolerates exactly one rider: the secret, reached transitively
+        // through the `Unchanged` root config -- never the config itself
+        // (it is a transit rider, not a candidate, so `riders_of` never
+        // lists it as *this* instance's own direct content either; only
+        // the project's own riders must include the secret).
+        let config = StubConfigTool::with_inverse(Box::new(ToleranceInverse {
+            expected_riders: 0,
+            calls: Arc::clone(&config_calls),
+        }));
+        let secret = StubSecretTool::new();
+        let checked = checked_riding(
+            Arc::clone(&project),
+            Arc::clone(&config),
+            secret,
+            TeardownPolicy::Delete { accept: vec![] },
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+
+        let project_value = repo_value("org/the-project");
+        let config_value = repo_value("org/the-root-config");
+        let project_run = riding_instance(
+            "project",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[("project", project_value.clone())]),
+            outputs_of(&[("project", project_value.clone())]),
+        );
+        let config_run = riding_instance(
+            "config",
+            Action::Create,
+            finished(START, END, NodeStatus::Unchanged),
+            inputs_of(&[
+                ("config", config_value.clone()),
+                ("project", project_value.clone()),
+            ]),
+            outputs_of(&[("config", config_value.clone())]),
+        );
+        let secret_run = riding_instance(
+            "secret",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("secret", repo_value("org/the-secret")),
+                ("config", config_value.clone()),
+            ]),
+            outputs_of(&[("secret", repo_value("org/the-secret"))]),
+        );
+        let run = facts_multi(vec![project_run, config_run, secret_run], RUN_FINISHED);
+
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        let config_ref = InstanceRef {
+            node: node("config"),
+            instance: None,
+        };
+        let project_ref = InstanceRef {
+            node: node("project"),
+            instance: None,
+        };
+        assert_eq!(teardown.steps.len(), 3);
+        assert_eq!(
+            teardown.steps[0],
+            TeardownStep {
+                instance: InstanceRef {
+                    node: node("secret"),
+                    instance: None
+                },
+                action: TeardownAction::RidesWith {
+                    container: config_ref.clone()
+                },
+            }
+        );
+        assert_eq!(
+            teardown.steps[1],
+            TeardownStep {
+                instance: config_ref,
+                action: TeardownAction::RidesWith {
+                    container: project_ref.clone()
+                },
+            }
+        );
+        assert_eq!(
+            teardown.steps[2],
+            TeardownStep {
+                instance: project_ref,
+                action: TeardownAction::Delete { uncertain: false },
+            }
+        );
+        // The project's own `standing` tolerated the secret even though
+        // it matches `config` directly, not `project`: transitive riders
+        // (acceptance 5). The config's own `standing` was never called
+        // (it rode, so it was never itself observed).
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(config_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Acceptance 5: the same run with the project kept lists the config
+    /// and the secret `Kept` (their container is kept), and observes
+    /// nothing at all -- not even the project itself, whose own policy
+    /// already decided it without observation.
+    #[test]
+    fn riders_of_a_kept_project_are_kept_and_nothing_is_observed() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let project =
+            StubProjectTool::with_counter("test.project", Standing::Gone, Arc::clone(&calls));
+        let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let config = StubConfigTool::with_standing(Standing::Gone, Arc::clone(&config_calls));
+        let secret = StubSecretTool::new();
+        // The project is kept by the document; `config` has no
+        // `teardown:` of its own either (with the project kept, a
+        // document declaring `teardown: delete` on `config` would hit the
+        // *other* rule decision 3a states, "its own `Delete` step" --
+        // pinned separately, below).
+        let checked = checked_riding(
+            Arc::clone(&project),
+            Arc::clone(&config),
+            secret,
+            TeardownPolicy::Retain,
+            None,
+        );
+        let resolved = empty_resolved(&checked);
+
+        let project_value = repo_value("org/the-project");
+        let config_value = repo_value("org/the-config");
+        let project_run = riding_instance(
+            "project",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[("project", project_value.clone())]),
+            outputs_of(&[("project", project_value.clone())]),
+        );
+        let config_run = riding_instance(
+            "config",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("config", config_value.clone()),
+                ("project", project_value.clone()),
+            ]),
+            outputs_of(&[("config", config_value.clone())]),
+        );
+        let secret_run = riding_instance(
+            "secret",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("secret", repo_value("org/the-secret")),
+                ("config", config_value.clone()),
+            ]),
+            outputs_of(&[("secret", repo_value("org/the-secret"))]),
+        );
+        let run = facts_multi(vec![project_run, config_run, secret_run], RUN_FINISHED);
+
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![
+                TeardownStep {
+                    instance: InstanceRef {
+                        node: node("secret"),
+                        instance: None
+                    },
+                    action: TeardownAction::Kept { why: KEPT_RIDER },
+                },
+                TeardownStep {
+                    instance: InstanceRef {
+                        node: node("config"),
+                        instance: None
+                    },
+                    // Its own default policy, not a rider reason: `config`
+                    // has no `teardown:` of its own either, so it is kept
+                    // on its own terms, whatever its container is.
+                    action: TeardownAction::Kept { why: KEPT },
+                },
+                TeardownStep {
+                    instance: InstanceRef {
+                        node: node("project"),
+                        instance: None
+                    },
+                    action: TeardownAction::Kept { why: KEPT },
+                },
+            ]
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(config_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Decision 3a's other rider rule: a `Delete`-capable candidate under
+    /// `teardown: delete` whose matched container is itself kept is its
+    /// own standalone `Delete` step, never `Kept` and never refused --
+    /// distinct from [`riders_of_a_kept_project_are_kept_and_nothing_is_observed`],
+    /// whose `config` has no policy of its own at all.
+    #[test]
+    fn a_delete_capable_rider_whose_container_is_kept_is_its_own_delete_step() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let project =
+            StubProjectTool::with_counter("test.project", Standing::Gone, Arc::clone(&calls));
+        let config_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let config = StubConfigTool::with_standing(
+            Standing::AsCreated { losing: vec![] },
+            Arc::clone(&config_calls),
+        );
+        let secret = StubSecretTool::new();
+        let checked = checked_riding(
+            Arc::clone(&project),
+            Arc::clone(&config),
+            secret,
+            TeardownPolicy::Retain,
+            Some(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let resolved = empty_resolved(&checked);
+
+        let project_value = repo_value("org/the-project");
+        let project_run = riding_instance(
+            "project",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[("project", project_value.clone())]),
+            outputs_of(&[("project", project_value.clone())]),
+        );
+        let config_run = riding_instance(
+            "config",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("config", repo_value("org/the-config")),
+                ("project", project_value.clone()),
+            ]),
+            outputs_of(&[("config", repo_value("org/the-config"))]),
+        );
+        let run = facts_multi(vec![project_run, config_run], RUN_FINISHED);
+
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![
+                TeardownStep {
+                    instance: InstanceRef {
+                        node: node("config"),
+                        instance: None
+                    },
+                    action: TeardownAction::Delete { uncertain: false },
+                },
+                TeardownStep {
+                    instance: InstanceRef {
+                        node: node("project"),
+                        instance: None
+                    },
+                    action: TeardownAction::Kept { why: KEPT },
+                },
+            ]
+        );
+        assert_eq!(config_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // The kept project is never observed either.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Milestone 3m's 2026-10-12 X1 addendum: "a `Within` may name its
+    /// own tool" (`StubSelfRidingTool`, below). Two instances that
+    /// structurally match *each other* must never both resolve
+    /// `GoesAway` from nothing but that mutual match: the earlier one (by
+    /// `facts.instances` order) is force-decided standalone, seeding the
+    /// later one's own ride, and `standing` is called exactly once, never
+    /// twice.
+    struct StubSelfRidingTool {
+        spec: ToolSpec,
+        inverse: RidingInverse,
+    }
+
+    impl StubSelfRidingTool {
+        fn with_counter(calls: Arc<std::sync::atomic::AtomicUsize>) -> Arc<Self> {
+            let mut inputs = IndexMap::new();
+            inputs.insert(
+                port("id"),
+                PortSpec {
+                    ty: PortType::Exact(ty("GitHubRepo")),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            inputs.insert(
+                port("parent"),
+                PortSpec {
+                    ty: PortType::Exact(ty("GitHubRepo")),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            let mut outputs = IndexMap::new();
+            outputs.insert(port("id"), ty("GitHubRepo"));
+            Arc::new(Self {
+                spec: ToolSpec {
+                    name: ToolName::parse("test.self_riding").unwrap(),
+                    description: "stub self-riding tool (milestone 3m X1 addendum)".to_string(),
+                    inputs,
+                    outputs,
+                    key: vec![port("id")],
+                    class: Class::Reversible,
+                    pure: false,
+                },
+                inverse: RidingInverse {
+                    standing: Standing::AsCreated { losing: vec![] },
+                    calls,
+                },
+            })
+        }
+    }
+
+    impl Tool for StubSelfRidingTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, crate::tool::ToolError> {
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+
+        fn ensure(
+            &self,
+            _inputs: &Inputs,
+            _token: &SinkToken,
+        ) -> Result<Ensured, crate::tool::ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+
+        fn reversal(&self) -> Reversal {
+            Reversal::Delete {
+                needs: &["id"],
+                within: &[Within {
+                    tool: "test.self_riding",
+                    ports: &[("parent", Side::Input, "id")],
+                }],
+                losses: &[],
+            }
+        }
+
+        fn inverse(&self) -> Option<&dyn Inverse> {
+            Some(&self.inverse)
+        }
+    }
+
+    #[test]
+    fn a_within_naming_its_own_tool_never_produces_a_mutual_ride() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tool = StubSelfRidingTool::with_counter(Arc::clone(&calls));
+        let node_a = Node::new(tool.spec.name.clone())
+            .port(port("id"), Binding::Literal("example-org/a".to_string()))
+            .port(
+                port("parent"),
+                Binding::Literal("example-org/b".to_string()),
+            )
+            .teardown(TeardownPolicy::Delete { accept: vec![] });
+        let node_b = Node::new(tool.spec.name.clone())
+            .port(port("id"), Binding::Literal("example-org/b".to_string()))
+            .port(
+                port("parent"),
+                Binding::Literal("example-org/a".to_string()),
+            )
+            .teardown(TeardownPolicy::Delete { accept: vec![] });
+        let workflow = Workflow::new(workflow_name("mutual-ride"))
+            .node(node("a"), node_a)
+            .node(node("b"), node_b);
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(tool as Arc<dyn Tool>).unwrap();
+        let checked = check(&workflow, &catalog)
+            .unwrap_or_else(|errors| unreachable!("must check cleanly: {errors:?}"));
+        let resolved = empty_resolved(&checked);
+
+        // `a`'s own `id` is "a", `parent` "b"; `b`'s own `id` is "b",
+        // `parent` "a" -- each structurally matches the other.
+        let a_run = riding_instance(
+            "a",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("id", repo_value("example-org/a")),
+                ("parent", repo_value("example-org/b")),
+            ]),
+            outputs_of(&[("id", repo_value("example-org/a"))]),
+        );
+        let b_run = riding_instance(
+            "b",
+            Action::Create,
+            finished(START, END, NodeStatus::Created),
+            inputs_of(&[
+                ("id", repo_value("example-org/b")),
+                ("parent", repo_value("example-org/a")),
+            ]),
+            outputs_of(&[("id", repo_value("example-org/b"))]),
+        );
+        let run = facts_multi(vec![a_run, b_run], RUN_FINISHED);
+
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        // Exactly one of the two is a genuine `Delete` (the earlier in
+        // `facts.instances` order, forced standalone to break the cycle);
+        // the other rides with it. Never both `Delete`, never both
+        // `RidesWith` (that would mean neither was ever grounded).
+        let a_ref = InstanceRef {
+            node: node("a"),
+            instance: None,
+        };
+        let b_ref = InstanceRef {
+            node: node("b"),
+            instance: None,
+        };
+        assert_eq!(
+            teardown.steps,
+            vec![
+                TeardownStep {
+                    instance: b_ref,
+                    action: TeardownAction::RidesWith {
+                        container: a_ref.clone()
+                    },
+                },
+                TeardownStep {
+                    instance: a_ref,
+                    action: TeardownAction::Delete { uncertain: false },
+                },
+            ]
+        );
+        // Never a mutual ride: exactly one `standing` call total, not two.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
