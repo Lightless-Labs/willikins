@@ -10,10 +10,12 @@ compaction, before handing off, after a milestone, and after a plan change or di
 ### RESUME HERE (2026-10-11) — 3k, 3n, 3l, 2b and 3o landed; next: 3m (safe rollback), its Tasks table revised first
 
 - **Live state:** `main` pushed. Full gate on the 3n tree: 50 test binaries, all green, about 7 minutes.
-- **Next: 3m.** Before running it, revise `docs/plans/2026-10-05-milestone-3m-safe-rollback.md`'s Tasks table for
-  the document-level teardown policy its addendum records (per-node `teardown:`, conservative defaults, tools declare
-  their inverses; the profile tool gains a delete-by-recorded-id inverse; the pipeline inverse reports builds). The
-  operator's document declares retain for profiles and refuse for the pipeline. Then run it with the runner.
+- **Now: 3m** (`docs/plans/2026-10-05-milestone-3m-safe-rollback.md`), revised 2026-10-12 for document-level teardown
+  policy and reviewed by four lenses. Tools declare capability (`Reversal`, with declared losses such as a pipeline's
+  `builds`); nodes declare policy (`teardown: retain | delete | { delete: { accept: [builds] } }`, default retain,
+  validated by `check`, fixed at the run's document hash). The profile gains a mock-only inverse (no new live App
+  Store call). Running with the runner, skipping coordinator rows (C1, L4, D1), X1 (the runner's own opus attack) and
+  D0 (after L4). C1, the operator's private document, waits for F1.
 - **Plans** (2026-10-05, written in parallel, then one portfolio review ordered them): 3k faster gates,
   3n checked as a typed graph, 3l new repositories, 2b composition, 3m safe rollback. Order: 3k, 3n F1-F3, 3l, 2b,
   then the AGENTS.md todo, the rest of 3n (S1 onward), and 3m last.
