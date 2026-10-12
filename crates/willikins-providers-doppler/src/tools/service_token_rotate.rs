@@ -21,7 +21,8 @@ use std::sync::Arc;
 
 use willikins_core::tool::helpers::{exact, get, port, require_present, scalar, tool_name};
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, Reversal, SinkToken, Tool, ToolError, ToolSpec,
+    Value,
 };
 use willikins_types::{DopplerConfig, DopplerTokenName};
 
@@ -151,5 +152,14 @@ impl Tool for DopplerServiceTokenRotate {
             outputs,
             changed: true,
         })
+    }
+
+    /// Milestone 3m decisions 4, 5, task P3: never undone -- the revoked
+    /// token cannot be restored, exact wording decision 4's own table
+    /// gives this row.
+    fn reversal(&self) -> Reversal {
+        Reversal::Retained {
+            why: "the revoked token cannot be restored",
+        }
     }
 }

@@ -462,3 +462,15 @@ fn ensure_still_fails_outright_on_a_listing_404() {
     delete.assert();
     create.assert();
 }
+
+/// Milestone 3m decision 4, task P3: never undone -- the revoked token
+/// cannot be restored.
+#[test]
+fn reversal_declares_retained() {
+    let (client, _sleeper) = client_against("http://127.0.0.1:1".to_string());
+    let tool = DopplerServiceTokenRotate::new(client);
+    let willikins_core::Reversal::Retained { why } = Tool::reversal(&tool) else {
+        panic!("doppler.service_token.rotate must declare Reversal::Retained");
+    };
+    assert!(!why.is_empty());
+}

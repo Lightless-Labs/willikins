@@ -51,12 +51,13 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use willikins_core::rollback::{Side, Within};
 use willikins_core::tool::helpers::{
     conflict, exact, get, invalid, list, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, PortSpec, PortType, SinkToken, Tool, ToolError,
-    ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, PortSpec, PortType, Reversal, SinkToken, Tool,
+    ToolError, ToolSpec, Value,
 };
 use willikins_types::DopplerConfig;
 
@@ -236,6 +237,27 @@ impl Tool for DopplerConfigInheritsEnsure {
                     },
                 }
             }
+        }
+    }
+
+    /// Milestone 3m decisions 4, 5, task P3: no delete of its own --
+    /// add-only, and which bases were already there before this run is
+    /// not recorded. Rides out with whichever of
+    /// `doppler.config.ensure`/`doppler.branch_config.ensure` produced
+    /// this config.
+    fn reversal(&self) -> Reversal {
+        Reversal::Contained {
+            within: &[
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: &[("config", Side::Output, "config")],
+                },
+                Within {
+                    tool: "doppler.branch_config.ensure",
+                    ports: &[("config", Side::Output, "config")],
+                },
+            ],
+            otherwise: "add-only, and which bases were already there is not recorded",
         }
     }
 }

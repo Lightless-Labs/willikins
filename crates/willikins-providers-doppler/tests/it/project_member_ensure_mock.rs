@@ -749,3 +749,21 @@ fn outputs_never_contain_a_slug() {
             .is_some()
     );
 }
+
+/// Milestone 3m decision 4, task P3: `Contained`, riding out with
+/// `doppler.project.ensure`'s own `project` input port.
+#[test]
+fn reversal_declares_contained_within_the_project() {
+    let tool = DopplerProjectMemberEnsure::new(client_against("http://127.0.0.1:1".to_string()));
+    let willikins_core::Reversal::Contained { within, otherwise } = Tool::reversal(&tool) else {
+        panic!("doppler.project_member.ensure must declare Reversal::Contained");
+    };
+    assert_eq!(within.len(), 1);
+    assert_eq!(within[0].tool, "doppler.project.ensure");
+    assert_eq!(within[0].ports.len(), 1);
+    assert_eq!(
+        within[0].ports[0],
+        ("project", willikins_core::Side::Input, "project")
+    );
+    assert!(!otherwise.is_empty());
+}

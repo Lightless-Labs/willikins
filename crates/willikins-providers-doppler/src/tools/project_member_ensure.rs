@@ -41,12 +41,13 @@
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
+use willikins_core::rollback::{Side, Within};
 use willikins_core::tool::helpers::{
     conflict, exact, get, invalid, list, not_found, port, require_present, tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, PortSpec, PortType, SinkToken, Tool, ToolError,
-    ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, PortSpec, PortType, Reversal, SinkToken, Tool,
+    ToolError, ToolSpec, Value,
 };
 use willikins_types::{
     DomainType, DopplerProject, DopplerProjectRole, DopplerServiceAccountName, EnvironmentSlug,
@@ -481,6 +482,20 @@ impl Tool for DopplerProjectMemberEnsure {
                     ),
                 }
             }
+        }
+    }
+
+    /// Milestone 3m decisions 4, 5, task P3: no delete of its own --
+    /// this tool only ever adds or raises a role (the module's own "Add
+    /// or raise, never remove"), and the prior role, if any, is not
+    /// recorded. Rides out with `doppler.project.ensure`.
+    fn reversal(&self) -> Reversal {
+        Reversal::Contained {
+            within: &[Within {
+                tool: "doppler.project.ensure",
+                ports: &[("project", Side::Input, "project")],
+            }],
+            otherwise: "adds or raises a role; the prior role is not recorded",
         }
     }
 }

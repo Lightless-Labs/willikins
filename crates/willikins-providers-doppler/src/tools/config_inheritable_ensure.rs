@@ -12,9 +12,10 @@
 
 use std::sync::Arc;
 
+use willikins_core::rollback::{Side, Within};
 use willikins_core::tool::helpers::{exact, get, port, require_present, tool_name};
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec,
+    Class, Ensured, Inputs, Observation, Outputs, Reversal, SinkToken, Tool, ToolError, ToolSpec,
 };
 use willikins_types::DopplerConfig;
 
@@ -115,6 +116,28 @@ impl Tool for DopplerConfigInheritableEnsure {
                     },
                 }
             }
+        }
+    }
+
+    /// Milestone 3m decisions 4, 5, task P3: no delete of its own --
+    /// setting a flag back off is not something this tool's own port
+    /// table expresses, and whether it was already set before this run
+    /// is not recorded. Rides out with whichever of
+    /// `doppler.config.ensure`/`doppler.branch_config.ensure` produced
+    /// this config.
+    fn reversal(&self) -> Reversal {
+        Reversal::Contained {
+            within: &[
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: &[("config", Side::Output, "config")],
+                },
+                Within {
+                    tool: "doppler.branch_config.ensure",
+                    ports: &[("config", Side::Output, "config")],
+                },
+            ],
+            otherwise: "a flag on an existing config; whether it was already set is not recorded",
         }
     }
 }

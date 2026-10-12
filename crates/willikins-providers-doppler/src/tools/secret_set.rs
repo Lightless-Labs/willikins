@@ -100,11 +100,12 @@
 
 use std::sync::Arc;
 
+use willikins_core::rollback::{Side, Within};
 use willikins_core::tool::helpers::{
     any_secret, exact, exact_derived_only, get, invalid, port, require_present, tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec,
+    Class, Ensured, Inputs, Observation, Outputs, Reversal, SinkToken, Tool, ToolError, ToolSpec,
 };
 use willikins_types::{DopplerConfig, SecretName};
 
@@ -194,6 +195,27 @@ impl Tool for DopplerSecretSet {
             outputs: Outputs::new(),
             changed: true,
         })
+    }
+
+    /// Milestone 3m decisions 4, 5, task P3: no delete of its own --
+    /// always writes, and the prior value is never read, by design (the
+    /// module's own doc). Rides out with whichever of
+    /// `doppler.config.ensure`/`doppler.branch_config.ensure` produced
+    /// this config.
+    fn reversal(&self) -> Reversal {
+        Reversal::Contained {
+            within: &[
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: &[("config", Side::Output, "config")],
+                },
+                Within {
+                    tool: "doppler.branch_config.ensure",
+                    ports: &[("config", Side::Output, "config")],
+                },
+            ],
+            otherwise: "always writes; the prior value is never read, by design",
+        }
     }
 }
 

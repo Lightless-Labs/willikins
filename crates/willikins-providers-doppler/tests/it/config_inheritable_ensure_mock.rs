@@ -308,3 +308,25 @@ fn a_post_is_never_retried_on_a_503() {
     assert_eq!(err.kind, ToolErrorKind::Provider);
     post.assert();
 }
+
+/// Milestone 3m decision 4, task P3: `Contained`, riding out with
+/// whichever of `doppler.config.ensure`/`doppler.branch_config.ensure`
+/// produced this config.
+#[test]
+fn reversal_declares_contained_within_either_config_tool() {
+    let tool =
+        DopplerConfigInheritableEnsure::new(client_against("http://127.0.0.1:1".to_string()));
+    let willikins_core::Reversal::Contained { within, otherwise } = Tool::reversal(&tool) else {
+        panic!("doppler.config.inheritable.ensure must declare Reversal::Contained");
+    };
+    assert_eq!(within.len(), 2);
+    assert_eq!(within[0].tool, "doppler.config.ensure");
+    assert_eq!(within[1].tool, "doppler.branch_config.ensure");
+    for entry in within {
+        assert_eq!(
+            entry.ports,
+            &[("config", willikins_core::Side::Output, "config")]
+        );
+    }
+    assert!(!otherwise.is_empty());
+}
