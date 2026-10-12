@@ -28,6 +28,7 @@ mod inherited_secret_gate_document;
 mod new_repository_scaffold_document;
 mod no_gh_writes_guard;
 mod prerendered_identifier_guards;
+mod rollback_round_trip;
 mod serve_and_live;
 mod smoke_parity;
 mod teardown_script;
