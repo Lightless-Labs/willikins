@@ -109,8 +109,8 @@ use willikins_core::tool::helpers::{
     conflict, exact, get, port, require_present, scalar, tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, TypeName,
-    TypeRef, Value,
+    Class, Ensured, Inputs, Observation, Outputs, Reversal, SinkToken, Tool, ToolError, ToolSpec,
+    TypeName, TypeRef, Value,
 };
 use willikins_types::{
     AppleBundleIdId, AppleBundleIdName, AppleBundleIdPlatform, AppleBundleIdentifier,
@@ -369,6 +369,18 @@ impl Tool for AppstoreBundleIdEnsure {
                 }
             }
             other => Self::converge_or_present(&client, resource, &identifier, &name, other),
+        }
+    }
+
+    /// Milestone 3m decision 4, task P5: never undone -- no document can
+    /// ask for it, whatever its own `teardown:`. No ownership marker
+    /// exists on a bundle id at all, and Apple's own deletes cascade:
+    /// deleting an identifier takes its capabilities and profiles with
+    /// it (decision 4's own "why"), which the operator keeps.
+    fn reversal(&self) -> Reversal {
+        Reversal::Retained {
+            why: "App Store identity the operator keeps: no ownership marker exists, and \
+                  deleting an identifier takes its capabilities and profiles with it",
         }
     }
 }

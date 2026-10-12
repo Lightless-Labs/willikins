@@ -174,7 +174,8 @@ use willikins_core::tool::helpers::{
     tool_name,
 };
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, Reversal, SinkToken, Tool, ToolError, ToolSpec,
+    Value,
 };
 use willikins_types::{
     AppleBundleIdId, AppleBundleIdentifier, AppleCapabilitySetting, AppleCapabilityType,
@@ -494,6 +495,15 @@ impl Tool for AppstoreBundleIdCapabilityEnsure {
                 }
             }
             Observation::Foreign => unreachable!("this tool's own observe never returns this"),
+        }
+    }
+
+    /// Milestone 3m decision 4, task P5: never undone -- disabling a
+    /// capability invalidates every profile on the identifier, which no
+    /// document can ask a teardown to risk.
+    fn reversal(&self) -> Reversal {
+        Reversal::Retained {
+            why: "disabling a capability invalidates every profile on the identifier",
         }
     }
 }

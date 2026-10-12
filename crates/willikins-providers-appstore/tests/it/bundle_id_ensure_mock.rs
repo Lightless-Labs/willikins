@@ -404,3 +404,14 @@ fn an_error_after_create_that_still_reads_absent_reports_the_original_error() {
     let err = tool.ensure(&inputs(), &token).unwrap_err();
     assert_eq!(err.kind, ToolErrorKind::Provider);
 }
+
+/// Milestone 3m decision 4, task P5: never undone -- no document can ask
+/// for it, whatever its own `teardown:`.
+#[test]
+fn reversal_declares_retained() {
+    let tool = AppstoreBundleIdEnsure::new("http://127.0.0.1:1");
+    let willikins_core::Reversal::Retained { why } = Tool::reversal(&tool) else {
+        panic!("appstore.bundle_id.ensure must declare Reversal::Retained");
+    };
+    assert!(!why.is_empty());
+}

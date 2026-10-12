@@ -841,3 +841,14 @@ fn ensure_refuses_a_setting_mismatch_with_conflict_and_never_posts() {
     assert_eq!(err.kind, ToolErrorKind::Conflict);
     create.assert();
 }
+
+/// Milestone 3m decision 4, task P5: never undone -- disabling a
+/// capability invalidates every profile on the identifier.
+#[test]
+fn reversal_declares_retained() {
+    let tool = AppstoreBundleIdCapabilityEnsure::new("http://127.0.0.1:1");
+    let willikins_core::Reversal::Retained { why } = Tool::reversal(&tool) else {
+        panic!("appstore.bundle_id_capability.ensure must declare Reversal::Retained");
+    };
+    assert!(!why.is_empty());
+}

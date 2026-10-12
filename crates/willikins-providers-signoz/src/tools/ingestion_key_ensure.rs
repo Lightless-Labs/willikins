@@ -28,7 +28,8 @@ use std::sync::Arc;
 
 use willikins_core::tool::helpers::{exact, get, port, require_present, scalar, tool_name};
 use willikins_core::{
-    Class, Ensured, Inputs, Observation, Outputs, SinkToken, Tool, ToolError, ToolSpec, Value,
+    Class, Ensured, Inputs, Observation, Outputs, Reversal, SinkToken, Tool, ToolError, ToolSpec,
+    Value,
 };
 use willikins_types::SigNozIngestionKeyName;
 
@@ -135,6 +136,15 @@ impl Tool for SigNozIngestionKeyEnsure {
                 }
             }
             Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Milestone 3m decision 4, task P5: never undone -- no live sandbox
+    /// exists to prove a delete against (out of scope), though `SigNoz`'s
+    /// own API does document one.
+    fn reversal(&self) -> Reversal {
+        Reversal::Retained {
+            why: "no live sandbox (out of scope)",
         }
     }
 }

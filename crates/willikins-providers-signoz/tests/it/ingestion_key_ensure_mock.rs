@@ -333,3 +333,15 @@ fn a_malformed_value_in_the_response_is_a_provider_error_that_echoes_nothing() {
     assert_eq!(err.kind, ToolErrorKind::Provider);
     assert!(!err.message.contains(marker), "{}", err.message);
 }
+
+/// Milestone 3m decision 4, task P5: never undone -- no live sandbox
+/// exists to prove a delete against.
+#[test]
+fn reversal_declares_retained() {
+    let (client, _sleeper) = client_against("http://127.0.0.1:1".to_string());
+    let tool = SigNozIngestionKeyEnsure::new(client);
+    let willikins_core::Reversal::Retained { why } = Tool::reversal(&tool) else {
+        panic!("signoz.ingestion_key.ensure must declare Reversal::Retained");
+    };
+    assert!(!why.is_empty());
+}
