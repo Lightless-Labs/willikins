@@ -165,6 +165,12 @@ fn apply_then_rollback_deletes_exactly_what_the_run_created() {
         .unwrap_or_else(|| panic!("no steps in {teardown_plan:?}"));
     assert_eq!(steps.len(), 1, "{steps:?}");
     assert_eq!(steps[0]["action"]["kind"], "delete", "{steps:?}");
+    // The production wiring (`butler.run(run_id)` -> matching the step's
+    // own `InstanceRef` against the forward run's recorded nodes ->
+    // attaching `resource`), not only the renderer the unit tests build a
+    // `RunRecord` by hand for: this run's own `project` output must have
+    // reached the printed plan.
+    assert!(steps[0]["resource"]["project"].is_object(), "{steps:?}");
 
     // 3. `approve`.
     let approved = run(&["approve", &plan_id, "--journal", journal.to_str().unwrap()]);
