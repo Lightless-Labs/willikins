@@ -837,6 +837,10 @@ impl DopplerClient {
     /// [`crate::tools::DopplerSecretNameGate`]'s own walk documents and
     /// for the same reason: whether Doppler permits a base to itself
     /// inherit is unverified (that gate's module doc, "One level only").
+    /// A base this token can no longer see ([`looks_like_a_missing_project`])
+    /// contributes nothing and the walk continues, the same tolerance
+    /// that gate's own step 2 already has; any other error stops the
+    /// walk and propagates.
     ///
     /// Never returns the names themselves — only whether a foreign one
     /// exists — the same trust boundary 2 [`Self::secret_names`]'s own
@@ -864,7 +868,15 @@ impl DopplerClient {
             return Ok(false);
         }
         for base in bases {
-            let base_names = self.secret_names(&base.project, &base.config)?.names;
+            let base_names = match self.secret_names(&base.project, &base.config) {
+                Ok(body) => body.names,
+                // Mirrors `DopplerSecretNameGate`'s own walk: a base this
+                // config's `inherits` names but that this token can no
+                // longer see contributes nothing, and the walk continues
+                // to the next one.
+                Err(err) if looks_like_a_missing_project(&err) => continue,
+                Err(err) => return Err(err),
+            };
             foreign.retain(|listed| !base_names.contains(listed));
             if foreign.is_empty() {
                 return Ok(false);
@@ -2474,6 +2486,39 @@ mod tests {
         let mut provider = MockProvider::start();
         mock_names(&mut provider, "shared_keys", "prd", &["HAND_SET"]);
         mock_names(&mut provider, "github", "example-org", &["SOMETHING_ELSE"]);
+        let client = client_against(provider.url());
+        let base = ConfigRefBody {
+            project: DopplerProject::parse("github").unwrap(),
+            config: DopplerConfigName::parse("example-org").unwrap(),
+        };
+        let foreign = client
+            .config_has_foreign_secret_name(&project(), &config(), &HashSet::new(), &[base])
+            .unwrap();
+        assert!(foreign);
+    }
+
+    /// Mirrors [`crate::tools::DopplerSecretNameGate`]'s own walk (that
+    /// tool's module doc, "(b2)" step 2): a base this config's `inherits`
+    /// names but that this token can no longer see (a `404`, or the `400`
+    /// [`looks_like_a_missing_project`] already recognises) contributes
+    /// nothing and the walk continues, rather than failing the whole
+    /// project's standing with an opaque transport error over one base
+    /// that is no longer there.
+    #[test]
+    fn config_has_foreign_secret_name_tolerates_a_base_that_no_longer_exists() {
+        let mut provider = MockProvider::start();
+        mock_names(&mut provider, "shared_keys", "prd", &["HAND_SET"]);
+        provider
+            .mock("GET", "/v3/configs/config/secrets/names")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("project".into(), "github".into()),
+                mockito::Matcher::UrlEncoded("config".into(), "example-org".into()),
+            ]))
+            .with_status(404)
+            .with_body(
+                serde_json::json!({"messages": ["Could not find requested project"]}).to_string(),
+            )
+            .create();
         let client = client_against(provider.url());
         let base = ConfigRefBody {
             project: DopplerProject::parse("github").unwrap(),
