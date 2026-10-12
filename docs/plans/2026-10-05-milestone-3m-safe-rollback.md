@@ -50,6 +50,22 @@ by unit tests over hand-written sources rather than the real tree. R6 must bump 
 commit that adds `apply_teardown`'s own call and its `#[allow(clippy::disallowed_methods)]`; leaving either behind
 fails the guard.
 
+**Addendum:** 2026-10-12 — R4 landed (`resolve_pure` in `plan.rs`, reusing `bind_ports`/`resolve_source`/`plan_one`
+over `checked.nodes()`'s own order, with no new ratchet token and no `&Catalog`). `wanted: &[NodeName]` names the
+pure producer nodes a `Delete` step's secret `needs` ports are directly bound to; the function computes their own
+pure ancestors by a two-pass walk (readability forward, the backward-reachable "needed" set in reverse, never
+crossing a non-pure node) and reads, via `bind_ports`/`plan_one`, exactly the nodes that are both. Its return,
+`Resolved`, is `pub` (opaque) with private tables and a `pub(crate) fn ctx` that builds a `ResolveCtx` for
+`resolve_source` — the same seam R5a's `plan_teardown` reads a `Delete` step's secret value through. Since neither
+`Resolved`'s fields nor `ctx` have a non-test caller yet (R5a is next), the plain `lib` build (no `--cfg test`) would
+flag both dead; both carry `#[cfg_attr(not(test), expect(dead_code))]`, self-removing the moment R5a's
+`plan_teardown` calls `ctx()` from outside `#[cfg(test)]` — the same discipline R2's `EXPECTED_SITES = 0` already
+uses. R5a's own commit must delete both attributes (leaving either behind fails the lib build once it is the real
+caller). `wanted` naming a node outside `checked`'s own graph is a no-op, not an error: deriving it from the checked
+graph is the caller's contract. Acceptance 3's unit tests (a resolver chain, a pure node bound to an impure output,
+an unwanted pure gate, and `wanted` naming an impure node directly) live in `plan.rs`'s own `#[cfg(test)]` module,
+not `tests/it/`, since they build a `Checked`/`Source` and call `ctx()`, all crate-private.
+
 **Addendum:** 2026-10-12 — R3 landed (`Tool::inverse()`, `Standing`, `Deleted`, `Created`, the `Inverse` trait, and
 `Catalog::insert`'s "`Delete` exactly when `inverse()` is `Some`" rule, with two new `ReversalError` variants,
 `DeleteWithoutInverse` and `InverseWithoutDelete`). Decision 3's `Created<'a>` code sample names three fields whose
