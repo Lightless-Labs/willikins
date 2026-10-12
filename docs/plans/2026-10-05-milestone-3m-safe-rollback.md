@@ -1071,6 +1071,50 @@ unrelated to this task), then this addendum. Deviations from the row, recorded:
   the lint's line count) and `plan_rollback_inner` (one operation, the ordered refusal checks this method's own doc
   spells out in sequence; splitting it would scatter that sequence across functions for no reader's benefit).
 
+**Addendum:** 2026-10-12 -- R9 landed: `willikins rollback` (`crates/willikins-cli/src/commands.rs`, `main.rs`,
+`render.rs`), decision 9's own two modes (`rollback <file> --run <run-id> --journal <path> [...]` planning a
+teardown through `Butler::plan_rollback`, `rollback --plan-id <id> --journal <path> [...]` applying one through
+`Butler::apply_rollback`), each reusing `apply`'s own pipeline (`load_workflow` -> `link_workflow` ->
+`build_catalog_for_document`/`build_catalog` -> `check_workflow` -> `stage_apply_closure`/`Butler::start`), including
+the linked closure copy (2b decision (d8), as the row asks). `cargo test -p willikins-cli --test it -j 2 --
+rollback_round_trip::` (the new acceptance-test-11 module) and `cargo test -p willikins-cli --bin willikins -j 2 --
+render::` (29 tests, including three new ones) both green; `cargo clippy -p willikins-cli --all-targets -j 2 -- -D
+warnings` and `cargo fmt -p willikins-cli --check` clean. Deviations from the row, recorded:
+- **Decision 9's own text does not say a step's line shows the resource being deleted, but the row's own acceptance
+  criterion ("a test that a profile step's id prints masked in both and whole only under `--reveal`") cannot be
+  satisfied by `Teardown`/`TeardownStep`/`TeardownAction` as R1--R7 left them: none of the three carries a `Value`
+  anywhere (confirmed by reading every variant). `render::teardown_plan_text`/`teardown_plan_json` therefore also
+  take the forward run's own already-journaled `RunRecord` (`Butler::run(run_id)`, read from the same `Butler` right
+  after `plan_rollback` succeeds) and, per step, show that instance's own recorded outputs -- the same
+  `redacted_map_lines`-over-`mask_json` path `run_record_text` already uses for journal-sourced values (there is no
+  live `Value` to call `Value::display` on in this position either; that function's own doc explains why reading
+  back the already-redacted JSON is the equivalent). This is what gives the acceptance test, and an approver, the
+  resource going (a profile's own `profile` output, an `AppleProfileId`), not only its node name.
+- **No `--approve` flag on `rollback`.** Decision 9 is explicit that a teardown always requires approval
+  (`requires_approval` is always `true`, SHARED VALUES), so unlike `apply`'s own `--approve`, there is no
+  self-approval path here at all: the only route from a fresh plan to an applied teardown is `willikins approve`,
+  then re-running `rollback --plan-id`. `cmd_rollback_plan`'s own text/JSON output prints both follow-up commands.
+- **`--fake-state-out` is accepted on `rollback --plan-id`, unlike `apply --plan-id` (which refuses it outright).**
+  Acceptance test 11's own round trip (`apply --fake-state-out A`, `rollback --run R --fake-state A`, `approve`,
+  `rollback --plan-id P --fake-state A --fake-state-out B`) needs the *teardown's* own ending state dumped from
+  exactly this mode, since planning never deletes anything and `rollback <file>` mode has no `--live`-free
+  "ending state that differs from the seed" of its own worth dumping either. `RollbackArgs::fake_state_out`'s own
+  doc records this as a deliberate difference, not an oversight.
+- **`--workflows-dir` is required in practice for `rollback --plan-id` in a test driving the built binary from a
+  directory with no `workflows/` of its own** (`apply_rollback_inner` resolves the forward run's document by name
+  against it, the same way `apply --plan-id` already does) -- `rollback_round_trip.rs`'s own test passes it
+  explicitly, pointed at the same temporary directory the document was written to, exactly as
+  `apply_and_journal.rs`'s own `the_approve_by_id_flow_runs_across_three_processes` already does for `apply
+  --plan-id`. Not a deviation from the row, just recorded so a reader of the test is not surprised by the extra
+  flag.
+- **The round trip's own test-local document** (`crates/willikins-cli/tests/it/rollback_round_trip.rs`, written
+  directly into a temp directory, never under `workflows/`) uses `doppler.project.ensure` alone, the one `Delete`
+  tool the fake catalog needs no credential for: one node, `teardown: delete` written out. Its own auto-seeded
+  `dev`/`stg`/`prd` root configs are tolerated unconditionally by `DopplerProjectInverse`'s own
+  `tolerated_config_names` (confirmed by reading it) regardless of riders, so a project with no `doppler.config.ensure`
+  rider at all still deletes cleanly; the seed file's own untouched project (`example-untouched-project`) is what the
+  round trip's final assertion tells apart from what the run itself created.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
