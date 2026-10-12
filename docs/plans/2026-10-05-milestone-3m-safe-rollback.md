@@ -1404,6 +1404,19 @@ its pipeline node; its private tests pass, and a live read-only plan still reads
 planned, so `not_reversible` is empty (it lists only planned creates and changes). Left: L1-L3 run live once each in
 the sandbox (L3 needs a sandbox Buildkite token able to create builds), L4, D0 and D1. The independent pass's
 residuals (its research record) stay open; residual 1 (`AlreadyRolledBack` not re-checked at apply) is the cheapest.
+**Addendum:** 2026-10-12 -- L1 and L2 run live once each, in the sandbox, both green; no secret in either log.
+L1 first failed before creating anything: its probe names put the sub-cycle tag after the digits, which `ProjectSlug`
+refuses (a token starts with a letter or is all digits); the offline name test would have caught it, but it builds
+only with `live-tests`, which the workspace gate never enables (fixed, `tag` first). Then L1: a clean rollback reads
+404; a push after `settled_by` and a hand-set Actions secret each read `Drifted` naming the cause, and `delete`
+refuses both as a `Conflict`. Verify 1 holds (the scaffold's `createCommitOnBranch` bumps `pushed_at`; the Actions
+secrets list carries names and no value) and verify 2 holds (a repository delete then reads 404). L2: verify 5, 6, 7
+and 9 hold as written. Verify 3: deleting an environment that still has a branch config **succeeds and takes the
+branch with it**, so the environment's drift rule, which must account for every branch config, is the only guard.
+Verify 4: Doppler **deletes** an environment whose config another project inherits; the `inheritedBy` drift rule is the
+only guard, and it refused live. The single-config `GET` of a root config carries `created_at` after all (P3's
+addendum said it did not; the code does not depend on it). L3 is blocked: the sandbox Buildkite token answers 401
+on every endpoint (it passed live on 2026-10-02), so L3 and L4 wait for the operator to replace it.
 
 ## Goal
 
