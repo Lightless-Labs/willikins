@@ -123,6 +123,38 @@ here rather than left silent:
   candidate inside a deleted container) is R5b's; the opus adversarial pass (X1) has not run over this task's own
   code yet.
 
+**Addendum:** 2026-10-12 — a same-day review of R5a above (before X1) found one correctness bug and two gaps; fixed in
+a fourth commit, same task:
+- **Bug, fixed:** `resolve_secret_source` checked only the *direct* producer's purity. A `needs` port bound to a pure
+  node that is itself bound to an *impure* node's own output (decision 5's own example: a credential resolver chain
+  two nodes deep) passed that check, then `resolve_source` returned `Value::unknown` (`resolve_pure`'s own `Skipped`
+  rule for an unreadable pure node) and `standing()` was called with it as though it were real — silently. Fixed by
+  checking `value.is_known()` after `resolve_source` and reporting `UnresolvableCredential` otherwise; safe on every
+  arm (`Literal` and a pure `Step`/`Aggregate`/`Keyed` reach it only once already known to resolve to something, and
+  a secret `Source::Input` cannot exist, `check` already refuses a secret workflow input). No new ratchet token.
+- **Added `pub fn wanted_resolvers(checked) -> Vec<NodeName>`** (plus a small private `source_producer_name`
+  helper): the row's own `resolved: &Resolved` parameter presumes a caller can compute `resolve_pure`'s own `wanted`,
+  but nothing before this addendum let one — `Checked::edge()` returns an `Edge`, never a `Source`, and
+  `CheckedNode`/`Shape`/`Source` are crate-private. Without this, task R8 (`Butler::plan_rollback`) could not call
+  `resolve_pure` correctly at all. Walks every node whose tool is `Reversal::Delete` and whose policy is
+  `teardown: delete`, and names each secret `needs` port's own `Step`/`Aggregate`/`Keyed` producer.
+- **Added test coverage for the decision 5 path itself** (a `FixedTool`/`wrap_tool`/`SecretNeedTool` fixture, four
+  tests): a secret `needs` port resolving through a pure chain and the resolved value actually reaching the
+  inverse's own `Created.inputs`; bound directly to an impure node; bound to a pure node downstream of an impure one
+  (the bug fix's own regression test — fails without the `is_known` check); and `wanted_resolvers` skipping a kept
+  node's own producer. Before this addendum, nothing exercised `Secrets::resolve_secret_source`'s secret branch at
+  all — every acceptance-4/6/19 test uses `StubDeletableTool`'s non-secret `repo` port.
+- **Left open, recorded rather than silently dropped:** SHARED VALUES credits R5a (with R7) for "Step fingerprint"
+  (`StepFingerprint { node, instance, action, standing: Option<StandingKind> }`). This task's own row does not name
+  `StepFingerprint` or `StandingKind` among what it must produce, and `TeardownStep` does not carry the observed
+  `Standing` (an `AsCreated`'s `losing` names are consumed into `TeardownAction::Delete`'s bare `uncertain` bool and
+  otherwise dropped). R7 needs them back — "a loss that appears between approval and apply therefore differs" is
+  exactly `losing`'s own job. Minting `StandingKind`/`StepFingerprint` here, before R7 has designed the rest of the
+  typed fingerprint and its journal shape, risked the same "throwaway shell" R2's and R3's own addenda already
+  refused elsewhere. R7 must either add `standing: Option<StandingKind>` to `TeardownStep` (or derive it from
+  `TeardownAction` plus whatever `AsCreated`'s `losing` turns out to need) in the commit that adds `StepFingerprint`
+  itself, or explain in its own addendum why it does not need to.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
