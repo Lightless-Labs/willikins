@@ -1396,6 +1396,14 @@ Eight mutations, each killed. Left for the coordinator, in the record's residual
 re-checked at apply (the fingerprint refuses it, as drift); two nodes on one natural key with conflicting policies;
 the forward plan over-warns for a would-be transit rider; and `apply_teardown` can in principle return `Err` after a
 delete.
+**Addendum:** 2026-10-12 -- the coordinator's gate and C1. The full four-command workspace gate is green after the
+independent adversarial pass (50 test binaries; clippy also with `live-tests` on the three live rollback targets and
+the CLI), after one formatting fix to L1's harness (`5ba2b13`). C1 done, uncommitted as planned: the operator's
+private app document declares `teardown: retain` on its three profile nodes and `teardown: delete` (no `accept`) on
+its pipeline node; its private tests pass, and a live read-only plan still reads 20 NoOp and 64 Compute with nothing
+planned, so `not_reversible` is empty (it lists only planned creates and changes). Left: L1-L3 run live once each in
+the sandbox (L3 needs a sandbox Buildkite token able to create builds), L4, D0 and D1. The independent pass's
+residuals (its research record) stay open; residual 1 (`AlreadyRolledBack` not re-checked at apply) is the cheapest.
 
 ## Goal
 

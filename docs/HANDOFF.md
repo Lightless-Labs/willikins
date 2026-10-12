@@ -10,15 +10,16 @@ compaction, before handing off, after a milestone, and after a plan change or di
 ### RESUME HERE (2026-10-11) — 3k, 3n, 3l, 2b and 3o landed; next: 3m (safe rollback), its Tasks table revised first
 
 - **Live state:** `main` pushed. Full gate on the 3n tree: 50 test binaries, all green, about 7 minutes.
-- **Now: 3m** (`docs/plans/2026-10-05-milestone-3m-safe-rollback.md`), revised 2026-10-12 for document-level teardown
-  policy and reviewed by four lenses. Tools declare capability (`Reversal`, with declared losses such as a pipeline's
-  `builds`); nodes declare policy (`teardown: retain | delete | { delete: { accept: [builds] } }`, default retain,
-  validated by `check`, fixed at the run's document hash). The profile gains a mock-only inverse (no new live App
-  Store call). Running with the runner, skipping coordinator rows (C1, L4, D1), X1 (the runner's own opus attack) and
-  D0 (after L4). C1, the operator's private document, waits for F1.
-- **Plans** (2026-10-05, written in parallel, then one portfolio review ordered them): 3k faster gates,
-  3n checked as a typed graph, 3l new repositories, 2b composition, 3m safe rollback. Order: 3k, 3n F1-F3, 3l, 2b,
-  then the AGENTS.md todo, the rest of 3n (S1 onward), and 3m last.
+- **Now: 3m** (`docs/plans/2026-10-05-milestone-3m-safe-rollback.md`): all implementer tasks landed (R1-R9, T1-T2,
+  P1-P8, F1, L1-L3 written), the independent opus pass fixed two delete hazards (a rider matching several containers;
+  LIFO not re-checked at apply), and the full gate is green. Tools declare capability; a node's `teardown:` (retain
+  by default, delete, or delete accepting declared losses such as `builds`) decides; policy is fixed at the run's
+  document hash. C1 is done locally (the operator's private document keeps its profiles and refuses its pipeline
+  while it has builds; uncommitted). **Next:** run L1, L2, L3 live once each in the sandbox (L3: confirm the sandbox
+  Buildkite token can create builds first), then L4's runbook, D0 (retire `deploy/teardown.sh`), D1.
+- **The runner** now takes `ids` (an explicit task list; the listing agent once returned a placeholder), and agents
+  wait for no `cargo-sweep` plus at least 40% free memory, not an idle host: other sessions build almost
+  continuously. In zsh, read `$?` straight after the command, never after a `$(...)` substitution.
 - **3k (completed):** one integration-test binary per crate (`crates/<crate>/tests/it/<module>.rs`, declared in
   `tests/it/main.rs`, guarded by `test_layout_guard`); the test run went 251 s to 108 s, 167 test executables to 16.
 - **3n (completed 2026-10-11):** `Checked` is a sealed typed graph (private fields, built only by `check`); `plan`,
