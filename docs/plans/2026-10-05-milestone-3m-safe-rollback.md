@@ -687,6 +687,57 @@ end. Deviations and choices, recorded:
   crate exercise only `ToolSpec` and `check`'s own type resolution, neither of which reads `Reversal` at
   all, so this task's own declarations needed no change there.
 
+**Addendum:** 2026-10-12 — P4 landed (`buildkite.pipeline.ensure`'s inverse and the builds read; `bootstrap.ensure`'s
+`Contained`; decision 4/7's buildkite rows; acceptance 12, 21's provider half) in `crates/willikins-providers-buildkite`
+alone, three commits (the client's builds read and standing read, the tool's `Delete`/`Inverse`, then the bootstrap
+tool's `Contained`), scoped gates (`-p willikins-providers-buildkite`: `cargo fmt --check`, `cargo clippy --all-targets
+-D warnings`, `cargo test`) green after each and at the end. Deviations and choices, recorded:
+- **Verify item 8, half-settled by a primary source fetched verbatim, half left to L3.** Buildkite's own documented
+  example (`buildkite.com/docs/apis/rest-api/pipelines.md`, fetched 2026-10-12) confirms a pipeline's own `created_at`
+  exists, but renders it as `"2013-09-03 13:24:38 UTC"` — a space, not a `T`, and a literal `UTC` suffix, **not** RFC
+  3339 — unlike the *nested* `created_by.created_at` in the same example, which is RFC 3339
+  (`"2013-08-29T10:10:03.000Z"`). `willikins_core::Timestamp`'s hand-written `Deserialize` is strict RFC 3339 only, by
+  design, and would hard-fail deserializing this field on every real response. `parse_pipeline_created_at` tries RFC
+  3339 first (in case a live pipeline ever actually returns one) and Buildkite's own documented form second, failing
+  closed (`None`, read as "outside the window") on anything else. Which form a live pipeline actually sends is left to
+  L3; whichever it is, both branches already exist and are tested. The builds endpoint's own list response is
+  confirmed bare (`builds.md`'s own "List builds for a pipeline" example: a top-level JSON array, not an envelope), so
+  `has_any_build`'s `Vec<serde::de::IgnoredAny>` deserialize is correct against the documented shape, not merely
+  convenient.
+- **`PipelineStandingBody` is a fourth, narrower response type**, not a seventh field on `PipelineBody`: this crate's
+  own precedent (`PipelineConfigurationBody`, `PipelineBootstrapBody`) is one response type per caller, and
+  `PipelineBody`'s own "exactly six fields" compile-time pin (`pipeline_body_still_has_exactly_six_fields`) would
+  otherwise need touching for a field no other caller reads. Carries `slug`, `description`, `created_at` (the last as
+  a raw `Option<String>`, parsed by `parse_pipeline_created_at` at the call site, never inside `Deserialize` itself,
+  so a parse failure is an ordinary `None`, never a whole-response deserialize error).
+- **`chrono` added to this crate's own `[dependencies]`** (previously absent; `willikins-providers-doppler` already
+  carries it), needed only for `parse_pipeline_created_at`'s own second, non-RFC-3339 parse.
+- **`needs` carries `token` alongside the two key ports** (`&["org", "slug", "token"]`), mirroring
+  `github.repo.ensure`'s own `reversal()`: decision 5 names this tool's `token` port as its own credential example, so
+  a document-bound `token` is re-resolved for the teardown exactly as `read`/`ensure` resolve it for a forward run.
+- **`standing_from_body`'s own check order is decision 7's row order literally** (description, then the window, then
+  the slug), not the order an earlier draft of this task used (description, slug, window) — reordered before landing
+  so a reader of the row and a reader of the code never have to reconcile two orders.
+- **`DELETE_REFUSED_NOT_AS_CREATED` is the first copy of this message whose loss clause is non-vacuous.** Every other
+  `Delete` tool in this workspace declares no loss at all, so their own copy's "or has changed" half never actually
+  distinguishes drift from an unaccepted loss at the message level; this tool's own copy names both ("is no longer
+  ours, or has a build this node's policy does not accept") since `delete_refuses_as_a_conflict_when_a_build_exists_and_is_not_accepted`
+  is the first test in this workspace to exercise that branch for real.
+- **`created.riders` is deliberately never read** by `standing_from_body`, called out in its own doc comment: decision
+  7 gives `buildkite.pipeline.ensure` no contents rule of its own (unlike `github.repo.ensure`'s Actions secrets or
+  `doppler.project.ensure`'s configs) — a pipeline's only reported loss is its builds, which this run's own riders
+  could never have written in the first place.
+- **The commit-1/commit-2 `#[cfg_attr(not(test), expect(dead_code))]` dance** on `get_pipeline_standing`,
+  `has_any_build`, `PipelineStandingBody`, and `parse_pipeline_created_at` follows P1's own precedent exactly: commit 1
+  adds all four under the attribute (no non-test caller yet), commit 2 removes all four in the same commit that makes
+  `BuildkitePipelineInverse::standing` their first real caller.
+- **No ratchet, tripwire or guard touched.** Nothing here changes `willikins-core`. The three `TeardownToken::new()`
+  calls in `pipeline_inverse_mock.rs` are under `tests/it/`, exempt from `teardown_token_guard.rs`'s walk, each
+  carrying its own `#[allow(clippy::disallowed_methods)]`.
+- **Left for P6/P7**, same as every other provider task: no Buildkite tool is yet checked against `LIVE_TOOL_NAMES`'s
+  own table test or the fake catalog's own parity test; `catalog_parity.rs` in this crate exercises only `ToolSpec`
+  (unaffected, since `reversal()` is not part of it) and stays green unchanged.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
