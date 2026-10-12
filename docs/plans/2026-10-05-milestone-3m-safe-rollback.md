@@ -1226,6 +1226,69 @@ warnings`, green. Deviations recorded:
   nothing upstream of this harness otherwise guarantees its casing matches GitHub's own canonical
   record.
 
+**Addendum:** 2026-10-12 -- L2 written (not run; the coordinator runs it once), in
+`crates/willikins-providers-doppler/tests/live_rollback_cycle.rs` plus its `Cargo.toml` `[[test]]`
+entry (`chrono` was already a dev-dependency of this crate, from `live_project_member_cycle.rs`).
+Scoped: `cargo fmt -p willikins-providers-doppler --check`, green; `cargo clippy -p
+willikins-providers-doppler --features live-tests --all-targets -j 2 -- -D warnings`, green;
+`cargo test -p willikins-core --test it -j 2 -- teardown_token_guard:: secret_literal_guard::` (30
+tests), green. Reads L1's own "provider-level, never through a document" framing and its "raw
+requests for verification, never the client's own typed calls" discipline (this crate's own client
+methods stay `pub(crate)` too). Four independent sub-cycles, each disposing of its own throwaway
+project(s), prefixed `willikins-probe-delete-me-<unix seconds>-<tag>` (`DopplerProject`'s 64-character
+bound needs none of L1's own truncation): `-a` a clean, full-stack LIFO teardown (project, an
+environment `qa`, a branch config under it, a service token in it) with no rider anywhere, since by
+construction each parent's own `standing` is checked only after everything riding inside it is
+already gone -- exercising verify item 9's three delete endpoints in turn plus the token's own fourth,
+verify items 5-7, and P2's own "left for L2" `per_page` question; `-b` the rider mechanic (no rider
+refuses, decision 7's own row; a tolerated `doppler.branch_config.ensure` rider reads `AsCreated`,
+decision 3a) and verify item 3's own real `DELETE /v3/environments/environment` issued while the
+branch genuinely still exists live, recorded as an observation either way with a hand-delete fallback
+if Doppler refuses; `-c` hand-set secret drift (the Doppler analogue of L1's own `-c`); `-d1`/`-d2`
+cross-project inheritance and verify item 4's own real delete, reusing
+`tests/live_secret_name_gate_cycle.rs`'s proven base/child naming and cleanup order (child before
+base) rather than deriving it fresh. Deviations recorded:
+
+- **Every assertion that expects a clean resource goes through `expect_as_created`/
+  `expect_drifted_containing` (full `Debug` on a surprise), never a bare `assert_eq!`.**
+  `doppler.project.ensure`'s own `standing` walks every config in the project -- including
+  `dev`/`stg`/`prd`, never touched by this file -- and asks `inverse_support::config_contents_drift`
+  about each one, whose own fail-closed rule reads `Drifted` the instant a config's single-`GET`
+  response omits `inheritedBy` outright. No inverse built here has ever been run against the real
+  API before this task, so every "clean" assertion is incidentally also the first live proof that an
+  ordinary, untouched root config's own single-config `GET` really does carry `inheritedBy` --
+  P2's own addendum assumed this from the fetched reference page alone. A failure whose panic names
+  `DRIFTED_FOREIGN_INHERITOR`'s own text rather than the reason a step expected is exactly that
+  finding, not a defect in this harness; `verify_6_and_inheritedby_shape` prints the raw fact
+  directly, before any sub-cycle's own assertion depends on the answer.
+- **No step sleeps past `settled_by`**, unlike L1's own `-b`: none of the four Doppler inverses'
+  `standing` (decision 7's table) reads `Created::settled_by` at all, only `Created::window`. It is
+  still supplied (`Created` requires it), set to `window.end`.
+- **`-d`'s own window is captured around the base project's `ensure` call, not a fresh `Timestamp::now()`
+  taken after both projects already exist** -- the latter would place `dev`'s own `created_at`
+  (created atomically with the project) before `window.start`, reading `NotOurs` rather than the
+  `Drifted` this sub-cycle exists to exercise, which was wrong in an early draft and fixed before any
+  gate ran.
+- **`sub_cycle_a_clean_lifo`/`sub_cycle_b_rider_and_environment_delete` each split into an owned-value
+  setup struct (`StackA`/`StackB`, no lifetime of their own since `Inputs`/`Outputs` are not
+  references) plus a setup function and one or two body functions**, purely to clear clippy's
+  `too_many_lines` (100); no behaviour moved across the split.
+- **`-c`'s own project is cleaned up by a raw `ProjectGuard::delete`, never through
+  `doppler.project.ensure`'s own inverse**: its `standing` is meant to stay `Drifted` forever (the
+  hand-set secret never goes away on its own), so the tool's own `delete` never has anything to
+  succeed through; this mirrors L1's own reading that a refused inverse's resource is "deleted by
+  hand" afterward.
+- **The hand-set secret in `-c` is a plain, non-credential-shaped word**
+  (`not-a-credential-just-a-probe-marker`), not L1's own Doppler-service-token-shaped
+  `concat!`-assembled marker, since nothing here needs to prove a credential-shaped value redacts --
+  only that a foreign secret *name* is caught -- and a plain word gives `secret_literal_guard.rs`
+  nothing to catch in this file's own source, confirmed by the guard's own test run above.
+- **`-d`'s shared base/child config is a root (`dev`), not a branch config**: a root config's own
+  deletion endpoint (`DELETE /v3/environments/environment`) is the one `doppler.config.ensure`'s own
+  inverse actually calls (decision 4's table), so probing that endpoint directly while a foreign
+  project still inherits answers verify item 4 for the real call site, not a different one a branch
+  config's `DELETE /v3/configs/config` would exercise instead.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
