@@ -891,6 +891,38 @@ left open, recorded:
   exactly the two new entries the row calls for, sorted between `template-source-input` and `type-mismatch`,
   diffed line-by-line against the prior snapshot before accepting -- no other block moved.
 
+**Addendum:** 2026-10-12 -- P7 landed (`crates/willikins-server/tests/it/reversal_table.rs`, with its `mod` line
+in `tests/it/main.rs`): acceptance 13's declaration-table pin, and decision 3's own `Within` type check over the
+live catalog. One commit, scoped gates (`cargo fmt -p willikins-server --check`; `cargo clippy -p willikins-server
+--all-targets -j 2 -- -D warnings`; `cargo test -p willikins-server --test it -j 2 -- reversal_table::`, 4 tests)
+all green. Notes:
+- **The task's own dispatch asked to "refuse a `Within` that names its own tool, unless R5b's addendum says riding
+  already handles it."** R5b's addendum (above) already covers this: the mutual-ride cycle is broken by a
+  deterministic tie-break, pinned by `a_within_naming_its_own_tool_never_produces_a_mutual_ride`, so a self-naming
+  `Within` is a riding-time concern already resolved, not a `Catalog::insert`-time refusal. No refusal was added
+  here, and no new constraint ("no live tool names itself today") was pinned either, since the row never asked for
+  one and R1/R5b's own guards are the complete story.
+- **The live catalog is built with `willikins_server::live_catalog_with`**, exactly as
+  `crates/willikins-providers-doppler/tests/it/live_catalog.rs` already does (short `for_testing` credential
+  literals, every `Http` pointed at a port nothing listens on): `reversal()` makes no network call either way, so
+  this is belt-and-suspenders, not a requirement.
+- **The container-side `Within` check is a second, independent copy of
+  `willikins-providers-fake/tests/it/within_container_check.rs`'s three tests (container exists, port exists on
+  its stated `Side` with the same type, non-vacuous), not a shared helper**: P6's lives in that crate's own
+  `tests/it` binary, which this crate cannot import from (a dev-only cycle back is what lets `live_catalog.rs` call
+  `willikins-server`, not the other way around). Mirrors what P6's own addendum already recorded about this task.
+- **The table snapshot was read in full against the landed-so-far record before accepting**, not blanket-accepted:
+  7 `Delete` tools (`github.repo.ensure`, `doppler.project/config/branch_config/service_token.ensure`,
+  `buildkite.pipeline.ensure` with `losses: ["builds"]`, `appstore.profile.ensure`), 7 `Contained`
+  (`github.actions_secret/scaffold.ensure`, `doppler.config.inheritable/inherits.ensure`, `doppler.secret.set`,
+  `doppler.project_member.ensure`, `buildkite.pipeline.bootstrap.ensure`), 4 explicit `Retained`
+  (`doppler.service_token.rotate`, `signoz.ingestion_key.ensure`, `appstore.bundle_id.ensure`,
+  `appstore.bundle_id_capability.ensure`), and 22 default `Retained { why: UNDECLARED }` (the eleven pure tools plus
+  eleven live `get`/`gate` tools) -- exactly the partition P1-P6 landed, with no surprise.
+- **`Reversal` gained no `Serialize`.** The snapshot is `insta::assert_debug_snapshot!` over `Vec<(&str,
+  Reversal)>`, not JSON -- `Reversal`'s `Debug` derive is already deterministic and complete (every field, `losses`
+  included), and adding `Serialize` to a core rollback type was not asked for by this row.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
