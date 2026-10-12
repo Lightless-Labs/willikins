@@ -578,6 +578,93 @@ fn scalar_source<'a, I>(
         })
 }
 
+/// `source`'s own producer node's name, by [`crate::check::Source::Step`]/
+/// `Aggregate`/`Keyed`; `None` for [`crate::check::Source::Literal`],
+/// `Input` or `Item`, which never name another node.
+fn source_producer_name<I>(
+    source: &crate::check::Source<I>,
+    single_names: &[crate::workflow::NodeName],
+    each_names: &[crate::workflow::NodeName],
+) -> Option<crate::workflow::NodeName> {
+    match source {
+        crate::check::Source::Step { from, .. } => Some(single_names[from.0 as usize].clone()),
+        crate::check::Source::Aggregate { from, .. } | crate::check::Source::Keyed { from, .. } => {
+            Some(each_names[from.0 as usize].clone())
+        }
+        crate::check::Source::Literal(_)
+        | crate::check::Source::Input(_)
+        | crate::check::Source::Item(_) => None,
+    }
+}
+
+/// Every pure resolver node a `Delete` step's own secret `needs` ports
+/// are directly bound to, over `checked`'s own nodes (milestone 3m
+/// decision 5): exactly the `wanted` [`crate::plan::resolve_pure`] needs
+/// to honestly resolve every credential [`plan_teardown`] might read
+/// from `checked`. A caller has no other way to derive it:
+/// [`crate::check::Checked::edge`] returns an `Edge`, never a `Source`,
+/// and `CheckedNode`/`Shape`/`Source` are crate-private -- this is the
+/// one function outside `plan_teardown` itself that needs to see them for
+/// it (milestone plan addendum, 2026-10-12: `willikins-server`'s future
+/// `Butler::plan_rollback`, task R8, calls this and feeds its result
+/// straight to `resolve_pure`).
+///
+/// Only a node whose own tool declares [`Reversal::Delete`] **and**
+/// whose `teardown:` policy is [`crate::workflow::TeardownPolicy::Delete`]
+/// is walked at all: a node `plan_teardown` would never observe (kept, or
+/// `Contained`/`Retained`) never reads its `needs` ports either, so
+/// nothing it is bound to needs to be in `wanted`. Among that node's own
+/// declared `needs` ports, a non-secret one contributes nothing (its
+/// value comes from the journal, decision 5), and neither does one that
+/// is unbound, literal- or workflow-input-bound: only a secret port bound
+/// to a `Step`/`Aggregate`/`Keyed` source names a producer. May repeat a
+/// name; [`crate::plan::resolve_pure`]'s own `wanted` is read into a
+/// `HashSet` regardless.
+pub fn wanted_resolvers(checked: &crate::check::Checked) -> Vec<crate::workflow::NodeName> {
+    let (single_names, each_names) = crate::plan::node_names_by_shape(checked);
+    let mut wanted = Vec::new();
+    for checked_node in checked.nodes() {
+        let Reversal::Delete { needs, .. } = checked_node.tool.reversal() else {
+            continue;
+        };
+        if !matches!(
+            checked_node.teardown,
+            crate::workflow::TeardownPolicy::Delete { .. }
+        ) {
+            continue;
+        }
+        for &needs_port in needs {
+            let Ok(port) = crate::tool::PortName::parse(needs_port) else {
+                continue;
+            };
+            let is_secret = checked_node
+                .tool
+                .spec()
+                .inputs
+                .get(&port)
+                .is_some_and(|spec| match &spec.ty {
+                    crate::value::PortType::AnySecret => true,
+                    crate::value::PortType::Exact(ty) => {
+                        checked.registry().is_secret(&ty.name) == Some(true)
+                    }
+                });
+            if !is_secret {
+                continue;
+            }
+            let producer = match &checked_node.shape {
+                crate::check::Shape::Single { ports, .. } => scalar_source(ports, &port)
+                    .and_then(|source| source_producer_name(source, &single_names, &each_names)),
+                crate::check::Shape::Each { ports, .. } => scalar_source(ports, &port)
+                    .and_then(|source| source_producer_name(source, &single_names, &each_names)),
+            };
+            if let Some(name) = producer {
+                wanted.push(name);
+            }
+        }
+    }
+    wanted
+}
+
 /// Everything [`decide_candidate`] needs to re-resolve a `Delete` step's
 /// own secret `needs` ports (milestone 3m decision 5), bundled so neither
 /// it nor [`Secrets::build_needs_inputs`] trips clippy's own
@@ -632,7 +719,19 @@ impl Secrets<'_> {
             crate::check::Source::Literal(_) | crate::check::Source::Input(_) => {}
         }
         let ctx = self.resolved.ctx(self.checked, &self.facts.inputs);
-        crate::plan::resolve_source(&ctx, source, site, None).map_err(TeardownError::from)
+        let value = crate::plan::resolve_source(&ctx, source, site, None)?;
+        // A `Step`/`Aggregate`/`Keyed` producer can itself be pure yet
+        // bound, in turn, to an impure node's output: `resolve_pure`
+        // leaves such a node `Skipped` (decision 5: "a pure node bound to
+        // an impure node's output resolves `Unknown` and is not read"),
+        // so `value` comes back `Unknown` rather than erroring. A `Delete`
+        // tool must never observe an unresolved credential as though it
+        // were a real one.
+        if value.is_known() {
+            Ok(value)
+        } else {
+            Err(unresolvable())
+        }
     }
 
     /// Every one of `needs`' own ports, resolved for a [`Created`]
@@ -969,16 +1068,22 @@ mod tests {
     use crate::apply::{InstanceRef, NodeStatus, Timestamp};
     use crate::catalog::Catalog;
     use crate::check::{Checked, check};
+    use crate::class::Class;
     use crate::plan::{Action, resolve_pure};
     use crate::testing::StubDeletableTool;
-    use crate::tool::{Inputs, Outputs, PortName};
+    use crate::tool::{Ensured, Inputs, Observation, Outputs, PortName, PortSpec, Tool, ToolSpec};
+    use crate::value::{PortType, TypeName, TypeRef, Value};
     use crate::workflow::{Binding, Loss, Node, NodeName, TeardownPolicy, Workflow};
     use indexmap::IndexMap;
-    use std::sync::Arc;
-    use willikins_types::DomainType;
+    use std::sync::{Arc, Mutex};
+    use willikins_types::{DomainType, DopplerServiceToken, SinkToken};
 
     fn node(name: &str) -> NodeName {
         NodeName::parse(name).unwrap()
+    }
+
+    fn port(name: &str) -> PortName {
+        PortName::parse(name).unwrap()
     }
 
     fn workflow_name(name: &str) -> willikins_types::WorkflowName {
@@ -1403,5 +1508,387 @@ mod tests {
             }]
         );
         assert_eq!(tool.standing_calls(), 0);
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3m, task R5a (bug fix + coverage, 2026-10-12 addendum):
+    // the secret `needs` resolution path (decision 5) and
+    // `wanted_resolvers`.
+    // -----------------------------------------------------------------
+
+    fn ty(name: &str) -> TypeRef {
+        TypeRef::scalar(TypeName::parse(name).unwrap())
+    }
+
+    /// A fixed secret value every resolver stub below returns: a
+    /// `DopplerServiceToken`, assembled with `concat!` the same way
+    /// `tests/it/check_adversarial.rs` does, so the secret-literal guard
+    /// never flags a fake-but-shaped token in this source.
+    fn secret_value() -> Value {
+        Value::known(
+            DopplerServiceToken::parse(concat!(
+                "dp.st.",
+                "fakesecretbytesaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ))
+            .unwrap(),
+        )
+    }
+
+    /// A pure or impure resolver stub with no inputs, one output
+    /// (`value`, a secret `DopplerServiceToken` fixed to
+    /// [`secret_value`]).
+    struct FixedTool {
+        spec: ToolSpec,
+    }
+
+    impl Tool for FixedTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, crate::tool::ToolError> {
+            let mut outputs = Outputs::new();
+            outputs.insert(port("value"), secret_value());
+            Ok(Observation::Absent { predicted: outputs })
+        }
+
+        fn ensure(
+            &self,
+            _inputs: &Inputs,
+            _token: &SinkToken,
+        ) -> Result<Ensured, crate::tool::ToolError> {
+            unreachable!("not used by this test")
+        }
+    }
+
+    fn resolver_tool(name: &str, pure: bool) -> Arc<FixedTool> {
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("value"), ty("DopplerServiceToken"));
+        Arc::new(FixedTool {
+            spec: ToolSpec {
+                name: ToolName::parse(name).unwrap(),
+                description: "test".to_string(),
+                inputs: IndexMap::new(),
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure,
+            },
+        })
+    }
+
+    /// A pure, one-input passthrough-shaped stub: input `raw`
+    /// (`AnySecret`), output `parsed` (a secret `DopplerServiceToken`).
+    /// Used to bind a secret `needs` port to a pure node that is itself
+    /// bound to an *impure* node's own output.
+    fn wrap_tool(name: &str) -> Arc<FixedTool> {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("raw"),
+            PortSpec {
+                ty: PortType::AnySecret,
+                required: true,
+                derived_only: false,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("parsed"), ty("DopplerServiceToken"));
+        Arc::new(FixedTool {
+            spec: ToolSpec {
+                name: ToolName::parse(name).unwrap(),
+                description: "test".to_string(),
+                inputs,
+                outputs,
+                key: Vec::new(),
+                class: Class::Reversible,
+                pure: true,
+            },
+        })
+    }
+
+    /// A `Delete`-capable stub with a secret `needs` port (`token`),
+    /// whose inverse records exactly what `Created.inputs` carried for
+    /// it: acceptance that a resolved secret actually reaches the
+    /// inverse, not only that resolution itself did not error.
+    struct SecretNeedTool {
+        spec: ToolSpec,
+        inverse: CapturingInverse,
+    }
+
+    struct CapturingInverse {
+        captured: Mutex<Option<Value>>,
+    }
+
+    impl Inverse for CapturingInverse {
+        fn standing(&self, created: &Created<'_>) -> Result<Standing, crate::tool::ToolError> {
+            *self.captured.lock().unwrap() = created.inputs.get(&port("token")).cloned();
+            Ok(Standing::Gone)
+        }
+
+        fn delete(
+            &self,
+            _created: &Created<'_>,
+            _token: &TeardownToken,
+        ) -> Result<Deleted, crate::tool::ToolError> {
+            Ok(Deleted { already_gone: true })
+        }
+    }
+
+    impl Tool for SecretNeedTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, crate::tool::ToolError> {
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+
+        fn ensure(
+            &self,
+            _inputs: &Inputs,
+            _token: &SinkToken,
+        ) -> Result<Ensured, crate::tool::ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+
+        fn reversal(&self) -> Reversal {
+            Reversal::Delete {
+                needs: &["repo", "token"],
+                within: &[],
+                losses: &[],
+            }
+        }
+
+        fn inverse(&self) -> Option<&dyn Inverse> {
+            Some(&self.inverse)
+        }
+    }
+
+    fn secret_need_tool() -> Arc<SecretNeedTool> {
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            port("repo"),
+            PortSpec {
+                ty: PortType::Exact(ty("GitHubRepo")),
+                required: true,
+                derived_only: false,
+            },
+        );
+        inputs.insert(
+            port("token"),
+            PortSpec {
+                ty: PortType::AnySecret,
+                required: false,
+                derived_only: false,
+            },
+        );
+        let mut outputs = IndexMap::new();
+        outputs.insert(port("repo"), ty("GitHubRepo"));
+        Arc::new(SecretNeedTool {
+            spec: ToolSpec {
+                name: ToolName::parse("test.secret_deletable").unwrap(),
+                description: "A stub tool with a secret needs port.".to_string(),
+                inputs,
+                outputs,
+                key: vec![port("repo")],
+                class: Class::Reversible,
+                pure: false,
+            },
+            inverse: CapturingInverse {
+                captured: Mutex::new(None),
+            },
+        })
+    }
+
+    fn repo_port_bindings(tool: Node) -> Node {
+        tool.port(
+            port("repo"),
+            Binding::Literal("example-org/example-repo".to_string()),
+        )
+    }
+
+    /// Acceptance (R5a's own 2026-10-12 addendum): a secret `needs` port
+    /// bound to a pure resolver node resolves through
+    /// `resolve_pure`/`resolve_source`, and the resolved value really
+    /// reaches the inverse's own `Created.inputs` -- not only that
+    /// resolution did not error.
+    #[test]
+    fn secret_needs_port_resolves_through_a_pure_resolver_chain() {
+        let get_token = resolver_tool("test.get_token_pure", true);
+        let tool = secret_need_tool();
+        let workflow = Workflow::new(workflow_name("secret-resolve-pure"))
+            .node(node("get_token"), Node::new(get_token.spec.name.clone()))
+            .node(
+                node("repo"),
+                repo_port_bindings(Node::new(tool.spec.name.clone()))
+                    .port(
+                        port("token"),
+                        Binding::Step {
+                            node: node("get_token"),
+                            port: port("value"),
+                        },
+                    )
+                    .teardown(TeardownPolicy::Delete { accept: vec![] }),
+            );
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(Arc::clone(&get_token) as Arc<dyn Tool>)
+            .unwrap();
+        catalog.insert(Arc::clone(&tool) as Arc<dyn Tool>).unwrap();
+        let checked = check(&workflow, &catalog)
+            .unwrap_or_else(|errors| unreachable!("must check cleanly: {errors:?}"));
+
+        let wanted = wanted_resolvers(&checked);
+        assert_eq!(wanted, vec![node("get_token")]);
+
+        let resolved = resolve_pure(&checked, &IndexMap::new(), &wanted).unwrap();
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let teardown = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(teardown.steps.len(), 1);
+        assert_eq!(teardown.steps[0].action, TeardownAction::Gone);
+        assert_eq!(*tool.inverse.captured.lock().unwrap(), Some(secret_value()));
+    }
+
+    /// Acceptance: a secret `needs` port bound directly to an *impure*
+    /// node is `UnresolvableCredential` -- never silently `Unknown`.
+    #[test]
+    fn secret_needs_port_bound_to_an_impure_node_is_unresolvable() {
+        let get_token = resolver_tool("test.get_token_impure", false);
+        let tool = secret_need_tool();
+        let workflow = Workflow::new(workflow_name("secret-resolve-impure"))
+            .node(node("get_token"), Node::new(get_token.spec.name.clone()))
+            .node(
+                node("repo"),
+                repo_port_bindings(Node::new(tool.spec.name.clone()))
+                    .port(
+                        port("token"),
+                        Binding::Step {
+                            node: node("get_token"),
+                            port: port("value"),
+                        },
+                    )
+                    .teardown(TeardownPolicy::Delete { accept: vec![] }),
+            );
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(Arc::clone(&get_token) as Arc<dyn Tool>)
+            .unwrap();
+        catalog.insert(Arc::clone(&tool) as Arc<dyn Tool>).unwrap();
+        let checked = check(&workflow, &catalog)
+            .unwrap_or_else(|errors| unreachable!("must check cleanly: {errors:?}"));
+
+        let wanted = wanted_resolvers(&checked);
+        let resolved = resolve_pure(&checked, &IndexMap::new(), &wanted).unwrap();
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let err = plan_teardown(&run, &checked, &resolved).unwrap_err();
+        match err {
+            TeardownError::UnresolvableCredential { port, .. } => {
+                assert_eq!(port.as_str(), "token");
+            }
+            other => panic!("expected UnresolvableCredential, got {other:?}"),
+        }
+    }
+
+    /// Acceptance (the bug `resolve_secret_source`'s own `is_known` check
+    /// fixes): a secret `needs` port bound to a *pure* node that is
+    /// itself bound to an impure node's own output is also
+    /// `UnresolvableCredential` -- `resolve_pure` leaves such a node
+    /// `Skipped`, so without the check this would silently observe an
+    /// `Unknown` credential as though it were real.
+    #[test]
+    fn secret_needs_port_bound_to_a_pure_node_downstream_of_an_impure_one_is_unresolvable() {
+        let get_token = resolver_tool("test.get_token_impure2", false);
+        let wrap = wrap_tool("test.wrap");
+        let tool = secret_need_tool();
+        let workflow = Workflow::new(workflow_name("secret-resolve-downstream"))
+            .node(node("get_token"), Node::new(get_token.spec.name.clone()))
+            .node(
+                node("wrap"),
+                Node::new(wrap.spec.name.clone()).port(
+                    port("raw"),
+                    Binding::Step {
+                        node: node("get_token"),
+                        port: port("value"),
+                    },
+                ),
+            )
+            .node(
+                node("repo"),
+                repo_port_bindings(Node::new(tool.spec.name.clone()))
+                    .port(
+                        port("token"),
+                        Binding::Step {
+                            node: node("wrap"),
+                            port: port("parsed"),
+                        },
+                    )
+                    .teardown(TeardownPolicy::Delete { accept: vec![] }),
+            );
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(Arc::clone(&get_token) as Arc<dyn Tool>)
+            .unwrap();
+        catalog.insert(Arc::clone(&wrap) as Arc<dyn Tool>).unwrap();
+        catalog.insert(Arc::clone(&tool) as Arc<dyn Tool>).unwrap();
+        let checked = check(&workflow, &catalog)
+            .unwrap_or_else(|errors| unreachable!("must check cleanly: {errors:?}"));
+
+        let wanted = wanted_resolvers(&checked);
+        assert_eq!(wanted, vec![node("wrap")]);
+
+        let resolved = resolve_pure(&checked, &IndexMap::new(), &wanted).unwrap();
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let err = plan_teardown(&run, &checked, &resolved).unwrap_err();
+        match err {
+            TeardownError::UnresolvableCredential { port, .. } => {
+                assert_eq!(port.as_str(), "token");
+            }
+            other => panic!("expected UnresolvableCredential, got {other:?}"),
+        }
+    }
+
+    /// `wanted_resolvers` skips a node the teardown would never observe
+    /// (its policy is `retain`): a secret `needs` port there is never
+    /// read at all, so its producer is not `wanted`.
+    #[test]
+    fn wanted_resolvers_skips_a_kept_nodes_own_producer() {
+        let get_token = resolver_tool("test.get_token_kept", true);
+        let tool = secret_need_tool();
+        let workflow = Workflow::new(workflow_name("secret-resolve-kept"))
+            .node(node("get_token"), Node::new(get_token.spec.name.clone()))
+            .node(
+                node("repo"),
+                repo_port_bindings(Node::new(tool.spec.name.clone())).port(
+                    port("token"),
+                    Binding::Step {
+                        node: node("get_token"),
+                        port: port("value"),
+                    },
+                ),
+                // No `teardown:` at all -- the conservative default, `retain`.
+            );
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(Arc::clone(&get_token) as Arc<dyn Tool>)
+            .unwrap();
+        catalog.insert(Arc::clone(&tool) as Arc<dyn Tool>).unwrap();
+        let checked = check(&workflow, &catalog)
+            .unwrap_or_else(|errors| unreachable!("must check cleanly: {errors:?}"));
+
+        assert!(wanted_resolvers(&checked).is_empty());
     }
 }
