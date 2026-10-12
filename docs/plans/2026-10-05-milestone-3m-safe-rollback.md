@@ -456,6 +456,79 @@ and `cargo check -p willikins-types` all green. Deviations, recorded:
   R8 must change it to try `journal.teardown(&plan_id)` too (`fold_approval` already resolves either kind on the
   journal side, `decide` is the one caller left that does not).
 
+**Addendum:** 2026-10-12 — P1 landed (`github.repo.ensure`'s inverse; `Contained` for
+`github.actions_secret.ensure` and `github.scaffold.ensure`; decisions 4, 5, 7; acceptance 12) in
+`crates/willikins-providers-github` alone, two commits (396110d the client, 7c2dfc6 the tool),
+scoped gates (`-p willikins-providers-github`: `cargo fmt --check`, `cargo clippy --all-targets -D
+warnings`, `cargo test`) green for both. Deviations and choices, recorded:
+- **`needs: &["repo", "token"]`, not just `"repo"`.** The row names only `delete_repo`, but decision
+  5 explicitly names `github.repo.ensure`'s `token` port as the credential example, so decision 5
+  controls: `standing`/`delete` resolve a document-bound `token` through `ScopedClient::default_for`
+  exactly as `read`/`ensure` already do, read from `created.inputs` instead of a tool call's own
+  `Inputs`. Pinned by `standing_uses_a_bound_token_client` (a `404` is enough to prove the credential
+  swap; the drift table itself is every other test's job).
+- **The Actions-secrets read paginates** (`?per_page=100&page=N`, stopping when the running total
+  reaches the response's own `total_count` or a page comes back short), where decision 7 writes the
+  bare path `GET /repos/{o}/{r}/actions/secrets`. A single, unpaginated page would let a foreign
+  secret name on page two pass the drift check unnoticed -- trust boundary 6's "all reads before any
+  delete" is read as covering this. Acceptance 12's "pins the exact query" is now the first page's
+  query string (`per_page=100&page=1`); a second test (`list_actions_secret_names_follows_total_count_across_pages`)
+  pins the second page's.
+- **Every `None` on `RepoBody`'s five new decision-7 fields fails closed, never "no opinion".**
+  GitHub's own `OpenAPI` description (fetched 2026-10-12, `github/rest-api-description` main,
+  `descriptions/api.github.com/api.github.com.json`) marks `full_name`, `created_at`, `pushed_at`,
+  `open_issues_count` and `forks_count` all `required` on `full-repository`, so a real response never
+  omits one; the only `None` this crate ever produces is a pre-milestone mock fixture that predates
+  the field (the row's own reason for `#[serde(default)]`). `full_name: None` and `created_at: None`
+  both read `Standing::NotOurs` (the first because `None != Some(repo.to_string())` holds trivially;
+  the second by an explicit `let Some(..) = .. else` on the window check); `pushed_at`,
+  `open_issues_count` and `forks_count` each read `Standing::Drifted` via `Option::is_none_or`
+  (`body.pushed_at.is_none_or(|p| p > settled_by)` and so on) -- "cannot rule the thing out" is read
+  the same as "the thing is true", not as "assume the safe case". Each constant's own doc names this.
+  `full_name`'s `NotOurs` reason is shared with the 3xx and rename/transfer cases (one row of decision
+  7); the collapse is documented on the constant rather than split into a third reason.
+- **The creation window is inclusive at both ends** (`>= start && <= end`), pinned by three tests at
+  `start − 1s` (`NotOurs`), `end` exactly (`AsCreated`), and `end + 1s` (`NotOurs`) -- acceptance 12
+  only asked for the upper edge; the lower edge is symmetric and otherwise unproven.
+- **`delete_repo` is retried under `retry_secondary_limit`**, unlike `create_repo`'s own `POST`: a
+  retry only ever fires after GitHub's secondary rate limit refused the request outright, before
+  anything was deleted, so a repeated `DELETE` carries none of `POST`'s ambiguous-failure hazard.
+- **`Side::Input` on both new `Within`s** (`github.actions_secret.ensure`'s and
+  `github.scaffold.ensure`'s own `repo` port maps to `github.repo.ensure`'s `repo` **input**): both
+  are inputs on the container tool, so this is the only reading the type allows, but it is picked
+  once and recorded since the table's "Within" column does not spell out the side.
+- **Tests live in a new `tests/it/repo_inverse_mock.rs`**, not `repo_ensure_mock.rs` (19 tests: one
+  per decision-7 `NotOurs`/`Drifted` row, the three window-edge tests, a tolerated-vs-foreign Actions
+  secret pair, the bound-token test, `delete`'s three outcomes, and the `reversal()` shape). Each
+  `Contained` declaration gets one shape test in its own existing mock file
+  (`actions_secret_ensure_mock.rs`, `scaffold_ensure_mock.rs`) rather than a new file, since neither
+  has an inverse or a provider call to mock. `GitHubScaffoldEnsure` is not inserted into any
+  `Catalog` by this crate's own tests (only `catalog_check_parity.rs` does, and only for the repo and
+  secret tools); its declaration is structurally identical to the secret's own (which is validated),
+  and P7's table test over `LIVE_TOOL_NAMES` validates it next.
+- **Commit 1 carried R4's own `#[cfg_attr(not(test), expect(dead_code))]`** on `delete_repo`,
+  `list_actions_secret_names`, the two new private list-response structs, and the five new
+  `RepoBody` fields, since none has a non-test caller until commit 2's `GitHubRepoInverse` exists.
+  Commit 2 removes all nine attributes in the same commit that makes every one of those items live --
+  self-enforcing, since an `expect(dead_code)` on a now-live item is itself an `unfulfilled_lint_expectations`
+  failure under `-D warnings`.
+- **Verify 1 and 2** (this milestone's own "Verify before relying on them" list): fetched 2026-10-12,
+  verbatim, from `github/rest-api-description`'s published `OpenAPI` description (`main` branch,
+  `descriptions/api.github.com/api.github.com.json`). Confirmed: `GET
+  /repos/{owner}/{repo}/actions/secrets` returns `{total_count, secrets: [{name, created_at,
+  updated_at}, ...]}` (both envelope fields required) and accepts `per-page`/`page` query
+  parameters; `GET /repos/{owner}/{repo}` carries `full_name`, `created_at`, `pushed_at`,
+  `open_issues_count` and `forks_count`, all marked `required`; `DELETE /repos/{owner}/{repo}`
+  documents `204`, `403`, `307`, `404` and `409` as response statuses. **Left open for L1** (this
+  task made no live call): verify 1's other half, "`createCommitOnBranch` bumps `pushed_at`" -- not a
+  fact the `OpenAPI` description states, only observable live.
+- **No ratchet, tripwire or guard touched.** `rollback.rs`'s own count is unaffected (nothing here
+  touches `willikins-core`). The three new `TeardownToken::new()` calls (one per `delete` test in
+  `repo_inverse_mock.rs`) are each under `tests/it/`, exempt outright from `teardown_token_guard.rs`'s
+  walk (it skips any `tests/` directory), and each carries its own `#[allow(clippy::disallowed_methods)]`
+  per the clippy row's own instruction -- the same convention `SinkToken::new()` already uses
+  throughout this crate's tests.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
