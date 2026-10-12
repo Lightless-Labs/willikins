@@ -4308,13 +4308,25 @@ mod tests {
         ) -> Result<Deleted, crate::tool::ToolError> {
             self.delete_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            match self.delete.lock().unwrap().clone() {
+            // Read, then drop the guard immediately (a plain `{ }` block,
+            // not the match scrutinee itself): an arm below re-locks the
+            // same `Mutex` on a successful delete, and holding this guard
+            // into the match would deadlock it.
+            let current = { self.delete.lock().unwrap().clone() };
+            match current {
                 Standing::Gone => Ok(Deleted { already_gone: true }),
                 Standing::AsCreated { losing } => {
                     if losing
                         .iter()
                         .all(|loss| created.accept.iter().any(|a| a.as_str() == *loss))
                     {
+                        // Milestone 3m task R6: a real inverse's own
+                        // `standing` would report `Gone` after this on
+                        // its own; this stub must be told, so it tells
+                        // itself -- behaving like an actually-deleted
+                        // resource for whichever test plans again.
+                        *self.plan.lock().unwrap() = Standing::Gone;
+                        *self.delete.lock().unwrap() = Standing::Gone;
                         Ok(Deleted {
                             already_gone: false,
                         })
@@ -4593,11 +4605,12 @@ mod tests {
         let outcomes = apply_teardown(&approved, &run, &checked, &resolved).unwrap();
         assert_eq!(outcomes, vec![TeardownStepOutcome::Deleted]);
 
-        // The resource is gone now: a real inverse's own `standing` would
-        // report this without being told, but this stub must be told.
-        inverse.set_plan_standing(Standing::Gone);
-
-        let teardown_again = plan_teardown(&run, &checked, &resolved).unwrap();
+        // Planning again (acceptance 8's own "resumes by planning
+        // again"): the deleted step now reads `Gone` -- `ObservableInverse`
+        // tells itself this on a successful delete, exactly as a real
+        // resource's own `standing` would, with nothing done by hand here.
+        let (teardown_again, approved_again) =
+            plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
         assert_eq!(
             teardown_again.steps,
             vec![TeardownStep {
@@ -4608,6 +4621,12 @@ mod tests {
                 action: TeardownAction::Gone,
             }]
         );
+
+        // And the second teardown succeeds: a `Gone` step is applied as
+        // `Listed`, never its own `delete` call.
+        let outcomes_again = apply_teardown(&approved_again, &run, &checked, &resolved).unwrap();
+        assert_eq!(outcomes_again, vec![TeardownStepOutcome::Listed]);
+        assert_eq!(inverse.delete_calls(), 1);
     }
 
     /// A `Delete` step's own failure stops the run: a later `Delete` step

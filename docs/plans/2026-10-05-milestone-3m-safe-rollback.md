@@ -351,6 +351,15 @@ same task, same file:
   re-observes a `Gone` step too, not only the `Delete` ones: a resource someone recreated after a `Gone` approval
   must still refuse. A design that only re-ran `approved`'s own `Delete` steps through a fresh `standing` call,
   rather than calling `plan_teardown_steps` in full, would have missed this.
+- **`planning_again_after_a_delete_reads_the_step_gone` did not prove its own name**, a second advisor-pass finding
+  on the same review: it set `plan` to `Gone` by hand, so only the "reads `Gone`" half of acceptance 8 ran, never
+  "the second teardown succeeds". Fixed by having `ObservableInverse::delete` tell itself `Gone` (both `plan` and
+  `delete`) on its own successful, non-`already_gone` delete, exactly as a real resource's own `standing` would
+  report without being told; the test now runs a full second `plan_teardown_fingerprint` → `apply_teardown` cycle and
+  asserts its one step is `Listed` (`delete_calls()` staying `1`) -- the one `TeardownStepOutcome::Listed`-from-`Gone`
+  path no other test produced. (The match arm that flips the stub's own state reads its `Mutex` into an owned value
+  in its own `{ }` block first, never the match scrutinee directly, so the arm's own re-lock cannot deadlock on a
+  guard the match statement might otherwise still be holding.)
 
 ## Goal
 
