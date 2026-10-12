@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
+use crate::rollback::{Reversal, ReversalError, Within};
 use crate::tool::{GateError, PortName, SpecError, Tool, ToolName, ToolSpec};
 use crate::value::{PortType, TypeRegistry};
 use willikins_types::TypeInfo;
@@ -33,6 +34,15 @@ pub enum CatalogError {
         #[source]
         error: GateError,
     },
+    /// The tool's [`crate::rollback::Reversal`] declaration is invalid.
+    #[error("tool `{name}` has an invalid reversal: {error}")]
+    Reversal {
+        /// The tool whose reversal declaration is invalid.
+        name: ToolName,
+        /// Why it is invalid.
+        #[source]
+        error: ReversalError,
+    },
 }
 
 /// Every tool a workflow can call, keyed by name, plus the type registry
@@ -59,8 +69,10 @@ impl Catalog {
     /// Returns [`CatalogError::Spec`] when the tool's spec does not
     /// validate, [`CatalogError::Gate`] when it declares a [`crate::tool::Gate`]
     /// that is not pure or whose `subject` names anything but one of its
-    /// own non-secret, [`PortType::Exact`] input ports, or
-    /// [`CatalogError::Duplicate`] when a tool with the same name is
+    /// own non-secret, [`PortType::Exact`] input ports,
+    /// [`CatalogError::Reversal`] when its [`crate::rollback::Reversal`]
+    /// declaration is invalid on its own side (milestone 3m decision 3),
+    /// or [`CatalogError::Duplicate`] when a tool with the same name is
     /// already present.
     pub fn insert(&mut self, tool: Arc<dyn Tool>) -> Result<(), CatalogError> {
         let name = tool.spec().name.clone();
@@ -77,6 +89,12 @@ impl Catalog {
                     error,
                 })?;
         }
+        Self::validate_reversal(tool.spec(), &tool.reversal()).map_err(|error| {
+            CatalogError::Reversal {
+                name: name.clone(),
+                error,
+            }
+        })?;
         if self.tools.contains_key(&name) {
             return Err(CatalogError::Duplicate(name));
         }
@@ -116,6 +134,83 @@ impl Catalog {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// This tool's own side of its [`crate::rollback::Reversal`]
+    /// declaration (milestone 3m decision 3): every `needs` port and the
+    /// left side of every `within` pair must name one of the tool's own
+    /// input ports, every loss name must match the required pattern, and
+    /// a pure tool's reversal must be the default
+    /// ([`crate::rollback::Reversal::Retained`] with
+    /// [`crate::rollback::UNDECLARED`]) — a pure tool has no external
+    /// state, so nothing about it can be undone. The container side of a
+    /// `within` pair names another tool entirely, which this method, like
+    /// `validate_gate`, cannot see: that is checked elsewhere (milestone
+    /// 3m's declaration table test over `LIVE_TOOL_NAMES`, and the
+    /// fake-catalog parity test).
+    fn validate_reversal(spec: &ToolSpec, reversal: &Reversal) -> Result<(), ReversalError> {
+        if spec.pure {
+            return match reversal {
+                Reversal::Retained { why } if *why == crate::rollback::UNDECLARED => Ok(()),
+                _ => Err(ReversalError::PureToolDeclaresReversal),
+            };
+        }
+        match reversal {
+            Reversal::Delete {
+                needs,
+                within,
+                losses,
+            } => {
+                for port in *needs {
+                    Self::validate_own_input_port(spec, port)
+                        .map_err(|port| ReversalError::NeedsNotAnInput { port })?;
+                }
+                for within in *within {
+                    Self::validate_within_own_side(spec, within)?;
+                }
+                for loss in *losses {
+                    if !crate::rollback::LOSS_NAME_REGEX.is_match(loss) {
+                        return Err(ReversalError::LossNameInvalid {
+                            loss: (*loss).to_string(),
+                        });
+                    }
+                }
+                Ok(())
+            }
+            Reversal::Contained {
+                within,
+                otherwise: _,
+            } => {
+                for within in *within {
+                    Self::validate_within_own_side(spec, within)?;
+                }
+                Ok(())
+            }
+            Reversal::Retained { why: _ } => Ok(()),
+        }
+    }
+
+    /// Whether `name` is one of `spec`'s own input ports, as a `String`
+    /// error carrying `name` back to the caller's own error variant.
+    fn validate_own_input_port(spec: &ToolSpec, name: &str) -> Result<(), String> {
+        let Ok(port) = PortName::parse(name) else {
+            return Err(name.to_string());
+        };
+        if spec.inputs.contains_key(&port) {
+            Ok(())
+        } else {
+            Err(name.to_string())
+        }
+    }
+
+    /// A [`Within`]'s own side: every `(own_port, side, container_port)`
+    /// triple's `own_port` must name one of `spec`'s own input ports.
+    fn validate_within_own_side(spec: &ToolSpec, within: &Within) -> Result<(), ReversalError> {
+        for &(own_port, _side, _container_port) in within.ports {
+            Self::validate_own_input_port(spec, own_port)
+                .map_err(|port| ReversalError::WithinNotAnInput { port })?;
         }
         Ok(())
     }
@@ -179,6 +274,7 @@ fn to_json_value<T: serde::Serialize>(value: &T) -> serde_json::Value {
 mod tests {
     use super::*;
     use crate::class::Class;
+    use crate::rollback::Side;
     use crate::tool::{Ensured, Inputs, Observation, Outputs, PortName, PortSpec, ToolError};
     use crate::value::{PortType, TypeName, TypeRef};
     use willikins_types::SinkToken;
@@ -289,6 +385,54 @@ mod tests {
         }
     }
 
+    /// A dummy tool, otherwise shaped like [`DummyPureTool`] or
+    /// [`DummyEnsureTool`], whose declared [`Reversal`] is configurable,
+    /// to exercise `Catalog::insert`'s reversal validation (milestone 3m
+    /// task R1).
+    struct DummyReversalTool {
+        spec: ToolSpec,
+        reversal: Reversal,
+    }
+
+    impl DummyReversalTool {
+        fn pure(reversal: Reversal) -> Self {
+            Self {
+                spec: DummyPureTool::new().spec,
+                reversal,
+            }
+        }
+
+        fn stateful(reversal: Reversal) -> Self {
+            Self {
+                spec: DummyEnsureTool::new().spec,
+                reversal,
+            }
+        }
+    }
+
+    impl Tool for DummyReversalTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, ToolError> {
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+
+        fn ensure(&self, _inputs: &Inputs, _token: &SinkToken) -> Result<Ensured, ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+
+        fn reversal(&self) -> Reversal {
+            self.reversal
+        }
+    }
+
     #[test]
     fn insert_and_get_round_trip() {
         let mut catalog = Catalog::new(willikins_types::registry());
@@ -362,5 +506,179 @@ mod tests {
                 { "from": "AppleBundleIdentifier", "to": "TemplateValue" },
             ])
         );
+    }
+
+    // -------------------------------------------------------------
+    // Reversal validation (milestone 3m task R1, acceptance test 1's R1
+    // half: the inverse-matching half of that acceptance test is R3's).
+    // -------------------------------------------------------------
+
+    #[test]
+    fn tool_reversal_defaults_to_retained_undeclared() {
+        // Neither dummy tool overrides `Tool::reversal`, so this calls the
+        // trait's own default directly -- not a value this test built
+        // itself.
+        assert!(matches!(
+            DummyPureTool::new().reversal(),
+            Reversal::Retained { why } if why == crate::rollback::UNDECLARED
+        ));
+        assert!(matches!(
+            DummyEnsureTool::new().reversal(),
+            Reversal::Retained { why } if why == crate::rollback::UNDECLARED
+        ));
+    }
+
+    #[test]
+    fn insert_accepts_a_tool_with_the_default_undeclared_reversal() {
+        // Every existing tool, pure or not, is unaffected: it simply does
+        // not override `reversal()`.
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(Arc::new(DummyPureTool::new())).unwrap();
+        catalog.insert(Arc::new(DummyEnsureTool::new())).unwrap();
+    }
+
+    #[test]
+    fn insert_rejects_a_pure_tool_declaring_a_reversal() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::pure(Reversal::Retained { why: "custom" });
+        let err = catalog.insert(Arc::new(tool)).unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Reversal {
+                error: ReversalError::PureToolDeclaresReversal,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn insert_accepts_a_pure_tool_with_the_default_reversal_declared_explicitly() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::pure(Reversal::Retained {
+            why: crate::rollback::UNDECLARED,
+        });
+        catalog.insert(Arc::new(tool)).unwrap();
+    }
+
+    #[test]
+    fn insert_rejects_a_needs_port_that_is_not_an_input() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful(Reversal::Delete {
+            needs: &["no_such_port"],
+            within: &[],
+            losses: &[],
+        });
+        let err = catalog.insert(Arc::new(tool)).unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Reversal {
+                error: ReversalError::NeedsNotAnInput { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn insert_accepts_a_needs_port_that_is_an_input() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful(Reversal::Delete {
+            needs: &["repo"],
+            within: &[],
+            losses: &[],
+        });
+        catalog.insert(Arc::new(tool)).unwrap();
+    }
+
+    #[test]
+    fn insert_rejects_a_within_own_side_port_that_is_not_an_input() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful(Reversal::Delete {
+            needs: &[],
+            within: &[Within {
+                tool: "test.container",
+                ports: &[("no_such_port", Side::Output, "container_port")],
+            }],
+            losses: &[],
+        });
+        let err = catalog.insert(Arc::new(tool)).unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Reversal {
+                error: ReversalError::WithinNotAnInput { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn insert_accepts_a_within_own_side_port_that_is_an_input() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful(Reversal::Delete {
+            needs: &[],
+            within: &[Within {
+                tool: "test.container",
+                ports: &[("repo", Side::Output, "container_port")],
+            }],
+            losses: &[],
+        });
+        catalog.insert(Arc::new(tool)).unwrap();
+    }
+
+    #[test]
+    fn insert_rejects_a_within_own_side_port_on_a_contained_reversal_too() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful(Reversal::Contained {
+            within: &[Within {
+                tool: "test.container",
+                ports: &[("no_such_port", Side::Output, "container_port")],
+            }],
+            otherwise: "left in place",
+        });
+        let err = catalog.insert(Arc::new(tool)).unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Reversal {
+                error: ReversalError::WithinNotAnInput { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn insert_rejects_a_malformed_loss_name() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful(Reversal::Delete {
+            needs: &[],
+            within: &[],
+            losses: &["Builds"],
+        });
+        let err = catalog.insert(Arc::new(tool)).unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Reversal {
+                error: ReversalError::LossNameInvalid { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn insert_accepts_a_well_formed_loss_name() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful(Reversal::Delete {
+            needs: &[],
+            within: &[],
+            losses: &["builds"],
+        });
+        catalog.insert(Arc::new(tool)).unwrap();
+    }
+
+    #[test]
+    fn insert_accepts_a_nonpure_tool_with_a_custom_retained_reason() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful(Reversal::Retained {
+            why: "no ownership marker exists",
+        });
+        catalog.insert(Arc::new(tool)).unwrap();
     }
 }
