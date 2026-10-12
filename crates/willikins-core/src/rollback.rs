@@ -76,6 +76,17 @@ pub const KEPT_RIDER: &str = "its container is kept by the document";
 pub const RIDER_KEPT_INSIDE_DELETED_CONTAINER: &str =
     "a node the document keeps is inside a container it deletes";
 
+/// [`crate::plan::NotReversible`]'s own `why` (milestone 3m decision 10,
+/// task F1) for a `Delete`-capable node kept by its own policy
+/// (`teardown: retain`, explicit or default) while it structurally rides
+/// inside a container this plan would create under `teardown: delete`:
+/// the forward plan's own preview of the refusal
+/// [`RIDER_KEPT_INSIDE_DELETED_CONTAINER`] names at teardown time. Not the
+/// same string: this one spells out *why it matters now*, before a run
+/// exists to refuse anything.
+pub const RIDER_KEPT_INSIDE_DELETED_CONTAINER_PREVIEW: &str =
+    "a node the document keeps is inside a container it deletes: the teardown will refuse";
+
 /// How many seconds either side of an instance's own recorded
 /// `NodeStarted.at`/`NodeFinished.at` still count as this run's own doing
 /// (milestone 3m decision 2): provider clocks and this host's clock are
@@ -782,7 +793,11 @@ pub enum TeardownError {
 /// [`crate::plan::Action::Replace`] or [`crate::plan::Action::Update`]
 /// (milestone 3m decision 1): the prior state at this key cannot be
 /// restored either way, whatever the tool's own [`Reversal`] says.
-const CHANGED_IN_PLACE: &str = "changed in place, or replaced; the prior state cannot be restored";
+/// `pub(crate)`: [`not_reversible`] (milestone 3m task F1) reuses this
+/// same reason for the same two actions in a forward plan, rather than
+/// duplicating it.
+pub(crate) const CHANGED_IN_PLACE: &str =
+    "changed in place, or replaced; the prior state cannot be restored";
 
 /// `checked`'s own node named `name`, if any.
 fn find_checked_node<'a>(
@@ -1159,22 +1174,26 @@ fn decide_standalone(
 
 /// One instance, reduced to exactly what [`rides_with`] needs (milestone
 /// 3m task R5b): its own tool name, identity, and recorded values on both
-/// sides. Never tied to [`RunInstance`]: `Plan::not_reversible` (task F1)
+/// sides. Never tied to [`RunInstance`]: [`not_reversible`] (task F1)
 /// matches the very same way over a forward `Plan`'s own recorded
 /// instances, before any run exists, which has no `RunInstance` or
 /// `RunProgress` to build one from. [`RideView`] wraps one of these with
 /// the journal-only facts riding's own fixed point needs besides.
-struct Recorded<'a> {
+///
+/// `pub(crate)` (fields included), not duplicated, so `not_reversible`
+/// (task F1, in this same module) can build one straight off a
+/// [`crate::plan::PlannedNode`].
+pub(crate) struct Recorded<'a> {
     /// This instance's own tool name.
-    tool: &'a str,
+    pub(crate) tool: &'a str,
     /// This instance's own identity.
-    instance: crate::apply::InstanceRef,
+    pub(crate) instance: crate::apply::InstanceRef,
     /// This instance's own recorded, non-secret inputs; secret ones
     /// `Unknown`.
-    inputs: &'a crate::tool::Inputs,
+    pub(crate) inputs: &'a crate::tool::Inputs,
     /// This instance's own recorded, non-secret outputs; secret ones
     /// `Unknown`.
-    outputs: &'a crate::tool::Outputs,
+    pub(crate) outputs: &'a crate::tool::Outputs,
 }
 
 /// One instance, reduced to exactly what the ride fixed point below needs
@@ -1218,10 +1237,11 @@ struct RideView<'a> {
 /// type compare equal (`value.rs`), so a port neither this run's rider
 /// nor the container ever bound (an unstarted `NotRun` instance's own
 /// empty recorded inputs, say) must never ride by default. Takes a
-/// [`Recorded`], never a [`RideView`]: the one thing `Plan::not_reversible`
-/// (task F1) will call this same function with, over a forward plan's
-/// own instances, which carry no [`RunInstance`].
-fn rides_with(within: &Within, rider: &Recorded, container: &Recorded) -> bool {
+/// [`Recorded`], never a [`RideView`]: the one thing [`not_reversible`]
+/// (task F1) calls this same function with, over a forward plan's own
+/// instances, which carry no [`RunInstance`]. `pub(crate)` for that same
+/// caller.
+pub(crate) fn rides_with(within: &Within, rider: &Recorded, container: &Recorded) -> bool {
     if rider.instance == container.instance {
         return false;
     }
@@ -1252,7 +1272,16 @@ fn rides_with(within: &Within, rider: &Recorded, container: &Recorded) -> bool {
 /// `view`'s own declared [`Within`] list, by its tool's [`Reversal`]
 /// (empty for [`Reversal::Retained`], which never rides).
 fn within_list(view: &RideView) -> &'static [Within] {
-    match view.checked_node.tool.reversal() {
+    within_list_of(view.checked_node.tool.reversal())
+}
+
+/// A declared [`Within`] list, by [`Reversal`] alone (empty for
+/// [`Reversal::Retained`], which never rides) -- [`within_list`]'s own
+/// match, factored out so [`not_reversible`] (milestone 3m task F1) can
+/// read the same declaration straight off a [`crate::check::CheckedNode`],
+/// with no [`RideView`] to build (a forward plan has no [`RunInstance`]).
+fn within_list_of(reversal: Reversal) -> &'static [Within] {
+    match reversal {
         Reversal::Delete { within, .. } | Reversal::Contained { within, .. } => within,
         Reversal::Retained { .. } => &[],
     }
@@ -2131,6 +2160,261 @@ pub fn apply_teardown(
     Ok(outcomes)
 }
 
+// ---------------------------------------------------------------------
+// Forward visibility (milestone 3m task F1, decision 10)
+// ---------------------------------------------------------------------
+
+/// What [`not_reversible`]'s own fixed point settles one planned instance
+/// to, for its own riders' sake -- the forward-plan analogue of
+/// [`Settled`], computed from capability and policy alone (a plan has no
+/// `standing()` to call: nothing has been created yet).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ForwardSettled {
+    /// This instance's own resource would go away on rollback: a genuine
+    /// `Delete`, or riding with something that does.
+    GoesAway,
+    /// The document keeps this instance.
+    Kept,
+    /// Anything else (`Retained`, `Contained` matching nothing or a
+    /// kept-but-not-delete-capable match): a rider matching this is
+    /// decided exactly as if it matched nothing.
+    Other,
+}
+
+/// One planned instance's own place in [`not_reversible`]'s fixed point:
+/// its [`ForwardSettled`] state (for its own riders) and the
+/// [`crate::plan::NotReversible`] entry it produces, if any.
+#[derive(Clone, Copy)]
+struct ForwardResolution {
+    settled: ForwardSettled,
+    entry: Option<(crate::plan::Keeper, &'static str)>,
+}
+
+/// Resolve one planned instance as if it matched no container at all
+/// (milestone 3m decision 10): a `Retained` tool is always listed
+/// `by: Tool`; a `Contained` tool matching nothing is listed `by: Tool`
+/// with its own `otherwise`; a `Delete` tool goes away under
+/// `teardown: delete`, or is listed `by: Document` with [`KEPT`] under
+/// `teardown: retain`.
+fn forward_standalone(checked_node: &crate::check::CheckedNode) -> ForwardResolution {
+    match checked_node.tool.reversal() {
+        Reversal::Retained { why } => ForwardResolution {
+            settled: ForwardSettled::Other,
+            entry: Some((crate::plan::Keeper::Tool, why)),
+        },
+        Reversal::Contained { otherwise, .. } => ForwardResolution {
+            settled: ForwardSettled::Other,
+            entry: Some((crate::plan::Keeper::Tool, otherwise)),
+        },
+        Reversal::Delete { .. } => match checked_node.teardown {
+            crate::workflow::TeardownPolicy::Delete { .. } => ForwardResolution {
+                settled: ForwardSettled::GoesAway,
+                entry: None,
+            },
+            crate::workflow::TeardownPolicy::Retain => ForwardResolution {
+                settled: ForwardSettled::Kept,
+                entry: Some((crate::plan::Keeper::Document, KEPT)),
+            },
+        },
+    }
+}
+
+/// Resolve one planned instance that structurally matches a container
+/// whose own [`ForwardSettled`] state is already known (milestone 3m
+/// decision 10, decision 3a): a `Contained` rider (or a `Delete`-capable
+/// one that is not itself a candidate -- never reached here, since every
+/// caller below only ever matches `Delete`- or `Contained`-declaring
+/// nodes) goes away with a container that does, or is kept `by: Document`
+/// with [`KEPT_RIDER`] when the container is kept. A `Delete`-capable
+/// candidate matching a container going away must itself say
+/// `teardown: delete` or is listed `by: Document` with
+/// [`RIDER_KEPT_INSIDE_DELETED_CONTAINER_PREVIEW`] (decision 3a's refusal,
+/// previewed); matching a *kept* container, it is decided exactly as if
+/// it matched nothing (decision 3a's own "is its own `Delete` step" rule).
+fn forward_matched(
+    checked_node: &crate::check::CheckedNode,
+    container_settled: ForwardSettled,
+) -> ForwardResolution {
+    let is_delete_candidate = matches!(checked_node.tool.reversal(), Reversal::Delete { .. });
+    match container_settled {
+        ForwardSettled::GoesAway if is_delete_candidate => match checked_node.teardown {
+            crate::workflow::TeardownPolicy::Delete { .. } => ForwardResolution {
+                settled: ForwardSettled::GoesAway,
+                entry: None,
+            },
+            crate::workflow::TeardownPolicy::Retain => ForwardResolution {
+                settled: ForwardSettled::Other,
+                entry: Some((
+                    crate::plan::Keeper::Document,
+                    RIDER_KEPT_INSIDE_DELETED_CONTAINER_PREVIEW,
+                )),
+            },
+        },
+        ForwardSettled::GoesAway => ForwardResolution {
+            settled: ForwardSettled::GoesAway,
+            entry: None,
+        },
+        ForwardSettled::Kept if is_delete_candidate => forward_standalone(checked_node),
+        ForwardSettled::Kept => ForwardResolution {
+            settled: ForwardSettled::Kept,
+            entry: Some((crate::plan::Keeper::Document, KEPT_RIDER)),
+        },
+        ForwardSettled::Other => forward_standalone(checked_node),
+    }
+}
+
+/// Every planned instance's own direct matched container, by the same
+/// structural matching [`container_of`] uses, over [`Recorded`] views
+/// built straight from `planned` -- `None` for an index this plan never
+/// created (not planned [`crate::plan::Action::Create`], or naming no
+/// node [`crate::check::Checked`] still has).
+fn forward_container_of(
+    checked_nodes: &[Option<&crate::check::CheckedNode>],
+    recorded: &[Option<Recorded>],
+) -> Vec<Option<usize>> {
+    (0..recorded.len())
+        .map(|me| {
+            let me_rec = recorded[me].as_ref()?;
+            let checked_node = checked_nodes[me]?;
+            for within in within_list_of(checked_node.tool.reversal()) {
+                for (idx, other) in recorded.iter().enumerate() {
+                    if idx == me {
+                        continue;
+                    }
+                    if let Some(other_rec) = other
+                        && rides_with(within, me_rec, other_rec)
+                    {
+                        return Some(idx);
+                    }
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+/// [`not_reversible`]'s own fixed point over every planned, `Create`d
+/// instance (milestone 3m task F1, decision 10), mirroring
+/// [`resolve_actions`]'s own shape: an instance resolves standalone when
+/// it has no matched container, or once its matched container's own
+/// [`ForwardResolution`] is known; a pass that makes no progress forces
+/// the earliest still-unresolved index to resolve standalone, exactly as
+/// [`resolve_actions`] does for a mutual ride (R5b's own X1 forward
+/// requirement) -- a forward plan is the very same declarations, so the
+/// same cycle is possible here.
+fn forward_resolutions(
+    checked_nodes: &[Option<&crate::check::CheckedNode>],
+    container_of: &[Option<usize>],
+    recorded: &[Option<Recorded>],
+) -> Vec<Option<ForwardResolution>> {
+    let mut resolved: Vec<Option<ForwardResolution>> = vec![None; recorded.len()];
+    loop {
+        let mut progress = false;
+        for idx in 0..recorded.len() {
+            if resolved[idx].is_some() || recorded[idx].is_none() {
+                continue;
+            }
+            let Some(checked_node) = checked_nodes[idx] else {
+                continue;
+            };
+            let next = match container_of[idx] {
+                None => Some(forward_standalone(checked_node)),
+                Some(container) => resolved[container].map(|container_resolution| {
+                    forward_matched(checked_node, container_resolution.settled)
+                }),
+            };
+            if let Some(value) = next {
+                resolved[idx] = Some(value);
+                progress = true;
+            }
+        }
+        if progress {
+            continue;
+        }
+        let stuck = (0..recorded.len()).find(|&i| recorded[i].is_some() && resolved[i].is_none());
+        let Some(stuck) = stuck else {
+            break;
+        };
+        match checked_nodes[stuck] {
+            Some(checked_node) => resolved[stuck] = Some(forward_standalone(checked_node)),
+            // Never reached: `recorded[stuck]` is `Some` only for an index
+            // `checked_nodes` also holds a node for (both built from the
+            // same `planned` slice, in lockstep, in `not_reversible`).
+            None => break,
+        }
+    }
+    resolved
+}
+
+/// `Plan::not_reversible` (milestone 3m decision 10, task F1): every
+/// planned instance whose own rollback would not undo it, in `planned`'s
+/// own order. Reuses [`rides_with`] (task R5b) over [`Recorded`] views
+/// built straight from `planned`, so a later teardown
+/// ([`plan_teardown`]) can never disagree with what this forward plan
+/// showed: `Replace`/`Update` is always listed `by: Tool` with
+/// [`CHANGED_IN_PLACE`]; a `Create`d instance is resolved exactly as
+/// [`plan_teardown`]'s own riding fixed point would, minus any
+/// `standing()` call (nothing exists yet to observe) -- see
+/// [`forward_standalone`] and [`forward_matched`] for the capability ×
+/// policy × riding matrix itself. Every other action (`Compute`, `NoOp`,
+/// `Blocked`, `Skip`) is never listed: nothing was, or would be, created.
+pub(crate) fn not_reversible(
+    checked: &crate::check::Checked,
+    planned: &[crate::plan::PlannedNode],
+) -> Vec<crate::plan::NotReversible> {
+    let checked_nodes: Vec<Option<&crate::check::CheckedNode>> = planned
+        .iter()
+        .map(|p| find_checked_node(checked, &p.name))
+        .collect();
+
+    let recorded: Vec<Option<Recorded>> = planned
+        .iter()
+        .zip(&checked_nodes)
+        .map(|(p, checked_node)| {
+            if p.action != crate::plan::Action::Create {
+                return None;
+            }
+            let checked_node = (*checked_node)?;
+            Some(Recorded {
+                tool: checked_node.tool.spec().name.as_str(),
+                instance: crate::apply::InstanceRef {
+                    node: p.name.clone(),
+                    instance: p.instance.clone(),
+                },
+                inputs: &p.inputs,
+                outputs: &p.outputs,
+            })
+        })
+        .collect();
+
+    let container_of = forward_container_of(&checked_nodes, &recorded);
+    let resolutions = forward_resolutions(&checked_nodes, &container_of, &recorded);
+
+    let mut out = Vec::new();
+    for (idx, p) in planned.iter().enumerate() {
+        let Some(checked_node) = checked_nodes[idx] else {
+            continue;
+        };
+        let entry = match p.action {
+            crate::plan::Action::Replace | crate::plan::Action::Update => {
+                Some((crate::plan::Keeper::Tool, CHANGED_IN_PLACE))
+            }
+            crate::plan::Action::Create => resolutions[idx].and_then(|resolution| resolution.entry),
+            _ => None,
+        };
+        if let Some((by, why)) = entry {
+            out.push(crate::plan::NotReversible {
+                node: p.name.clone(),
+                instance: p.instance.clone(),
+                tool: checked_node.tool.spec().name.clone(),
+                by,
+                why,
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2183,8 +2467,8 @@ mod tests {
     use crate::catalog::Catalog;
     use crate::check::{Checked, check};
     use crate::class::Class;
-    use crate::plan::{Action, resolve_pure};
-    use crate::testing::StubDeletableTool;
+    use crate::plan::{Action, Keeper, NotReversible, PlannedNode, resolve_pure};
+    use crate::testing::{StubContainedTool, StubDeletableTool};
     use crate::tool::{Ensured, Inputs, Observation, Outputs, PortName, PortSpec, Tool, ToolSpec};
     use crate::value::{PortType, TypeName, TypeRef, Value};
     use crate::workflow::{Binding, Loss, Node, NodeName, TeardownPolicy, Workflow};
@@ -5131,5 +5415,475 @@ mod tests {
         let json = serde_json::to_value(&replan).expect("TeardownApplyError::Replan serializes");
         assert_eq!(json["kind"], "Replan");
         assert_eq!(json["error"]["kind"], "UnresolvableCredential");
+    }
+
+    // -------------------------------------------------------------------
+    // Forward visibility (milestone 3m task F1, decision 10, acceptance 15)
+    // -------------------------------------------------------------------
+
+    /// One hand-built [`PlannedNode`] for `not_reversible`'s own tests:
+    /// these never go through [`crate::plan::plan`] itself (the stub
+    /// pair's tools never override `Tool::replaces`/`Tool::updates`, so a
+    /// real planner run could never produce `Action::Replace`/`Update`
+    /// for them) -- only `not_reversible`'s own two inputs, `&Checked` and
+    /// `&[PlannedNode]`, matter here. `repo` is bound to the same literal
+    /// on both sides of a riding pair so [`rides_with`] matches them.
+    fn planned_instance(name_str: &str, action: Action, tool_name: &str) -> PlannedNode {
+        let mut inputs = Inputs::new();
+        inputs.insert(
+            port("repo"),
+            Value::known(GitHubRepo::parse("example-org/example-repo").unwrap()),
+        );
+        PlannedNode {
+            name: node(name_str),
+            instance: None,
+            tool: ToolName::parse(tool_name).unwrap(),
+            action,
+            inputs,
+            outputs: Outputs::new(),
+        }
+    }
+
+    /// A two-node checked workflow: `repo` (`test.deletable`, R3's own
+    /// stub, `repo_policy` as its own `teardown:`) and `secret`
+    /// (`test.contained`, R3's own stub, riding out with `repo`'s own
+    /// `repo` input port, decision 3's own `Within`). Neither node's own
+    /// bound value matters to `not_reversible` (it reads
+    /// [`PlannedNode::inputs`] built by [`planned_instance`], never a
+    /// [`Checked`]'s own bindings) -- only each node's own tool and
+    /// `teardown:` policy, read off [`crate::check::CheckedNode`].
+    fn checked_riding_forward(repo_policy: Option<TeardownPolicy>) -> Checked {
+        let literal = Binding::Literal("example-org/example-repo".to_string());
+        let mut repo_node = Node::new(ToolName::parse("test.deletable").unwrap())
+            .port(port("repo"), literal.clone());
+        if let Some(policy) = repo_policy {
+            repo_node = repo_node.teardown(policy);
+        }
+        let secret_node =
+            Node::new(ToolName::parse("test.contained").unwrap()).port(port("repo"), literal);
+        let workflow = Workflow::new(workflow_name("not-reversible-riding"))
+            .node(node("repo"), repo_node)
+            .node(node("secret"), secret_node);
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(Arc::new(StubDeletableTool::new()) as Arc<dyn crate::tool::Tool>)
+            .unwrap();
+        catalog
+            .insert(Arc::new(StubContainedTool::new()) as Arc<dyn crate::tool::Tool>)
+            .unwrap();
+        check(&workflow, &catalog).unwrap_or_else(|errors| {
+            unreachable!("a two-node Delete/Contained workflow must check cleanly: {errors:?}")
+        })
+    }
+
+    /// An [`Inverse`] `not_reversible` must never call: nothing has been
+    /// created at plan time, so there is nothing to observe.
+    struct NeverCalledInverse;
+
+    impl Inverse for NeverCalledInverse {
+        fn standing(&self, _created: &Created<'_>) -> Result<Standing, crate::tool::ToolError> {
+            unreachable!("not_reversible never calls an inverse's own standing")
+        }
+
+        fn delete(
+            &self,
+            _created: &Created<'_>,
+            _token: &TeardownToken,
+        ) -> Result<Deleted, crate::tool::ToolError> {
+            unreachable!("not_reversible never calls an inverse's own delete")
+        }
+    }
+
+    /// A stub `Delete` tool riding within `test.deletable`'s own `repo`
+    /// port (milestone 3m task F1): a *`Delete`-capable* candidate nested
+    /// inside another `Delete`-capable container -- the one shape neither
+    /// R3's nor R5b's existing stub pairs reaches, needed to prove
+    /// decision 10's own "kept inside a deleted container" preview text
+    /// ([`RIDER_KEPT_INSIDE_DELETED_CONTAINER_PREVIEW`]).
+    struct StubNestedDeletableTool {
+        spec: ToolSpec,
+        inverse: NeverCalledInverse,
+    }
+
+    impl StubNestedDeletableTool {
+        fn new() -> Arc<Self> {
+            let mut inputs = IndexMap::new();
+            inputs.insert(
+                port("repo"),
+                PortSpec {
+                    ty: PortType::Exact(ty("GitHubRepo")),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            let mut outputs = IndexMap::new();
+            outputs.insert(port("repo"), ty("GitHubRepo"));
+            Arc::new(Self {
+                spec: ToolSpec {
+                    name: ToolName::parse("test.nested_deletable").unwrap(),
+                    description: "stub nested Delete tool (milestone 3m task F1)".to_string(),
+                    inputs,
+                    outputs,
+                    key: vec![port("repo")],
+                    class: Class::Reversible,
+                    pure: false,
+                },
+                inverse: NeverCalledInverse,
+            })
+        }
+    }
+
+    impl Tool for StubNestedDeletableTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, crate::tool::ToolError> {
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+
+        fn ensure(
+            &self,
+            _inputs: &Inputs,
+            _token: &SinkToken,
+        ) -> Result<Ensured, crate::tool::ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+
+        fn reversal(&self) -> Reversal {
+            Reversal::Delete {
+                needs: &["repo"],
+                within: &[Within {
+                    tool: "test.deletable",
+                    ports: &[("repo", Side::Input, "repo")],
+                }],
+                losses: &[],
+            }
+        }
+
+        fn inverse(&self) -> Option<&dyn Inverse> {
+            Some(&self.inverse)
+        }
+    }
+
+    /// A two-node checked workflow: `repo` (`test.deletable`) and `token`
+    /// (`test.nested_deletable`, riding within `repo`'s own `repo` port),
+    /// each with its own `teardown:` policy.
+    fn checked_nested_deletable(
+        repo_policy: TeardownPolicy,
+        token_policy: TeardownPolicy,
+    ) -> Checked {
+        let literal = Binding::Literal("example-org/example-repo".to_string());
+        let repo_node = Node::new(ToolName::parse("test.deletable").unwrap())
+            .port(port("repo"), literal.clone())
+            .teardown(repo_policy);
+        let token_node = Node::new(ToolName::parse("test.nested_deletable").unwrap())
+            .port(port("repo"), literal)
+            .teardown(token_policy);
+        let workflow = Workflow::new(workflow_name("not-reversible-nested"))
+            .node(node("repo"), repo_node)
+            .node(node("token"), token_node);
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(Arc::new(StubDeletableTool::new()) as Arc<dyn crate::tool::Tool>)
+            .unwrap();
+        catalog
+            .insert(StubNestedDeletableTool::new() as Arc<dyn crate::tool::Tool>)
+            .unwrap();
+        check(&workflow, &catalog).unwrap_or_else(|errors| {
+            unreachable!("a two-node nested Delete workflow must check cleanly: {errors:?}")
+        })
+    }
+
+    /// Acceptance 15, first shape: a plan with a scaffold-analogue node
+    /// (`test.contained`) and no container `Create` at all lists it
+    /// `by: Tool`, with the tool's own `otherwise`.
+    #[test]
+    fn contained_with_no_container_create_is_listed_by_tool() {
+        let checked = checked_riding_forward(None);
+        let planned = vec![planned_instance("secret", Action::Create, "test.contained")];
+        let not_reversible = not_reversible(&checked, &planned);
+        assert_eq!(
+            not_reversible,
+            vec![NotReversible {
+                node: node("secret"),
+                instance: None,
+                tool: ToolName::parse("test.contained").unwrap(),
+                by: Keeper::Tool,
+                why: "left in place, outside its container",
+            }]
+        );
+    }
+
+    /// Acceptance 15, second shape: with a `repo` `Create` under
+    /// `teardown: delete`, riding with it means rollback would undo it
+    /// too -- neither is listed.
+    #[test]
+    fn contained_riding_a_deleted_container_is_not_listed() {
+        let checked = checked_riding_forward(Some(TeardownPolicy::Delete { accept: Vec::new() }));
+        let planned = vec![
+            planned_instance("repo", Action::Create, "test.deletable"),
+            planned_instance("secret", Action::Create, "test.contained"),
+        ];
+        assert_eq!(not_reversible(&checked, &planned), Vec::new());
+    }
+
+    /// Acceptance 15, third shape: with the repo kept, both the repo and
+    /// the rider are listed `by: Document` -- the repo with [`KEPT`], the
+    /// rider with [`KEPT_RIDER`] (its container is kept).
+    #[test]
+    fn contained_riding_a_kept_container_lists_both_by_document() {
+        let checked = checked_riding_forward(Some(TeardownPolicy::Retain));
+        let planned = vec![
+            planned_instance("repo", Action::Create, "test.deletable"),
+            planned_instance("secret", Action::Create, "test.contained"),
+        ];
+        assert_eq!(
+            not_reversible(&checked, &planned),
+            vec![
+                NotReversible {
+                    node: node("repo"),
+                    instance: None,
+                    tool: ToolName::parse("test.deletable").unwrap(),
+                    by: Keeper::Document,
+                    why: KEPT,
+                },
+                NotReversible {
+                    node: node("secret"),
+                    instance: None,
+                    tool: ToolName::parse("test.contained").unwrap(),
+                    by: Keeper::Document,
+                    why: KEPT_RIDER,
+                },
+            ]
+        );
+    }
+
+    /// A stub tool that declares no [`Reversal`] at all -- [`Tool::reversal`]'s
+    /// own default, `Retained { why: UNDECLARED }` -- used only to prove
+    /// `not_reversible` lists it `by: Tool`.
+    struct StubUndeclaredTool {
+        spec: ToolSpec,
+    }
+
+    impl StubUndeclaredTool {
+        fn new() -> Arc<Self> {
+            let mut inputs = IndexMap::new();
+            inputs.insert(
+                port("repo"),
+                PortSpec {
+                    ty: PortType::Exact(ty("GitHubRepo")),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            Arc::new(Self {
+                spec: ToolSpec {
+                    name: ToolName::parse("test.undeclared").unwrap(),
+                    description: "stub tool declaring no Reversal (milestone 3m task F1)"
+                        .to_string(),
+                    inputs,
+                    outputs: IndexMap::new(),
+                    key: vec![port("repo")],
+                    class: Class::Reversible,
+                    pure: false,
+                },
+            })
+        }
+    }
+
+    impl Tool for StubUndeclaredTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, crate::tool::ToolError> {
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+
+        fn ensure(
+            &self,
+            _inputs: &Inputs,
+            _token: &SinkToken,
+        ) -> Result<Ensured, crate::tool::ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+        // `reversal()` and `inverse()` are both left at their own
+        // defaults.
+    }
+
+    /// A tool that declares no [`Reversal`] at all is always listed
+    /// `by: Tool` with [`UNDECLARED`] -- [`Tool::reversal`]'s own default.
+    #[test]
+    fn undeclared_tool_is_listed_by_tool_with_undeclared() {
+        let workflow = Workflow::new(workflow_name("not-reversible-undeclared")).node(
+            node("thing"),
+            Node::new(ToolName::parse("test.undeclared").unwrap()).port(
+                port("repo"),
+                Binding::Literal("example-org/example-repo".to_string()),
+            ),
+        );
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog
+            .insert(StubUndeclaredTool::new() as Arc<dyn crate::tool::Tool>)
+            .unwrap();
+        let checked = check(&workflow, &catalog).unwrap_or_else(|errors| {
+            unreachable!("a one-node undeclared-reversal workflow must check cleanly: {errors:?}")
+        });
+        let planned = vec![planned_instance("thing", Action::Create, "test.undeclared")];
+        assert_eq!(
+            not_reversible(&checked, &planned),
+            vec![NotReversible {
+                node: node("thing"),
+                instance: None,
+                tool: ToolName::parse("test.undeclared").unwrap(),
+                by: Keeper::Tool,
+                why: UNDECLARED,
+            }]
+        );
+    }
+
+    /// An instance planned `Replace` or `Update` is always listed
+    /// `by: Tool` with [`CHANGED_IN_PLACE`], whatever the tool declares
+    /// (decision 1) -- here, a `Delete`-capable tool, to show the policy
+    /// column never overrides this.
+    #[test]
+    fn replace_and_update_are_always_listed_by_tool_with_changed_in_place() {
+        let checked = checked_with(
+            Arc::new(StubDeletableTool::new()),
+            Some(TeardownPolicy::Delete { accept: Vec::new() }),
+        );
+        let planned = vec![planned_instance("repo", Action::Replace, "test.deletable")];
+        assert_eq!(
+            not_reversible(&checked, &planned),
+            vec![NotReversible {
+                node: node("repo"),
+                instance: None,
+                tool: ToolName::parse("test.deletable").unwrap(),
+                by: Keeper::Tool,
+                why: CHANGED_IN_PLACE,
+            }]
+        );
+
+        let planned = vec![planned_instance("repo", Action::Update, "test.deletable")];
+        assert_eq!(
+            not_reversible(&checked, &planned),
+            vec![NotReversible {
+                node: node("repo"),
+                instance: None,
+                tool: ToolName::parse("test.deletable").unwrap(),
+                by: Keeper::Tool,
+                why: CHANGED_IN_PLACE,
+            }]
+        );
+    }
+
+    /// A `NoOp`, `Compute`, `Blocked` or `Skip` instance is never listed:
+    /// nothing was, or would be, created.
+    #[test]
+    fn noop_and_friends_are_never_listed() {
+        let checked = checked_with(
+            Arc::new(StubDeletableTool::new()),
+            Some(TeardownPolicy::Retain),
+        );
+        for action in [Action::NoOp, Action::Compute, Action::Blocked, Action::Skip] {
+            let planned = vec![planned_instance("repo", action, "test.deletable")];
+            assert_eq!(not_reversible(&checked, &planned), Vec::new(), "{action:?}");
+        }
+    }
+
+    /// Decision 10's own last paragraph: a `Delete`-capable node the
+    /// document keeps (`teardown: retain`) while it rides inside a
+    /// container this plan would create under `teardown: delete` is
+    /// listed `by: Document`, with
+    /// [`RIDER_KEPT_INSIDE_DELETED_CONTAINER_PREVIEW`] -- the forward
+    /// plan's own preview of the refusal a later teardown would hit.
+    #[test]
+    fn delete_capable_rider_kept_inside_a_deleted_container_previews_the_refusal() {
+        let checked = checked_nested_deletable(
+            TeardownPolicy::Delete { accept: Vec::new() },
+            TeardownPolicy::Retain,
+        );
+        let planned = vec![
+            planned_instance("repo", Action::Create, "test.deletable"),
+            planned_instance("token", Action::Create, "test.nested_deletable"),
+        ];
+        assert_eq!(
+            not_reversible(&checked, &planned),
+            vec![NotReversible {
+                node: node("token"),
+                instance: None,
+                tool: ToolName::parse("test.nested_deletable").unwrap(),
+                by: Keeper::Document,
+                why: RIDER_KEPT_INSIDE_DELETED_CONTAINER_PREVIEW,
+            }]
+        );
+    }
+
+    /// Decision 3a's own "is its own `Delete` step" rule: a
+    /// `Delete`-capable candidate under `teardown: delete` whose matched
+    /// container is *kept* is decided exactly as if it matched nothing --
+    /// its own standalone delete, not listed, whatever the container's
+    /// own `teardown:` says.
+    #[test]
+    fn delete_capable_rider_of_a_kept_container_is_its_own_standalone_delete() {
+        let checked = checked_nested_deletable(
+            TeardownPolicy::Retain,
+            TeardownPolicy::Delete { accept: Vec::new() },
+        );
+        let planned = vec![
+            planned_instance("repo", Action::Create, "test.deletable"),
+            planned_instance("token", Action::Create, "test.nested_deletable"),
+        ];
+        assert_eq!(
+            not_reversible(&checked, &planned),
+            vec![NotReversible {
+                node: node("repo"),
+                instance: None,
+                tool: ToolName::parse("test.deletable").unwrap(),
+                by: Keeper::Document,
+                why: KEPT,
+            }]
+        );
+    }
+
+    /// A `Delete`-capable candidate riding within another `Delete`
+    /// container that itself goes away is `RidesWith` -- reversible, so
+    /// neither is listed (the omitted bullet in decision 10's own list).
+    #[test]
+    fn delete_capable_rider_of_a_deleted_container_is_not_listed() {
+        let checked = checked_nested_deletable(
+            TeardownPolicy::Delete { accept: Vec::new() },
+            TeardownPolicy::Delete { accept: Vec::new() },
+        );
+        let planned = vec![
+            planned_instance("repo", Action::Create, "test.deletable"),
+            planned_instance("token", Action::Create, "test.nested_deletable"),
+        ];
+        assert_eq!(not_reversible(&checked, &planned), Vec::new());
+    }
+
+    /// Entries come out in `planned`'s own order, not sorted or grouped
+    /// by [`Keeper`].
+    #[test]
+    fn entries_come_out_in_planned_order() {
+        let checked = checked_riding_forward(Some(TeardownPolicy::Retain));
+        let planned = vec![
+            planned_instance("secret", Action::Create, "test.contained"),
+            planned_instance("repo", Action::Create, "test.deletable"),
+        ];
+        let not_reversible = not_reversible(&checked, &planned);
+        let nodes: Vec<_> = not_reversible.iter().map(|entry| &entry.node).collect();
+        assert_eq!(nodes, vec![&node("secret"), &node("repo")]);
     }
 }

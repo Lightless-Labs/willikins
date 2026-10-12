@@ -53,9 +53,9 @@
 //! masking in two different ways.
 
 use willikins_core::{
-    Action, Applied, AppliedNode, CheckError, CheckWarning, Description, InstanceRef, NodeStatus,
-    Plan, PlanError, PlannedNode, Reported, TeardownAction, TeardownStep, TeardownStepOutcome,
-    Value,
+    Action, Applied, AppliedNode, CheckError, CheckWarning, Description, InstanceRef, Keeper,
+    NodeStatus, Plan, PlanError, PlannedNode, Reported, TeardownAction, TeardownStep,
+    TeardownStepOutcome, Value,
 };
 use willikins_journal::{PlanId, PlanRecord, RunNode, RunRecord, RunState};
 use willikins_server::{
@@ -480,8 +480,11 @@ pub fn describe_text(description: &Description, disclosure: Disclosure) -> Strin
 /// then, when [`Plan::replacing`] is non-empty, the `replacing:` section
 /// (2026-09-29 addendum, finding 4) -- an `Action::Replace` node's own line
 /// already reads `Replace`, so this section is what names the resource that
-/// goes away, which the approval text otherwise never says; then workflow
-/// outputs, then the plan's class and approval requirement.
+/// goes away, which the approval text otherwise never says; then, when
+/// [`Plan::not_reversible`] is non-empty, the `not_reversible:` section
+/// (milestone 3m, decision 10, task F1) -- what a later `rollback` of this
+/// run would not undo, shown before approval so this is never a surprise;
+/// then workflow outputs, then the plan's class and approval requirement.
 #[must_use]
 pub fn plan_text(plan: &Plan, disclosure: Disclosure) -> String {
     let mut lines = Vec::new();
@@ -496,6 +499,9 @@ pub fn plan_text(plan: &Plan, disclosure: Disclosure) -> String {
     }
     if !plan.replacing.is_empty() {
         lines.extend(replacing_lines(&plan.replacing));
+    }
+    if !plan.not_reversible.is_empty() {
+        lines.extend(not_reversible_lines(&plan.not_reversible));
     }
     lines.push("outputs:".to_string());
     for (name, value) in &plan.outputs {
@@ -592,6 +598,43 @@ fn replacing_lines(replacing: &[willikins_core::Replacing]) -> Vec<String> {
         for (port, value) in &entry.subject {
             lines.push(format!("    {port}: {}", single_line(value)));
         }
+    }
+    lines
+}
+
+/// The `not_reversible:` section (milestone 3m decision 10, task F1): a
+/// summary line, then one line per [`willikins_core::NotReversible`]
+/// naming its node/instance and tool, and who keeps it -- [`Keeper::Tool`]
+/// as `cannot be undone: <why>`, [`Keeper::Document`] as `kept by the
+/// document: <why>`, the same two phrases [`teardown_action_text`] already
+/// uses for a real [`TeardownAction::Retained`]/[`TeardownAction::Kept`],
+/// so an operator reads one vocabulary for "this will not come back"
+/// before and after approval. `why` is always a tool's or the engine's own
+/// `&'static str` (trust boundary 5), never document text, so it is never
+/// passed through [`single_line`] -- the same reasoning
+/// [`teardown_action_text`]'s own doc gives.
+fn not_reversible_lines(not_reversible: &[willikins_core::NotReversible]) -> Vec<String> {
+    let mut lines = Vec::with_capacity(not_reversible.len() + 1);
+    lines.push(format!(
+        "not_reversible: {} node instance{} rollback would not undo",
+        not_reversible.len(),
+        if not_reversible.len() == 1 { "" } else { "s" },
+    ));
+    for entry in not_reversible {
+        let kept = match entry.by {
+            Keeper::Tool => format!("cannot be undone: {}", entry.why),
+            Keeper::Document => format!("kept by the document: {}", entry.why),
+        };
+        let header = match &entry.instance {
+            Some(instance) => format!(
+                "  {}[{}] ({}): {kept}",
+                entry.node,
+                single_line(instance),
+                entry.tool
+            ),
+            None => format!("  {} ({}): {kept}", entry.node, entry.tool),
+        };
+        lines.push(header);
     }
     lines
 }
@@ -1139,6 +1182,7 @@ mod tests {
             requires_approval: false,
             blocked: Vec::new(),
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         };
 
         let text = plan_text(&plan, Disclosure::Masked);
@@ -1177,6 +1221,7 @@ mod tests {
             requires_approval: false,
             blocked: Vec::new(),
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         };
 
         let masked = plan_text(&plan, Disclosure::Masked);
@@ -1235,6 +1280,7 @@ mod tests {
             requires_approval: false,
             blocked: vec![blocked],
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         };
 
         let text = plan_text(&plan, Disclosure::Masked);
@@ -1296,6 +1342,7 @@ mod tests {
             requires_approval: false,
             blocked: vec![blocked],
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         };
 
         let text = plan_text(&plan, Disclosure::Masked);
@@ -1318,6 +1365,7 @@ mod tests {
             requires_approval: false,
             blocked: Vec::new(),
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         };
         let text = plan_text(&plan, Disclosure::Masked);
         assert!(!text.contains("blocked:"), "text: {text}");
@@ -1376,6 +1424,7 @@ mod tests {
             requires_approval: true,
             blocked: Vec::new(),
             replacing: vec![replacing],
+            not_reversible: Vec::new(),
         };
 
         let text = plan_text(&plan, Disclosure::Masked);
@@ -1414,9 +1463,80 @@ mod tests {
             requires_approval: false,
             blocked: Vec::new(),
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         };
         let text = plan_text(&plan, Disclosure::Masked);
         assert!(!text.contains("replacing:"), "text: {text}");
+    }
+
+    /// Milestone 3m, decision 10 (task F1): a [`Plan::not_reversible`]
+    /// entry renders in the same two phrases a real teardown's own
+    /// `TeardownAction::Retained`/`Kept` already use (`cannot be undone`
+    /// for [`Keeper::Tool`], `kept by the document` for
+    /// [`Keeper::Document`]), so an operator reads one vocabulary before
+    /// and after approval.
+    #[test]
+    fn plan_text_shows_not_reversible_entries_by_tool_and_by_document() {
+        let plan = Plan {
+            workflow: willikins_types::WorkflowName::parse("test").unwrap(),
+            nodes: Vec::new(),
+            outputs: IndexMap::new(),
+            class: Class::Reversible,
+            requires_approval: false,
+            blocked: Vec::new(),
+            replacing: Vec::new(),
+            not_reversible: vec![
+                willikins_core::NotReversible {
+                    node: NodeName::parse("key").unwrap(),
+                    instance: None,
+                    tool: ToolName::parse("signoz.ingestion_key.ensure").unwrap(),
+                    by: Keeper::Tool,
+                    why: "no live sandbox",
+                },
+                willikins_core::NotReversible {
+                    node: NodeName::parse("profile").unwrap(),
+                    instance: None,
+                    tool: ToolName::parse("appstore.profile.ensure").unwrap(),
+                    by: Keeper::Document,
+                    why: "the document keeps it (no teardown: delete)",
+                },
+            ],
+        };
+        let text = plan_text(&plan, Disclosure::Masked);
+        assert!(
+            text.contains("not_reversible: 2 node instances rollback would not undo"),
+            "text: {text}"
+        );
+        assert!(
+            text.contains("key (signoz.ingestion_key.ensure): cannot be undone: no live sandbox"),
+            "text: {text}"
+        );
+        assert!(
+            text.contains(
+                "profile (appstore.profile.ensure): kept by the document: the document keeps \
+                 it (no teardown: delete)"
+            ),
+            "text: {text}"
+        );
+    }
+
+    /// The mirror case: nothing is listed, so no `not_reversible:` section
+    /// at all -- unaffected by this addendum, exactly like the `blocked`
+    /// and `replacing` cases above.
+    #[test]
+    fn plan_text_has_no_not_reversible_section_when_everything_is_reversible() {
+        let plan = Plan {
+            workflow: willikins_types::WorkflowName::parse("test").unwrap(),
+            nodes: Vec::new(),
+            outputs: IndexMap::new(),
+            class: Class::Reversible,
+            requires_approval: false,
+            blocked: Vec::new(),
+            replacing: Vec::new(),
+            not_reversible: Vec::new(),
+        };
+        let text = plan_text(&plan, Disclosure::Masked);
+        assert!(!text.contains("not_reversible:"), "text: {text}");
     }
 
     /// Milestone 3h, task E1: an `Action::Update` node's line reads
@@ -1447,6 +1567,7 @@ mod tests {
             requires_approval: false,
             blocked: Vec::new(),
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         };
 
         let text = plan_text(&plan, Disclosure::Masked);
@@ -1613,6 +1734,7 @@ mod tests {
             requires_approval: true,
             blocked: Vec::new(),
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         };
 
         let text = plan_text(&plan, Disclosure::Masked);
@@ -2143,6 +2265,7 @@ mod tests {
                 requires_approval: false,
                 blocked: Vec::new(),
                 replacing: Vec::new(),
+                not_reversible: Vec::new(),
             },
             requires_approval: false,
             approval: ApprovalRequirement::Automatic,

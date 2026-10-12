@@ -81,6 +81,7 @@ fn a_plan_fingerprint_of_secret_outputs_never_carries_the_bytes() {
         requires_approval: true,
         blocked: Vec::new(),
         replacing: Vec::new(),
+        not_reversible: Vec::new(),
     };
 
     let fingerprint = plan.fingerprint();

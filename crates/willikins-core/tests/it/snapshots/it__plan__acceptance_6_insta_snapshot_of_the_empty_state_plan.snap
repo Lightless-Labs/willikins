@@ -248,5 +248,56 @@ expression: "serde_json::to_string_pretty(&result).unwrap()"
     }
   },
   "class": "reversible",
-  "requires_approval": false
+  "requires_approval": false,
+  "not_reversible": [
+    {
+      "node": "repo",
+      "instance": null,
+      "tool": "github.repo.ensure",
+      "by": "document",
+      "why": "the document keeps it (no teardown: delete)"
+    },
+    {
+      "node": "doppler",
+      "instance": null,
+      "tool": "doppler.project.ensure",
+      "by": "document",
+      "why": "the document keeps it (no teardown: delete)"
+    },
+    {
+      "node": "configs",
+      "instance": "dev",
+      "tool": "doppler.config.ensure",
+      "by": "document",
+      "why": "the document keeps it (no teardown: delete)"
+    },
+    {
+      "node": "configs",
+      "instance": "stg",
+      "tool": "doppler.config.ensure",
+      "by": "document",
+      "why": "the document keeps it (no teardown: delete)"
+    },
+    {
+      "node": "configs",
+      "instance": "prd",
+      "tool": "doppler.config.ensure",
+      "by": "document",
+      "why": "the document keeps it (no teardown: delete)"
+    },
+    {
+      "node": "token",
+      "instance": null,
+      "tool": "doppler.service_token.ensure",
+      "by": "document",
+      "why": "the document keeps it (no teardown: delete)"
+    },
+    {
+      "node": "ci_secret",
+      "instance": null,
+      "tool": "github.actions_secret.ensure",
+      "by": "document",
+      "why": "its container is kept by the document"
+    }
+  ]
 }

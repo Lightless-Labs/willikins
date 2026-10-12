@@ -891,6 +891,7 @@ fn acceptance_08a_redaction_by_construction() {
         requires_approval: false,
         blocked: Vec::new(),
         replacing: Vec::new(),
+        not_reversible: Vec::new(),
     };
     let tool_error = ToolError {
         kind: ToolErrorKind::Provider,

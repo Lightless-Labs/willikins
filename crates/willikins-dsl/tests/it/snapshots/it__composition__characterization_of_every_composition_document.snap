@@ -515,7 +515,7 @@ TYPES:
 boom.key: ProjectSlug
 OUTPUTS:
 PLAN:
-plan_json: {"workflow":"uses-class-child","nodes":[{"name":"boom","instance":null,"tool":"fake.irreversible.ensure","action":"create","inputs":{"key":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{}}],"outputs":{},"class":"irreversible","requires_approval":true}
+plan_json: {"workflow":"uses-class-child","nodes":[{"name":"boom","instance":null,"tool":"fake.irreversible.ensure","action":"create","inputs":{"key":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{}}],"outputs":{},"class":"irreversible","requires_approval":true,"not_reversible":[{"node":"boom","instance":null,"tool":"fake.irreversible.ensure","by":"tool","why":"this tool declares no reversal"}]}
 fingerprint: [{"name":"boom","instance":null,"action":"create","outputs":[]}]
 
 === workflows/fixtures/composition/uses-class-root.yaml ===
@@ -527,7 +527,7 @@ names.slug: ProjectSlug
 child/boom.key: ProjectSlug
 OUTPUTS:
 PLAN:
-plan_json: {"workflow":"uses-class-root","nodes":[{"name":"names","instance":null,"tool":"naming.v1","action":"compute","inputs":{"org":{"type":"GitHubOrg","list":false,"state":"known","value":"lightless-labs"},"slug":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{"github_repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"doppler_project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"buildkite_pipeline_slug":{"type":"BuildkitePipelineSlug","list":false,"state":"known","value":"third-thoughts"}}},{"name":"child/boom","instance":null,"tool":"fake.irreversible.ensure","action":"create","inputs":{"key":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{}}],"outputs":{},"class":"irreversible","requires_approval":true}
+plan_json: {"workflow":"uses-class-root","nodes":[{"name":"names","instance":null,"tool":"naming.v1","action":"compute","inputs":{"org":{"type":"GitHubOrg","list":false,"state":"known","value":"lightless-labs"},"slug":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{"github_repo":{"type":"GitHubRepo","list":false,"state":"known","value":"lightless-labs/third-thoughts"},"doppler_project":{"type":"DopplerProject","list":false,"state":"known","value":"third-thoughts"},"buildkite_pipeline_slug":{"type":"BuildkitePipelineSlug","list":false,"state":"known","value":"third-thoughts"}}},{"name":"child/boom","instance":null,"tool":"fake.irreversible.ensure","action":"create","inputs":{"key":{"type":"ProjectSlug","list":false,"state":"known","value":"third-thoughts"}},"outputs":{}}],"outputs":{},"class":"irreversible","requires_approval":true,"not_reversible":[{"node":"child/boom","instance":null,"tool":"fake.irreversible.ensure","by":"tool","why":"this tool declares no reversal"}]}
 fingerprint: [{"name":"names","instance":null,"action":"compute","outputs":[["github_repo","lightless-labs/third-thoughts"],["doppler_project","third-thoughts"],["buildkite_pipeline_slug","third-thoughts"]]},{"name":"child/boom","instance":null,"action":"create","outputs":[]}]
 
 === workflows/fixtures/composition/uses-disallowed-input-child.yaml ===

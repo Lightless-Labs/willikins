@@ -66,6 +66,7 @@ fn empty_plan() -> willikins_core::Plan {
         requires_approval: false,
         blocked: Vec::new(),
         replacing: Vec::new(),
+        not_reversible: Vec::new(),
     }
 }
 

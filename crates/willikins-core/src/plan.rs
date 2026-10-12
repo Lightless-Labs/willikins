@@ -187,6 +187,62 @@ pub struct Plan {
     /// `required` in the published MCP schema either.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replacing: Vec<Replacing>,
+    /// Every node instance planned `Create`, `Replace` or `Update` whose
+    /// rollback would not undo it, in this plan's own order (milestone 3m
+    /// decision 10, task F1): what a tool cannot undo at all, what the
+    /// document's own `teardown:` keeps, and a `Delete`-capable node the
+    /// document keeps while it rides inside a container this plan would
+    /// create under `teardown: delete` -- shown here because the teardown
+    /// itself would refuse. Computed from the same riding match
+    /// [`crate::rollback::plan_teardown`] uses (`crate::rollback::not_reversible`),
+    /// so the two can never disagree. Empty for a plan whose every tool
+    /// declares nothing, or whose every node is kept by default -- the
+    /// common case today, and why this is `#[serde(default,
+    /// skip_serializing_if = "Vec::is_empty")]` exactly like
+    /// [`Plan::blocked`]/[`Plan::replacing`]: never `required` in the
+    /// published MCP schema either (the same reason those two give).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_reversible: Vec<NotReversible>,
+}
+
+/// Who keeps one [`NotReversible`] instance from being undone by rollback
+/// (milestone 3m decision 10): the tool's own declared capability
+/// ([`crate::rollback::Reversal`]), or the document's own `teardown:`
+/// policy ([`crate::workflow::TeardownPolicy`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Keeper {
+    /// The tool's own declared capability keeps it: `Reversal::Retained`,
+    /// a `Reversal::Contained` instance matching no deleted container, or
+    /// an instance planned `Replace`/`Update` (whatever the tool
+    /// declares).
+    Tool,
+    /// The document's own `teardown:` policy keeps it, or keeps the
+    /// container it structurally rides inside.
+    Document,
+}
+
+/// One [`Plan::not_reversible`] entry: a planned instance whose rollback
+/// would not undo it, who keeps it, and why (milestone 3m decision 10).
+///
+/// Plain data, like [`Replacing`]: `why` is always one of a tool's or the
+/// engine's own `&'static str` reasons (trust boundary 5), never document
+/// text, so this holds no secret by construction. `PartialEq`/`Eq`
+/// (unlike [`Replacing`]): `not_reversible`'s own tests compare whole
+/// entries directly.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+pub struct NotReversible {
+    /// The node this instance belongs to.
+    pub node: NodeName,
+    /// The `for_each` instance key, if any; `None` for a node with no
+    /// `for_each`.
+    pub instance: Option<String>,
+    /// The tool this node calls.
+    pub tool: ToolName,
+    /// Who keeps it: the tool's own capability, or the document's policy.
+    pub by: Keeper,
+    /// Why, fixed text.
+    pub why: &'static str,
 }
 
 /// One [`Action::Replace`] node instance in a [`Plan`]: which node (and,
@@ -1201,6 +1257,12 @@ pub(crate) fn walk(
         outputs.insert(checked_output.name.clone(), value);
     }
 
+    // Milestone 3m, task F1: computed from `planned` before it moves into
+    // the `Plan` literal below, over `checked`'s own typed graph -- no
+    // second catalog lookup, no `Binding` (3n's own tripwire over this
+    // file covers `rollback.rs` too; see that file's own doc).
+    let not_reversible = crate::rollback::not_reversible(checked, &planned);
+
     Ok(Walk {
         plan: Plan {
             workflow: checked.name().clone(),
@@ -1210,6 +1272,7 @@ pub(crate) fn walk(
             requires_approval: checked.class().requires_approval(),
             blocked: gates.into_blocked(),
             replacing,
+            not_reversible,
         },
         groups,
     })
@@ -2304,6 +2367,7 @@ mod tests {
             requires_approval: false,
             blocked: Vec::new(),
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         }
     }
 
@@ -2330,6 +2394,7 @@ mod tests {
             requires_approval: false,
             blocked: Vec::new(),
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         }
     }
 
@@ -2356,6 +2421,7 @@ mod tests {
             requires_approval: false,
             blocked: Vec::new(),
             replacing: Vec::new(),
+            not_reversible: Vec::new(),
         }
     }
 

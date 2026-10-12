@@ -1,6 +1,5 @@
 ---
 source: crates/willikins-server/tests/it/mcp_server.rs
-assertion_line: 241
 expression: snapshot
 ---
 [
@@ -733,9 +732,59 @@ expression: snapshot
           },
           "type": "object"
         },
+        "Keeper": {
+          "description": "Who keeps one [`NotReversible`] instance from being undone by rollback\n(milestone 3m decision 10): the tool's own declared capability\n([`crate::rollback::Reversal`]), or the document's own `teardown:`\npolicy ([`crate::workflow::TeardownPolicy`]).",
+          "oneOf": [
+            {
+              "const": "tool",
+              "description": "The tool's own declared capability keeps it: `Reversal::Retained`,\na `Reversal::Contained` instance matching no deleted container, or\nan instance planned `Replace`/`Update` (whatever the tool\ndeclares).",
+              "type": "string"
+            },
+            {
+              "const": "document",
+              "description": "The document's own `teardown:` policy keeps it, or keeps the\ncontainer it structurally rides inside.",
+              "type": "string"
+            }
+          ]
+        },
         "NodeName": {
           "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$",
           "type": "string"
+        },
+        "NotReversible": {
+          "description": "One [`Plan::not_reversible`] entry: a planned instance whose rollback\nwould not undo it, who keeps it, and why (milestone 3m decision 10).\n\nPlain data, like [`Replacing`]: `why` is always one of a tool's or the\nengine's own `&'static str` reasons (trust boundary 5), never document\ntext, so this holds no secret by construction. `PartialEq`/`Eq`\n(unlike [`Replacing`]): `not_reversible`'s own tests compare whole\nentries directly.",
+          "properties": {
+            "by": {
+              "$ref": "#/$defs/Keeper",
+              "description": "Who keeps it: the tool's own capability, or the document's policy."
+            },
+            "instance": {
+              "description": "The `for_each` instance key, if any; `None` for a node with no\n`for_each`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "node": {
+              "$ref": "#/$defs/NodeName",
+              "description": "The node this instance belongs to."
+            },
+            "tool": {
+              "$ref": "#/$defs/ToolName",
+              "description": "The tool this node calls."
+            },
+            "why": {
+              "description": "Why, fixed text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "node",
+            "tool",
+            "by",
+            "why"
+          ],
+          "type": "object"
         },
         "Outputs": {
           "additionalProperties": false,
@@ -765,6 +814,13 @@ expression: snapshot
               "description": "Every planned node, in [`Checked::order`]; a `for_each` node\ncontributes one entry per instance, in its source list's order.",
               "items": {
                 "$ref": "#/$defs/PlannedNode"
+              },
+              "type": "array"
+            },
+            "not_reversible": {
+              "description": "Every node instance planned `Create`, `Replace` or `Update` whose\nrollback would not undo it, in this plan's own order (milestone 3m\ndecision 10, task F1): what a tool cannot undo at all, what the\ndocument's own `teardown:` keeps, and a `Delete`-capable node the\ndocument keeps while it rides inside a container this plan would\ncreate under `teardown: delete` -- shown here because the teardown\nitself would refuse. Computed from the same riding match\n[`crate::rollback::plan_teardown`] uses (`crate::rollback::not_reversible`),\nso the two can never disagree. Empty for a plan whose every tool\ndeclares nothing, or whose every node is kept by default -- the\ncommon case today, and why this is `#[serde(default,\nskip_serializing_if = \"Vec::is_empty\")]` exactly like\n[`Plan::blocked`]/[`Plan::replacing`]: never `required` in the\npublished MCP schema either (the same reason those two give).",
+              "items": {
+                "$ref": "#/$defs/NotReversible"
               },
               "type": "array"
             },

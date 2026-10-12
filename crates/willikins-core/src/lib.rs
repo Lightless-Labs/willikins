@@ -41,7 +41,8 @@ pub use describe::{
 };
 pub use disclosure::mask_json;
 pub use plan::{
-    Action, BlockedGate, InstanceFingerprint, Plan, PlanError, PlannedNode, Replacing, plan,
+    Action, BlockedGate, InstanceFingerprint, Keeper, NotReversible, Plan, PlanError, PlannedNode,
+    Replacing, plan,
 };
 pub use reported::Reported;
 pub use rollback::{

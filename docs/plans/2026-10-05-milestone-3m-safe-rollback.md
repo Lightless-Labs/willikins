@@ -1114,6 +1114,81 @@ warnings` and `cargo fmt -p willikins-cli --check` clean. Deviations from the ro
   `tolerated_config_names` (confirmed by reading it) regardless of riders, so a project with no `doppler.config.ensure`
   rider at all still deletes cleanly; the seed file's own untouched project (`example-untouched-project`) is what the
   round trip's final assertion tells apart from what the run itself created.
+**Addendum:** 2026-10-12 -- F1 landed: `Plan::not_reversible` (decision 10, acceptance 15), in one commit (see below).
+
+Commit 1 (`crates/willikins-core/src/rollback.rs`, `plan.rs`, `lib.rs`): `Keeper` and
+`NotReversible` (`plan.rs`, re-exported from `lib.rs`), `Plan::not_reversible: Vec<NotReversible>`
+(`#[serde(default, skip_serializing_if = "Vec::is_empty")]`, exactly like `blocked`/`replacing`),
+and its computation, `rollback::not_reversible(checked, planned)`, called from `walk()` before the
+`Plan` literal. Reuses R5b's own matcher (`rides_with`, promoted `pub(crate)` with `Recorded`'s
+fields, as R5b's own addendum asked) over `Recorded` views built straight from `PlannedNode`,
+through a small forward-only fixed point (`ForwardSettled`/`ForwardResolution`,
+`forward_standalone`/`forward_matched`/`forward_container_of`/`forward_resolutions`) that mirrors
+`resolve_actions`'s own shape but drops every run-only distinction (`standing()`, `wrote`,
+`transit`, riders) a forward plan has nothing to observe or tolerate: every planned `Create` is
+its own candidate, period. A new constant,
+`RIDER_KEPT_INSIDE_DELETED_CONTAINER_PREVIEW` ("a node the document keeps is inside a container it
+deletes: the teardown will refuse"), is decision 10's own last-paragraph text -- deliberately not
+`RIDER_KEPT_INSIDE_DELETED_CONTAINER` (which lacks the clause explaining *why it matters now*,
+before a run exists to refuse anything). `CHANGED_IN_PLACE` is promoted `pub(crate)` alongside, for
+the `Replace`/`Update` bullet. Every `Plan { .. }` struct literal rustc listed (`render.rs`'s and
+`plan.rs`'s own tests, the journal's `journal.rs` and nine `tests/it/` files, `tests/common/mod.rs`,
+`willikins-cli`'s `tests/it/acceptance.rs`) gained `not_reversible: Vec::new()`. Nine new unit tests
+in `rollback.rs`'s own `#[cfg(test)]` module cover acceptance 15's three named shapes
+(`contained_with_no_container_create_is_listed_by_tool`,
+`contained_riding_a_deleted_container_is_not_listed`,
+`contained_riding_a_kept_container_lists_both_by_document`) plus the rest of decision 10's matrix: a
+plain `Retained`/undeclared tool, `Replace`/`Update`, `NoOp`/`Compute`/`Blocked`/`Skip`, the
+kept-inside-a-deleted-container preview itself (a new local stub, `StubNestedDeletableTool`, riding
+within `test.deletable` -- the one shape, a *`Delete`-capable* candidate nested inside another
+`Delete`-capable container, neither R3's nor R5b's existing stub pairs reach), a `Delete`-capable
+rider of a *kept* container deciding standalone (decision 3a's own second rule), a `Delete`-capable
+rider of a *deleted* container (`RidesWith`, not listed -- decision 10's own omitted bullet), and
+plan order preservation. Scoped `-p willikins-core`: `cargo fmt --check`, `clippy --all-targets -D
+warnings`, `cargo test`, all green.
+
+Commit 2 (`crates/willikins-cli/src/render.rs`): `not_reversible_lines`, after `replacing_lines` in
+`plan_text`, in the same two phrases `teardown_action_text` already uses for a real teardown
+(`cannot be undone: <why>` for `Keeper::Tool`, `kept by the document: <why>` for
+`Keeper::Document`) so an operator reads one vocabulary before and after approval. `why` is always
+a tool's or the engine's own `&'static str`, never through `single_line` (the same reasoning
+`teardown_action_text`'s own doc gives). Two new render unit tests
+(`plan_text_shows_not_reversible_entries_by_tool_and_by_document`,
+`plan_text_has_no_not_reversible_section_when_everything_is_reversible`), mirroring the existing
+`replacing` pair.
+
+Landed by the coordinator: F1's implementer wrote all of it but host contention (other sessions'
+cargo, then the maintenance sweep) left it no window to compile, so the coordinator ran its gates and
+committed it as **one** commit, not two: `render.rs` holds both commit 1's `Plan { .. }` literal fixes and commit 2's
+rendering, and splitting one file's hunks needs an interactive add. Gates, all green:
+`-p willikins-core -p willikins-dsl -p willikins-journal` (fmt, clippy `-D warnings`, test),
+`cargo clippy -p willikins-cli -p willikins-server --all-targets`, and `cargo test -p willikins-server
+-p willikins-cli` (which also ran the gitignored `operator_*` targets: all green; the private
+live-catalog target makes no network call, it asserts a missing-input refusal with a placeholder
+token). Snapshots, each reviewed as additions only: core's `plan_schema`
+(57 added lines) and `acceptance_6` (52 added; the one changed line is the comma before the new
+field); the server's `mcp_server` tool list (57 added); the dsl `acceptance` (12 documents) and
+`composition` (2) characterizations, where `plan_json` is one line per document, so each was parsed
+and found identical except for an added `not_reversible` key. The journal's `plan_record` schema did
+not move: it carries the plan redacted and does not embed `Plan`'s fields. R9's round-trip test
+gains its last, previously unrun assertion (the printed teardown step carries the run's `resource`),
+committed separately.
+
+- **A fidelity question checked, not left open**: a `Within` on `Side::Output` (Doppler's
+  `config.inheritable.ensure`/`inherits.ensure`/`secret.set`/`service_token.ensure`, all riding
+  within `config`/`branch_config`'s own output `config`) depends on that output being
+  `is_known()` at *plan* time for `rides_with` to ever match -- unlike the GitHub pair's own
+  `Side::Input` mapping, which both sides bind directly. Read `DopplerConfigEnsure::observe`
+  (`tools/config_ensure.rs`): `Observation::Absent`'s own `predicted` already carries
+  `Self::outputs_for(config)` -- the config's name is derived deterministically from
+  `project`+`environment` via `naming::v1`, never server-assigned -- so the output is known before
+  creation and the match is live. The concern is real in principle (a server-assigned output would
+  make a rider's own forward entry over-cautious, `by: Tool` instead of correctly riding), but does
+  not affect any tool `willikins` declares today; flagged here rather than silently assumed away.
+- No tracked document sets `teardown: delete` anywhere yet (that is C1, the gitignored operator
+  document only), so every tracked characterization's new `not_reversible` array lists every
+  `Delete`/`Contained`/`Retained` node it creates, `by: Document` (`KEPT`/`KEPT_RIDER`) or
+  `by: Tool`, exactly as decision 10's own "the point" paragraph predicts.
 
 ## Goal
 
