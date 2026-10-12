@@ -35,7 +35,13 @@
 //!    in node declaration order. A node whose tool is unknown is skipped
 //!    for every later step (its ports cannot be checked against a spec
 //!    that does not exist).
-//! 3. Boundary errors (milestone 2b task C1, decision (d4)), one per
+//! 3. [`CheckError::TeardownNotAdmitted`] and
+//!    [`CheckError::TeardownLossNotDeclared`] (milestone 3m decision 3a),
+//!    one per node that declared a `teardown:` policy its tool's
+//!    [`crate::rollback::Reversal`] does not admit, in node declaration
+//!    order. Skips a node whose tool is unknown (stage 2 already reported
+//!    it).
+//! 4. Boundary errors (milestone 2b task C1, decision (d4)), one per
 //!    entry of [`Workflow::boundaries`], in that order, skipping a
 //!    boundary the linker left unbound (`binding` is `None`): that one
 //!    became a *fixed* input instead (decision (d6)) and was already
@@ -56,7 +62,7 @@
 //!    boundary's declared type, with no conversion probe
 //!    ([`CheckError::UsesInputTypeMismatch`]; decision (d4), "exact type
 //!    at the boundary, no conversion").
-//! 4. For every node whose tool *is* known, in node declaration order:
+//! 5. For every node whose tool *is* known, in node declaration order:
 //!    its `for_each` binding's errors -- a secret source
 //!    ([`CheckError::SecretForEachSource`]), then a scalar source
 //!    ([`CheckError::ForEachOverScalar`]), then an identifier-typed source
@@ -67,8 +73,8 @@
 //!    order the tool spec declares them (an unbound required port, or a
 //!    bound port's own errors), then any `with` keys that are not one of
 //!    the tool's ports, in `with` declaration order.
-//! 5. Workflow outputs' errors, in declaration order.
-//! 6. [`CheckError::Cycle`], one per cyclic strongly-connected component,
+//! 6. Workflow outputs' errors, in declaration order.
+//! 7. [`CheckError::Cycle`], one per cyclic strongly-connected component,
 //!    ordered by the lowest declaration index among its nodes.
 //!
 //! # Cascade suppression
@@ -143,13 +149,14 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use crate::catalog::Catalog;
 use crate::class::Class;
 use crate::compose::prefixed_input;
+use crate::rollback::Reversal;
 use crate::site::Site;
 use crate::tool::{PortName, PortSpec, Tool, ToolName, ToolSpec};
 use crate::value::{
     Conversion, ConversionMismatch, PortType, TypeRef, TypeRegistry, Value, reported_type_name_or,
 };
 use crate::workflow::{
-    Binding, InputName, InputSpec, Node, NodeName, OutputName, TeardownPolicy, Workflow,
+    Binding, InputName, InputSpec, Loss, Node, NodeName, OutputName, TeardownPolicy, Workflow,
 };
 use willikins_types::{Description, ParseError, WorkflowName};
 
@@ -392,9 +399,9 @@ pub(crate) struct CheckedNode {
     pub(crate) shape: Shape,
     /// This node's teardown policy (milestone 3m decision 3a):
     /// [`Node::teardown`]'s own value, or [`TeardownPolicy::Retain`] when
-    /// the document declared nothing. [`check`] has already confirmed
-    /// this agrees with the node's tool by the time a [`Checked`] exists
-    /// at all.
+    /// the document declared nothing. [`check_teardown_policies`] has
+    /// already confirmed this agrees with the node's tool by the time a
+    /// [`Checked`] exists at all.
     pub(crate) teardown: TeardownPolicy,
 }
 
@@ -1634,6 +1641,35 @@ pub enum CheckError {
         /// The binding's own resolved type.
         found: TypeRef,
     },
+    /// A node declared `teardown:` (either `retain` or `delete`) whose
+    /// tool's own [`crate::rollback::Reversal`] is not
+    /// [`crate::rollback::Reversal::Delete`]: a `Contained` node goes with
+    /// its container whatever it says, and a `Retained` one cannot be
+    /// deleted, so a `teardown:` there would be a promise the engine
+    /// cannot keep (milestone 3m decision 3a).
+    ///
+    /// Not one of the plan's variants; milestone 3m task T1.
+    TeardownNotAdmitted {
+        /// The node that declared `teardown:`.
+        node: NodeName,
+        /// Its tool, whose `Reversal` is not `Delete`.
+        tool: ToolName,
+    },
+    /// A `teardown: { delete: { accept: [...] } }` entry names a loss the
+    /// node's tool never declares in its own `Reversal::Delete::losses`
+    /// (milestone 3m decision 3a): a loss the tool reports but the node
+    /// does not accept is treated as drift, so accepting a name the tool
+    /// can never report would be a promise that can never matter and,
+    /// worse, would silently admit a typo for the one loss name that
+    /// does matter.
+    ///
+    /// Not one of the plan's variants; milestone 3m task T1.
+    TeardownLossNotDeclared {
+        /// The node whose `accept:` named the loss.
+        node: NodeName,
+        /// The undeclared loss name.
+        loss: Loss,
+    },
 }
 
 impl fmt::Display for CheckError {
@@ -1799,6 +1835,14 @@ impl fmt::Display for CheckError {
                 f,
                 "node `{node}`, input `{input}`: expected {expected}, found `{found}`"
             ),
+            Self::TeardownNotAdmitted { node, tool } => write!(
+                f,
+                "node `{node}`: tool `{tool}` does not declare `Reversal::Delete`, so it cannot admit a `teardown:` policy"
+            ),
+            Self::TeardownLossNotDeclared { node, loss } => write!(
+                f,
+                "node `{node}`: accepted loss `{loss}` is not one of its tool's declared losses"
+            ),
             Self::ListOnScalarPort { site, expected } => write!(
                 f,
                 "{site}: a list binding cannot be delivered to a port of type {expected}"
@@ -1934,6 +1978,8 @@ impl CheckError {
             Self::UsesOutputCycle { .. } => "UsesOutputCycle",
             Self::PathInAuthoredName { .. } => "PathInAuthoredName",
             Self::UsesInputTypeMismatch { .. } => "UsesInputTypeMismatch",
+            Self::TeardownNotAdmitted { .. } => "TeardownNotAdmitted",
+            Self::TeardownLossNotDeclared { .. } => "TeardownLossNotDeclared",
         }
     }
 }
@@ -1968,6 +2014,15 @@ pub fn check(workflow: &Workflow, catalog: &Catalog) -> Result<Checked, Vec<Chec
 
     let (mut graph, index_of) = build_graph(workflow);
     let specs = resolve_tool_specs(workflow, catalog, &mut errors);
+
+    // Step 3 (module docs' "Error ordering"): milestone 3m decision 3a.
+    // A node's own `teardown:` is validated against its tool's declared
+    // `Reversal` here, right after `UnknownTool` is resolved above, so a
+    // node whose tool does not even exist is skipped rather than reported
+    // twice. This is `check.rs`'s own one sanctioned `catalog.get` for the
+    // purpose (`plan`, `apply` and `describe` never do this -- they read
+    // `CheckedNode.tool`, already resolved).
+    check_teardown_policies(workflow, catalog, &mut errors);
 
     let mut resolver = Resolver {
         workflow,
@@ -2356,11 +2411,11 @@ fn build_checked_nodes(
             };
             // Milestone 3m decision 3a: `None` (the document declared
             // nothing) becomes the conservative default, `Retain` --
-            // never read as "ask the tool". A later task (T1 commit 2)
-            // validates a declared policy against the tool's own
-            // `Reversal` before `check` ever returns a `Checked`, so by
-            // the time this runs any disagreement has already made
-            // `errors` non-empty above.
+            // never read as "ask the tool", which `check_teardown_policies`
+            // already confirmed is unreachable by the time this runs (any
+            // disagreement would have made `errors` non-empty above, and
+            // `check` returns before `build_checked_nodes` is ever
+            // called).
             let teardown = node.teardown.clone().unwrap_or(TeardownPolicy::Retain);
             CheckedNode {
                 name: name.clone(),
@@ -2551,6 +2606,49 @@ fn resolve_tool_specs<'c>(
         }
     }
     specs
+}
+
+/// Validate every node's `teardown:` policy against its tool's declared
+/// [`Reversal`] (milestone 3m decision 3a): `teardown:` -- `retain` or
+/// `delete` alike -- is admitted only on a node whose tool declares
+/// [`Reversal::Delete`] ([`CheckError::TeardownNotAdmitted`] otherwise,
+/// since a `Contained` node rides out with its container whatever it
+/// says, and a `Retained` one can never be deleted), and every entry of a
+/// `delete: { accept: [...] }` must name one of that tool's own declared
+/// `losses` ([`CheckError::TeardownLossNotDeclared`]). A node whose tool
+/// is unknown is skipped: [`resolve_tool_specs`] already reported
+/// [`CheckError::UnknownTool`] for it, run just before this in [`check`],
+/// and there is no `Reversal` to check a nonexistent tool's `teardown:`
+/// against.
+fn check_teardown_policies(workflow: &Workflow, catalog: &Catalog, errors: &mut Vec<CheckError>) {
+    for (name, node) in &workflow.nodes {
+        let Some(policy) = &node.teardown else {
+            continue;
+        };
+        let Some(tool) = catalog.get(&node.tool) else {
+            continue;
+        };
+        let declared_losses: &[&str] = match tool.reversal() {
+            Reversal::Delete { losses, .. } => losses,
+            Reversal::Contained { .. } | Reversal::Retained { .. } => {
+                errors.push(CheckError::TeardownNotAdmitted {
+                    node: name.clone(),
+                    tool: node.tool.clone(),
+                });
+                continue;
+            }
+        };
+        if let TeardownPolicy::Delete { accept } = policy {
+            for loss in accept {
+                if !declared_losses.contains(&loss.as_str()) {
+                    errors.push(CheckError::TeardownLossNotDeclared {
+                        node: name.clone(),
+                        loss: loss.clone(),
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Whether `ty` is a secret type, per `registry`. An unregistered type
@@ -3264,7 +3362,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Check every `uses:` step's input boundary (milestone 2b task C1,
-    /// decision (d4); module docs' "Error ordering", stage 3), in
+    /// decision (d4); module docs' "Error ordering", stage 4), in
     /// [`Workflow::boundaries`]'s own order. A boundary the linker left
     /// unbound (`binding` is `None`) is skipped: it became a *fixed*
     /// input instead (decision (d6)), already inserted into
@@ -5278,6 +5376,14 @@ mod tests {
                 expected: ty("DopplerProject"),
                 found: ty("GitHubRepo"),
             },
+            CheckError::TeardownNotAdmitted {
+                node: node_name("n"),
+                tool: tool_name("test.contained"),
+            },
+            CheckError::TeardownLossNotDeclared {
+                node: node_name("n"),
+                loss: Loss::parse("issues").unwrap(),
+            },
         ]
     }
 
@@ -5329,6 +5435,8 @@ mod tests {
         UsesOutputCycle,
         PathInAuthoredName,
         UsesInputTypeMismatch,
+        TeardownNotAdmitted,
+        TeardownLossNotDeclared,
     );
 
     #[test]
@@ -5723,6 +5831,156 @@ mod tests {
             other => panic!("expected ApplyError::Plan{{EdgeTypeMismatch}}, got {other:?}"),
         }
         assert!(observer.events.is_empty(), "nothing was ever ensured");
+    }
+
+    // ---------------------------------------------------------------------
+    // Milestone 3m task T1 commit 2 (decision 3a; acceptance 18's core
+    // half): `check_teardown_policies`, proved on R3's own stub tools
+    // (`StubDeletableTool`'s `Reversal::Delete` with the loss `"builds"`,
+    // `StubContainedTool`'s `Reversal::Contained`).
+    // ---------------------------------------------------------------------
+
+    /// A catalog carrying [`crate::testing::StubDeletableTool`] and
+    /// [`crate::testing::StubContainedTool`] alongside the usual test
+    /// double tools.
+    fn teardown_test_catalog() -> Catalog {
+        let mut catalog = test_catalog();
+        catalog
+            .insert(Arc::new(crate::testing::StubDeletableTool::new()))
+            .unwrap_or_else(|err| unreachable!("StubDeletableTool must validate: {err}"));
+        catalog
+            .insert(Arc::new(crate::testing::StubContainedTool::new()))
+            .unwrap_or_else(|err| unreachable!("StubContainedTool must validate: {err}"));
+        catalog
+    }
+
+    fn deletable_node(policy: Option<TeardownPolicy>) -> Node {
+        let mut node = Node::new(tool_name("test.deletable")).port(
+            port("repo"),
+            Binding::Literal("example-org/example-repo".to_string()),
+        );
+        if let Some(policy) = policy {
+            node = node.teardown(policy);
+        }
+        node
+    }
+
+    /// `teardown: delete` with no `accept:` is admitted on a `Delete`
+    /// tool: a plain delete never needs to accept any loss.
+    #[test]
+    fn teardown_delete_with_no_accept_is_admitted_on_a_delete_tool() {
+        let workflow = Workflow::new(workflow_name("w")).node(
+            node_name("n"),
+            deletable_node(Some(TeardownPolicy::Delete { accept: vec![] })),
+        );
+        check(&workflow, &teardown_test_catalog()).expect("Delete admits a plain teardown: delete");
+    }
+
+    /// `teardown: retain` is admitted on a `Delete` tool too -- the
+    /// default, written out, is not a declaration error.
+    #[test]
+    fn teardown_retain_is_admitted_on_a_delete_tool() {
+        let workflow = Workflow::new(workflow_name("w"))
+            .node(node_name("n"), deletable_node(Some(TeardownPolicy::Retain)));
+        check(&workflow, &teardown_test_catalog()).expect("Delete admits teardown: retain");
+    }
+
+    /// `accept: [builds]` is admitted: `builds` is `test.deletable`'s own
+    /// declared loss.
+    #[test]
+    fn teardown_delete_accepting_a_declared_loss_is_admitted() {
+        let workflow = Workflow::new(workflow_name("w")).node(
+            node_name("n"),
+            deletable_node(Some(TeardownPolicy::Delete {
+                accept: vec![Loss::parse("builds").unwrap()],
+            })),
+        );
+        check(&workflow, &teardown_test_catalog())
+            .expect("accepting the tool's own declared loss is admitted");
+    }
+
+    /// `accept: [issues]` is refused: `test.deletable` never declares an
+    /// `issues` loss.
+    #[test]
+    fn teardown_delete_accepting_an_undeclared_loss_is_refused() {
+        let workflow = Workflow::new(workflow_name("w")).node(
+            node_name("n"),
+            deletable_node(Some(TeardownPolicy::Delete {
+                accept: vec![Loss::parse("issues").unwrap()],
+            })),
+        );
+        let errors = check(&workflow, &teardown_test_catalog()).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::TeardownLossNotDeclared {
+                node: node_name("n"),
+                loss: Loss::parse("issues").unwrap(),
+            }]
+        );
+    }
+
+    /// `teardown: retain` on a `Contained` tool is refused: a contained
+    /// node goes with its container whatever it says, so a policy there
+    /// is a promise `check` cannot keep.
+    #[test]
+    fn teardown_on_a_contained_tool_is_refused() {
+        let workflow = Workflow::new(workflow_name("w")).node(
+            node_name("n"),
+            Node::new(tool_name("test.contained"))
+                .port(
+                    port("repo"),
+                    Binding::Literal("example-org/example-repo".to_string()),
+                )
+                .teardown(TeardownPolicy::Retain),
+        );
+        let errors = check(&workflow, &teardown_test_catalog()).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::TeardownNotAdmitted {
+                node: node_name("n"),
+                tool: tool_name("test.contained"),
+            }]
+        );
+    }
+
+    /// `teardown: delete` on a `Contained` tool is refused the same way.
+    #[test]
+    fn teardown_delete_on_a_contained_tool_is_refused() {
+        let workflow = Workflow::new(workflow_name("w")).node(
+            node_name("n"),
+            Node::new(tool_name("test.contained"))
+                .port(
+                    port("repo"),
+                    Binding::Literal("example-org/example-repo".to_string()),
+                )
+                .teardown(TeardownPolicy::Delete { accept: vec![] }),
+        );
+        let errors = check(&workflow, &teardown_test_catalog()).unwrap_err();
+        assert_eq!(
+            errors,
+            vec![CheckError::TeardownNotAdmitted {
+                node: node_name("n"),
+                tool: tool_name("test.contained"),
+            }]
+        );
+    }
+
+    /// A node with no `teardown:` at all is never checked against its
+    /// tool's `Reversal`, whatever that tool declares -- the conservative
+    /// default needs no promise kept. `test.contained` would refuse a
+    /// declared policy of either value (the two tests above), yet
+    /// declaring none at all checks clean.
+    #[test]
+    fn teardown_absent_is_never_checked_against_the_tools_reversal() {
+        let workflow = Workflow::new(workflow_name("w")).node(
+            node_name("n"),
+            Node::new(tool_name("test.contained")).port(
+                port("repo"),
+                Binding::Literal("example-org/example-repo".to_string()),
+            ),
+        );
+        check(&workflow, &teardown_test_catalog())
+            .expect("no teardown: at all is never a declaration error");
     }
 
     // ---------------------------------------------------------------------

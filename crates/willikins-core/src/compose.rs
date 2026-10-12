@@ -2554,6 +2554,60 @@ mod tests {
             .expect("the flat graph has no node-level cycle");
     }
 
+    /// Milestone 3m decision 3a (acceptance 18): a used document's own
+    /// node carries its own `teardown:` policy through the linker
+    /// unchanged -- commit 1's own claim -- and `check` still validates it
+    /// under the node's prefixed name once linked -- commit 2's.
+    #[test]
+    fn a_used_documents_own_teardown_policy_survives_linking_and_check() {
+        let mut catalog = test_catalog();
+        catalog
+            .insert(Arc::new(crate::testing::StubDeletableTool::new()))
+            .unwrap();
+
+        let child = Workflow::new(wf_name("deletable-child")).node(
+            node("leaf"),
+            Node::new(tool("test.deletable"))
+                .port(
+                    port("repo"),
+                    Binding::Literal("example-org/example-repo".to_string()),
+                )
+                .teardown(crate::workflow::TeardownPolicy::Delete {
+                    accept: vec![crate::workflow::Loss::parse("builds").unwrap()],
+                }),
+        );
+
+        let root = Workflow::new(wf_name("root")).uses(
+            node("child"),
+            Uses {
+                workflow: wf_name("deletable-child"),
+                with: IndexMap::new(),
+                position: 0,
+            },
+        );
+
+        let linked = link(&root, &mut |name| match name.as_str() {
+            "deletable-child" => Ok(child.clone()),
+            other => panic!("resolver asked for an unexpected workflow: {other}"),
+        })
+        .expect("a single uses: step with no alias links cleanly");
+
+        assert_eq!(
+            linked.workflow.nodes[&node("child/leaf")].teardown,
+            Some(crate::workflow::TeardownPolicy::Delete {
+                accept: vec![crate::workflow::Loss::parse("builds").unwrap()],
+            }),
+            "the linker carries the used document's own policy through unchanged"
+        );
+
+        let checked = check::check(&linked.workflow, &catalog)
+            .expect("a Delete tool's node may declare teardown: delete, with an accepted loss");
+        assert!(
+            checked.nodes().iter().any(|n| n.name == node("child/leaf")),
+            "the linked node keeps its policy under its prefixed name"
+        );
+    }
+
     /// A chain of `uses:` steps declared in reverse dependency order (`s0`
     /// reads `s1`'s output, `s1` reads `s2`'s, and so on) must link on a
     /// thread with tokio's default 2 MiB stack: the server runs every MCP

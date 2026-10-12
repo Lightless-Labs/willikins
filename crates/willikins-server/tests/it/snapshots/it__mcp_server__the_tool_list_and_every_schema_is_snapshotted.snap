@@ -2577,6 +2577,52 @@ expression: snapshot
                 "found"
               ],
               "type": "object"
+            },
+            {
+              "description": "A node declared `teardown:` (either `retain` or `delete`) whose\ntool's own [`crate::rollback::Reversal`] is not\n[`crate::rollback::Reversal::Delete`]: a `Contained` node goes with\nits container whatever it says, and a `Retained` one cannot be\ndeleted, so a `teardown:` there would be a promise the engine\ncannot keep (milestone 3m decision 3a).\n\nNot one of the plan's variants; milestone 3m task T1.",
+              "properties": {
+                "kind": {
+                  "const": "TeardownNotAdmitted",
+                  "type": "string"
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node that declared `teardown:`."
+                },
+                "tool": {
+                  "$ref": "#/$defs/ToolName",
+                  "description": "Its tool, whose `Reversal` is not `Delete`."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "tool"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A `teardown: { delete: { accept: [...] } }` entry names a loss the\nnode's tool never declares in its own `Reversal::Delete::losses`\n(milestone 3m decision 3a): a loss the tool reports but the node\ndoes not accept is treated as drift, so accepting a name the tool\ncan never report would be a promise that can never matter and,\nworse, would silently admit a typo for the one loss name that\ndoes matter.\n\nNot one of the plan's variants; milestone 3m task T1.",
+              "properties": {
+                "kind": {
+                  "const": "TeardownLossNotDeclared",
+                  "type": "string"
+                },
+                "loss": {
+                  "$ref": "#/$defs/Loss",
+                  "description": "The undeclared loss name."
+                },
+                "node": {
+                  "$ref": "#/$defs/NodeName",
+                  "description": "The node whose `accept:` named the loss."
+                }
+              },
+              "required": [
+                "kind",
+                "node",
+                "loss"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -2631,6 +2677,10 @@ expression: snapshot
             "index"
           ],
           "type": "object"
+        },
+        "Loss": {
+          "pattern": "^[a-z][a-z_]*$",
+          "type": "string"
         },
         "NodeName": {
           "pattern": "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$",

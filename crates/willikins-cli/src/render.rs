@@ -394,6 +394,14 @@ fn check_error_detail(error: &CheckError) -> String {
             expected,
             found,
         } => format!("{node}/{input}: expected {expected}, found `{found}`"),
+        CheckError::TeardownNotAdmitted { node, tool } => {
+            format!(
+                "{node}: tool `{tool}` does not declare Reversal::Delete, so it cannot admit a teardown: policy"
+            )
+        }
+        CheckError::TeardownLossNotDeclared { node, loss } => {
+            format!("{node}: accepted loss `{loss}` is not one of its tool's declared losses")
+        }
     }
 }
 
