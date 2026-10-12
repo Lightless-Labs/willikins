@@ -53,11 +53,14 @@
 //! masking in two different ways.
 
 use willikins_core::{
-    Action, Applied, AppliedNode, CheckError, CheckWarning, Description, NodeStatus, Plan,
-    PlanError, PlannedNode, Reported, Value,
+    Action, Applied, AppliedNode, CheckError, CheckWarning, Description, InstanceRef, NodeStatus,
+    Plan, PlanError, PlannedNode, Reported, TeardownAction, TeardownStep, TeardownStepOutcome,
+    Value,
 };
 use willikins_journal::{PlanId, PlanRecord, RunNode, RunRecord, RunState};
-use willikins_server::{ApprovalRequirement, PlanResponse};
+use willikins_server::{
+    ApprovalRequirement, PlanResponse, TeardownPlanResponse, TeardownRunResult,
+};
 use willikins_types::Disclosure;
 
 /// Serialize `value`, mask every identifier-typed [`Value`] it carries
@@ -922,6 +925,180 @@ pub fn approval_required_guidance(plan_id: PlanId, journal_path: Option<&str>) -
              approve / `apply --plan-id` flow"
         ),
     }
+}
+
+// ---------------------------------------------------------------------
+// milestone 3m task R9: `rollback`
+// ---------------------------------------------------------------------
+
+/// Render one [`TeardownAction`] in decision 9's own vocabulary: `Delete`
+/// (apart from a `Delete { uncertain: true }`, decision 1's "shown
+/// apart"), `rides with <container>`, `already gone`, `kept by the
+/// document: <why>`, `cannot be undone: <why>`, `made by hand: <need>`,
+/// and `unfinished (manual check)`. `why`/`need` are the tool's or the
+/// document's own `&'static str` (never document text — a literal or
+/// default a document wrote would be a [`Value`], not a reason string),
+/// so neither goes through [`single_line`], unlike every rendered
+/// [`Value`] or instance key elsewhere in this module.
+fn teardown_action_text(action: &TeardownAction) -> String {
+    match action {
+        TeardownAction::Delete { uncertain: false } => "Delete".to_string(),
+        TeardownAction::Delete { uncertain: true } => "Delete (uncertain)".to_string(),
+        TeardownAction::RidesWith { container } => format!("rides with {container}"),
+        TeardownAction::Gone => "already gone".to_string(),
+        TeardownAction::Kept { why } => format!("kept by the document: {why}"),
+        TeardownAction::Retained { why } => format!("cannot be undone: {why}"),
+        TeardownAction::MadeByHand { need } => format!("made by hand: {need}"),
+        TeardownAction::Unfinished => "unfinished (manual check)".to_string(),
+    }
+}
+
+fn teardown_step_line(step: &TeardownStep) -> String {
+    format!("{}: {}", step.instance, teardown_action_text(&step.action))
+}
+
+/// The forward run's own recorded, already-redacted outputs for `instance`
+/// -- `None` when `forward_run` was not available (a defensive case;
+/// `cmd_rollback_plan` always has one once `plan_rollback` itself
+/// succeeds) or holds no node matching `instance`.
+fn forward_outputs<'a>(
+    forward_run: Option<&'a RunRecord>,
+    instance: &InstanceRef,
+) -> Option<&'a serde_json::Value> {
+    forward_run?
+        .nodes
+        .iter()
+        .find(|node| node.node == instance.node && node.instance == instance.instance)
+        .map(|node| node.outputs.as_json())
+}
+
+/// Render a [`willikins_server::Butler::plan_rollback`] response for text
+/// output: one line per step (decision 9's own order, the reverse of the
+/// applied plan's), each followed -- when `forward_run` has it -- by that
+/// instance's own recorded outputs from the run being rolled back, in the
+/// same [`redacted_map_lines`] form [`run_record_text`] already uses for
+/// journal-sourced values (there is no live [`Value`] here either: see
+/// that function's own doc for why masking the already-serialized JSON is
+/// the equivalent of [`Value::display`] in this position). This is what
+/// gives an approver the resource being deleted -- a profile's own `id`
+/// output, say -- not only its node name; decision 9 itself does not
+/// spell this line out, so it is recorded as an addendum. Then the
+/// teardown's own `plan_id`, `expires_at`, and the two follow-up commands
+/// (`approve`, then `rollback --plan-id`) decision 9 asks for.
+#[must_use]
+pub fn teardown_plan_text(
+    response: &TeardownPlanResponse,
+    forward_run: Option<&RunRecord>,
+    journal_path: &str,
+    disclosure: Disclosure,
+) -> String {
+    let mut lines = Vec::new();
+    for step in &response.teardown.steps {
+        lines.push(teardown_step_line(step));
+        if let Some(outputs) = forward_outputs(forward_run, &step.instance) {
+            lines.extend(redacted_map_lines(outputs, "    ", disclosure));
+        }
+    }
+    lines.push(format!("plan_id: {}", response.plan_id));
+    lines.push(format!("expires_at: {}", response.expires_at));
+    lines.push(format!(
+        "run `willikins approve {} --journal {journal_path}`, then `willikins rollback \
+         --plan-id {} --journal {journal_path}` to apply this teardown",
+        response.plan_id, response.plan_id
+    ));
+    lines.join("\n")
+}
+
+/// Like [`teardown_plan_text`], for `--json`: [`TeardownPlanResponse`]'s
+/// own `Serialize`, with each step's own `resource` key added from
+/// `forward_run` when one is available -- the same recorded outputs
+/// [`teardown_plan_text`] shows in text, in the same wire shape
+/// [`willikins_core::disclosure::mask_json`] already knows how to mask
+/// (it is exactly what [`crate::render::print_json`]'s own `mask_json`
+/// pass over the result this function returns will find and redact, so
+/// the identifier it carries -- a profile's own `id`, say -- prints
+/// masked here exactly as it does in text, and whole only under
+/// `--reveal`). Steps and their JSON array elements are in the same
+/// order (both come from `response.teardown.steps`, one rendered by
+/// `serde`, one walked directly), so this zips rather than re-matching by
+/// instance.
+#[must_use]
+pub fn teardown_plan_json(
+    response: &TeardownPlanResponse,
+    forward_run: Option<&RunRecord>,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(response).unwrap_or(serde_json::Value::Null);
+    if let Some(steps) = value
+        .get_mut("teardown")
+        .and_then(|teardown| teardown.get_mut("steps"))
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for (json_step, step) in steps.iter_mut().zip(&response.teardown.steps) {
+            if let Some(outputs) = forward_outputs(forward_run, &step.instance)
+                && let Some(object) = json_step.as_object_mut()
+            {
+                object.insert("resource".to_string(), outputs.clone());
+            }
+        }
+    }
+    value
+}
+
+fn teardown_step_outcome_text(outcome: &TeardownStepOutcome) -> String {
+    match outcome {
+        TeardownStepOutcome::Deleted => "Deleted".to_string(),
+        TeardownStepOutcome::AlreadyGone => "AlreadyGone".to_string(),
+        // A tool's own failure message (trust boundary 5), never a
+        // document's: through `single_line` exactly as `node_status_text`
+        // already treats `NodeStatus::Failed`.
+        TeardownStepOutcome::Failed { error } => {
+            format!("Failed: {}", single_line(&error.to_string()))
+        }
+        TeardownStepOutcome::NotRun => "NotRun".to_string(),
+        TeardownStepOutcome::Listed => "Listed".to_string(),
+    }
+}
+
+/// Render a [`willikins_server::Butler::apply_rollback`] result for text
+/// output: the teardown's own run id, one line per step (the approved
+/// teardown's own order), then whether it succeeded. No [`Value`] appears
+/// here at all -- a step's own outcome carries at most a tool's plain-text
+/// failure message -- so, unlike [`teardown_plan_text`], this takes no
+/// [`Disclosure`].
+#[must_use]
+pub fn teardown_run_text(result: &TeardownRunResult) -> String {
+    let mut lines = vec![format!("run_id: {}", result.run_id)];
+    for (instance, outcome) in &result.steps {
+        lines.push(format!(
+            "{instance}: {}",
+            teardown_step_outcome_text(outcome)
+        ));
+    }
+    lines.push(format!(
+        "state: {}",
+        if result.succeeded {
+            "succeeded"
+        } else {
+            "failed"
+        }
+    ));
+    lines.join("\n")
+}
+
+/// Like [`approval_required_guidance`], for `rollback --plan-id`: there is
+/// no `--approve` flag in decision 9's own grammar (a teardown always
+/// requires approval, decision 9: "always requires approval"), so the
+/// only path is `approve`, then re-running this same command.
+/// `willikins-journal` R7 addendum: `Butler::pending_approvals` stays
+/// `PlanRecord`-only, so this prints no backlog listing the way
+/// [`fail_apply`](crate::commands) itself adds for a forward plan.
+#[must_use]
+pub fn teardown_approval_required_guidance(plan_id: PlanId, journal_path: &str) -> String {
+    format!(
+        "teardown `{plan_id}` needs a human decision: run `willikins approve {plan_id} \
+         --journal {journal_path}`, then re-run `willikins rollback --plan-id {plan_id} \
+         --journal {journal_path}`"
+    )
 }
 
 #[cfg(test)]
@@ -1992,5 +2169,147 @@ mod tests {
             !without_journal.contains("willikins approve"),
             "{without_journal}: should not suggest a command that cannot work"
         );
+    }
+
+    // -------------------------------------------------------------
+    // milestone 3m task R9: `rollback`
+    // -------------------------------------------------------------
+
+    /// Decision 3a's two "cannot be undone" shapes -- a document that
+    /// keeps a node, and a tool that cannot undo one at all -- must read
+    /// differently, so an approver never mistakes one for the other.
+    #[test]
+    fn teardown_action_text_tells_kept_apart_from_retained() {
+        let kept = teardown_action_text(&TeardownAction::Kept {
+            why: "the document keeps it (no teardown: delete)",
+        });
+        let retained = teardown_action_text(&TeardownAction::Retained {
+            why: "never undone by rollback",
+        });
+        assert!(kept.contains("kept by the document"), "{kept}");
+        assert!(retained.contains("cannot be undone"), "{retained}");
+        assert_ne!(kept, retained);
+    }
+
+    /// A one-step [`TeardownPlanResponse`] whose step is a `profile`
+    /// node's `Delete`, plus the forward [`RunRecord`] it would roll
+    /// back, recording that node's own `profile` output (an
+    /// [`willikins_types::AppleProfileId`]) with `FULL` as its value.
+    /// Shared by the text and JSON masking tests below.
+    fn profile_delete_fixture(full: &str) -> (TeardownPlanResponse, RunRecord) {
+        let profile = willikins_types::AppleProfileId::parse(full).unwrap();
+        let mut outputs = Outputs::new();
+        outputs.insert(PortName::parse("profile").unwrap(), Value::known(profile));
+
+        let instance = InstanceRef {
+            node: NodeName::parse("profile").unwrap(),
+            instance: None,
+        };
+        let step = TeardownStep {
+            instance: instance.clone(),
+            action: TeardownAction::Delete { uncertain: false },
+        };
+        let response = TeardownPlanResponse {
+            plan_id: plan_id(),
+            teardown: willikins_core::Teardown { steps: vec![step] },
+            expires_at: willikins_core::Timestamp::now(),
+        };
+
+        let node = RunNode {
+            node: instance.node,
+            instance: instance.instance,
+            status: NodeStatus::Created,
+            outputs: willikins_journal::Redacted::from(&outputs),
+        };
+        let run = RunRecord {
+            run_id: run_id(),
+            plan_id: plan_id(),
+            principal: principal("agent"),
+            started_at: willikins_core::Timestamp::now(),
+            state: RunState::Succeeded,
+            nodes: vec![node],
+            outputs: willikins_journal::Redacted::from(&IndexMap::new()),
+            error: None,
+            blocked: Vec::new(),
+            next_step: None,
+            finished_at: Some(willikins_core::Timestamp::now()),
+            rolled_back_by: None,
+        };
+        (response, run)
+    }
+
+    /// `teardown_plan_text`'s own masking claim (R9's acceptance test):
+    /// a profile step's recorded `profile` output -- an identifier --
+    /// prints masked by default and whole only under `--reveal`, through
+    /// the same `mask_json`-over-journal-JSON path
+    /// `run_record_text_masks_an_identifier_output_unless_revealed`
+    /// already pins for a forward run.
+    #[test]
+    fn teardown_plan_text_masks_a_profile_steps_id_unless_revealed() {
+        const FULL: &str = "PR0F1LE1D9999";
+        let (response, run) = profile_delete_fixture(FULL);
+
+        let masked = teardown_plan_text(&response, Some(&run), "/tmp/j.jsonl", Disclosure::Masked);
+        assert!(masked.contains("profile: PR0F..."), "text: {masked}");
+        assert!(!masked.contains(FULL), "text leaked the full id: {masked}");
+
+        let revealed =
+            teardown_plan_text(&response, Some(&run), "/tmp/j.jsonl", Disclosure::Revealed);
+        assert!(revealed.contains(FULL), "text: {revealed}");
+    }
+
+    /// Like the text test above, for `--json`: `teardown_plan_json` itself
+    /// never masks (consistent with every other `--json` call site in
+    /// this crate, which builds the JSON first and masks it, through
+    /// `mask_json`, only at print time -- see `json_text`); this pins
+    /// that `mask_json` finds the attached `resource` field and masks it.
+    #[test]
+    fn teardown_plan_json_masks_a_profile_steps_id_unless_revealed() {
+        const FULL: &str = "PR0F1LE1D9999";
+        let (response, run) = profile_delete_fixture(FULL);
+
+        let mut masked = teardown_plan_json(&response, Some(&run));
+        willikins_core::disclosure::mask_json(&mut masked);
+        let masked_text = masked.to_string();
+        assert!(masked_text.contains("PR0F..."), "json: {masked_text}");
+        assert!(
+            !masked_text.contains(FULL),
+            "json leaked the full id: {masked_text}"
+        );
+
+        let revealed = teardown_plan_json(&response, Some(&run));
+        assert!(revealed.to_string().contains(FULL), "json: {revealed}");
+    }
+
+    /// Decision 9: `TeardownRunResult`'s own text carries the run id,
+    /// every step's outcome, and the overall state -- a `Failed` step's
+    /// tool message goes through `single_line`, exactly like a forward
+    /// run's own `NodeStatus::Failed`.
+    #[test]
+    fn teardown_run_text_lists_every_step_and_the_overall_state() {
+        let result = TeardownRunResult {
+            run_id: run_id(),
+            steps: vec![
+                (
+                    InstanceRef {
+                        node: NodeName::parse("repo").unwrap(),
+                        instance: None,
+                    },
+                    TeardownStepOutcome::Deleted,
+                ),
+                (
+                    InstanceRef {
+                        node: NodeName::parse("secret").unwrap(),
+                        instance: None,
+                    },
+                    TeardownStepOutcome::Listed,
+                ),
+            ],
+            succeeded: true,
+        };
+        let text = teardown_run_text(&result);
+        assert!(text.contains("repo: Deleted"), "{text}");
+        assert!(text.contains("secret: Listed"), "{text}");
+        assert!(text.contains("state: succeeded"), "{text}");
     }
 }

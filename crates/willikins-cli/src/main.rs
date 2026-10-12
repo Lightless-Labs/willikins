@@ -110,6 +110,11 @@ enum Command {
     Runs(commands::RunsArgs),
     /// Show one recorded run from a file journal.
     Run(commands::RunArgs),
+    /// Plan or apply a teardown of what a run created (milestone 3m):
+    /// `rollback <file> --run <run-id> --journal <path> [...]` plans one;
+    /// `rollback --plan-id <id> --journal <path> [...]` applies one
+    /// already approved (`willikins approve`).
+    Rollback(commands::RollbackArgs),
     /// Run the MCP server: `willikins serve --stdio | --http --bind <addr>
     /// [--fake] [--principal <id>]`. The same implementation
     /// `willikins-server serve` calls -- see
@@ -154,6 +159,7 @@ fn main() -> ExitCode {
         Command::Reject(args) => commands::cmd_reject(&args, cli.json, disclosure),
         Command::Runs(args) => commands::cmd_runs(&args, cli.json, disclosure),
         Command::Run(args) => commands::cmd_run(&args, cli.json, disclosure),
+        Command::Rollback(args) => commands::cmd_rollback(&args, cli.json, disclosure),
         Command::Serve(args) => willikins_server::cli::run_serve(&args),
         Command::HashToken => willikins_server::cli::run_hash_token(),
     }

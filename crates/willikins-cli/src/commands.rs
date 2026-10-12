@@ -175,6 +175,65 @@ pub struct RunArgs {
     pub journal: String,
 }
 
+/// `rollback`'s two modes (milestone 3m task R9, decision 9): plan a fresh
+/// teardown of a finished forward run, or apply one an earlier `rollback`
+/// (and, in between, `willikins approve`) already recorded. Mirrors
+/// [`ApplyArgs`]'s own file-vs-`--plan-id` split, with two differences
+/// decision 9's own grammar asks for: `--journal` is required in *both*
+/// modes (a run, or a teardown plan, only exists in one), and there is no
+/// `--approve` (a teardown always requires a human decision -- SHARED
+/// VALUES: "`requires_approval` always `true`" -- so the only path is
+/// `willikins approve`, then re-running this command).
+#[derive(clap::Args, Debug)]
+pub struct RollbackArgs {
+    /// Path to the workflow YAML whose run is being rolled back. Mutually
+    /// exclusive with `--plan-id`; exactly one of the two is required.
+    pub file: Option<String>,
+    /// The forward run to plan a teardown of. Required with `file`;
+    /// refused with `--plan-id` (a plan already names its own run).
+    #[arg(long)]
+    pub run: Option<String>,
+    /// Apply an approved teardown plan recorded earlier, instead of
+    /// planning a fresh one for `--run`.
+    #[arg(long = "plan-id", value_name = "ID")]
+    pub plan_id: Option<String>,
+    /// Where this run, and this teardown, are recorded. Unlike
+    /// [`ApplyArgs::journal`] (which defaults to an in-memory journal),
+    /// this is required in both modes: a run named by `--run`, or a plan
+    /// named by `--plan-id`, exists only in a journal one of `apply`'s or
+    /// `rollback`'s own earlier invocations wrote.
+    #[arg(long)]
+    pub journal: String,
+    /// A JSON file seeding the fake providers' state, as `apply
+    /// --fake-state` does. Mutually exclusive with `--live`.
+    #[arg(long = "fake-state", value_name = "FILE")]
+    pub fake_state: Option<String>,
+    /// After this command's own operation (planning or applying the
+    /// teardown) completes, dump the fake providers' (redacted) ending
+    /// state to this file -- as `apply --fake-state-out` does.
+    ///
+    /// **Deviation from `apply --plan-id`, which refuses this flag
+    /// outright:** acceptance test 11's own round trip
+    /// (`apply --fake-state-out A`, `rollback --run R --fake-state A`,
+    /// `approve`, `rollback --plan-id P --fake-state A --fake-state-out
+    /// B`) needs the *teardown's* own ending state dumped from
+    /// `--plan-id` mode, since that is the only mode that ever deletes
+    /// anything. Recorded as a plan addendum.
+    #[arg(long = "fake-state-out", value_name = "FILE")]
+    pub fake_state_out: Option<String>,
+    /// Real providers. Without it, the fake providers.
+    #[arg(long)]
+    pub live: bool,
+    /// The principal this command runs as.
+    #[arg(long, default_value = "local")]
+    pub principal: String,
+    /// The trusted workflow directory `--plan-id` resolves its teardown's
+    /// own forward plan against. See [`ApplyArgs::workflows_dir`]. Only
+    /// valid with `--plan-id`.
+    #[arg(long = "workflows-dir", value_name = "DIR")]
+    pub workflows_dir: Option<String>,
+}
+
 // ---------------------------------------------------------------------
 // shared, kind-tagged CLI-local refusals
 // ---------------------------------------------------------------------
@@ -1144,5 +1203,257 @@ pub fn cmd_run(args: &RunArgs, json: bool, disclosure: Disclosure) -> ExitCode {
             json,
             disclosure,
         ),
+    }
+}
+
+// ---------------------------------------------------------------------
+// rollback (milestone 3m task R9, decision 9)
+// ---------------------------------------------------------------------
+
+/// `rollback`: dispatch on `file` vs `--plan-id`. See [`RollbackArgs`]'s
+/// own doc.
+pub fn cmd_rollback(args: &RollbackArgs, json: bool, disclosure: Disclosure) -> ExitCode {
+    match (&args.file, &args.plan_id) {
+        (Some(_), Some(_)) => usage_error("rollback: pass a file or --plan-id, not both"),
+        (None, None) => {
+            usage_error("rollback: pass a file --run <run-id>, or --plan-id <id> --journal <path>")
+        }
+        (Some(file), None) => cmd_rollback_plan(args, file, json, disclosure),
+        (None, Some(plan_id)) => cmd_rollback_apply(args, plan_id, json, disclosure),
+    }
+}
+
+/// `rollback <file> --run <run-id> --journal <path> [...]`: plan a fresh
+/// teardown of `--run` (`Butler::plan_rollback`), over a `Butler` scoped
+/// to `file`'s own private temporary directory -- the exact same
+/// `load_workflow` -> `link_workflow` -> `build_catalog_for_document` ->
+/// `check_workflow` -> `stage_apply_closure` pipeline [`cmd_apply_file`]
+/// uses, including the linked closure copy (milestone 2b decision (d8),
+/// as this task's own row asks). Always exits 0 on a successful plan: a
+/// teardown always requires approval (decision 9), so nothing has been
+/// deleted yet either way, and a refusal (including a drifted/refused
+/// teardown) is a [`ButlerError`] like any other, exit 1 via
+/// [`fail_domain`] -- "exit codes are `apply`'s, plus 1 for a refused
+/// (drifted) teardown" is satisfied because that *is* `apply`'s own exit
+/// 1 for a domain refusal.
+fn cmd_rollback_plan(
+    args: &RollbackArgs,
+    file: &str,
+    json: bool,
+    disclosure: Disclosure,
+) -> ExitCode {
+    if args.workflows_dir.is_some() {
+        return usage_error("rollback: --workflows-dir only applies with --plan-id");
+    }
+    let Some(run_id_str) = args.run.as_deref() else {
+        return usage_error("rollback <file> needs --run <run-id>");
+    };
+    let run_id: RunId = match run_id_str.parse() {
+        Ok(id) => id,
+        Err(error) => {
+            return fail_config(
+                &CliError::InvalidId {
+                    argument: run_id_str.to_string(),
+                    error: error.to_string(),
+                },
+                json,
+                disclosure,
+            );
+        }
+    };
+    let principal = match parse_principal(&args.principal) {
+        Ok(principal) => principal,
+        Err(code) => return code,
+    };
+
+    let workflow = match crate::load_workflow(file, json) {
+        Ok(workflow) => workflow,
+        Err(code) => return code,
+    };
+    let linked = match crate::link_workflow(file, &workflow, json, disclosure) {
+        Ok(linked) => linked,
+        Err(code) => return code,
+    };
+    let (catalog, fake_state) = match build_catalog_for_document(
+        args.live,
+        args.fake_state.as_deref(),
+        &linked.workflow,
+        json,
+        disclosure,
+    ) {
+        Ok(built) => built,
+        Err(code) => return code,
+    };
+    if args.fake_state_out.is_some() && fake_state.is_none() {
+        return usage_error("rollback: --fake-state-out needs the fake providers (drop --live)");
+    }
+
+    let checked = match crate::check_workflow(&linked.workflow, &catalog, json, disclosure) {
+        Ok(checked) => checked,
+        Err(code) => return code,
+    };
+    let workflow_name = checked.name().clone();
+    let temp_dir = match stage_apply_closure(file, &workflow_name, &linked, json, disclosure) {
+        Ok(dir) => dir,
+        Err(code) => return code,
+    };
+
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let journal = match open_journal(Some(&args.journal), Arc::clone(&clock), json, disclosure) {
+        Ok(journal) => journal,
+        Err(code) => return code,
+    };
+    let butler = match Butler::start(default_butler_config(
+        temp_dir.path().to_path_buf(),
+        journal,
+        catalog,
+        clock,
+    )) {
+        Ok(butler) => butler,
+        Err(error) => return fail_startup(error, json, disclosure),
+    };
+
+    let response = match butler.plan_rollback(run_id, principal) {
+        Ok(response) => response,
+        Err(error) => {
+            note_nothing_dumped(args.fake_state_out.as_deref(), "planned");
+            return fail_domain(&error, json, disclosure);
+        }
+    };
+    // The same `Butler`/journal that just recorded the teardown already
+    // holds the forward run itself -- used only to show each step's own
+    // recorded resource alongside it (see `render::teardown_plan_text`'s
+    // own doc); `plan_rollback` succeeding guarantees `run_id` resolves.
+    let forward_run = butler.run(run_id);
+    if json {
+        render::print_json(
+            &render::teardown_plan_json(&response, forward_run.as_ref()),
+            disclosure,
+        );
+    } else {
+        println!(
+            "{}",
+            render::teardown_plan_text(&response, forward_run.as_ref(), &args.journal, disclosure)
+        );
+    }
+
+    if let Some(path) = &args.fake_state_out
+        && let Some(state) = &fake_state
+        && let Err(error) = dump_fake_state(state, path)
+    {
+        eprintln!("{path}: failed to write fake state: {error}");
+    }
+    ExitCode::from(0)
+}
+
+/// `rollback --plan-id <id> --journal <path> [...]`: apply an approved
+/// teardown (`Butler::apply_rollback`), over a `Butler` scoped to a real
+/// trusted `--workflows-dir` (default `workflows`) -- the same
+/// `build_catalog`/`Butler::start` pair [`cmd_apply_plan_id`] uses.
+/// **Runs synchronously** (`apply_rollback`'s own doc): there is no
+/// `RunHandle` to poll here, unlike `apply --plan-id`. Exit 0 when every
+/// step ran (or was already gone); exit 1 on a step failure or any
+/// [`ButlerError`] refusal, including [`ButlerError::TeardownDrift`]
+/// ("plus 1 for a refused (drifted) teardown", decision 9).
+fn cmd_rollback_apply(
+    args: &RollbackArgs,
+    plan_id_str: &str,
+    json: bool,
+    disclosure: Disclosure,
+) -> ExitCode {
+    if args.run.is_some() {
+        return usage_error("rollback --plan-id does not take --run");
+    }
+    let plan_id: PlanId = match plan_id_str.parse() {
+        Ok(id) => id,
+        Err(error) => {
+            return fail_config(
+                &CliError::InvalidId {
+                    argument: plan_id_str.to_string(),
+                    error: error.to_string(),
+                },
+                json,
+                disclosure,
+            );
+        }
+    };
+    let principal = match parse_principal(&args.principal) {
+        Ok(principal) => principal,
+        Err(code) => return code,
+    };
+    let workflows_dir = PathBuf::from(args.workflows_dir.as_deref().unwrap_or("workflows"));
+
+    let (catalog, fake_state) =
+        match build_catalog(args.live, args.fake_state.as_deref(), json, disclosure) {
+            Ok(built) => built,
+            Err(code) => return code,
+        };
+    if args.fake_state_out.is_some() && fake_state.is_none() {
+        return usage_error("rollback: --fake-state-out needs the fake providers (drop --live)");
+    }
+
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let journal = match open_journal(Some(&args.journal), Arc::clone(&clock), json, disclosure) {
+        Ok(journal) => journal,
+        Err(code) => return code,
+    };
+    let butler = match Butler::start(default_butler_config(
+        workflows_dir,
+        journal,
+        catalog,
+        clock,
+    )) {
+        Ok(butler) => butler,
+        Err(error) => return fail_startup(error, json, disclosure),
+    };
+
+    let result = match butler.apply_rollback(plan_id, principal) {
+        Ok(result) => result,
+        Err(error) => {
+            note_nothing_dumped(args.fake_state_out.as_deref(), "applied");
+            if json {
+                return fail_domain(&error, json, disclosure);
+            }
+            println!("{}", render::single_line(&error.to_string()));
+            if matches!(&error, ButlerError::ApprovalRequired { .. }) {
+                println!(
+                    "{}",
+                    render::teardown_approval_required_guidance(plan_id, &args.journal)
+                );
+            }
+            return ExitCode::from(1);
+        }
+    };
+
+    if json {
+        render::print_json(&result, disclosure);
+    } else {
+        println!("{}", render::teardown_run_text(&result));
+    }
+
+    if let Some(path) = &args.fake_state_out
+        && let Some(state) = &fake_state
+        && let Err(error) = dump_fake_state(state, path)
+    {
+        eprintln!("{path}: failed to write fake state: {error}");
+    }
+
+    if result.succeeded {
+        ExitCode::from(0)
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+/// `--fake-state-out`'s own refusal note when a `rollback` call was
+/// refused before its operation (planning, or applying) ever ran -- the
+/// same "nothing written" honesty [`cmd_apply_file`]'s own handling of
+/// the flag already gives a refusal that never reached a run.
+fn note_nothing_dumped(fake_state_out: Option<&str>, verb: &str) {
+    if fake_state_out.is_some() {
+        eprintln!(
+            "--fake-state-out: nothing written -- the teardown was never {verb}, so there is no \
+             ending state to dump"
+        );
     }
 }
