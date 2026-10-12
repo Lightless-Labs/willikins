@@ -1,0 +1,465 @@
+---
+source: crates/willikins-server/tests/it/reversal_table.rs
+assertion_line: 77
+expression: table
+---
+[
+    (
+        "naming.v1",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "template.render",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "operator.acknowledge",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "env.get",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "base64.decode",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "apple.signing_key.parse",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "apple.issuer_id.parse",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "apple.key_id.parse",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "github.token.parse",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "buildkite.token.parse",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "repo.file.render",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "github.repo.ensure",
+        Delete {
+            needs: [
+                "repo",
+                "token",
+            ],
+            within: [],
+            losses: [],
+        },
+    ),
+    (
+        "github.actions_secret.ensure",
+        Contained {
+            within: [
+                Within {
+                    tool: "github.repo.ensure",
+                    ports: [
+                        (
+                            "repo",
+                            Input,
+                            "repo",
+                        ),
+                    ],
+                },
+            ],
+            otherwise: "it always writes, and its prior value, if any, is never read, so it cannot be restored",
+        },
+    ),
+    (
+        "github.repo.get",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "github.scaffold.ensure",
+        Contained {
+            within: [
+                Within {
+                    tool: "github.repo.ensure",
+                    ports: [
+                        (
+                            "repo",
+                            Input,
+                            "repo",
+                        ),
+                    ],
+                },
+            ],
+            otherwise: "a scaffold is a commit on a branch; reverting it is a new forward change the document must make",
+        },
+    ),
+    (
+        "doppler.project.ensure",
+        Delete {
+            needs: [
+                "project",
+            ],
+            within: [],
+            losses: [],
+        },
+    ),
+    (
+        "doppler.config.ensure",
+        Delete {
+            needs: [
+                "project",
+                "environment",
+            ],
+            within: [
+                Within {
+                    tool: "doppler.project.ensure",
+                    ports: [
+                        (
+                            "project",
+                            Input,
+                            "project",
+                        ),
+                    ],
+                },
+            ],
+            losses: [],
+        },
+    ),
+    (
+        "doppler.branch_config.ensure",
+        Delete {
+            needs: [
+                "project",
+                "environment",
+                "branch",
+            ],
+            within: [
+                Within {
+                    tool: "doppler.project.ensure",
+                    ports: [
+                        (
+                            "project",
+                            Input,
+                            "project",
+                        ),
+                    ],
+                },
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: [
+                        (
+                            "project",
+                            Input,
+                            "project",
+                        ),
+                        (
+                            "environment",
+                            Input,
+                            "environment",
+                        ),
+                    ],
+                },
+            ],
+            losses: [],
+        },
+    ),
+    (
+        "doppler.config.inheritable.ensure",
+        Contained {
+            within: [
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: [
+                        (
+                            "config",
+                            Output,
+                            "config",
+                        ),
+                    ],
+                },
+                Within {
+                    tool: "doppler.branch_config.ensure",
+                    ports: [
+                        (
+                            "config",
+                            Output,
+                            "config",
+                        ),
+                    ],
+                },
+            ],
+            otherwise: "a flag on an existing config; whether it was already set is not recorded",
+        },
+    ),
+    (
+        "doppler.config.inheritable.gate",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "doppler.secret_name.gate",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "doppler.config.inherits.ensure",
+        Contained {
+            within: [
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: [
+                        (
+                            "config",
+                            Output,
+                            "config",
+                        ),
+                    ],
+                },
+                Within {
+                    tool: "doppler.branch_config.ensure",
+                    ports: [
+                        (
+                            "config",
+                            Output,
+                            "config",
+                        ),
+                    ],
+                },
+            ],
+            otherwise: "add-only, and which bases were already there is not recorded",
+        },
+    ),
+    (
+        "doppler.project_member.ensure",
+        Contained {
+            within: [
+                Within {
+                    tool: "doppler.project.ensure",
+                    ports: [
+                        (
+                            "project",
+                            Input,
+                            "project",
+                        ),
+                    ],
+                },
+            ],
+            otherwise: "adds or raises a role; the prior role is not recorded",
+        },
+    ),
+    (
+        "doppler.service_token.ensure",
+        Delete {
+            needs: [
+                "config",
+                "name",
+            ],
+            within: [
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: [
+                        (
+                            "config",
+                            Output,
+                            "config",
+                        ),
+                    ],
+                },
+                Within {
+                    tool: "doppler.branch_config.ensure",
+                    ports: [
+                        (
+                            "config",
+                            Output,
+                            "config",
+                        ),
+                    ],
+                },
+            ],
+            losses: [],
+        },
+    ),
+    (
+        "doppler.service_token.rotate",
+        Retained {
+            why: "the revoked token cannot be restored",
+        },
+    ),
+    (
+        "doppler.secret.get",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "doppler.secret.set",
+        Contained {
+            within: [
+                Within {
+                    tool: "doppler.config.ensure",
+                    ports: [
+                        (
+                            "config",
+                            Output,
+                            "config",
+                        ),
+                    ],
+                },
+                Within {
+                    tool: "doppler.branch_config.ensure",
+                    ports: [
+                        (
+                            "config",
+                            Output,
+                            "config",
+                        ),
+                    ],
+                },
+            ],
+            otherwise: "always writes; the prior value is never read, by design",
+        },
+    ),
+    (
+        "doppler.value.get",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "signoz.ingestion_key.ensure",
+        Retained {
+            why: "no live sandbox (out of scope)",
+        },
+    ),
+    (
+        "buildkite.pipeline.ensure",
+        Delete {
+            needs: [
+                "org",
+                "slug",
+                "token",
+            ],
+            within: [],
+            losses: [
+                "builds",
+            ],
+        },
+    ),
+    (
+        "buildkite.cluster.get",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "buildkite.pipeline.bootstrap.gate",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "buildkite.pipeline.bootstrap.ensure",
+        Contained {
+            within: [
+                Within {
+                    tool: "buildkite.pipeline.ensure",
+                    ports: [
+                        (
+                            "org",
+                            Input,
+                            "org",
+                        ),
+                        (
+                            "slug",
+                            Input,
+                            "slug",
+                        ),
+                    ],
+                },
+            ],
+            otherwise: "the prior configuration is not recorded",
+        },
+    ),
+    (
+        "appstore.bundle_id.ensure",
+        Retained {
+            why: "App Store identity the operator keeps: no ownership marker exists, and deleting an identifier takes its capabilities and profiles with it",
+        },
+    ),
+    (
+        "appstore.bundle_id_capability.ensure",
+        Retained {
+            why: "disabling a capability invalidates every profile on the identifier",
+        },
+    ),
+    (
+        "appstore.certificate.get",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "appstore.profile.ensure",
+        Delete {
+            needs: [
+                "issuer_id",
+                "key_id",
+                "key",
+                "identifier",
+                "name",
+            ],
+            within: [],
+            losses: [],
+        },
+    ),
+    (
+        "appstore.app.get",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "appstore.app_group.gate",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+    (
+        "appstore.bundle_id_capability.gate",
+        Retained {
+            why: "this tool declares no reversal",
+        },
+    ),
+]

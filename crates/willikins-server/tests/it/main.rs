@@ -29,5 +29,6 @@ mod mcp_output_schema_conformance;
 mod mcp_server;
 mod plan_failure_message;
 mod readme_variables;
+mod reversal_table;
 mod send_sync;
 mod serve_http_deploy_pins;
