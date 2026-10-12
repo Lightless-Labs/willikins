@@ -1288,6 +1288,29 @@ base) rather than deriving it fresh. Deviations recorded:
   inverse actually calls (decision 4's table), so probing that endpoint directly while a foreign
   project still inherits answers verify item 4 for the real call site, not a different one a branch
   config's `DELETE /v3/configs/config` would exercise instead.
+- **`crates/willikins-cli/tests/it/delete_call_sites_guard.rs`'s `INVENTORY` is confirmed stale**,
+  run scoped (`cargo test -p willikins-cli --test it -j 2 -- delete_call_sites_guard::`, `RUST_TEST_THREADS=2`):
+  10 of 11 tests pass; `delete_call_sites_in_provider_crates_match_the_pinned_inventory` fails,
+  reporting every site below as live but unlisted. Five are L1's own (already missing before this
+  task; this task never touched `willikins-providers-github`), eleven are this task's own L2 sites.
+  Not fixed here (fixing L2 alone while L1's own entries stay missing is no less inconsistent, and
+  `INVENTORY` lives in `willikins-cli`, outside this task's own crate scope) -- recorded in
+  `needs_coordinator` as a real blocker for the coordinator's own end-of-milestone full gate, to be
+  closed in one commit extending `INVENTORY` for L1 and L2 together (and L3, once written):
+  ```
+  crates/willikins-providers-doppler/tests/live_rollback_cycle.rs::delete .delete_with_body(
+  crates/willikins-providers-doppler/tests/live_rollback_cycle.rs::sub_cycle_a_teardown .delete( (x4)
+  crates/willikins-providers-doppler/tests/live_rollback_cycle.rs::sub_cycle_b_project_teardown .delete(
+  crates/willikins-providers-doppler/tests/live_rollback_cycle.rs::sub_cycle_b_rider_mechanic_and_verify_3 .delete( (x3)
+  crates/willikins-providers-doppler/tests/live_rollback_cycle.rs::sub_cycle_c_hand_set_secret_drift .delete(
+  crates/willikins-providers-doppler/tests/live_rollback_cycle.rs::sub_cycle_d_cross_project_inheritance .delete(
+  crates/willikins-providers-doppler/tests/live_rollback_cycle.rs::verify_decision_7_no_rider_refuses .delete(
+  crates/willikins-providers-github/tests/live_rollback_cycle.rs::drop .delete(
+  crates/willikins-providers-github/tests/live_rollback_cycle.rs::step_2_clean_rollback .delete(
+  crates/willikins-providers-github/tests/live_rollback_cycle.rs::step_3_push_drift .delete(
+  crates/willikins-providers-github/tests/live_rollback_cycle.rs::step_4_secret_drift .delete(
+  crates/willikins-providers-github/tests/live_rollback_cycle.rs::step_5_manual_cleanup_and_recount .delete(
+  ```
 
 ## Goal
 
