@@ -50,6 +50,22 @@ by unit tests over hand-written sources rather than the real tree. R6 must bump 
 commit that adds `apply_teardown`'s own call and its `#[allow(clippy::disallowed_methods)]`; leaving either behind
 fails the guard.
 
+**Addendum:** 2026-10-12 — R3 landed (`Tool::inverse()`, `Standing`, `Deleted`, `Created`, the `Inverse` trait, and
+`Catalog::insert`'s "`Delete` exactly when `inverse()` is `Some`" rule, with two new `ReversalError` variants,
+`DeleteWithoutInverse` and `InverseWithoutDelete`). Decision 3's `Created<'a>` code sample names three fields whose
+types no landed task yet defines: `window: CreationWindow` and `riders: &'a [Rider<'a>]` are R5a/R5b's, `accept: &'a
+[Loss]` is T1's (`Loss` itself lives in `workflow.rs`, added by T1). Minting throwaway `CreationWindow`/`Rider`/`Loss`
+shells here would be exactly the pattern R2's own addendum above already refused for `TeardownToken`'s capability
+token. So R3's `Created` carries only `inputs`, `outputs` and `settled_by` (`crate::apply::Timestamp`, which already
+exists); `Inverse::delete`'s documented contract already states the rule those three fields will carry (observe
+first; anything but `AsCreated` is `Conflict`, so is `AsCreated` with an unaccepted declared loss; `Gone` is `Ok(Deleted
+{ already_gone: true })`), in prose rather than in the type, so their later arrival changes no contract, only the type
+that can express it. R5a adds `window`, R5b adds `riders`, T1 adds `accept` — each in the commit that adds the type it
+needs, the same discipline R6 owes `EXPECTED_SITES` above. R3 also added two stub `Tool` implementations to
+`testing.rs` behind `test-support`, `StubDeletableTool` (`Reversal::Delete` with the loss `"builds"`, a working
+`inverse()`) and `StubContainedTool` (`Reversal::Contained`, riding out with the first), for T1's own stubs line to
+bind in a document.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
