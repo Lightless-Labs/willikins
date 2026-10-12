@@ -770,17 +770,25 @@ gates (`-p willikins-providers-appstore -p willikins-providers-signoz`: `cargo f
   kept anyway, for the same shape every other inverse's `delete` already uses, rather than special-cased away.
 - **`ProfileStandingResource` carries no `id` field.** The caller already knows it (the id this read was addressed
   to); carrying one unread field was flagged dead code by the plain `lib` build and removed rather than silenced.
-- **Nineteen mock tests**, in a new `tests/it/profile_inverse_mock.rs`: the exact standing query, `Gone` on `404`,
-  `NotOurs` on a name mismatch, a bundle id mismatch (wrong id and a missing relationship outright), outside the
-  window (and missing `createdDate` outright), the `reversal()` shape, and `delete`'s three outcomes (already gone,
+- **Thirteen mock tests**, in a new `tests/it/profile_inverse_mock.rs`: the exact standing query, `Gone` on `404`,
+  `NotOurs` on a name mismatch, a bundle id mismatch (wrong id and a missing relationship outright), the three window
+  edges (`start − 1s` `NotOurs`, `end` exactly `AsCreated`, `end + 1s` `NotOurs`, mirroring P1's and P4's own edge
+  tests) and missing `createdDate` outright, the `reversal()` shape, and `delete`'s three outcomes (already gone,
   deletes, refuses as `Conflict` with no `DELETE` issued at all -- trust boundary 6).
 - **`appstore.bundle_id.ensure`'s and `appstore.bundle_id_capability.ensure`'s own "why" strings are decision 4's table
   text verbatim**, copied character for character rather than paraphrased, per the row's own instruction.
 - **No new live App Store call, as the row requires.** No live-tests target, no manual try; the existing live write
   cycle (which already deletes its own throwaway profiles by hand, outside rollback) is untouched.
+- **`delete_profile`'s own doc comment gains the inverse as its third caller**, as the row's own text asked for --
+  missed on the first pass of this addendum and fixed in a follow-up commit, same task.
 - **Left for P6/P7**, same as every other provider task: `appstore.profile.ensure` is not yet checked against
   `LIVE_TOOL_NAMES`'s own table test or the fake catalog's own parity test; `catalog_parity.rs` in both crates
   exercises only `ToolSpec` (unaffected, since `reversal()` is not part of it) and stays green unchanged.
+- **Two commit subjects below miscount, carried over from other tasks' own wording rather than fixed for this one; not
+  amended (history), corrected here instead.** Commit 1's subject says "declare Retained for the five tools" -- it
+  is three (`appstore.bundle_id.ensure`, `appstore.bundle_id_capability.ensure`, `signoz.ingestion_key.ensure`); "five"
+  is P3's own count. This addendum's own first draft said "Nineteen mock tests" above; it is thirteen (now, after a
+  same-day addition of the two edge tests this addendum's own review added) -- "nineteen" is P1's own count.
 
 ## Goal
 
