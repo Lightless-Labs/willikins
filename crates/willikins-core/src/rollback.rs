@@ -17,15 +17,22 @@
 //! [`crate::plan::resolve_pure`] evaluated for it — [`wanted_resolvers`]
 //! is the seam a caller (`willikins-server`'s future
 //! `Butler::plan_rollback`, task R8) uses to compute that closure's own
-//! `wanted` set from `checked` alone. `apply_teardown` (milestone 3m task
-//! R6) still lands in a later commit. Riding (milestone 3m task R5b,
+//! `wanted` set from `checked` alone. Riding (milestone 3m task R5b,
 //! decisions 3 and 3a) is computed once, structurally, over every
 //! instance the run named -- never from the resolution the fixed point
 //! below produces -- so a [`Rider`] is attached to [`Created::riders`]
 //! purely on typed-equal recorded values and "wrote or found something",
 //! and the fixed point (`resolve_actions`) only decides, from that same
 //! static matching, whether *this* instance itself rides out, is kept
-//! with its container, or stands on its own.
+//! with its container, or stands on its own. [`apply_teardown`]
+//! (milestone 3m task R6) re-plans (reusing the very same
+//! `plan_teardown_steps` [`plan_teardown`] itself calls), refuses when the
+//! fresh observation disagrees with what was approved
+//! ([`StepFingerprint`]'s own `standing`, decision 8's "a loss that
+//! appears between approval and apply therefore differs"), mints the
+//! one [`willikins_types::TeardownToken`] this module's executor ever
+//! mints, and deletes every `Delete` step in order, stopping at the
+//! first failure.
 
 use std::sync::LazyLock;
 
@@ -551,6 +558,62 @@ pub enum TeardownAction {
     Unfinished,
 }
 
+/// What a [`TeardownPolicy::Delete`] step's own `standing()` call
+/// actually reported (milestone 3m task R6, decision 8), carried on its
+/// [`StepFingerprint`] so a later re-observation can be compared value
+/// for value, not only by which [`TeardownAction`] it produced: an
+/// accepted loss never changes a step's own action (still
+/// `Delete { uncertain }` either way), so the action alone cannot tell
+/// "no loss yet" apart from "a loss, but one this node's policy already
+/// accepts" -- exactly the gap decision 8's "a loss that appears between
+/// approval and apply therefore differs" closes. `None` on
+/// [`StepFingerprint::standing`] for a step whose action never called
+/// `standing` at all (`RidesWith`, `Kept`, `Retained`, `MadeByHand`,
+/// `Unfinished`) -- only `Gone` and the `Delete`-producing `AsCreated`
+/// ever do (decision 6).
+///
+/// SHARED VALUES names this type (credited to tasks R5a and R7, for the
+/// journal's own typed comparison); it is taken over here, by R6, because
+/// R6's own row is the first that actually needs it ("compare
+/// fingerprints... standing kinds and losses included"), ahead of R7's
+/// journal work. See this task's own plan addendum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StandingKind {
+    /// [`Standing::Gone`] was observed.
+    Gone,
+    /// [`Standing::AsCreated`] was observed, with these declared losses
+    /// currently reported (empty when none).
+    AsCreated {
+        /// The declared losses this observation reported.
+        losing: Vec<&'static str>,
+    },
+}
+
+/// One step's own fingerprint (milestone 3m decision 8, SHARED VALUES
+/// "Step fingerprint"): everything [`apply_teardown`]'s own comparison
+/// needs to tell "this run's own teardown, re-observed, is still exactly
+/// what was approved" from "something changed" -- without comparing a
+/// secret or otherwise-unredacted value (trust boundaries 5, 7). Produced
+/// by [`plan_teardown_fingerprint`], one entry per [`Teardown::steps`]
+/// entry, in the same order; the caller that approves a teardown
+/// (`willikins-server`'s future `Butler::plan_rollback`, task R8) keeps
+/// this alongside the [`Teardown`] it shows the operator, and passes it
+/// back to [`apply_teardown`] at apply time.
+///
+/// Bundles `node` and `instance` into one [`crate::apply::InstanceRef`]
+/// rather than SHARED VALUES' own two separate fields, matching
+/// [`TeardownStep::instance`]'s own shape -- a deviation recorded in this
+/// task's own plan addendum, not a change of meaning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepFingerprint {
+    /// The instance.
+    pub instance: crate::apply::InstanceRef,
+    /// What `plan_teardown` decided for it.
+    pub action: TeardownAction,
+    /// What its own `standing()` call reported, if it called one at all.
+    pub standing: Option<StandingKind>,
+}
+
 /// Why [`plan_teardown`] could not produce an approvable [`Teardown`].
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum TeardownError {
@@ -876,6 +939,11 @@ enum Decision {
 /// [`Created::riders`] exactly when this reversal is `Delete` and its
 /// policy says to delete, the only case that ever observes a resource at
 /// all.
+///
+/// Returns, alongside the [`Decision`], the [`StandingKind`] its own
+/// `standing()` call reported -- `None` for a branch that never calls one
+/// (milestone 3m task R6): [`Resolution::standing`] carries it into the
+/// matching [`StepFingerprint`].
 fn decide_standalone(
     secrets: &Secrets,
     instance: &RunInstance,
@@ -884,15 +952,16 @@ fn decide_standalone(
     finished: crate::apply::Timestamp,
     uncertain: bool,
     riders: &[Rider<'_>],
-) -> Result<Decision, TeardownError> {
+) -> Result<(Decision, Option<StandingKind>), TeardownError> {
     match checked_node.tool.reversal() {
-        Reversal::Retained { why } => Ok(Decision::Step(TeardownAction::Retained { why })),
-        Reversal::Contained { otherwise, .. } => {
-            Ok(Decision::Step(TeardownAction::Retained { why: otherwise }))
-        }
+        Reversal::Retained { why } => Ok((Decision::Step(TeardownAction::Retained { why }), None)),
+        Reversal::Contained { otherwise, .. } => Ok((
+            Decision::Step(TeardownAction::Retained { why: otherwise }),
+            None,
+        )),
         Reversal::Delete { needs, losses, .. } => match &checked_node.teardown {
             crate::workflow::TeardownPolicy::Retain => {
-                Ok(Decision::Step(TeardownAction::Kept { why: KEPT }))
+                Ok((Decision::Step(TeardownAction::Kept { why: KEPT }), None))
             }
             crate::workflow::TeardownPolicy::Delete { accept } => {
                 let window = CreationWindow {
@@ -924,7 +993,18 @@ fn decide_standalone(
                         },
                         error,
                     })?;
-                Ok(match standing {
+                // Milestone 3m task R6: the fingerprint's own half of this
+                // observation, kept apart from `decision` below --
+                // `NotOurs`/`Drifted` never reach a `Teardown` at all (they
+                // only ever refuse), so neither needs a `StandingKind`.
+                let standing_kind = match &standing {
+                    Standing::Gone => Some(StandingKind::Gone),
+                    Standing::AsCreated { losing } => Some(StandingKind::AsCreated {
+                        losing: losing.clone(),
+                    }),
+                    Standing::NotOurs { .. } | Standing::Drifted { .. } => None,
+                };
+                let decision = match standing {
                     Standing::Gone => Decision::Step(TeardownAction::Gone),
                     Standing::NotOurs { why } => Decision::Refused(why),
                     Standing::Drifted { what } => Decision::Refused(what),
@@ -945,7 +1025,8 @@ fn decide_standalone(
                             Decision::Step(TeardownAction::Delete { uncertain })
                         }
                     }
-                })
+                };
+                Ok((decision, standing_kind))
             }
         },
     }
@@ -1145,11 +1226,16 @@ enum Settled {
 }
 
 /// One instance's own resolved place in the ride fixed point: its
-/// [`Settled`] state (for its own riders) and the [`Decision`] it itself
-/// produces, if any (`None` for "not a step at all").
+/// [`Settled`] state (for its own riders), the [`Decision`] it itself
+/// produces, if any (`None` for "not a step at all"), and -- milestone
+/// 3m task R6 -- what its own `standing()` call reported, if it called
+/// one (`None` for every branch that never observes anything:
+/// `RidesWith`, `Kept`-by-matching-a-kept-container, a refusal, or no
+/// step at all).
 struct Resolution {
     settled: Settled,
     outcome: Option<Decision>,
+    standing: Option<StandingKind>,
 }
 
 impl Resolution {
@@ -1157,6 +1243,7 @@ impl Resolution {
         Self {
             settled: Settled::Other,
             outcome,
+            standing: None,
         }
     }
 }
@@ -1258,6 +1345,10 @@ fn try_resolve(
                 outcome: Some(Decision::Step(TeardownAction::RidesWith {
                     container: container_ref,
                 })),
+                // R5b's own addendum: a `RidesWith` step's own `standing`
+                // is never called -- only the chain's grounding instance
+                // observes anything.
+                standing: None,
             }))
         }
         Settled::Kept => {
@@ -1270,6 +1361,7 @@ fn try_resolve(
             Ok(Some(Resolution {
                 settled: Settled::Kept,
                 outcome: Some(Decision::Step(TeardownAction::Kept { why: KEPT_RIDER })),
+                standing: None,
             }))
         }
         Settled::Other => standalone_resolution(secrets, views, idx, riders_of).map(Some),
@@ -1301,7 +1393,7 @@ fn standalone_resolution(
     }
     let uncertain = matches!(status, crate::apply::NodeStatus::Failed { .. });
     let riders = transitive_riders(idx, riders_of, views);
-    let decision = decide_standalone(
+    let (decision, standing) = decide_standalone(
         secrets,
         instance,
         view.checked_node,
@@ -1318,6 +1410,7 @@ fn standalone_resolution(
     Ok(Resolution {
         settled,
         outcome: Some(decision),
+        standing,
     })
 }
 
@@ -1390,6 +1483,178 @@ fn build_ride_views<'a>(
         .collect()
 }
 
+/// Push one step onto both `steps` and its own [`StepFingerprint`] onto
+/// `fingerprint`, in lockstep (milestone 3m task R6) -- every push site in
+/// [`plan_teardown_steps`] needs exactly this pair, and factoring it out
+/// is what keeps that function under clippy's own `too_many_lines`.
+fn record_step(
+    steps: &mut Vec<TeardownStep>,
+    fingerprint: &mut Vec<StepFingerprint>,
+    instance: crate::apply::InstanceRef,
+    action: TeardownAction,
+    standing: Option<StandingKind>,
+) {
+    steps.push(TeardownStep {
+        instance: instance.clone(),
+        action: action.clone(),
+    });
+    fingerprint.push(StepFingerprint {
+        instance,
+        action,
+        standing,
+    });
+}
+
+/// The ride resolver's own setup and fixed point, factored out of
+/// [`plan_teardown_steps`] so that function stays under clippy's own
+/// `too_many_lines` (milestone 3m task R6): builds `secrets`, runs the
+/// riding fixed point ([`resolve_actions`]) over every candidate and
+/// transit rider `build_ride_views` admits, and returns each one's own
+/// [`Resolution`], keyed by its original `facts.instances` index -- the
+/// same map [`plan_teardown_steps`]'s own loop (unchanged otherwise)
+/// looks up by `facts_idx`.
+fn resolve_instances(
+    secrets: &Secrets<'_>,
+) -> Result<std::collections::HashMap<usize, Resolution>, TeardownError> {
+    let ride_views = build_ride_views(secrets.checked, secrets.facts);
+    // The ride resolver's own universe: `Create`-actioned, finished,
+    // `Created`/`Failed`/`Unchanged` instances only (every `Some` entry
+    // above). `container_of`/`riders_of` index this sub-sequence, not
+    // `facts.instances` itself, so riding needs no graph over the full
+    // run (decision 3) and a gate or a `Replace`/`Update` instance is
+    // never a candidate container or rider.
+    let (ride_indices, ride_views): (Vec<usize>, Vec<RideView>) = ride_views
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, view)| view.map(|view| (idx, view)))
+        .unzip();
+    let container_of = container_of(&ride_views);
+    let riders_of = riders_of(&ride_views, &container_of);
+    let resolutions = resolve_actions(secrets, &ride_views, &container_of, &riders_of)?;
+    Ok(ride_indices.into_iter().zip(resolutions).collect())
+}
+
+/// The shared computation behind [`plan_teardown`] and
+/// [`plan_teardown_fingerprint`] (milestone 3m task R6): everything
+/// [`plan_teardown`]'s own doc comment describes, returning each step
+/// alongside its own [`StepFingerprint`] -- `plan_teardown` keeps only
+/// the former (its signature is frozen, SHARED VALUES), so this is the
+/// one place either public function's own logic lives. No behaviour
+/// changes from before this task: the fingerprint is read straight off
+/// values ([`Resolution::standing`]) each branch below already computed,
+/// never a second round of `standing()` calls.
+fn plan_teardown_steps(
+    facts: &RunFacts,
+    checked: &crate::check::Checked,
+    resolved: &crate::plan::Resolved,
+) -> Result<(Vec<TeardownStep>, Vec<StepFingerprint>), TeardownError> {
+    let (single_names, each_names) = crate::plan::node_names_by_shape(checked);
+    let secrets = Secrets {
+        checked,
+        resolved,
+        facts,
+        single_names: &single_names,
+        each_names: &each_names,
+    };
+
+    let mut by_facts_index = resolve_instances(&secrets)?;
+
+    let mut steps: Vec<TeardownStep> = Vec::new();
+    let mut fingerprint: Vec<StepFingerprint> = Vec::new();
+    let mut refusals: Vec<(crate::apply::InstanceRef, &'static str)> = Vec::new();
+
+    for (facts_idx, instance) in facts.instances.iter().enumerate().rev() {
+        let Some(checked_node) = find_checked_node(checked, &instance.node) else {
+            continue;
+        };
+        let instance_ref = crate::apply::InstanceRef {
+            node: instance.node.clone(),
+            instance: instance.instance.clone(),
+        };
+
+        // Decision 4's gate rows: pure, so never `Create`-actioned.
+        if let Some(gate) = checked_node.tool.gate() {
+            if let RunProgress::Finished { status, .. } = &instance.progress
+                && matches!(status, crate::apply::NodeStatus::Computed)
+            {
+                record_step(
+                    &mut steps,
+                    &mut fingerprint,
+                    instance_ref,
+                    TeardownAction::MadeByHand { need: gate.need },
+                    None,
+                );
+            }
+            continue;
+        }
+
+        match instance.action {
+            crate::plan::Action::Compute
+            | crate::plan::Action::NoOp
+            | crate::plan::Action::Skip
+            | crate::plan::Action::Blocked => continue,
+            crate::plan::Action::Replace | crate::plan::Action::Update => {
+                record_step(
+                    &mut steps,
+                    &mut fingerprint,
+                    instance_ref,
+                    TeardownAction::Retained {
+                        why: CHANGED_IN_PLACE,
+                    },
+                    None,
+                );
+                continue;
+            }
+            crate::plan::Action::Create => {}
+        }
+
+        if matches!(
+            instance.progress,
+            RunProgress::NotFinished { started: None }
+        ) {
+            continue;
+        }
+        if matches!(
+            instance.progress,
+            RunProgress::NotFinished { started: Some(_) }
+        ) {
+            record_step(
+                &mut steps,
+                &mut fingerprint,
+                instance_ref,
+                TeardownAction::Unfinished,
+                None,
+            );
+            continue;
+        }
+
+        let Some(resolution) = by_facts_index.remove(&facts_idx) else {
+            // Not in the ride resolver's own universe at all (status
+            // `Converged`, `Blocked`, `Skipped` or `NotRun`): nothing was
+            // created (decision 1).
+            continue;
+        };
+        match resolution.outcome {
+            Some(Decision::Step(action)) => {
+                record_step(
+                    &mut steps,
+                    &mut fingerprint,
+                    instance_ref,
+                    action,
+                    resolution.standing,
+                );
+            }
+            Some(Decision::Refused(why)) => refusals.push((instance_ref, why)),
+            None => {}
+        }
+    }
+
+    if !refusals.is_empty() {
+        return Err(TeardownError::Refused { steps: refusals });
+    }
+    Ok((steps, fingerprint))
+}
+
 /// Compute a teardown plan from one applied run's own journal facts
 /// (milestone 3m decisions 1, 2, 3, 3a, 4's gate rows, and 6).
 ///
@@ -1431,6 +1696,248 @@ pub fn plan_teardown(
     checked: &crate::check::Checked,
     resolved: &crate::plan::Resolved,
 ) -> Result<Teardown, TeardownError> {
+    let (steps, _fingerprint) = plan_teardown_steps(facts, checked, resolved)?;
+    Ok(Teardown { steps })
+}
+
+/// Same computation as [`plan_teardown`], also returning each step's own
+/// [`StepFingerprint`] (milestone 3m task R6; decision 8: "the apply-time
+/// comparison reads the typed `StepFingerprint`"). The caller that
+/// approves a teardown (`willikins-server`'s future
+/// `Butler::plan_rollback`, task R8) keeps the fingerprint alongside the
+/// [`Teardown`] it shows the operator, and passes it back to
+/// [`apply_teardown`] at apply time.
+///
+/// # Errors
+///
+/// Exactly [`plan_teardown`]'s own.
+pub fn plan_teardown_fingerprint(
+    facts: &RunFacts,
+    checked: &crate::check::Checked,
+    resolved: &crate::plan::Resolved,
+) -> Result<(Teardown, Vec<StepFingerprint>), TeardownError> {
+    let (steps, fingerprint) = plan_teardown_steps(facts, checked, resolved)?;
+    Ok((Teardown { steps }, fingerprint))
+}
+
+// ---------------------------------------------------------------------
+// apply_teardown (milestone 3m task R6)
+// ---------------------------------------------------------------------
+
+/// What [`apply_teardown`] ran -- or chose not to run -- one approved
+/// [`StepFingerprint`] into (milestone 3m decision 8): core's own,
+/// not-yet-serialized terms for the five outcomes
+/// `TeardownStepFinished` (task R7) will journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TeardownStepOutcome {
+    /// A `Delete` step's own `inverse().delete` deleted the resource.
+    Deleted,
+    /// A `Delete` step's own `inverse().delete` found it already gone --
+    /// a resumed teardown calling `delete` on a step an earlier,
+    /// half-finished one already deleted (decision 8).
+    AlreadyGone,
+    /// A `Delete` step's own `inverse().delete` failed: this teardown
+    /// stops here. Every `Delete` step after this one in `approved`'s own
+    /// order is [`Self::NotRun`].
+    Failed {
+        /// The failure.
+        error: crate::tool::ToolError,
+    },
+    /// A `Delete` step that never ran because an earlier one failed.
+    NotRun,
+    /// Any non-`Delete` step (`RidesWith`, `Gone`, `Kept`, `Retained`,
+    /// `MadeByHand`, `Unfinished`): recorded, never run, whatever its own
+    /// position relative to a failure -- decision 8's "`Listed` for every
+    /// non-delete step", unconditionally.
+    Listed,
+}
+
+/// Why [`apply_teardown`] refused to delete anything, or stopped before
+/// finishing a per-step re-resolution (milestone 3m decision 8). Never
+/// returned once at least one `delete` call has actually run: a `Delete`
+/// step's own failure is [`TeardownStepOutcome::Failed`], part of the
+/// `Ok` result, not this type (decision 8: "a delete failure stops the
+/// run", never the whole call).
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum TeardownApplyError {
+    /// Re-planning this teardown from the same facts, checked document
+    /// and resolved credentials `approved` itself came from failed
+    /// outright -- the same way [`plan_teardown`] itself can fail, either
+    /// while re-observing every step (the same call [`plan_teardown`]
+    /// makes) or while re-resolving a `Delete` step's own secret `needs`
+    /// port a second time, just before calling `delete`. Never drift: a
+    /// document defect, or a tool failure while merely observing.
+    #[error("{0}")]
+    Replan(#[from] TeardownError),
+    /// The freshly re-observed teardown disagrees with what was approved
+    /// (milestone 3m decision 8): a different step, a different action,
+    /// or the same action with a different `standing` -- a loss that
+    /// was not there, or was not reported, when this was approved (the
+    /// one case the action alone cannot show: an *accepted* loss never
+    /// changes `Delete { uncertain }`). Nothing is deleted.
+    #[error(
+        "the teardown has drifted since it was approved: re-observing it now gives a different \
+         result"
+    )]
+    Drift,
+    /// `approved` names an instance, tool declaration or policy this
+    /// run's own facts and checked document no longer support --
+    /// defensive: by construction this never happens when `approved`
+    /// really is this same call's own freshly re-observed fingerprint
+    /// (just checked equal to it, above), but `apply_teardown` trusts no
+    /// caller's data blindly, the same discipline `apply`'s own
+    /// `ApplyError::Drift` already affords a forward run.
+    #[error("{instance}: {why}")]
+    Inconsistent {
+        /// The instance.
+        instance: crate::apply::InstanceRef,
+        /// What is inconsistent.
+        why: &'static str,
+    },
+}
+
+/// Re-resolve and `delete` one approved `Delete` step, named by
+/// `instance_ref` (milestone 3m task R6): rebuilds the very same
+/// [`Created`] [`decide_standalone`] built for it at plan time (its own
+/// `needs_inputs`, [`CreationWindow`], `settled_by`, `accept` and
+/// [`Rider`]s), then calls `inverse().delete`, never `standing` again --
+/// `apply_teardown`'s own re-plan, just before this is called, already
+/// re-observed every step's `standing` (trust boundary 6: never a
+/// `RidesWith` step on its own).
+fn delete_one(
+    secrets: &Secrets,
+    instance_ref: &crate::apply::InstanceRef,
+    ride_views: &[RideView],
+    riders_of: &[Vec<usize>],
+    ride_view_index_of: &std::collections::HashMap<usize, usize>,
+    token: &TeardownToken,
+) -> Result<TeardownStepOutcome, TeardownApplyError> {
+    let facts_idx = secrets
+        .facts
+        .instances
+        .iter()
+        .position(|candidate| {
+            candidate.node == instance_ref.node && candidate.instance == instance_ref.instance
+        })
+        .ok_or_else(|| TeardownApplyError::Inconsistent {
+            instance: instance_ref.clone(),
+            why: "names no instance in this run's own facts",
+        })?;
+    let instance = &secrets.facts.instances[facts_idx];
+    let checked_node = find_checked_node(secrets.checked, &instance.node).ok_or_else(|| {
+        TeardownApplyError::Inconsistent {
+            instance: instance_ref.clone(),
+            why: "names no node in the checked document",
+        }
+    })?;
+    let Reversal::Delete { needs, .. } = checked_node.tool.reversal() else {
+        return Err(TeardownApplyError::Inconsistent {
+            instance: instance_ref.clone(),
+            why: "its tool no longer declares Reversal::Delete",
+        });
+    };
+    let accept = match &checked_node.teardown {
+        crate::workflow::TeardownPolicy::Delete { accept } => accept,
+        crate::workflow::TeardownPolicy::Retain => {
+            return Err(TeardownApplyError::Inconsistent {
+                instance: instance_ref.clone(),
+                why: "its node's own policy no longer says teardown: delete",
+            });
+        }
+    };
+    let inverse = checked_node
+        .tool
+        .inverse()
+        .ok_or_else(|| TeardownApplyError::Inconsistent {
+            instance: instance_ref.clone(),
+            why: "its tool declares Delete but Tool::inverse returns None",
+        })?;
+    let (started, finished, _status) =
+        instance_window(instance).ok_or_else(|| TeardownApplyError::Inconsistent {
+            instance: instance_ref.clone(),
+            why: "has no recorded NodeFinished",
+        })?;
+    let window = CreationWindow {
+        start: shift(started, -CREATION_SKEW),
+        end: shift(finished, CREATION_SKEW),
+    };
+    let settled_by = shift(secrets.facts.finished_at, CREATION_SKEW);
+    let needs_inputs = secrets.build_needs_inputs(instance, checked_node, needs)?;
+    let riders = ride_view_index_of
+        .get(&facts_idx)
+        .map(|&view_idx| transitive_riders(view_idx, riders_of, ride_views))
+        .unwrap_or_default();
+    let created = Created {
+        inputs: &needs_inputs,
+        outputs: &instance.outputs,
+        window,
+        settled_by,
+        accept,
+        riders: &riders,
+    };
+    Ok(match inverse.delete(&created, token) {
+        Ok(Deleted { already_gone: true }) => TeardownStepOutcome::AlreadyGone,
+        Ok(Deleted {
+            already_gone: false,
+        }) => TeardownStepOutcome::Deleted,
+        Err(error) => TeardownStepOutcome::Failed { error },
+    })
+}
+
+/// Apply an approved teardown (milestone 3m decision 8's apply; trust
+/// boundaries 1, 2, 6): re-plans from the same `facts`, `checked` and
+/// `resolved` `approved` itself came from (re-observing exactly the set
+/// [`plan_teardown`] observed: every candidate whose node says
+/// `teardown: delete` and that is not itself a rider -- never a
+/// `RidesWith` step on its own, trust boundary 6), refuses with
+/// [`TeardownApplyError::Drift`] when the fresh result disagrees with
+/// `approved` (standing kinds and losses included, via
+/// [`StepFingerprint`]), mints the one
+/// [`willikins_types::TeardownToken`] this module ever mints, and runs
+/// every `Delete` step in `approved`'s own order, stopping at the first
+/// failure (decision 8). A non-`Delete` step is always
+/// [`TeardownStepOutcome::Listed`].
+///
+/// # Errors
+///
+/// [`TeardownApplyError::Replan`] when re-planning (or a per-step secret
+/// re-resolution) fails outright; [`TeardownApplyError::Drift`] when the
+/// fresh observation disagrees with `approved`, before any delete;
+/// [`TeardownApplyError::Inconsistent`] only defensively (see its own
+/// doc). A `Delete` step's own failure is part of the `Ok` result (see
+/// [`TeardownStepOutcome::Failed`]), never this error type.
+pub fn apply_teardown(
+    approved: &[StepFingerprint],
+    facts: &RunFacts,
+    checked: &crate::check::Checked,
+    resolved: &crate::plan::Resolved,
+) -> Result<Vec<TeardownStepOutcome>, TeardownApplyError> {
+    let (_, fresh) = plan_teardown_steps(facts, checked, resolved)?;
+    if fresh.as_slice() != approved {
+        return Err(TeardownApplyError::Drift);
+    }
+
+    // The one non-test `TeardownToken::new` call site in the workspace
+    // (trust boundary 2; `tests/it/teardown_token_guard.rs`, acceptance
+    // test 2's `TeardownToken` half) -- minted only once the fresh
+    // observation above has already matched what was approved.
+    #[allow(clippy::disallowed_methods)]
+    let token = TeardownToken::new();
+
+    let ride_views = build_ride_views(checked, facts);
+    let (ride_indices, ride_views): (Vec<usize>, Vec<RideView>) = ride_views
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, view)| view.map(|view| (idx, view)))
+        .unzip();
+    let container_of = container_of(&ride_views);
+    let riders_of = riders_of(&ride_views, &container_of);
+    let ride_view_index_of: std::collections::HashMap<usize, usize> = ride_indices
+        .into_iter()
+        .enumerate()
+        .map(|(view_idx, facts_idx)| (facts_idx, view_idx))
+        .collect();
+
     let (single_names, each_names) = crate::plan::node_names_by_shape(checked);
     let secrets = Secrets {
         checked,
@@ -1440,103 +1947,31 @@ pub fn plan_teardown(
         each_names: &each_names,
     };
 
-    let ride_views = build_ride_views(checked, facts);
-    // The ride resolver's own universe: `Create`-actioned, finished,
-    // `Created`/`Failed`/`Unchanged` instances only (every `Some` entry
-    // above). `container_of`/`riders_of` index this sub-sequence, not
-    // `facts.instances` itself, so riding needs no graph over the full
-    // run (decision 3) and a gate or a `Replace`/`Update` instance is
-    // never a candidate container or rider.
-    let (ride_indices, ride_views): (Vec<usize>, Vec<RideView>) = ride_views
-        .into_iter()
-        .enumerate()
-        .filter_map(|(idx, view)| view.map(|view| (idx, view)))
-        .unzip();
-    let container_of = container_of(&ride_views);
-    let riders_of = riders_of(&ride_views, &container_of);
-    let resolutions = resolve_actions(&secrets, &ride_views, &container_of, &riders_of)?;
-    let mut by_facts_index: std::collections::HashMap<usize, Resolution> =
-        ride_indices.into_iter().zip(resolutions).collect();
-
-    let mut steps: Vec<TeardownStep> = Vec::new();
-    let mut refusals: Vec<(crate::apply::InstanceRef, &'static str)> = Vec::new();
-
-    for (facts_idx, instance) in facts.instances.iter().enumerate().rev() {
-        let Some(checked_node) = find_checked_node(checked, &instance.node) else {
-            continue;
-        };
-        let instance_ref = crate::apply::InstanceRef {
-            node: instance.node.clone(),
-            instance: instance.instance.clone(),
-        };
-
-        // Decision 4's gate rows: pure, so never `Create`-actioned.
-        if let Some(gate) = checked_node.tool.gate() {
-            if let RunProgress::Finished { status, .. } = &instance.progress
-                && matches!(status, crate::apply::NodeStatus::Computed)
-            {
-                steps.push(TeardownStep {
-                    instance: instance_ref,
-                    action: TeardownAction::MadeByHand { need: gate.need },
-                });
-            }
+    let mut outcomes = Vec::with_capacity(approved.len());
+    let mut stopped = false;
+    for step in approved {
+        if !matches!(step.action, TeardownAction::Delete { .. }) {
+            outcomes.push(TeardownStepOutcome::Listed);
             continue;
         }
-
-        match instance.action {
-            crate::plan::Action::Compute
-            | crate::plan::Action::NoOp
-            | crate::plan::Action::Skip
-            | crate::plan::Action::Blocked => continue,
-            crate::plan::Action::Replace | crate::plan::Action::Update => {
-                steps.push(TeardownStep {
-                    instance: instance_ref,
-                    action: TeardownAction::Retained {
-                        why: CHANGED_IN_PLACE,
-                    },
-                });
-                continue;
-            }
-            crate::plan::Action::Create => {}
-        }
-
-        if matches!(
-            instance.progress,
-            RunProgress::NotFinished { started: None }
-        ) {
+        if stopped {
+            outcomes.push(TeardownStepOutcome::NotRun);
             continue;
         }
-        if matches!(
-            instance.progress,
-            RunProgress::NotFinished { started: Some(_) }
-        ) {
-            steps.push(TeardownStep {
-                instance: instance_ref,
-                action: TeardownAction::Unfinished,
-            });
-            continue;
+        let outcome = delete_one(
+            &secrets,
+            &step.instance,
+            &ride_views,
+            &riders_of,
+            &ride_view_index_of,
+            &token,
+        )?;
+        if matches!(outcome, TeardownStepOutcome::Failed { .. }) {
+            stopped = true;
         }
-
-        let Some(resolution) = by_facts_index.remove(&facts_idx) else {
-            // Not in the ride resolver's own universe at all (status
-            // `Converged`, `Blocked`, `Skipped` or `NotRun`): nothing was
-            // created (decision 1).
-            continue;
-        };
-        match resolution.outcome {
-            Some(Decision::Step(action)) => steps.push(TeardownStep {
-                instance: instance_ref,
-                action,
-            }),
-            Some(Decision::Refused(why)) => refusals.push((instance_ref, why)),
-            None => {}
-        }
+        outcomes.push(outcome);
     }
-
-    if !refusals.is_empty() {
-        return Err(TeardownError::Refused { steps: refusals });
-    }
-    Ok(Teardown { steps })
+    Ok(outcomes)
 }
 
 #[cfg(test)]
@@ -3793,5 +4228,421 @@ mod tests {
         );
         // Never a mutual ride: exactly one `standing` call total, not two.
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // Milestone 3m, task R6, acceptance 7, 8 (core half), 21 (core half):
+    // `apply_teardown`.
+    // -----------------------------------------------------------------
+
+    /// A stub [`Inverse`] whose `standing()` and `delete()` observations
+    /// are independently settable *after* construction (milestone 3m
+    /// task R6): neither [`StubInverse`] (`testing.rs`, fixed for its
+    /// whole life) nor [`RidingInverse`]/[`ToleranceInverse`] (above) can
+    /// express "what `standing` reports when asked to plan or re-plan"
+    /// and "what `delete` itself re-observes, later, when it actually
+    /// runs" disagreeing -- exactly acceptance 21's "no builds at the
+    /// re-plan, one build when `delete` observes", and acceptance 7's "a
+    /// standing that changes between approval and apply". `delete`
+    /// honours the documented [`Inverse::delete`] contract for real,
+    /// unlike every fixed stub above: [`Standing::Gone`] is
+    /// `already_gone: true`; [`Standing::AsCreated`] with every reported
+    /// loss in `created.accept` deletes; anything else is
+    /// [`crate::tool::ToolErrorKind::Conflict`].
+    struct ObservableInverse {
+        plan: std::sync::Mutex<Standing>,
+        delete: std::sync::Mutex<Standing>,
+        standing_calls: Arc<std::sync::atomic::AtomicUsize>,
+        delete_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl ObservableInverse {
+        fn new(standing: Standing) -> Arc<Self> {
+            Arc::new(Self {
+                plan: std::sync::Mutex::new(standing.clone()),
+                delete: std::sync::Mutex::new(standing),
+                standing_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                delete_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            })
+        }
+
+        /// What `standing()` reports from now on -- the planning side
+        /// (both the original approval and `apply_teardown`'s own
+        /// re-plan read this).
+        fn set_plan_standing(&self, standing: Standing) {
+            *self.plan.lock().unwrap() = standing;
+        }
+
+        /// What `delete()` itself re-observes from now on -- modelling a
+        /// resource that changes strictly between the last `standing()`
+        /// call and `delete`'s own, later, re-observation of the very
+        /// same resource.
+        fn set_delete_standing(&self, standing: Standing) {
+            *self.delete.lock().unwrap() = standing;
+        }
+
+        fn delete_calls(&self) -> usize {
+            self.delete_calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl Inverse for ObservableInverse {
+        fn standing(&self, _created: &Created<'_>) -> Result<Standing, crate::tool::ToolError> {
+            self.standing_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.plan.lock().unwrap().clone())
+        }
+
+        fn delete(
+            &self,
+            created: &Created<'_>,
+            _token: &TeardownToken,
+        ) -> Result<Deleted, crate::tool::ToolError> {
+            self.delete_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match self.delete.lock().unwrap().clone() {
+                Standing::Gone => Ok(Deleted { already_gone: true }),
+                Standing::AsCreated { losing } => {
+                    if losing
+                        .iter()
+                        .all(|loss| created.accept.iter().any(|a| a.as_str() == *loss))
+                    {
+                        Ok(Deleted {
+                            already_gone: false,
+                        })
+                    } else {
+                        Err(crate::tool::ToolError {
+                            kind: crate::tool::ToolErrorKind::Conflict,
+                            message: "a declared loss this node's policy has not accepted"
+                                .to_string(),
+                        })
+                    }
+                }
+                Standing::NotOurs { .. } | Standing::Drifted { .. } => {
+                    Err(crate::tool::ToolError {
+                        kind: crate::tool::ToolErrorKind::Conflict,
+                        message: "no longer AsCreated".to_string(),
+                    })
+                }
+            }
+        }
+    }
+
+    /// A stub, top-level `Delete` tool declaring the loss `"builds"`,
+    /// holding an [`ObservableInverse`] (milestone 3m task R6):
+    /// [`StubDeletableTool`] (`testing.rs`) always pairs with its own
+    /// fixed `StubInverse`, so this is the one combination R6's own tests
+    /// need -- local to this crate's own tests, like every other riding
+    /// fixture above (R5b's own addendum).
+    struct StubLossyTool {
+        spec: ToolSpec,
+        inverse: Arc<ObservableInverse>,
+    }
+
+    impl StubLossyTool {
+        fn new(inverse: Arc<ObservableInverse>) -> Arc<Self> {
+            let mut inputs = IndexMap::new();
+            inputs.insert(
+                port("repo"),
+                PortSpec {
+                    ty: PortType::Exact(ty("GitHubRepo")),
+                    required: true,
+                    derived_only: false,
+                },
+            );
+            let mut outputs = IndexMap::new();
+            outputs.insert(port("repo"), ty("GitHubRepo"));
+            Arc::new(Self {
+                spec: ToolSpec {
+                    name: ToolName::parse("test.lossy").unwrap(),
+                    description: "stub tool declaring a loss, with an independently \
+                                   observable standing/delete (milestone 3m task R6)"
+                        .to_string(),
+                    inputs,
+                    outputs,
+                    key: vec![port("repo")],
+                    class: Class::Reversible,
+                    pure: false,
+                },
+                inverse,
+            })
+        }
+    }
+
+    impl Tool for StubLossyTool {
+        fn spec(&self) -> &ToolSpec {
+            &self.spec
+        }
+
+        fn read(&self, _inputs: &Inputs) -> Result<Observation, crate::tool::ToolError> {
+            Ok(Observation::Absent {
+                predicted: Outputs::new(),
+            })
+        }
+
+        fn ensure(
+            &self,
+            _inputs: &Inputs,
+            _token: &SinkToken,
+        ) -> Result<Ensured, crate::tool::ToolError> {
+            Ok(Ensured {
+                outputs: Outputs::new(),
+                changed: true,
+            })
+        }
+
+        fn reversal(&self) -> Reversal {
+            Reversal::Delete {
+                needs: &["repo"],
+                within: &[],
+                losses: &["builds"],
+            }
+        }
+
+        fn inverse(&self) -> Option<&dyn Inverse> {
+            Some(self.inverse.as_ref())
+        }
+    }
+
+    /// A one-node `test.lossy` workflow, `repo` (literal), the given
+    /// policy -- the `apply_teardown` counterpart of [`checked_with`]
+    /// above.
+    fn checked_lossy(tool: Arc<StubLossyTool>, policy: TeardownPolicy) -> Checked {
+        let repo_node = Node::new(ToolName::parse("test.lossy").unwrap())
+            .port(
+                port("repo"),
+                Binding::Literal("example-org/example-repo".to_string()),
+            )
+            .teardown(policy);
+        let workflow =
+            Workflow::new(workflow_name("apply-teardown-test")).node(node("repo"), repo_node);
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(tool as Arc<dyn Tool>).unwrap();
+        check(&workflow, &catalog).unwrap_or_else(|errors| {
+            unreachable!("a one-node lossy workflow must check cleanly: {errors:?}")
+        })
+    }
+
+    /// A two-node `test.lossy` workflow sharing one tool/inverse, `repo_a`
+    /// and `repo_b`, both under the given policy -- for the "stop at the
+    /// first failure" test, where teardown order (reverse of
+    /// `facts.instances`) puts `repo_b` first.
+    fn checked_lossy_pair(tool: Arc<StubLossyTool>, policy: TeardownPolicy) -> Checked {
+        let node_a = Node::new(ToolName::parse("test.lossy").unwrap())
+            .port(
+                port("repo"),
+                Binding::Literal("example-org/repo-a".to_string()),
+            )
+            .teardown(policy.clone());
+        let node_b = Node::new(ToolName::parse("test.lossy").unwrap())
+            .port(
+                port("repo"),
+                Binding::Literal("example-org/repo-b".to_string()),
+            )
+            .teardown(policy);
+        let workflow = Workflow::new(workflow_name("apply-teardown-pair-test"))
+            .node(node("repo_a"), node_a)
+            .node(node("repo_b"), node_b);
+        let mut catalog = Catalog::new(willikins_types::registry());
+        catalog.insert(tool as Arc<dyn Tool>).unwrap();
+        check(&workflow, &catalog).unwrap_or_else(|errors| {
+            unreachable!("a two-node lossy workflow must check cleanly: {errors:?}")
+        })
+    }
+
+    /// Base case: `apply_teardown` deletes a plain `Delete` step and
+    /// reports it `Deleted`.
+    #[test]
+    fn apply_teardown_deletes_in_order_and_reports_each_outcome() {
+        let inverse = ObservableInverse::new(Standing::AsCreated { losing: vec![] });
+        let tool = StubLossyTool::new(Arc::clone(&inverse));
+        let checked = checked_lossy(tool, TeardownPolicy::Delete { accept: vec![] });
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let (_, approved) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
+        let outcomes = apply_teardown(&approved, &run, &checked, &resolved).unwrap();
+        assert_eq!(outcomes, vec![TeardownStepOutcome::Deleted]);
+        assert_eq!(inverse.delete_calls(), 1);
+    }
+
+    /// Acceptance 7: a standing that changes between approval and apply
+    /// (here, to outright drift) refuses with no delete -- the re-plan
+    /// itself refuses, before `apply_teardown` even reaches the delete
+    /// loop.
+    #[test]
+    fn a_standing_that_drifts_before_the_replan_refuses_with_no_deletes() {
+        let inverse = ObservableInverse::new(Standing::AsCreated { losing: vec![] });
+        let tool = StubLossyTool::new(Arc::clone(&inverse));
+        let checked = checked_lossy(tool, TeardownPolicy::Delete { accept: vec![] });
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let (_, approved) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
+
+        inverse.set_plan_standing(Standing::Drifted {
+            what: "a push after this run",
+        });
+
+        let err = apply_teardown(&approved, &run, &checked, &resolved).unwrap_err();
+        assert!(matches!(err, TeardownApplyError::Replan(_)), "{err:?}");
+        assert_eq!(inverse.delete_calls(), 0);
+    }
+
+    /// Acceptance 21's second half: a build appearing between approval
+    /// and the apply-time re-plan, under `accept: [builds]`, refuses as
+    /// drift -- the re-plan itself still succeeds (same `Delete { uncertain:
+    /// false }` action both times), but the fingerprint's own `standing`
+    /// now carries the loss, so the comparison still catches it.
+    #[test]
+    fn a_loss_appearing_before_the_replan_refuses_as_drift_though_the_action_is_unchanged() {
+        let inverse = ObservableInverse::new(Standing::AsCreated { losing: vec![] });
+        let tool = StubLossyTool::new(Arc::clone(&inverse));
+        let checked = checked_lossy(
+            tool,
+            TeardownPolicy::Delete {
+                accept: vec![Loss::parse("builds").unwrap()],
+            },
+        );
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let (teardown, approved) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None,
+                },
+                action: TeardownAction::Delete { uncertain: false },
+            }]
+        );
+
+        inverse.set_plan_standing(Standing::AsCreated {
+            losing: vec!["builds"],
+        });
+
+        let err = apply_teardown(&approved, &run, &checked, &resolved).unwrap_err();
+        assert!(matches!(err, TeardownApplyError::Drift), "{err:?}");
+        assert_eq!(inverse.delete_calls(), 0);
+    }
+
+    /// Acceptance 21's core half: a build appearing only when `delete`
+    /// itself observes -- never at the re-plan -- is not deleted:
+    /// `delete` refuses with `Conflict` on its own.
+    #[test]
+    fn delete_itself_refuses_an_unaccepted_loss_appearing_only_at_delete_time() {
+        let inverse = ObservableInverse::new(Standing::AsCreated { losing: vec![] });
+        let tool = StubLossyTool::new(Arc::clone(&inverse));
+        // A plain `teardown: delete`: no loss is ever accepted.
+        let checked = checked_lossy(tool, TeardownPolicy::Delete { accept: vec![] });
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let (_, approved) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
+
+        // The re-plan still sees no builds (`plan` standing is untouched);
+        // only `delete`'s own observation changes.
+        inverse.set_delete_standing(Standing::AsCreated {
+            losing: vec!["builds"],
+        });
+
+        let outcomes = apply_teardown(&approved, &run, &checked, &resolved).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        match &outcomes[0] {
+            TeardownStepOutcome::Failed { error } => {
+                assert_eq!(error.kind, crate::tool::ToolErrorKind::Conflict);
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(inverse.delete_calls(), 1);
+    }
+
+    /// Acceptance 8's core half: once `apply_teardown` has actually
+    /// deleted a resource (its own `delete` call flips the stub's
+    /// standing to `Gone`), planning again reads that step `Gone`, not
+    /// `Delete`.
+    #[test]
+    fn planning_again_after_a_delete_reads_the_step_gone() {
+        let inverse = ObservableInverse::new(Standing::AsCreated { losing: vec![] });
+        let tool = StubLossyTool::new(Arc::clone(&inverse));
+        let checked = checked_lossy(tool, TeardownPolicy::Delete { accept: vec![] });
+        let resolved = empty_resolved(&checked);
+        let run = facts(
+            instance(Action::Create, finished(START, END, NodeStatus::Created)),
+            RUN_FINISHED,
+        );
+        let (_, approved) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
+        let outcomes = apply_teardown(&approved, &run, &checked, &resolved).unwrap();
+        assert_eq!(outcomes, vec![TeardownStepOutcome::Deleted]);
+
+        // The resource is gone now: a real inverse's own `standing` would
+        // report this without being told, but this stub must be told.
+        inverse.set_plan_standing(Standing::Gone);
+
+        let teardown_again = plan_teardown(&run, &checked, &resolved).unwrap();
+        assert_eq!(
+            teardown_again.steps,
+            vec![TeardownStep {
+                instance: InstanceRef {
+                    node: node("repo"),
+                    instance: None,
+                },
+                action: TeardownAction::Gone,
+            }]
+        );
+    }
+
+    /// A `Delete` step's own failure stops the run: a later `Delete` step
+    /// in `approved`'s own order is `NotRun`, never attempted.
+    #[test]
+    fn a_delete_failure_stops_the_run_and_later_delete_steps_are_not_run() {
+        let inverse = ObservableInverse::new(Standing::AsCreated { losing: vec![] });
+        let tool = StubLossyTool::new(Arc::clone(&inverse));
+        let checked = checked_lossy_pair(tool, TeardownPolicy::Delete { accept: vec![] });
+        let resolved = empty_resolved(&checked);
+        let run = facts_multi(
+            vec![
+                riding_instance(
+                    "repo_a",
+                    Action::Create,
+                    finished(START, END, NodeStatus::Created),
+                    inputs_of(&[]),
+                    outputs_of(&[]),
+                ),
+                riding_instance(
+                    "repo_b",
+                    Action::Create,
+                    finished(START, END, NodeStatus::Created),
+                    inputs_of(&[]),
+                    outputs_of(&[]),
+                ),
+            ],
+            RUN_FINISHED,
+        );
+        let (_, approved) = plan_teardown_fingerprint(&run, &checked, &resolved).unwrap();
+        assert_eq!(approved.len(), 2);
+
+        // Both steps are approved as plain `Delete`s; now make `delete`
+        // itself refuse every call (an unaccepted loss on every
+        // observation), so the *first* one `apply_teardown` runs fails.
+        inverse.set_delete_standing(Standing::AsCreated {
+            losing: vec!["builds"],
+        });
+
+        let outcomes = apply_teardown(&approved, &run, &checked, &resolved).unwrap();
+        assert_eq!(outcomes.len(), 2);
+        assert!(matches!(outcomes[0], TeardownStepOutcome::Failed { .. }));
+        assert_eq!(outcomes[1], TeardownStepOutcome::NotRun);
+        assert_eq!(inverse.delete_calls(), 1);
     }
 }

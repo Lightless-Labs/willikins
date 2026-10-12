@@ -19,13 +19,10 @@
 //! `Reversal`, `Within` and every other declaration type R1 already put
 //! in `rollback.rs`, most of which are plain data and never execute.
 //!
-//! `apply_teardown` itself is milestone 3m task R6, not yet written: this
-//! guard's enclosing-function rule is live today over zero legitimate
-//! call sites ([`EXPECTED_SITES`]). R6 flips the pin to `1` in the same
-//! commit that adds its own call and its own
-//! `#[allow(clippy::disallowed_methods)]` — forgetting either fails this
-//! test, the same ratchet idiom as `test_layout_guard::PENDING` and
-//! `ratchet.rs`'s counts. See the plan's 2026-10-12 addendum (R2).
+//! `apply_teardown` (milestone 3m task R6) now exists, with its own one
+//! call to `TeardownToken::new`, so [`EXPECTED_SITES`] is pinned to `1` —
+//! the same ratchet idiom as `test_layout_guard::PENDING` and
+//! `ratchet.rs`'s counts. See the plan's 2026-10-12 addenda (R2, R6).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -34,11 +31,10 @@ use syn::visit::Visit;
 use syn::{Attribute, Ident, ItemUse, UseTree};
 
 /// The number of legitimate non-test `TeardownToken::new` call sites this
-/// workspace holds today. Zero, because `apply_teardown` (task R6) does
-/// not exist yet. Bump to `1` — never higher — in the commit that adds
-/// it; a second real site anywhere is exactly what this guard exists to
+/// workspace holds today: `apply_teardown`'s own (task R6). Never higher
+/// — a second real site anywhere is exactly what this guard exists to
 /// catch.
-const EXPECTED_SITES: usize = 0;
+const EXPECTED_SITES: usize = 1;
 
 /// `rollback.rs`'s path, relative to a crate's `src/` directory.
 fn rollback_rs_relative() -> PathBuf {

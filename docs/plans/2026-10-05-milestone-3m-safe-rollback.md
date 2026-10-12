@@ -266,6 +266,71 @@ stays at 2, below). Deviations from the row, recorded:
   plan's own instances, with no `RunInstance`. F1's own commit should promote both to `pub(crate)` (`Recorded`'s
   fields included) rather than duplicate either.
 
+**Addendum:** 2026-10-12 — R6 landed (`apply_teardown`, in `crates/willikins-core/src/rollback.rs` alone: `-p
+willikins-core`, `cargo fmt --check`, `clippy --all-targets -D warnings`, `cargo test`, all green; the ratchet stays
+at 2, `teardown_token_guard.rs`'s `EXPECTED_SITES` moves from 0 to 1 in the same commit as the call, exactly as its
+own 2026-10-12 addendum required). Deviations, recorded:
+- **`StandingKind`/`StepFingerprint` are taken over from R7, here, by R6** — not left open as R5a's own addendum
+  (immediately above) flagged. That addendum's own framing ("R7 must either add `standing` to `TeardownStep`... or
+  explain why it does not need to") assumed R7 would be the first caller; R6's own row text says otherwise ("compare
+  fingerprints... standing kinds and losses included"), and the row is literal: decision 8's "a loss that appears
+  between approval and apply therefore differs" is a case `TeardownAction` alone cannot show — an *accepted* loss
+  never changes a step's own action (`Delete { uncertain }` either way) — so comparing two freshly re-planned
+  `Teardown`s by `==` would silently let exactly that bypass through (a build appearing under `accept: [builds]`
+  between approval and the apply-time re-plan). `StandingKind` carries only `Gone`/`AsCreated { losing }` (the two
+  `Standing` variants that ever reach a `Teardown` step at all; `NotOurs`/`Drifted` only ever refuse, so they need no
+  fingerprint). `StepFingerprint` bundles `node`+`instance` into one `InstanceRef` rather than SHARED VALUES' own two
+  separate fields, matching `TeardownStep::instance`'s own shape — a naming deviation, not a meaning change. `R7`
+  owns journaling `StepFingerprint` (as `Redacted<Teardown>` plus the typed fingerprint, decision 8) and may still
+  reshape it there; nothing here commits R7 to this exact Rust representation surviving serialization unchanged.
+- **No new public function changes `plan_teardown`'s own frozen signature or behaviour.** The shared computation
+  (riding fixed point, per-instance classification) moved into a private `plan_teardown_steps`, which now also
+  returns each step's own `StepFingerprint` (read straight off values `decide_standalone`/`Resolution` already
+  compute — no second round of `standing()` calls); `plan_teardown` is now a two-line wrapper over it, and a new
+  `pub fn plan_teardown_fingerprint` is the one a future `Butler::plan_rollback` (task R8) calls to get both the
+  `Teardown` to show the operator and the fingerprint to journal and later pass to `apply_teardown`. Every one of
+  R5a/R5b's own existing tests (315, now 321 with R6's own six) passed unmodified against this refactor — confirmed
+  by running them both before and after.
+- **`apply_teardown`'s own signature takes `approved: &[StepFingerprint]`, never a `Teardown`.** A `Teardown`'s own
+  `TeardownStep`s do not carry `standing`, so comparing against one could not catch the gap above; `StepFingerprint`
+  already carries `instance`+`action` too, so nothing is lost. `facts`/`checked`/`resolved` are the same three the
+  original plan was computed from (SHARED VALUES' own "Core signatures" row: `&Checked`, no `&Catalog`).
+- **Re-observation is literally a second `plan_teardown_steps` call**, compared to `approved` by `Vec<StepFingerprint>`
+  equality (`!=`) before anything else runs. This satisfies the row's "re-observe exactly the set `plan_teardown`
+  observed" by construction — including trust boundary 6 as R5b's own addendum reworded it (never a `RidesWith` step
+  on its own; only a chain's grounding instance ever calls `standing`) — without a second, parallel implementation of
+  the ride resolver that could drift from the first's own rules.
+- **Rebuilding `Created` to call `delete`** (the needs re-resolution, window, `settled_by`, accept list and riders
+  `decide_standalone` already computes once, at plan time, and discards) is a second, independent computation in a
+  new `delete_one`, reusing the same private helpers (`Secrets::build_needs_inputs`, `build_ride_views`,
+  `container_of`, `riders_of`, `transitive_riders`, `find_checked_node`, `instance_window`, `shift`) rather than
+  threading the first computation's own borrowed materials through the fixed point's `Resolution`/`Decision` types
+  (which would have meant giving those types a lifetime tied to `facts`/`checked`, a wider change than this task's
+  own row asked for). Every fallback in `delete_one` is a typed `TeardownApplyError::Inconsistent` (`ok_or_else`),
+  never `unwrap`/`expect`/`unreachable!`/`panic!`: by construction none of these cases can actually happen once
+  `approved == fresh` has just been checked, but `apply_teardown` trusts no caller's data blindly, so the ratchet
+  gains nothing from this task (it stays at 2).
+- **"Listed for every non-delete step" is read as unconditional, pinned by its own test.** Decision 8's own two
+  clauses ("a delete failure stops the run, and later steps are `NotRun`" vs. "`Listed` for every non-delete step")
+  read ambiguously taken alone; this task reads `NotRun` as reserved for a `Delete` step that never got its own
+  `delete` call because an earlier one failed, and every non-`Delete` step is `Listed`, whatever its own position
+  relative to a failure — pinned by `a_delete_failure_stops_the_run_and_later_delete_steps_are_not_run`.
+- **Acceptance 21's core half is two separate tests, not one**, because the row's own two clauses are two different
+  moments: `delete_itself_refuses_an_unaccepted_loss_appearing_only_at_delete_time` (the re-plan still agrees with
+  `approved`; only `delete`'s own, later re-observation finds the loss, so `delete` itself returns `Conflict` and the
+  step is `Failed`) and `a_loss_appearing_before_the_replan_refuses_as_drift_though_the_action_is_unchanged` (the
+  loss is already there by the re-plan, under `accept: [builds]`, so the *action* does not change but the
+  fingerprint's own `standing` does, and `apply_teardown` refuses before minting a token at all). A plain `teardown:
+  delete` (no `accept`) is required for the first case to even reach `delete`: under `accept: [builds]` the same
+  loss at re-plan time would not refuse there at all.
+- **A new stub, `ObservableInverse`/`StubLossyTool`, local to `rollback.rs`'s own `#[cfg(test)]` module** (R5b's own
+  precedent: nothing outside this crate needs a tool whose `standing`/`delete` disagree after construction).
+  `StubDeletableTool` (`testing.rs`) cannot express this — its `StubInverse` is fixed for life and its own `delete`
+  never even looks at `created.accept`. `ObservableInverse` separates "what `standing()` reports" from "what
+  `delete()` itself re-observes", each independently settable after construction, and `delete()` honours the
+  documented `Inverse::delete` contract for real (`Gone` → already-gone; `AsCreated` with every loss accepted →
+  deletes; anything else → `Conflict`) — the first stub in this file to do so.
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
