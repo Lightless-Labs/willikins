@@ -40,8 +40,8 @@
 //!   own "left for L2" `per_page` question). `doppler.project.ensure`
 //!   creates it; an environment `qa` (`doppler.config.ensure`), a branch
 //!   config under it (`doppler.branch_config.ensure`), and a service
-//!   token in that branch (`doppler.service_token.ensure`) are created on
-//!   top. Every one of the four inverses' own `standing` then reads
+//!   token in `qa`'s own root config (`doppler.service_token.ensure`) are
+//!   created on top. Every one of the four inverses' own `standing` then reads
 //!   `AsCreated` with **no rider at all** -- by the time each parent's
 //!   `standing` is checked, every tool riding inside it has *already*
 //!   been deleted, LIFO (token, then branch, then environment, then
@@ -79,10 +79,12 @@
 //! - **`-d1`/`-d2`: cross-project inheritance, verify item 4.** Two
 //!   projects, named and ordered exactly as the proven
 //!   `tests/live_secret_name_gate_cycle.rs` base/child pair: `-d1`'s
-//!   `dev` root config is made inheritable
-//!   (`doppler.config.inheritable.ensure`) and `-d2`'s `dev` root
-//!   inherits it (`doppler.config.inherits.ensure`). `-d1`'s environment
-//!   inverse then reads `Drifted`, naming a foreign inheritor (decision
+//!   `dev` root config is made inheritable and `-d2`'s `dev` root inherits
+//!   it, both through a raw `POST` (`/v3/configs/config/inheritable` and
+//!   `/inherits`), never through `doppler.config.inheritable.ensure`/
+//!   `doppler.config.inherits.ensure` themselves -- this sub-cycle's own
+//!   subject is `doppler.config.ensure`'s inverse, not those two tools.
+//!   `-d1`'s environment inverse then reads `Drifted`, naming a foreign inheritor (decision
 //!   7's own row). A real `DELETE /v3/environments/environment` on
 //!   `-d1`'s `dev`, issued while `-d2` still inherits it, records
 //!   whether Doppler itself refuses or allows it -- verify item 4's own
