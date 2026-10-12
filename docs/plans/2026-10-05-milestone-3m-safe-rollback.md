@@ -15,6 +15,14 @@ is the dsl one (it prints `plan_json`); R8/R9 check and copy 2b's used-document 
 already extended. Two interactions are recorded under Risks. "Sequencing with other milestones" below holds the rest.
 **Addendum:** 2026-10-05 (operator's decisions) — (a) `appstore.profile.ensure` stays Retained: a teardown never deletes a provisioning profile. (b) A Buildkite pipeline with any build is drift: the teardown refuses and says why; willikins never deletes build history. (c) The sandbox Buildkite token already deletes throwaway pipelines in the sandbox org (milestone 3i's live bootstrap cycle, step 8, 2026-10-02).
 **Addendum:** 2026-10-05 (operator's correction, supersedes (a) and (b) above) — teardown behaviour is the document's policy, never the tool's ("Shouldn't this be a document decision?"). A tool declares only what it can do: `appstore.profile.ensure` gains an inverse that deletes the profile by the id the journal recorded; the Buildkite pipeline's inverse reports whether the pipeline has builds. Each node in a document declares its teardown policy (for example `teardown: retain | delete`, and for a pipeline what to do when it has builds: refuse or delete), validated by `check` against what the tool admits. A node that declares nothing gets the conservative default: retain, and refuse a pipeline with builds. The operator's iOS app document declares retain for its profiles and refuse for its pipeline. The Tasks table is revised to this before 3m starts. (c) stands.
+**Addendum:** 2026-10-12 — revised for document-level teardown policy, in place: the Goal, trust boundary 8, SHARED
+VALUES, decision 3a (new: the `teardown:` field, its default, how `check` validates it), decision 4 (the table states
+capability only; the profile gains a `Delete` inverse; a pipeline's builds become a declared loss, not drift),
+decisions 6, 7, 8 and 10 (policy evaluated per step; a document-kept step is `Kept`, told apart from a tool's
+`Retained`), acceptance tests 5, 6, 13, 15, 16 and new 18-20, Needs the operator (items 1 and 2 answered), and the
+Tasks table (new T1 and C1; R1, R3, R4, R5, R7, P4, P5, F1, R9 and L4 amended; 3k's test paths and 3n's catalog-free
+signatures written into the rows). Nothing a tool declares says whether to delete; a node that declares nothing is
+kept. The 2026-10-05 sequencing notes on 3k, 3n, 2b and 3l still hold and are now reflected in the rows.
 
 ## Goal
 
@@ -22,20 +30,25 @@ Given one recorded run, willikins computes a **teardown plan** that deletes exac
 else, shows it the way it shows any plan, waits for a human to approve it, and runs it only if a fresh observation
 still agrees with what was approved. Concretely:
 
-1. **Each tool declares its reversal** (decision 3): a typed inverse that deletes one resource, "rides out with its
-   container", "left in place, because …", or nothing at all. The declaration is static, like a tool's class. A tool
-   that declares nothing is never undone.
-2. **A teardown plan is computed from the journal** (decisions 1, 2, 5, 6): the run's planned actions and node
+1. **Each tool declares what it can undo** (decision 3): a typed inverse that deletes one resource, "rides out with
+   its container", "cannot be undone, because …", or nothing at all. The declaration is static, like a tool's class,
+   and states capability only. A tool that declares nothing is never undone.
+2. **Each node declares whether to undo it** (decision 3a): `teardown: retain | delete` in the document, validated by
+   `check` against the tool's capability. A node that declares nothing is kept. Policy is the document's, never the
+   tool's.
+3. **A teardown plan is computed from the journal** (decisions 1, 2, 5, 6): the run's planned actions and node
    outcomes say what it created, the journal's own timestamps bracket when, and the document at its recorded hash
    re-resolves the credentials the deletes need. Steps run in reverse of the applied plan's order.
-3. **Drift refuses the whole teardown** (decision 7): before anything is deleted, every candidate is observed. A
-   resource that is gone is skipped; one that is not willikins', that was created outside this run's window, or that
-   has changed since (a push, a secret nobody in this run wrote, a config someone else inherits, a build) refuses the
-   teardown before any delete.
-4. **Approved like any plan** (decision 8): a teardown is always `Destructive`, always needs a human, is journaled,
+4. **Drift refuses the whole teardown** (decision 7): before anything is deleted, every candidate the document says
+   to delete is observed. A resource that is gone is skipped; one that is not willikins', that was created outside
+   this run's window, or that has changed since (a push, a secret nobody in this run wrote, a config someone else
+   inherits) refuses the teardown before any delete. So does a declared loss (a pipeline's builds) the node's policy
+   does not accept.
+5. **Approved like any plan** (decision 8): a teardown is always `Destructive`, always needs a human, is journaled,
    and is re-observed and compared step by step before its first delete.
-5. **The forward plan says what a rollback could not undo** (decision 10), before anything runs.
-6. **The CLI drives it** (decision 9): `willikins rollback`. MCP is out of scope (below).
+6. **The forward plan says what a rollback would not undo** (decision 10), before anything runs: what the tool
+   cannot undo, and what the document keeps.
+7. **The CLI drives it** (decision 9): `willikins rollback`. MCP is out of scope (below).
 
 This milestone covers the todo's three parts: undoing pure creates (Delete), per-tool inverses or their declared
 absence (Contained, Retained), and the reverse of a gate (Made by hand).
@@ -60,6 +73,12 @@ exactly what it will delete and what it cannot undo.
   declares `Retained` until a live cycle can run (decision 4).
 - **Any rollback of the operator's real runs.** That is the operator's act, from their own journal, after reading the
   teardown plan. No agent plans or applies one.
+- **A live App Store delete.** The App Store Connect account willikins reaches is the operator's live account.
+  `appstore.profile.ensure`'s inverse is written and tested against mocks only; no live cycle, no L-row, and no
+  agent ever runs it. It runs only when the operator rolls back their own run whose document says `teardown: delete`
+  on a profile node.
+- **Overriding a used document's policy.** A `uses:` step cannot set `teardown:` on the nodes it brings in; the used
+  document's own nodes declare theirs.
 - **Restoring something the run deleted.** `appstore.profile.ensure`'s Replace deletes an INVALID profile first; it
   cannot come back.
 
@@ -84,6 +103,11 @@ exactly what it will delete and what it cannot undo.
 7. **A secret is never journaled for a teardown.** Credentials are re-resolved from the document's pure resolver
    nodes at teardown time (decision 5). They are never read back from the journal, which holds only redaction markers
    for them.
+8. **Policy is the document's, capability is the tool's.** A tool's declaration never decides whether to delete;
+   only a node's `teardown:` does, and a node that declares nothing is kept. The teardown reads policy from the
+   document at the run's recorded hash (and its recorded used closure), so a policy cannot be changed after the run:
+   flipping a node to `delete` later changes the hash and the teardown refuses with `DocumentChanged`. This is
+   intended. The forward plan's `not_reversible` showed the policy when the run was approved.
 
 ## SHARED VALUES
 
@@ -93,11 +117,16 @@ exactly what it will delete and what it cannot undo.
 | Declaration method | `fn reversal(&self) -> Reversal` on `Tool`, default `Reversal::Retained { why: UNDECLARED }` | R1 |
 | `UNDECLARED` | `"this tool declares no reversal"` | R1 |
 | Inverse method | `fn inverse(&self) -> Option<&dyn Inverse>` on `Tool`, default `None` | R3 |
-| `Reversal` variants | `Delete { needs, within }`, `Contained { within, otherwise }`, `Retained { why }` | R1 |
+| `Reversal` variants | `Delete { needs, within, losses }`, `Contained { within, otherwise }`, `Retained { why }` | R1 |
+| `losses` | `&'static [&'static str]`: what a delete would destroy that a run never makes. Only `buildkite.pipeline.ensure` declares one: `"builds"` | R1, P4 |
+| Policy type | `willikins_core::workflow::Teardown` = `Retain` \| `Delete { accept: Vec<Loss> }`; `Loss` a validated name (`^[a-z][a-z_]*$`); `Node.teardown: Option<Teardown>`; `CheckedNode.teardown: Teardown` (`None` becomes `Retain`) | T1 |
+| YAML | `teardown: retain`, `teardown: delete`, or `teardown: { delete: { accept: [builds] } }`; refused on a `uses:` step | T1 |
+| New `CheckError`s | `TeardownNotAdmitted { node, tool }` (any `teardown:` on a tool whose reversal is not `Delete`); `TeardownLossNotDeclared { node, loss }` | T1 |
+| `KEPT` | `"the document keeps it (no teardown: delete)"`; `"its container is kept by the document"` for a rider of a kept container | R5 |
 | `Within` | `{ tool: &'static str, ports: &'static [(&'static str, Side, &'static str)] }`, `Side` = `Input` \| `Output` | R1 |
-| `Standing` variants | `AsCreated`, `Gone`, `NotOurs { why }`, `Drifted { what }` (both `&'static str`) | R3 |
+| `Standing` variants | `AsCreated { losing: Vec<&'static str> }` (each a declared loss, empty when none), `Gone`, `NotOurs { why }`, `Drifted { what }` (both `&'static str`) | R3 |
 | Step fingerprint | `StepFingerprint { node, instance, action, standing }`, typed, discriminants only, in `TeardownPlanned` | R5, R7 |
-| `TeardownAction` variants | `Delete { uncertain: bool }`, `RidesWith { container: InstanceRef }`, `Gone`, `Retained { why }`, `MadeByHand { need }`, `Unfinished` | R5 |
+| `TeardownAction` variants | `Delete { uncertain: bool }`, `RidesWith { container: InstanceRef }`, `Gone`, `Kept { why }` (the document's policy), `Retained { why }` (the tool's capability), `MadeByHand { need }`, `Unfinished` | R5 |
 | Token | `willikins_types::TeardownToken` in `crates/willikins-types/src/sink.rs`, `executor` feature | R2 |
 | `CREATION_SKEW` | 120 seconds, `pub const` in `rollback.rs` | R5, P1–P4 |
 | Teardown class | always `Class::Destructive`; `requires_approval` always `true` | R5, R8 |
@@ -106,7 +135,8 @@ exactly what it will delete and what it cannot undo.
 | New `DriftReasonKind` | `Standing` | R7 |
 | CLI | `willikins rollback <file> --run <run-id> --journal <path> [--live \| --fake-state F] [--fake-state-out F]`; `willikins rollback --plan-id <id> --journal <path> [...]` | R9 |
 | Live probe prefix | `willikins-probe-delete-me-` (`willikins_probe_delete_me_` where `-` is refused) | L1–L3 |
-| Forward plan field | `Plan::not_reversible: Vec<NotReversible>`, `#[serde(default, skip_serializing_if = "Vec::is_empty")]` | F1 |
+| Forward plan field | `Plan::not_reversible: Vec<NotReversible>`, `#[serde(default, skip_serializing_if = "Vec::is_empty")]`; `NotReversible { node, instance, tool, by: Keeper, why }`, `Keeper` = `Tool` \| `Document` | F1 |
+| Core signatures (after 3n) | `resolve_pure(checked, inputs, wanted)`, `plan_teardown(facts, checked, resolved)`, `apply_teardown(...)` take `&Checked` and no `&Catalog`; tool handles come from `CheckedNode`, the registry from `Checked` | R4-R6 |
 
 ## Decisions
 
@@ -197,15 +227,52 @@ it can only cause an under-deletion: a rider is never deleted on its own, and th
 A new Doppler project holds the configs and secret names this run's riders created, plus Doppler's three default
 environments, and nothing more.
 
-### 4. The per-tool table
+### 3a. Teardown policy is the document's
 
-Eighteen non-pure live tools and seven gates. "Within" lists the containers each one rides with.
+The operator, 2026-10-05: "Shouldn't this be a document decision?" A tool's `Reversal` says what it **can** undo. A
+node's `teardown:` says whether this document **wants** it undone.
+
+```yaml
+nodes:
+  repo:
+    tool: github.repo.ensure
+    teardown: delete                         # delete on rollback; refuse on drift
+  pipeline:
+    tool: buildkite.pipeline.ensure
+    teardown: { delete: { accept: [builds] } }   # delete even when it has builds
+  profile:
+    tool: appstore.profile.ensure
+    teardown: retain                         # the default, written out
+```
+
+- **The default is `retain`.** A node with no `teardown:` is kept. Nothing is deleted unless a document asked for it
+  in writing, before the run.
+- **`check` validates policy against capability.** `teardown:` (either value) is admitted only on a node whose tool
+  declares `Reversal::Delete`; anywhere else it is `CheckError::TeardownNotAdmitted`. A `Contained` node goes with its
+  container whatever it says, and a `Retained` one cannot be deleted, so a `teardown:` there would be a promise the
+  engine cannot keep. Each `accept` entry must name one of the tool's declared `losses`, or it is
+  `CheckError::TeardownLossNotDeclared`. Both are static, so `check` refuses them, never `plan`.
+- **Losses are not drift.** Drift (`NotOurs`, `Drifted`) means the resource is not what this run made, and always
+  refuses. A loss is something a delete would destroy that the run itself never makes but the resource accumulates
+  by design: a pipeline's builds. The inverse reports a loss in `Standing::AsCreated { losing }`; the step deletes
+  only if every reported loss is in the node's `accept`, and otherwise refuses the teardown naming the loss. A loss
+  the tool reports but does not declare is treated as `Drifted` (fail safe).
+- **Riders follow their container's policy.** A `Contained` rider rides only with a container whose step is
+  `Delete`. A rider of a kept container is `Kept { why: "its container is kept by the document" }`.
+- **Composition.** A used document's nodes carry their own `teardown:` through the linker unchanged. A `uses:` step
+  has no `teardown:` (the DSL refuses the field there), so a parent cannot widen a used document's deletes.
+- **Policy is fixed at the run.** See trust boundary 8.
+
+
+Eighteen non-pure live tools and seven gates. "Within" lists the containers each one rides with. Every column is
+**capability**: what the tool can undo and why not. Whether a node's resource is undone is its document's
+`teardown:` (decision 3a), never this table.
 
 | Tool | Class | Reversal | Inverse (typed delete) | Within | Why |
 | --- | --- | --- | --- | --- | --- |
 | `github.repo.ensure` | Reversible | **Delete** | `GitHubClient::delete_repo(&GitHubRepo)` | none | marker topic, `created_at`, no later push |
 | `github.actions_secret.ensure` | Reversible | Contained | none | repo (`repo`→`repo`) | always writes, prior value unknowable |
-| `github.scaffold.ensure` | Irreversible | Contained | none | repo (`repo`→`repo`) | a signed commit on a branch. A revert is a new forward change the document must make |
+| `github.scaffold.ensure` | Irreversible | Contained | none | repo (`repo`→`repo`) | a commit on a branch (on a new, empty repository the first file goes through the Contents API, unsigned; milestone 3l). A revert is a new forward change the document must make |
 | `doppler.project.ensure` | Reversible | **Delete** | `delete_project(&DopplerProject)` | none | marker description, `created_at`, contents (decision 7) |
 | `doppler.config.ensure` | Reversible | **Delete** | `delete_environment(&DopplerProject, &EnvironmentSlug)` | project (`project`→`project`) | a root config goes only with its environment |
 | `doppler.branch_config.ensure` | Reversible | **Delete** | `delete_config(&DopplerConfig)` | project (`project`→`project`); `doppler.config.ensure` (`project`, `environment`) | |
@@ -216,11 +283,11 @@ Eighteen non-pure live tools and seven gates. "Within" lists the containers each
 | `doppler.service_token.rotate` | Destructive | Retained | none | | the revoked token cannot be restored |
 | `doppler.secret.set` | Reversible | Contained | none | config (`config`→output `config`) | always writes. The prior value is never read, by design |
 | `signoz.ingestion_key.ensure` | Reversible | Retained | none (a delete exists, unproven) | | no live sandbox (out of scope) |
-| `buildkite.pipeline.ensure` | Reversible | **Delete** | existing `delete_pipeline(&BuildkiteOrg, &BuildkitePipelineSlug)` | none | marker description, `created_at`, no builds |
+| `buildkite.pipeline.ensure` | Reversible | **Delete**, losses `["builds"]` | existing `delete_pipeline(&BuildkiteOrg, &BuildkitePipelineSlug)` | none | marker description, `created_at`; builds are a declared loss (decision 3a) |
 | `buildkite.pipeline.bootstrap.ensure` | Destructive | Contained | none | pipeline (`org`, `slug`) | the prior configuration is not recorded |
 | `appstore.bundle_id.ensure` | Reversible | Retained | none | | App Store identity the operator keeps: no ownership marker exists, and deleting an identifier takes its capabilities and profiles with it |
 | `appstore.bundle_id_capability.ensure` | Reversible | Retained | none | | disabling a capability invalidates every profile on the identifier |
-| `appstore.profile.ensure` | Destructive | Retained | none | | CI fetches profiles by name, and a re-run of the document recreates one on demand (Needs the operator, 1) |
+| `appstore.profile.ensure` | Destructive | **Delete** | new `delete_profile(&AppleProfileId)`, by the id the run recorded | none | no marker exists, so ownership is the recorded id, its name and its bundle id, and the creation window (verify 10). Mocks only: never a live call (Out of scope) |
 
 **Gates** (`appstore.app.get`, `appstore.app_group.gate`, `appstore.bundle_id_capability.gate`,
 `buildkite.pipeline.bootstrap.gate`, `doppler.config.inheritable.gate`, `doppler.secret_name.gate`,
@@ -228,9 +295,13 @@ Eighteen non-pure live tools and seven gates. "Within" lists the containers each
 { need }`, using the gate's own static `need`: this is the todo's "gate in reverse". A Blocked gate was never satisfied
 and is not listed.
 
-**Why App Store is all `Retained`:** none of its resources carries an ownership marker, so willikins cannot prove at
-delete time what it owns. Apple's deletes cascade (an identifier takes its profiles), and the operator has said these
-resources are kept. The live cycles still delete their throwaway identifiers by id, as before, outside rollback.
+**Why the identifier and its capabilities stay `Retained`:** none of App Store's resources carries an ownership
+marker, and Apple's deletes cascade: deleting an identifier takes its capabilities and profiles, and disabling a
+capability invalidates every profile on the identifier. Those are capability reasons, so no document can ask for
+them. A profile cascades nothing and is addressed by the exact id the run recorded, so it is deletable when its
+document says `teardown: delete` (the operator's correction of 2026-10-05). Whether a given app keeps its profiles
+is that app's document's choice. The live cycles still delete their throwaway identifiers by id, as before, outside
+rollback.
 
 ### 5. Credentials: re-resolved from the document, never from the journal
 
@@ -241,7 +312,7 @@ bound to a **pure** resolver node, so:
 
 - The teardown requires the workflow document, by name from the trusted directory, **at the run's recorded
   `document_sha256`**. A changed document refuses with the existing `DocumentChanged`.
-- New `willikins_core::plan::resolve_pure(checked, catalog, inputs, wanted)` evaluates, in `Checked::order` and from
+- New `willikins_core::plan::resolve_pure(checked, inputs, wanted)` evaluates, in the checked graph's order and from
   the recorded workflow inputs (rebuilt with `Butler`'s existing `parse_recorded_value`), **only the backward closure
   of `wanted`**: the pure nodes the `Delete` steps' secret `needs` ports are bound to, and their own pure ancestors.
   Pure includes gates that read providers (`appstore.app.get`, `doppler.secret_name.gate`). Evaluating every pure node
@@ -258,13 +329,19 @@ the only part a teardown needs, and it is exactly the part that must be evaluabl
 
 ### 6. Order, and what a teardown plan is
 
-`plan_teardown(facts, checked, catalog, resolved) -> Result<Teardown, TeardownError>` is a pure function of the run's
-journal facts, the checked document, and what each inverse observes. Its steps are the run's applied plan instances
+`plan_teardown(facts, checked, resolved) -> Result<Teardown, TeardownError>` is a pure function of the run's
+journal facts, the checked document (its graph and each node's `teardown:`), and what each inverse observes. Its steps are the run's applied plan instances
 **in reverse `Plan::nodes` order**, which is a topological order of the graph reversed: dependents come before what
 they depend on. A rider is listed in its own position as `RidesWith { container }`. Only `Delete` steps call a
 provider at apply time.
 
-If any candidate's standing is `NotOurs` or `Drifted`, `plan_teardown` returns
+**Per step, capability × policy × standing decides the action.** A candidate whose tool is `Retained` is
+`Retained { why }`. One whose tool is `Delete` and whose node's policy is `retain` is `Kept { why: KEPT }`, and its
+inverse is **not** observed: a kept resource's drift is not this teardown's concern. One whose policy is `delete` is
+observed: `AsCreated` with every reported loss accepted is `Delete`, `Gone` is `Gone`. Riders follow decision 3a.
+
+If any observed candidate's standing is `NotOurs` or `Drifted`, or `AsCreated` with a loss its policy does not
+accept, `plan_teardown` returns
 `TeardownError::Refused { steps: Vec<(InstanceRef, &'static str)> }` and **nothing is recorded as approvable**. The
 operator fixes the drift by hand (or deletes the thing by hand, which then reads `Gone`) and plans again. A partial
 teardown that deletes some things and refuses others is never offered. It would be worse than one that never started
@@ -272,7 +349,8 @@ teardown that deletes some things and refuses others is never offered. It would 
 
 ### 7. Drift: what "changed since this run created it" means, per Delete tool
 
-Every rule below runs inside the tool's own `standing`, from one or a few `GET`s, and returns a static reason.
+Every rule below runs inside the tool's own `standing`, from one or a few `GET`s, and returns a static reason. Only
+a candidate whose node says `teardown: delete` is observed (decision 6).
 
 | Tool | `NotOurs` when | `Drifted` when |
 | --- | --- | --- |
@@ -281,7 +359,8 @@ Every rule below runs inside the tool's own `standing`, from one or a few `GET`s
 | `doppler.config.ensure` (environment) | the project lacks the marker; the environment's `created_at` outside the window | a config in the environment that no rider created; secret names, `inheritedBy`, tokens as for the project, scoped to the environment |
 | `doppler.branch_config.ensure` | the project lacks the marker; `root` is true; `environment` differs; `created_at` outside the window | secret names, `inheritedBy`, tokens as above, scoped to the config |
 | `doppler.service_token.ensure` | the project lacks the marker; no token at `(config, name)` created in the window | more than one token at `(config, name)` |
-| `buildkite.pipeline.ensure` | `description` ≠ `managed-by: willikins`; `created_at` outside the window; the slug differs | any build exists (deleting a pipeline deletes its build history, which this run did not make) |
+| `buildkite.pipeline.ensure` | `description` ≠ `managed-by: willikins`; `created_at` outside the window; the slug differs | none of its own. Any build is the declared loss `builds`, reported in `AsCreated { losing }`: refused unless the node accepts it (decision 3a) |
+| `appstore.profile.ensure` | `404` → `Gone`; the id's name or bundle id differs from the run's recorded ones; its creation date outside the window (verify 10) | none: a profile has no contents |
 
 **Inherited names.** The names endpoint lists inherited names (`docs/solutions/providers/doppler-names-endpoint-lists-inherited-names.md`).
 A name visible only through a base config the rider `inherits.ensure` added is not drift. Implementation: a name
@@ -320,8 +399,10 @@ willikins' only under an owned project. The operator deletes such a config by ha
   (`AlreadyRolledBack { run_id }`); or a **later** forward run of the same workflow in this journal mutated something
   (any planned `Create`/`Replace`/`Update` that finished `Created`) and has not itself been rolled back
   (`LaterRunFirst { run_id }`).
+- **Kept and Retained stay apart in the journal.** `StepFingerprint.action` carries the discriminant, so a step the
+  document keeps and one the tool cannot undo never compare equal, and `TeardownStepFinished` lists both as `Listed`.
 - **A half-finished teardown resumes by planning again.** What it deleted reads `Gone`. The run is marked rolled back
-  only when a teardown finishes `Succeeded`. A teardown with no `Delete` step (everything `Retained`, `Gone` or
+  only when a teardown finishes `Succeeded`. A teardown with no `Delete` step (everything `Kept`, `Retained`, `Gone` or
   `MadeByHand`) is still recorded, approved and applied, so the run is marked and an earlier run is no longer blocked
   by `LaterRunFirst`.
 
@@ -332,8 +413,8 @@ by the container drift checks instead.
 ### 9. The CLI
 
 `willikins rollback <file> --run <run-id> --journal <path> [--live | --fake-state F] [--fake-state-out F]` plans a
-teardown, records it, and prints it: steps in order, uncertain deletes apart, then "rides with", "already gone", "left
-in place" (each with its reason), and "made by hand". It prints the `plan_id` and the `approve` command, and always
+teardown, records it, and prints it: steps in order, uncertain deletes apart, then "rides with", "already gone", "kept by the
+document", "cannot be undone" (each with its reason), and "made by hand". It prints the `plan_id` and the `approve` command, and always
 requires approval. `willikins rollback --plan-id <id> --journal <path> [--live | ...]` applies an approved teardown.
 `--json` and `--reveal` behave as everywhere else. Exit codes are `apply`'s, plus `1` for a refused (drifted)
 teardown. `<file>` is copied into the CLI's private trusted directory exactly as `apply <file>` does, so its hash is
@@ -347,19 +428,23 @@ README at `willikins rollback`.
 `Plan::not_reversible` lists every instance planned `Create`, `Replace` or `Update` whose rollback would not undo it,
 in the plan's order. Each entry is `{ node, instance, tool, why: &'static str }`:
 
-- the tool is `Retained`;
-- the tool is `Contained` and no container instance in the same plan is planned `Create` with matching values;
-- or the instance is `Replace`/`Update`, whatever the tool declares.
+- the tool is `Retained` (`by: Tool`);
+- the tool is `Delete` and the node's policy is `retain` (`by: Document`, `why: KEPT`);
+- the tool is `Contained` and no container instance in the same plan is planned `Create` with matching values and
+  `teardown: delete` (`by: Tool` when no container matches, `by: Document` when the matching one is kept);
+- or the instance is `Replace`/`Update`, whatever the tool declares (`by: Tool`).
 
 Rendered after `replacing` in text, and present in `--json` and MCP plan results. Computed at plan time from the same
-`Within` matching as decision 3, so the forward plan and the teardown cannot disagree. **The cost:** every
-characterization snapshot of a document with such a node gains this array. The diff review accepts only added
-`not_reversible` arrays.
+`Within` matching as decision 3, so the forward plan and the teardown cannot disagree. **The cost:** with `retain` the
+default, nearly every tracked document's characterization gains this array, listing every created node. That is the
+point: the forward plan says, before approval, that nothing will be deleted on rollback unless the document asks. The
+diff review accepts only added `not_reversible` arrays.
 
 ## Acceptance tests
 
 1. **Declarations validate** (R1, R3): `Catalog::insert` refuses a `needs` or `within` port that is not an input, a
-   `Delete` without an inverse, an inverse without `Delete`, and a pure tool declaring anything.
+   `Delete` without an inverse, an inverse without `Delete`, a malformed loss name, and a pure tool declaring
+   anything.
 2. **`TeardownToken` is gated** (R2): structurally, as `SinkToken` is (`TeardownToken::new` declared only under
    `#[cfg(feature = "executor")]`, and `cargo check -p willikins-types` with no `--tests` succeeding with `executor`
    off; a trybuild case cannot express it here, see `derive_compile_fail.rs`'s module doc), the `clippy.toml` row,
@@ -371,11 +456,15 @@ characterization snapshot of a document with such a node gains this array. The d
 4. **The candidate predicate** (R5): `Create`+`Created` is a candidate; `Update`+`Created`, `Replace`+`Created` and
    `NoOp`+`Unchanged` are not; `Create`+`Failed`+`AsCreated` gives `Delete { uncertain: true }`; a started, unfinished
    instance is `Unfinished` and never deleted.
-5. **Order and riding** (R5): steps come out in reverse plan order. A config rides with the project created in the same
-   run. A config inside a pre-existing project is its own `Delete`. Mismatched values do not ride. A `Create` +
+5. **Order and riding** (R5): steps come out in reverse plan order. Every container below says `teardown: delete`.
+   A config rides with the project created in the same run. A config inside a pre-existing project is its own `Delete`. Mismatched values do not ride. A `Create` +
    `Unchanged` root config is a transit rider, and a secret set into it rides with the project (the
-   `new-rust-service` shape).
-6. **Refusal is total** (R5): one `Drifted` step refuses the whole teardown, with no `TeardownPlanned` recorded.
+   `new-rust-service` shape). The same run with the project kept lists the config and the secret `Kept` (its
+   container is kept) and observes nothing.
+6. **Refusal is total** (R5): one `Drifted` step refuses the whole teardown, with no `TeardownPlanned` recorded. So
+   does a pipeline whose inverse reports `builds` under a plain `teardown: delete`; with `accept: [builds]` it is a
+   `Delete`. A drifted resource on a **kept** node refuses nothing (its inverse is never called: a counting stub sees
+   zero `standing` calls).
 7. **Apply re-observes** (R6): a standing that changes between approval and apply refuses with `Drift`/`Standing`
    before any delete (a counting stub sees zero deletes). A delete failure stops the run, and later steps are
    `NotRun`.
@@ -391,15 +480,24 @@ characterization snapshot of a document with such a node gains this array. The d
     the run's created resources and everything seeded in `S`.
 12. **Per-tool drift** (P1–P4): a mock test per `NotOurs`/`Drifted` row of decision 7, each pinning the exact query,
     including a `3xx` repo and a `created_at` one second outside the window.
-13. **The declaration table is pinned** (P7): one snapshot of every live tool's reversal. Adding a tool without a
-    declaration changes the snapshot.
+13. **The declaration table is pinned** (P7): one snapshot of every live tool's reversal, losses included. Adding a
+    tool without a declaration changes the snapshot.
 14. **Delete call sites are inventoried** (P8): a guard lists every `.delete(` and `delete_with_body(` call site in the
     provider crates by file and enclosing function. A new one fails until reviewed.
 15. **Forward visibility** (F1): a plan with a scaffold node and no repo `Create` lists the scaffold in
-    `not_reversible`. With a repo `Create`, it does not.
-16. **Live, sandbox only** (L1–L4): create, roll back, `GET` is `404`. Create, drift (a push, a hand-set secret), and
+    `not_reversible` (`by: Tool`). With a repo `Create` under `teardown: delete`, it does not. With the repo kept, the
+    repo and the scaffold are both listed `by: Document`.
+16. **Live, sandbox only** (L1–L4), from documents that say `teardown: delete`: create, roll back, `GET` is `404`. Create, drift (a push, a hand-set secret), and
     the teardown refuses with the drift named. The test then deletes by hand.
 17. **Adversarial pass** (X1), recorded under `docs/research/`. Every bypass becomes a fixture or a test.
+18. **Policy is checked** (T1): fixtures `workflows/fixtures/teardown-not-admitted.yaml` (`teardown: delete` on a
+    `Contained` tool) and `teardown-loss-not-declared.yaml` (`accept: [builds]` on `github.repo.ensure`) produce exactly
+    their `CheckError`. `teardown:` on a `uses:` step is refused by the DSL. A linked document's node keeps its own
+    policy (the composite path agrees with the flat one).
+19. **The default deletes nothing** (R5): a run of a document with no `teardown:` anywhere plans a teardown with no
+    `Delete` step and calls no inverse.
+20. **The profile inverse, on mocks** (P5): `delete_profile` pins its exact request; `standing` reads `Gone` on `404`
+    and `NotOurs` on a name or bundle-id mismatch. No live App Store call exists in any test.
 
 ## Verify before relying on them
 
@@ -427,6 +525,11 @@ is recorded as an addendum here and in `docs/solutions/providers/`).
    /v3/environments/environment?project&environment`, `DELETE /v3/configs/config?project&config`) are as fetched on
    2026-10-05 (`projects-delete.md`, `environments-delete.md`, `configs-delete.md`). The project delete takes a
    **body** (`Http::delete_with_body`); the other two take a query.
+
+10. App Store Connect's `Profile` resource carries a creation date (`createdDate`) and `DELETE /v1/profiles/{id}`
+    answers `204`. Fetched verbatim from Apple's published OpenAPI description before P5; never from a live call. If
+    the profile carries no creation date, P5 stops and reports: a `Delete` inverse without a window is not admitted
+    (decision 2).
 
 ## Sequencing with other milestones (portfolio review, 2026-10-05)
 
@@ -464,29 +567,31 @@ implementer's own `Co-Authored-By` trailer. Nobody pushes.
 
 | # | Task | Delegate to |
 | --- | --- | --- |
-| R1 | **`Reversal` and `Within`** (decision 3; acceptance 1). `rollback.rs` with the declaration types, `Tool::reversal()` defaulting to `Retained { why: UNDECLARED }`, and `Catalog::insert`'s port validation. No tool changes. Scoped: `-p willikins-core` | sonnet implements |
-| R2 | **`TeardownToken`** (trust boundary 2; acceptance 2). `sink.rs` (`new` under `#[cfg(feature = "executor")]`, documented beside `SinkToken`'s note in `derive_compile_fail.rs`'s module doc), the `clippy.toml` row, the tripwire test. No trybuild case (the self dev-dependency unifies `executor` on). Scoped: `-p willikins-types`, `-p willikins-core --test sink_token_guard` and the new guard, then `cargo check -p willikins-types` | sonnet implements |
-| R3 | **`Inverse`, `Created`, `Standing`, `Deleted`** (decision 3). `Tool::inverse()`, and `Catalog::insert`'s "`Delete` exactly when `inverse()` is `Some`". Test stubs in `testing.rs`. Scoped: `-p willikins-core` | sonnet implements |
-| R4 | **`resolve_pure`** (decision 5; acceptance 3). In `plan.rs`, sharing `plan`'s binding resolution. Not a second probe of the conversion table: the tripwire test that greps `plan.rs` must still pass. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
-| R5 | **`plan_teardown`** (decisions 1, 2, 4's gate rows, 6; acceptance 4–6). `RunFacts` (built by callers, so core does not depend on the journal crate), `Teardown`, `TeardownStep`, `TeardownAction`, riding, ordering, total refusal. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
+| R1 | **`Reversal` and `Within`** (decision 3; acceptance 1). `rollback.rs` with the declaration types, `Reversal::Delete`'s `losses`, `Tool::reversal()` defaulting to `Retained { why: UNDECLARED }`, and `Catalog::insert`'s port validation (and a loss name's pattern). No tool changes. A `Reversal` states capability only: no field of it says whether to delete. Scoped: `-p willikins-core` | sonnet implements |
+| R2 | **`TeardownToken`** (trust boundary 2; acceptance 2). `sink.rs` (`new` under `#[cfg(feature = "executor")]`, documented beside `SinkToken`'s note in `derive_compile_fail.rs`'s module doc), the `clippy.toml` row, the tripwire test at `crates/willikins-core/tests/it/teardown_token_guard.rs` with its `mod` line. No trybuild case (the self dev-dependency unifies `executor` on). Scoped: `-p willikins-types`, `-p willikins-core --test it sink_token_guard:: teardown_token_guard::`, then `cargo check -p willikins-types` | sonnet implements |
+| R3 | **`Inverse`, `Created`, `Standing`, `Deleted`** (decision 3). `Tool::inverse()`, `Standing::AsCreated { losing }`, and `Catalog::insert`'s "`Delete` exactly when `inverse()` is `Some`". Test stubs in `testing.rs`. Scoped: `-p willikins-core` | sonnet implements |
+| T1 | **`teardown:` in documents** (decision 3a; acceptance 18). Commit 1: `Teardown`/`Loss` in `workflow.rs`, `Node.teardown`, the DSL field (refused on a `uses:` step), the linker carrying it unchanged, and `CheckedNode.teardown`. Commit 2: `check` refuses `TeardownNotAdmitted` and `TeardownLossNotDeclared` (variants, `Display`, `kind()`, the samples list, `willikins-cli`'s exhaustive `render.rs` arm), the two fixtures with header comments, acceptance 18, and, in the same commit, the server's `mcp_server` tool-list snapshot (it embeds every `CheckError` variant; additions only) and the dsl characterization's two new fixture entries. No tracked positive document changes here. Scoped: `-p willikins-core -p willikins-dsl -p willikins-cli`, `-p willikins-server --test it mcp_server::` | sonnet implements, opus attacks |
+| R4 | **`resolve_pure`** (decision 5; acceptance 3). In `plan.rs`, `resolve_pure(checked, inputs, wanted)` reusing `plan`'s own `bind_ports`/`resolve_source` over the checked graph's `Source`s. It names no `Binding`, takes no `&Catalog`, adds no counted fallback (the ratchet pins `plan.rs` at 8), and is not a second probe of the conversion table: 3n's tripwires over `plan.rs` must still pass. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
+| R5 | **`plan_teardown`** (decisions 1, 2, 3a, 4's gate rows, 6; acceptance 4–6, 19). `RunFacts` (built by callers, so core does not depend on the journal crate), `Teardown`, `TeardownStep`, `TeardownAction` with `Kept` apart from `Retained`, policy × capability × standing per step, losses against `accept`, riders following their container's policy, ordering, total refusal. Takes `&Checked`, no catalog. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
 | R6 | **`apply_teardown`** (decision 8's apply; acceptance 7, 8's core half). Re-plan, compare, mint, delete in order, stop on failure. Scoped: `-p willikins-core` | sonnet implements, opus attacks |
-| R7 | **Journal** (decision 8; acceptance 9). The four events, the new reasons, `Teardown: Redactable`, the typed `StepFingerprint`, `TeardownRecord`, approval and rejection replay resolving either record kind, `RunRecord::rolled_back_by`, the pre-milestone replay test, and the redaction case. Journal `schema_generation` snapshots and the server's `mcp_server` snapshot that publish a changed shape are regenerated in the same commit (additions only). Scoped: `-p willikins-journal`, plus `cargo clippy -p willikins-server -p willikins-cli --all-targets` and `-p willikins-server --test mcp_server` | sonnet implements |
+| R7 | **Journal** (decision 8; acceptance 9). The four events, the new reasons, `Teardown: Redactable`, the typed `StepFingerprint` (whose action discriminant keeps `Kept` and `Retained` apart), `TeardownRecord`, approval and rejection replay resolving either record kind, `RunRecord::rolled_back_by`, the pre-milestone replay test, and the redaction case. Journal `schema_generation` snapshots and the server's `mcp_server` snapshot that publish a changed shape are regenerated in the same commit (additions only). Scoped: `-p willikins-journal`, plus `cargo clippy -p willikins-server -p willikins-cli --all-targets` and `-p willikins-server --test it mcp_server::` | sonnet implements |
 | P1 | **GitHub inverse** (decisions 4, 7; acceptance 12). `delete_repo`, a repo read with the decision 7 fields, `GitHubRepoEnsure`'s `Delete` and inverse; `Contained` for `actions_secret` and `scaffold`. Mock tests pin each query. Commit 1: the client. Commit 2: the tool. `RepoBody` (which 3l's S1 extended with `default_branch`) gains the decision 7 fields as `#[serde(default)]` options, since existing mock fixtures predate them; `repo_ensure.rs`'s exhaustive `observe` destructure gains them as `_`. Scoped: `-p willikins-providers-github` | sonnet implements, opus attacks |
 | P2 | **Doppler project inverse** (decision 7's project row). `delete_project` (body), `delete_environment`, `delete_config`, and the list reads (environments, configs with `created_at`/`inheritedBy`, names, tokens). Commit 1: the client. Commit 2: `doppler.project.ensure`. Scoped: `-p willikins-providers-doppler` | sonnet implements, opus attacks |
-| P3 | **Doppler config, branch config and token inverses**, and the `Contained`/`Retained` declarations of the other six Doppler tools. Scoped: `-p willikins-providers-doppler` | sonnet implements, opus attacks |
-| P4 | **Buildkite inverse.** The builds read, `buildkite.pipeline.ensure`'s inverse, `bootstrap.ensure` `Contained`; `delete_pipeline`'s doc now names its one non-test caller. Scoped: `-p willikins-providers-buildkite` | sonnet implements |
-| P5 | **Retained declarations**: the three App Store tools and SigNoz, with decision 4's reasons verbatim. Scoped: `-p willikins-providers-appstore -p willikins-providers-signoz` | sonnet implements |
-| P6 | **Fake twins**: the same declarations on every fake tool, fake inverses for the six `Delete` tools over `FakeState` (no timestamps: the fake skips the window rule, which the mock tests pin instead), parity of declarations in `catalog_parity.rs`, and `fake_agrees_with_live.rs` rows for standing. Scoped: `-p willikins-providers-fake` | sonnet implements |
-| P7 | **Declaration table** (acceptance 13). `crates/willikins-server/tests/reversal_table.rs` over `LIVE_TOOL_NAMES`, plus the `Within` type check of decision 3. Scoped: `-p willikins-server --test reversal_table` | sonnet implements |
-| P8 | **Delete call-site guard** (acceptance 14). `crates/willikins-cli/tests/delete_call_sites_guard.rs`, written like `no_gh_writes_guard.rs`. Scoped: `-p willikins-cli --test delete_call_sites_guard` | sonnet implements |
+| P3 | **Doppler config, branch config and token inverses**, and the `Contained`/`Retained` declarations of the other five non-pure Doppler tools (`config.inheritable.ensure`, `config.inherits.ensure`, `project_member.ensure`, `service_token.rotate`, `secret.set`). Scoped: `-p willikins-providers-doppler` | sonnet implements, opus attacks |
+| P4 | **Buildkite inverse.** The builds read, `buildkite.pipeline.ensure`'s inverse declaring the loss `builds` and reporting it in `AsCreated { losing }` (never `Drifted` for builds), `bootstrap.ensure` `Contained`; `delete_pipeline`'s doc now names its one non-test caller. Scoped: `-p willikins-providers-buildkite` | sonnet implements |
+| P5 | **App Store and SigNoz declarations** (acceptance 20; verify 10). `appstore.bundle_id.ensure`, `bundle_id_capability.ensure` and SigNoz `Retained` with decision 4's reasons verbatim. `appstore.profile.ensure` gains `Delete` and its inverse: a typed `delete_profile(&AppleProfileId)` client method and decision 7's `standing`, pinned by mock tests only. Verify 10 is fetched from Apple's published OpenAPI description first, and if it fails the task stops and reports. **No live App Store call, ever** (the operator's live account): no live test, no `live-tests` target, no manual try. Scoped: `-p willikins-providers-appstore -p willikins-providers-signoz` | sonnet implements, opus attacks |
+| P6 | **Fake twins**: the same declarations on every fake tool, fake inverses for the seven `Delete` tools over `FakeState` (the profile's included; the fake pipeline reports its fake builds as the `builds` loss) (no timestamps: the fake skips the window rule, which the mock tests pin instead), parity of declarations in `catalog_parity.rs`, and `fake_agrees_with_live.rs` rows for standing. Scoped: `-p willikins-providers-fake` | sonnet implements |
+| P7 | **Declaration table** (acceptance 13). `crates/willikins-server/tests/it/reversal_table.rs` (with its `mod` line) over `LIVE_TOOL_NAMES`, plus the `Within` type check of decision 3. Scoped: `-p willikins-server --test it reversal_table::` | sonnet implements |
+| P8 | **Delete call-site guard** (acceptance 14). `crates/willikins-cli/tests/it/delete_call_sites_guard.rs` (with its `mod` line), written like `no_gh_writes_guard.rs`; its self-exemption names `tests/it/`. Scoped: `-p willikins-cli --test it delete_call_sites_guard::` | sonnet implements |
 | R8 | **`Butler::plan_rollback` / `apply_rollback`** (decisions 5, 8; acceptance 8, 10). `RunFacts` from the journal through `parse_recorded_value`, the document hash check, `resolve_pure`, LIFO, double rollback, windows. On the fake catalog. After 2b: the document is linked through the trusted-directory resolver before `check`, and the teardown refuses `DocumentChanged` unless the root's sha **and** the run's `PlanRecorded.used` closure both match, exactly as 2b's S2 does for apply. Scoped: `-p willikins-server` | sonnet implements, opus attacks |
-| R9 | **CLI `rollback`** (decision 9; acceptance 11). The subcommand, text and JSON rendering through `mask_json`, and the fake-state round trip test. `<file>` is copied with its linked closure, as 2b's K1 made `apply <file>` do. Scoped: `-p willikins-cli` (the new tests and `render` only) | sonnet implements |
-| F1 | **`Plan::not_reversible`** (decision 10; acceptance 15). Commit 1: the field and its computation in core, with tests; in the same commit, because each goes red without it: the `Plan { .. }` struct literals in `crates/willikins-cli/src/render.rs`'s tests, core's `schema_generation__plan_schema` snapshot and the server's `mcp_server` snapshot (both publish `Plan`), and the dsl characterization snapshot, which prints every document's `plan_json` (the only tracked characterization; `willikins-cli` has none, and its 35 gitignored `operator_*` snapshots hold no plan JSON). All diff-reviewed as added `not_reversible` arrays or schema properties only. Commit 2: text rendering after `replacing`. Scoped: `-p willikins-core -p willikins-dsl`, `cargo clippy -p willikins-cli -p willikins-server --all-targets`, `-p willikins-server --test mcp_server`, then `-p willikins-cli`; run the gitignored `operator_*` targets and report, never commit | sonnet implements |
+| R9 | **CLI `rollback`** (decision 9; acceptance 11). The subcommand, text and JSON rendering through `mask_json` ("kept by the document" apart from "cannot be undone"), and the fake-state round trip test, over a test-local document that says `teardown: delete` on its deletable nodes. `<file>` is copied with its linked closure, as 2b's K1 made `apply <file>` do. Scoped: `-p willikins-cli --test it` (the new modules) and `render`'s unit tests | sonnet implements |
+| F1 | **`Plan::not_reversible`** (decision 10; acceptance 15). Commit 1: the field (with `by: Keeper`) and its computation in core, reading each node's `teardown:`, with tests; in the same commit, because each goes red without it: the `Plan { .. }` struct literals in `crates/willikins-cli/src/render.rs`'s tests, core's `schema_generation__plan_schema` snapshot, the journal's plan-record snapshot, the server's `mcp_server` snapshot (all publish `Plan`), and the dsl characterization snapshot, which prints every document's `plan_json` (the only tracked characterization; the gitignored `operator_*` snapshots may hold plan JSON too: run them, update locally if they move, never commit). With `retain` the default, nearly every tracked document gains an array: all diff-reviewed as added `not_reversible` arrays or schema properties only. Commit 2: text rendering after `replacing`. Scoped: `-p willikins-core -p willikins-dsl -p willikins-journal`, `cargo clippy -p willikins-cli -p willikins-server --all-targets`, `-p willikins-server --test it mcp_server::`, then `-p willikins-cli`; run the gitignored `operator_*` targets and report | sonnet implements |
+| C1 | **The operator's app document declares its policy** (coordinator, after T1). In the gitignored private app document: `teardown: retain` on its profile nodes and `teardown: delete` (no `accept`) on its pipeline node; nothing else changes. Run its private tests and a fake plan; uncommitted, survives only in this working tree | coordinator |
 | L1 | **GitHub live rollback cycle** (acceptance 16, verify 1–2), behind `live-tests`, in the sandbox org only. Written and compiling, **never run by the implementer**. Scoped: `cargo clippy -p willikins-providers-github --features live-tests --all-targets -j 2 -- -D warnings` | sonnet writes, coordinator runs once |
 | L2 | **Doppler live rollback cycle** (verify 3–7, 9), as L1, in the sandbox workplace | sonnet writes, coordinator runs once |
 | L3 | **Buildkite live rollback cycle** (verify 8), as L1, in the sandbox org | sonnet writes, coordinator runs once |
-| L4 | **End to end through the CLI**: `apply` then `rollback` of `workflows/new-rust-service-buildkite.yaml` in the sandbox, with a scratch journal. A coordinator runbook in this plan's addendum, not a test | coordinator |
-| X1 | **Adversarial pass** (acceptance 17), recorded under `docs/research/2026-10-0x-m3m-adversarial-pass.md`. Priority targets: a delete reachable without a `TeardownToken` or from a document; a candidate that the run did not create (Update, Replace, NoOp, another run's); a rider deleted on its own; a container deleted despite foreign contents (a hand-set secret, an inheriting config elsewhere, a build, a push); a window bypass by clock or format; a `3xx` repo followed; a credential read from the journal; a value in a reason; LIFO bypass; a teardown applied after its standing changed | opus |
+| L4 | **End to end through the CLI**: `apply` then `rollback` of a scratch copy of `workflows/new-rust-service-buildkite.yaml` that adds `teardown: delete` to its deletable nodes (the tracked document keeps the default), in the sandbox, with a scratch journal. A coordinator runbook in this plan's addendum, not a test | coordinator |
+| X1 | **Adversarial pass** (acceptance 17), recorded under `docs/research/2026-10-0x-m3m-adversarial-pass.md`. Priority targets: a delete reachable without a `TeardownToken` or from a document; a candidate that the run did not create (Update, Replace, NoOp, another run's); a rider deleted on its own; a container deleted despite foreign contents (a hand-set secret, an inheriting config elsewhere, a build, a push); a window bypass by clock or format; a `3xx` repo followed; a credential read from the journal; a value in a reason; LIFO bypass; a teardown applied after its standing changed; policy reintroduced in a tool declaration; a delete reachable on a node that declares nothing, or on a rider of a kept container; a policy changed after the run without `DocumentChanged`; an unaccepted loss deleted; a parent widening a used document's policy; any App Store call outside mocks | opus |
 | D0 | **Retire `deploy/teardown.sh`** (decision 9), after L4 has run live. One commit: delete `deploy/teardown.sh`, `deploy/teardown_test.sh` and `crates/willikins-cli/tests/teardown_script.rs` (which runs that suite); in `crates/willikins-cli/tests/no_gh_writes_guard.rs`, `the_walk_reads_every_kind_of_file_this_repository_executes` drops `deploy/teardown.sh` from its on-disk list (no tracked `.sh` file remains, so `is_runnable("teardown.sh")` stays as the name check only) and the comments that cite the script as the guard's origin stay as history; `smoke_parity.rs`'s comments and README's two teardown sections point at `willikins rollback`. The guard must still pass with no `.sh` in the tree. Scoped: `-p willikins-cli` (`no_gh_writes_guard`, `smoke_parity`), `cargo clippy -p willikins-cli --all-targets` | sonnet implements |
 | D1 | **Docs**: after D0, add a design-doc addendum and a CLAUDE.md invariant (edit `AGENTS.md` identically), update the HANDOFF, close the todo, and write the MCP follow-up todo | coordinator |
 
@@ -517,10 +622,12 @@ implementer's own `Co-Authored-By` trailer. Nobody pushes.
 
 ## Needs the operator
 
-1. **`appstore.profile.ensure`: keep `Retained`, or give it an inverse?** A created profile is deletable by its
-   recorded id, but it carries no marker, and CI fetches profiles by name. This plan keeps it, as with every App Store
-   resource. A yes adds one task after P5.
-2. **A pipeline with builds: drift (this plan) or deletable?** Deleting the pipeline takes its build history.
+1. **Answered 2026-10-05:** a profile's teardown is its document's decision. The tool gains an inverse (P5); the
+   operator's app document keeps its profiles (C1).
+2. **Answered 2026-10-05:** a pipeline with builds is the document's decision too (`accept: [builds]`). The
+   operator's app document refuses (C1: `teardown: delete` without `accept`).
 3. **Sandbox credentials for L1–L3** in `~/.config/willikins/sandbox.env`: the GitHub PAT with repository
    administration in the sandbox org (already there), the sandbox Doppler token (already there), and a Buildkite token
    able to delete pipelines in the sandbox org (the renewed one is broad enough; confirm).
+4. **C1 is a local, uncommitted edit** to the operator's private app document, like 3n B2's edit to the private
+   tests. It survives only in this working tree.
