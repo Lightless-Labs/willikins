@@ -132,8 +132,9 @@ const CREDENTIAL_PREFIXES: &[&str] = &["ghp_", "github_pat_"];
 /// `willikins-newrepo-`.
 const REPO_PREFIX: &str = "willikins-probe-delete-me-";
 
-/// How many characters [`probe_timestamp`] plus a one-letter tag produce: 5 digits (seconds mod
-/// 100,000) plus the one-letter sub-cycle tag (`a`/`b`/`c`), so
+/// How many characters a one-letter tag plus [`probe_timestamp`] produce: the one-letter sub-cycle
+/// tag (`a`/`b`/`c`) then 5 digits (seconds mod 100,000), tag first because a `ProjectSlug` token
+/// must start with a lowercase letter or be all digits, so
 /// `REPO_PREFIX.len() + PROBE_SUFFIX_LEN == 32 == ProjectSlug::MAX_LEN`
 /// exactly.
 const PROBE_SUFFIX_LEN: usize = 6;
@@ -236,10 +237,10 @@ fn probe_timestamp(ts: u64) -> String {
     format!("{:05}", ts % 100_000)
 }
 
-/// A fresh repository identity: `willikins-probe-delete-me-<5 digits><tag>`
+/// A fresh repository identity: `willikins-probe-delete-me-<tag><5 digits>`
 /// -- exactly [`ProjectSlug::MAX_LEN`] (32) characters.
 fn build_repo_identity(org: &GitHubOrg, timestamp: &str, tag: &str) -> GitHubRepo {
-    let name = format!("{REPO_PREFIX}{timestamp}{tag}");
+    let name = format!("{REPO_PREFIX}{tag}{timestamp}");
     let slug = ProjectSlug::parse(&name)
         .unwrap_or_else(|err| panic!("`{name}` must be a valid ProjectSlug: {}", err.reason));
     GitHubRepo::new(org.clone(), slug)
@@ -1036,7 +1037,7 @@ fn github_live_rollback_cycle() {
 fn repo_prefix_and_probe_suffix_produce_a_valid_project_slug_at_exactly_the_bound() {
     assert_eq!(REPO_PREFIX.len() + PROBE_SUFFIX_LEN, ProjectSlug::MAX_LEN);
     for tag in ["a", "b", "c"] {
-        let candidate = format!("{REPO_PREFIX}{}{tag}", probe_timestamp(unix_seconds()));
+        let candidate = format!("{REPO_PREFIX}{tag}{}", probe_timestamp(unix_seconds()));
         assert_eq!(
             candidate.len(),
             ProjectSlug::MAX_LEN,
@@ -1045,7 +1046,7 @@ fn repo_prefix_and_probe_suffix_produce_a_valid_project_slug_at_exactly_the_boun
             candidate.len()
         );
         ProjectSlug::parse(&candidate).expect(
-            "a `willikins-probe-delete-me-<5 digits><tag>` name must be a valid ProjectSlug",
+            "a `willikins-probe-delete-me-<tag><5 digits>` name must be a valid ProjectSlug",
         );
     }
 }
