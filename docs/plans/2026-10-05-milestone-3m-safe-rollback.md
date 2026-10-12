@@ -973,6 +973,104 @@ willikins-cli --test it -j 2 -- delete_call_sites_guard::`, 11 tests; `cargo cli
   `syn`-AST guards in `willikins-core`; `before_trailing_comment` is copied from it nearly verbatim (minus the
   shell `#`-comment half, since this guard reads only `.rs` files).
 
+**Addendum:** 2026-10-12 -- R8 landed (`Butler::plan_rollback`/`apply_rollback`; `Butler::decide`'s either-record-kind
+fix, which rides in the same commit because it shares `butler.rs`) in three commits: `crates/willikins-core/src/rollback.rs`
+alone (`-p willikins-core`: `cargo clippy --all-targets -D warnings`, `cargo test --lib -- rollback::`, 46 tests, all
+green), then every `willikins-server` path together (`crates/willikins-server/src/butler.rs`, a new
+`crates/willikins-server/src/rollback.rs`, `ButlerError`, the two new response types, `lib.rs`, and the new
+`tests/it/rollback_r8.rs` with its `mod` line -- `cargo clippy -p willikins-server --all-targets -D warnings`,
+`cargo fmt --package willikins-core --package willikins-server --check`, `cargo test -p willikins-core --test it`
+(317 tests, including `test_layout_guard`'s own check of this task's new `mod` line) and `cargo test -p
+willikins-server` (96 lib tests plus 243 integration tests, including `mcp_server::the_tool_list_and_every_schema_is_snapshotted`
+unmoved and `mcp_output_schema_conformance::`), all green; two pre-existing `live-tests`-gated tests stay ignored,
+unrelated to this task), then this addendum. Deviations from the row, recorded:
+- **One core addition this task needed, not in the row's own file list:** `TeardownApplyError::Step { instance,
+  error }` (`crates/willikins-core/src/rollback.rs`). `apply_teardown` already reports a `Delete` step's own failure
+  inside its `Ok` result (`TeardownStepOutcome::Failed`), but nothing before this task ever needed to express that
+  failure as a `TeardownApplyError` -- which `apply_rollback` does, to journal `TeardownFinished`'s `Failed`
+  outcome (decision 8) the same way forward apply's own `ApplyError::Tool` wraps a failed `ensure` call. Documented
+  on the variant itself as "never returned by `apply_teardown`" -- it is built by the caller, not by core. No new
+  ratchet token.
+- **`apply_rollback` runs synchronously**, unlike `Butler::apply`: there is no `TeardownRunRecord` or per-step
+  replay view yet (R7's own addendum: "a later task that does need a teardown's own per-step replay should add it
+  as its own view"), so a `RunHandle` here would be unpollable, and every provider this milestone's own acceptance
+  tests exercise (the fake catalog) never blocks. It still claims the single-apply slot through the existing
+  `ApplyGuard` for the whole call, but never calls `commit`: the slot stays `Preparing`, never `Running`, for the
+  entire synchronous call, and `ApplyGuard`'s own `Drop` returns it to `Idle` on every return path (a refusal, a
+  `?`, or a panic) -- the same discipline `Butler::apply` relies on between claiming the slot and committing it. A
+  concurrent `apply`/`apply_rollback` therefore sees `ApplyPreparing` rather than `RunInProgress { run_id }` for
+  the whole call; pinned by a regression test (`a_full_rollback_cycle_deletes_the_project_and_marks_the_run`) that
+  runs a forward `apply` on the same `Butler` right after a successful `apply_rollback` returns. A later task that
+  drives this against a live provider may want to move it onto its own thread, the way `Butler::apply` already
+  does; not done here on spec.
+- **Plan-time refusals are journaled under an id that already resolves, never a freshly minted one.** The row's
+  own reading of decision 8 ("every refusal... journaled as `ApplyRefused`") would, taken with "mint the teardown's
+  own `PlanId` up front," journal most of `plan_rollback`'s own refusals under an id neither `Journal::plan` nor
+  `Journal::teardown` can ever look back up -- an audit line nobody could resolve. Instead: `RunUnfinished`,
+  `AlreadyRolledBack` and `LaterRunFirst` (and `DocumentChanged`, when `reload_and_check` fails) are journaled
+  under the run's own *forward* `plan_id` (already resolvable via `Journal::plan`); `NotAForwardRun` is journaled
+  under the teardown's own, already-recorded `plan_id` (found by scanning for its `TeardownStarted` event, then
+  resolvable via `Journal::teardown`). `ButlerError::UnknownRun` (a `run_id` the journal never saw as either a
+  forward or a teardown run at all) and `TeardownError::Refused` itself (decision 6: "nothing is recorded as
+  approvable") are left unjournaled, for the same reason: neither has an id to attribute a line to. The teardown's
+  own `PlanId` is minted only once `plan_teardown_fingerprint` has actually produced a `Teardown`, immediately
+  before `TeardownPlanned` -- mirroring `Butler::plan_inner`'s own "mint it right before recording" pattern.
+- **"Later" (decision 8's "why LIFO per workflow") is this journal's own `RunStarted` append order, never
+  wall-clock time.** Two runs started in the same clock tick (the common case under a `ManualClock` in a test, and
+  not impossible against a real clock either) must still order deterministically; `Journal::runs()`'s own order
+  (an `IndexMap`'s insertion order) is append order and can never tie. `later_run_first` takes the excluded run's
+  own position in that order and scans forward from it, never comparing timestamps at all.
+- **"Created something" (the same decision) is read narrowly: a planned `Action::Create` whose recorded status is
+  `NodeStatus::Created`**, never `Replace`/`Update` (which decision 1 already calls `Retained`, "changed in place,
+  or replaced; the prior state cannot be restored," not a new resource added on top). `run_created_something`
+  (`crates/willikins-server/src/rollback.rs`) joins a run's own recorded `RunNode`s against its `PlanRecord`'s own
+  fingerprint by `(node, instance)` to get each one's planned action, since `RunRecord::nodes` itself carries no
+  action.
+- **`RunFacts` is rebuilt from the raw journal, never from `RunRecord::nodes`.** `RunRecord::nodes` carries only
+  `status`/`outputs` and synthesizes `NodeStatus::NotRun` for an instance the run never reached -- exactly the fold
+  R5a's own addendum flagged as not telling apart "never started at all" from "started, but its own `NodeFinished`
+  never landed" (the `Unfinished` row decision 1 and 2 both need distinguished). `build_run_instances`
+  (`crates/willikins-server/src/rollback.rs`) instead walks `entries()` itself for this run's own `NodeStarted`/
+  `NodeFinished` pairs, in the run's own recorded plan `fingerprint` order (one `InstanceFingerprint` per instance,
+  already in `Plan::nodes`' order -- `plan_teardown` reverses it itself).
+- **A port's recorded value is decoded generically, with no need to know in advance which ports are secret.**
+  `decode_value_json` reads a `NodeStarted.inputs`/`NodeFinished.outputs` entry's own `type`/`list` fields to build
+  its `TypeRef`, then treats `state: "unknown"` *or* a known value's own `redacted: true` identically: both
+  produce `Value::unknown(ty)`, never an attempted parse of the redaction marker string. This works because a
+  known secret value's own `Serialize` always carries `redacted: true`, and an unknown one always carries
+  `state: "unknown"` (the module's own pinned shape), so the JSON itself always says which case it is -- the
+  caller never needs the checked document's own `PortSpec` to tell.
+- **The fake catalog cannot produce a literal `TeardownStepOutcome::AlreadyGone`** (a `Delete`-actioned step whose
+  own `delete()` call, not its plan-time `standing()`, observes `Gone` -- the genuine "a half-finished teardown
+  already deleted this one" case): `FakeState::fail_ensure_once` exists but is wired into no tool's `ensure`, and
+  no inverse's `delete`, at all. Acceptance 8's "after a half-finished teardown, planning again reads the deleted
+  steps `Gone`" is instead proven the way decision 6 itself describes the identical observable case ("[the
+  operator] deletes the thing by hand, which then reads `Gone`, and plans again"): the test removes the resource
+  from `FakeState` directly between the forward run and `plan_rollback`, which reads the step `TeardownAction::Gone`
+  at plan time (not `Delete`) -- a step whose own apply-time outcome is `Listed`, same as `Kept`/`Retained`/
+  `RidesWith`/`MadeByHand`/`Unfinished` (`TeardownStepOutcome::Listed`'s own doc: "any non-`Delete` step"), never
+  `AlreadyGone`. The teardown that follows still succeeds (no step failed) and marks the run via
+  `RunRecord::rolled_back_by`, which is the behaviour acceptance 8 actually asks for. A later task wanting a test
+  of the literal mid-resume `AlreadyGone` path needs a fake-side delete-failure hook first; flagged, not built here.
+- **`TeardownApplyError::Replan`/`Inconsistent` at `apply_rollback` time are reported but not journaled with any
+  `ApplyRefusedReason`.** By the time `apply_rollback` reaches its own `resolve_pure`/`plan_teardown_fingerprint`
+  calls, `plan_rollback` has already computed the identical pair once, successfully, against the same document
+  hash `reload_and_check` just re-verified -- a failure there is defensive, the same "by construction this never
+  happens, but trusted blindly from no caller" discipline `apply_teardown`'s own `Inconsistent` variant already
+  documents. Decision 8's own refusal list names none of these (it mirrors forward apply's `ApplyRefusedReason::PlanFailed`,
+  which adversarial pass 2 had to add after the fact for the identical forward-run gap); left as a gap for a later
+  pass to close with its own reason, rather than journaled under a reason that does not fit.
+- **`wanted_resolvers` is not tightened to a run's own candidates.** R5a's own addendum already flagged this as
+  "task R8's call, not this one's"; acceptance 8 and 10 do not need it tightened (nothing in this task's own tests
+  binds a secret `needs` port through a pure resolver chain), so it is left as the documented over-approximation.
+- **No rate limit on `plan_rollback`/`apply_rollback`.** `plan`/`apply` share two rate-limited buckets
+  (`crate::rate_limit`); the row does not ask for a third, and neither acceptance test needs one. Flagged for a
+  later pass, not added on spec.
+- **`clippy::too_many_lines` allows added in two places**, both for the same reason `Butler::apply_inner` already
+  carries one: `ButlerError`'s `Display` impl (one arm per variant; this task's eight new variants pushed it past
+  the lint's line count) and `plan_rollback_inner` (one operation, the ordered refusal checks this method's own doc
+  spells out in sequence; splitting it would scatter that sequence across functions for no reader's benefit).
+
 ## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
