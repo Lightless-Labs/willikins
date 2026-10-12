@@ -180,8 +180,8 @@ pub struct Loaded {
     /// never a used document's fixed inputs or renamed nodes.
     pub workflow: Workflow,
     /// The result of `check`ing this document's *linked* graph (milestone
-    /// 2b, decision (d8)): [`Checked::workflow`] is the flattened
-    /// workflow [`willikins_core::link`] produced, not [`Self::workflow`]
+    /// 2b, decision (d8)): its nodes are the flattened ones
+    /// [`willikins_core::link`] produced, not [`Self::workflow`]'s own
     /// unchanged -- `check` refuses outright on one that still has an
     /// unlinked `uses:` step.
     pub checked: Checked,

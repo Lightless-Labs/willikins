@@ -4,6 +4,18 @@
 //! a deterministic order, or a [`Checked`] workflow ready for `describe`
 //! and `plan` (milestone 1 task 8).
 //!
+//! # The checked graph
+//!
+//! [`Checked`] is sealed (milestone 3n): its fields are private and only
+//! [`check`] builds one. It holds the document's resolved graph -- each
+//! node's tool handle, its `for_each` shape, and every bound port's
+//! [`Edge`] beside the source it reads (a literal parsed once, a declared
+//! input, the item, a step, an aggregate or a keyed instance), with the
+//! catalog's registry. `plan`, `apply` and `describe` read that graph and
+//! never a [`Binding`]: they take no catalog and perform no lookup by name.
+//! The document itself is reachable only through [`DocumentView`], which
+//! exposes its name, description, inputs and output names, never its nodes.
+//!
 //! # Error ordering
 //!
 //! Errors accumulate in this fixed sequence, so a workflow with many
@@ -111,6 +123,14 @@
 //!   one-hop conversion it otherwise allows. Not needed by any
 //!   acceptance test this milestone pins; left as a gap rather than
 //!   risked under time pressure.
+//! - Milestone 3n's adversarial pass
+//!   (`docs/research/2026-10-11-m3n-adversarial-pass.md`) left three
+//!   residuals. `apply` zips the checked nodes with plan's groups, and a
+//!   list port zips its sources with its element edges; both lengths agree
+//!   by construction, and a mismatch would truncate silently rather than
+//!   fail. [`Edge::deliver`] passes a value with no conversion through
+//!   unchecked; the type checks upstream are what make that safe. The
+//!   unreachable ratchet counts four exact spellings only.
 
 use std::collections::HashSet;
 use std::convert::Infallible;

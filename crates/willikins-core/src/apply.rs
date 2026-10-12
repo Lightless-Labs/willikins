@@ -520,7 +520,7 @@ impl ApplyObserver for RecordingObserver {
 
 /// Run `approved` (a [`Plan`] for `checked` against `inputs`), minting the
 /// one [`SinkToken`] the whole run gets. Milestone 3n, decision (b2): no
-/// `&Catalog` parameter -- see [`plan`]'s own doc for why.
+/// `&Catalog` parameter -- see [`crate::plan::plan`]'s own doc for why.
 ///
 /// Implements the design's six numbered rules in order:
 ///
@@ -531,7 +531,7 @@ impl ApplyObserver for RecordingObserver {
 ///    a caller cannot forge — as well as from `approved.requires_approval`,
 ///    so neither a cleared flag nor a weaker workflow's plan can open the
 ///    gate.
-/// 2. Re-plans via [`plan`]; a [`PlanError`] becomes [`ApplyError::Plan`].
+/// 2. Re-plans via [`crate::plan::plan`]; a [`PlanError`] becomes [`ApplyError::Plan`].
 ///    Compares [`Plan::fingerprint`] per instance, in order; the first
 ///    difference is [`ApplyError::Drift`]. Nothing has been executed yet.
 /// 3. Mints the run's one [`SinkToken`] — the only non-test call site in
@@ -556,7 +556,7 @@ impl ApplyObserver for RecordingObserver {
 ///    delete the approved plan did not show never happens -- see
 ///    [`refuse_unplanned_replacement`].
 /// 5. Resolves workflow outputs from the run's own instance outputs, the
-///    same way [`plan`] resolves them from planned ones (see the module
+///    same way [`crate::plan::plan`] resolves them from planned ones (see the module
 ///    docs).
 /// 6. Calls `observer` with [`ApplyEvent::NodeStarted`] before and
 ///    [`ApplyEvent::NodeFinished`] after every attempted instance.
@@ -567,9 +567,10 @@ impl ApplyObserver for RecordingObserver {
 ///
 /// # Panics
 ///
-/// Panics if `checked` and `approved` are mutually inconsistent (a node or
-/// tool `approved` names that `checked` does not have) — a caller contract
-/// violation, the same way [`plan`] panics on one; see `plan`'s own doc.
+/// Never on a document, an input or an approved plan: a plan that does not
+/// match `checked` is drift, refused as an [`ApplyError`]. The two internal
+/// fallback arms left (counted by the ratchet test) guard drift
+/// detection's own index arithmetic. Reaching one is a bug.
 #[allow(clippy::too_many_lines)]
 // one function, six numbered rules; splitting further would scatter the sequence the module doc walks through
 pub fn apply(

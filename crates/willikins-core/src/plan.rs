@@ -913,8 +913,9 @@ fn key_for_each_items(
 /// catalog's own registry (`Checked::registry`), so there is no second
 /// lookup left for a catalog to serve.
 ///
-/// Walks `checked.order`; for each node, resolves its `for_each` source (if
-/// any) and every instance's `with` bindings, checks the tool's key ports
+/// Walks the checked graph's nodes in topological order; for each node,
+/// resolves its `for_each` source (if any) and every instance's ports from
+/// their checked sources, checks the tool's key ports
 /// are known, calls [`Tool::read`], and records one [`PlannedNode`] per
 /// instance. Workflow outputs are resolved last, against every node's
 /// finished result.
@@ -931,10 +932,10 @@ fn key_for_each_items(
 ///
 /// # Panics
 ///
-/// Panics if a node, port, or output name `checked` resolved is not
-/// actually present in its own workflow -- which would mean `checked` was
-/// not produced by [`crate::check::check`], a caller contract violation,
-/// not a value `plan` deals with normally.
+/// Never on a document or an input. [`Checked`] is sealed: only
+/// [`crate::check::check`] builds one, and the few internal fallback
+/// arms left (counted by the ratchet test) guard shapes that graph cannot
+/// hold. Reaching one is a bug in `check`.
 pub fn plan(checked: &Checked, inputs: &IndexMap<InputName, Value>) -> Result<Plan, PlanError> {
     Ok(walk(checked, inputs)?.plan)
 }
@@ -1214,8 +1215,8 @@ pub(crate) fn walk(
     })
 }
 
-/// Tracks every blocked or skipped node/instance while [`plan`] walks
-/// `checked.order`, so a later node's bindings can be checked against it
+/// Tracks every blocked or skipped node/instance while [`plan`] walks the
+/// checked graph, so a later node's bindings can be checked against it
 /// (decision (j), point 3) and so each [`BlockedGate`]'s `holds_back` can be
 /// filled in as its dependents are discovered, in plan order.
 #[derive(Default)]
