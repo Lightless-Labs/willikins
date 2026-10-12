@@ -82,6 +82,46 @@ fn both_specs_validate_against_the_type_registry() {
         .expect("valid spec");
 }
 
+/// Milestone 3m task P6: the live and fake `Reversal` declarations of
+/// every tool this crate registers are equal. `Reversal` is not part of
+/// `ToolSpec`, so the spec-equality tests above never exercised this.
+#[test]
+fn reversal_declarations_equal_the_fake_tools() {
+    use willikins_core::rollback::Reversal;
+
+    let live = GitHubRepoEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::GitHubRepoEnsure::new(Arc::new(Mutex::new(
+        willikins_providers_fake::FakeState::new(),
+    )));
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = GitHubActionsSecretEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::GitHubActionsSecretEnsure::new(Arc::new(
+        Mutex::new(willikins_providers_fake::FakeState::new()),
+    ));
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = GitHubScaffoldEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::GitHubScaffoldEnsure::new(Arc::new(Mutex::new(
+        willikins_providers_fake::FakeState::new(),
+    )));
+    assert_eq!(live.reversal(), fake.reversal());
+
+    // `github.repo.get` declares no reversal at all on either side --
+    // both default to `Retained { why: UNDECLARED }`.
+    let live = GitHubRepoGet::new(test_client());
+    let fake = willikins_providers_fake::tools::FakeGitHubRepoGet::new(Arc::new(Mutex::new(
+        willikins_providers_fake::FakeState::new(),
+    )));
+    assert_eq!(live.reversal(), fake.reversal());
+    assert_eq!(
+        live.reversal(),
+        Reversal::Retained {
+            why: willikins_core::rollback::UNDECLARED
+        }
+    );
+}
+
 #[test]
 fn snapshot_both_live_tool_specs() {
     let repo = spec_json(GitHubRepoEnsure::new(test_client()).spec());

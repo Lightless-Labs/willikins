@@ -11,10 +11,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use willikins_core::{Inputs, Observation, PortName, Tool, Value};
+use willikins_core::rollback::{CreationWindow, Standing};
+use willikins_core::{Created, Inputs, Observation, PortName, Timestamp, Tool, Value};
 use willikins_providers_fake::FakeState;
 use willikins_providers_fake::tools::FakeGitHubRepoGet;
-use willikins_providers_github::{GitHubClient, GitHubRepoGet};
+use willikins_providers_github::{GitHubClient, GitHubRepoEnsure, GitHubRepoGet};
 use willikins_providers_http::testing::{MockProvider, load_fixture};
 use willikins_providers_http::{Credential, Http};
 use willikins_types::{DomainType, GitHubRepo, RepoVisibility};
@@ -178,4 +179,125 @@ fn agrees_on_present_with_the_token_port_bound() {
 
     assert_eq!(shape(&live), shape(&fake));
     assert!(matches!(live, Observation::Present(_)));
+}
+
+/// Milestone 3m task P6: `github.repo.ensure`'s inverse, the live
+/// `GitHubRepoInverse` against mocks and the fake `GitHubRepoInverse`
+/// against `FakeState`, agree on [`Standing`]'s *variant* for the same
+/// scenario -- never on the exact `why`/`what` text, which each crate
+/// writes for its own reader. The live inverse's own window check has no
+/// fake counterpart (this crate's own `tests/it/repo_inverse_mock.rs`
+/// pins that half); every case here holds inside both inverses' own
+/// window regardless.
+mod inverse_standing_parity {
+    use super::*;
+
+    fn created_inputs() -> Inputs {
+        let mut inputs = Inputs::new();
+        inputs.insert(PortName::parse("repo").unwrap(), Value::known(repo()));
+        inputs
+    }
+
+    fn window() -> CreationWindow {
+        CreationWindow {
+            start: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            end: Timestamp::parse("2026-01-01T00:10:00Z").unwrap(),
+        }
+    }
+
+    fn created(inputs: &Inputs) -> Created<'_> {
+        Created {
+            inputs,
+            outputs: Box::leak(Box::new(willikins_core::Outputs::new())),
+            window: window(),
+            settled_by: window().end,
+            accept: &[],
+            riders: &[],
+        }
+    }
+
+    fn live_standing(provider: &mut MockProvider) -> Standing {
+        let credential = Credential::for_testing("WILLIKINS_TEST_GITHUB_TOKEN", "ghp_testtoken");
+        let http = Http::new(provider.url(), Vec::new(), credential);
+        let tool = GitHubRepoEnsure::new(Arc::new(GitHubClient::new(http)));
+        Tool::inverse(&tool)
+            .expect("github.repo.ensure declares Delete")
+            .standing(&created(&created_inputs()))
+            .expect("standing never fails against a well-formed mock response")
+    }
+
+    fn fake_standing(state: FakeState) -> Standing {
+        let tool =
+            willikins_providers_fake::tools::GitHubRepoEnsure::new(Arc::new(Mutex::new(state)));
+        Tool::inverse(&tool)
+            .expect("github.repo.ensure declares Delete")
+            .standing(&created(&created_inputs()))
+            .expect("standing never fails against a well-formed fake state")
+    }
+
+    #[test]
+    fn both_report_gone_when_absent() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/repos/example-org/monorepo")
+            .with_status(404)
+            .with_body(fixture("error_basic_404").to_string())
+            .create();
+        assert_eq!(live_standing(&mut provider), Standing::Gone);
+        assert_eq!(fake_standing(FakeState::new()), Standing::Gone);
+    }
+
+    #[test]
+    fn both_report_as_created_when_present_and_ours_with_no_foreign_contents() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/repos/example-org/monorepo")
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "visibility": "private",
+                    "topics": ["managed-by-willikins"],
+                    "full_name": "example-org/monorepo",
+                    "created_at": "2026-01-01T00:05:00Z",
+                    "pushed_at": "2026-01-01T00:05:00Z",
+                    "open_issues_count": 0,
+                    "forks_count": 0,
+                })
+                .to_string(),
+            )
+            .create();
+        provider
+            .mock(
+                "GET",
+                "/repos/example-org/monorepo/actions/secrets?per_page=100&page=1",
+            )
+            .with_status(200)
+            .with_body(serde_json::json!({"total_count": 0, "secrets": []}).to_string())
+            .create();
+        assert_eq!(
+            live_standing(&mut provider),
+            Standing::AsCreated { losing: Vec::new() }
+        );
+        let state = FakeState::new().with_repo(&repo(), RepoVisibility::Private, true);
+        assert_eq!(
+            fake_standing(state),
+            Standing::AsCreated { losing: Vec::new() }
+        );
+    }
+
+    #[test]
+    fn both_report_not_ours_when_foreign() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/repos/example-org/monorepo")
+            .with_status(200)
+            .with_body(fixture("repo_get_foreign").to_string())
+            .create();
+        assert!(matches!(
+            live_standing(&mut provider),
+            Standing::NotOurs { .. }
+        ));
+        let state = FakeState::new().with_repo(&repo(), RepoVisibility::Private, false);
+        assert!(matches!(fake_standing(state), Standing::NotOurs { .. }));
+    }
 }
