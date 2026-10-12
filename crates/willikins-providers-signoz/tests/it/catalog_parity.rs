@@ -33,6 +33,16 @@ fn signoz_ingestion_key_ensure_spec_equals_the_fake_tool() {
     assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
 }
 
+/// Milestone 3m task P6: the live and fake `Reversal` declarations
+/// agree. `Reversal` is not part of `ToolSpec`, so the spec-equality
+/// test above never exercised this.
+#[test]
+fn reversal_declaration_equals_the_fake_tool() {
+    let live = SigNozIngestionKeyEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::SigNozIngestionKeyEnsure::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+}
+
 #[test]
 fn the_spec_validates_against_the_type_registry() {
     SigNozIngestionKeyEnsure::new(test_client())
