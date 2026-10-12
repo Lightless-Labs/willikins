@@ -27,5 +27,6 @@ mod schema_generation;
 mod sealed_compile_fail;
 mod secret_literal_guard;
 mod sink_token_guard;
+mod teardown_token_guard;
 mod test_layout_guard;
 mod value_render_parse_round_trip;
