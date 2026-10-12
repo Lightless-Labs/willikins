@@ -502,3 +502,57 @@ fn an_approved_teardown_applied_after_the_apply_window_elapses_refuses_plan_expi
         "PlanExpired must be journaled"
     );
 }
+
+/// Decision 8's LIFO rule holds at apply, not only at plan (the
+/// 2026-10-12 independent adversarial pass): a later run of the same
+/// workflow that created something between this teardown's plan and its
+/// apply must be rolled back first. The two runs here touch independent
+/// projects, so no container drift check can see the later one -- only
+/// the LIFO rule does -- and without a re-check at apply the earlier
+/// run's project was deleted while the later run stood.
+#[test]
+fn a_later_run_between_teardown_plan_and_apply_refuses_later_run_first() {
+    let dir = tempfile::tempdir().unwrap();
+    write_docs(dir.path());
+    let (state, catalog) = willikins_providers_fake::empty();
+    let clock = common::manual_clock();
+    let (butler, journal) = common::butler_with_journal(dir.path(), catalog, clock);
+
+    let first = plan_and_apply(&butler, "rollback-r8-single", "r8-lifo-apply-first");
+    let planned = butler
+        .plan_rollback(first, common::principal("agent"))
+        .expect("no later run exists yet, so the teardown plans cleanly");
+    let second = plan_and_apply(&butler, "rollback-r8-single", "r8-lifo-apply-second");
+    butler
+        .approve(planned.plan_id, common::principal("approver"))
+        .unwrap();
+
+    let err = butler
+        .apply_rollback(planned.plan_id, common::principal("agent"))
+        .expect_err("the later run must be rolled back first, at apply too");
+    assert!(
+        matches!(err, ButlerError::LaterRunFirst { run_id } if run_id == second),
+        "{err:?}"
+    );
+    assert!(
+        refused(&journal, Some(planned.plan_id), |reason| matches!(
+            reason,
+            ApplyRefusedReason::LaterRunFirst { run_id } if *run_id == second
+        )),
+        "LaterRunFirst must be journaled against the teardown's own plan_id"
+    );
+    let key = willikins_providers_fake::state::doppler_project_key(&project("r8-lifo-apply-first"));
+    assert!(
+        state.lock().unwrap().doppler_projects.contains_key(&key),
+        "nothing may be deleted"
+    );
+    assert!(
+        !journal
+            .lock()
+            .unwrap()
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry.event, Event::TeardownStarted { .. })),
+        "the refusal precedes TeardownStarted"
+    );
+}

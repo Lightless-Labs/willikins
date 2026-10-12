@@ -1492,7 +1492,8 @@ impl Butler {
     /// [`ButlerError::UnknownPlan`], [`ButlerError::AlreadyApplied`],
     /// [`ButlerError::RunInProgress`], [`ButlerError::ApplyPreparing`],
     /// [`ButlerError::DocumentChanged`], [`ButlerError::PlanExpired`],
-    /// [`ButlerError::ApprovalRequired`],
+    /// [`ButlerError::ApprovalRequired`], [`ButlerError::LaterRunFirst`]
+    /// (decision 8's LIFO rule, re-checked at apply),
     /// [`ButlerError::RecordedInputUnreadable`],
     /// [`ButlerError::TeardownDrift`], [`ButlerError::Teardown`] (a
     /// re-resolution failure, defensive -- see this method's own body),
@@ -1607,6 +1608,21 @@ impl Butler {
                     });
                 }
             }
+        }
+
+        // Decision 8's LIFO rule, re-checked here and not only by
+        // `plan_rollback` (the 2026-10-12 independent adversarial pass): a
+        // later run of the same workflow may have started, and built on
+        // what this run created, after this teardown was planned or
+        // approved. A container's drift rule sees only what it reads; this
+        // rule holds per workflow, whatever the later run touched.
+        if let Some(later) = self.later_run_first(&forward_plan.workflow, record.of_run) {
+            self.refuse_apply(
+                plan_id,
+                principal,
+                ApplyRefusedReason::LaterRunFirst { run_id: later },
+            );
+            return Err(ButlerError::LaterRunFirst { run_id: later });
         }
 
         let resolved_inputs = match resolve_recorded_inputs(
