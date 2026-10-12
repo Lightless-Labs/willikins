@@ -22,7 +22,8 @@ use indexmap::IndexMap;
 
 use willikins_core::{
     BlockedGate, Class, InputName, Inputs, InstanceFingerprint, NodeName, NodeStatus, OutputName,
-    PortName, ToolError, ToolName, Value,
+    PortName, StepFingerprint, Teardown, TeardownApplyError, TeardownStepOutcome, ToolError,
+    ToolName, Value,
 };
 use willikins_types::WorkflowName;
 
@@ -149,6 +150,35 @@ pub enum ApplyRefusedReason {
         /// document text: an id this journal itself minted.
         run_id: RunId,
     },
+    /// A `rollback` call named a `plan_id`/`run_id` whose own
+    /// `PlanRecorded`/`RunStarted` event is a *teardown*, never a forward
+    /// run (milestone 3m decision 8): planning or applying a rollback of
+    /// a rollback is not a thing this design has a rule for.
+    NotAForwardRun,
+    /// The run a rollback names has no `RunFinished` of its own: it is
+    /// still going, or the process that ran it died mid-way (milestone 3m
+    /// decision 8). Its own `settled_by` (decision 2) is undefined, so a
+    /// teardown of it cannot be planned yet. Distinct from
+    /// [`Self::RunInProgress`], which names a *different* run already
+    /// holding the apply lock.
+    RunUnfinished,
+    /// This run was already rolled back once, by a teardown that finished
+    /// [`Outcome::Succeeded`] -- [`crate::journal::RunRecord::rolled_back_by`]
+    /// already names it.
+    AlreadyRolledBack {
+        /// The run id of the teardown that already succeeded.
+        run_id: RunId,
+    },
+    /// A *later* forward run of the same workflow, in this same journal,
+    /// mutated something and has not itself been rolled back yet
+    /// (milestone 3m decision 8, "why LIFO per workflow"): that later
+    /// run's own teardown is the only one that knows what it added on top
+    /// of what this run created, so this run's own rollback must wait for
+    /// it.
+    LaterRunFirst {
+        /// The later run that must be rolled back first.
+        run_id: RunId,
+    },
 }
 
 /// Which of [`willikins_core::DriftKind`]'s three shapes an
@@ -171,6 +201,16 @@ pub enum DriftReasonKind {
         /// The output port whose value changed.
         port: PortName,
     },
+    /// A teardown step's own re-observation disagrees with what was
+    /// approved (milestone 3m decision 8): a different
+    /// [`willikins_core::StandingKind`], including a loss that was not
+    /// there, or was not reported, when the teardown was approved -- the
+    /// one case a step's own action alone cannot show, since an
+    /// *accepted* loss never changes `Delete { uncertain }`. Never a
+    /// forward run's own drift, which is always one of the three variants
+    /// above; this one is reached only through
+    /// [`ApplyRefusedReason::Drift`] on a teardown's own apply.
+    Standing,
 }
 
 /// How a run finished: [`crate::Event::RunFinished`]'s payload.
@@ -215,6 +255,30 @@ pub enum Outcome {
     Failed {
         /// The failure `apply` returned, partial result included.
         error: Redacted<willikins_core::ApplyError>,
+    },
+}
+
+/// How a teardown run finished: [`Event::TeardownFinished`]'s payload
+/// (milestone 3m decision 8). Mirrors [`Outcome`] with no `Blocked`
+/// equivalent -- a teardown has no gate to block on (trust boundary 1: no
+/// inverse is a catalog tool).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TeardownOutcome {
+    /// Every `Delete` step ran (or was already [`TeardownStepOutcome::AlreadyGone`]),
+    /// in order, with no failure.
+    Succeeded,
+    /// A `Delete` step's own `inverse().delete` failed, or re-planning
+    /// this teardown at apply time failed outright.
+    ///
+    /// Wrapped in [`Redacted`], not stored directly, for the same reason
+    /// [`Outcome::Failed`]'s own `error` is: `willikins_core::TeardownApplyError`
+    /// (and the `willikins_core::PlanError` it can nest, through
+    /// `Replan`) has no `Deserialize`, so this crate's own `Event` could
+    /// not derive it either, were the field stored unwrapped.
+    Failed {
+        /// The failure.
+        error: Redacted<TeardownApplyError>,
     },
 }
 
@@ -449,6 +513,74 @@ pub enum Event {
         transport: Transport,
         /// Why.
         reason: AuthFailedReason,
+    },
+    /// A teardown plan was produced and recorded (milestone 3m decision
+    /// 8). Teardown plans share the [`PlanId`] namespace with forward
+    /// plans, so the approval and apply windows carry over unchanged.
+    TeardownPlanned {
+        /// This teardown's fresh id, in the same [`PlanId`] namespace a
+        /// forward plan's own id comes from.
+        plan_id: PlanId,
+        /// The run this teardown would undo.
+        of_run: RunId,
+        /// That run's own workflow name.
+        workflow: WorkflowName,
+        /// The workflow document's content hash, read at the run's own
+        /// recorded hash (decision 5): a teardown's policy and
+        /// credentials come from the document as it stood at the run,
+        /// never as it stands now.
+        document_sha256: DocumentSha256,
+        /// The teardown itself, for display -- opaque, redacted JSON
+        /// (`willikins_core::Teardown` has no `Deserialize`; see
+        /// [`Redacted`]'s own module doc).
+        teardown: Redacted<Teardown>,
+        /// The teardown's own per-step fingerprint, for apply time's
+        /// byte-exact re-observation check (decision 8): typed, unlike
+        /// `teardown` above, since [`StepFingerprint`] is built to
+        /// round-trip through `Deserialize`.
+        fingerprint: Vec<StepFingerprint>,
+        /// The teardown's approval class -- always
+        /// [`willikins_core::Class::Destructive`] (decision 8).
+        class: Class,
+        /// Whether this teardown requires human approval -- always
+        /// `true` (decision 8).
+        requires_approval: bool,
+        /// Who called `rollback`.
+        principal: PrincipalId,
+    },
+    /// A teardown run began (milestone 3m decision 8): its own `run_id`,
+    /// in the same [`RunId`] namespace a forward run's own id comes from,
+    /// is never `of_run` -- the two are always distinct ids, one naming
+    /// the teardown's own run, one naming what it undoes.
+    TeardownStarted {
+        /// This teardown run's fresh id.
+        run_id: RunId,
+        /// The teardown plan being run.
+        plan_id: PlanId,
+        /// The run this teardown undoes.
+        of_run: RunId,
+        /// Who started it.
+        principal: PrincipalId,
+    },
+    /// Finished processing one teardown step (milestone 3m decision 8):
+    /// one per [`Teardown::steps`] entry, in `approved`'s own order.
+    TeardownStepFinished {
+        /// The teardown run.
+        run_id: RunId,
+        /// The node.
+        node: NodeName,
+        /// Its `for_each` instance key, if any.
+        instance: Option<String>,
+        /// What happened to it.
+        status: TeardownStepOutcome,
+    },
+    /// A teardown run finished, one way or the other (milestone 3m
+    /// decision 8).
+    TeardownFinished {
+        /// The teardown run.
+        run_id: RunId,
+        /// How it finished.
+        outcome: TeardownOutcome,
     },
 }
 

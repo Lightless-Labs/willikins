@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-journal/tests/it/schema_generation.rs
+assertion_line: 26
 expression: schema
 ---
 {
@@ -62,6 +63,17 @@ expression: schema
     "principal": {
       "description": "Who started it.",
       "$ref": "#/$defs/PrincipalId"
+    },
+    "rolled_back_by": {
+      "description": "The teardown run that rolled this one back, if a teardown of it\nhas finished [`crate::event::TeardownOutcome::Succeeded`]\n(milestone 3m decision 8). `#[serde(skip_serializing_if =\n\"Option::is_none\")]`, no explicit `default` needed: `schemars`\nalready treats an `Option` field as not required, the same as\n`next_step` above -- so a `RunRecord` with none serializes\nbyte-identically to before this field existed.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunId"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "run_id": {
       "description": "This run's id.",

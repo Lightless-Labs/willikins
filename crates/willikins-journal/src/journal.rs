@@ -8,12 +8,13 @@ use std::collections::BTreeMap;
 use indexmap::IndexMap;
 
 use willikins_core::{
-    BlockedGate, Class, InstanceFingerprint, NodeName, NodeStatus, OutputName, Outputs, Value,
+    BlockedGate, Class, InstanceFingerprint, NodeName, NodeStatus, OutputName, Outputs,
+    StepFingerprint, Teardown, Value,
 };
 use willikins_types::WorkflowName;
 
 use crate::document_hash::DocumentSha256;
-use crate::event::{Entry, Event, Outcome};
+use crate::event::{Entry, Event, Outcome, TeardownOutcome};
 use crate::ids::{PlanId, RunId};
 use crate::reason::Reason;
 use crate::redacted::Redacted;
@@ -97,6 +98,46 @@ pub struct PlanRecord {
     /// the plan depends on.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub used: BTreeMap<WorkflowName, DocumentSha256>,
+}
+
+/// A recorded teardown plan, replayed from a [`Event::TeardownPlanned`]
+/// event and whatever approval and run events followed it (milestone 3m
+/// decision 8). Mirrors [`PlanRecord`]: teardown plans share the
+/// [`PlanId`] namespace with forward plans, so the same approval and
+/// apply windows, and the same fold rules, carry over unchanged -- see
+/// [`pending_approvals_view`]/[`fold_approval`] for how an approval event
+/// resolves against either record kind.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+pub struct TeardownRecord {
+    /// This teardown's id, in the same [`PlanId`] namespace a forward
+    /// plan's own id comes from.
+    pub plan_id: PlanId,
+    /// The run this teardown would undo.
+    pub of_run: RunId,
+    /// That run's own workflow name.
+    pub workflow: WorkflowName,
+    /// The workflow document's content hash, at the undone run's own
+    /// recorded hash.
+    pub document_sha256: DocumentSha256,
+    /// The teardown itself, for display.
+    pub teardown: Redacted<Teardown>,
+    /// The teardown's own per-step fingerprint, for the apply-time
+    /// re-observation check.
+    pub fingerprint: Vec<StepFingerprint>,
+    /// The teardown's approval class.
+    pub class: Class,
+    /// Whether this teardown requires human approval.
+    pub requires_approval: bool,
+    /// Who called `rollback`.
+    pub requested_by: PrincipalId,
+    /// When `rollback` recorded it.
+    pub recorded_at: Timestamp,
+    /// Its current approval state.
+    pub approval: ApprovalState,
+    /// The run this teardown was applied as, if any -- the teardown's own
+    /// run id, never [`Self::of_run`]. Set as soon as `TeardownStarted` is
+    /// seen, the same way [`PlanRecord::applied`] is.
+    pub applied: Option<RunId>,
 }
 
 /// [`RunRecord::next_step`]'s fixed text for a [`RunState::Blocked`] run
@@ -186,6 +227,15 @@ pub struct RunRecord {
     pub next_step: Option<String>,
     /// When it finished, if it has.
     pub finished_at: Option<Timestamp>,
+    /// The teardown run that rolled this one back, if a teardown of it
+    /// has finished [`crate::event::TeardownOutcome::Succeeded`]
+    /// (milestone 3m decision 8). `#[serde(skip_serializing_if =
+    /// "Option::is_none")]`, no explicit `default` needed: `schemars`
+    /// already treats an `Option` field as not required, the same as
+    /// `next_step` above -- so a `RunRecord` with none serializes
+    /// byte-identically to before this field existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rolled_back_by: Option<RunId>,
 }
 
 /// An append-only, replayable event log.
@@ -217,6 +267,14 @@ pub trait Journal {
     /// One recorded plan, by id.
     fn plan(&self, plan_id: &PlanId) -> Option<PlanRecord> {
         plan_view(self.entries(), plan_id)
+    }
+
+    /// One recorded teardown plan, by id (milestone 3m decision 8). Never
+    /// a match for a forward plan's own id: the two live in the same
+    /// [`PlanId`] namespace but each id is minted for exactly one kind of
+    /// record.
+    fn teardown(&self, plan_id: &PlanId) -> Option<TeardownRecord> {
+        teardown_view(self.entries(), plan_id)
     }
 
     /// Every run recorded so far.
@@ -269,6 +327,12 @@ pub(crate) fn plan_view(entries: &[Entry], plan_id: &PlanId) -> Option<PlanRecor
     fold(entries).plans.shift_remove(plan_id)
 }
 
+/// The fold behind [`Journal::teardown`]; see [`pending_approvals_view`]'s
+/// doc for why this is a free function.
+pub(crate) fn teardown_view(entries: &[Entry], plan_id: &PlanId) -> Option<TeardownRecord> {
+    fold(entries).teardowns.shift_remove(plan_id)
+}
+
 /// The fold behind [`Journal::runs`]; see [`pending_approvals_view`]'s doc
 /// for why this is a free function.
 pub(crate) fn runs_view(entries: &[Entry]) -> Vec<RunRecord> {
@@ -281,12 +345,13 @@ pub(crate) fn run_view(entries: &[Entry], run_id: &RunId) -> Option<RunRecord> {
     fold(entries).runs.shift_remove(run_id)
 }
 
-/// The two replay views, built together in one pass over `entries` so a
+/// The replay views, built together in one pass over `entries` so a
 /// run's [`RunRecord::nodes`] can consult its plan's fingerprint (see
 /// [`finish_runs`]) without a second, separate fold.
 struct Fold {
     plans: IndexMap<PlanId, PlanRecord>,
     runs: IndexMap<RunId, RunRecord>,
+    teardowns: IndexMap<PlanId, TeardownRecord>,
 }
 
 /// Per-run finished node instances, in the order their `NodeFinished`
@@ -294,38 +359,62 @@ struct Fold {
 /// instance (there should never be one) replaces rather than duplicates.
 type FinishedNodes = IndexMap<RunId, IndexMap<(NodeName, Option<String>), RunNode>>;
 
+/// Each teardown run's own `of_run`, keyed by the teardown run's own
+/// `run_id` (milestone 3m decision 8): filled from `TeardownStarted`,
+/// read back when that same `run_id`'s `TeardownFinished` arrives, so a
+/// successful one can set [`RunRecord::rolled_back_by`] on the run it
+/// undid. Transient, like [`FinishedNodes`] above -- never part of
+/// [`Fold`] itself.
+type TeardownOfRun = IndexMap<RunId, RunId>;
+
 fn fold(entries: &[Entry]) -> Fold {
     let mut plans: IndexMap<PlanId, PlanRecord> = IndexMap::new();
     let mut runs: IndexMap<RunId, RunRecord> = IndexMap::new();
+    let mut teardowns: IndexMap<PlanId, TeardownRecord> = IndexMap::new();
     let mut finished: FinishedNodes = IndexMap::new();
+    let mut teardown_of_run: TeardownOfRun = IndexMap::new();
 
     for entry in entries {
         match &entry.event {
             Event::PlanRecorded { .. } => fold_plan_recorded(&mut plans, entry),
             Event::ApprovalAutomatic { .. }
             | Event::ApprovalGranted { .. }
-            | Event::ApprovalRejected { .. } => fold_approval(&mut plans, entry),
+            | Event::ApprovalRejected { .. } => fold_approval(&mut plans, &mut teardowns, entry),
             Event::RunStarted { .. } => {
                 fold_run_started(&mut plans, &mut runs, &mut finished, entry);
             }
             Event::NodeFinished { .. } => fold_node_finished(&mut finished, entry),
             Event::RunFinished { .. } => fold_run_finished(&mut runs, entry),
+            Event::TeardownPlanned { .. } => fold_teardown_planned(&mut teardowns, entry),
+            Event::TeardownStarted { .. } => {
+                fold_teardown_started(&mut teardowns, &mut teardown_of_run, entry);
+            }
+            Event::TeardownFinished { .. } => {
+                fold_teardown_finished(&mut runs, &teardown_of_run, entry);
+            }
             // No replay view depends on any of these: `ApplyRefused` is an
             // audit line about an attempt, not a state transition;
             // `NodeStarted`'s progress is folded from `NodeFinished` only
-            // (see `RunRecord::nodes`'s own doc); the rest carry nothing
-            // any view reads.
+            // (see `RunRecord::nodes`'s own doc); `TeardownStepFinished`
+            // has no replay view yet (a teardown's own per-step progress
+            // is out of scope for this crate's R7 -- see this task's own
+            // plan addendum); the rest carry nothing any view reads.
             Event::ApplyRefused { .. }
             | Event::NodeStarted { .. }
             | Event::ServerStarted { .. }
             | Event::ToolCalled { .. }
-            | Event::AuthFailed { .. } => {}
+            | Event::AuthFailed { .. }
+            | Event::TeardownStepFinished { .. } => {}
         }
     }
 
     finish_runs(&mut runs, &plans, finished);
 
-    Fold { plans, runs }
+    Fold {
+        plans,
+        runs,
+        teardowns,
+    }
 }
 
 fn fold_plan_recorded(plans: &mut IndexMap<PlanId, PlanRecord>, entry: &Entry) {
@@ -378,7 +467,18 @@ fn fold_plan_recorded(plans: &mut IndexMap<PlanId, PlanRecord>, entry: &Entry) {
     );
 }
 
-fn fold_approval(plans: &mut IndexMap<PlanId, PlanRecord>, entry: &Entry) {
+/// Applies an approval event to whichever record kind `plan_id` names
+/// (milestone 3m decision 8: "approve/reject and their replay must
+/// resolve a `plan_id` in either `PlanRecord` or the new
+/// `TeardownRecord`"). The two live in one namespace and an id is minted
+/// for exactly one kind of record, so at most one of `plans`/`teardowns`
+/// ever holds it; trying `plans` first and falling back to `teardowns` is
+/// never ambiguous.
+fn fold_approval(
+    plans: &mut IndexMap<PlanId, PlanRecord>,
+    teardowns: &mut IndexMap<PlanId, TeardownRecord>,
+    entry: &Entry,
+) {
     let (plan_id, approval) = match &entry.event {
         Event::ApprovalAutomatic { plan_id, .. } => (plan_id, ApprovalState::Automatic),
         Event::ApprovalGranted { plan_id, approver } => (
@@ -403,6 +503,8 @@ fn fold_approval(plans: &mut IndexMap<PlanId, PlanRecord>, entry: &Entry) {
         _ => unreachable!("fold_approval is only called for the three approval events"),
     };
     if let Some(record) = plans.get_mut(plan_id) {
+        record.approval = approval;
+    } else if let Some(record) = teardowns.get_mut(plan_id) {
         record.approval = approval;
     }
 }
@@ -448,9 +550,101 @@ fn fold_run_started(
             blocked: Vec::new(),
             next_step: None,
             finished_at: None,
+            rolled_back_by: None,
         },
     );
     finished.insert(*run_id, IndexMap::new());
+}
+
+fn fold_teardown_planned(teardowns: &mut IndexMap<PlanId, TeardownRecord>, entry: &Entry) {
+    let Event::TeardownPlanned {
+        plan_id,
+        of_run,
+        workflow,
+        document_sha256,
+        teardown,
+        fingerprint,
+        class,
+        requires_approval,
+        principal,
+    } = &entry.event
+    else {
+        unreachable!("fold_teardown_planned is only called for Event::TeardownPlanned");
+    };
+    // The first record of an id is the only one, for the same reason a
+    // forward plan's first record is (see `fold_plan_recorded`).
+    if teardowns.contains_key(plan_id) {
+        return;
+    }
+    teardowns.insert(
+        *plan_id,
+        TeardownRecord {
+            plan_id: *plan_id,
+            of_run: *of_run,
+            workflow: workflow.clone(),
+            document_sha256: document_sha256.clone(),
+            teardown: teardown.clone(),
+            fingerprint: fingerprint.clone(),
+            class: *class,
+            requires_approval: *requires_approval,
+            requested_by: principal.clone(),
+            recorded_at: entry.at,
+            approval: ApprovalState::Pending,
+            applied: None,
+        },
+    );
+}
+
+fn fold_teardown_started(
+    teardowns: &mut IndexMap<PlanId, TeardownRecord>,
+    teardown_of_run: &mut TeardownOfRun,
+    entry: &Entry,
+) {
+    let Event::TeardownStarted {
+        run_id,
+        plan_id,
+        of_run,
+        ..
+    } = &entry.event
+    else {
+        unreachable!("fold_teardown_started is only called for Event::TeardownStarted");
+    };
+    // The first `TeardownStarted` for a teardown run id is the only one,
+    // for the same reason `fold_run_started` keeps only the first: a
+    // duplicate would overwrite which run this teardown undoes.
+    if teardown_of_run.contains_key(run_id) {
+        return;
+    }
+    if let Some(record) = teardowns.get_mut(plan_id) {
+        record.applied = Some(*run_id);
+    }
+    teardown_of_run.insert(*run_id, *of_run);
+}
+
+/// Sets [`RunRecord::rolled_back_by`] on the run a successful teardown
+/// undid (milestone 3m decision 8): "a forward `RunRecord` gains
+/// `rolled_back_by`... set when a teardown of it finishes `Succeeded`."
+/// A `Failed` teardown outcome, or a `run_id` this fold never saw a
+/// `TeardownStarted` for (an edited or truncated file), sets nothing --
+/// the same defensive "only when the file actually supports it" style
+/// [`fold_run_started`]/[`fold_node_finished`] already use.
+fn fold_teardown_finished(
+    runs: &mut IndexMap<RunId, RunRecord>,
+    teardown_of_run: &TeardownOfRun,
+    entry: &Entry,
+) {
+    let Event::TeardownFinished { run_id, outcome } = &entry.event else {
+        unreachable!("fold_teardown_finished is only called for Event::TeardownFinished");
+    };
+    if !matches!(outcome, TeardownOutcome::Succeeded) {
+        return;
+    }
+    let Some(of_run) = teardown_of_run.get(run_id) else {
+        return;
+    };
+    if let Some(run) = runs.get_mut(of_run) {
+        run.rolled_back_by = Some(*run_id);
+    }
 }
 
 fn fold_node_finished(finished: &mut FinishedNodes, entry: &Entry) {

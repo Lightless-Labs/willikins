@@ -44,12 +44,14 @@ mod timestamp_clamp;
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use document_hash::{DocumentSha256, DocumentSha256Error};
 pub use event::{
-    ApplyRefusedReason, AuthFailedReason, DriftReasonKind, Entry, Event, Outcome, Transport,
+    ApplyRefusedReason, AuthFailedReason, DriftReasonKind, Entry, Event, Outcome, TeardownOutcome,
+    Transport,
 };
 pub use file::{FileJournal, JournalError};
 pub use ids::{PlanId, RunId};
 pub use journal::{
     ApprovalState, BLOCKED_NEXT_STEP, Journal, PlanRecord, RunNode, RunRecord, RunState,
+    TeardownRecord,
 };
 pub use memory::MemoryJournal;
 pub use observer::{Append, JournalObserver, continue_run_and_journal, run_and_journal};

@@ -33,7 +33,7 @@ use crate::JournalError;
 use crate::event::Entry;
 use crate::file;
 use crate::ids::{PlanId, RunId};
-use crate::journal::{self, PlanRecord, RunRecord};
+use crate::journal::{self, PlanRecord, RunRecord, TeardownRecord};
 
 /// A journal file's entries, replayed once by [`replay`] and held in
 /// memory -- the read-only counterpart to [`crate::FileJournal`].
@@ -69,6 +69,12 @@ impl ReplayedJournal {
     #[must_use]
     pub fn plan(&self, plan_id: &PlanId) -> Option<PlanRecord> {
         journal::plan_view(&self.entries, plan_id)
+    }
+
+    /// See [`crate::Journal::teardown`].
+    #[must_use]
+    pub fn teardown(&self, plan_id: &PlanId) -> Option<TeardownRecord> {
+        journal::teardown_view(&self.entries, plan_id)
     }
 
     /// See [`crate::Journal::runs`].

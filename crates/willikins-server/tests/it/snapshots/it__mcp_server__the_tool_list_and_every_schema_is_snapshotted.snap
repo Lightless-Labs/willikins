@@ -1,5 +1,6 @@
 ---
 source: crates/willikins-server/tests/it/mcp_server.rs
+assertion_line: 241
 expression: snapshot
 ---
 [
@@ -1489,6 +1490,17 @@ expression: snapshot
         "principal": {
           "$ref": "#/$defs/PrincipalId",
           "description": "Who started it."
+        },
+        "rolled_back_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The teardown run that rolled this one back, if a teardown of it\nhas finished [`crate::event::TeardownOutcome::Succeeded`]\n(milestone 3m decision 8). `#[serde(skip_serializing_if =\n\"Option::is_none\")]`, no explicit `default` needed: `schemars`\nalready treats an `Option` field as not required, the same as\n`next_step` above -- so a `RunRecord` with none serializes\nbyte-identically to before this field existed."
         },
         "run_id": {
           "$ref": "#/$defs/RunId",

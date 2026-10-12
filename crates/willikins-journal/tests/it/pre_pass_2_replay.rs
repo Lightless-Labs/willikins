@@ -86,6 +86,13 @@ fn every_event_kind_in_the_frozen_fixture_still_deserializes() {
             Event::NodeFinished { .. } => "node_finished",
             Event::RunFinished { .. } => "run_finished",
             Event::AuthFailed { .. } => "auth_failed",
+            // Added by milestone 3m (task R7); never present in a frozen
+            // pre-pass-2 file, but named so this match stays exhaustive
+            // and a future variant fails to compile here.
+            Event::TeardownPlanned { .. } => "teardown_planned",
+            Event::TeardownStarted { .. } => "teardown_started",
+            Event::TeardownStepFinished { .. } => "teardown_step_finished",
+            Event::TeardownFinished { .. } => "teardown_finished",
         };
         *kinds.entry(kind).or_default() += 1;
     }
@@ -123,6 +130,10 @@ fn every_apply_refused_reason_in_the_frozen_fixture_still_deserializes() {
                     willikins_journal::DriftReasonKind::Instance => "drift_instance",
                     willikins_journal::DriftReasonKind::Action => "drift_action",
                     willikins_journal::DriftReasonKind::Output { .. } => "drift_output",
+                    // Added by milestone 3m (task R7); never present in a
+                    // frozen pre-pass-2 file, but named so this match
+                    // stays exhaustive.
+                    willikins_journal::DriftReasonKind::Standing => "drift_standing",
                 },
                 ApplyRefusedReason::PlanFailed { .. } => "plan_failed",
                 // Added by adversarial pass 2; never present in a frozen
@@ -134,6 +145,13 @@ fn every_apply_refused_reason_in_the_frozen_fixture_still_deserializes() {
                 ApplyRefusedReason::ApprovalRequired => "approval_required",
                 ApplyRefusedReason::AlreadyApplied => "already_applied",
                 ApplyRefusedReason::RunInProgress { .. } => "run_in_progress",
+                // Added by milestone 3m (task R7); never present in a
+                // frozen pre-pass-2 file, but named so this match stays
+                // exhaustive and a future variant fails to compile here.
+                ApplyRefusedReason::NotAForwardRun => "not_a_forward_run",
+                ApplyRefusedReason::RunUnfinished => "run_unfinished",
+                ApplyRefusedReason::AlreadyRolledBack { .. } => "already_rolled_back",
+                ApplyRefusedReason::LaterRunFirst { .. } => "later_run_first",
             });
         }
     }

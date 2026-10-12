@@ -15,10 +15,12 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::common;
 use crate::common::{node, port, principal, reason, tool_name, workflow_name};
-use willikins_core::{Class, InstanceFingerprint, NodeStatus, ToolError, ToolErrorKind};
+use willikins_core::{
+    Class, InstanceFingerprint, NodeStatus, Teardown, TeardownStepOutcome, ToolError, ToolErrorKind,
+};
 use willikins_journal::{
     ApplyRefusedReason, AuthFailedReason, DriftReasonKind, Event, Journal, Outcome, PlanId,
-    Redacted, RunId, Transport,
+    Redacted, RunId, TeardownOutcome, Transport,
 };
 
 macro_rules! variant_kinds {
@@ -49,6 +51,10 @@ variant_kinds!(
     NodeFinished => "node_finished",
     RunFinished => "run_finished",
     AuthFailed => "auth_failed",
+    TeardownPlanned => "teardown_planned",
+    TeardownStarted => "teardown_started",
+    TeardownStepFinished => "teardown_step_finished",
+    TeardownFinished => "teardown_finished",
 );
 
 fn empty_plan() -> willikins_core::Plan {
@@ -64,9 +70,12 @@ fn empty_plan() -> willikins_core::Plan {
 }
 
 /// One instance of every [`Event`] variant.
+#[allow(clippy::too_many_lines)] // one flat list of samples; splitting it hides what it covers
 fn event_samples() -> Vec<Event> {
     let plan_id = PlanId::new();
     let run_id = RunId::new();
+    let teardown_plan_id = PlanId::new();
+    let teardown_run_id = RunId::new();
     vec![
         Event::ServerStarted {
             version: "0.1.0".to_string(),
@@ -144,6 +153,33 @@ fn event_samples() -> Vec<Event> {
         Event::AuthFailed {
             transport: Transport::Http,
             reason: AuthFailedReason::MissingCredential,
+        },
+        Event::TeardownPlanned {
+            plan_id: teardown_plan_id,
+            of_run: run_id,
+            workflow: workflow_name("wf"),
+            document_sha256: common::document_sha256("deadbeef"),
+            teardown: Redacted::from(&Teardown { steps: Vec::new() }),
+            fingerprint: Vec::new(),
+            class: Class::Destructive,
+            requires_approval: true,
+            principal: principal("agent"),
+        },
+        Event::TeardownStarted {
+            run_id: teardown_run_id,
+            plan_id: teardown_plan_id,
+            of_run: run_id,
+            principal: principal("agent"),
+        },
+        Event::TeardownStepFinished {
+            run_id: teardown_run_id,
+            node: node("repo"),
+            instance: None,
+            status: TeardownStepOutcome::Deleted,
+        },
+        Event::TeardownFinished {
+            run_id: teardown_run_id,
+            outcome: TeardownOutcome::Succeeded,
         },
     ]
 }

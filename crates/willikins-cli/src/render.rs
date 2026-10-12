@@ -1722,6 +1722,7 @@ mod tests {
             blocked: Vec::new(),
             next_step: None,
             finished_at: Some(willikins_core::Timestamp::now()),
+            rolled_back_by: None,
         };
 
         let text = run_record_text(&run, Disclosure::Masked);
@@ -1767,6 +1768,7 @@ mod tests {
             blocked: Vec::new(),
             next_step: None,
             finished_at: Some(willikins_core::Timestamp::now()),
+            rolled_back_by: None,
         };
 
         let masked = run_record_text(&run, Disclosure::Masked);
@@ -1841,6 +1843,7 @@ mod tests {
             blocked: Vec::new(),
             next_step: None,
             finished_at: Some(willikins_core::Timestamp::now()),
+            rolled_back_by: None,
         };
 
         let masked = run_record_text(&run, Disclosure::Masked);
@@ -1875,6 +1878,7 @@ mod tests {
             blocked: Vec::new(),
             next_step: None,
             finished_at: Some(willikins_core::Timestamp::now()),
+            rolled_back_by: None,
         };
 
         let text = run_record_text(&run, Disclosure::Masked);
@@ -1927,6 +1931,7 @@ mod tests {
             blocked: vec![blocked],
             next_step: Some(willikins_journal::BLOCKED_NEXT_STEP.to_string()),
             finished_at: Some(willikins_core::Timestamp::now()),
+            rolled_back_by: None,
         };
 
         let text = run_record_text(&run, Disclosure::Masked);
