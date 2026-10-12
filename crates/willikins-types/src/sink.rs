@@ -46,8 +46,8 @@ impl std::fmt::Debug for SinkToken {
 }
 
 /// Proof that code is running inside the teardown executor and may call
-/// an [`Inverse::delete`](https://docs.rs/willikins-core)-shaped method —
-/// `willikins_core::rollback`'s `Inverse::delete` takes a `&TeardownToken`.
+/// an `Inverse::delete`-shaped method — `willikins_core::rollback`'s
+/// `Inverse::delete` takes a `&TeardownToken`.
 ///
 /// Holds no data; its only purpose is to exist or not. The same mechanism
 /// as [`SinkToken`], for a different capability: deleting a resource a
