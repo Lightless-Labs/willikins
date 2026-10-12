@@ -899,3 +899,164 @@ fn secret_name_gate_base_missing_agrees() {
             .unwrap();
     assert_eq!(shape(&live), shape(&fake));
 }
+
+/// Milestone 3m task P6: `doppler.project.ensure`'s inverse, the live
+/// `DopplerProjectInverse` against mocks and the fake one against
+/// `FakeState`, agree on [`Standing`]'s *variant* for the same scenario
+/// -- never on the exact `why`/`what` text, which each crate writes for
+/// its own reader, and never on the creation window (this crate has
+/// none in its fake state at all; `tests/it/project_inverse_mock.rs`
+/// pins the live window behaviour alone).
+mod project_inverse_standing_parity {
+    use super::*;
+    use willikins_core::rollback::Standing;
+    use willikins_core::{Created, Outputs};
+    use willikins_providers_doppler::DopplerProjectEnsure;
+    use willikins_types::DopplerProject;
+
+    fn project() -> DopplerProject {
+        DopplerProject::parse("shared_keys").unwrap()
+    }
+
+    fn created_inputs() -> Inputs {
+        let mut inputs = Inputs::new();
+        inputs.insert(PortName::parse("project").unwrap(), Value::known(project()));
+        inputs
+    }
+
+    fn window() -> willikins_core::rollback::CreationWindow {
+        willikins_core::rollback::CreationWindow {
+            start: willikins_core::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            end: willikins_core::Timestamp::parse("2026-01-01T00:10:00Z").unwrap(),
+        }
+    }
+
+    fn created(inputs: &Inputs) -> Created<'_> {
+        Created {
+            inputs,
+            outputs: Box::leak(Box::new(Outputs::new())),
+            window: window(),
+            settled_by: window().end,
+            accept: &[],
+            riders: &[],
+        }
+    }
+
+    fn live_standing(provider: &mut MockProvider) -> Standing {
+        let client = Arc::new(DopplerClient::new(Http::new(
+            provider.url(),
+            Vec::new(),
+            Credential::for_testing("WILLIKINS_TEST_DOPPLER_TOKEN", "dp.sa.testtoken"),
+        )));
+        let tool = DopplerProjectEnsure::new(client);
+        Tool::inverse(&tool)
+            .expect("doppler.project.ensure declares Delete")
+            .standing(&created(&created_inputs()))
+            .expect("standing never fails against a well-formed mock response")
+    }
+
+    fn fake_standing(state: FakeState) -> Standing {
+        let tool =
+            willikins_providers_fake::tools::DopplerProjectEnsure::new(Arc::new(Mutex::new(state)));
+        Tool::inverse(&tool)
+            .expect("doppler.project.ensure declares Delete")
+            .standing(&created(&created_inputs()))
+            .expect("standing never fails against a well-formed fake state")
+    }
+
+    fn project_query() -> mockito::Matcher {
+        mockito::Matcher::UrlEncoded("project".into(), "shared_keys".into())
+    }
+
+    #[test]
+    fn both_report_gone_when_absent() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/projects/project")
+            .match_query(project_query())
+            .with_status(404)
+            .with_body(
+                serde_json::json!({"messages": ["Could not find requested project"]}).to_string(),
+            )
+            .create();
+        assert_eq!(live_standing(&mut provider), Standing::Gone);
+        assert_eq!(fake_standing(FakeState::new()), Standing::Gone);
+    }
+
+    #[test]
+    fn both_report_as_created_for_a_fresh_project_with_only_defaults() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/projects/project")
+            .match_query(project_query())
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "project": {
+                        "description": "managed-by: willikins",
+                        "created_at": "2026-01-01T00:05:00Z",
+                    }
+                })
+                .to_string(),
+            )
+            .create();
+        provider
+            .mock("GET", "/v3/environments")
+            .match_query(mockito::Matcher::AllOf(vec![
+                project_query(),
+                mockito::Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "environments": [
+                        {"id": "dev"}, {"id": "stg"}, {"id": "prd"},
+                    ],
+                    "page": 1,
+                })
+                .to_string(),
+            )
+            .create();
+        provider
+            .mock("GET", "/v3/configs")
+            .match_query(mockito::Matcher::AllOf(vec![
+                project_query(),
+                mockito::Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_body(serde_json::json!({"configs": [], "page": 1}).to_string())
+            .create();
+        assert_eq!(
+            live_standing(&mut provider),
+            Standing::AsCreated { losing: Vec::new() }
+        );
+        assert_eq!(
+            fake_standing(FakeState::new().with_doppler_project(&project(), true)),
+            Standing::AsCreated { losing: Vec::new() }
+        );
+    }
+
+    #[test]
+    fn both_report_not_ours_when_the_marker_is_gone() {
+        let mut provider = MockProvider::start();
+        provider
+            .mock("GET", "/v3/projects/project")
+            .match_query(project_query())
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "project": {"description": "some other note", "created_at": "2026-01-01T00:05:00Z"}
+                })
+                .to_string(),
+            )
+            .create();
+        assert!(matches!(
+            live_standing(&mut provider),
+            Standing::NotOurs { .. }
+        ));
+        assert!(matches!(
+            fake_standing(FakeState::new().with_doppler_project(&project(), false)),
+            Standing::NotOurs { .. }
+        ));
+    }
+}

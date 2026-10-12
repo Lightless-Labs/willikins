@@ -128,6 +128,49 @@ fn doppler_value_get_spec_equals_the_fake_tools() {
     assert_eq!(spec_json(live.spec()), spec_json(fake.spec()));
 }
 
+/// Milestone 3m task P6: the live and fake `Reversal` declarations of
+/// every non-pure tool this crate registers are equal. `Reversal` is not
+/// part of `ToolSpec`, so the spec-equality tests above never exercised
+/// this.
+#[test]
+fn reversal_declarations_equal_the_fake_tools() {
+    let live = DopplerProjectEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::DopplerProjectEnsure::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = DopplerConfigEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::DopplerConfigEnsure::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = DopplerBranchConfigEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::DopplerBranchConfigEnsure::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = DopplerConfigInheritableEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::DopplerConfigInheritableEnsure::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = DopplerConfigInheritsEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::DopplerConfigInheritsEnsure::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = DopplerProjectMemberEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::DopplerProjectMemberEnsure::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = DopplerServiceTokenEnsure::new(test_client());
+    let fake = willikins_providers_fake::tools::DopplerServiceTokenEnsure::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = DopplerServiceTokenRotate::new(test_client());
+    let fake = willikins_providers_fake::tools::DopplerServiceTokenRotate::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+
+    let live = DopplerSecretSet::new(test_client());
+    let fake = willikins_providers_fake::tools::DopplerSecretSet::new(fake_state());
+    assert_eq!(live.reversal(), fake.reversal());
+}
+
 #[test]
 fn every_spec_validates_against_the_type_registry() {
     for spec in [
