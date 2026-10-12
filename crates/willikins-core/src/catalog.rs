@@ -205,9 +205,17 @@ impl Catalog {
         }
     }
 
-    /// A [`Within`]'s own side: every `(own_port, side, container_port)`
-    /// triple's `own_port` must name one of `spec`'s own input ports.
+    /// A [`Within`]'s own side: it maps at least one port (an empty
+    /// mapping would match every container instance, since "every pair is
+    /// equal" holds vacuously), and every `(own_port, side,
+    /// container_port)` triple's `own_port` must name one of `spec`'s own
+    /// input ports.
     fn validate_within_own_side(spec: &ToolSpec, within: &Within) -> Result<(), ReversalError> {
+        if within.ports.is_empty() {
+            return Err(ReversalError::WithinMapsNoPort {
+                tool: within.tool.to_string(),
+            });
+        }
         for &(own_port, _side, _container_port) in within.ports {
             Self::validate_own_input_port(spec, own_port)
                 .map_err(|port| ReversalError::WithinNotAnInput { port })?;
@@ -680,5 +688,52 @@ mod tests {
             why: "no ownership marker exists",
         });
         catalog.insert(Arc::new(tool)).unwrap();
+    }
+
+    // Milestone 3m's X1 pass over R1 (2026-10-12): a `Within` that maps no
+    // port rides with every instance of its container tool, since "every
+    // mapped pair is equal" holds vacuously. The container's inverse would
+    // then tolerate, as this run's own, contents in containers the
+    // instance never touched. Refused at insert, on the tool's own side.
+
+    #[test]
+    fn insert_rejects_a_within_that_maps_no_port() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful(Reversal::Delete {
+            needs: &[],
+            within: &[Within {
+                tool: "test.container",
+                ports: &[],
+            }],
+            losses: &[],
+        });
+        let err = catalog.insert(Arc::new(tool)).unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Reversal {
+                error: ReversalError::WithinMapsNoPort { ref tool },
+                ..
+            } if tool == "test.container"
+        ));
+    }
+
+    #[test]
+    fn insert_rejects_a_within_that_maps_no_port_on_a_contained_reversal_too() {
+        let mut catalog = Catalog::new(willikins_types::registry());
+        let tool = DummyReversalTool::stateful(Reversal::Contained {
+            within: &[Within {
+                tool: "test.container",
+                ports: &[],
+            }],
+            otherwise: "left in place",
+        });
+        let err = catalog.insert(Arc::new(tool)).unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Reversal {
+                error: ReversalError::WithinMapsNoPort { .. },
+                ..
+            }
+        ));
     }
 }

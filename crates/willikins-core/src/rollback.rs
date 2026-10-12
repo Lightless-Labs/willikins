@@ -120,6 +120,16 @@ pub enum ReversalError {
         /// The offending `within` entry.
         port: String,
     },
+    /// A `Within` maps no port at all. Riding holds when every mapped
+    /// pair's recorded values are equal, so an empty mapping holds for
+    /// every instance of the container tool: the instance would ride
+    /// with, and be tolerated inside, every such container the run
+    /// deletes, vouching for contents in containers it never touched.
+    #[error("reversal `within` container `{tool}` maps no port")]
+    WithinMapsNoPort {
+        /// The container tool the empty `Within` names.
+        tool: String,
+    },
     /// A `Reversal::Delete`'s `losses` entry does not match the required
     /// pattern `^[a-z][a-z_]*$`.
     #[error("reversal loss `{loss}` does not match the required pattern `^[a-z][a-z_]*$`")]
