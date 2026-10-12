@@ -857,4 +857,224 @@ mod tests {
             );
         }
     }
+
+    /// `TeardownRecord` (milestone 3m task R7), mirroring
+    /// `plan_record_schema_generates_and_names_its_fields` above: nothing
+    /// publishes this type over MCP yet (`willikins-server`'s future
+    /// `Butler::plan_rollback`, task R8, is the first caller), so there is
+    /// no `mcp_server` snapshot to regenerate here, only this crate's own
+    /// field-presence pin.
+    #[test]
+    fn teardown_record_schema_generates_and_names_its_fields() {
+        let schema = serde_json::to_value(schemars::schema_for!(TeardownRecord))
+            .expect("TeardownRecord schema serializes");
+        assert_eq!(schema["title"], "TeardownRecord");
+        let properties = schema["properties"]
+            .as_object()
+            .expect("TeardownRecord schema has properties");
+        for field in [
+            "plan_id",
+            "of_run",
+            "workflow",
+            "document_sha256",
+            "teardown",
+            "fingerprint",
+            "class",
+            "requires_approval",
+            "requested_by",
+            "recorded_at",
+            "approval",
+            "applied",
+        ] {
+            assert!(
+                properties.contains_key(field),
+                "TeardownRecord schema is missing `{field}`: {schema}"
+            );
+        }
+    }
+
+    /// A minimal `TeardownPlanned` event for `plan_id`/`of_run`, for the
+    /// fold tests below.
+    fn teardown_planned(plan_id: PlanId, of_run: RunId) -> Event {
+        Event::TeardownPlanned {
+            plan_id,
+            of_run,
+            workflow: WorkflowName::parse("wf").unwrap(),
+            document_sha256: DocumentSha256::compute(b"wf bytes"),
+            teardown: Redacted::from(&willikins_core::Teardown { steps: Vec::new() }),
+            fingerprint: Vec::new(),
+            class: Class::Destructive,
+            requires_approval: true,
+            principal: PrincipalId::parse("agent-0123456789ab").unwrap(),
+        }
+    }
+
+    /// Milestone 3m decision 8: a `TeardownPlanned` event folds to a
+    /// `TeardownRecord` under its own `plan_id`, in the same `PlanId`
+    /// namespace a forward plan's own id comes from -- never confused
+    /// with [`Journal::plan`]'s own view.
+    #[test]
+    fn a_teardown_planned_event_folds_to_a_teardown_record() {
+        let plan_id = PlanId::new();
+        let of_run = RunId::new();
+        let mut journal = crate::memory::MemoryJournal::new();
+        journal.append(teardown_planned(plan_id, of_run)).unwrap();
+
+        let record = journal
+            .teardown(&plan_id)
+            .expect("the teardown plan must replay");
+        assert_eq!(record.of_run, of_run);
+        assert!(record.requires_approval);
+        assert!(matches!(record.approval, ApprovalState::Pending));
+        assert!(record.applied.is_none());
+        assert!(journal.plan(&plan_id).is_none());
+    }
+
+    /// Milestone 3m decision 8: `ApprovalGranted` resolves against a
+    /// `TeardownRecord` when its own `plan_id` names one, not only a
+    /// forward `PlanRecord` -- the half of "approval and rejection replay
+    /// resolving either record kind" this fold owns.
+    #[test]
+    fn approval_granted_resolves_against_a_teardown_record() {
+        let plan_id = PlanId::new();
+        let mut journal = crate::memory::MemoryJournal::new();
+        journal
+            .append(teardown_planned(plan_id, RunId::new()))
+            .unwrap();
+        journal
+            .append(Event::ApprovalGranted {
+                plan_id,
+                approver: PrincipalId::parse("operator").unwrap(),
+            })
+            .unwrap();
+
+        let record = journal
+            .teardown(&plan_id)
+            .expect("the teardown plan must replay");
+        assert!(
+            matches!(record.approval, ApprovalState::Granted { .. }),
+            "{:?}",
+            record.approval
+        );
+    }
+
+    /// Milestone 3m decision 8: a successful `TeardownFinished` sets the
+    /// undone run's own `RunRecord::rolled_back_by` to the teardown run's
+    /// id -- never its own `of_run` -- and `TeardownStarted` marks the
+    /// teardown plan applied, exactly as `RunStarted` does for a forward
+    /// plan.
+    #[test]
+    fn a_successful_teardown_sets_rolled_back_by_on_the_run_it_undid() {
+        let of_run_plan = PlanId::new();
+        let of_run = RunId::new();
+        let teardown_plan = PlanId::new();
+        let teardown_run = RunId::new();
+        let mut journal = crate::memory::MemoryJournal::new();
+
+        journal
+            .append(Event::PlanRecorded {
+                plan_id: of_run_plan,
+                workflow: WorkflowName::parse("wf").unwrap(),
+                document_sha256: DocumentSha256::compute(b"wf bytes"),
+                inputs: Redacted::from(&IndexMap::<willikins_core::InputName, Value>::new()),
+                plan: Redacted::from(&willikins_core::Plan {
+                    workflow: WorkflowName::parse("wf").unwrap(),
+                    nodes: Vec::new(),
+                    outputs: IndexMap::new(),
+                    class: Class::Reversible,
+                    requires_approval: false,
+                    blocked: Vec::new(),
+                    replacing: Vec::new(),
+                }),
+                fingerprint: Vec::new(),
+                class: Class::Reversible,
+                requires_approval: false,
+                principal: None,
+                used: BTreeMap::new(),
+            })
+            .unwrap();
+        journal
+            .append(Event::RunStarted {
+                run_id: of_run,
+                plan_id: of_run_plan,
+                principal: PrincipalId::parse("agent-0123456789ab").unwrap(),
+            })
+            .unwrap();
+        journal
+            .append(Event::RunFinished {
+                run_id: of_run,
+                outcome: Outcome::Succeeded {
+                    outputs: Redacted::from(&IndexMap::new()),
+                },
+            })
+            .unwrap();
+        journal
+            .append(teardown_planned(teardown_plan, of_run))
+            .unwrap();
+        journal
+            .append(Event::TeardownStarted {
+                run_id: teardown_run,
+                plan_id: teardown_plan,
+                of_run,
+                principal: PrincipalId::parse("agent-0123456789ab").unwrap(),
+            })
+            .unwrap();
+        journal
+            .append(Event::TeardownFinished {
+                run_id: teardown_run,
+                outcome: TeardownOutcome::Succeeded,
+            })
+            .unwrap();
+
+        let run = journal.run(&of_run).expect("the undone run must replay");
+        assert_eq!(run.rolled_back_by, Some(teardown_run));
+        let teardown_record = journal
+            .teardown(&teardown_plan)
+            .expect("the teardown plan must replay");
+        assert_eq!(teardown_record.applied, Some(teardown_run));
+    }
+
+    /// The other half of the same decision: a `Failed` teardown outcome
+    /// never sets `rolled_back_by` -- a half-finished teardown resumes by
+    /// planning again (decision 8), it does not mark the run rolled back.
+    #[test]
+    fn a_failed_teardown_does_not_set_rolled_back_by() {
+        let of_run = RunId::new();
+        let teardown_run = RunId::new();
+        let mut journal = crate::memory::MemoryJournal::new();
+        journal
+            .append(Event::RunStarted {
+                run_id: of_run,
+                plan_id: PlanId::new(),
+                principal: PrincipalId::parse("agent-0123456789ab").unwrap(),
+            })
+            .unwrap();
+        journal
+            .append(Event::RunFinished {
+                run_id: of_run,
+                outcome: Outcome::Succeeded {
+                    outputs: Redacted::from(&IndexMap::new()),
+                },
+            })
+            .unwrap();
+        journal
+            .append(Event::TeardownStarted {
+                run_id: teardown_run,
+                plan_id: PlanId::new(),
+                of_run,
+                principal: PrincipalId::parse("agent-0123456789ab").unwrap(),
+            })
+            .unwrap();
+        journal
+            .append(Event::TeardownFinished {
+                run_id: teardown_run,
+                outcome: TeardownOutcome::Failed {
+                    error: Redacted::from(&willikins_core::TeardownApplyError::Drift),
+                },
+            })
+            .unwrap();
+
+        let run = journal.run(&of_run).expect("the run must replay");
+        assert!(run.rolled_back_by.is_none());
+    }
 }
