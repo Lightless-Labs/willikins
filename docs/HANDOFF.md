@@ -15,8 +15,9 @@ compaction, before handing off, after a milestone, and after a plan change or di
   LIFO not re-checked at apply), and the full gate is green. Tools declare capability; a node's `teardown:` (retain
   by default, delete, or delete accepting declared losses such as `builds`) decides; policy is fixed at the run's
   document hash. C1 is done locally (the operator's private document keeps its profiles and refuses its pipeline
-  while it has builds; uncommitted). **Next:** run L1, L2, L3 live once each in the sandbox (L3: confirm the sandbox
-  Buildkite token can create builds first), then L4's runbook, D0 (retire `deploy/teardown.sh`), D1.
+  while it has builds; uncommitted). L1 and L2 passed live (2026-10-12). **Blocked:** the sandbox Buildkite token
+  answers 401; the operator replaces it (needs pipeline read/write/delete and build creation in the sandbox org).
+  Then L3, L4's runbook, D0 (retire `deploy/teardown.sh`), D1.
 - **The runner** now takes `ids` (an explicit task list; the listing agent once returned a placeholder), and agents
   wait for no `cargo-sweep` plus at least 40% free memory, not an idle host: other sessions build almost
   continuously. In zsh, read `$?` straight after the command, never after a `$(...)` substitution.
