@@ -12,10 +12,10 @@
 //!
 //! - the pre-flight credential checks and the leftover checks, which are
 //!   questions about a real account;
-//! - `deploy/teardown.sh`, already covered twice over by
-//!   `tests/it/teardown_script.rs` -- once against its own stubbed scenario
-//!   suite, once against a real `willikins run --json` document, which
-//!   is the tie that matters (the script's `jq` paths).
+//! - `willikins rollback` itself, already covered offline by
+//!   `tests/it/rollback_round_trip.rs`, which pins the same `plan_id`/
+//!   `teardown.steps`/`resource` and `succeeded`/`steps` JSON shapes
+//!   `tests/live_smoke.rs` reads;
 //!
 //! - any difference between the fake catalog's behaviour and a live
 //!   provider's. Both sides of every comparison here are the fake, so
@@ -227,7 +227,7 @@ fn the_smoke_sequence_holds_against_the_fake_catalog() {
     let rotation_run_id = rotated.run_id();
 
     // --- f/g. both runs are readable by id, which is what
-    // `deploy/teardown.sh` reads names from. -------------------------
+    // `willikins rollback <file> --run <run-id>` reads names from. ----
     assert_ne!(first_run_id, rotation_run_id);
     for run_id in [&first_run_id, &rotation_run_id] {
         let shown = willikins(
@@ -244,9 +244,9 @@ fn the_smoke_sequence_holds_against_the_fake_catalog() {
         assert_eq!(shown.run_record()["run_id"].as_str(), Some(run_id.as_str()));
     }
 
-    // The two resources `teardown.sh` names come from the *first* run's
-    // own recorded outputs, never re-derived from the slug. Read them
-    // the way the script's `jq` does.
+    // The two resources `willikins rollback` names come from the
+    // *first* run's own recorded outputs, never re-derived from the
+    // slug. Read them the way its own `forward_outputs` does.
     let shown = willikins(
         &[
             "--json",

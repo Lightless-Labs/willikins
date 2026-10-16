@@ -233,12 +233,14 @@ this gap without the detour. See `todos/2026-09-15-journal-repair-subcommand.md`
 
 ### The live smoke test
 
-One test runs the whole of milestone 2 against real providers:
-`crates/willikins-cli/tests/live_smoke.rs`. It applies
-`workflows/new-rust-service.yaml` twice, applies
+One test runs the whole of milestone 2 (and, for its teardown, milestone 3m) against real
+providers: `crates/willikins-cli/tests/live_smoke.rs`. It applies a scratch copy of
+`workflows/new-rust-service.yaml` (with `teardown: delete` added to its deletable nodes --
+the tracked document keeps the default, `retain`) twice, applies
 `workflows/rotate-service-token.yaml` once without approval and once with it, and then
-removes both resources with `deploy/teardown.sh`. It creates a real GitHub repository and a
-real Doppler project in the sandbox accounts.
+removes both resources with `willikins rollback`: `rollback <file> --run <run-id>` plans the
+teardown, `approve <plan_id>` approves it, and `rollback --plan-id <plan_id>` applies it. It
+creates a real GitHub repository and a real Doppler project in the sandbox accounts.
 
 Three gates keep it out of an ordinary test run. It needs the `willikins-cli` feature
 `live-tests`, which is the only thing that compiles the test at all. It carries `#[ignore]`,
@@ -251,17 +253,21 @@ source ~/.config/willikins/sandbox.env && WILLIKINS_LIVE_TESTS=1 \
   --test live_smoke -j 2 -- --ignored --nocapture
 ```
 
-The test starts with a pre-flight check, before it creates anything. The teardown script
-deletes the repository through `curl`, authenticated with `WILLIKINS_GITHUB_TOKEN` -- the
-same sandbox fine-grained PAT the server itself uses in live mode, scoped to repository
-administration in the throwaway `Willikins-Test` organization -- exactly as it already
-authenticates to Doppler with `WILLIKINS_DOPPLER_TOKEN`. The pre-flight checks that both
-`WILLIKINS_GITHUB_TOKEN` and `WILLIKINS_DOPPLER_TOKEN` are set, that `jq` is on `PATH`, and
-that neither the repository nor the Doppler project already exists: a leftover from an
-earlier run is for the operator to remove, and this test never reuses one.
+The test starts with a pre-flight check, before it creates anything. It authenticates to
+GitHub with `WILLIKINS_GITHUB_TOKEN` -- the same sandbox fine-grained PAT the server itself
+uses in live mode, scoped to repository administration in the throwaway `Willikins-Test`
+organization -- and to Doppler with `WILLIKINS_DOPPLER_TOKEN`. The pre-flight checks that
+both of those are set, and also that `WILLIKINS_BUILDKITE_TOKEN`, `WILLIKINS_SIGNOZ_API_KEY`
+and `WILLIKINS_SIGNOZ_HOST` are set: `rollback --plan-id --live`, which applies the teardown,
+builds the full live catalog the same unconditional way `apply --plan-id --live` does, so a
+missing Buildkite or SigNoz credential would refuse there even though this document never
+calls either provider. The pre-flight also checks that neither the repository nor the
+Doppler project already exists: a leftover from an earlier run is for the operator to
+remove, and this test never reuses one.
 
 The test prints the journal path as its first line of output. Keep that line. The run record
-in that journal is the only place `deploy/teardown.sh` can read the created names from.
+in that journal is the only place `willikins rollback <file> --run <run-id>` can read the
+created names from.
 
 `crates/willikins-cli/tests/smoke_parity.rs` makes the same four invocations against the
 fake catalog. This test is not gated, so every workspace test run checks the JSON shapes the

@@ -232,7 +232,7 @@ fn no_file_in_this_workspace_invokes_the_operators_github_cli() {
         offenders.is_empty(),
         "these lines invoke the operator's GitHub CLI; authenticate as the project's own \
          scoped credential instead (`WILLIKINS_GITHUB_TOKEN`, through `curl --config -` on \
-         stdin, as `deploy/teardown.sh` does):\n{}",
+         stdin, as the retired `deploy/teardown.sh` did):\n{}",
         offenders.join("\n")
     );
 }
@@ -336,7 +336,7 @@ mod tests {
         let root = repo_root();
         let mut files = Vec::new();
         runnable_files(&root, "", &mut files);
-        for expected in ["deploy/teardown.sh", "Dockerfile", ".railway/railway.ts"] {
+        for expected in ["Dockerfile", ".railway/railway.ts"] {
             assert!(
                 files.iter().any(|f| f == expected),
                 "the walk never reached {expected}"

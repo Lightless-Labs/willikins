@@ -59,15 +59,15 @@ indexmap.workspace = true
 # W1's rendered-file snapshots (milestone 3g): one `insta` snapshot per
 # `repo.file.render` output, the artefact the operator reviews.
 insta.workspace = true
-# Task 14's live smoke test reads the Doppler project back after the
-# teardown script has run, through the same client the provider uses --
-# an independent leftover check, not the script's own word for it. Only
-# a dev-dependency: the CLI itself reaches Doppler through
+# Task 14's live smoke test reads the Doppler project back after
+# `willikins rollback` has run, through the same client the provider
+# uses -- an independent leftover check, not the command's own word for
+# it. Only a dev-dependency: the CLI itself reaches Doppler through
 # `willikins-server`'s live catalog, never directly.
 willikins-providers-doppler.workspace = true
 # The same test's GitHub pre-flight and leftover check read the
 # repository through the sandbox PAT directly (the same credential and
-# client `deploy/teardown.sh` authenticates with), never through `gh`.
+# client `willikins rollback` authenticates with), never through `gh`.
 willikins-providers-github.workspace = true
 # `test-support` enables `Credential::for_testing`, used by
 # `tests/acceptance_m3a_buildkite.rs` to build the live-shaped catalog

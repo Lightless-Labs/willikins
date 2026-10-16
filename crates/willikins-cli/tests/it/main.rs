@@ -31,5 +31,4 @@ mod prerendered_identifier_guards;
 mod rollback_round_trip;
 mod serve_and_live;
 mod smoke_parity;
-mod teardown_script;
 mod unique_temp_prefixes;

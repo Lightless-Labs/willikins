@@ -23,28 +23,37 @@
 //! smoke-operator`, and the same `--journal` at a persistent path under
 //! the system temporary directory, printed on stdout as `journal:
 //! <path>` before anything else. The journal is deliberately **not**
-//! removed when the test ends: `deploy/teardown.sh` reads the created
-//! resources' names out of a run record, and a run record that no longer
-//! exists cannot be torn down.
+//! removed when the test ends: `willikins rollback <file> --run
+//! <run-id>` reads the created resources' names out of a run record,
+//! and a run record that no longer exists cannot be torn down.
 //!
-//! 1. **Pre-flight, before anything is created.** Both `WILLIKINS_GITHUB_TOKEN`
-//!    and `WILLIKINS_DOPPLER_TOKEN` must be set (presence only -- neither
-//!    value is ever read for anything but the leak sweep); `deploy/
-//!    teardown.sh` authenticates to GitHub with the sandbox PAT
-//!    `WILLIKINS_GITHUB_TOKEN` names, exactly as it already does for
-//!    Doppler, so no `gh`-specific scope is needed. The repository and
-//!    the Doppler project must both answer `404`: a leftover from an
-//!    earlier run is a stop, not something to reuse. `jq`, which the
-//!    teardown script reads every document with, must be on `PATH`.
-//! 2. **First apply** of `workflows/new-rust-service.yaml` with `slug=`
-//!    [`common::SLUG`] and `org=`[`common::ORG`].
+//! 1. **Pre-flight, before anything is created.** `WILLIKINS_GITHUB_TOKEN`,
+//!    `WILLIKINS_DOPPLER_TOKEN`, `WILLIKINS_BUILDKITE_TOKEN`,
+//!    `WILLIKINS_SIGNOZ_API_KEY` and `WILLIKINS_SIGNOZ_HOST` must all be
+//!    set (presence only -- no value is ever read for anything but the
+//!    leak sweep). The first two are what this run's own document
+//!    calls; the other three are needed only at step 6c, because
+//!    `rollback --plan-id --live` builds the full live catalog the same
+//!    unconditional way `apply --plan-id --live` does, so a missing
+//!    Buildkite or SigNoz credential would refuse there -- after both
+//!    resources already exist. The repository and the Doppler project
+//!    must both answer `404`: a leftover from an earlier run is a stop,
+//!    not something to reuse.
+//! 2. **First apply** of a scratch copy of `workflows/new-rust-service.yaml`
+//!    with `teardown: delete` added to `repo`, `doppler`, `configs` and
+//!    `token` (decision 3a's default is `retain`; the tracked document
+//!    keeps it, so this copy is what actually admits a teardown), with
+//!    `slug=`[`common::SLUG`] and `org=`[`common::ORG`].
 //! 3. **Second, identical apply**: the convergence claim.
 //! 4. **The rotation without `--approve`**: refused `ApprovalRequired`,
 //!    with no run started.
 //! 5. **The rotation with `--approve`**.
-//! 6. **Teardown through `deploy/teardown.sh`**, as a dry run and then
-//!    with `--yes`, followed by a leftover check that does not go
-//!    through the script at all.
+//! 6. **Teardown through `willikins rollback`**: `rollback <file> --run
+//!    <run-id> --live --journal <j>` plans it (6a), `approve <plan_id>
+//!    --journal <j>` approves it (6b), `rollback --plan-id <plan_id>
+//!    --live --journal <j> --workflows-dir <dir>` applies it (6c),
+//!    followed by a leftover check that does not go through willikins at
+//!    all (6d).
 //!
 //! # Credentials
 //!
@@ -58,16 +67,16 @@
 //!
 //! # Offline proof
 //!
-//! Every expectation table and JSON reader this file uses lives in
-//! `tests/common/mod.rs` and is exercised on every workspace gate by
-//! `tests/it/smoke_parity.rs`, which makes the same four invocations
-//! against the fake catalog. The live run is therefore the first time
-//! only the *providers* differ.
+//! Every expectation table and JSON reader the apply/rotation steps use
+//! lives in `tests/common/mod.rs` and is exercised on every workspace
+//! gate by `tests/it/smoke_parity.rs`, which makes the same four
+//! invocations against the fake catalog. `willikins rollback`'s own
+//! JSON shapes are pinned offline by `tests/it/rollback_round_trip.rs`.
+//! The live run is therefore the first time only the *providers* differ.
 
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
 use serde_json::Value as Json;
 
@@ -79,7 +88,7 @@ use common::{
 };
 
 /// What to tell the operator when a step after the first apply fails:
-/// the run is real, its resources exist, and the teardown script is the
+/// the run is real, its resources exist, and `willikins rollback` is the
 /// way to remove them.
 ///
 /// Armed as soon as the first run's id is known and disarmed only after
@@ -88,14 +97,18 @@ use common::{
 struct TeardownHint {
     run_id: Option<String>,
     journal: PathBuf,
+    document: PathBuf,
+    workflows_dir: PathBuf,
     armed: bool,
 }
 
 impl TeardownHint {
-    fn new(journal: &Path) -> Self {
+    fn new(journal: &Path, document: &Path, workflows_dir: &Path) -> Self {
         Self {
             run_id: None,
             journal: journal.to_path_buf(),
+            document: document.to_path_buf(),
+            workflows_dir: workflows_dir.to_path_buf(),
             armed: true,
         }
     }
@@ -116,7 +129,13 @@ impl Drop for TeardownHint {
         }
         let journal = self.journal.display();
         match &self.run_id {
-            Some(run_id) => println!("teardown: run {run_id} --journal {journal}"),
+            Some(run_id) => println!(
+                "rollback: willikins rollback {} --run {run_id} --live --journal {journal}, \
+                 then `approve <plan_id> --journal {journal}`, then `rollback --plan-id \
+                 <plan_id> --live --journal {journal} --workflows-dir {}`",
+                self.document.display(),
+                self.workflows_dir.display()
+            ),
             None => println!(
                 "teardown: no run id was recorded; the journal is {journal} \
                  (check both accounts by hand)"
@@ -125,11 +144,18 @@ impl Drop for TeardownHint {
     }
 }
 
-/// Step 1: both provider credentials must be set. Presence only -- the
-/// CLI's own `--live` path parses and validates them, and a second read
-/// here would make a plaintext copy for nothing.
+/// Step 1: every credential the full live catalog needs, even though
+/// this run's own document calls only the first two. Presence only --
+/// the CLI's own `--live` path parses and validates them, and a second
+/// read here would make a plaintext copy for nothing.
 fn require_credentials_present() {
-    for name in ["WILLIKINS_GITHUB_TOKEN", "WILLIKINS_DOPPLER_TOKEN"] {
+    for name in [
+        "WILLIKINS_GITHUB_TOKEN",
+        "WILLIKINS_DOPPLER_TOKEN",
+        "WILLIKINS_BUILDKITE_TOKEN",
+        "WILLIKINS_SIGNOZ_API_KEY",
+        "WILLIKINS_SIGNOZ_HOST",
+    ] {
         assert!(
             std::env::var_os(name).is_some_and(|value| !value.is_empty()),
             "pre-flight: {name} is not set. Source \
@@ -139,25 +165,7 @@ fn require_credentials_present() {
     }
 }
 
-/// Step 1: `deploy/teardown.sh` pipes every document it reads through
-/// `jq`. A missing `jq` would fail step 6, after both resources exist --
-/// so it is a pre-flight question, not a teardown-time one.
-fn require_jq() {
-    let found = Command::new("jq")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success());
-    assert!(
-        found,
-        "pre-flight: `jq` is not on PATH, and `deploy/teardown.sh` needs it to read \
-         the run record. Install it before running this test. Nothing has been created."
-    );
-    println!("1b. jq: present");
-}
-
-/// A read-only GitHub client built from the sandbox PAT -- the same
-/// credential `deploy/teardown.sh` authenticates with, so a `404` this
-/// test sees here is the same `404` the script would see.
+/// A read-only GitHub client built from the sandbox PAT.
 fn github() -> willikins_providers_http::Http {
     let credential = willikins_providers_github::credential_from_env()
         .expect("a valid sandbox GitHub token (source ~/.config/willikins/sandbox.env)");
@@ -180,10 +188,11 @@ fn require_repository_absent(http: &willikins_providers_http::Http) {
         status == Some(404),
         "pre-flight: `repos/{REPO}` answered {status:?}, expected 404. \
          A leftover from an earlier run is the operator's to remove \
-         (`deploy/teardown.sh <run-id> <journal> --yes`, or by hand); \
-         this test never reuses one. Nothing has been created."
+         (`willikins rollback <file> --run <run-id> --live --journal <journal>`, then \
+         `approve`, then `rollback --plan-id`, or by hand); this test never reuses one. \
+         Nothing has been created."
     );
-    println!("1c. GET repos/{REPO}: 404, as a fresh run needs");
+    println!("1b. GET repos/{REPO}: 404, as a fresh run needs");
 }
 
 /// A read-only Doppler client built from the sandbox credential.
@@ -212,7 +221,7 @@ fn require_project_absent(http: &willikins_providers_http::Http) {
          A leftover is the operator's to remove; this test never reuses one. \
          Nothing has been created."
     );
-    println!("1d. GET /v3/projects/project ({PROJECT}): 404, as a fresh run needs");
+    println!("1c. GET /v3/projects/project ({PROJECT}): 404, as a fresh run needs");
 }
 
 /// `willikins --json apply <document> --live --journal <j> --principal
@@ -234,22 +243,121 @@ fn apply(document: &str, journal: &str, inputs: &[String], extra: &[&str]) -> In
     willikins(&args, &[])
 }
 
-/// Run `deploy/teardown.sh <run-id> <journal> [--yes]` with
-/// `WILLIKINS_BIN` pointing at the binary this test drives, so the
-/// script reads the same run record this test wrote.
-fn teardown(run_id: &str, journal: &str, yes: bool) -> Output {
-    let script = workspace_root().join("deploy").join("teardown.sh");
-    let mut command = Command::new("bash");
-    command
-        .arg(&script)
-        .arg(run_id)
-        .arg(journal)
-        .env("WILLIKINS_BIN", env!("CARGO_BIN_EXE_willikins"))
-        .current_dir(workspace_root());
-    if yes {
-        command.arg("--yes");
+/// This run's own `Delete`-capable nodes, by the tool that makes them
+/// candidates at all (decision 3a). `ci_secret` (`github.actions_secret.ensure`,
+/// `Contained`) is deliberately absent: `check` refuses `teardown:` on a
+/// `Contained` node (`CheckError::TeardownNotAdmitted`), and it rides
+/// with `repo` regardless of what it says.
+const DELETABLE_TOOLS: [&str; 4] = [
+    "github.repo.ensure",
+    "doppler.project.ensure",
+    "doppler.config.ensure",
+    "doppler.service_token.ensure",
+];
+
+/// A copy of the tracked `document`'s own bytes with `teardown: delete`
+/// inserted right after each of [`DELETABLE_TOOLS`]'s own `tool:` line,
+/// at that line's own indentation.
+///
+/// Decision 3a: the default is `retain`, and a `Delete`-capable candidate
+/// riding inside a container this run deletes (`configs` inside
+/// `doppler`, `token` inside `configs[prd]`) must itself say `teardown:
+/// delete` or the whole teardown refuses ("a node the document keeps is
+/// inside a container it deletes"). So this run cannot roll anything
+/// back from the tracked document as committed -- a scratch copy with
+/// the policy added is what milestone 3m's own L4 runbook used
+/// (`docs/plans/2026-10-05-milestone-3m-safe-rollback.md`, 2026-10-16
+/// addendum) and what this test now automates.
+///
+/// Read from disk and transformed, rather than hardcoded, so this test
+/// cannot silently drift from `common::FIRST_APPLY`/`SECOND_APPLY`
+/// (which describe the *tracked* document's own shape) the way a second,
+/// hand-maintained copy could.
+fn teardown_delete_copy(document: &str) -> String {
+    let mut out = String::with_capacity(document.len() + DELETABLE_TOOLS.len() * 24);
+    let mut inserted = 0usize;
+    for line in document.lines() {
+        out.push_str(line);
+        out.push('\n');
+        let trimmed = line.trim_start();
+        if let Some(tool) = trimmed.strip_prefix("tool: ")
+            && DELETABLE_TOOLS.contains(&tool)
+        {
+            out.push_str(&line[..line.len() - trimmed.len()]);
+            out.push_str("teardown: delete\n");
+            inserted += 1;
+        }
     }
-    command.output().expect("failed to run deploy/teardown.sh")
+    assert_eq!(
+        inserted,
+        DELETABLE_TOOLS.len(),
+        "expected exactly {} `teardown: delete` insertions in:\n{document}",
+        DELETABLE_TOOLS.len()
+    );
+    out
+}
+
+/// `willikins --json rollback <document> --run <run-id> --live --journal
+/// <j> --principal smoke-operator`: plans a teardown of what `run-id`
+/// created.
+fn rollback_plan(document: &str, run_id: &str, journal: &str) -> Invocation {
+    willikins(
+        &[
+            "--json",
+            "rollback",
+            document,
+            "--run",
+            run_id,
+            "--live",
+            "--journal",
+            journal,
+            "--principal",
+            PRINCIPAL,
+        ],
+        &[],
+    )
+}
+
+/// `willikins approve <plan-id> --journal <j> --principal
+/// smoke-operator`.
+fn approve_plan(plan_id: &str, journal: &str) -> Invocation {
+    willikins(
+        &[
+            "approve",
+            plan_id,
+            "--journal",
+            journal,
+            "--principal",
+            PRINCIPAL,
+        ],
+        &[],
+    )
+}
+
+/// `willikins --json rollback --plan-id <plan-id> --live --journal <j>
+/// --workflows-dir <dir> --principal smoke-operator`: applies an
+/// approved teardown. Builds the **full** live catalog
+/// (`willikins_server::live_catalog_from_env`, unconditional), exactly
+/// as `apply --plan-id --live` does, so it needs every provider's
+/// credential even though this document calls only two of them -- see
+/// `require_credentials_present`.
+fn rollback_apply(plan_id: &str, journal: &str, workflows_dir: &str) -> Invocation {
+    willikins(
+        &[
+            "--json",
+            "rollback",
+            "--plan-id",
+            plan_id,
+            "--live",
+            "--journal",
+            journal,
+            "--workflows-dir",
+            workflows_dir,
+            "--principal",
+            PRINCIPAL,
+        ],
+        &[],
+    )
 }
 
 #[test]
@@ -275,28 +383,43 @@ fn live_smoke_run() {
         .expect("a UTF-8 journal path")
         .to_string();
     // First thing on stdout, before any provider is touched: the run
-    // record is the only thing `deploy/teardown.sh` can read names from,
+    // record is the only thing `willikins rollback` can read names from,
     // so the operator needs this path even if the next line panics.
     println!("journal: {journal}");
 
+    // A scratch copy of `workflows/new-rust-service.yaml` with
+    // `teardown: delete` added, so this run's own rollback can delete
+    // what it creates (decision 3a; see `teardown_delete_copy`'s doc).
+    let tracked = std::fs::read_to_string(
+        workspace_root()
+            .join("workflows")
+            .join("new-rust-service.yaml"),
+    )
+    .expect("the tracked new-rust-service.yaml document");
+    let document_path = dir.join("new-rust-service.yaml");
+    std::fs::write(&document_path, teardown_delete_copy(&tracked))
+        .expect("a scratch copy of new-rust-service.yaml");
+    let document = document_path
+        .to_str()
+        .expect("a UTF-8 scratch document path")
+        .to_string();
+    let workflows_dir = dir
+        .to_str()
+        .expect("a UTF-8 scratch workflows directory")
+        .to_string();
+
     // --- 1. pre-flight ----------------------------------------------
     require_credentials_present();
-    require_jq();
     let github_http = github();
     require_repository_absent(&github_http);
     let http = doppler();
     require_project_absent(&http);
 
-    let mut hint = TeardownHint::new(&journal_path);
+    let mut hint = TeardownHint::new(&journal_path, &document_path, &dir);
 
     // --- 2. first apply ---------------------------------------------
     println!("2. apply new-rust-service (slug={SLUG}, org={ORG}) --live");
-    let first = apply(
-        "workflows/new-rust-service.yaml",
-        &journal,
-        &positive_inputs(),
-        &[],
-    );
+    let first = apply(&document, &journal, &positive_inputs(), &[]);
     let first_run_id = first
         .docs
         .iter()
@@ -333,12 +456,7 @@ fn live_smoke_run() {
 
     // --- 3. second apply, identical ---------------------------------
     println!("3. apply new-rust-service again (the convergence claim)");
-    let second = apply(
-        "workflows/new-rust-service.yaml",
-        &journal,
-        &positive_inputs(),
-        &[],
-    );
+    let second = apply(&document, &journal, &positive_inputs(), &[]);
     assert_no_credential_bytes(
         "second apply",
         &[("stdout", &second.stdout), ("stderr", &second.stderr)],
@@ -424,54 +542,106 @@ fn live_smoke_run() {
     let rotation_run_id = rotated.run_id();
     println!("5. ok: run {rotation_run_id}");
 
-    // --- 6. teardown, through the script the plan's acceptance names -
-    println!("6a. deploy/teardown.sh {first_run_id} {journal} (dry run)");
-    let dry = teardown(&first_run_id, &journal, false);
-    let dry_out = String::from_utf8_lossy(&dry.stdout).into_owned();
-    let dry_err = String::from_utf8_lossy(&dry.stderr).into_owned();
+    // --- 6. teardown, through `willikins rollback` -------------------
+    println!("6a. rollback {document} --run {first_run_id} --live --journal {journal}");
+    let planned = rollback_plan(&document, &first_run_id, &journal);
     assert_no_credential_bytes(
-        "teardown dry run",
-        &[("stdout", &dry_out), ("stderr", &dry_err)],
+        "rollback plan",
+        &[("stdout", &planned.stdout), ("stderr", &planned.stderr)],
     );
-    assert!(
-        dry.status.success(),
-        "the dry run failed:\nstdout:\n{dry_out}\nstderr:\n{dry_err}"
+    assert_eq!(
+        planned.code(),
+        0,
+        "rollback plan failed:\nstdout:\n{}\nstderr:\n{}",
+        planned.stdout,
+        planned.stderr
     );
-    // Line by line, and each line has to name its own resource:
-    // `PROJECT` is a substring of `REPO`, so a bare `contains` would
-    // pass on the repository line alone.
-    assert!(
-        dry_out
-            .lines()
-            .any(|line| line.contains("GitHub repository") && line.contains(REPO)),
-        "the dry run did not name the repository: {dry_out}"
+    let teardown_plan = planned
+        .docs
+        .first()
+        .unwrap_or_else(|| panic!("no teardown plan document: {}", planned.stdout));
+    let plan_id = teardown_plan["plan_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no plan_id in {teardown_plan}"))
+        .to_string();
+    let steps = teardown_plan["teardown"]["steps"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no teardown.steps in {teardown_plan}"));
+    let step_for = |node: &str| {
+        steps
+            .iter()
+            .find(|step| step["instance"]["node"] == node)
+            .unwrap_or_else(|| panic!("no {node} step in {steps:?}"))
+    };
+    let repo_step = step_for("repo");
+    assert_eq!(repo_step["action"]["kind"], "delete", "{repo_step:?}");
+    assert_eq!(
+        repo_step["resource"]["repo"]["value"], REPO,
+        "{repo_step:?}"
     );
-    assert!(
-        dry_out
-            .lines()
-            .any(|line| line.contains("Doppler project") && line.trim_end().ends_with(PROJECT)),
-        "the dry run did not name the Doppler project: {dry_out}"
+    let doppler_step = step_for("doppler");
+    assert_eq!(doppler_step["action"]["kind"], "delete", "{doppler_step:?}");
+    assert_eq!(
+        doppler_step["resource"]["project"]["value"], PROJECT,
+        "{doppler_step:?}"
     );
-    println!("6a. ok: it names {REPO} and {PROJECT}");
+    println!("6a. ok: plan {plan_id} deletes repo and doppler");
 
-    println!("6b. deploy/teardown.sh {first_run_id} {journal} --yes");
-    let deleted = teardown(&first_run_id, &journal, true);
-    let deleted_out = String::from_utf8_lossy(&deleted.stdout).into_owned();
-    let deleted_err = String::from_utf8_lossy(&deleted.stderr).into_owned();
+    println!("6b. approve {plan_id} --journal {journal}");
+    let approved = approve_plan(&plan_id, &journal);
     assert_no_credential_bytes(
-        "teardown",
-        &[("stdout", &deleted_out), ("stderr", &deleted_err)],
+        "approve",
+        &[("stdout", &approved.stdout), ("stderr", &approved.stderr)],
     );
-    assert!(
-        deleted.status.success(),
-        "the teardown failed:\nstdout:\n{deleted_out}\nstderr:\n{deleted_err}"
+    assert_eq!(
+        approved.code(),
+        0,
+        "approve failed:\nstdout:\n{}\nstderr:\n{}",
+        approved.stdout,
+        approved.stderr
     );
     println!("6b. ok");
 
-    // The leftover check does not go through the script: the script
+    println!(
+        "6c. rollback --plan-id {plan_id} --live --journal {journal} --workflows-dir \
+         {workflows_dir}"
+    );
+    let deleted = rollback_apply(&plan_id, &journal, &workflows_dir);
+    assert_no_credential_bytes(
+        "rollback apply",
+        &[("stdout", &deleted.stdout), ("stderr", &deleted.stderr)],
+    );
+    assert_eq!(
+        deleted.code(),
+        0,
+        "rollback apply failed:\nstdout:\n{}\nstderr:\n{}",
+        deleted.stdout,
+        deleted.stderr
+    );
+    let teardown_run = deleted
+        .docs
+        .first()
+        .unwrap_or_else(|| panic!("no teardown run document: {}", deleted.stdout));
+    assert_eq!(teardown_run["succeeded"], true, "{teardown_run:?}");
+    let run_steps = teardown_run["steps"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no steps in {teardown_run:?}"));
+    let repo_outcome = run_steps
+        .iter()
+        .find(|pair| pair[0]["node"] == "repo")
+        .unwrap_or_else(|| panic!("no repo step in {teardown_run:?}"));
+    assert_eq!(repo_outcome[1]["kind"], "deleted", "{repo_outcome:?}");
+    let doppler_outcome = run_steps
+        .iter()
+        .find(|pair| pair[0]["node"] == "doppler")
+        .unwrap_or_else(|| panic!("no doppler step in {teardown_run:?}"));
+    assert_eq!(doppler_outcome[1]["kind"], "deleted", "{doppler_outcome:?}");
+    println!("6c. ok");
+
+    // The leftover check does not go through willikins: willikins
     // reporting success and the two accounts agreeing are different
     // claims, and only the second one is the one that matters.
-    println!("6c. leftover check, independent of the script");
+    println!("6d. leftover check, independent of willikins");
     let repo_status = github_repo_status(&github_http);
     assert!(
         repo_status == Some(404),
@@ -484,7 +654,7 @@ fn live_smoke_run() {
         "leftover: the Doppler project `{PROJECT}` answered {project_after:?} after the \
          teardown; delete it by hand"
     );
-    println!("6c. ok: both are gone");
+    println!("6d. ok: both are gone");
 
     hint.disarm();
 
