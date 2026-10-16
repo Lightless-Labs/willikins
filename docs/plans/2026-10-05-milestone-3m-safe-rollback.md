@@ -1432,6 +1432,18 @@ printed `[REDACTED DopplerServiceToken]`; (4) `approve`; (5) `rollback --plan-id
 --workflows-dir <scratch>`: `doppler` and `repo` Deleted, the rest Listed, `succeeded`; (6) checked outside willikins:
 the repository reads 404, and the sandbox lists no probe repository and no probe project (Doppler answers a project
 read with 400 "no access" once it is gone). No secret in any output.
+**Addendum:** 2026-10-16 -- L3 and L4's Buildkite variant run live, green, in a new sandbox Buildkite org
+(`willikins-sandbox`): the old sandbox org's free trial had expired, and Buildkite then answers every API call for it
+with `{"message":"No organization found"}` (404), which is what the tokens kept getting; one user holds one free org,
+so the operator made a second. L3: a clean pipeline rolls back and reads 404; one build makes `standing` report
+`AsCreated { losing: ["builds"] }` and `delete` refuse it as a `Conflict`; with `accept: [builds]` it deletes and
+reads 404; verify 8 holds (`created_at` parses, the builds list works, `DELETE` answers 204). L4 over a scratch copy
+of `workflows/new-rust-service-buildkite.yaml` with `teardown: delete` on `repo`, `doppler`, `configs` and `pipeline`:
+the plan showed six creates and no `not_reversible`; apply created repo, project and pipeline (the root configs
+`Unchanged`); the teardown deleted `pipeline`, `doppler` and `repo` with the configs riding; the repository and the
+pipeline then read 404 and no probe project is left. `rollback --plan-id` builds the full live catalog, as
+`apply --plan-id` does, so it needs every provider's variable (SigNoz's included, though nothing calls SigNoz); the
+first attempt from a wrapper that passed only three tokens refused with exit 2 before any delete. D0 is next.
 
 ## Goal
 
