@@ -1444,8 +1444,46 @@ the plan showed six creates and no `not_reversible`; apply created repo, project
 pipeline then read 404 and no probe project is left. `rollback --plan-id` builds the full live catalog, as
 `apply --plan-id` does, so it needs every provider's variable (SigNoz's included, though nothing calls SigNoz); the
 first attempt from a wrapper that passed only three tokens refused with exit 2 before any delete. D0 is next.
+**Addendum:** 2026-10-16 -- D0 landed (one commit, `crates/willikins-cli/tests/it/no_gh_writes_guard.rs`'s
+`the_walk_reads_every_kind_of_file_this_repository_executes` green with no `.sh` in the tree). `deploy/teardown.sh`,
+`deploy/teardown_test.sh` and `crates/willikins-cli/tests/it/teardown_script.rs` deleted (`git rm`), with its `mod
+teardown_script;` line dropped from `tests/it/main.rs`; the `deploy/` directory itself is gone (it held only those
+two scripts; nothing else in the tree named the directory). `the_walk_...`'s on-disk list drops `deploy/teardown.sh`;
+its own `is_runnable("teardown.sh")` name check and `is_exempt("deploy/teardown.sh")` (a pure string check, not an
+on-disk one) are untouched, as are every historical doc comment citing the script as the guard's origin -- except
+the one runtime assertion message at that test's own `no_file_in_this_workspace_invokes_the_operators_github_cli`,
+reworded "as the retired `deploy/teardown.sh` did" so a future failure does not point at a file that no longer
+exists. `crates/willikins-cli/Cargo.toml`'s two comments, and `smoke_parity.rs`'s header bullet and two in-body
+comments, now point at `willikins rollback`/`rollback_round_trip.rs` instead of the script/`jq`. README's "The live
+smoke test" section (the two paragraphs that discussed teardown mechanics) now describes the scratch document and
+the plan/approve/apply sequence instead of the script.
 
-## Goal
+`live_smoke.rs`'s rewrite goes a step past the row's own wording, necessarily: decision 3a's default is `retain`, and
+a `Delete`-capable candidate riding inside a container this run deletes (`configs` inside `doppler`, `token` inside
+`configs[prd]`) must itself say `teardown: delete` or the whole teardown refuses ("a node the document keeps is
+inside a container it deletes") -- so rolling back the *tracked* `workflows/new-rust-service.yaml` as committed
+would either refuse outright or (worse) report success while deleting nothing. The test now writes a scratch copy of
+the tracked document (read from disk and transformed by inserting `teardown: delete` after each of `repo`'s,
+`doppler`'s, `configs`'s and `token`'s own `tool:` line, asserting exactly four insertions, rather than a second
+hand-maintained copy that could drift from `common::FIRST_APPLY`/`SECOND_APPLY`) into the journal's own scratch
+directory before the first apply, and uses that one file -- never the tracked one -- for both applies and the whole
+`rollback`/`approve`/`rollback --plan-id --workflows-dir` sequence, exactly as this plan's own L4 runbook did for the
+equivalent GitHub+Doppler document. `ci_secret` (`Contained`) carries no `teardown:` field; `check` would refuse one
+(`TeardownNotAdmitted`). The pre-flight now requires `WILLIKINS_BUILDKITE_TOKEN`, `WILLIKINS_SIGNOZ_API_KEY` and
+`WILLIKINS_SIGNOZ_HOST` alongside the two providers the document itself calls, because `rollback --plan-id --live`
+builds the full live catalog unconditionally (`live_catalog_from_env`), the same gap the L4 runbook hit live
+2026-10-16. Step 6's plan/apply assertions read the `--json` shapes `rollback_round_trip.rs` already pins (`plan_id`,
+`teardown.steps[].instance.node`/`.action.kind`/`.resource`, and the apply result's `succeeded`/`steps[][1].kind`).
+
+Not run live by the implementer (out of scope for this task: "NO live provider call"), as L1-L4 were not run by
+their own implementer either -- only compiled and linted under `--features live-tests`. One residual for the
+coordinator's first live run to settle, since it could not be checked without running it: this test now interposes
+the rotation (steps 4-5) between the first apply and its own rollback, which L4's runbook never did. Checked by
+reading, not by running: `DopplerProjectInverse::standing_from_body` and `config_contents_drift`
+(`crates/willikins-providers-doppler/src/{tools/project_ensure.rs,inverse_support.rs}`) tolerate a project's configs
+and service tokens *by name* (`tolerated_token_names`), never by id or value, and a rider's own standing is never
+separately observed (decision 3a) -- so the rotation re-minting `ci` under the same name should read `AsCreated`
+with no foreign token, not `Drifted`. The coordinator's first run should confirm this rather than assume it.
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
 else, shows it the way it shows any plan, waits for a human to approve it, and runs it only if a fresh observation
