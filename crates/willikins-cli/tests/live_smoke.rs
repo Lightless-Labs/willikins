@@ -35,7 +35,7 @@
 //!    calls; the other three are needed only at step 6c, because
 //!    `rollback --plan-id --live` builds the full live catalog the same
 //!    unconditional way `apply --plan-id --live` does, so a missing
-//!    Buildkite or SigNoz credential would refuse there -- after both
+//!    Buildkite or `SigNoz` credential would refuse there -- after both
 //!    resources already exist. The repository and the Doppler project
 //!    must both answer `404`: a leftover from an earlier run is a stop,
 //!    not something to reuse.
