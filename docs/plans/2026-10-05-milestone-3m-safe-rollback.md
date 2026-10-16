@@ -1444,7 +1444,9 @@ the plan showed six creates and no `not_reversible`; apply created repo, project
 pipeline then read 404 and no probe project is left. `rollback --plan-id` builds the full live catalog, as
 `apply --plan-id` does, so it needs every provider's variable (SigNoz's included, though nothing calls SigNoz); the
 first attempt from a wrapper that passed only three tokens refused with exit 2 before any delete. D0 is next.
-**Addendum:** 2026-10-16 -- D0 landed (one commit, `crates/willikins-cli/tests/it/no_gh_writes_guard.rs`'s
+**Addendum:** 2026-10-16 -- D0 landed (two commits, not the row's one: the `--features live-tests` clippy gate, run
+after the first, flagged one `clippy::doc_markdown` on a bare `SigNoz` in `live_smoke.rs`'s own module doc, fixed in a
+follow-up commit. `crates/willikins-cli/tests/it/no_gh_writes_guard.rs`'s
 `the_walk_reads_every_kind_of_file_this_repository_executes` green with no `.sh` in the tree). `deploy/teardown.sh`,
 `deploy/teardown_test.sh` and `crates/willikins-cli/tests/it/teardown_script.rs` deleted (`git rm`), with its `mod
 teardown_script;` line dropped from `tests/it/main.rs`; the `deploy/` directory itself is gone (it held only those
