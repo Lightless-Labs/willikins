@@ -1417,6 +1417,21 @@ Verify 4: Doppler **deletes** an environment whose config another project inheri
 only guard, and it refused live. The single-config `GET` of a root config carries `created_at` after all (P3's
 addendum said it did not; the code does not depend on it). L3 is blocked: the sandbox Buildkite token answers 401
 on every endpoint (it passed live on 2026-10-02), so L3 and L4 wait for the operator to replace it.
+**Addendum:** 2026-10-16 -- L4 run live for GitHub and Doppler, green; the Buildkite variant waits with L3. The
+sandbox Buildkite token answers `{"message":"No organization found"}` (404) on every `willikins-test` endpoint: two
+freshly created tokens, both granted the org by display name, with the right scopes (`read_pipelines`,
+`write_pipelines`, `read_builds`, `write_builds`; no organization scope, which the operator's real token never
+needed either), confirmed loaded from `sandbox.env` in a clean environment. Open with the operator. The runbook,
+over a scratch copy of `workflows/new-rust-service.yaml` with `teardown: delete` on `repo`, `doppler`, `configs` and
+`token` (the tracked document keeps the default), a probe slug `willikins-probe-delete-me-l<5 digits>` and a scratch
+journal: (1) `plan --live` showed seven creates and no `not_reversible` (every created node is deleted or rides);
+(2) `apply --live --journal J`: repo, project, token and Actions secret Created, the three root configs Unchanged
+(Doppler creates them with the project); (3) `rollback <file> --run R --live --journal J`: `repo` and `doppler`
+Delete, the secret riding with the repo, the token with `configs[prd]`, the configs with the project, the token
+printed `[REDACTED DopplerServiceToken]`; (4) `approve`; (5) `rollback --plan-id P --live --journal J
+--workflows-dir <scratch>`: `doppler` and `repo` Deleted, the rest Listed, `succeeded`; (6) checked outside willikins:
+the repository reads 404, and the sandbox lists no probe repository and no probe project (Doppler answers a project
+read with 400 "no access" once it is gone). No secret in any output.
 
 ## Goal
 
