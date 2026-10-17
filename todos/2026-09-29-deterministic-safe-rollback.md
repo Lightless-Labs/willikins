@@ -1,7 +1,7 @@
 ---
 title: Deterministic, safe rollback of what a run created
 created: 2026-09-29
-status: pending
+status: done
 priority: medium
 area: core/apply
 related:
@@ -29,3 +29,8 @@ reinvented CloudFormation." It splits three ways, and the plan must keep them ap
 Unlike CloudFormation, willikins keeps no stack state and spans several vendors, so "rollback" cannot mean "restore a
 snapshot": it means "converge back", from the journal and from reads of reality, and the plan must show exactly what
 it will delete and what it cannot undo. Destructive by construction, so always approval-gated.
+
+**Done 2026-10-16:** milestone 3m (`docs/plans/2026-10-05-milestone-3m-safe-rollback.md`). `willikins rollback`
+plans, approves and applies a teardown of one run; policy is the document's (`teardown:`), capability the tool's.
+Live in the sandbox for GitHub, Doppler and Buildkite. `deploy/teardown.sh` is retired. The MCP surface is
+`todos/2026-10-16-rollback-over-mcp.md`.

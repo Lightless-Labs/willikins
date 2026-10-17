@@ -3,6 +3,7 @@
 **Created:** 2026-10-05 (from `todos/2026-09-29-deterministic-safe-rollback.md`)
 **Reviewed:** 2026-10-05 (portfolio review of the five plans of 2026-10-05: 3k, 2b, 3l, 3m, 3n)
 **Reviewed:** 2026-10-12 (four-lens review of the policy revision: coherence, feasibility against the code, security, scope)
+**Completed:** 2026-10-16
 **Addendum:** 2026-10-05 — portfolio review. Order: this milestone runs **last**, after 3k, 3n F1–F3, 3l, 2b and 3n's
 S, G and B parts, so `rollback.rs`, `resolve_pure` and `not_reversible` are written once against the sealed typed
 graph (no `Binding`, no catalog lookup), its plan-JSON change does not land inside 3n's byte-identical window, and the
@@ -1486,6 +1487,18 @@ reading, not by running: `DopplerProjectInverse::standing_from_body` and `config
 and service tokens *by name* (`tolerated_token_names`), never by id or value, and a rider's own standing is never
 separately observed (decision 3a) -- so the rotation re-minting `ci` under the same name should read `AsCreated`
 with no foreign token, not `Drifted`. The coordinator's first run should confirm this rather than assume it.
+**Addendum:** 2026-10-16 -- D1 (coordinator), closing the milestone. CLAUDE.md and AGENTS.md carry the invariant
+(rollback deletes only what the document asked for before the run; capability is the tool's, policy the node's; one
+`TeardownToken`, minted in `apply_teardown` after a matching fresh observation); the design doc's Execution section
+gains the rollback bullet; `todos/2026-09-29-deterministic-safe-rollback.md` is done; the MCP surface is
+`todos/2026-10-16-rollback-over-mcp.md`; the independent pass's seven open residuals are
+`todos/2026-10-16-rollback-residuals.md`. D0's addendum had replaced this plan's `## Goal` heading; restored. One
+live run is still owed: D0 rewrote `live_smoke.rs`'s teardown step to `willikins rollback` (written, clippy-clean
+with `live-tests`), and its first live run was queued but stopped by the host's low-memory guard before it started
+(nothing was created; the sandbox was checked afterwards). The same rollback path already passed live in L4 for both
+documents.
+
+## Goal
 
 Given one recorded run, willikins computes a **teardown plan** that deletes exactly what that run created and nothing
 else, shows it the way it shows any plan, waits for a human to approve it, and runs it only if a fresh observation

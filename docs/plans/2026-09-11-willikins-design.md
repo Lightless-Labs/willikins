@@ -155,6 +155,12 @@ once with a complete, typed set.
   end up on disk.
 - A per-node run ledger. Because every tool is idempotent, re-running a partially failed plan
   converges instead of duplicating.
+- Rollback converges back from the journal, not from a snapshot (milestone 3m, 2026-10-16). A teardown
+  plan deletes what one run created and the document said to delete (`teardown: delete`; the default
+  keeps everything), in reverse order, after observing that each resource is still as the run left it:
+  anything foreign inside it, or anything created outside the run's window, refuses the whole teardown.
+  It is approved like any plan, re-observed before its first delete, and run last-in first-out per
+  workflow. The forward plan names what a rollback would not undo, before the run.
 - Approval is out-of-band from the agent session: plan goes pending, a human approves through
   a notification or a small page, the agent polls or is notified.
 - Scope is deliberately narrow. No triggers, no long-running steps, no loops beyond

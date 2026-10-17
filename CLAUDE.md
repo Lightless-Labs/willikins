@@ -58,6 +58,10 @@ Read `docs/plans/2026-09-11-willikins-design.md` before changing anything in `cr
 - `Checked` is built only by `check`; `plan`, `apply` and `describe` read its typed graph and never a
   `Binding`. They take no `Catalog` and look nothing up by name. A `for_each` over identifier-typed
   values is refused by `check`, because its instance keys would print whole.
+- Rollback deletes only what the document asked for, in writing, before the run. A tool's `Reversal`
+  states capability only; a node's `teardown:` (default `retain`) is the policy, read from the document
+  at the run's recorded hash. No inverse is a catalog tool or nameable in a document; every delete takes
+  a `TeardownToken`, minted once, in `apply_teardown`, after a fresh observation matches the approved one.
 - Workflow documents and templates are privileged content: run only from a trusted ref.
 - A used document is found by name in its parent's trusted source; no secret enters one; its
   nodes are named `<step>/<node>`.

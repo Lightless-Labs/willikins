@@ -7,18 +7,19 @@ compaction, before handing off, after a milestone, and after a plan change or di
 
 ## Current Status
 
-### RESUME HERE (2026-10-11) — 3k, 3n, 3l, 2b and 3o landed; next: 3m (safe rollback), its Tasks table revised first
+### RESUME HERE (2026-10-16) — 3k, 3n, 3l, 2b, 3o and 3m landed; the five-lane portfolio is complete
 
 - **Live state:** `main` pushed. Full gate on the 3n tree: 50 test binaries, all green, about 7 minutes.
-- **Now: 3m** (`docs/plans/2026-10-05-milestone-3m-safe-rollback.md`): all implementer tasks landed (R1-R9, T1-T2,
-  P1-P8, F1, L1-L3 written), the independent opus pass fixed two delete hazards (a rider matching several containers;
-  LIFO not re-checked at apply), and the full gate is green. Tools declare capability; a node's `teardown:` (retain
-  by default, delete, or delete accepting declared losses such as `builds`) decides; policy is fixed at the run's
-  document hash. C1 is done locally (the operator's private document keeps its profiles and refuses its pipeline
-  while it has builds; uncommitted). L1, L2 and L4 (GitHub and Doppler, end to end through the CLI) passed live.
-  **Waiting on the operator:** every sandbox Buildkite token tried answers "No organization found" (404) for
-  `willikins-test`, though granted the org with the right scopes. Then L3, L4's Buildkite variant, D0 (retire
-  `deploy/teardown.sh`, which also deletes pipelines, so it waits for that path to be proven live), D1.
+- **3m (completed 2026-10-16):** `willikins rollback` plans, approves and applies a teardown of one recorded run.
+  Tools declare capability (`Reversal`, with declared losses such as a pipeline's `builds`); a node's `teardown:`
+  (default `retain`, `delete`, or delete accepting a loss) is the policy, fixed at the run's document hash. Live in
+  the sandbox for GitHub, Doppler and Buildkite (L1-L4); `deploy/teardown.sh` is retired. The operator's private app
+  document keeps its profiles and sets its pipeline to `teardown: delete` (refused while it has builds); uncommitted.
+  **Owed:** one live run of the rewritten `live_smoke.rs` (stopped by the host's low-memory guard before it started).
+  Follow-ups: `todos/2026-10-16-rollback-over-mcp.md`, `todos/2026-10-16-rollback-residuals.md`.
+- **Sandbox:** the Buildkite sandbox org is now `willikins-sandbox` (the old one's free trial expired, and Buildkite
+  then answers every API call for it with "No organization found"). `~/.config/willikins/sandbox.env` is the
+  coordinator's to maintain; the operator only supplies tokens.
 - **The runner** now takes `ids` (an explicit task list; the listing agent once returned a placeholder), and agents
   wait for no `cargo-sweep` plus at least 40% free memory, not an idle host: other sessions build almost
   continuously. In zsh, read `$?` straight after the command, never after a `$(...)` substitution.
@@ -787,12 +788,14 @@ regenerated from that frontmatter; a todo marked `done` leaves it.
 | `todos/2026-09-20-remote-mcp-from-a-phone.md` | open | high | Usable from a phone: self-describing workflows and enumerable input values |
 | `todos/2026-09-22-secrecy-inference.md` | pending | high | Infer secrecy from use sites instead of declaring it at the source |
 | `todos/2026-09-23-checked-as-a-typed-graph.md` | done | medium | Turn Checked into a typed graph that plan, apply and describe consume |
-| `todos/2026-09-29-deterministic-safe-rollback.md` | pending | medium | Deterministic, safe rollback of what a run created |
+| `todos/2026-09-29-deterministic-safe-rollback.md` | done | medium | Deterministic, safe rollback of what a run created |
 | `todos/2026-09-29-open-source-agent-tools.md` | pending | medium | Provision the operator's two open-source, self-hostable tools for AI agents |
 | `todos/2026-10-05-reusable-ios-app-document.md` | pending | medium | A reusable iOS-app document, and the RepoPath derivation it needs |
 | `todos/2026-10-06-provision-agents-md.md` | done | medium | Provision a project's AGENTS.md |
 | `todos/2026-10-11-plan-ratchet-last-two.md` | pending | low | Remove plan.rs's last two counted fallbacks (ratchet 8 to 6) |
 | `todos/2026-10-11-readable-repofile-view.md` | pending | medium | A readable multi-line view of rendered files in plan text and on the approvals page |
+| `todos/2026-10-16-rollback-over-mcp.md` | pending | medium | Rollback over MCP and on the approvals page |
+| `todos/2026-10-16-rollback-residuals.md` | pending | low | Milestone 3m's open rollback residuals |
 
 ## How Work Is Verified
 
