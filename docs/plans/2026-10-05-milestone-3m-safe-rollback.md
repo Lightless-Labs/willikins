@@ -1497,6 +1497,14 @@ live run is still owed: D0 rewrote `live_smoke.rs`'s teardown step to `willikins
 with `live-tests`), and its first live run was queued but stopped by the host's low-memory guard before it started
 (nothing was created; the sandbox was checked afterwards). The same rollback path already passed live in L4 for both
 documents.
+**Addendum:** 2026-10-18 -- the owed live run: `live_smoke.rs` passes live in the sandbox (79 s, no secret in the
+log). Its first attempt stopped at the pre-flight, before creating anything: it expected Doppler to answer a read of
+a missing project with 404, and Doppler answers 400 ("this token does not have access to requested project"), the
+same answer L2 and L4 met; the final leftover check had the same assumption. Both now decide from `GET /v3/projects`
+by slug. The run then applied `new-rust-service`, re-applied it (converged), had the rotation refused without
+`--approve` and run with it, and rolled the first run back: `rollback --run` planned deletes of `repo` and `doppler`,
+`approve`, `rollback --plan-id` succeeded, and an independent check found both gone. That settles D0's residual: a
+token rotation between the apply and the teardown does not disturb the teardown.
 
 ## Goal
 

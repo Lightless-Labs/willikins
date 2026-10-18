@@ -15,11 +15,13 @@ compaction, before handing off, after a milestone, and after a plan change or di
   (default `retain`, `delete`, or delete accepting a loss) is the policy, fixed at the run's document hash. Live in
   the sandbox for GitHub, Doppler and Buildkite (L1-L4); `deploy/teardown.sh` is retired. The operator's private app
   document keeps its profiles and sets its pipeline to `teardown: delete` (refused while it has builds); uncommitted.
-  **Owed:** one live run of the rewritten `live_smoke.rs` (stopped by the host's low-memory guard before it started).
+  The rewritten `live_smoke.rs` passed live 2026-10-18 (its Doppler absence checks now read the project listing).
   Follow-ups: `todos/2026-10-16-rollback-over-mcp.md`, `todos/2026-10-16-rollback-residuals.md`.
 - **Sandbox:** the Buildkite sandbox org is now `willikins-sandbox` (the old one's free trial expired, and Buildkite
   then answers every API call for it with "No organization found"). `~/.config/willikins/sandbox.env` is the
   coordinator's to maintain; the operator only supplies tokens.
+- **Host:** match the sweep by process name, `pgrep -x cargo-sweep`; `-f` also matches other sessions' shells
+  whose command text mentions it, and a wait on it then never ends.
 - **The runner** now takes `ids` (an explicit task list; the listing agent once returned a placeholder), and agents
   wait for no `cargo-sweep` plus at least 40% free memory, not an idle host: other sessions build almost
   continuously. In zsh, read `$?` straight after the command, never after a `$(...)` substitution.
