@@ -36,9 +36,10 @@
 //!    `rollback --plan-id --live` builds the full live catalog the same
 //!    unconditional way `apply --plan-id --live` does, so a missing
 //!    Buildkite or `SigNoz` credential would refuse there -- after both
-//!    resources already exist. The repository and the Doppler project
-//!    must both answer `404`: a leftover from an earlier run is a stop,
-//!    not something to reuse.
+//!    resources already exist. The repository must answer `404` and the
+//!    sandbox must not list the Doppler project (Doppler answers a read
+//!    of a missing project with 400): a leftover from an earlier run is a
+//!    stop, not something to reuse.
 //! 2. **First apply** of a scratch copy of `workflows/new-rust-service.yaml`
 //!    with `teardown: delete` added to `repo`, `doppler`, `configs` and
 //!    `token` (decision 3a's default is `retain`; the tracked document
@@ -202,26 +203,39 @@ fn doppler() -> willikins_providers_http::Http {
     willikins_providers_doppler::http_client(credential)
 }
 
-/// `GET /v3/projects/project?project=<project>`: `Some(status)` for a
-/// failure, `None` when the project reads back.
-fn doppler_project_status(http: &willikins_providers_http::Http) -> Option<u16> {
-    match http.get::<Json>(&format!("/v3/projects/project?project={PROJECT}")) {
-        Ok(_) => None,
-        Err(err) => Some(err.status.unwrap_or(0)),
+/// Whether the sandbox lists a Doppler project named [`PROJECT`]: `GET
+/// /v3/projects`, read by slug. Doppler answers a read of a project that
+/// does not exist with 400 ("This token does not have access to requested
+/// project"), not 404, so absence is decided from the listing instead
+/// (milestone 3m's L2 and L4 saw the same answer).
+fn doppler_project_listed(http: &willikins_providers_http::Http) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Listing {
+        projects: Vec<Slug>,
     }
+    #[derive(serde::Deserialize)]
+    struct Slug {
+        slug: String,
+    }
+    let listing: Listing = http
+        .get("/v3/projects?per_page=100")
+        .unwrap_or_else(|err| panic!("listing Doppler projects failed (status {:?})", err.status));
+    listing
+        .projects
+        .iter()
+        .any(|project| project.slug == PROJECT)
 }
 
 /// Step 1: the Doppler project must not exist yet, for the same reason
 /// the repository must not.
 fn require_project_absent(http: &willikins_providers_http::Http) {
-    let status = doppler_project_status(http);
     assert!(
-        status == Some(404),
-        "pre-flight: the Doppler project `{PROJECT}` answered {status:?}, expected a 404. \
+        !doppler_project_listed(http),
+        "pre-flight: the sandbox lists a Doppler project `{PROJECT}`. \
          A leftover is the operator's to remove; this test never reuses one. \
          Nothing has been created."
     );
-    println!("1c. GET /v3/projects/project ({PROJECT}): 404, as a fresh run needs");
+    println!("1c. GET /v3/projects: no `{PROJECT}`, as a fresh run needs");
 }
 
 /// `willikins --json apply <document> --live --journal <j> --principal
@@ -648,10 +662,9 @@ fn live_smoke_run() {
         "leftover: `repos/{REPO}` answered {repo_status:?} after the teardown; \
          delete it by hand"
     );
-    let project_after = doppler_project_status(&http);
     assert!(
-        project_after == Some(404),
-        "leftover: the Doppler project `{PROJECT}` answered {project_after:?} after the \
+        !doppler_project_listed(&http),
+        "leftover: the sandbox still lists the Doppler project `{PROJECT}` after the \
          teardown; delete it by hand"
     );
     println!("6d. ok: both are gone");
