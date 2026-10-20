@@ -722,7 +722,9 @@ for a fetched reason: `webauthn-rs` requires the in-progress ceremony state to b
 and refuses to derive serde on it by default, precisely so it cannot be put in a cookie and
 replayed. So the store keeps its shape — 300 s TTL, which is also the crate's own
 `DEFAULT_AUTHENTICATOR_TIMEOUT`, pruned on insert, capped at **1,024** entries, answering **503**
-when full rather than evicting a login someone is in the middle of.
+when full rather than evicting a login someone is in the middle of. Only a ceremony for a real
+account takes a slot, and each account has its own in-flight cap (decision 24's username step), so
+inventing usernames cannot fill it.
 
 **The `__Host-willikins-login` cookie stays too, re-founded as the ceremony binding.** It is short
 lived (`Secure`, `HttpOnly`, `SameSite=Lax`, 300 s), it holds the ceremony id, and the finish step
@@ -796,8 +798,13 @@ bolted on after a session shape has been frozen in tests.
 
 **`Sec-Fetch-Site`, and the origin check.** OWASP now lists Fetch Metadata as a first-class CSRF
 defence with a **mandatory** fallback to origin verification, which willikins already has. So it is
-purely additive: a non-safe method arriving with `Sec-Fetch-Site: cross-site` is refused, and
-`Vary` names `Sec-Fetch-Site, Origin`. **The two "fixes" this paragraph used to list are already
+purely additive: a non-safe method is refused **unless `Sec-Fetch-Site` is `same-origin` or
+`none`**, the origin check runs whenever the header is absent, and `Vary` names
+`Sec-Fetch-Site, Origin`. (The 2026-09-16 text refused only `cross-site`. The 2026-10-20 review
+pointed out that the threat this decision names is a sibling host, whose forged POST arrives as
+`same-site` and would have passed.) The rule covers every non-safe method on a browser surface:
+the approve and reject POSTs, the consent POST, the ceremony and recovery finish endpoints, and
+logout. `/token` is not a browser surface and is exempt; it is called server to server. **The two "fixes" this paragraph used to list are already
 how the code behaves** (corrected 2026-10-20; both have been in place since 0e329eb, 2026-09-15).
 `extract_authority` splits on `/`, `?` and `#`, and `host_matches`
 (`crates/willikins-server/src/http/approvals.rs:276`) compares exactly and case-insensitively, so
@@ -824,7 +831,11 @@ the consent response's CSP is `form-action 'self' <origin>`, where `<origin>` is
 of the **validated, registered** redirect URI of the pending request: the scheme, host and port
 of a loopback redirect as the request gave them, never a wildcard. Only the consent page widens
 this; the approvals page keeps `form-action 'self'`. A server-chosen, already-validated origin
-adds nothing a markup-injection bug could retarget. The rejected alternative is ending the consent
+adds nothing a markup-injection bug could retarget. **Every other header is the approvals page's
+set** (2026-10-20 review): `frame-ancestors 'none'`, `X-Frame-Options: DENY`, the per-response
+`script-src` nonce and `Cache-Control: no-store`, plus `Referrer-Policy: no-referrer`, so the
+vendor callback never receives the consent URL in a `Referer`. RFC 6749 §10.13 names framing as
+the clickjacking vector and the "x-frame-options" header as its avoidance. The rejected alternative is ending the consent
 POST on a same-origin page that navigates onward with script. It needs a second `<script>` and
 gains nothing over naming the one origin. Whether Chrome and iOS WebKit then follow the redirect is
 measured by test 22's browser check (verify item 35), not assumed.
@@ -1075,6 +1086,11 @@ new, and pass 3 must attack them at least as hard.
 | `WILLIKINS_WORKFLOWS_DIR` swapped for a symlink after start, and an entry swapped between check and open | refused, `StartupError::Symlink` and `O_NOFOLLOW` respectively (decision 25) |
 | A document changed on the volume between plan and approval | the page shows no stale description and names the change; apply refuses `DocumentChanged` |
 | A non-canonical `WILLIKINS_PUBLIC_URL` (uppercase host, `:443`, trailing `/`) | startup refuses with `NonCanonicalUrl`; no deployment publishes an identifier Claude's canonical `resource` cannot match |
+| **Added by the 2026-10-20 review.** A forged consent POST from a sibling host, one without its nonce, one with another session's nonce, and one carrying its own `redirect_uri` | **403** for the first three (`same-site` refused, `InvalidNonce`); the fourth gets the stored redirect, never the posted one |
+| A stolen recovery code used to approve a plan or consent to a `willikins:apply` token | **403**: a recovery session can only enrol a passkey |
+| An enrollment URL used after 15 minutes, replayed, or against another account | refused in each case; the token appears in no request line, log line or journal line |
+| A sustained flood of username steps for invented accounts, and one naming the real account | no ceremony-store slot for the invented ones, so a real login still starts; the real account's flood stops at its per-account cap; the residual `/authorize` lockout is **measured** and recorded |
+| A flood of junk `/token` POSTs, then a valid redemption | the valid code is redeemed: the bucket counts failures per `client_id` after the claim |
 
 Every bypass pass 3 finds becomes a fixture plus a test, as in passes 1 and 2, and the pass is
 recorded under `docs/research/` with the same shape.
@@ -1124,7 +1140,15 @@ items and where each one went are in the out-of-scope list above.
   authorization-code store and anything that touches the signing key. The sweep is the acceptance
   test: at every level willikins can be configured to emit, no secret byte, no private-key byte, no
   authorization code, no `code_verifier`, no recovery code, no document text, no header value and
-  no JSON-RPC body reaches stderr, or the level that does is refused. *Task 14, test 15.*
+  no JSON-RPC body reaches stderr, or the level that does is refused. **No query string
+  either** (2026-10-20 review). `TraceLayer::new_for_http()`'s default span records
+  `uri = %request.uri()`, path and query, at DEBUG (tower-http 0.7.1, the locked version:
+  `src/trace/make_span.rs` and `DEFAULT_MESSAGE_LEVEL: Level = Level::DEBUG` in `trace/mod.rs`).
+  Today the INFO ceiling hides it, and `http/mod.rs`'s comment that the defaults log "only method,
+  path, status, and latency" is wrong about the path. Once `WILLIKINS_LOG` can raise the level,
+  every `/authorize` line would print `state`, `redirect_uri` and `code_challenge`, and a client's
+  misplaced `?access_token=` would print too. So task 14 installs a custom `MakeSpan` that records
+  `request.uri().path()` only, and corrects that comment. *Task 14, test 15.*
 - **Move the concurrency permit into the blocking closure** (its item 9). One line, no behaviour
   change; it stops the 64-call bound's correctness from depending on rmcp running the stateless
   handler on its own task. *Task 15, test 16.*
@@ -1759,6 +1783,26 @@ discipline willikins already applies with domain newtypes, and the shape prior a
   The screen presents the requested MCP scopes of the grant rule above, read from the same table
   the middleware uses, and requires a session, which is the second consumer decision 4 gives the
   human session. Its CSP widens `form-action` to the one validated redirect origin (decision 4).
+- **The consent POST is CSRF-bound, and carries no authorization parameter** (2026-10-20 review).
+  RFC 6749 §10.12: "The authorization server MUST implement CSRF protection for its authorization
+  endpoint and ensure that a malicious client cannot obtain authorization without the awareness
+  and explicit consent of the resource owner." Decision 4's argument that `SameSite=Lax` is not
+  enough applies here unchanged, because every sibling host is same-site. So the consent form
+  carries only a **session-bound, single-use nonce** that references the server-side pending
+  request, minted and checked by the per-plan nonce mechanism, plus the human's scope selection.
+  `client_id`, `redirect_uri`, `code_challenge`, `resource` and `state` are **never read from the
+  POST body**; they come from the stored request. A POST without the nonce, with another
+  session's nonce, or replayed is 403 `InvalidNonce`, and decision 4's `Sec-Fetch-Site` and origin
+  checks run on it as on any other browser POST.
+- **The consent screen shows the request's age and says to approve only a connection started
+  just now on this device** (2026-10-20 review). A hosted app's `client_id` is public and shared by
+  every account on that vendor, so anyone with their own Claude or ChatGPT account can start a
+  flow against this server and send the operator the `/authorize` link. The screen would show a
+  legitimate client name and `claude.ai`. Whether the code then reaches the attacker's connector
+  depends on whether the vendor binds `state` to the browser session that started the flow
+  (RFC 6749 §10.12: "The client MUST implement CSRF protection for its redirection URI"), which
+  is verify item 37. The subject allowlist does not help, because the token's `sub` is the
+  operator's. Risks records the threat, and open question 5 records the stronger delta.
 - **An `/authorize` with no session parks the request, logs in, and resumes** (2026-10-20; the
   earlier text did not say how). On a phone, the first `/authorize` comes from the Claude or
   ChatGPT app in a fresh browser context with no willikins session. In order:
@@ -1768,8 +1812,9 @@ discipline willikins already applies with domain newtypes, and the shape prior a
   3. The browser goes to `/approvals/login` carrying only an opaque id, with the parked request
      bound to it by a short-lived `__Host-willikins-authorize` cookie, as the ceremony is bound by
      `__Host-willikins-login`. A resume link opened in another browser therefore resumes nothing.
-  4. After the passkey ceremony, or the recovery-code path, the browser returns to the consent
-     screen for exactly the parked request.
+  4. After the passkey ceremony, the browser returns to the consent screen for exactly the parked
+     request. A recovery-code login does not reach it: a recovery session may only enrol a
+     passkey (decision 24), and the human then completes a passkey ceremony to consent.
   5. The parked entry is claimed once, by the same atomic get-and-remove as a code.
 
   A request that expires while parked ends in an error redirect, which carries `state` and `iss`
@@ -1787,7 +1832,14 @@ discipline willikins already applies with domain newtypes, and the shape prior a
   `Cache-Control: no-store` set before anything else on the response. **The numbers are this
   plan's choice and no specification sets them**; the prior art they are taken from is
   Cloudflare's shipped MCP authorization server, which defaults to 100 requests per 15 minutes at
-  `/authorize` and 50 at `/token`.
+  `/authorize` and 50 at `/token`. **The `/token` bucket counts failed redemptions only, per
+  `client_id`** (2026-10-20 review): a global bucket that counted every request let 50 junk POSTs
+  per 15 minutes refuse Claude's own valid redemption. A valid code is claimed before the bucket
+  is consulted, so someone else's flood never refuses it, and a valid redemption needs a human's
+  consent, which bounds it anyway. `/authorize` keeps its global bucket, because before phase 1
+  nothing distinguishes one anonymous caller from another; an anonymous flood can still refuse
+  the operator's own connect until verify item 18 makes a per-IP key possible, and Risks records
+  that as accepted.
 - **Every refusal is journalled**, through the machinery decision 1 already specifies rather than a
   second one: new additive `AuthFailedReason` variants, with the refusals of an unauthenticated
   request passing through the same per-reason token bucket and carrying the same `suppressed`
@@ -2033,12 +2085,32 @@ the real cost of the milestone is.
   invalidation plus reissue after use. **This plan follows the reading that satisfies both
   §4.2.1.1 and §3.1.2.2** — at least 128 bits *and* Argon2id — and says so rather than claiming the
   documents settle it; §3.2.2's throttling numbers were not read verbatim and are verify item 10.
-  This is what puts `argon2` in the tree **on the passkey branch too**.
+  This is what puts `argon2` in the tree **on the passkey branch too**. **A recovery-code login
+  is a restricted session** (2026-10-20 review): it may register a new passkey, and revoke the
+  account's other credentials, and nothing else, and it ends when that is done. Approve, reject
+  and consent each require a session that came from a passkey ceremony, so a stolen recovery code
+  alone cannot approve a plan or consent to a `willikins:apply` token. A look-up secret is
+  single-factor, and this decision's own case for passkeys is that they are "self-contained
+  multifactor authentication". Every recovery-code use is journaled as loudly as the break-glass.
+  The cost is in the last bullet.
 - **Two credentials before enrollment is complete**, or the operator is nagged until a second
   exists. Prevention before recovery: a single-credential deployment is one lost device away from
   the break-glass, every time.
 - **A host-side break-glass**: a CLI subcommand on the host that mints a one-time enrollment URL to
-  stdout and journals it as loudly as an approval. That is consistent with the design doc's own
+  stdout and journals it as loudly as an approval. **The URL carries a bearer credential, so it is
+  specified like one** (2026-10-20 review; whoever holds it can enrol a passkey on the account):
+  - the token is at least 128 bits from the OS CSPRNG, and the credential store holds only its
+    hash;
+  - it lives **15 minutes**, checked against its own expiry independently of storage, which is
+    why go-live step 4b mints it only after the deploy;
+  - it is bound to one named account and can register **one** credential and nothing else;
+  - it travels in the URL **fragment**, which the browser never sends, and the page's script
+    POSTs it, so it appears in no request line and no access log;
+  - the journal records the account, the principal and the time, never the token or the URL,
+    and test 6's and test 15's sweeps cover it.
+
+  The CLI's first run for a new account creates the account and prints its subject (go-live
+  step 4a) without minting a URL. That is consistent with the design doc's own
   trust model — the boundary is the network, and whoever holds host, environment and Doppler access
   already controls the deployment. What a deployment must **not** do is add a fourth layer that
   reintroduces a static shared secret, which trust boundary 5 forbids.
@@ -2046,15 +2118,26 @@ the real cost of the milestone is.
   own credentials, so the server must know which account before it can build a challenge; the
   usernameless alternative needs a preview feature the crate's authors advise against. For a single
   operator that is one text field, and it is an account-existence oracle unless it answers
-  uniformly.
+  uniformly. **Uniform in cost as well as in body** (2026-10-20 review): an unknown account
+  allocates **no** ceremony-store slot. It gets a dummy challenge of the same shape and cost, with
+  a credential list derived deterministically from the username under a startup key, so asking
+  twice looks the same, and its finish step fails like any other. That closes the timing oracle
+  and stops an anonymous caller filling the store by inventing usernames: at 1,024 entries and a
+  300 s TTL, about 3.4 requests a second would otherwise hold every login at 503. In-flight
+  ceremonies are also capped **per account**, so a flood naming the operator's real username
+  cannot take the whole store either.
 - **The first `<script>` on the approvals page**, inlined under a `script-src` with a per-response
   nonce. The ceremony runs through `navigator.credentials.create()` and `.get()`, and the page must
   base64url-decode the challenge, the user id and every credential id before the call and re-encode
   five fields for the POST back — about a hundred lines. The approvals page contains no `<script>`
   today, so 2c's CSP grows a `script-src` it did not have.
-- **The recovery path is not deferrable to a later milestone**, and the reason is in the risks: if
-  any browser in the operator's environment refuses `navigator.credentials` on the deployment's
-  domain (verify item 13), the recovery codes are the *only* mitigation the plan's shape offers.
+- **The recovery path is not deferrable to a later milestone**, and the reason is in the risks:
+  losing every enrolled device leaves recovery codes as the only way back in short of the
+  break-glass. **What it no longer mitigates** (2026-10-20 review): because a recovery session can
+  only enrol a passkey, a browser context that refuses `navigator.credentials` on the deployment's
+  domain (verify item 13) cannot be rescued by a recovery code. If test 19 finds an app's
+  `/authorize` context refuses passkeys, that app cannot connect until the operator chooses
+  otherwise (open question 7).
 
 *Recommended by open decision 1, and pinned by tests 10, 24, 25.*
 
@@ -2985,7 +3068,11 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     identical response to none, with no `WWW-Authenticate: Basic` anywhere. The per-plan nonce is
     still required and is bound to the session: a `POST` without it, or with one minted for another
     session, is **403** and journals `AuthFailedReason::InvalidNonce`. Filling the ceremony store →
-    **503**; filling the session store → **503**.
+    **503**; filling the session store → **503**. A username step for an unknown account takes
+    **no** ceremony-store slot, answers with a challenge of the same shape as a real one, gives the
+    same challenge when asked twice, and its finish step fails like any other; ceremonies for one
+    real account stop at its per-account cap while another account's still start (2026-10-20
+    review).
 11. **The approver role.** A session whose `sub` is not in `WILLIKINS_APPROVER_SUBJECTS` → the
     approve and reject POSTs are **403** `AuthFailedReason::WrongRole` and nothing is journaled
     as a grant; the pending list is not rendered; and the 403 page **displays that session's own
@@ -3037,7 +3124,9 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     or response body on stderr. The sweep additionally covers **the signing key, the authorization
     code store, the ceremony endpoints and the recovery codes**: no private-key byte, no
     authorization code, no `code_verifier` and no recovery code reaches stderr at any level the
-    binary can be configured to emit. The sweep records what rmcp itself emits at each level;
+    binary can be configured to emit. **No query string, no `state`, no parked-request resume id
+    and no enrollment token** reaches it either: a case sends an `/authorize` carrying a marker
+    `state` at TRACE and asserts the marker is absent from stderr (2026-10-20 review). The sweep records what rmcp itself emits at each level;
     anything that would print a body or a secret makes the level refused rather than the test
     relaxed.
 16. **The concurrency permit.** The 64-call bound still refuses with the kind-tagged `Busy`, and
@@ -3183,7 +3272,14 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     nothing beyond the request. **`redirect_uri` absent:** a client with exactly one registered
     HTTPS redirect gets that redirect, bound into the code; a client with several, or with a
     loopback entry, gets a phase-1 **400**. **`resource` absent:** the canonical
-    `<WILLIKINS_PUBLIC_URL>/mcp` is bound into the code and becomes the token's `aud`.
+    `<WILLIKINS_PUBLIC_URL>/mcp` is bound into the code and becomes the token's `aud`. **The
+    consent POST (2026-10-20 review):** without its nonce, with another session's nonce, and
+    replayed → **403** `InvalidNonce`; one whose body also carries a different `redirect_uri`,
+    `client_id`, `code_challenge`, `resource` or `state` gets the stored values, not the posted
+    ones; one with `Sec-Fetch-Site: same-site` → **403**. The consent response carries
+    `frame-ancestors 'none'`, `X-Frame-Options: DENY`, the `script-src` nonce, `Cache-Control:
+    no-store` and `Referrer-Policy: no-referrer`, and the screen shows the request's age and the
+    warning to approve only a connection just started on this device.
 23. **`/token` and the code bindings.** **One negative fixture per binding**, each carrying the
     header comment this repo's convention requires — naming its acceptance test and the exact error
     it must produce — and each asserting the binding is enforced from the **stored** record and not
@@ -3225,9 +3321,17 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     `AuthFailedReason::RecoveryCodeReplayed`. Concurrent recovery attempts are bounded by a
     semaphore, so an unauthenticated endpoint cannot turn 19 MiB per hash into a memory-exhaustion
     path, and per-account throttling refuses beyond its bound. Enrollment is **not complete until a
-    second credential exists**, or the operator is nagged until one does. The CLI subcommand mints
-    a one-time enrollment URL to stdout, journals the act as loudly as an approval, and prints the
-    subject to paste into both allowlists; the URL is single-use.
+    second credential exists**, or the operator is nagged until one does. The CLI subcommand's
+    first run for a new account creates it and prints the subject to paste into both allowlists,
+    minting no URL (go-live step 4a). A later run mints a one-time enrollment URL to stdout and
+    journals the act as loudly as an approval; the URL is single-use. **The enrollment token
+    (2026-10-20 review):** it is at least 128 bits, stored only as a hash, and carried in the URL
+    fragment, so no request line the server sees contains it. It is refused after 15 minutes even
+    if the store still holds it, refused on replay, refused for a different account, and
+    registers exactly one credential. The journal line carries the account, the principal and the
+    time and contains no byte of the token. **A recovery-code session is restricted:** after a
+    recovery-code login, the approve POST, the reject POST and the consent POST are each **403**,
+    and registering a passkey succeeds and ends the session. Recovery-code use is journaled.
 26. **The session core.** Against a router the test builds, before `/approvals` depends on any of
     it: a login **rotates the session id unconditionally** and the previous id is destroyed, not
     merely superseded — a request carrying it afterwards has no session. The idle timer is bumped
@@ -3236,9 +3340,9 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     constant-time compare of the credential hash recorded at login. Session ids are 128 bits from a
     CSPRNG. `Set-Cookie` is asserted as a **response header**, never as store contents, because the
     `SignedCookieJar` drop is silent. `Cache-Control: no-store` is present on every response that
-    carries a session id. A non-safe method with `Sec-Fetch-Site: cross-site` is refused, `Vary`
-    names `Sec-Fetch-Site, Origin`, and the fallback origin check still runs when the header is
-    absent.
+    carries a session id. A non-safe method with `Sec-Fetch-Site: cross-site` **or `same-site`**
+    is refused, one with `same-origin` or `none` passes on to the other checks, `Vary` names
+    `Sec-Fetch-Site, Origin`, and the fallback origin check still runs when the header is absent.
 27. **The image carries no workflow document** (decision 25, task 20). Read from the repository's
     own `Dockerfile` and `.dockerignore`, as `crates/willikins-server/tests/it/image_contents.rs`
     already does, because this host never builds an image. The runtime stage has exactly one
@@ -3353,15 +3457,15 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 5 | **Both metadata documents, the JWKS route and the challenge surface.** RFC 9728 at the insertion-built path, with `scopes_supported` the three MCP scopes and the root deliberately not a route. RFC 8414 with a byte-identical `issuer`, `authorization_endpoint`, `token_endpoint`, `response_types_supported: ["code"]`, `code_challenge_methods_supported`, explicit `grant_types_supported` and `token_endpoint_auth_methods_supported`, `authorization_response_iss_parameter_supported`, `jwks_uri`, the same `scopes_supported`, and zero-element arrays omitted. `/jwks.json`. All four routes outside the bearer middleware and rmcp's host check, as `/healthz` is. The 401 naming the three MCP scopes, and the 403. rmcp's `allowed_origins` set to the one derived public origin at 3.3.0 (decision 18). Pinned by: tests 1, 2, 20, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- oauth_metadata:: deploy_host_headers::` | 4 | sonnet, verified by opus |
 | 6 | Principal and journal: the `oauth-<12 hex>` derivation; the `Principal { id, claims }` signature change across **all eleven** `Butler` methods decision 2 lists (3m's `plan_rollback` and `apply_rollback` included), `record_auth_failure`, the eight `#[tool]` methods, `principal_for`, the approvals handlers, and `willikins-cli`'s commands including `rollback`; the optional claim fields on all eight principal-carrying events, bounded and escaped; `OAuthSubject` and `ClientId` as plain domain types. Pinned by: test 8, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- event_shapes:: pre_2c_replay::` and `cargo test -p willikins-server --test it -j 2 -- oauth_principal:: rollback_r8::` | 4 | sonnet, verified by opus |
 | 7 | Scopes: the four and the hierarchy; the `scope`/`scp` readers; the tool table with the pre-assigned `rollback_plan` and `rollback_apply` rows, **tied to the snapshotted tool list** with exactly that exception; the body parse; the 403 with `insufficient_scope`, and the 400 `UnknownTool` with no challenge; `scopes_supported` (the three MCP scopes); the table API the consent screen will read (the consent screen itself, and its assertions, are task 11's). Pinned by: test 7, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- oauth_scopes:: mcp_server::` | 5, 6 | sonnet, verified by opus |
-| 8 | **Session core, as library code.** The signed `__Host-` cookie and jar, both bounded stores with their 503, unconditional id rotation, the absolute **and** idle timeouts, `no-store`, 128-bit ids, the non-persistent cookie, credential-change revocation, `X-Frame-Options`, the CSP with `script-src`, `Sec-Fetch-Site` and `Vary`. Plus **pinning tests** for the origin check's exact match and its both-headers-absent refusal, which already ship (decision 4). **No `/approvals`-level assertion lands here**: `basic_auth` still gates that surface until task 9 removes it, and decision 6 forbids a commit in which both gates exist. Pinned by: test 26, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- session_core::` | 7 | sonnet, verified by opus |
+| 8 | **Session core, as library code.** The signed `__Host-` cookie and jar, both bounded stores with their 503, unconditional id rotation, the absolute **and** idle timeouts, `no-store`, 128-bit ids, the non-persistent cookie, credential-change revocation, `X-Frame-Options`, the CSP with `script-src`, `Sec-Fetch-Site` (a non-safe method refused unless `same-origin` or `none`) and `Vary`. Plus **pinning tests** for the origin check's exact match and its both-headers-absent refusal, which already ship (decision 4). **No `/approvals`-level assertion lands here**: `basic_auth` still gates that surface until task 9 removes it, and decision 6 forbids a commit in which both gates exist. Pinned by: test 26, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- session_core::` | 7 | sonnet, verified by opus |
 | 9 | **Passkey enrollment and authentication, and the gate swap.** `webauthn-rs` wiring, the durable credential store at `/data/credentials/`, ceremony-to-account binding, UV Required, counter regression and `update_credential`, `exclude_credentials` and CredentialID uniqueness, the uniform username step, the inline script under a CSP nonce, logout, the `WrongRole` page (showing `sub` whole), and the **mint → `oauth::validate` → session** hop. **Removes `basic_auth`, `TokenHash`, `matches_any` and the constant-time compare, and retires `WILLIKINS_APPROVER_TOKEN_HASH` in this series**, so no commit on `main` has an unauthenticated `/approvals` and none has two gates on it. Flips the three `adversarial_10b.rs` pins named below. **Every `/approvals`-level assertion is this task's.** Pinned by: tests 9, 10, 11, 24, and test 12's approver-hash retirement, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_login:: passkey:: adversarial_10b::` | 8 | **sonnet test-first, opus attacks**: CVE-2026-69199's class lives here |
 | 23 | **The approvals page shows what was planned** (decision 25): the root's short sha beside the `used` closure, and "document says" only while the file's sha equals `record.document_sha256`, otherwise the `DocumentChanged` notice. Pinned by: test 30, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_document_identity::` | 9 | sonnet test-first, opus attacks |
 | 24 | **Teardowns on the approvals page** (decision 4): `pending_teardowns` in `willikins-journal`, the teardown section through `mask_json`, session-bound nonces for teardown `plan_id`s, the same role rules. Pinned by: test 31, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` and `cargo test -p willikins-server --test it -j 2 -- approvals_teardowns:: rollback_r8::` | 9, 6 | sonnet test-first, opus attacks |
-| 10 | **Recovery codes, the enrollment CLI and the break-glass.** Codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule; the CLI subcommand that mints a one-time enrollment URL to stdout and journals it as loudly as an approval; the printed subject for both allowlists. **Where this CLI runs against a distroless deployment is open question 2**, and the task does not guess. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes::` and `cargo test -p willikins-cli --test it -j 2 -- enroll::` | 9 | sonnet, verified by opus |
-| 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname and its own `form-action` CSP. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. No refresh tokens. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
+| 10 | **Recovery codes, the enrollment CLI and the break-glass.** Codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule; the restricted recovery session (enrol a passkey, nothing else), journaled; the CLI subcommand that creates an account and prints its subject, and on a later run mints a one-time enrollment URL to stdout and journals it as loudly as an approval, with decision 24's token rules (128 bits, hashed, 15 minutes, one account, one credential, carried in the fragment, never journaled). **Where this CLI runs against a distroless deployment is open question 2**, and the task does not guess. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes::` and `cargo test -p willikins-cli --test it -j 2 -- enroll::` | 9 | sonnet, verified by opus |
+| 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. No refresh tokens. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
 | 12 | Delete `hash-token` from both binaries, its README section and the `hash_token` test module with its `mod` line; update the variable reference. Pinned by: test 12's last case, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- readme_variables:: binary_startup::` | 11 | sonnet |
 | 13 | Bracket-aware port stripping in the origin check, the one real defect (`approvals.rs:276-284`: `rsplit_once(':')` cuts `[::1]` to `[:`). Pinned by: test 14, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- origin_ipv6::` | 11 | sonnet |
-| 14 | Two steps, in order. (1) `WILLIKINS_LOG` as a `tracing_subscriber` `EnvFilter` directive, which flips `crates/willikins-server/tests/it/adversarial_13.rs`'s `the_binary_ignores_rust_log_and_emits_nothing_below_info` (line 1249) into its successor. (2) The sweep of everything the process emits at DEBUG and TRACE, rmcp's own output included, now also covering `/authorize`, `/token`, the ceremony endpoints, the code store, the parked-request store, `state` and the signing key. Amend milestone 2's trust boundary 5 in that plan's own addendum style. Pinned by: test 15, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: log_sweep::` | 12 | sonnet, swept by opus |
+| 14 | Two steps, in order. (1) `WILLIKINS_LOG` as a `tracing_subscriber` `EnvFilter` directive, which flips `crates/willikins-server/tests/it/adversarial_13.rs`'s `the_binary_ignores_rust_log_and_emits_nothing_below_info` (line 1249) into its successor. (2) The sweep of everything the process emits at DEBUG and TRACE, rmcp's own output included, now also covering `/authorize`, `/token`, the ceremony endpoints, the code store, the parked-request store, `state`, the enrollment token and the signing key, after replacing `TraceLayer::new_for_http()`'s default span with a custom `MakeSpan` that records the path only, never the query (decision 8), and correcting `http/mod.rs`'s comment about what the default logs. Amend milestone 2's trust boundary 5 in that plan's own addendum style. Pinned by: test 15, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: log_sweep::` | 12 | sonnet, swept by opus |
 | 15 | Move the concurrency permit into the blocking closure. Pinned by: test 16, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- blocking_pool_13::` | 12 | sonnet |
 | 16 | **Adversarial pass 3**, against the foreign-issuer fixture and against willikins' own endpoints: decision 7's whole table, recorded under `docs/research/`, plus the 2026-10-20 surfaces. Those are `state` tampering and omission; a parked request resumed from another browser; the consent CSP widened beyond the one origin; a forward-plan nonce against a teardown and the reverse; a symlinked or swapped workflows directory; a document changed between plan and approval; and the row "a vendor-backend `Origin` is not 403". Freeze `post-2c-new-shapes.jsonl`. Test 17 | 12, 13, 14, 15, 21, 22, 23, 24 | **opus** |
 | 17 | Bound the header read: replace `axum::serve` with a `hyper::server::conn::http1` accept loop (timer first, decision 8) carrying graceful shutdown and connection accounting; flip the pass-2 slowloris test. Runs **after** pass 3, with a short pass-3 addendum recording that the transport changed under it. Pinned by: test 13, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: http_server:: http_smoke::` | 16 | sonnet, verified by opus |
@@ -3448,8 +3552,9 @@ the behaviour, and every adversarial pass is opus.
 
 ## Verify with a browser
 
-Thirty-six items: twenty-three merged from both research notes' own lists, and items 24 to 36
-added on 2026-10-20 for what the client-and-spec and volume passes could not fetch verbatim.
+Thirty-seven items: twenty-three merged from both research notes' own lists, items 24 to 36
+added on 2026-10-20 for what the client-and-spec and volume passes could not fetch verbatim, and
+item 37 added by the 2026-10-20 review.
 Items keep their numbers, because the resolutions cite them; one that is settled says so in place. These are the ones this plan
 depends on, each named with the task that owns it. **Nothing below may be written into frozen
 code before it is settled.** Items that existed only to choose or characterise an external
@@ -3643,6 +3748,13 @@ settled by test 19 with the operator.
     restore is all-or-nothing for the volume (it would then rewind the journal, the credential
     store, the client table and the documents together, which is why decision 25 never restores
     for documents), and whether a restore rehearsal is possible in a disposable environment.
+37. **Task 19: whether each vendor's callback refuses a code whose `state` was started by another
+    account or browser** (added by the 2026-10-20 review). RFC 6749 §10.12 makes that the client's
+    obligation ("The client MUST implement CSRF protection for its redirection URI"), and nothing
+    fetched says whether Claude or ChatGPT meets it. Attempt it with the operator from a second
+    vendor account: start a connection there, complete the consent as the operator in another
+    browser, and record where the code lands. It decides how much of the consent-phishing risk
+    open question 5's per-deployment secret would close.
 
 ## Risks
 
@@ -3747,8 +3859,21 @@ Then, in descending order of how likely each is to surprise someone:
   independently on constant-time secret comparison, one of them post-audit, is the one thing in the
   corpus that is settled rather than rediscovered. Everything else is judgement.
 - **Browser dependency.** If any browser in the operator's environment refuses
-  `navigator.credentials` on the deployment's domain, the recovery-code path is the only mitigation
-  the plan's shape offers — which is why decision 24 refuses to defer it.
+  `navigator.credentials` on the deployment's domain, that browser cannot consent or approve.
+  Since the 2026-10-20 review a recovery code no longer covers that case, because a recovery
+  session may only enrol a passkey (decision 24); it still covers a lost device, which is why
+  decision 24 refuses to defer it. If an iOS app's `/authorize` context is the browser that
+  refuses, that app cannot connect (verify item 13, open question 7).
+- **Consent phishing through a shared public client id** (2026-10-20 review). A hosted app's
+  `client_id` is public and the same for every account on that vendor, so anyone with their own
+  Claude or ChatGPT account can start a flow against this server and send the operator the
+  `/authorize` link. The consent screen shows a real client name and `claude.ai`, and one click
+  delivers a code for the operator's subject to the vendor's callback. Whether it then lands in
+  the attacker's connector depends on whether the vendor binds `state` to the browser session that
+  started the flow (verify item 37); the subject allowlist does not help, because the `sub` is the
+  operator's. Mitigated in 2c only by the consent screen's request age and warning (decision 20).
+  The stronger answer is a per-deployment client secret entered only in the operator's own
+  connector, which touches trust boundary 5 and is open question 5.
 - **A stolen session cookie is valid until its TTL expires, the idle timer fires, the browser logs
   out, or the credential changes.** The last of those is new and is the real revocation: a
   credential change flushes every live session for that account (decision 4). Beyond it there is
@@ -3787,7 +3912,10 @@ Then, in descending order of how likely each is to surprise someone:
   Argon2 hash on the recovery path, and a WebAuthn ceremony — which is why decisions 20 and 24 each
   carry their own bound (an endpoint rate limit, a semaphore, a store cap) rather than leaning on
   one. A per-IP limiter cannot be built until verify item 18 settles whether any forwarded header
-  is trustworthy, and pass 3 measures what a flood actually costs.
+  is trustworthy, and pass 3 measures what a flood actually costs. **Accepted until then**
+  (2026-10-20 review): an anonymous flood of `/authorize` can spend its global bucket and refuse
+  the operator's own connect. The ceremony store no longer can be filled by invented usernames,
+  and `/token` counts only failed redemptions per client, so those two lockouts are closed.
 - **Duplicate dependency majors and build time**, unchanged in kind and smaller than this plan
   first feared (recomputed 2026-10-20 from `Cargo.lock`). The lock already holds two `base64`
   (0.22.1, 0.23.1), two `sha2` (0.10.9, 0.11.0), three `rand` (0.8.8, 0.9.5, 0.10.2), three
@@ -4417,9 +4545,12 @@ Each names what it blocks.
    `todos/2026-10-16-rollback-over-mcp.md` lands, the view is exercised by tests and has no
    production producer. Pulling the tool in is one more `#[tool]`, whose scope row is already
    fixed, plus its snapshot. *Blocks:* nothing in 2c as written.
-5. **If ChatGPT's static-credential form refuses a blank secret** (verify item 27): the delta is a
-   confidential client with `client_secret_post`, which brings back a static shared secret that
-   trust boundary 5 removed. That is the operator's call, not the plan's. *Blocks:* the ChatGPT
+5. **If ChatGPT's static-credential form refuses a blank secret** (verify item 27), **or if a
+   vendor does not bind `state` to the browser that started a flow** (verify item 37, added by
+   the 2026-10-20 review): the delta is a confidential client with `client_secret_post` or
+   `client_secret_basic` for the hosted entries, a per-deployment secret entered only in the
+   operator's own connector, so that a code redeems only there. It brings back a static shared
+   secret that trust boundary 5 removed. That is the operator's call, not the plan's. *Blocks:* the ChatGPT
    half of go-live step 10 only.
 6. **What "done" means if ChatGPT's iOS app cannot use a custom plugin** (added by the 2026-10-20
    review). OpenAI's page says "**Access:** Use ChatGPT on the web" for adding one, and says
@@ -4427,3 +4558,11 @@ Each names what it blocks.
    vendor limit and mark the milestone Completed without that half. The other is to hold the
    milestone open until the vendor supports it. The plan does not choose. *Blocks:* marking this
    plan Completed, and only if test 19 finds the limit.
+7. **Recovery-code sessions may only enrol a passkey** (added by the 2026-10-20 review, applied
+   at that setting). The review's case: a recovery code is single-factor, so letting it approve a
+   plan or consent to a `willikins:apply` token makes a stolen code worth as much as an
+   authenticator. The cost: decision 24 used to name recovery codes as the mitigation for a
+   browser that refuses `navigator.credentials`, and they no longer are. If test 19 finds that an
+   app's `/authorize` context refuses passkeys (verify item 13), that app cannot connect. The
+   alternative is to let a recovery session consent, and possibly approve, and accept the weaker
+   factor. *Blocks:* nothing in 2c as written; the answer may change test 25 and go-live step 10.
