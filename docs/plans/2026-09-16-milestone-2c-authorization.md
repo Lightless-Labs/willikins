@@ -284,7 +284,15 @@ own instruction, and is journaled as `AuthFailed` with a reason that says which 
 than 401 because the credential was good and the authority was not: a `sub` that is not in
 `WILLIKINS_AGENT_SUBJECTS` is `AuthFailedReason::UnlistedSubject`, and a scope set that does not
 admit the tool named in the body is `AuthFailedReason::InsufficientScope { needed }` with
-`error="insufficient_scope"` (decision 3). The specification reserves **400** for a malformed
+`error="insufficient_scope"` (decision 3). **Only that second 403 carries `insufficient_scope`**
+(2026-10-20 review). Anthropic: "A `403` triggers re-authentication only when accompanied by
+`WWW-Authenticate: Bearer error="insufficient_scope"` for scope step-up, and any other `403` is
+surfaced as a terminal error" (claude.com/docs/connectors/building/lazy-authentication.md, fetched
+2026-10-20). An unlisted subject cannot be fixed by re-consenting, so its 403 carries **no**
+`WWW-Authenticate` at all, and Claude shows it as the terminal error it is. Claude Code marks a
+server as needing authentication on any 401 or 403 (code.claude.com/docs/en/mcp.md), so an
+unlisted subject there sees a sign-in prompt that cannot succeed; that is the honest signal for a
+deployment that has not listed them, and it is recorded rather than designed around. The specification reserves **400** for a malformed
 authorization request. Whether a non-`Bearer` `Authorization` header counts as malformed (400) or
 simply absent (401) is verify item 22 — RFC 6750 §3.1 was not fetched — so today's behaviour, 401
 `MissingCredential`, is kept until it is. The status table itself is the specification's, verbatim.
@@ -292,8 +300,8 @@ simply absent (401) is verify item 22 — RFC 6750 §3.1 was not fetched — so 
 **Every check, and the `AuthFailedReason` it journals.** The variants are additive to
 `willikins_journal::AuthFailedReason` (`crates/willikins-journal/src/event.rs`), which today holds
 `MissingCredential`, `InvalidCredential`, `WrongRole`, `InvalidNonce`, `ForeignOrigin` and
-`MalformedUsername`. The authorization-server half adds ten more, listed in the journal contract
-below.
+`MalformedUsername`. The authorization-server half adds twelve more, listed in the journal
+contract below.
 
 | Check | Status | Reason variant | State |
 | --- | --- | --- | --- |
@@ -309,6 +317,7 @@ below.
 | `sub` absent | 401 | `MissingSubject` | new |
 | `sub` not in `WILLIKINS_AGENT_SUBJECTS` | 403 | `UnlistedSubject` | new |
 | The token's scopes do not admit the tool named | 403 | `InsufficientScope { needed }` | new |
+| A `tools/call` with no `name`, or naming no tool in the scope table | **400** `invalid_request`, no `WWW-Authenticate` | `UnknownTool` | new (2026-10-20 review) |
 | A session whose `sub` is not in `WILLIKINS_APPROVER_SUBJECTS`, or whose token lacked `willikins:approve` | 403 | `WrongRole` | retained |
 | A `POST /approvals/{plan_id}` with a missing, spent, foreign or expired nonce | 403 | `InvalidNonce` | retained |
 | A `POST /approvals/{plan_id}` from a foreign `Origin`/`Referer` | 403 | `ForeignOrigin` | retained |
@@ -319,7 +328,7 @@ produced. Removing a variant would break the journal's own additive-only discipl
 `pre-pass-2-every-event.jsonl`, which carries both, from replaying — so they stay in the enum, stop
 being emitted, and their doc comments say when they were last written. `AuthFailed` additionally
 gains an **optional** `subject` field, written only for a refusal of a token that validated
-(`UnlistedSubject`, `InsufficientScope`, `WrongRole`, `InvalidNonce`): before validation there is
+(`UnlistedSubject`, `InsufficientScope`, `UnknownTool`, `WrongRole`, `InvalidNonce`): before validation there is
 no subject to name, and writing attacker-supplied text for an unvalidated credential is exactly
 what trust boundary 2 forbids.
 
@@ -333,7 +342,7 @@ existing per-principal buckets. Refusals beyond the bucket are counted, not drop
 `AuthFailed` line per reason per window is written carrying a new **optional** `suppressed: <count>`
 field (additive, like `subject`), so the record says "this happened 4,812 more times" rather than
 losing it. Refusals of a token that *did* validate — `UnlistedSubject`, `InsufficientScope`,
-`WrongRole`, `InvalidNonce` — are journaled one to one and are not bucketed: a validated principal
+`UnknownTool`, `WrongRole`, `InvalidNonce` — are journaled one to one and are not bucketed: a validated principal
 exists, it is already rate-limited as a principal, and those are the lines an operator most needs
 whole. **The authorization server's own refusals reuse this machinery rather than inventing a
 second one** (decision 20): `/authorize`, `/token` and the ceremony endpoints are all anonymously
@@ -515,8 +524,11 @@ premise does not, and is replaced below rather than quietly kept.**
 | `willikins:approve` | no MCP tool; the approvals page only |
 
 **Two rows are assigned now for tools that do not exist yet** (2026-10-20). They are the rollback
-tools of `todos/2026-10-16-rollback-over-mcp.md`: `rollback_plan` goes under `willikins:plan`, and
-the teardown apply under `willikins:apply`. `run_status` for a teardown run stays under
+tools of `todos/2026-10-16-rollback-over-mcp.md`, and they are keyed by the names `Butler`
+already journals for those calls in `ToolCalled` (`butler.rs:1300` and `:1509`):
+**`rollback_plan` → `willikins:plan`** and **`rollback_apply` → `willikins:apply`** (the
+2026-09-16 text left the second unnamed). That todo's tools must use those names, or move the
+rows. `run_status` for a teardown run stays under
 `willikins:read`. `rollback_plan` belongs with `plan` because `Butler::plan_rollback` re-observes
 provider state when it computes a teardown (`TeardownAction::Gone` is an observed state), so it
 spends provider budget the way `plan` does. The teardown apply deletes, so it is an apply. Neither
@@ -524,12 +536,13 @@ needs a scope of its own: every teardown already needs a human's approval, and t
 approver role is the gate for that.
 
 **The table is tied to the tool list by a test, not by memory.** An unknown tool name is refused
-403 (step 4 below). That fails closed, but it also means a new `#[tool]` would be silently 403'd in
-production until someone remembered this table. So test 7 asserts that every tool in the
+400 (step 4 below). That fails closed, but it also means a new `#[tool]` would be silently refused
+in production until someone remembered this table. So test 7 asserts that every tool in the
 snapshotted tool list
 (`crates/willikins-server/tests/it/snapshots/it__mcp_server__the_tool_list_and_every_schema_is_snapshotted.snap`)
-has exactly one row in `oauth::scope`'s table, and that the table names no tool the list lacks. A
-new tool without a scope row then fails the gate.
+has exactly one row in `oauth::scope`'s table, and that the table names no tool beyond that list
+**except the two pre-assigned rollback rows**, `rollback_plan` and `rollback_apply`. A new tool
+without a scope row then fails the gate, and so does any other row the list lacks.
 
 `plan` is separated from the read tools because it is the only read-side tool that calls live
 providers and spends the organization's provider budget (GitHub, Doppler, Buildkite, SigNoz, App
@@ -613,9 +626,13 @@ version the lock holds. The scope check therefore runs **in the middleware**, in
 4. **Scope-check only a parsed `tools/call`**, against the tool named in `params.name`: 403
    `insufficient_scope` with the exact scope that call needed. Every other parsed message —
    `initialize`, `ping`, `tools/list`, notifications, responses — passes once authenticated and is
-   forwarded unchanged. A `tools/call` with no `name`, or a name no tool has, is **403**: an
-   unknown name maps to no scope, and refusing it on authority rather than forwarding it keeps the
-   middleware from having to know rmcp's tool table to stay closed. **A conditional, for a client
+   forwarded unchanged. A `tools/call` with no `name`, or a name the scope table lacks, is refused
+   by the middleware with **400** `invalid_request` and **no** `WWW-Authenticate`, journaled
+   `UnknownTool`: an unknown name maps to no scope, and refusing it rather than forwarding it keeps
+   the middleware from having to know rmcp's tool table to stay closed. (The 2026-09-16 text made
+   it a 403 `insufficient_scope`. The 2026-10-20 review found that this sends Claude round a
+   step-up consent that can never succeed, because no scope admits an unknown tool, and that
+   Claude Code treats any 403 as "needs authentication".) **A conditional, for a client
    speaking 2026-07-28:** that revision's transport makes a server that processes the body check
    that the `Mcp-Method` and `Mcp-Name` headers match it. This middleware processes the body. If
    test 19 finds either app negotiating 2026-07-28 against rmcp 3.3.0's sessionless server (verify
@@ -639,10 +656,10 @@ revision tells protected resources not to advertise and which decision 21 does n
 of scopes necessary for basic functionality", and Claude requests all of it when a challenge
 carries no `scope`. `willikins:approve` admits no MCP tool, so advertising it on the resource it
 cannot be used at only invites clients to ask for it. **It is never granted at `/authorize`**:
-the consent screen offers the three MCP scopes, and a request naming `willikins:approve` is
-granted the remaining MCP scopes it asked for, with the token response's `scope` stating what was
-granted (RFC 6749 lets a server issue less than was requested). `willikins:approve` is minted
-only by the ceremony hop of decision 4. The RFC 8414 document publishes the same three
+the consent screen offers only MCP scopes, `willikins:approve` and every unknown value are dropped
+from a request, and the token response's `scope` always states what was granted (RFC 6749 lets a
+server issue less than was requested). Decision 20 gives the whole grant rule, including an
+absent `scope`. `willikins:approve` is minted only by the ceremony hop of decision 4. The RFC 8414 document publishes the same three
 (decision 19). The 403's
 `scope` attribute names only what the refused call needed, which is 2026-07-28's rule and the
 reverse of 2025-11-25's; naming less is safe under both.
@@ -667,6 +684,12 @@ same process could mint directly, is machinery with no security gain. The flow i
 > carrying the enrolled subject and `willikins:approve` → **`oauth::validate` accepts it on exactly
 > the same path `/mcp` uses** → the session records the subject, issuer and scopes that validation
 > returned.
+
+**The hop has no OAuth client, so its `client_id` claim is a reserved value** (2026-10-20
+review): `mint` emits all seven RFC 9068 claims (decision 22), and this one names
+`willikins-approvals`. The client table refuses an entry with that id (`StartError::ClientTable`,
+decision 23), so no registered client can be confused with the hop, and the journal's `client_id`
+field reads `willikins-approvals` on every approval decided through a session.
 
 That last hop is not ceremony; it is the seam. The delegating draft's own words survive verbatim
 and are now the seam's load-bearing rule: **the same function and the same configuration the
@@ -1021,13 +1044,14 @@ new, and pass 3 must attack them at least as hard.
 | An `aud` array carrying this resource plus others | **accepted** — RFC 9068 says `aud` must *contain* a resource indicator for this server |
 | A bearer token presented at `/approvals`, and a session cookie presented at `/mcp` | at `/approvals`, **byte-identical** to the same request with no header at all (302 on a GET, 403 on a POST); at `/mcp`, 401 `MissingCredential`. Neither surface ever reads the other's credential |
 | An **oversized body from an authenticated caller** at `/mcp` | **413** from the middleware, which buffers under the same `max_body_bytes` rmcp enforces (decision 3) |
-| A `tools/call` with no `name`, and one naming a tool that does not exist | **403** `insufficient_scope` in both cases: an unknown name maps to no scope (decision 3) |
+| A `tools/call` with no `name`, and one naming a tool that does not exist | **400** `invalid_request` with no `WWW-Authenticate`, `UnknownTool`, in both cases: an unknown name maps to no scope, and a step-up challenge would loop (decision 3) |
 | A body `ClientJsonRpcMessage` cannot parse, from an authenticated caller | **400** from the middleware, before rmcp |
 | A `notifications/initialized` from an authenticated caller | forwarded unchanged; no scope is required of it |
 | A valid `willikins:read` token calling `apply` | 403, `error="insufficient_scope"`, `scope="willikins:apply"`, `resource_metadata` present |
 | A flood of garbage tokens at `/mcp` | journal growth stays bounded by the per-reason bucket (decision 1), the coalesced lines carry `suppressed`, and the approvals page's fold latency is **measured** and recorded — pass-2 hand-over item 6, pulled forward because a public listener makes the fold attacker-reachable |
 | An authenticated request carrying a foreign `Host` | the status rmcp actually returns, measured rather than inferred — pass-2 hand-over item 10 |
 | **Each code binding attacked one at a time**: wrong `client_id`, wrong `code_verifier`, changed `redirect_uri`, changed or newly introduced `resource` | `invalid_grant` in each case, from the **stored** binding and not from a request claim, with its named `AuthFailedReason` |
+| **Added by the 2026-10-20 review.** A token request carrying a wider `scope` than was consented, and an `/authorize` naming only `willikins:approve` | the token carries the stored scope set and the stored `sub`; `invalid_scope` |
 | One authorization code redeemed **twice concurrently** | exactly one token issued; the second is `invalid_grant` `CodeReplayed` |
 | A code redeemed after its own TTL, with the store still holding it | `invalid_grant` `CodeExpired` — the independent expiry check |
 | A code redeemed by the **wrong client** versus an entirely unknown code | **indistinguishable** on status and body |
@@ -1641,11 +1665,16 @@ grant types are supported that use the authorization endpoint"; and `token_endpo
 unless only the implicit grant type is supported". willikins emits
 `response_types_supported: ["code"]` and both endpoint URLs, derived from `WILLIKINS_PUBLIC_URL`.
 **The document also publishes `scopes_supported`**, with the same three MCP scopes as the `/mcp`
-document and never `offline_access` or `willikins:approve` (decision 3). Two vendor rules make that
-worth stating. Claude's 403 step-up falls back to "the authorization server metadata's
-`scopes_supported`". And OpenAI says that when a provider advertises scopes "in `scopes_supported`
-of its `.well-known/oauth-authorization-server` ... ChatGPT requests those scopes by default". So
-the two documents must agree, and test 20 asserts that they do.
+document and never `offline_access` or `willikins:approve` (decision 3). Claude's 403 step-up
+falls back to "the authorization server metadata's `scopes_supported`", so the two documents must
+agree, and test 20 asserts that they do. (The 2026-09-16 text also cited OpenAI here through an
+ellipsis that changed its subject. The whole sentence is about OIDC scopes: "If your provider
+advertises OIDC scopes (for example, `openid`, `email`, `profile`) in `scopes_supported` of its
+`.well-known/oauth-authorization-server` or `.well-known/openid-configuration` document, ChatGPT
+requests those scopes by default during the OAuth flow"
+(developers.openai.com/plugins/build/auth.md, fetched 2026-10-20). Whether ChatGPT also requests
+willikins' own advertised scopes by default is **unverified**, and test 19 records which scopes it
+requests. The agreement rule stands on Claude's fallback alone.)
 
 *Pinned by tests 1, 20.*
 
@@ -1674,7 +1703,41 @@ discipline willikins already applies with domain newtypes, and the shape prior a
   apps' redirects are HTTPS and matched exactly, port included**:
   `https://claude.ai/api/mcp/auth_callback` and
   `https://chatgpt.com/connector_platform_oauth_redirect`. These are the redirects that matter
-  most for this deployment, and test 22 has a case for them.
+  most for this deployment, and test 22 has a case for them. **Claude Code's pre-registered path
+  is not its CIMD path**, and needs both loopback forms in its table entry: it takes a
+  pre-registered client only through `--client-id` with `--callback-port`, redirecting to
+  `http://localhost:PORT/callback`, and its docs add "In v2.1.229, Claude Code sent
+  `http://127.0.0.1:PORT/callback` instead, and servers that exact-match the registered redirect
+  URI rejected the sign-in" (code.claude.com/docs/en/mcp.md, fetched 2026-10-20). Since the
+  matcher never cross-matches hosts, an entry holding one form breaks on the other version.
+- **An absent `redirect_uri` resolves only for a client with exactly one registered redirect**
+  (2026-10-20 review). draft-16 §4.1.1: "redirect_uri: OPTIONAL if only one redirect URI is
+  registered for this client. REQUIRED if multiple redirect URIs are registered for this client."
+  So an absent value with one registered URI uses that URI, and stores it as the code's binding.
+  An absent value with several is a phase-1 **400**, never a redirect, because there is nowhere
+  safe to send it. A registered loopback entry with the port relaxed counts as several, since the
+  port is unknown.
+- **The scope grant rule** (2026-10-20 review; the earlier text named only `willikins:approve`).
+  draft-16 §1.4.1: "If the client omits the scope parameter when requesting authorization, the
+  authorization server MUST either process the request using a pre-defined default value or fail
+  the request indicating an invalid scope." willikins takes the default, because a client that
+  sends no `scope` is a real input: Claude Code says "When `oauth.scopes` isn't set, Claude Code
+  doesn't request the full `scopes_supported` catalog", and ChatGPT documents `scopes_supported`
+  only as an "optional list that helps ChatGPT explain the permissions". In order:
+  1. An absent or empty `scope` requests the three MCP scopes, the same set the 401 challenge
+     names (decision 1).
+  2. `willikins:approve` and every value outside the four scopes (`openid`, `offline_access`, a
+     typo) are **dropped**, never an error on their own; draft-16 §1.4.1 lets the server "fully or
+     partially ignore the scope requested".
+  3. The consent screen lists what remains and lets the human **narrow** it, never widen it: the
+     selection is intersected with the stored requested set, so a forged POST cannot add a scope.
+  4. If the result is empty, the request ends in an `invalid_scope` error redirect, carrying
+     `state` and `iss`, and journals `InvalidScope`. No token is minted with an empty scope set,
+     since it would be refused on every tool.
+  5. The granted set is stored on the code (decision 21), and the token response always carries
+     `scope`.
+  The absent case is the default the operator documents, as draft-16 asks: the README states it
+  beside the scope table.
 - **`state` is echoed byte for byte on every redirect, success and error alike** (2026-10-20;
   the earlier text never said so). RFC 6749 §4.1.2: "state REQUIRED if the "state" parameter was
   present in the client authorization request. The exact value received from the client." MCP's
@@ -1693,9 +1756,9 @@ discipline willikins already applies with domain newtypes, and the shape prior a
 - **The consent screen clearly displays the redirect URI's hostname**, with an additional warning
   for a `localhost`-only redirect. Both are MCP security-considerations requirements, and the
   hostname display is the only thing standing between a human and an attacker-registered redirect.
-  The screen presents the three MCP scopes of decision 3, read from the same table the middleware
-  uses, and requires a session, which is the second consumer decision 4 gives the human session.
-  Its CSP widens `form-action` to the one validated redirect origin (decision 4).
+  The screen presents the requested MCP scopes of the grant rule above, read from the same table
+  the middleware uses, and requires a session, which is the second consumer decision 4 gives the
+  human session. Its CSP widens `form-action` to the one validated redirect origin (decision 4).
 - **An `/authorize` with no session parks the request, logs in, and resumes** (2026-10-20; the
   earlier text did not say how). On a phone, the first `/authorize` comes from the Claude or
   ChatGPT app in a fresh browser context with no willikins session. In order:
@@ -1713,7 +1776,10 @@ discipline willikins already applies with domain newtypes, and the shape prior a
   like any other. Which browser context each iOS app opens, and whether `navigator.credentials`
   works there, is verify item 13.
 - **`resource` is accepted, bound into the code, and narrowed.** Anything that is not the one
-  canonical resource identifier is refused `invalid_target`. This is the hinge between the two
+  canonical resource identifier is refused `invalid_target`. An **absent** `resource` binds the
+  canonical `<WILLIKINS_PUBLIC_URL>/mcp` into the code, since it is the only audience this server
+  mints for (2026-10-20 review; test 23's "newly introduced `resource`" case presumes the absent
+  case is accepted, and the earlier text never said what it bound). This is the hinge between the two
   halves in one process: the `aud` the issuer writes here is the `aud` the validator already
   checks.
 - **Both endpoints carry their own bounds**, because both are anonymously reachable on a public
@@ -1736,7 +1802,7 @@ with private-address and loopback refusal, HTTPS only and a 5 KB cap — not a g
 
 *Pinned by tests 7, 22.*
 
-**21. `/token`, the authorization code, and its four stored bindings.** `POST /token` accepts
+**21. `/token`, the authorization code, and its six stored bindings.** `POST /token` accepts
 `grant_type=authorization_code` and nothing else: each grant not implemented is one that cannot be
 attacked.
 
@@ -1746,17 +1812,46 @@ attacked.
   code — a bug that appears only under concurrency, which is where a test written later will not
   find it. A shipped server claims with `get_remove` and still re-checks the code's own expiry
   against the clock, and willikins does both.
-- **The code record stores its bindings — `client_id`, `code_challenge`, `redirect_uri`,
-  `resource` — and each is re-checked at redemption, from the store.** draft-16 §4.1.2 binds the
-  code to the client identifier, the code challenge and the redirect URI, and RFC 6749 §4.1.3
-  requires the token request's `redirect_uri` and the authorization request's values to be
-  identical, which is a separate obligation from re-checking the registered set. **In the store,
-  not only in a claim**, and that phrasing is deliberate: the one fetched post-mortem of a
+- **The code record stores six bindings — `client_id`, `code_challenge`, `redirect_uri`,
+  `resource`, the `sub` of the session that consented, and the granted scope set — and each is
+  re-checked or used at redemption, from the store.** (The 2026-09-16 text stored four, which left
+  `/token` to find the subject and the scopes somewhere else; the 2026-10-20 review added the last
+  two.) draft-16 §4.1.2 binds the code to the client identifier, the code challenge and the
+  redirect URI. **`/token` mints exactly the stored `sub` and scope set, and ignores any `scope`
+  parameter**, so a client cannot consent to `willikins:read` and redeem for `willikins:apply`;
+  draft-16 defines no `scope` parameter on this grant. **`redirect_uri` at `/token` is optional,
+  and when present it must equal the stored value** (`invalid_grant`, `RedirectUriMismatch`,
+  otherwise). The 2026-09-16 text cited RFC 6749 §4.1.3 as requiring it, which would lock out a
+  client that follows OAuth 2.1. draft-16 §10.2
+  (www.ietf.org/archive/id/draft-ietf-oauth-v2-1-16.txt, fetched 2026-10-20): "In OAuth 2.1,
+  authorization code injection is prevented by the code_challenge and code_verifier parameters,
+  making the inclusion of the redirect_uri parameter serve no purpose in the token request. As
+  such, it has been removed." And: "the authorization server MUST allow clients to send the
+  redirect_uri parameter in the token request (Section 4.1.3), and MUST enforce the parameter as
+  described in [RFC6749]", while "A client following only the OAuth 2.1 recommendations will not
+  send the redirect_uri in the token request, and therefore will not be compatible with an
+  authorization server that expects the parameter in the token request." When it is absent, PKCE
+  is the binding. **In the store, not only in a claim**, and that phrasing is deliberate: the one fetched post-mortem of a
   comparable Rust server is a rewrite that deleted the last copy of a binding while keeping the
   comment that claimed it happened, and a professional audit running in the same window missed it.
   Task 11 ships a negative fixture per binding for that reason.
 - **`resource` at the token request may only match what the code granted** — never widen, never
   introduce.
+- **The response is pinned** (2026-10-20 review). Success is 200, `application/json`,
+  `Cache-Control: no-store`, with exactly `access_token`, `token_type: "Bearer"`, `expires_in`
+  (`WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`) and `scope` (the stored granted set), and no
+  `refresh_token`. draft-16 makes `expires_in` RECOMMENDED, and Claude needs it: "Claude refreshes
+  tokens reactively on a `401` response, and proactively up to five minutes before the stored
+  expiry" (claude.com/docs/connectors/building/authentication.md, fetched 2026-10-20). An error is
+  RFC 6749 §5.2's JSON body, `{"error": "<code>"}` with no `error_description` that could become
+  an oracle, at **400**, or **401** for `invalid_client`.
+- **A public client sends no secret, and an empty one is the same as none** (2026-10-20 review).
+  The `client_id` may arrive in the form body or as the user half of `Authorization: Basic` with
+  an empty password, and an empty `client_secret=` in the body is treated as absent. Any
+  **non-empty** secret, in either shape, is **401** `invalid_client`, journaled `InvalidClient`,
+  because no client here has one. OpenAI says only that "Other OAuth clients commonly use `none`,
+  `client_secret_post`, or `client_secret_basic`", so which shape ChatGPT's static-credential
+  path sends is recorded by test 19.
 - **Clients are public; `token_endpoint_auth_method` is `"none"`; there is no client secret
   anywhere in the deployment.** Every client this deployment serves is a public client. That
   covers local MCP clients with loopback redirects, and also the two hosted apps the operator
@@ -2413,16 +2508,36 @@ ten fields and not one of them is an authorization point.
   — checks 0 to 7 of decision 1, in order, each mapping to one `TokenRejection` variant and one
   `AuthFailedReason`. Pure over its inputs plus the key set, so the whole validation matrix is a
   unit test as well as an end-to-end one. **It has no "did I mint this" branch and never will.**
-- `oauth::middleware::require_token` — extracts the header and nothing else (a query parameter is
-  not read), validates, checks the `sub` against `WILLIKINS_AGENT_SUBJECTS`, derives the principal
-  (decision 2), inserts the `Principal` and the granted scope set into the request extensions,
-  **removes the `Authorization`, `Cookie` and `Proxy-Authorization` headers**, and calls
-  `next.run`. Only then does it buffer and parse the body for the scope check (decision 3). On
-  refusal it journals through `Butler::record_auth_failure` and answers decision 1's challenge.
+- `oauth::middleware::require_token` — in decision 3's order, and **nothing reaches `next.run`
+  until every check has passed** (the 2026-09-16 text called `next.run` before the scope check,
+  which would have dispatched a `willikins:read` token's `apply` before refusing it; corrected by
+  the 2026-10-20 review):
+  1. extract the `Authorization: Bearer` header and nothing else (a query parameter is not read);
+  2. validate (decision 1, 401);
+  3. check the `sub` against `WILLIKINS_AGENT_SUBJECTS` (403, no challenge);
+  4. derive the `Principal` (decision 2) and insert it and the granted scope set into the request
+     extensions;
+  5. buffer the body under `max_body_bytes` (413);
+  6. parse it with `ClientJsonRpcMessage` (400);
+  7. scope-check a `tools/call` (403 `insufficient_scope`, or 400 `UnknownTool`);
+  8. **remove the `Authorization`, `Cookie` and `Proxy-Authorization` headers**;
+  9. re-attach the buffered bytes as the body;
+  10. only then call `next.run`.
+
+  On refusal it journals through `Butler::record_auth_failure` and answers decision 1's response
+  for that refusal.
+- `oauth::middleware::protect(service, state)` — a `pub` constructor that wraps any tower service
+  in `require_token`. `router()` uses it for the rmcp service, and test 6 passes it a probe service
+  that records the headers and body it receives. That is the only way to observe what the
+  middleware hands rmcp: a layer a test adds around `router()`'s output is outermost and sees the
+  request **before** the strip (`router()` puts the auth layer on the `/mcp` nest and wraps
+  tracing and the timeout outside it, `crates/willikins-server/src/http/mod.rs:96-129`). It needs
+  no test-only feature and ships no test tool, which is the constraint resolution 16 set.
 - `oauth::scope` — the four scopes, the hierarchy, the `scope`/`scp` claim readers, and the
   tool-to-scope table of decision 3, shared with the consent screen so the two cannot disagree
-  about what a scope admits. The table carries the rollback rows ahead of their tools, and test 7
-  ties it to the snapshotted tool list, so a `#[tool]` without a row fails the gate.
+  about what a scope admits. The table carries the rollback rows ahead of their tools, keyed
+  `rollback_plan` and `rollback_apply`, and test 7 ties it to the snapshotted tool list with
+  exactly that exception, so a `#[tool]` without a row fails the gate.
 - `oauth::metadata` — **both** documents (decision 19) as `#[derive(Serialize)]` structs with
   `skip_serializing_if = "Vec::is_empty"` on every array field, plus their routes and the
   `/jwks.json` route, registered on the root router outside both the auth middleware and rmcp's
@@ -2441,7 +2556,7 @@ ten fields and not one of them is an authorization point.
   (decision 22).
 - `issuer::clients` — the pre-registered client table and the redirect matcher of decision 23,
   including the loopback port exception.
-- `issuer::codes` — the authorization-code store of decision 21: the four stored bindings, the
+- `issuer::codes` — the authorization-code store of decision 21: the six stored bindings, the
   atomic get-and-remove claim, and the independent expiry check.
 - `issuer::authorize` and `issuer::token` — the two endpoints, their two-phase error split, the
   consent screen and its own CSP, the parked-request store for an `/authorize` with no session,
@@ -2514,19 +2629,21 @@ willikins-types -j 2`) is what proves the new type builds the way its dependents
 
 The new `AuthFailedReason` variants land in two batches, both additive. The validating half's
 variants land in **task 4**, with the middleware that produces them, because tests 3 to 5 assert
-them; the claim fields land in task 6. The issuing half's variants land with the endpoints that
+them, except `UnknownTool`, which lands with the scope check in task 7; the claim fields land in task 6. The issuing half's variants land with the endpoints that
 produce them, in tasks 9, 10 and 11:
 
 | Refusal | Produced by |
 | --- | --- |
 | `UnknownClient` | `/authorize` phase 1 (decision 20) |
-| `RedirectUriMismatch` | `/authorize` phase 1 (decision 20) |
+| `RedirectUriMismatch` | `/authorize` phase 1 (decision 20), and a `/token` request whose `redirect_uri` differs from the stored one (decision 21) |
+| `InvalidScope` | `/authorize`, when nothing grantable remains of the request (decision 20; added 2026-10-20) |
 | `MissingCodeChallenge` | `/authorize` (decision 20) |
 | `UnsupportedCodeChallengeMethod` | `/authorize`, including `plain` (decision 20) |
 | `PkceVerifierMismatch` | `/token` (decision 21) |
 | `CodeReplayed` | `/token` (decision 21) |
 | `CodeExpired` | `/token` (decision 21) |
 | `ResourceWidened` | `/token` (decision 21) |
+| `InvalidClient` | `/token`, a non-empty client secret (decision 21; added 2026-10-20) |
 | `CeremonyAccountMismatch` | the passkey ceremonies (decision 24) |
 | `RecoveryCodeReplayed` | the recovery path (decision 24) |
 
@@ -2785,11 +2902,14 @@ at the test it was written about. The authorization-server half is tests 20 to 2
    The refresh-failure policy, the staleness bound and the unknown-`kid` refetch floor are not
    tested here because they have no producer in 2c; decision 16 records them as the adapter path's.
 6. **The inbound token neither leaves nor lands.** A probe that reads the headers rmcp hands a
-   handler sees **no** `Authorization`, `Cookie` or `Proxy-Authorization` header. The probe is an
-   **axum layer the test wraps around `router()`'s output**, not a test-only MCP tool and not a
-   crate feature: an integration test under `tests/` cannot see a `#[cfg(test)]` library item, so a
-   "test-only tool" would have to be compiled into the shipped binary or hidden behind a feature
-   that nothing else needs. A tool call that makes a provider request against the mock HTTP server
+   handler sees **no** `Authorization`, `Cookie` or `Proxy-Authorization` header. The probe is a
+   **service the test passes to `oauth::middleware::protect`**, the same constructor `router()`
+   uses for rmcp, not a test-only MCP tool and not a crate feature: an integration test under
+   `tests/` cannot see a `#[cfg(test)]` library item, so a "test-only tool" would have to be
+   compiled into the shipped binary or hidden behind a feature that nothing else needs. (The
+   2026-09-16 text had the test wrap a layer around `router()`'s output. That layer is outermost,
+   so it runs before the auth middleware and would see `Authorization` whether or not the strip
+   exists; corrected by the 2026-10-20 review.) A tool call that makes a provider request against the mock HTTP server
    asserts the outgoing `Authorization` equals the operator credential and contains no substring of
    the inbound token. Three guards are extended to cover the new modules, **including the issuing
    half, whose signing key is the one new secret in the process**: the `expose_secret` guard
@@ -2805,21 +2925,26 @@ at the test it was written about. The authorization-server half is tests 20 to 2
    what holds this (decision 22). `Credential::authorize_basic` does not exist.
 7. **Subjects, scopes and the 403.** A valid token whose `sub` is **not in
    `WILLIKINS_AGENT_SUBJECTS`** → **403** `AuthFailedReason::UnlistedSubject` on every tool
-   including the read ones, with the journal carrying no `ToolCalled` for it — the allowlist is
-   checked before anything runs. Within the allowlist: a `willikins:read` token calling `apply` →
+   including the read ones, with **no `WWW-Authenticate` header** and the journal carrying no
+   `ToolCalled` for it — the allowlist is checked before anything runs. Within the allowlist: a `willikins:read` token calling `apply` →
    **403** with `error="insufficient_scope"`, `scope="willikins:apply"` and `resource_metadata`
    present; calling `plan` → **403** `scope="willikins:plan"`. A `willikins:apply` token calling
    `describe` → **200** (the hierarchy). A token with no scope claim at all → **403** on every
    tool, and the same token with its scopes in `scp` rather than `scope` behaves identically.
    `willikins:approve` alone → **403** on every MCP tool. A `tools/call` with no `name`, and one
-   naming a tool that does not exist → **403**. An `initialize`, a `tools/list`, a `ping` and a
-   notification from a listed subject → forwarded, no scope required. The consent screen of
-   decision 20 offers exactly the same three MCP scopes, read from the same table, so the two
-   cannot drift apart, and an `/authorize` asking for `willikins:approve` is granted only the MCP
-   scopes it asked for. **The table is tied to the tool list:** every tool in
+   naming a tool that does not exist → **400** `invalid_request` with **no** `WWW-Authenticate`,
+   journaled `UnknownTool`. Only the scope refusals carry `error="insufficient_scope"`, asserted
+   on each 403 above and absent from the `UnlistedSubject` 403 and the `UnknownTool` 400. **A
+   refused call never reaches the tool:** a `willikins:read` token's `apply`, run against test 6's
+   probe service, leaves the inner service uncalled, and the journal holds no `ToolCalled` for it,
+   not just a 403. An `initialize`, a `tools/list`, a `ping` and a
+   notification from a listed subject → forwarded, no scope required. `oauth::scope` exposes the
+   table through the API the consent screen reads; the consent screen's own assertions are test
+   22's, because task 11 builds it (moved there by the 2026-10-20 review). **The table is tied to
+   the tool list:** every tool in
    `tests/it/snapshots/it__mcp_server__the_tool_list_and_every_schema_is_snapshotted.snap` has
    exactly one row in `oauth::scope`'s table, the table names no tool beyond the list and the
-   pre-assigned rollback rows (`rollback_plan` → `willikins:plan`, the teardown apply →
+   pre-assigned rollback rows (`rollback_plan` → `willikins:plan`, `rollback_apply` →
    `willikins:apply`), and a fixture tool list carrying an unknown tool fails the assertion.
 8. **Principal and journal.** The same `(iss, sub)` always derives the same
    `oauth-<12 hex>` principal and two different subjects never collide; the principal parses
@@ -2929,7 +3054,14 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     — plus the `[[test]]` entry with `required-features = ["live-tests"]` that keeps the harness
     out of `--all-targets`. There is no external provider token to obtain, so what this test does
     is drive a **stock local MCP client** by hand against a locally bound `serve --http`, through
-    its loopback redirect. Neither target app can reach a local server: Anthropic says "Claude
+    its loopback redirect. **The stock client is Claude Code** (named by the 2026-10-20 review),
+    added as a public pre-registered client with `claude mcp add --transport http --client-id
+    <id> --callback-port <port> <name> <url>` and no `--client-secret` ("If the server uses a
+    public OAuth client with no secret, use only `--client-id` without `--client-secret`",
+    code.claude.com/docs/en/mcp.md). Its table entry registers both
+    `http://localhost:<port>/callback` and `http://127.0.0.1:<port>/callback` (decision 20).
+    Browser-based clients such as MCP Inspector are out of scope: they would need CORS on the
+    metadata documents, the JWKS and `/token`, which 2c does not serve. Neither target app can reach a local server: Anthropic says "Claude
     reaches your server from Anthropic's infrastructure, so a server running on your machine needs
     a public URL", and both are hosted clients with HTTPS redirects. So this test covers the local
     half, and test 19 covers the hosted half against the public domain. The local run covers discovery of
@@ -2971,6 +3103,8 @@ at the test it was written about. The authorization-server half is tests 20 to 2
         - that it discovers through the 401's header;
         - which scopes it requests;
         - that `/token` receives a form-encoded body and answers well inside 10 seconds;
+        - whether it sends `redirect_uri` at `/token`, and in which shape it sends its `client_id`
+          (body, or Basic with an empty password; decision 21);
         - the protocol revision it negotiates (verify item 34);
         - that `state` round-trips;
         - which browser context `/authorize` opens in on iOS, and that the passkey ceremony, the
@@ -3038,7 +3172,18 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     the code. `Cache-Control: no-store` is set before anything else on the response, and the
     endpoint's rate limit refuses beyond its bound. Every refusal journals its named
     `AuthFailedReason` and an unauthenticated flood is coalesced through decision 1's per-reason
-    bucket.
+    bucket. **Scopes (moved from test 7, and extended by the 2026-10-20 review):** the consent
+    screen offers exactly the MCP scopes of `oauth::scope`'s table that the request asked for,
+    read through the same API the middleware uses. An `/authorize` with no `scope`, and one with an
+    empty `scope`, offers and grants the three MCP scopes. `openid`, `offline_access` and an
+    unknown value are dropped without an error. `willikins:approve` beside `willikins:read` grants
+    only `willikins:read`. `willikins:approve` alone, and a request whose every value is dropped,
+    end in an `invalid_scope` error redirect carrying `state` and `iss`. A consent POST that
+    narrows the set grants the narrower set; one that names a scope the request lacked grants
+    nothing beyond the request. **`redirect_uri` absent:** a client with exactly one registered
+    HTTPS redirect gets that redirect, bound into the code; a client with several, or with a
+    loopback entry, gets a phase-1 **400**. **`resource` absent:** the canonical
+    `<WILLIKINS_PUBLIC_URL>/mcp` is bound into the code and becomes the token's `aud`.
 23. **`/token` and the code bindings.** **One negative fixture per binding**, each carrying the
     header comment this repo's convention requires — naming its acceptance test and the exact error
     it must produce — and each asserting the binding is enforced from the **stored** record and not
@@ -3051,7 +3196,17 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     `invalid_grant` **indistinguishably** from an unknown code, asserted on body and status
     together. `grant_type` other than `authorization_code` is refused. The endpoint accepts
     `application/x-www-form-urlencoded`, the body every client sends. The response carries **no
-    `refresh_token`**, and `offline_access` appears in no metadata document.
+    `refresh_token`**, and `offline_access` appears in no metadata document. **Added by the
+    2026-10-20 review:** a token request with **no** `redirect_uri` succeeds (PKCE is the
+    binding), and one whose `redirect_uri` differs from the stored value is `invalid_grant`. A
+    request carrying `scope=willikins:apply` for a code consented at `willikins:read` mints a
+    `willikins:read` token, and the minted `sub` is the consenting session's, both from the
+    stored record. A success body is exactly `access_token`, `token_type: "Bearer"`,
+    `expires_in` equal to `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`, and `scope`, as
+    `application/json` with `Cache-Control: no-store`. An error body is `{"error": …}` at 400, and
+    `invalid_client` is 401. A public client's id in the body, and as `Authorization: Basic` with
+    an empty password, both redeem; an empty `client_secret=` is treated as absent; a non-empty
+    secret in either shape is 401 `invalid_client`.
 24. **Passkey enrollment and authentication.** Driven by `SoftPasskey`, with no browser.
     Registration enrols a credential, and a second registration of the **same `CredentialID`** — to
     the same account or to any other — is refused, which is the caller's obligation the crate
@@ -3197,13 +3352,13 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 4 | **The resource-server middleware, against both issuers.** `OAuthConfig`, `validate`, `require_token`, the header strip, the subject-allowlist check, the new validating-half `AuthFailedReason` variants, and the refusals of decisions 6, 7, 12 (`NonCanonicalUrl`) and 15. Plus the assertion that the fixed-order path runs **identically** for a willikins-minted and a fixture-minted token. **Also removes `HttpConfig::build`'s agent-hash rules and retires `WILLIKINS_AGENT_TOKEN_HASHES`**, and migrates every `HttpConfig::build` call site (counted below). Pinned by: tests 3, 4, 5, 6, and test 12's validating-half refusals, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- oauth_validation:: adversarial_10b:: binary_startup::` and `cargo test -p willikins-server --lib -j 2 -- http::config::` | 3 | sonnet, verified by opus |
 | 5 | **Both metadata documents, the JWKS route and the challenge surface.** RFC 9728 at the insertion-built path, with `scopes_supported` the three MCP scopes and the root deliberately not a route. RFC 8414 with a byte-identical `issuer`, `authorization_endpoint`, `token_endpoint`, `response_types_supported: ["code"]`, `code_challenge_methods_supported`, explicit `grant_types_supported` and `token_endpoint_auth_methods_supported`, `authorization_response_iss_parameter_supported`, `jwks_uri`, the same `scopes_supported`, and zero-element arrays omitted. `/jwks.json`. All four routes outside the bearer middleware and rmcp's host check, as `/healthz` is. The 401 naming the three MCP scopes, and the 403. rmcp's `allowed_origins` set to the one derived public origin at 3.3.0 (decision 18). Pinned by: tests 1, 2, 20, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- oauth_metadata:: deploy_host_headers::` | 4 | sonnet, verified by opus |
 | 6 | Principal and journal: the `oauth-<12 hex>` derivation; the `Principal { id, claims }` signature change across **all eleven** `Butler` methods decision 2 lists (3m's `plan_rollback` and `apply_rollback` included), `record_auth_failure`, the eight `#[tool]` methods, `principal_for`, the approvals handlers, and `willikins-cli`'s commands including `rollback`; the optional claim fields on all eight principal-carrying events, bounded and escaped; `OAuthSubject` and `ClientId` as plain domain types. Pinned by: test 8, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- event_shapes:: pre_2c_replay::` and `cargo test -p willikins-server --test it -j 2 -- oauth_principal:: rollback_r8::` | 4 | sonnet, verified by opus |
-| 7 | Scopes: the four and the hierarchy; the `scope`/`scp` readers; the tool table with the pre-assigned rollback rows, **tied to the snapshotted tool list**; the body parse; the 403 with `insufficient_scope`; `scopes_supported` (the three MCP scopes); the same table feeding the consent screen; `willikins:approve` never granted at `/authorize`. Pinned by: test 7, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- oauth_scopes:: mcp_server::` | 5, 6 | sonnet, verified by opus |
+| 7 | Scopes: the four and the hierarchy; the `scope`/`scp` readers; the tool table with the pre-assigned `rollback_plan` and `rollback_apply` rows, **tied to the snapshotted tool list** with exactly that exception; the body parse; the 403 with `insufficient_scope`, and the 400 `UnknownTool` with no challenge; `scopes_supported` (the three MCP scopes); the table API the consent screen will read (the consent screen itself, and its assertions, are task 11's). Pinned by: test 7, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- oauth_scopes:: mcp_server::` | 5, 6 | sonnet, verified by opus |
 | 8 | **Session core, as library code.** The signed `__Host-` cookie and jar, both bounded stores with their 503, unconditional id rotation, the absolute **and** idle timeouts, `no-store`, 128-bit ids, the non-persistent cookie, credential-change revocation, `X-Frame-Options`, the CSP with `script-src`, `Sec-Fetch-Site` and `Vary`. Plus **pinning tests** for the origin check's exact match and its both-headers-absent refusal, which already ship (decision 4). **No `/approvals`-level assertion lands here**: `basic_auth` still gates that surface until task 9 removes it, and decision 6 forbids a commit in which both gates exist. Pinned by: test 26, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- session_core::` | 7 | sonnet, verified by opus |
 | 9 | **Passkey enrollment and authentication, and the gate swap.** `webauthn-rs` wiring, the durable credential store at `/data/credentials/`, ceremony-to-account binding, UV Required, counter regression and `update_credential`, `exclude_credentials` and CredentialID uniqueness, the uniform username step, the inline script under a CSP nonce, logout, the `WrongRole` page (showing `sub` whole), and the **mint → `oauth::validate` → session** hop. **Removes `basic_auth`, `TokenHash`, `matches_any` and the constant-time compare, and retires `WILLIKINS_APPROVER_TOKEN_HASH` in this series**, so no commit on `main` has an unauthenticated `/approvals` and none has two gates on it. Flips the three `adversarial_10b.rs` pins named below. **Every `/approvals`-level assertion is this task's.** Pinned by: tests 9, 10, 11, 24, and test 12's approver-hash retirement, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_login:: passkey:: adversarial_10b::` | 8 | **sonnet test-first, opus attacks**: CVE-2026-69199's class lives here |
 | 23 | **The approvals page shows what was planned** (decision 25): the root's short sha beside the `used` closure, and "document says" only while the file's sha equals `record.document_sha256`, otherwise the `DocumentChanged` notice. Pinned by: test 30, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_document_identity::` | 9 | sonnet test-first, opus attacks |
 | 24 | **Teardowns on the approvals page** (decision 4): `pending_teardowns` in `willikins-journal`, the teardown section through `mask_json`, session-bound nonces for teardown `plan_id`s, the same role rules. Pinned by: test 31, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` and `cargo test -p willikins-server --test it -j 2 -- approvals_teardowns:: rollback_r8::` | 9, 6 | sonnet test-first, opus attacks |
 | 10 | **Recovery codes, the enrollment CLI and the break-glass.** Codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule; the CLI subcommand that mints a one-time enrollment URL to stdout and journals it as loudly as an approval; the printed subject for both allowlists. **Where this CLI runs against a distroless deployment is open question 2**, and the task does not guess. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes::` and `cargo test -p willikins-cli --test it -j 2 -- enroll::` | 9 | sonnet, verified by opus |
-| 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname and its own `form-action` CSP. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all four bindings **stored**, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. No refresh tokens. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
+| 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname and its own `form-action` CSP. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. No refresh tokens. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
 | 12 | Delete `hash-token` from both binaries, its README section and the `hash_token` test module with its `mod` line; update the variable reference. Pinned by: test 12's last case, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- readme_variables:: binary_startup::` | 11 | sonnet |
 | 13 | Bracket-aware port stripping in the origin check, the one real defect (`approvals.rs:276-284`: `rsplit_once(':')` cuts `[::1]` to `[:`). Pinned by: test 14, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- origin_ipv6::` | 11 | sonnet |
 | 14 | Two steps, in order. (1) `WILLIKINS_LOG` as a `tracing_subscriber` `EnvFilter` directive, which flips `crates/willikins-server/tests/it/adversarial_13.rs`'s `the_binary_ignores_rust_log_and_emits_nothing_below_info` (line 1249) into its successor. (2) The sweep of everything the process emits at DEBUG and TRACE, rmcp's own output included, now also covering `/authorize`, `/token`, the ceremony endpoints, the code store, the parked-request store, `state` and the signing key. Amend milestone 2's trust boundary 5 in that plan's own addendum style. Pinned by: test 15, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: log_sweep::` | 12 | sonnet, swept by opus |
