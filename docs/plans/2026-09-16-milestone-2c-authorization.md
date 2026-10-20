@@ -298,9 +298,13 @@ no longer describe the system while still being cited as though they did.
    presenting one. That statement belongs to boundary 1b, which is where it is. **One bounded
    carve-out, settled 2026-10-20** (settled decision 6, decision 27): the bootstrap secret. It is
    a static secret in the deployment's configuration, and it authenticates a human for exactly
-   one act, enrolling one passkey on one named, allowlisted account. It never yields a session, an
-   approval, a consent or a token. Once used it is dead, durably, and only a fresh value re-arms
-   it. So the boundary's sentence holds in this form: no static secret authenticates a caller to
+   one act, enrolling one passkey on one named, allowlisted account. The page never yields a
+   session, an approval, a consent or a token. **Its output is still a full credential**, stated
+   plainly by the 2026-10-20 review of the answers: the passkey it enrols logs in at
+   `/approvals/login` with that account's whole authority, so **an armed secret is equivalent to
+   full authority over any allowlisted account**. Into an existing account the enrolment replaces
+   every other credential, so its use is never silent. Once used it is dead, durably, and only a
+   fresh value re-arms it. So the boundary's sentence holds in this form: no static secret authenticates a caller to
    willikins for anything but one enrolment, and none for anything twice. Tests 12 and 34.
 
 ## Decisions
@@ -2825,8 +2829,10 @@ credential store is on the volume, so the CLI had no host to run on.
   written into `WILLIKINS_AGENT_SUBJECTS` and `WILLIKINS_APPROVER_SUBJECTS` at go-live step 4a,
   typed at the bootstrap page with the secret, and typed at the login's username step thereafter.
   The page refuses a name that is in neither allowlist. Decision 2's derivation is unchanged, and
-  only the in-house `sub` stops being a generated UUID. 2c deletes no account, so a name is never
-  reassigned to another human. *The rejected alternative* is a generated subject shown by the
+  only the in-house `sub` stops being a generated UUID. 2c deletes no account. A name re-added
+  for a new human is still never handed the earlier holder's passkeys, because a bootstrap into an
+  existing name replaces every credential it had (below; the earlier text's "a name is never
+  reassigned" was enforced by nothing). *The rejected alternative* is a generated subject shown by the
   page. It needs either a startup that tolerates an empty allowlist while a bootstrap is armed,
   which weakens decision 3's refusal, or a second restart to add the subject, which costs another
   volume-downtime outage.
@@ -2886,8 +2892,9 @@ credential store is on the volume, so the CLI had no host to run on.
      enrolment about to happen. A right secret with a name in neither allowlist is 403 naming
      the rule, since whoever holds the secret is the operator, journaled
      `BootstrapSubjectUnlisted`.
-  2. A right pair starts a registration ceremony for that account, creating the account if it
-     does not exist. The ceremony is bound to the browser by a `__Host-willikins-bootstrap`
+  2. A right pair starts a registration ceremony for that account. Nothing is written yet: the
+     account is created only at the finish, so a cancelled ceremony leaves no credential-less
+     account behind (2026-10-20 review of the answers). The ceremony is bound to the browser by a `__Host-willikins-bootstrap`
      cookie, as the login ceremony is by `__Host-willikins-login` (decision 4), and it lives in
      the ceremony store. **One ceremony at a time:** a second start while one is in flight is 409,
      journaled `BootstrapCeremonyInFlight`, until the first finishes or its 300 s expire. A finish
@@ -2902,13 +2909,27 @@ credential store is on the volume, so the CLI had no host to run on.
      2. `BootstrapSecretSpent` is appended to the journal, with the fingerprint, the subject and
         the time. If that append fails, the secret stays spent, nothing is enrolled, and the
         answer is a 5xx.
-     3. The passkey is committed, then `CredentialEnrolled { Bootstrap }` is appended.
+     3. The account is committed with the new passkey, in one write under the store's lock. An
+        absent account is created. An existing one has **every other credential, its recovery
+        codes, its sessions and its refresh families** revoked in the same write, which bumps its
+        credential epoch (decision 4). Then `CredentialEnrolled { Bootstrap, replaced: n }` is
+        appended, `n` being the number of credentials replaced, with one `RefreshFamilyRevoked`
+        (`CredentialRevoked`) per family.
      4. The response shows the account's fresh recovery codes once (decision 24), replacing any
         earlier set.
 
      A fault after the first step leaves the secret dead and no passkey. That costs a fresh secret
      and a restart, and it never allows a second enrolment from one secret. A passkey enrolled
      through the page always has both spent records behind it.
+
+  **Into an existing account it replaces, never adds** (2026-10-20 review of the answers). Every
+  use of the page on an existing account is a break-glass or a domain move, and both mean the old
+  credentials are lost or useless. An additive enrolment would let anyone holding an armed secret
+  slip a passkey into any allowlisted account without its owner noticing, and that passkey then
+  logs in as a full passkey session that can approve and consent to `willikins:apply`. Replacing
+  makes the use loud: the owner's sessions end and their apps disconnect. Adding a passkey to an
+  account its owner still holds is the passkey session's "add a passkey" action (decision 4),
+  never the page.
 
   The page **never** creates a session, approves or rejects, reaches the consent screen or mints
   a token. The human goes to `/approvals/login` next and logs in with the passkey just enrolled.
@@ -2931,9 +2952,10 @@ credential store is on the volume, so the CLI had no host to run on.
   earlier text named only the first, so the 403, the 409 and the 400 had no reason to journal).
 - **Break-glass and further accounts are the same act with a fresh secret.** If a human has lost
   every passkey and every recovery code: generate a new secret, set it, restart, and enrol at the
-  page into the existing account. The account keeps its subject, so the journal and the
-  allowlists are unaffected. Then revoke the lost credentials from the new passkey session, which
-  also revokes their refresh families (decision 26). For a second human, add the name to the
+  page into the existing account. The finish replaces the lost credentials, the recovery codes,
+  the sessions and the refresh families in one write (above), so nothing is left to revoke by
+  hand afterwards, and each app reconnects with one passkey consent. The account keeps its
+  subject, so the journal and the allowlists are unaffected. For a second human, add the name to the
   allowlists and set a fresh secret in one variable change and one restart. A domain move
   (decision 12) is the same act, once per human, at the new host.
 - **No `preserve()` row** in `.railway/railway.ts`, if it is set as a Railway variable. An apply
@@ -3459,7 +3481,8 @@ and `suppressed`, written only on a coalesced line (decision 1). `ServerStarted`
 additive, carry decision 26's refresh lifecycle: `RefreshFamilyIssued`, `RefreshTokenRotated` and
 `RefreshFamilyRevoked`. Each names a random family id, a client id and a subject, and never a token
 or a token's hash. A fourth, `CredentialEnrolled`, records each passkey enrolment with its subject
-and how it arrived (`Bootstrap`, `Session` or `Recovery`, decision 27). A fifth,
+and how it arrived (`Bootstrap`, `Session` or `Recovery`, decision 27), plus, for a bootstrap, how
+many credentials it replaced. A fifth,
 `BootstrapSecretSpent`, records each bootstrap secret's spend with its domain-separated fingerprint
 and the subject, and is what startup reads beside the store's spent list (decision 27).
 `ServerStarted` gains an optional `bootstrap` field (`armed`, `spent` or `unset`), never the secret
@@ -4229,15 +4252,19 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       `__Host-willikins-bootstrap`; a second start while it is in flight → **409**
       `BootstrapCeremonyInFlight`; a finish from a browser without the cookie → **400**
       `BootstrapCeremonyUnbound`.
-      A `SoftPasskey` finish enrols exactly one passkey on that account, creating it when absent,
-      shows recovery codes once, journals `CredentialEnrolled` with `Bootstrap`, and sets no
-      session cookie. The page offers no approve, consent or token route, and `/approvals` still
+      A `SoftPasskey` finish enrols exactly one passkey on that account, creating it only at the
+      finish (a start that is never finished leaves no account), shows recovery codes once,
+      journals `CredentialEnrolled` with `Bootstrap` and `replaced: 0`, and sets no session
+      cookie. The page offers no approve, consent or token route, and `/approvals` still
       302s to login afterwards.
     - **Spent.** After that finish, every bootstrap route is 404 with the same secret. A restart
       with the variable still set **starts**, reports `ServerStarted.bootstrap` as `spent`, logs a
       WARN line naming `WILLIKINS_BOOTSTRAP_SECRET` that contains no byte of the value, and the
-      page stays 404. A fresh secret re-arms it, and a break-glass enrolment into the existing
-      account keeps its subject and replaces its recovery codes.
+      page stays 404. A fresh secret re-arms it. A break-glass enrolment into the existing account
+      keeps its subject and, in one write, removes every other credential, the recovery codes, the
+      sessions and the refresh families: a session from an old passkey is flushed, each family is
+      refused at `/token`, and the journal holds `CredentialEnrolled { Bootstrap, replaced: n }`
+      and one `RefreshFamilyRevoked` (`CredentialRevoked`) per family.
     - **Spent in two places** (2026-10-20 review of the answers). The store directory emptied (or
       pointed somewhere new) with the journal intact and the same value still set → the restart
       reports `spent` and every bootstrap route is 404, from the journal's fingerprint alone; the
@@ -4816,9 +4843,12 @@ Then, in descending order of how likely each is to surprise someone:
   and allowlisted account, one passkey, no session, and a spent list that survives restarts. Two
   ways around the bounds are recorded rather than designed around. A spent value left set is
   harmless but confusing, so the startup log names it. A volume restore rewinds the spent list,
-  so go-live step 9 checks the variable is unset after any restore. While a secret is armed, its
-  holder can add a passkey to any allowlisted account, so the operator arms it only for the
-  moment an enrolment is about to happen and uses it at once.
+  so go-live step 9 checks the variable is unset after any restore. **While a secret is armed, it
+  is equivalent to full authority over any allowlisted account**: its holder enrols a passkey that
+  logs in as that account (trust boundary 5). Into an existing account the enrolment replaces the
+  owner's credentials, sessions and app connections, so a misuse is visible at once rather than
+  silent. The operator arms a secret only for the moment an enrolment is about to happen, and
+  uses it at once.
 - **An agent with the operator's Railway access could write the volume** (2026-10-20). Railway
   guards only `files delete` against agents. Every other write path (`upload`, `rename`,
   `browse`, `railway ssh`, `scp`, `sftp`) is closed by a written rule (task 25), not by the
