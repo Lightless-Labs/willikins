@@ -3,6 +3,29 @@
 **Created:** 2026-09-16
 **Reviewed:** 2026-09-16 (via document-review workflow: coherence, feasibility, security-lens,
 scope-guardian, adversarial; findings folded in below)
+**Reviewed:** 2026-10-20 (four-lens review of the 2026-10-20 refresh: coherence, feasibility against the code, security, client fit)
+**Addendum:** 2026-10-20 (the four-lens review, folded in; every disposition, and what was not
+applied as written, is review resolution 60). It changed:
+- **Go-live order.** The step-6 deploy now carries `WILLIKINS_PUBLIC_URL`, the four lifetimes
+  and the Doppler-injected signing key, which a new `willikins signing-key generate` produces.
+  Step 4 splits into accounts before the deploy and enrollment after it. The echo build of step 3
+  runs on a disposable environment, so the live service gets its domain only once 2c is healthy.
+- **A push fence.** From task 2 on, commits land on an `m2c` branch merged into `main` only at
+  step 6.3. Tasks 21 and 22 now run before task 20.
+- **`/authorize` and `/token`.** The scope grant rule, six code bindings (the consenting `sub`
+  and the granted scopes added), `redirect_uri` optional at `/token` as OAuth 2.1 §10.2 requires,
+  a pinned token response, and the empty-secret rule. Only a scope refusal carries
+  `insufficient_scope`.
+- **Browser surfaces.** A CSRF-bound consent POST, `Sec-Fetch-Site` refusing `same-site`,
+  recovery sessions restricted to enrolling a passkey, a specified enrollment token, the
+  anonymous-lockout fixes, and consent phishing named in Risks.
+- **The trusted directory and the client table.** Handle-based opens through `rustix`, and a
+  client table with a schema, a startup-only read and its sha in `ServerStarted`.
+- **Feasibility fixes against the code.** The signing-key type derived like `GitHubToken`, the
+  `require_token` order, test 6's probe, the two-step hash migration, and
+  `WILLIKINS_EXTRA_ALLOWED_ORIGINS` shipped empty in task 5.
+
+  Open questions 6 and 7 are new, and open question 5 is widened.
 **Addendum:** 2026-10-20 (resumption, and one new operator decision). The plan was shelved on
 2026-09-16 while milestones 2b and 3g to 3o landed. It is now restated against today's code so it
 can be implemented. **The operator's new decision:** the deployed server reads its workflow
@@ -232,9 +255,12 @@ Twenty-five numbered decisions. Ten the milestone cannot start without, each wit
 the acceptance test that pins it; then eight smaller ones the resource-server research left
 unresolved and the plan may not leave silent; then six the authorization-server half adds; then
 one the 2026-10-20 addendum adds, on where the deployed server's documents come from. Four
-questions are the operator's and are in **Open decisions** at the end, with a recommended default
-and one reason each — **the plan below is written at all four defaults**, because a task table and
-a pin table cannot be conditional, and Open decisions is what names the delta if one is overridden.
+questions were the operator's, and the operator settled all four on 2026-09-16; they are in
+**Decisions the operator settled** near the end, each with the delta of the road not taken, and
+the text cites them as "settled decision N". The plan is written at those settings throughout,
+because a task table and a pin table cannot be conditional. What still needs the operator is in
+**Open questions, 2026-10-20** at the end, cited as "open question N"; none of those changes the
+task table.
 
 ### 1. The resource-server half at `/mcp`
 
@@ -1340,7 +1366,7 @@ are inserted after them.)
    the signing key, the client table and the journal. This is the first backup-and-restore concern
    the project has ever had. Losing the store means every human re-enrols from the break-glass,
    and losing the key refuses every outstanding token. The signing key's backup is Doppler's
-   version history (open decision 2). The volume's candidate mechanism is Railway's volume
+   version history (settled decision 2). The volume's candidate mechanism is Railway's volume
    backups; their schedule and restore rules are quoted in decision 25 and stay a verify item
    until a restore has been rehearsed. **Documents are not restored from a volume backup.** A
    restore rewinds the journal and the credential store along with them. Documents are recovered
@@ -1941,7 +1967,7 @@ attacked.
   **deletes the only stateful authorization-server requirement there is** — rotation with reuse
   detection and family revocation — which is also where every one of the fetched corpus's worst
   problems lived. The cost is named rather than hidden: the access-token lifetime becomes exactly
-  how often a human re-consents at `/authorize` (open decision 4), and an operator who believes a
+  how often a human re-consents at `/authorize` (settled decision 4), and an operator who believes a
   token leaked waits that lifetime out, because there is no revocation endpoint either. **On the
   phone use case that put 2c on the critical path, that means a passkey round trip every 3600 s.**
   Both apps refresh reactively on a 401 (Anthropic: "Claude refreshes tokens reactively on a `401`
@@ -2029,7 +2055,7 @@ catalog snapshot or the `list_tools` catalog JSON.
   that publishing more keys widens the compromise surface, so **two live keys is a ceiling and not
   a steady state**. The overlap window is exactly the maximum access-token lifetime, which is why
   `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS` and the rotation window are one number and one decision
-  (open decision 4). The *schedule* is deferrable and the *mechanism* is not: retrofitting the
+  (settled decision 4). The *schedule* is deferrable and the *mechanism* is not: retrofitting the
   ability to publish two keys at once means a flag day in which every outstanding token is refused.
 
 *Pinned by tests 5, 21.*
@@ -2104,14 +2130,14 @@ expensive. Add it when a named client needs it. Dynamic registration costs nothi
 should not be built at all: it is an anonymous write endpoint, a persisted registry, a garbage
 collector and a rate limit.
 
-*Recommended by open decision 3, and pinned by test 18's unregistered-then-registered pair.*
+*Settled by the operator (settled decision 3, pre-registration), and pinned by test 18's unregistered-then-registered pair.*
 
 **24. Authenticating the human: passkeys, recovery codes, and a host-side break-glass.** MCP says
 **nothing whatsoever** about this — no MUST, no SHOULD, no shape — and all three MCP reference
 implementations declare the login out of scope. Everything here is willikins' own, and it is where
 the real cost of the milestone is.
 
-- **Passkeys through `webauthn-rs` 0.5.5** (open decision 1). The reason is not phishing
+- **Passkeys through `webauthn-rs` 0.5.5** (settled decision 1). The reason is not phishing
   resistance: this deployment has no email and no SMS, so a password path has **no reset**, and
   losing the reset also removes the account-lockout mechanism's only escape hatch.
 - **A durable credential store**, on the Railway volume beside the journal. A `Passkey` record
@@ -2197,7 +2223,7 @@ the real cost of the milestone is.
   `/authorize` context refuses passkeys, that app cannot connect until the operator chooses
   otherwise (open question 7).
 
-*Recommended by open decision 1, and pinned by tests 10, 24, 25.*
+*Settled by the operator (settled decision 1, passkeys), and pinned by tests 10, 24, 25.*
 
 ### One decision the 2026-10-20 addendum adds
 
@@ -2911,8 +2937,8 @@ only the binary; no `ENV` sets `WILLIKINS_WORKFLOWS_DIR`; and `.dockerignore` ex
 paths (test 27). Whether the distroless runtime image carries the matching `libssl.so.3` is
 build-blocking and is verify item 2.
 
-Doppler's Railway integration carries every provider credential the README names, plus, on open
-decision 2's branch, the signing key and its retiring sibling (go-live step 7).
+Doppler's Railway integration carries every provider credential the README names, plus, under
+settled decision 2, the signing key and its retiring sibling (go-live steps 6 and 7).
 `WILLIKINS_OAUTH_CLIENT_SECRET` does not exist. `.railway/railway.ts` changes four times:
 
 - In **task 20**, it gains `WILLIKINS_WORKFLOWS_DIR: preserve()`, after the operator has set the
@@ -2970,7 +2996,7 @@ values and their shape, not their spelling.
 | `WILLIKINS_APPROVER_SUBJECTS` | none | `serve --http` | Comma-separated `sub` values allowed to approve. Empty or unset refuses startup. Read by the approvals decision handler. |
 | `WILLIKINS_OAUTH_ALGORITHMS` | `ES256` | optional | Comma-separated JWA names for the **validator's** allowlist. Asymmetric families only; intersected per key; must contain `ES256` (decision 15). Read by `oauth::validate`. |
 | `WILLIKINS_OAUTH_LEEWAY_SECONDS` | `60` | optional | Whole seconds of clock skew. Read by `oauth::validate`. |
-| `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS` | `3600` | optional | The access token's lifetime, which with no refresh tokens is exactly how often a human re-consents at `/authorize`, and which is also the key-rotation overlap window (decisions 21, 22; open decision 4). Read by `issuer::mint` and by the rotation check. |
+| `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS` | `3600` | optional | The access token's lifetime, which with no refresh tokens is exactly how often a human re-consents at `/authorize`, and which is also the key-rotation overlap window (decisions 21, 22; settled decision 4). Read by `issuer::mint` and by the rotation check. |
 | `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS` | `60` | optional | The authorization code's own lifetime, checked independently of any store TTL. A value above **600** refuses startup, which is draft-16's RECOMMENDED maximum; the default itself is this plan's choice and no specification sets it. Read by `issuer::codes`. |
 | `WILLIKINS_SESSION_TTL_SECONDS` | `3600` | optional | The session's **absolute** lifetime, capped below `WILLIKINS_APPROVAL_WINDOW_SECONDS`; startup refuses a larger value. Read by the session store. |
 | `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS` | `300` | optional | The session's **idle** lifetime, bumped on writes and **not** on reads (decision 4). The default sits inside OWASP's fetched 2-to-5-minute range for high-value applications; the exact number is unpinned (verify item 11). Read by the session store. |
@@ -3774,10 +3800,10 @@ says so in the decision rather than waiting on a fetch.
 12. **Tasks 3 and 19: where the signing key lives, and the Railway volume's mount path.** Both a
     Railway volume file and a Doppler-injected variable fit the fetched platform facts; the project
     rule that every secret lives in Doppler pulls one way and first-boot self-provisioning pulls the
-    other (open decision 2). **The mount-path half is settled (2026-10-20): `/data`**, from
+    other (settled decision 2). **The mount-path half is settled (2026-10-20): `/data`**, from
     `.railway/railway.ts:58` (`volumeMounts: { "/data": willikinsVolume }`), which this item missed
     by looking only for `railway.json` and `railway.toml`. Decision 25 fixes the layout under it.
-    The signing-key half is settled by open decision 2 (Doppler).
+    The signing-key half is settled by settled decision 2 (Doppler).
 13. **Tasks 9, 11 and 19: whether any browser in the operator's environment refuses
     `navigator.credentials` on the deployment's domain**, and since 2026-10-20 **which browser
     context the Claude and ChatGPT iOS apps open `/authorize` in, and whether the passkey ceremony,
@@ -4211,7 +4237,8 @@ How each finding of the 2026-09-16 document review was resolved, and then how th
 revision moved them. Reviewers: coherence, feasibility, security-lens, scope-guardian, adversarial.
 Findings from two or more reviewers on the same point are merged; the reviewers in brackets are who
 raised it. Seventy-five findings merged into entries 1 to 57; entry 58 is the scope revision, and
-says which of the fifty-seven it supersedes.
+says which of the fifty-seven it supersedes. Entry 59 is the 2026-10-20 restatement, and entry 60
+the 2026-10-20 four-lens review of it.
 
 **Entries 1 to 57 are kept verbatim as the record, so they cite the task and verify-item numbers
 the delegating draft had.** The key, once, rather than fifty-seven edits that would falsify the
@@ -4657,6 +4684,87 @@ question this plan no longer asks.
     Two of decision 4's origin "fixes" turned out to be current behaviour, and they are now pinning
     tests. The 401's fixed scope now names the three MCP scopes, for a client reason (decision 1).
     `willikins:approve` leaves `scopes_supported`. Decision 25 and tasks 20 to 25 are new.
+
+60. **The 2026-10-20 four-lens review** (coherence, feasibility against the code, security, client
+    fit; forty-six findings, each checked against this plan, the tree and, for every quoted
+    source, a verbatim fetch on 2026-10-20). Findings that two lenses raised are merged. Every
+    finding was real; none was dismissed. **Applied:**
+    - **Go-live order** (coherence P1 ×2, clients P1). Step 6 now carries `WILLIKINS_PUBLIC_URL`,
+      four lifetimes, and the Doppler-injected signing key, generated by the new
+      `willikins signing-key generate` (coherence P2); step 7 is a check for it. Step 4 is 4a
+      (accounts and subjects, before the deploy) and 4b (enrollment, after it). Doppler-delivered
+      variables get no `preserve()` row, per `.railway/railway.ts`'s header, and what an apply does
+      to one is a sub-question of verify item 20. Step 8 drops the fake-catalog row with its
+      variable (coherence P3). **This also makes resolution 58's bullet on 8 true**: it said the
+      step-6 change carries the signing key, and the body did not.
+    - **The push fence and step 3** (coherence P1). Tasks from 2 on land on `m2c`, merged at step
+      6.3. The echo build runs on a disposable environment.
+    - **Task 20's cutover** (coherence P2): tasks 21 and 22 now run first, so the procedure's tools
+      exist on the deployed commit.
+    - **Extra origins** (coherence P2, feasibility P1): `WILLIKINS_EXTRA_ALLOWED_ORIGINS` ships
+      empty in task 5; the pass-3 row is synthetic; verify item 26 is "before step 10 is declared
+      done". Sixteen variables are added, superseding the count in 57, 58 and 59.
+    - **The signing-key refusal** (coherence P2): "a configured signing key that cannot be
+      loaded", not the volume branch's wording.
+    - **Test 7's consent clauses move to test 22** (coherence P2). **The rollback rows are named
+      `rollback_plan` and `rollback_apply`**, with test 7's exception in decision 3 and the contract
+      (coherence P2, feasibility P3).
+    - **Stale references** (coherence P3): "open decision N" outside the record is now "settled
+      decision N", and the Decisions preamble points at the right sections.
+      `HttpConfigError::CodeTtlAboveCeiling` is named (coherence P3). "Already has the column" is
+      corrected (coherence P3).
+    - **Test 6's probe** (feasibility P1). An outer layer runs before the strip, so the probe is a
+      service passed to a new `oauth::middleware::protect`. **This supersedes resolution 16's
+      mechanism**; its constraint, no feature and no test tool, stands.
+    - **The signing-key type** (feasibility P1): derived like `GitHubToken`, redacted `Display` and
+      `Debug`, outside `domain_types!`; its single caller is held by `clippy.toml`
+      (feasibility P2), not by the `expose_secret` guard.
+    - **The trusted directory** (feasibility P1, security P2): handle-based opens through `rustix`,
+      a `willikins-dsl` file entry point, the residual stated, and a no-write guard.
+    - **`require_token`'s order** (feasibility P2, security P1): every check before `next.run`,
+      with a test that the inner service is never called.
+    - **The two-step hash migration and the approvals test move** (feasibility P2); the image and
+      README tests (feasibility P2); the CLI's `hash-token` (feasibility P2); task 2's `JwkSet`
+      (feasibility P2); `documents_manifest` exported (feasibility P3); test 28's per-case errors,
+      raw retired-variable detection, and the journal crate's claims (feasibility P3).
+    - **The consent POST's CSRF binding and headers** (security P1).
+    - **Six code bindings and the scope grant rule** (security P1, clients P1). The reserved
+      `willikins-approvals` client id is for the ceremony hop.
+    - **`redirect_uri`** optional at `/token` and resolved at `/authorize` for a single
+      registration (security P1, clients P1).
+    - **The enrollment token** (security P1). The query-free request span (security P2). The
+      client table's integrity and schema (security P2, clients P1).
+    - **Consent phishing**: Risks, verify item 37, and the consent screen's age and warning
+      (security P2). **`Sec-Fetch-Site` refusing `same-site`** (security P2). **Recovery sessions
+      restricted** (security P2). **The lockout fixes** (security P2).
+    - **Step 10 against the vendors' pages**, with ChatGPT's redirect read before connecting
+      (clients P1, P2). **403s that step up** (clients P2). **The token response** and **the
+      empty-secret rule** (clients P2). **The OpenAI quote restored** (clients P3). **Claude Code
+      as test 18's client** (clients P3).
+
+    **Not applied as written**, each with its reason:
+    - **Security's "an absent or empty `scope` is `invalid_scope`, never a default".** Clients'
+      default of the three MCP scopes was taken instead. draft-16 §1.4.1 allows either, and Claude
+      Code sends no `scope` when `oauth.scopes` is unset. The human still sees and can narrow the
+      set at consent, so the default grants nothing unseen. The rest of that finding is applied.
+    - **Feasibility's "journal-crate paths write the claims as `None`".** That would leave an
+      `ApplyRefused` written through `continue_run_and_journal` for an OAuth caller without its
+      claims, against decision 2. The three entry points take a `JournaledClaims` instead.
+    - **The ChatGPT-on-iOS Goal relaxation** (clients P2): it changes what "done" means against
+      the operator's own words, so it is open question 6; the step-10 rewrite is applied.
+    - **A per-deployment client secret for the hosted entries** (security P2): it touches trust
+      boundary 5, so it widens open question 5.
+    - **Linux `openat2` with `RESOLVE_BENEATH`** (security P2, offered beside `rustix` and
+      `cap-std`): it is Linux-only and the tests run on macOS. `cap-std` would bring a new crate
+      tree. `rustix` is already in the lock.
+    - **Choices where a finding offered two:** a branch rather than unpushed local commits
+      (coherence P1); reordering rather than an interim `shasum` procedure (coherence P2); a plain
+      `JwkSet` from task 2 rather than moving the `JwkSource` trait (feasibility P2); a 400 rather
+      than a challenge-less 403 for unknown tools, because Claude Code treats any 403 as needing
+      sign-in (clients P2); `--clients` on `documents check` rather than a sibling command
+      (security P2); and PKCS#8 only, no SEC1, for the signing key (clients P1).
+    - **Recovery sessions** are restricted as security asked. The cost to decision 24's
+      browser-refusal mitigation is open question 7, not a silent loss.
 
 ## Open questions, 2026-10-20
 
