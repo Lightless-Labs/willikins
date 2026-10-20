@@ -4,6 +4,34 @@
 **Reviewed:** 2026-09-16 (via document-review workflow: coherence, feasibility, security-lens,
 scope-guardian, adversarial; findings folded in below)
 **Reviewed:** 2026-10-20 (four-lens review of the 2026-10-20 refresh: coherence, feasibility against the code, security, client fit)
+**Reviewed:** 2026-10-20 (two-lens review of the operator's answers: security, coherence and feasibility)
+**Addendum:** 2026-10-20 (the two-lens review of the operator's answers, folded in; every
+disposition is review resolution 62). It changed:
+- **Credential-change revocation** is a per-account epoch that only a removal, or a bootstrap into
+  an existing account, bumps. A login and an added passkey no longer flush sessions or kill
+  refresh families (decision 4).
+- **Recovery sessions** enrol one passkey and nothing else, as the operator's answer says; only
+  a passkey session revokes. The plan now says plainly that a recovery code is one step from full
+  authority (decision 24).
+- **`rollback_apply`'s thread** mirrors `apply`'s: guard committed, `catch_unwind`, the slot held
+  until `TeardownFinished`, and graceful shutdown drains it. `start_rollback` serves MCP, and
+  `apply_rollback` stays synchronous for the CLI. `rollback_plan` shares `plan`'s rate limit
+  (decision 28).
+- **The bootstrap secret.** Its spend is journaled with a fingerprint, so a restart reads either
+  record. A spent secret presented again is journaled. An existing account is replaced, never
+  added to. Only the generator's checksummed `wkbs1_` value is accepted, refused in
+  `HttpConfig::build` and ignored by `serve --stdio`. Its refusals get named reasons. A Railway
+  variable carries a temporary `preserve()` row (decision 27).
+- **Refresh tokens.** A failed durable write changes nothing and answers 503. Verify item 39 covers
+  concurrent refreshes. A wrong-client `/revoke` revokes the family. Connections flags duplicate
+  families (decision 26).
+- **Sequencing and owners.** Tasks 5, 26 and 27 advertise only what they build (tests 20 and 23).
+  The push fence starts at task 2 everywhere. Orphaned items have owners, and `zeroize` is a
+  direct dependency. Verify item 9 now gates local enrolment and test 18, with a TLS fallback
+  named (decision 5).
+
+  One question is open again, because the review's preferred fix would narrow an operator answer;
+  it is in "Open questions" at the end.
 **Addendum:** 2026-10-20 (the operator answers all seven open questions; review resolution 61).
 Two answers are in the operator's own words. Question 2, the one-time bootstrap secret: "Approved,
 as long as its single-use". Question 3, the trusted-ref wording: "Approved". The other five reached
@@ -317,7 +345,9 @@ three the operator's 2026-10-20 answers add (refresh tokens, the bootstrap secre
 MCP). Eleven questions were the operator's: four settled on 2026-09-16 and seven on 2026-10-20.
 They are in **Decisions the operator settled** near the end, each with the delta of the road not
 taken, and the text cites them as "settled decision N". The plan is written at those settings
-throughout, because a task table and a pin table cannot be conditional. No question is open.
+throughout, because a task table and a pin table cannot be conditional. One question is open
+again, raised by the review of the operator's answers (review resolution 62). The plan is written
+at the setting that keeps the operator's answer as given, and the question records the delta.
 
 ### 1. The resource-server half at `/mcp`
 
@@ -5280,8 +5310,8 @@ revision moved them. Reviewers: coherence, feasibility, security-lens, scope-gua
 Findings from two or more reviewers on the same point are merged; the reviewers in brackets are who
 raised it. Seventy-five findings merged into entries 1 to 57; entry 58 is the scope revision, and
 says which of the fifty-seven it supersedes. Entry 59 is the 2026-10-20 restatement, entry 60
-the 2026-10-20 four-lens review of it, and entry 61 the operator's answers to its seven open
-questions.
+the 2026-10-20 four-lens review of it, entry 61 the operator's answers to its seven open
+questions, and entry 62 the two-lens review of those answers.
 
 **Entries 1 to 57 are kept verbatim as the record, so they cite the task and verify-item numbers
 the delegating draft had.** The key, once, rather than fifty-seven edits that would falsify the
@@ -5841,6 +5871,86 @@ question this plan no longer asks.
     **Not applied:** nothing. Two consequences are recorded rather than designed around: a volume
     restore rewinds both the refresh families and the bootstrap spent list (go-live step 9), and
     refresh tokens raise the stake of consent phishing (Risks).
+
+62. **The two-lens review of the operator's answers, 2026-10-20** (security, and coherence with
+    feasibility against the code; twenty-four findings). Each was checked against this plan and,
+    where it cited code, against the tree: `butler.rs`'s `apply_inner` and `apply_rollback_inner`,
+    `run_in_progress` and the drain, `RunHandle`, `wait_for_run`, `plan_rollback_inner`'s missing
+    limiter, `ServerConfig::from_vars`'s two callers and `ConfigError`, and the workspace manifests
+    for `zeroize`. RFC 7009 §2.1 and §2.2.1 were fetched verbatim for the `/revoke` changes. Every
+    finding was real, and none was rejected. **Applied**, by finding:
+    - **Security P1, the credential hash** → decision 4's credential epoch, tests 26 and 32.
+    - **Security P1, `rollback_apply`'s thread**, and **coherence P1, `RunHandle` and
+      `rollback_r8`** → decision 28's shared path and shape (a), test 35, task 29 (with
+      `rollback_round_trip::`), the `mcp.rs` contract, and a pass-3 row.
+    - **Security P1, spent detection** → `BootstrapSecretSpent` with its fingerprint, read at
+      startup beside the store; test 34 and a pass-3 row.
+    - **Security P2, a bootstrap into an existing account** → the account is created at the finish,
+      and an existing one is replaced, journaled `replaced: n`. Trust boundary 5 and Risks state
+      the secret's authority plainly.
+    - **Security P2, the throttle and the strength check** → the checksummed `wkbs1_` shape.
+    - **Security P2, a spent secret presented** → `BootstrapSecretReplayed`.
+    - **Security P2, concurrent refreshes** → decision 26 and verify item 39, test 19.
+    - **Security P2, a failed durable write** → decision 26's write-then-commit rule, applied to
+      revocations and the spent list too; test 32.
+    - **Security P2, `rollback_plan` unthrottled** → `plan`'s bucket, decision 3 and 28, test 35.
+    - **Security P2, phished families** → the Connections flag and consent request age, test 33.
+    - **Security P2, the recovery overstatement** → decision 24, Risks, a pass-3 row and the next
+      login's notice.
+    - **Security P3, `/token` versus `/revoke`** → `/revoke` revokes the family too, test 33.
+    - **Coherence P1, the Railway-variable bootstrap secret** → fix (b), a temporary `preserve()`
+      row.
+    - **Coherence P1, recovery sessions revoking** → decisions 4, 24 and 26, task 10, test 25.
+    - **Coherence P1 and P2, test 20 and test 23** → the flips at tasks 26 and 27.
+    - **Coherence P2:**
+      - `WeakBootstrapSecret` → `HttpConfig::build`, with `serve --stdio` ignoring the variable.
+      - The push fence → task 2 in step 6.3.
+      - `__Host-` on loopback → decision 5, verify item 9 and test 18.
+      - The bootstrap reasons → four new variants, so twenty-four in all.
+    - **Coherence P3:** the spend journaled before the commit; the owners; `zeroize`.
+
+    **Not applied as written**, each with its reason:
+    - **"Hash the sorted set of credential IDs."** Adding a credential changes that set, so the
+      finding's own requirement, that adding does not flush, could not hold. An epoch counter
+      bumped only on removal meets it.
+    - **"Refuse to arm when the store is empty but the journal records a bootstrap."** That
+      contradicts the same finding's "a fresh value arms" case. It would also lock out the
+      documented recovery from a lost store, a fresh secret (go-live step 9). Startup logs a WARN
+      naming `WILLIKINS_CREDENTIAL_STORE_PATH` instead.
+    - **The fingerprint "in `CredentialEnrolled { Bootstrap }`".** It goes into a separate
+      `BootstrapSecretSpent`, appended before the credential commit, because coherence's P3 asked
+      for the spend to be journaled even when the enrolment then fails. One event serves both
+      findings.
+    - **Choices where a finding offered two:**
+      - The identifiable secret shape, rather than a lockout an anonymous flood could impose.
+      - A flag on duplicate families, rather than a cap of one that would set one human's two
+        vendor accounts against each other.
+      - Revoking at `/revoke`, rather than recording the asymmetry.
+      - Shape (a), rather than migrating every `rollback_r8` site.
+      - Refusing in `HttpConfig::build`, rather than `ConfigError::Malformed`.
+      - The new reason names rather than reusing the login's.
+      - A direct `zeroize` dependency, rather than reaching through `secrecy`, which
+        `willikins-server` does not declare.
+    - **Coherence P1's fix (a), Doppler-only delivery of the bootstrap secret.** It would drop "as
+      a Railway variable" from the operator's own answer, so it is a question, not a change. Fix
+      (b) is applied meanwhile.
+    - **Choices that are open to the operator's overruling**, as resolution 61's were:
+      - A bootstrap into an existing account replaces its credentials rather than adding one.
+      - Only the `wkbs1_` generator shape is accepted.
+      - Should verify item 39 ever trigger, the grace window goes back to the operator before it is
+        built, because it bends "single-use".
+
+## Open questions, 2026-10-20 (from the review of the answers)
+
+1. **Should `WILLIKINS_BOOTSTRAP_SECRET` be delivered through Doppler only?** The operator's answer
+   names both paths: "as a Railway variable (or through Doppler)". The review found that a Railway
+   variable with no `preserve()` row cannot pass go-live step 6's "no variable delete" gate, and
+   it preferred dropping the Railway path. That narrows the answer, so the plan instead keeps both
+   paths and gives the Railway variable a temporary `preserve()` row from its staging change to
+   step 4b (decision 27). *The delta if the operator chooses Doppler only:* step 4a, step 6, the
+   deployment section's fifth `.railway/railway.ts` change, the variable table and decision 27's
+   delivery bullet each lose their Railway-variable clause, and verify item 20 loses its bootstrap
+   sentence.
 
 ## Open questions, 2026-10-20: all answered
 
