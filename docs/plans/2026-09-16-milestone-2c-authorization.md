@@ -87,6 +87,14 @@ attacks the **issuing** side at least as hard as the validating side, and the co
 test 18 has driven a stock MCP client through discovery, `/authorize`, `/token` and `list_tools`
 against a real deployment.
 
+**The two clients the operator named are hosted, not local.** The operator, 2026-09-20
+(`todos/2026-09-20-remote-mcp-from-a-phone.md`): "ideally, I should be able to use it straight
+from the Claude or ChatGPT iOS apps, as a simple MCP". Both apps connect from their vendor's
+infrastructure. They call `/mcp`, both well-known documents and `/token` from there, open
+`/authorize` in the user's browser, and redirect to the vendor's own HTTPS callback. So the
+milestone is also not done until test 19 has connected each app on the web and used it from that
+app on iOS, against the public domain. Loopback redirects remain for local clients only.
+
 ## Out of scope
 
 - **Refresh tokens.** Not issuing them is conformant — MCP says clients "MUST NOT assume refresh
@@ -164,18 +172,28 @@ no longer describe the system while still being cited as though they did.
    `Serialize` — the `Credential`/`Value` discipline the codebase already enforces, applied to a
    signing key. Tests 20, 21, 22, 23.
 2. **The inbound token is a credential for this server and for nothing else.** It is never
-   attached to a GitHub or Doppler request, never exchanged for an upstream token, never written
-   to the journal, a log line, or an error message, and never reaches a tool handler: the auth
-   middleware removes `Authorization`, `Cookie` and `Proxy-Authorization` before `next.run`,
-   because rmcp verifiably inserts the complete request `Parts` — headers included — into every
-   handler's extensions. The **`Credential` methods in `willikins-providers-http` are the only
-   sites in the process that put a credential on an outgoing wire**, and the inbound token is never
-   an input to any of them. **That set does not grow at all in 2c**: the delegating draft added
-   `Credential::authorize_basic` for the approvals login's client secret, and decision 4 removes
-   the client and the secret together, so the invariant reverts to its milestone 2 form.
-   `clippy.toml`'s `disallowed-methods` entry and
-   `crates/willikins-core/tests/expose_secret_guard.rs` are what keep that checkable, extended to
-   cover the signing key, which is the one new secret in the process. Test 6.
+   attached to any provider request (GitHub, Doppler, Buildkite, SigNoz, App Store Connect or any
+   later one), never exchanged for an upstream token, never written to the journal, a log line or
+   an error message, and never reaches a tool handler. The auth middleware removes `Authorization`,
+   `Cookie` and `Proxy-Authorization` before `next.run`, because rmcp verifiably inserts the
+   complete request `Parts`, headers included, into every handler's extensions. **The sites that
+   may read a secret's bytes are the ones `clippy.toml`'s `expose_secret` entry names, and no
+   other.** Today those are:
+   - the `Credential` methods in `willikins-providers-http`, which are the only sites that put an
+     operator credential on an outgoing wire;
+   - each secret domain type's derived `expose`;
+   - **five token-less exceptions**, each scoped to its own `Tool::read`: `OpaqueSecret`'s and
+     `DopplerSecretValue`'s `reveal_for_transform`, `AppleSigningKey`'s `reveal_for_signing`
+     (signing one App Store Connect JWT), and `GitHubToken`'s and `BuildkiteToken`'s
+     `reveal_for_authorization`.
+
+   The inbound token is never an input to any of them. **2c adds exactly one site, a sixth
+   exception.** The ES256 signing key cannot sign without reading its bytes. So it becomes a
+   `#[domain(secret)]` type in `willikins-types`, modelled on `AppleSigningKey`, with its own
+   `reveal_for_signing` called only by `issuer::mint`. That exception is named in `clippy.toml`'s
+   reason and in `crates/willikins-core/tests/it/expose_secret_guard.rs`. The delegating draft's
+   `Credential::authorize_basic` does not exist, because decision 4 removes the client and its
+   secret together. Test 6.
 3. **Two surfaces, two credential kinds, two configured allowlists.** `/mcp` accepts an
    `Authorization: Bearer` access token and never a session cookie. `/approvals` accepts a session
    cookie and never a bearer token — it does not so much as look at an `Authorization` header.
@@ -328,20 +346,51 @@ check exactly as `/healthz` is — an unauthenticated client must reach it befor
 and `/healthz` is the existing precedent for a root-level exemption. Decision 19 adds the second
 document beside it under the same rule.
 
-**The 401 shape.** `WWW-Authenticate: Bearer resource_metadata="<PRM URL>",
-scope="willikins:read"`, plus `error="invalid_token"` when a token was presented and rejected. The
-scope is **fixed**, not the scope the refused call needed, because the token is validated before
-the body is read at all (decision 3) — so at 401 time the server does not know which tool was
-asked for, and naming a minimal read scope is what the specification recommends for an initial
-challenge anyway. The 403 of decision 3 is where the exact scope is named, and there the body has
-been parsed. The specification's MUST is to implement *one of* the header or the well-known URI;
-clients prefer the header, so willikins does both.
+**The document is served at the path-inserted URL only, and the root is deliberately not a
+route.** MCP clients that receive no `resource_metadata` pointer fall back to the path form and
+then to `/.well-known/oauth-protected-resource`. Anthropic's lazy-authentication example serves
+both. willikins does not, because RFC 9728 §3.3 says "The resource value returned MUST be
+identical to the protected resource's resource identifier value into which the well-known URI path
+suffix was inserted". A root document carrying `resource=<origin>/mcp` would break that, and one
+carrying the bare origin would name a resource that does not exist. Every 401 carries the pointer
+(test 2), so neither app needs the fallback. Test 19 checks that both discover through the header,
+and test 1 asserts the root answers no document.
 
-**The passthrough prohibition, stated for a server that itself calls GitHub and Doppler, and
-unchanged by this revision.** The specification says it twice: an MCP server must not pass through
-the token it received, and must not accept a token not issued for it. willikins satisfies the first
-structurally already, because no caller token has ever reached an upstream API and the `Credential`
-methods in `willikins-providers-http` are the only outgoing-credential sites. This milestone's job
+**The 401 shape.** `WWW-Authenticate: Bearer resource_metadata="<PRM URL>",
+scope="willikins:read willikins:plan willikins:apply"`, plus `error="invalid_token"` when a token
+was presented and rejected. The scope is **fixed**, not the scope the refused call needed, because
+the token is validated before the body is read at all (decision 3). So at 401 time the server does
+not know which tool was asked for.
+
+**Why it names the three MCP scopes and not only `willikins:read`** (2026-10-20; the earlier text
+named `willikins:read` alone). Both target apps take this challenge as authoritative for the
+*first* token. Anthropic: "To control which scopes Claude requests, include a `scope` parameter in
+the `WWW-Authenticate` header on your `401` response". MCP 2026-07-28: "Clients MUST treat the
+scopes provided in the challenge as authoritative". A read-only first token leaves every `plan` and
+`apply` waiting on a step-up, and that costs four things:
+
+- Each step-up is another passkey consent, because no refresh token is issued (decision 21).
+- Claude documents step-up on an HTTP 403 with a challenge.
+- OpenAI documents re-linking only through per-tool `securitySchemes` plus a tool result carrying
+  `_meta["mcp/www_authenticate"]` (developers.openai.com/plugins/build/auth.md: "Without both
+  halves ChatGPT will not show the linking UI for that tool").
+- Whether ChatGPT steps up on willikins' transport-level 403 at all is verify item 28.
+
+The specification allows the challenged set to "match `scopes_supported`, be a subset or
+superset", so naming the three is conformant. **It changes no authority.** The human still grants
+scopes at the consent screen. `WILLIKINS_AGENT_SUBJECTS` still decides who may act at all
+(decision 3). And the 403 of decision 3 still names the exact scope a call lacked. The rejected
+alternative is omitting `scope` so that both apps fall back to `scopes_supported`. It reaches the
+same set, but only through each client's fallback rule rather than a value the server states.
+The specification's MUST is to implement *one of* the header or the well-known URI; clients prefer
+the header, so willikins does both.
+
+**The passthrough prohibition, stated for a server that itself calls providers, and unchanged by
+this revision.** The specification says it twice: an MCP server must not pass through the token it
+received, and must not accept a token not issued for it. willikins satisfies the first
+structurally already, because no caller token has ever reached an upstream API: every outgoing
+credential is an operator credential or a document-bound secret, read only at the sites trust
+boundary 2 lists. This milestone's job
 is to keep it that way while a real OAuth token is in the request: the inbound token is consumed by
 the middleware, the header is stripped before rmcp sees it, and nothing downstream can read it.
 That willikins now mints the token changes nothing here, and the second half — not accepting a
@@ -373,7 +422,9 @@ the seam says there is one.
 
 **What the journal records, and how the claims get there.** The claims themselves, as new
 **optional** fields on every event that already carries a principal: `subject`, `issuer`,
-`client_id`. They are authorization-server-supplied text — willikins' own or an adapter's — so each
+`client_id`. Since 3m those events are, by name, `ToolCalled`, `PlanRecorded`, `ApprovalGranted`
+and `ApprovalRejected` (whose field is `approver`), `ApplyRefused`, `RunStarted`, `TeardownPlanned`
+and `TeardownStarted` (`crates/willikins-journal/src/event.rs`). They are authorization-server-supplied text — willikins' own or an adapter's — so each
 is bounded and escaped the way `willikins_types::quoted` bounds a rejected literal before it is
 written, and each is omitted when the claim is absent. `client_id` in particular must tolerate
 absence: willikins emits it on every token it mints (decision 22), and RFC 9068 §2.2's claim list
@@ -392,16 +443,19 @@ pub struct Principal { pub id: PrincipalId, pub claims: Option<Claims> }
 
 `Principal` is what the middleware inserts into the extensions, what `principal_for` returns, and
 what **every `Butler` method that writes an event takes** in place of today's `PrincipalId`. That
-is ten methods in `crates/willikins-server/src/butler.rs` — `list_workflows`, `validate`,
-`describe`, `list_tools`, `propose_slug`, `plan`, `approve`, `reject`, `apply` — plus
-`record_auth_failure`, which gains the parameter it does not have today (it takes only a
-`Transport` and an `AuthFailedReason`). `claims` is `None` for every caller that is not an OAuth
-caller: `willikins-cli`'s `--principal`, `serve --stdio`'s local principal, and the existing test
-helpers. Task 6 lists every changed signature: the ten `Butler` methods, the eight `#[tool]`
+is **eleven** methods in `crates/willikins-server/src/butler.rs`: `list_workflows`, `validate`,
+`describe`, `list_tools`, `propose_slug`, `plan`, `approve`, `reject` and `apply`, plus 3m's
+`plan_rollback` (`:1294`) and `apply_rollback` (`:1503`), which journal `ToolCalled` as
+`rollback_plan` and `rollback_apply`. `record_auth_failure` (`:1215`) also changes: it gains the
+parameter it does not have today, because it takes only a `Transport` and an `AuthFailedReason`.
+(The 2026-09-16 text said "ten" and named nine; it predates 3m.) `claims` is `None` for every
+caller that is not an OAuth caller: `willikins-cli`'s `--principal`, including its `rollback`
+commands, `serve --stdio`'s local principal, and the existing test helpers. Task 6 lists every
+changed signature: the eleven `Butler` methods, the eight `#[tool]`
 methods in `crates/willikins-server/src/mcp.rs` and `principal_for` beside them, the approve and
 reject handlers in `crates/willikins-server/src/http/approvals.rs`, `willikins-cli`'s commands in
-`crates/willikins-cli/src/commands.rs`, and the shared helpers under
-`crates/willikins-server/tests/common/`.
+`crates/willikins-cli/src/commands.rs` (the rollback paths included), and the shared helpers under
+`crates/willikins-server/tests/common/`, which `tests/it/main.rs` mounts as `mod common`.
 
 The claims repeat on every event that carries a principal rather than appearing once per session.
 That is deliberate: the journal's fold does not join across events, so a line that does not carry
@@ -415,9 +469,29 @@ added, a journal frozen before the change replays through both readers, and the 
 frozen as the next pass's baseline). So: a fixture frozen **before** this change
 (`crates/willikins-journal/tests/fixtures/pre-2c-every-event.jsonl`, cut from the current binary
 as task 2's first commit, before task 3 changes anything) replays through both readers after it,
-and pass 3 freezes `post-2c-new-shapes.jsonl` as milestone 3's baseline. Both existing fixtures —
-`pre-pass-2-every-event.jsonl` and pass 2's own `post-pass-2-new-shapes.jsonl` baseline — keep
-replaying.
+and pass 3 freezes `post-2c-new-shapes.jsonl` as milestone 3's baseline. The pre-2c fixture holds
+**every `Event` variant the current binary writes**, including 3m's `TeardownPlanned`,
+`TeardownStarted`, `TeardownStepFinished` and `TeardownFinished`. Otherwise the replay guarantee
+would not cover them. Both existing fixtures, `pre-pass-2-every-event.jsonl` and pass 2's own
+`post-pass-2-new-shapes.jsonl` baseline, keep replaying.
+
+**The new identity values are plain domain types, not identifiers, and the plan says why**
+(2026-10-20, reconciling 3i). Since 3i, every `#[domain(identifier)]` type prints as a short
+prefix on every output surface, the approvals page included, and only the CLI's `--reveal` prints
+one whole (`CLAUDE.md`; `approvals.rs`'s decision b7). 2c adds surfaces that show identity:
+
+- the `WrongRole` page's `sub` and `iss`;
+- the consent screen's client display name and redirect host;
+- the 401 and 403 bodies;
+- the journal's `subject`, `issuer` and `client_id`;
+- the enrollment CLI's printed subject.
+
+The subject (`OAuthSubject`) and the client id (`ClientId`) are **plain, non-identifier domain
+types**, because the operator must copy them whole into `WILLIKINS_*_SUBJECTS` and the client
+table. A prefix would make both bootstrap paths useless. They name a willikins-local account or
+client, not a provider's record, so the reason identifiers are masked does not apply. The issuer
+is the public URL. What does not change: every plan and teardown rendering on the rebuilt page
+keeps `mask_json` with no reveal, and the journal keeps full values (decision b4).
 
 *Pinned by test 8.*
 
@@ -436,9 +510,27 @@ premise does not, and is replaced below rather than quietly kept.**
 | `willikins:apply` | the above, plus `apply` |
 | `willikins:approve` | no MCP tool; the approvals page only |
 
+**Two rows are assigned now for tools that do not exist yet** (2026-10-20). They are the rollback
+tools of `todos/2026-10-16-rollback-over-mcp.md`: `rollback_plan` goes under `willikins:plan`, and
+the teardown apply under `willikins:apply`. `run_status` for a teardown run stays under
+`willikins:read`. `rollback_plan` belongs with `plan` because `Butler::plan_rollback` re-observes
+provider state when it computes a teardown (`TeardownAction::Gone` is an observed state), so it
+spends provider budget the way `plan` does. The teardown apply deletes, so it is an apply. Neither
+needs a scope of its own: every teardown already needs a human's approval, and the page's
+approver role is the gate for that.
+
+**The table is tied to the tool list by a test, not by memory.** An unknown tool name is refused
+403 (step 4 below). That fails closed, but it also means a new `#[tool]` would be silently 403'd in
+production until someone remembered this table. So test 7 asserts that every tool in the
+snapshotted tool list
+(`crates/willikins-server/tests/it/snapshots/it__mcp_server__the_tool_list_and_every_schema_is_snapshotted.snap`)
+has exactly one row in `oauth::scope`'s table, and that the table names no tool the list lacks. A
+new tool without a scope row then fails the gate.
+
 `plan` is separated from the read tools because it is the only read-side tool that calls live
-providers and spends the organization's GitHub and Doppler budget — which is why it already has
-its own rate-limit bucket. `apply` is separated because it is the only tool that writes.
+providers and spends the organization's provider budget (GitHub, Doppler, Buildkite, SigNoz, App
+Store Connect). That is why it already has its own rate-limit bucket. `apply` is separated
+because it is the only tool that writes.
 `willikins:approve` grants no tool at all: it is the browser-side intent, and decision 4 says
 where the authority behind it lives. **The same table feeds the consent screen** of decision 20, so
 what a human is asked to grant and what the middleware admits cannot drift apart.
@@ -495,9 +587,10 @@ set an authorization status: `jsonrpc_http_status` in
 version the lock holds. The scope check therefore runs **in the middleware**, in this order:
 
 1. **Validate the token first, before reading one byte of the body.** An unauthenticated request
-   answers 401 carrying the fixed `scope="willikins:read"` — legal, because the specification says
-   the challenged scope set MAY be a subset, a superset or neither, and names a minimal read scope
-   as the recommended initial set. A challenge that named the real scope would require parsing an
+   answers 401 carrying the fixed `scope="willikins:read willikins:plan willikins:apply"`
+   (decision 1 says why it names the three MCP scopes rather than a minimal read scope). That is
+   legal, because the specification says the challenged scope set MAY be a subset, a superset or
+   neither. A challenge that named the exact scope of the refused call would require parsing an
    unauthenticated body, which is the thing this ordering exists to avoid.
 2. **Only for an authenticated request, buffer and parse the body.** The middleware is *not*
    downstream of a body cap: rmcp's 1 MiB cap is applied inside its own service
@@ -518,7 +611,12 @@ version the lock holds. The scope check therefore runs **in the middleware**, in
    `initialize`, `ping`, `tools/list`, notifications, responses — passes once authenticated and is
    forwarded unchanged. A `tools/call` with no `name`, or a name no tool has, is **403**: an
    unknown name maps to no scope, and refusing it on authority rather than forwarding it keeps the
-   middleware from having to know rmcp's tool table to stay closed.
+   middleware from having to know rmcp's tool table to stay closed. **A conditional, for a client
+   speaking 2026-07-28:** that revision's transport makes a server that processes the body check
+   that the `Mcp-Method` and `Mcp-Name` headers match it. This middleware processes the body. If
+   test 19 finds either app negotiating 2026-07-28 against rmcp 3.3.0's sessionless server (verify
+   item 34), the middleware also compares `Mcp-Name` with `params.name` and refuses a mismatch with
+   400. Until then nothing reads either header.
 5. **`GET` and `DELETE` at `/mcp` still require a token**, and then meet rmcp's own **405** with
    `Allow: POST` (`tower.rs:1502`, reached because `legacy_session_mode` is false), which is a
    transport answer this milestone does not change.
@@ -530,8 +628,18 @@ an opportunity — nothing here waits on it.
 The hierarchy is a resource-server obligation at 2026-07-28 — "Servers **MUST** account for
 scope hierarchies, where a broader scope implies narrower ones, when deciding whether a token is
 sufficient for an operation" — so a token carrying only `willikins:apply` satisfies a `describe`
-call. `scopes_supported` lists exactly these four and never `offline_access`, which that revision
-tells protected resources not to advertise and which decision 21 does not issue anyway. The 403's
+call. **The `/mcp` document's `scopes_supported` lists the three MCP scopes** —
+`willikins:read`, `willikins:plan` and `willikins:apply` — and never `offline_access`, which that
+revision tells protected resources not to advertise and which decision 21 does not issue anyway.
+(Until 2026-10-20 it also listed `willikins:approve`.) MCP describes the list as "the minimal set
+of scopes necessary for basic functionality", and Claude requests all of it when a challenge
+carries no `scope`. `willikins:approve` admits no MCP tool, so advertising it on the resource it
+cannot be used at only invites clients to ask for it. **It is never granted at `/authorize`**:
+the consent screen offers the three MCP scopes, and a request naming `willikins:approve` is
+granted the remaining MCP scopes it asked for, with the token response's `scope` stating what was
+granted (RFC 6749 lets a server issue less than was requested). `willikins:approve` is minted
+only by the ceremony hop of decision 4. The RFC 8414 document publishes the same three
+(decision 19). The 403's
 `scope` attribute names only what the refused call needed, which is 2026-07-28's rule and the
 reverse of 2025-11-25's; naming less is safe under both.
 
@@ -659,13 +767,17 @@ bolted on after a session shape has been frozen in tests.
    changing or removing a credential now kills every live session for that account, without a
    redeploy.
 
-**`Sec-Fetch-Site`, and the origin check's two gaps.** OWASP now lists Fetch Metadata as a
-first-class CSRF defence with a **mandatory** fallback to origin verification, which willikins
-already has — so it is purely additive: a non-safe method arriving with `Sec-Fetch-Site:
-cross-site` is refused, and `Vary` names `Sec-Fetch-Site, Origin`. Two fixes to the existing check
-land beside it: the origin match runs **through the trailing `/`**, which is what stops
-`willikins.example.com.attacker.com` from passing a prefix comparison, and a request carrying
-**neither `Origin` nor `Referer`** on a non-safe method is **blocked** rather than allowed.
+**`Sec-Fetch-Site`, and the origin check.** OWASP now lists Fetch Metadata as a first-class CSRF
+defence with a **mandatory** fallback to origin verification, which willikins already has. So it is
+purely additive: a non-safe method arriving with `Sec-Fetch-Site: cross-site` is refused, and
+`Vary` names `Sec-Fetch-Site, Origin`. **The two "fixes" this paragraph used to list are already
+how the code behaves** (corrected 2026-10-20; both have been in place since 0e329eb, 2026-09-15).
+`extract_authority` splits on `/`, `?` and `#`, and `host_matches`
+(`crates/willikins-server/src/http/approvals.rs:276`) compares exactly and case-insensitively, so
+there is no prefix comparison for `willikins.example.com.attacker.com` to pass. And
+`origin_allowed` (`:289`) already refuses when both `Origin` and `Referer` are absent. Both become
+pinning tests in task 8 and test 14, not changes. The one real defect is task 13's:
+`rsplit_once(':')` on a bracketed literal with no port turns `[::1]` into `[:`.
 
 **Everything else milestone 2 built on the page stays.** The body cap, the IPv6-aware origin parser
 (task 13), `X-Frame-Options: DENY`, and the CSP — which **grows a `script-src` with a per-response
@@ -674,7 +786,48 @@ nonce**, because decision 24 puts the first `<script>` this page has ever carrie
 retarget the approve form at another origin. Every refusal is journaled with the
 `AuthFailedReason` that is literally true of it.
 
+**The consent screen's CSP is stated separately, because `form-action 'self'` can break the hand-back
+to the client** (2026-10-20). The consent screen sits behind the same session (decision 20), and
+approving it is a form POST answered by a redirect to the client's registered callback, for
+example `https://claude.ai/api/mcp/auth_callback`. MDN, on `form-action`: "Whether `form-action`
+should block redirects after a form submission is debated and browser implementations of this
+aspect are inconsistent (e.g., Firefox 57 doesn't block the redirects whereas Chrome 63 does)."
+Under the approvals page's policy, a Chrome user's consent would never reach Claude or ChatGPT. So
+the consent response's CSP is `form-action 'self' <origin>`, where `<origin>` is the exact origin
+of the **validated, registered** redirect URI of the pending request: the scheme, host and port
+of a loopback redirect as the request gave them, never a wildcard. Only the consent page widens
+this; the approvals page keeps `form-action 'self'`. A server-chosen, already-validated origin
+adds nothing a markup-injection bug could retarget. The rejected alternative is ending the consent
+POST on a same-origin page that navigates onward with script. It needs a second `<script>` and
+gains nothing over naming the one origin. Whether Chrome and iOS WebKit then follow the redirect is
+measured by test 22's browser check (verify item 35), not assumed.
+
 **Logging out.** `POST /approvals/logout` drops the session record and clears the cookie.
+
+**Pending teardowns are on the rebuilt page too** (2026-10-20, 3m). `Butler::decide`
+(`crates/willikins-server/src/butler.rs:748`) already accepts either kind of id: it tries
+`journal.plan(...)` and falls back to `journal.teardown(...)`, because the two share one `PlanId`
+namespace and each id is minted for exactly one kind. The page does not. `pending_approvals_view`
+(`crates/willikins-journal/src/journal.rs:295`) folds forward plans only, and `get_approvals`
+renders, and issues nonces for, `PlanRecord`s only. So a teardown waiting for a human is invisible
+there. The CLI says as much: "run `willikins approve`" (`crates/willikins-cli/src/render.rs:1141`).
+On Railway the journal is on the volume and the container has no shell, so that path does not
+exist. **Decided: the page lists pending teardowns** (task 24):
+
+- A `pending_teardowns` view beside `pending_approvals_view`.
+- A teardown-shaped section: the steps in order, through `mask_json` like every other value on the
+  page.
+- Session-bound nonces issued for teardown `plan_id`s by the same mechanism.
+- The same `WrongRole` and approver rules.
+
+A nonce is minted for one `plan_id`, and ids are never shared between kinds, so a forward plan's
+nonce cannot decide a teardown, nor the reverse; test 31 asserts both directions anyway. The
+rejected alternative was deferring the view to the todo and stating that no deployed teardown
+could be approved until it landed. It was rejected because 2c rebuilds this page, and building it
+twice costs more than one section. What stays in `todos/2026-10-16-rollback-over-mcp.md` is the
+producer: an agent-callable `rollback_plan` (its scope row is fixed in decision 3) and teardown
+`run_status`. Until that lands, a teardown reaches the deployment's journal only through a
+`Butler::plan_rollback` caller, which in 2c means the tests (open question 4).
 
 **The `WrongRole` page tells the operator their own identity.** A session whose `sub` is not in
 `WILLIKINS_APPROVER_SUBJECTS` gets a 403 page that displays that session's own `sub` and `iss`,
@@ -691,7 +844,7 @@ has re-authenticated in front of since. The idle lifetime is
 ceremonies and authorization codes are in memory and are therefore lost on a redeploy, exactly as
 the nonces already are; the README gains a line saying so, next to the existing recovery notes.
 
-*Pinned by tests 9, 10, 11 and 26.*
+*Pinned by tests 9, 10, 11, 26 and 31.*
 
 ### 5. Which listeners require OAuth
 
@@ -740,14 +893,16 @@ variable names: if either is set, `serve --http` refuses to start with
 `HttpConfigError::RetiredVariable { name }`, naming the variable and pointing at what replaces it.
 
 **Which error type the new refusals live on.** `StartupError`
-(`crates/willikins-server/src/startup.rs:43`) has seven variants and every one of them is about
-the **trusted workflow directory** or the `ServerStarted` write — `Directory`, `Symlink`,
-`InvalidName`, `NameMismatch`, `Document`, `Check`, `Journal`. None is a configuration refusal, so
-this milestone adds none to it. Configuration refusals go where the existing ones are:
+(`crates/willikins-server/src/startup.rs:45`) has **eight** variants, and every one of them is about
+the **trusted workflow directory** or the `ServerStarted` write: `Directory`, `Symlink`,
+`InvalidName`, `NameMismatch`, `Document`, 2b's `Compose`, `Check` and `Journal`. None is a
+configuration refusal, so this milestone adds none to it. Decision 25's refusal of a symlinked
+workflows directory *is* about the trusted directory, so it belongs here, and it reuses
+`Symlink` rather than adding a variant. Configuration refusals go where the existing ones are:
 `HttpConfigError` (`crates/willikins-server/src/http/config.rs:212`, today `NoAgentHash`,
 `ApproverAmongAgentHashes`, `EmptyAllowedHosts`) gains **`RetiredVariable`**,
 **`SymmetricAlgorithm`**, **`CannotVerifyOwnTokens`**, **`SessionOutlivesApprovalWindow`**,
-**`InsecureUrl`** and **`EmptyAllowlist`**; a required variable that is simply unset keeps reusing
+**`InsecureUrl`**, **`NonCanonicalUrl`** (decision 12) and **`EmptyAllowlist`**; a required variable that is simply unset keeps reusing
 `ConfigError::Missing { variable }` (`crates/willikins-server/src/config.rs:33`), which is the
 shape `build_http_config` already reaches for.
 
@@ -1164,6 +1319,22 @@ hold **by construction** rather than by a startup comparison nobody wrote. Start
 (decision 7's loopback carve-out excepted), because each of those makes a derivation ambiguous or
 an identifier insecure.
 
+**It must also be canonical, or startup refuses it** (2026-10-20,
+`HttpConfigError::NonCanonicalUrl`, which also covers the path, query and fragment cases above).
+Anthropic says Claude sends `resource` "set to the canonical form of your MCP server URL ... The
+canonical form has a lowercase scheme and host, no trailing slash, no fragment, and no default
+port". OpenAI says ChatGPT copies the protected-resource document's `resource` exactly. The
+derived issuer, audience and `resource` are compared byte for byte (checks 4 and 5, and decision
+20's `invalid_target`). So a `WILLIKINS_PUBLIC_URL` with an uppercase scheme or host, an explicit
+default port (`:443` for `https`, `:80` for `http`), or a trailing `/` would make every Claude
+connection fail with `invalid_target`. Refusing it at startup, rather than canonicalising it
+silently, keeps the operator's configuration identical to what is published. The check runs on
+the **raw string**. A URL parser such as the `url` crate serialises `https://h` as `https://h/`,
+so every derived identifier is built from the validated raw string, never from a parsed value's
+serialisation. MCP's "implementations SHOULD accept uppercase scheme and host components" is about
+what a client sends, which this refusal does not affect: an incoming `resource` is compared with
+the one canonical value.
+
 **Sibling one: the issuer identifier is derived too**, and is `WILLIKINS_PUBLIC_URL` exactly, with
 no path. Two things follow. The RFC 8414 well-known URL's insertion and append forms **coincide**
 for a bare-origin issuer, which removes by construction a three-route trap a shipped server has hit;
@@ -1320,6 +1491,21 @@ during the research, so whether `cargo update -p rmcp --precise 3.4.0` resolves 
 pass is unverified, as is the effect of 3.4.0's cancellation and pre-init changes on willikins'
 stateless configuration.
 
+**What the `allowed_origins` list holds** (2026-10-20; the plan never said). It holds exactly
+one entry: the origin of `WILLIKINS_PUBLIC_URL`, derived like every other identifier (decision 12)
+and not separately configurable. rmcp 3.3.0's `validate_origin_header` (around `tower.rs:884`)
+does three things. It skips the check for an empty list. It accepts a request with **no** `Origin`
+header. And it answers `Forbidden: Origin header is not allowed` for a present but unlisted one.
+That list therefore refuses foreign *browser* origins and leaves header-less server-to-server
+callers alone. **This is conditional on a measurement.** Anthropic lists "Strict `Origin`-header
+validation: an overly strict check rejects Anthropic's requests" among the common causes of an
+`initialize` timeout. MCP 2026-07-28 says "If the `Origin` header is present and invalid, servers
+MUST respond with HTTP 403 Forbidden". No primary source says which `Origin`, if any, Anthropic's
+or OpenAI's backend sends (verify item 26). Test 19 records it on a real Claude and a real ChatGPT
+`initialize` before go-live. If either sends one, it is listed by exact value before the list
+freezes; the list is never emptied to make it pass. Pass 3 gains the row "a vendor-backend
+`Origin` is not 403".
+
 **If task 1b is skipped, nothing changes.** No task and no acceptance test depends on it: the
 origin value is set at 3.3.0, the scope check's placement is settled at 3.3.0 (decision 3), and the
 milestone ships on the lock as it stands. Recording why it was skipped is the whole of the
@@ -1363,6 +1549,18 @@ without implementing it sends clients to a dead end (decision 23). The RFC 9728 
 everything decision 1 already specifies; only its `authorization_servers` value changes, to
 willikins' own issuer identifier.
 
+**RFC 8414's REQUIRED members are pinned as well, not left to the struct** (2026-10-20). RFC 8414
+§2 lists three: "response_types_supported REQUIRED"; `authorization_endpoint`, "REQUIRED unless no
+grant types are supported that use the authorization endpoint"; and `token_endpoint`, "REQUIRED
+unless only the implicit grant type is supported". willikins emits
+`response_types_supported: ["code"]` and both endpoint URLs, derived from `WILLIKINS_PUBLIC_URL`.
+**The document also publishes `scopes_supported`**, with the same three MCP scopes as the `/mcp`
+document and never `offline_access` or `willikins:approve` (decision 3). Two vendor rules make that
+worth stating. Claude's 403 step-up falls back to "the authorization server metadata's
+`scopes_supported`". And OpenAI says that when a provider advertises scopes "in `scopes_supported`
+of its `.well-known/oauth-authorization-server` ... ChatGPT requests those scopes by default". So
+the two documents must agree, and test 20 asserts that they do.
+
 *Pinned by tests 1, 20.*
 
 **20. `/authorize`, PKCE, and the consent step.** `GET /authorize` accepts `response_type=code` and
@@ -1383,8 +1581,25 @@ discipline willikins already applies with domain newtypes, and the shape prior a
   request for loopback IP redirect URIs", because a desktop MCP client binds an ephemeral port at
   request time. A literal string-equality matcher is non-conformant and a matcher that ignores the
   port everywhere is a vulnerability, so the exception is scoped to loopback hosts and to the port
-  alone. Whether `localhost` joins `127.0.0.1` and `[::1]` in that set is verify item 8 and a
-  fixture decision for task 11 — four fetched sources show three behaviours.
+  alone. **`localhost` joins `127.0.0.1` and `[::1]` in that set** (verify item 8, settled
+  2026-10-20). Claude Code registers both `http://localhost/callback` and
+  `http://127.0.0.1/callback` and needs both matched with the port ignored. The relaxation never
+  cross-matches between the three hosts, which is the TypeScript SDK's rule. **The two hosted
+  apps' redirects are HTTPS and matched exactly, port included**:
+  `https://claude.ai/api/mcp/auth_callback` and
+  `https://chatgpt.com/connector_platform_oauth_redirect`. These are the redirects that matter
+  most for this deployment, and test 22 has a case for them.
+- **`state` is echoed byte for byte on every redirect, success and error alike** (2026-10-20;
+  the earlier text never said so). RFC 6749 §4.1.2: "state REQUIRED if the "state" parameter was
+  present in the client authorization request. The exact value received from the client." MCP's
+  security considerations: clients "SHOULD use and verify state parameters ... and discard any
+  results that do not include or have a mismatch with the original state". Without it, both
+  target apps would throw the callback away. `state` is stored with the pending authorization,
+  beside `client_id`, `redirect_uri`, `code_challenge` and `resource`. It is returned unchanged
+  next to `iss`, and omitted when the request had none. It is opaque, bounded like every other
+  stored request value, never interpreted, and never journaled. (Decision 4 deleted the approvals
+  page's *own* `state`, which existed because that page was a client. This is the server-side
+  half, which every authorization server owes its clients.)
 - **`iss` is on every authorization response, error responses included.** RFC 9207 §2 makes it a
   MUST for any server supporting it and draft-16 §4.1.2 already lists it REQUIRED where MCP still
   says SHOULD. It is one query parameter and one metadata boolean now, and expensive to retrofit;
@@ -1392,8 +1607,25 @@ discipline willikins already applies with domain newtypes, and the shape prior a
 - **The consent screen clearly displays the redirect URI's hostname**, with an additional warning
   for a `localhost`-only redirect. Both are MCP security-considerations requirements, and the
   hostname display is the only thing standing between a human and an attacker-registered redirect.
-  The screen presents the four scopes of decision 3, read from the same table the middleware uses,
-  and requires a session — which is the second consumer decision 4 gives the human session.
+  The screen presents the three MCP scopes of decision 3, read from the same table the middleware
+  uses, and requires a session, which is the second consumer decision 4 gives the human session.
+  Its CSP widens `form-action` to the one validated redirect origin (decision 4).
+- **An `/authorize` with no session parks the request, logs in, and resumes** (2026-10-20; the
+  earlier text did not say how). On a phone, the first `/authorize` comes from the Claude or
+  ChatGPT app in a fresh browser context with no willikins session. In order:
+  1. Phase 1's checks run first: client, redirect, PKCE, `resource` and `state` bound.
+  2. The validated request is parked server-side, in a store shaped like the ceremony store (300 s
+     TTL, pruned on insert, capped at 1,024, 503 when full).
+  3. The browser goes to `/approvals/login` carrying only an opaque id, with the parked request
+     bound to it by a short-lived `__Host-willikins-authorize` cookie, as the ceremony is bound by
+     `__Host-willikins-login`. A resume link opened in another browser therefore resumes nothing.
+  4. After the passkey ceremony, or the recovery-code path, the browser returns to the consent
+     screen for exactly the parked request.
+  5. The parked entry is claimed once, by the same atomic get-and-remove as a code.
+
+  A request that expires while parked ends in an error redirect, which carries `state` and `iss`
+  like any other. Which browser context each iOS app opens, and whether `navigator.credentials`
+  works there, is verify item 13.
 - **`resource` is accepted, bound into the code, and narrowed.** Anything that is not the one
   canonical resource identifier is refused `invalid_target`. This is the hinge between the two
   halves in one process: the `aud` the issuer writes here is the `aud` the validator already
@@ -1440,8 +1672,15 @@ attacked.
 - **`resource` at the token request may only match what the code granted** — never widen, never
   introduce.
 - **Clients are public; `token_endpoint_auth_method` is `"none"`; there is no client secret
-  anywhere in the deployment.** MCP desktop clients with loopback redirects are public clients, and
-  draft-16 accepts exactly that given mandatory PKCE. The one confidential client the delegating
+  anywhere in the deployment.** Every client this deployment serves is a public client. That
+  covers local MCP clients with loopback redirects, and also the two hosted apps the operator
+  named. Anthropic: "Leave the secret blank unless your authorization server requires one".
+  OpenAI says token-endpoint method `none` applies to "CIMD, DCR, and predefined OAuth clients"
+  (whether ChatGPT's static-credential form accepts a blank secret is verify item 27). draft-16
+  accepts a public client given mandatory PKCE. (The earlier text justified this with loopback
+  redirects alone. The conclusion stands, but that reason covered neither target app.) `/token`
+  accepts `Content-Type: application/x-www-form-urlencoded`, the only body RFC 6749 defines and
+  the one Anthropic requires, and answers well inside Claude's 10-second wait. The one confidential client the delegating
   draft had — the approvals login — stops being an OAuth client at all (decision 4), so the whole
   client-secret surface disappears rather than moving.
 - **A code redeemed by the wrong client answers `invalid_grant` indistinguishably from an unknown
@@ -1453,13 +1692,29 @@ attacked.
   detection and family revocation — which is also where every one of the fetched corpus's worst
   problems lived. The cost is named rather than hidden: the access-token lifetime becomes exactly
   how often a human re-consents at `/authorize` (open decision 4), and an operator who believes a
-  token leaked waits that lifetime out, because there is no revocation endpoint either.
+  token leaked waits that lifetime out, because there is no revocation endpoint either. **On the
+  phone use case that put 2c on the critical path, that means a passkey round trip every 3600 s.**
+  Both apps refresh reactively on a 401 (Anthropic: "Claude refreshes tokens reactively on a `401`
+  response, and proactively up to five minutes before the stored expiry"), and with nothing to
+  refresh they must re-run OAuth. Whether either app does that inline or flips the connector to
+  "Reconnect" is verify item 32, recorded by test 19. The decision is the operator's and is not
+  changed here (open question 1). The ways out are those of
+  `todos/2026-09-16-unattended-agents-token-longevity.md`. If refresh is ever added, Anthropic
+  requires rotation for public clients: "Rotate refresh tokens for public-client connections".
 
 *Pinned by test 23.*
 
 **22. The signing key: ES256, a thumbprint `kid` on both sides, persistence, and a two-key
 overlap.** The token-minting half costs **zero new crates**: `jsonwebtoken` 11 signs, derives the
-public JWK from the private key, and computes the `kid`.
+public JWK from the private key, and computes the `kid`. **It is not even the first ES256 signer in
+the tree.** `crates/willikins-providers-http/src/apple_credential.rs` already mints App Store
+Connect JWTs: it calls `EncodingKey::from_ec_pem` at `:175` and `Header::new(Algorithm::ES256)` at
+`:213`, under the workspace's `jsonwebtoken = { version = "11", features = ["rust_crypto",
+"use_pem"] }`. `crates/willikins-types/src/appstore.rs` canonicalises SEC1 or PKCS#8 input to
+PKCS#8 with `p256` for exactly that call. The issuer copies that shape. The key is a
+`#[domain(secret)]` type in `willikins-types`, modelled on `AppleSigningKey`, whose own
+`reveal_for_signing` is the sixth token-less `expose_secret` exception (trust boundary 2), called
+only by `issuer::mint`.
 
 - **The token carries all seven of RFC 9068's REQUIRED claims** — `iss`, `exp`, `aud`, `sub`,
   `client_id`, `iat`, `jti` — with `jti` REQUIRED here even though it is OPTIONAL in plain RFC
@@ -1511,7 +1766,16 @@ and deprecated**, and pre-registration carries no MUST at all — while its own 
 order puts pre-registration *first*. For a handful of agent clients that is not a compromise; it is
 what makes an in-house authorization server genuinely small.
 
-The table holds a client id, a display name and a set of registered redirect URIs per client.
+The table holds a client id, a display name and a set of registered redirect URIs per client. It
+lives on the volume at `/data/clients.yaml` (decision 25), outside `workflows/`, and it is written
+by the operator by hand. At go-live it holds one entry per target app (go-live step 5), each with
+the exact HTTPS redirect its vendor documents. **Pre-registration works for both apps, but only on
+a non-default path, which the plan states so nobody discovers it at the dialog.** Claude's default
+is its published identity, a Client ID Metadata Document, and Anthropic says Claude "falls back to
+DCR" when the server advertises neither. willikins advertises neither, so that default fails. The
+operator must pick "Use your own OAuth client", and "You can't change authentication settings after
+you add a connector". ChatGPT uses static credentials when they are entered: "if static
+credentials are provided, then they will be used".
 `client_id_metadata_document_supported` is advertised **only if** CIMD is implemented, which it is
 not in 2c: the draft makes advertising it a MUST for any server that implements it *and* publishes
 RFC 8414 metadata, and the converse is that advertising it without implementing it sends clients to
@@ -2064,8 +2328,8 @@ refusal that needs the runtime or the filesystem cannot live there. Those refusa
 key configured and none can be generated or written**, and **a credential store that cannot be read
 or written**. `StartError::JwksUnavailable` is **not** among them: decision 16 removes the startup
 JWKS fetch, so the variant the delegating draft introduced has no producer and is not added.
-`startup::StartupError` is **not** touched: its seven variants are the trusted-directory refusals
-and none of this milestone's refusals is one.
+`startup::StartupError` gains no variant: its eight variants (2b added `Compose`) are the
+trusted-directory refusals, and decision 25's symlinked-directory refusal reuses `Symlink`.
 
 **`mcp.rs`.** `principal_for` reads the `Principal` the OAuth middleware inserted — id plus claims,
 not a bare `PrincipalId` — and every `#[tool]` method passes it on to the `Butler` method it calls,
