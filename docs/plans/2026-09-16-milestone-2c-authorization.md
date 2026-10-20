@@ -1083,7 +1083,7 @@ new, and pass 3 must attack them at least as hard.
 | A consent page whose `form-action` would name any origin other than the validated registered redirect's | impossible by construction: the origin comes from the stored binding, never from a request field |
 | A forward plan's nonce used to decide a teardown, and the reverse | **403** `InvalidNonce` in both directions (decision 4) |
 | A vendor backend's `initialize` carrying an `Origin` header | **not 403**: the measured origin is in `allowed_origins` (decision 18), and no other foreign origin is |
-| `WILLIKINS_WORKFLOWS_DIR` swapped for a symlink after start, and an entry swapped between check and open | refused, `StartupError::Symlink` and `O_NOFOLLOW` respectively (decision 25) |
+| `WILLIKINS_WORKFLOWS_DIR` swapped for a symlink after start, then read by a scan and by a named load; and an entry swapped for a symlink before its open | refused: the directory's `O_DIRECTORY \| O_NOFOLLOW` open fails (`StartupError::Symlink` for a scan, `UnknownWorkflow` for a named load), and the entry's `openat(O_NOFOLLOW)` fails. A swap of the mount point's own parents is out of reach without root and is not claimed (decision 25) |
 | A document changed on the volume between plan and approval | the page shows no stale description and names the change; apply refuses `DocumentChanged` |
 | A non-canonical `WILLIKINS_PUBLIC_URL` (uppercase host, `:443`, trailing `/`) | startup refuses with `NonCanonicalUrl`; no deployment publishes an identifier Claude's canonical `resource` cannot match |
 | **Added by the 2026-10-20 review.** A forged consent POST from a sibling host, one without its nonce, one with another session's nonce, and one carrying its own `redirect_uri` | **403** for the first three (`same-site` refused, `InvalidNonce`); the fourth gets the stored redirect, never the posted one |
@@ -2025,7 +2025,48 @@ what makes an in-house authorization server genuinely small.
 
 The table holds a client id, a display name and a set of registered redirect URIs per client. It
 lives on the volume at `/data/clients.yaml` (decision 25), outside `workflows/`, and it is written
-by the operator by hand. At go-live it holds one entry per target app (go-live step 5), each with
+by the operator by hand.
+
+**Its schema and load rules** (2026-10-20 review; the operator writes it by hand at go-live step
+5, and the plan gave them nothing to follow). Decision 20 calls the hostname display "the only
+thing standing between a human and an attacker-registered redirect", and this file is what defines
+a registered redirect, so it gets the same integrity rules as the documents:
+
+```yaml
+# /data/clients.yaml: read once at startup; a change needs a restart.
+clients:
+  - id: claude-hosted
+    name: Claude
+    redirect_uris:
+      - https://claude.ai/api/mcp/auth_callback
+  - id: chatgpt
+    name: ChatGPT
+    redirect_uris:
+      - https://chatgpt.com/connector_platform_oauth_redirect   # provisional until go-live step 10
+  - id: claude-code-local
+    name: Claude Code on the operator's machine
+    redirect_uris:
+      - http://localhost:8080/callback    # loopback: the port is relaxed at request time
+      - http://127.0.0.1:8080/callback    # both forms, for the reason decision 20 gives
+```
+
+- The keys are exactly `clients`, and per client `id` (a `ClientId`), `name` and `redirect_uris`;
+  an unknown key is refused, as `deny_unknown_fields` does. A per-client lifetime would be a new
+  key, not an existing one (open question 1).
+- A redirect is `https://` with a host, or `http://` on `localhost`, `127.0.0.1` or `[::1]`, with
+  no fragment. Each client has at least one. A duplicate `id`, and the reserved
+  `willikins-approvals` (decision 4), are refused. An empty table starts with a named warning,
+  since it only means no client can connect.
+- **Read once, at startup, and never re-read.** The file is opened with `O_NOFOLLOW` and must be
+  a regular file. A symlink, a non-regular file, unparseable YAML or any rule above refuses
+  startup with `StartError::ClientTable`, naming the rule and never echoing a value.
+- Startup logs each client id with its redirect hosts, and **`ServerStarted` gains an optional
+  `clients_sha256`** field (additive, like every journal change here), so every table that ever
+  served is in the journal beside the documents' hashes.
+- `willikins documents check` gains `--clients <file>` (task 11): the same parser and rules, and
+  the table's sha printed beside the documents' manifest.
+- The credential store's path gets the same no-symlink rule: `WILLIKINS_CREDENTIAL_STORE_PATH` is
+  opened with `O_DIRECTORY | O_NOFOLLOW`, and a symlink there is `StartError`. At go-live it holds one entry per target app (go-live step 5), each with
 the exact HTTPS redirect its vendor documents. **Pre-registration works for both apps, but only on
 a non-default path, which the plan states so nobody discovers it at the dialog.** Claude's default
 is its published identity, a Client ID Metadata Document, and Anthropic says Claude "falls back to
@@ -2279,12 +2320,34 @@ costs are recorded rather than designed around:
 **Three code changes harden the trusted directory now that it can change under a running server**
 (task 21). Each is test-first.
 
-- **The directory itself must not be a symlink.** `scan_directory` calls `std::fs::read_dir(dir)`,
-  which follows `dir` when it is one, and only each entry's own file type is checked. So at start
-  and on every scan, a `WILLIKINS_WORKFLOWS_DIR` whose `symlink_metadata` is not a plain directory
-  is refused, reusing `StartupError::Symlink`. Each document is opened with `O_NOFOLLOW`, and
-  `is_file` is checked on the opened handle's metadata, which closes the gap between
-  `load_named_document`'s `symlink_metadata` and its open.
+- **The directory and each document are opened through handles, never re-resolved by path**
+  (rewritten by the 2026-10-20 review, which found the earlier bullet both incomplete and
+  check-then-use). Today three paths follow a symlink:
+  - `scan_directory` calls `std::fs::read_dir(dir)`, which follows `dir`;
+  - named loads (`plan`, `validate`, `describe`, `apply`, `plan_rollback` and the `uses:`
+    resolver, through `load_named_document` and `workflow_path`, `document.rs:66-116`) check
+    `symlink_metadata` on the entry only, never on `dir`;
+  - the open itself is not in the server: `willikins_dsl::load_document_with_bytes`
+    (`crates/willikins-dsl/src/lib.rs:336-360`) calls `std::fs::metadata`, which follows, and then
+    `File::open`.
+
+  A refusal of a symlinked directory checked only at scan time would leave every named load
+  following a `/data/workflows` swapped after start, and a `symlink_metadata` check followed by an
+  open by path leaves a window between the two. So **each scan and each named load opens
+  `WILLIKINS_WORKFLOWS_DIR` once with `O_DIRECTORY | O_NOFOLLOW`**, which refuses a symlinked
+  directory (`StartupError::Symlink` at a scan, `LoadError::Symlink` at a named load). It lists
+  entries from that handle, opens each document **relative to it** with
+  `openat(O_RDONLY | O_NOFOLLOW | O_CLOEXEC)`, and checks `is_file` on the opened handle's
+  metadata. The calls come from **`rustix`** with its `fs` feature, a new direct dependency of
+  `willikins-dsl` and `willikins-server` that is already in the lock at 1.1.4 (through `fd-lock`
+  and `tempfile`), so no new crate enters the build. `std` has no `O_NOFOLLOW` constant, and
+  `libc`'s `openat` is `unsafe`, which the workspace's `unsafe_code = "forbid"` rules out;
+  `rustix`'s is safe. **`willikins-dsl` gains `load_document_from_file(File, &Path)`**, which keeps
+  `MAX_DOCUMENT_BYTES` and the bounded read but sizes the file from the opened handle; the path
+  entry points stay for the CLI. **What stays open, stated:** the directory's own parent
+  components (`/data`, the mount point) are still resolved by path when the directory is opened.
+  Swapping them needs root inside the container, and the plan accepts that residual rather than
+  claiming it closed.
 - **The startup scan hashes exactly the bytes it parsed.** `scan_directory` parses through
   `willikins_dsl::load_document` and then hashes a second `std::fs::read`
   (`crates/willikins-server/src/startup.rs`, the scan loop). `document.rs` already fixed that
@@ -2292,6 +2355,11 @@ costs are recorded rather than designed around:
   On a volume it is reachable. The scan moves to `load_document_with_bytes`.
 - **Startup logs each document's file name with its short sha**, and logs a named warning when the
   directory holds zero documents.
+- **"The server never writes `workflows/`" gets a guard** (2026-10-20 review), as the tree's
+  other invariants do (`no_gh_writes_guard.rs`, `sink_token_guard.rs`): a source test asserting
+  that no file in `crates/willikins-server/src` that names `workflows_dir` calls a write, create,
+  rename or remove API (`std::fs::write`, `File::create`, `OpenOptions` with write or create,
+  `rename`, `remove_file`, `remove_dir_all`, `create_dir_all`).
 
 **The operator's procedure, human only.** The commands are the operator's; no agent runs any of
 them.
@@ -2660,12 +2728,23 @@ document's short sha, and shows "document says" only while the current file stil
 planned sha (task 23, decision 25). **There is no `/approvals/callback`, no `state` store, no `code_verifier` and
 no token exchange**: the approvals page is no longer an OAuth client of anyone, willikins included.
 
-**`startup` and `document`** gain decision 25's hardening (task 21). `scan_directory` refuses a
-`WILLIKINS_WORKFLOWS_DIR` that is itself a symlink, reusing `StartupError::Symlink`. It hashes
-exactly the bytes it parsed, through `load_document_with_bytes`. And it logs each file name with
-its short sha, plus a named warning for an empty directory, or for one outside
-`RAILWAY_VOLUME_MOUNT_PATH` when that is set. Named loads open with `O_NOFOLLOW` and check the
-opened handle. Nothing in the server writes under `WILLIKINS_WORKFLOWS_DIR`.
+**`startup` and `document`** gain decision 25's hardening (task 21). Every scan and every named
+load opens `WILLIKINS_WORKFLOWS_DIR` once with `O_DIRECTORY | O_NOFOLLOW` through `rustix`,
+refusing a symlinked directory (`StartupError::Symlink`, `LoadError::Symlink`), and opens each
+document relative to that handle with `openat(O_NOFOLLOW)`, checking `is_file` on the opened
+handle. `workflow_path` and the `TrustedResolver` go through the same handle, so no named load
+re-resolves the directory by path. The scan hashes exactly the bytes it parsed, through
+`willikins-dsl`'s new `load_document_from_file`. And it logs each file name with its short sha,
+plus a named warning for an empty directory, or for one outside `RAILWAY_VOLUME_MOUNT_PATH` when
+that is set. Nothing in the server writes under `WILLIKINS_WORKFLOWS_DIR`, and a source guard
+holds it. **Task 22 makes the scan reachable from the CLI**: `startup` is a private module today
+(`lib.rs:22`, which re-exports only `InputSummary`, `StartupError` and `WorkflowSummary`), so
+task 22 exports `pub fn documents_manifest(dir, &Catalog)` returning each file's name and sha, or
+the `StartupError` a start would give.
+
+**`willikins-dsl`** gains `load_document_from_file(File, &Path)` (task 21): the size cap and the
+bounded read of `load_document_with_bytes`, sized from the opened handle's metadata rather than
+`std::fs::metadata` on a path.
 
 **`http::auth`** loses `bearer_auth`'s hash comparison and `basic_auth` entirely. `TokenHash`,
 `matches_any` and the constant-time compare go with them; nothing else in the crate uses them.
@@ -2737,7 +2816,8 @@ same machinery, not a second one.
 Three new **optional** fields — `subject`, `issuer`, `client_id` — on every event that carries a
 `principal`, each bounded and escaped before it is written (decision 2), plus two more optional
 fields on `AuthFailed` alone: `subject`, written only for the refusal of a token that validated,
-and `suppressed`, written only on a coalesced line (decision 1). No existing field changes type,
+and `suppressed`, written only on a coalesced line (decision 1). `ServerStarted` gains an optional
+`clients_sha256`, the client table's hash at that start (decision 23). No existing field changes type,
 **no variant is removed** — `InvalidCredential` and `MalformedUsername` stay in the enum and stop
 being produced, because `pre-pass-2-every-event.jsonl` carries both and removing a variant would
 break the replay the whole discipline exists to guarantee — and no field becomes required.
@@ -2867,7 +2947,7 @@ values and their shape, not their spelling.
 | `WILLIKINS_SIGNING_KEY_PEM` | none | `serve --http` | The current ES256 signing key, PKCS#8 PEM, a secret whose `Display` and `Debug` print `[REDACTED <Type>]` and which has no `Serialize`. Doppler only (settled decision 2), generated by `willikins signing-key generate` (decision 22). Read by `issuer::key`. |
 | `WILLIKINS_SIGNING_KEY_RETIRING_PEM` | empty | optional | The previous signing key during a rotation overlap. Published in the JWKS, never used to sign. Two variables exist because one cannot express an overlap (decision 22). Read by `issuer::key`. |
 | `WILLIKINS_CREDENTIAL_STORE_PATH` | none | `serve --http` | The durable passkey and recovery-code store, on the volume at `/data/credentials/`, beside the journal and never inside `workflows/` (decision 25). Read by the ceremonies and the enrollment CLI. |
-| `WILLIKINS_CLIENTS_PATH` | none | `serve --http` | The pre-registered client table: client id, display name, registered redirect URIs (decision 23). On the volume at `/data/clients.yaml`, written by the operator by hand, never inside `workflows/`. Read by `issuer::clients`. |
+| `WILLIKINS_CLIENTS_PATH` | none | `serve --http` | The pre-registered client table: client id, display name, registered redirect URIs, in decision 23's schema. On the volume at `/data/clients.yaml`, written by the operator by hand, never inside `workflows/`. Read once at startup by `issuer::clients`; a symlink or a malformed table is `StartError::ClientTable`, and a change needs a restart. |
 | `WILLIKINS_AGENT_SUBJECTS` | none | `serve --http` | Comma-separated `sub` values allowed to hold any MCP scope. Empty or unset refuses startup (decision 3). Read by `oauth::middleware::require_token`. |
 | `WILLIKINS_APPROVER_SUBJECTS` | none | `serve --http` | Comma-separated `sub` values allowed to approve. Empty or unset refuses startup. Read by the approvals decision handler. |
 | `WILLIKINS_OAUTH_ALGORITHMS` | `ES256` | optional | Comma-separated JWA names for the **validator's** allowlist. Asymmetric families only; intersected per key; must contain `ES256` (decision 15). Read by `oauth::validate`. |
@@ -3105,7 +3185,11 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     key is a required variable like any other; a key that is **present and cannot be loaded** —
     the shape verify item 4's PKCS#8 round trip would fail in — a credential store that cannot be
     read or written, and a client table that cannot be read or is malformed → `StartError`,
-    because all three need the filesystem or the runtime (decision 6). A loopback `--bind` with no OAuth configuration → the same refusals as any other
+    because all three need the filesystem or the runtime (decision 6). The client table's cases
+    are each `StartError::ClientTable`: a symlink, a directory, an unknown key, a duplicate `id`,
+    the reserved `willikins-approvals`, a non-loopback `http://` redirect, and a client with no
+    redirect; a symlinked credential-store path is refused the same way. A valid table logs one
+    line per client with its redirect hosts, and `ServerStarted` carries its `clients_sha256`. A loopback `--bind` with no OAuth configuration → the same refusals as any other
     bind (decision 5). `hash-token` is gone from both binaries: invoking it exits non-zero with a
     usage error.
 13. **Bounded header read.** The pass-2 slowloris test, un-`#[ignore]`d: a client that trickles
@@ -3356,13 +3440,18 @@ at the test it was written about. The authorization-server half is tests 20 to 2
 28. **The trusted directory on a writable volume** (decision 25, task 21). A
     `WILLIKINS_WORKFLOWS_DIR` that is itself a symlink to a directory of valid documents →
     `StartupError::Symlink` at start, and the same refusal from `list_workflows` if the swap happens
-    after start. A symlinked entry is still refused. A file swapped for a symlink between the
-    `symlink_metadata` check and the open is refused by `O_NOFOLLOW`. The hash `ServerStarted`
+    after start; a `plan` by name after that swap → `ButlerError::UnknownWorkflow`, because
+    `load_source` maps `LoadError::Symlink` there (`butler.rs:247-255`), and it never reads the
+    swapped-in directory. A symlinked entry is still refused. An entry that is a symlink when it is
+    opened is refused by `openat(O_NOFOLLOW)` relative to the directory handle, with no path
+    re-resolved between the check and the open. The hash `ServerStarted`
     records for each document equals the sha256 of the exact bytes that were parsed, asserted by a
     test that changes the file between the two reads the old loop made. **A negative fixture placed
-    in the directory after `Butler::start` cannot be planned**: `plan` by its name refuses with the
-    same error startup would have produced, and `list_workflows` fails closed with
-    `ButlerError::Startup`, never by silently skipping the file. Startup logs one line per document
+    in the directory after `Butler::start` cannot be planned**: `plan` by its name refuses with
+    `ButlerError::Document` for a fixture that does not parse and `ButlerError::Check` for one that
+    parses but fails `check`, the same rule startup applies under a different type, because `plan`
+    never returns a `StartupError` (the per-case errors were named by the 2026-10-20 review); and
+    `list_workflows` fails closed with `ButlerError::Startup`, never by silently skipping the file. Startup logs one line per document
     with its file name and short sha, a named warning for an empty directory, and a named warning
     when `RAILWAY_VOLUME_MOUNT_PATH` is set and the directory is not beneath it. No fixture from
     `workflows/fixtures/` is ever placed in a deployment's directory: the test builds its own
@@ -3372,7 +3461,11 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     `ServerStarted.workflow_hashes` for a server started on the same directory. Over a directory
     holding a negative fixture or a broken `uses:` child, it exits non-zero naming the file, with
     the same `StartupError` a start would have produced. It writes nothing, and it refuses a
-    symlinked directory like the server does.
+    symlinked directory like the server does. It needs no provider credential in its environment,
+    and it checks against the live tool set, so a document using a live-only tool passes here
+    exactly as it would on a deployment without `WILLIKINS_FAKE_CATALOG`. With `--clients <file>`
+    (task 11) it applies decision 23's rules to the table and prints the table's sha, equal to
+    `ServerStarted.clients_sha256`.
 30. **The approvals page shows what was planned, not what is on disk now** (decision 25, task 23).
     A pending plan's section shows the root document's short sha beside the `used` closure's.
     Render it, change the document's bytes on disk, and render again. The second render shows **no**
@@ -3448,8 +3541,8 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 0 | Research: `docs/research/2026-09-16-m2c-authorization.md`, then `…-m2c-own-authorization-server.md` and `…-m2c-scope-revision.md`. **Done 2026-09-16.** The 2026-10-20 code audit, client-and-spec pass and volume pass are folded into this plan's 2026-10-20 addendum | | six parallel passes, then two; then three on 2026-10-20 |
 | 1 | **Dockerfile and dependency pins, first, because it is the one thing that can invalidate the shape.** **Record** the `jsonwebtoken` backend as the `rust_crypto` the workspace already uses (`Cargo.toml:75`), and do not build both: a switch would be workspace-wide and would touch App Store Connect (pinned dependencies). Add `libssl-dev` and `pkg-config` to the builder for `webauthn-rs-core`'s unconditional `openssl`/`openssl-sys`. **Verify that the distroless runtime image ships the `libssl.so.3` that `openssl-sys` 0.9.114 links against** (verify item 2, build-blocking). Rewrite the `Dockerfile:41` comment that claims no `openssl-sys` anywhere. Pins: `webauthn-rs` 0.5.5 (+ core/proto), `argon2` 0.6.0, `password-hash` **0.6.1**, `axum-extra` 0.12 `cookie-signed`, `rand_core = { version = "0.6", features = ["getrandom"] }` on `willikins-server` (the providers-github precedent, not `rand` 0.8), and `webauthn-authenticator-rs` 0.5.5 dev-only. Record the RUSTSEC-2023-0071 justification (pinned dependencies). Pinned by: the image builds on Railway's builder, the runtime container starts and serves `/healthz`, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- image_contents::`, and all four gates | 0 | sonnet, verified by opus |
 | 1b | rmcp 3.4.0 (conditional, decision 18): `cargo update -p rmcp --precise 3.4.0`, the `ServerInfo` rename at three `mcp.rs` sites, `enforce_origin_validation()`, all four gates. Lands it or records why not; nothing depends on it | 1 | sonnet |
-| 21 | **Harden the trusted directory for a writable volume** (decision 25). Refuse a symlinked `WILLIKINS_WORKFLOWS_DIR` at start and on every scan (`StartupError::Symlink`). Open named documents with `O_NOFOLLOW` and check the opened handle. `scan_directory` hashes the bytes it parsed (`load_document_with_bytes`). Startup logs each name with its short sha, and warns on an empty directory and on a directory outside `RAILWAY_VOLUME_MOUNT_PATH`. Pinned by: test 28, a new module `trusted_directory_volume`, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- trusted_directory_volume:: acceptance_13_trusted_directory::` | 1 | sonnet test-first, opus attacks |
-| 22 | **`willikins documents check <dir>`** (decision 25): runs `scan_directory`, prints the `shasum -a 256` manifest equal to `ServerStarted.workflow_hashes`, writes nothing. README section on the publish procedure, with decision 25's "agents never write the volume" rule. Pinned by: test 29, `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- documents_check::` | 21 | sonnet |
+| 21 | **Harden the trusted directory for a writable volume** (decision 25). Add `rustix = { version = "1", features = ["fs"] }` to `willikins-dsl` and `willikins-server` (1.1.4 is already in the lock). Open the directory once per scan and per named load with `O_DIRECTORY \| O_NOFOLLOW`, refusing a symlinked one (`StartupError::Symlink`, `LoadError::Symlink`); list and open entries relative to that handle with `openat(O_NOFOLLOW)` and check `is_file` on the opened handle; route `workflow_path` and the `TrustedResolver` through it. Add `willikins_dsl::load_document_from_file(File, &Path)`, keeping the size cap and bounded read. `scan_directory` hashes the bytes it parsed. Startup logs each name with its short sha, and warns on an empty directory and on a directory outside `RAILWAY_VOLUME_MOUNT_PATH`. A source guard that no file naming `workflows_dir` calls a write API. Pinned by: test 28, a new module `trusted_directory_volume`, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- trusted_directory_volume:: acceptance_13_trusted_directory::` and `RUST_TEST_THREADS=2 cargo test -p willikins-dsl -j 2` | 1 | sonnet test-first, opus attacks |
+| 22 | **`willikins documents check <dir>`** (decision 25): exports `documents_manifest(dir, &Catalog)` from `willikins-server` (the `startup` module is private today), runs it against the **live** tool set, the catalog a deployment without `WILLIKINS_FAKE_CATALOG` starts with, built without reading any credential because `check` calls no provider, prints the `shasum -a 256` manifest equal to `ServerStarted.workflow_hashes`, writes nothing. README section on the publish procedure, with decision 25's "agents never write the volume" rule. Pinned by: test 29, `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- documents_check::` | 21 | sonnet |
 | 20 | **The image carries no workflow document** (decision 25). **Operator first, before this task's commit is pushed:** create `/data/workflows` and publish the public `workflows/*.yaml` into it by decision 25's procedure, then set `WILLIKINS_WORKFLOWS_DIR=/data/workflows` on the service. Then the task: drop `COPY workflows/*.yaml /app/workflows/`, `ENV WILLIKINS_WORKFLOWS_DIR=/app/workflows` and their comment from the Dockerfile; add `workflows`, `private` and `crates/willikins-cli/tests/operator_*` to `.dockerignore`; rewrite `image_contents.rs` to test 27's assertions (its seventeen-document test is replaced and its "three" module doc fixed); add `WILLIKINS_WORKFLOWS_DIR: preserve()` to `.railway/railway.ts`, after a read-only `railway config plan` shows no delete; and change the README's variable row. Pinned by: test 27, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- image_contents:: readme_variables::` | 22, operator | sonnet; the operator does the volume step and the plan read |
 | 2 | **First commit:** freeze `pre-2c-every-event.jsonl` from the current binary, before any 2c change (decision 2), through an `#[ignore]`d generator shaped like the two in `crates/willikins-journal/tests/it/pre_pass_2_replay.rs:311` and `tests/it/post_pass_2_shapes.rs:217`. It holds **every** `Event` variant, the four teardown variants included. Then the **foreign-issuer fixture** (decision 7): a fixed test key, a key set carrying a `kid`, `mint(flaws)` including the two new flaws, key rotation, and the shared environment-block helper. **No `/authorize`, no `/token`, no metadata documents, no HTTP JWKS route and no blocking `start()`**: each of those lost its consumer with decision 16, and the foreign-issuer assertion is made in process. Wire `SoftPasskey`. Shared test support, used by tasks 4, 5, 7, 9 and 16. Pinned by: all three fixtures replay through `Journal` and `replay`, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- pre_2c_replay:: pre_pass_2_replay:: post_pass_2_shapes::` | 1 | sonnet, verified by opus |
 | 3 | **The signing key and the issuer's mint.** The signing-key type in `willikins-types`, `#[derive(DomainType)]` with `#[domain(secret, pattern = …)]` like `GitHubToken` (not hand-written like `AppleSigningKey`), with one hand-written `reveal_for_signing`. That is the sixth token-less exception, added to `clippy.toml`'s `expose_secret` reason and to `crates/willikins-core/tests/it/expose_secret_guard.rs`, plus a `disallowed-methods` entry for the method's own path, allowed only in `issuer::mint` and tests. Not registered in `domain_types!`, nor are `OAuthSubject` and `ClientId`. ES256 generation (`p256` with `rand_core::OsRng`) and the `willikins signing-key generate <file>` subcommand that writes it (decision 22), PKCS#8 loading from the Doppler variable (settled decision 2), the RFC 7638 thumbprint as `kid` set on **both** the header and the published JWK, `JwkSet` assembly, the two-key overlap mechanism, `mint(sub, scopes, aud) -> Jwt` emitting all seven RFC 9068 claims with `typ` overwritten, and the `JwkSource` boundary with its in-process implementation, which wraps the plain `jsonwebtoken::jwk::JwkSet` task 2's fixture exposes. `jsonwebtoken.workspace` and `p256.workspace` move from `willikins-server`'s dev-dependencies (task 2) to its dependencies. Pinned by: test 21, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_key::`, `cargo test -p willikins-core --test it -j 2 -- expose_secret_guard::`, `cargo check -p willikins-types -j 2` | 2 | sonnet, verified by opus |
@@ -3462,7 +3555,7 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 23 | **The approvals page shows what was planned** (decision 25): the root's short sha beside the `used` closure, and "document says" only while the file's sha equals `record.document_sha256`, otherwise the `DocumentChanged` notice. Pinned by: test 30, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_document_identity::` | 9 | sonnet test-first, opus attacks |
 | 24 | **Teardowns on the approvals page** (decision 4): `pending_teardowns` in `willikins-journal`, the teardown section through `mask_json`, session-bound nonces for teardown `plan_id`s, the same role rules. Pinned by: test 31, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` and `cargo test -p willikins-server --test it -j 2 -- approvals_teardowns:: rollback_r8::` | 9, 6 | sonnet test-first, opus attacks |
 | 10 | **Recovery codes, the enrollment CLI and the break-glass.** Codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule; the restricted recovery session (enrol a passkey, nothing else), journaled; the CLI subcommand that creates an account and prints its subject, and on a later run mints a one-time enrollment URL to stdout and journals it as loudly as an approval, with decision 24's token rules (128 bits, hashed, 15 minutes, one account, one credential, carried in the fragment, never journaled). **Where this CLI runs against a distroless deployment is open question 2**, and the task does not guess. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes::` and `cargo test -p willikins-cli --test it -j 2 -- enroll::` | 9 | sonnet, verified by opus |
-| 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. No refresh tokens. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
+| 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. `ServerStarted.clients_sha256`, and `--clients <file>` on `willikins documents check`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. No refresh tokens. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
 | 12 | Delete `hash-token` from both binaries, its README section and the `hash_token` test module with its `mod` line; update the variable reference. Pinned by: test 12's last case, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- readme_variables:: binary_startup::` | 11 | sonnet |
 | 13 | Bracket-aware port stripping in the origin check, the one real defect (`approvals.rs:276-284`: `rsplit_once(':')` cuts `[::1]` to `[:`). Pinned by: test 14, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- origin_ipv6::` | 11 | sonnet |
 | 14 | Two steps, in order. (1) `WILLIKINS_LOG` as a `tracing_subscriber` `EnvFilter` directive, which flips `crates/willikins-server/tests/it/adversarial_13.rs`'s `the_binary_ignores_rust_log_and_emits_nothing_below_info` (line 1249) into its successor. (2) The sweep of everything the process emits at DEBUG and TRACE, rmcp's own output included, now also covering `/authorize`, `/token`, the ceremony endpoints, the code store, the parked-request store, `state`, the enrollment token and the signing key, after replacing `TraceLayer::new_for_http()`'s default span with a custom `MakeSpan` that records the path only, never the query (decision 8), and correcting `http/mod.rs`'s comment about what the default logs. Amend milestone 2's trust boundary 5 in that plan's own addendum style. Pinned by: test 15, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: log_sweep::` | 12 | sonnet, swept by opus |
@@ -3945,7 +4038,8 @@ Then, in descending order of how likely each is to surprise someone:
   re-consents, and that an operator who believes a token leaked waits the lifetime out. Revisit
   both at once or neither. **Banked at `todos/2026-09-16-unattended-agents-token-longevity.md`**,
   which carries the pairing rule, the cost to an agent meant to run without a human, and the three
-  ways out: a longer per-client lifetime (the client table already has the column), refresh plus
+  ways out: a longer per-client lifetime (the client table has room for the column, which decision
+23's schema would gain as a new key), refresh plus
   revocation together, or capability tokens with offline attenuation (`biscuit-auth`, macaroons),
   which suit willikins' shaped authority — a plan is a fixed set of operations against named
   resources — and which are unverified beyond the crate's existence.
