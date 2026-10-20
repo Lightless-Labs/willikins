@@ -1511,7 +1511,13 @@ validation: an overly strict check rejects Anthropic's requests" among the commo
 MUST respond with HTTP 403 Forbidden". No primary source says which `Origin`, if any, Anthropic's
 or OpenAI's backend sends (verify item 26). Test 19 records it on a real Claude and a real ChatGPT
 `initialize` before go-live. If either sends one, it is listed by exact value before the list
-freezes; the list is never emptied to make it pass. Pass 3 gains the row "a vendor-backend
+freezes; the list is never emptied to make it pass. **The mechanism for that delta is fixed now**,
+so task 5 does not have to invent it. A vendor origin cannot be derived from
+`WILLIKINS_PUBLIC_URL`. Hard-coding one in `crates/` would put a provider name in the code, which
+decision 10 forbids. So the delta is one optional, additive variable,
+`WILLIKINS_EXTRA_ALLOWED_ORIGINS`: comma-separated exact origins, `https://` only, appended to the
+derived entry and logged by name at startup. It is added only if verify item 26 finds an `Origin`
+to list, and it is not in the variable table until then. Pass 3 gains the row "a vendor-backend
 `Origin` is not 403".
 
 **If task 1b is skipped, nothing changes.** No task and no acceptance test depends on it: the
@@ -3079,7 +3085,15 @@ would otherwise be discovered in a deploy at 3 a.m. rather than in a plan.
 onto the live service. The moment the image stops carrying documents and the ENV, a service whose
 `WILLIKINS_WORKFLOWS_DIR` is unset, or points at an empty or missing path, refuses to start, and
 under `ON_FAILURE` that is a crash loop with no shell to fix it from. So the directory and the
-variable exist live first, and the commit follows.
+variable exist live first, and the commit follows. **Task 20 is also the first live test of verify
+item 20's second half.** Nobody has measured whether a push-triggered deploy picks up a variable
+staged on Railway's page. If it does not, the new image starts with neither the ENV nor the
+variable, refuses with `ConfigError::Missing`, and crash-loops. The service is private and runs
+the fake catalog, so the failure is closed and costs no user anything. The fallback is a
+hand-triggered deploy once the variable is applied, and the outcome settles item 20's second half
+either way, before go-live depends on it. Excluding `workflows` from the build context was
+checked against the release build: no `include_str!` or `include_bytes!` under `crates/*/src`
+reads from `workflows/`, and no crate has a `build.rs`.
 
 **Why `/authorize` and `/token` is the opus task.** Kanidm spends roughly 3,600 implementation
 lines against 5,160 test lines on this surface, a 1.4:1 ratio that is the most transferable number
