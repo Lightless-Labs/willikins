@@ -1077,8 +1077,8 @@ workflows directory *is* about the trusted directory, so it belongs here, and it
 **`InsecureUrl`**, **`NonCanonicalUrl`** (decision 12), **`EmptyAllowlist`** and
 **`CodeTtlAboveCeiling`** (an authorization-code lifetime above draft-16's 600-second ceiling,
 decision 21), **`RefreshLifetimes`** (refresh lifetimes out of order or above their ceiling,
-decision 26) and **`WeakBootstrapSecret`** (a bootstrap secret shorter than 43 base64url
-characters, decision 27); a required variable that is simply unset keeps reusing
+decision 26) and **`WeakBootstrapSecret`** (a bootstrap secret not in the generator's checksummed
+`wkbs1_` shape, decision 27, from a check `ServerConfig::from_vars` passes in); a required variable that is simply unset keeps reusing
 `ConfigError::Missing { variable }` (`crates/willikins-server/src/config.rs:33`), which is the
 shape `build_http_config` already reaches for.
 
@@ -2837,16 +2837,29 @@ credential store is on the volume, so the CLI had no host to run on.
   which weakens decision 3's refusal, or a second restart to add the subject, which costs another
   volume-downtime outage.
 - **The variable is `WILLIKINS_BOOTSTRAP_SECRET`**, optional, set as a Railway variable or
-  through Doppler's integration. **Its minimum is 256 bits.** Startup refuses a value shorter than
-  43 characters or outside the base64url alphabet, with `HttpConfigError::WeakBootstrapSecret`,
-  naming the variable and never echoing the value. A length check is all a server can do; the
-  entropy comes from `willikins bootstrap-secret generate <file>`. That command writes 32 bytes
-  from the OS CSPRNG, as base64url, to a new `0600` file and nowhere else, with the refusals of
-  `signing-key generate` (decision 22). The operator pastes the value into the variable and later
-  into the page, then deletes the file.
-- **Kept and compared as a digest, in constant time.** `ServerConfig::from_vars` validates the
-  value, keeps only its SHA-256 digest and zeroizes the string. At 256 bits a fast hash is the
-  right one, for decision 26's reason. The page hashes what it is given and compares the two
+  through Doppler's integration. **Its minimum is 256 bits, and only the generator's output is
+  accepted** (2026-10-20 review of the answers; the earlier text checked length and alphabet only,
+  so a hand-typed 43-character value armed the page). `willikins bootstrap-secret generate <file>`
+  writes one value of a willikins-own, identifiable shape: the prefix `wkbs1_`, then 43 base64url
+  characters encoding 32 bytes from the OS CSPRNG, then a 6-character base64url checksum, the
+  first 4 bytes of SHA-256(`"willikins-bootstrap-check-v1"` ‖ those 32 bytes). It is 55
+  characters, with no padding. The prefix is not one of the provider-token prefixes `CLAUDE.md`
+  lists, so the tree's own literal guard is unaffected. Startup refuses any value not of exactly
+  that shape and checksum with `HttpConfigError::WeakBootstrapSecret`, naming the variable and
+  never echoing the value. The checksum proves nothing cryptographic; it makes a hand-typed value
+  a deliberate act rather than an accident, which is the only weakness a server can see. The
+  command writes to a new `0600` file and nowhere else, with the refusals of `signing-key generate`
+  (decision 22). The operator pastes the value into the variable and later into the page, then
+  deletes the file.
+- **Kept and compared as a digest, in constant time.** `ServerConfig::from_vars` reads the raw
+  value, checks its shape and checksum, keeps only its SHA-256 digest and the check's result, and
+  zeroizes the string. **It refuses nothing itself** (2026-10-20 review of the answers):
+  `from_vars` returns `ConfigError` and is shared with `serve --stdio` (`cli.rs:191` and `:246`).
+  `HttpConfig::build`, which only `serve --http` reaches, turns a failed check into
+  `HttpConfigError::WeakBootstrapSecret`, the same way test 12 has `from_vars` pass the retired
+  variables' raw presence into `build`. `serve --stdio` ignores the variable, as it ignores every
+  http-mode variable, because it serves no `/bootstrap`. At 256 bits a fast hash is the right one,
+  for decision 26's reason. The page hashes what it is given and compares the two
   digests with `subtle::ConstantTimeEq`, which is why `subtle` stays a dependency after task 9.
   There is no secret domain type and no new `expose_secret` site.
 - **Armed, spent or unset, and spent is durable in two places**, as the operator's answer asks:
@@ -2935,10 +2948,15 @@ credential store is on the volume, so the CLI had no host to run on.
   a token. The human goes to `/approvals/login` next and logs in with the passkey just enrolled.
   Decision 24's two-credential rule is then met from that passkey session's "add a passkey"
   action (decision 4).
-- **Throttled, though throttling is not what protects it.** 256 bits do. The bounds limit what a
-  flood costs. The digest compare runs first and is cheap, so a right pair is never refused by a
-  bucket. Failures count in a global bucket of 10 per 15 minutes, and beyond it a wrong secret
-  answers 429. Every refusal passes decision 1's per-reason journal bucket. Both POSTs carry
+- **Throttled, though throttling is not what protects it.** The generator's 256 bits do, and the
+  startup shape check is what guarantees every armed value has them. Stated plainly (2026-10-20
+  review of the answers): the bucket never refuses a correct guess, so it bounds what a flood
+  costs and not how many guesses are made. The digest compare runs first and is cheap, so a right
+  pair is never refused by a bucket. Failures count in a global bucket of 10 per 15 minutes, and
+  beyond it a wrong secret answers 429. Every refusal passes decision 1's per-reason journal
+  bucket. *The rejected alternative* consults the bucket before the compare once it is exhausted.
+  That bounds guesses, but it hands an anonymous flood a lockout of the operator's own enrolment
+  that only a restart clears, and a restart costs a volume-downtime outage. Both POSTs carry
   `Cache-Control: no-store`, decision 4's header set and CSP, and the `Sec-Fetch-Site` and origin
   checks.
 - **Journaled as loudly as an approval, never the secret.** Two new additive events.
@@ -3530,7 +3548,8 @@ ES256 PKCS#8 PEM to a new `0600` file and nowhere else. The second is `willikins
 prints a `shasum -a 256`-format manifest that equals `ServerStarted.workflow_hashes`, so the
 operator can check a document set before publishing it. It reads only that directory and writes
 nothing. The first is `willikins bootstrap-secret generate <file>` (task 28, decision 27), which
-writes a new 256-bit base64url secret to a new `0600` file and nowhere else, and touches no store.
+writes a new 256-bit secret in the checksummed `wkbs1_` shape of decision 27 to a new `0600` file
+and nowhere else, and touches no store.
 **The enrollment and break-glass command decision 24 used to specify is not built** (settled
 decision 6): the bootstrap page replaces it on every host, the operator's own machine included.
 `serve --http` reaches the same configuration path
@@ -3632,7 +3651,7 @@ values and their shape, not their spelling.
 | `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS` | `60` | optional | The authorization code's own lifetime, checked independently of any store TTL. A value above **600** refuses startup, which is draft-16's RECOMMENDED maximum; the default itself is this plan's choice and no specification sets it. Read by `issuer::codes`. |
 | `WILLIKINS_SESSION_TTL_SECONDS` | `3600` | optional | The session's **absolute** lifetime, capped below `WILLIKINS_APPROVAL_WINDOW_SECONDS`; startup refuses a larger value. Read by the session store. |
 | `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS` | `300` | optional | The session's **idle** lifetime, bumped on writes and **not** on reads (decision 4). The default sits inside OWASP's fetched 2-to-5-minute range for high-value applications; the exact number is unpinned (verify item 11). Read by the session store. |
-| `WILLIKINS_BOOTSTRAP_SECRET` | unset | optional | A single-use secret of at least 43 base64url characters, generated by `willikins bootstrap-secret generate`; while set and not on the store's spent list it arms exactly one passkey enrolment at `/bootstrap` (decision 27). Kept only as a SHA-256 digest; a short value refuses startup with `HttpConfigError::WeakBootstrapSecret`; a spent value is logged by name, never by value, at every start. Doppler or a Railway variable, with no `preserve()` row. Read by `ServerConfig::from_vars` and the bootstrap page. |
+| `WILLIKINS_BOOTSTRAP_SECRET` | unset | optional | A single-use secret in the generator's checksummed `wkbs1_` shape, generated by `willikins bootstrap-secret generate`; while set and spent in neither the store's list nor the journal it arms exactly one passkey enrolment at `/bootstrap` (decision 27). Kept only as a SHA-256 digest; any other shape refuses `serve --http` with `HttpConfigError::WeakBootstrapSecret`, and `serve --stdio` ignores it; a spent value is logged by name, never by value, at every start. Doppler or a Railway variable, with no `preserve()` row. Read by `ServerConfig::from_vars` and the bootstrap page. |
 | `WILLIKINS_LOG` | the current INFO behaviour | optional | A `tracing_subscriber` filter directive (task 14). Read once, when the subscriber is built. |
 | `WILLIKINS_EXTRA_ALLOWED_ORIGINS` | empty | optional | Comma-separated exact `https://` origins appended to rmcp's `allowed_origins` after the derived public origin, for a vendor backend that sends an `Origin` on `initialize` (decision 18, verify item 26). Each is logged by name at startup; a non-`https://` or non-origin value refuses startup. Read by `http::router`'s rmcp configuration. |
 | `WILLIKINS_OAUTH_PREVIOUS_AUDIENCES` | empty | optional | Comma-separated resource identifiers this server also accepts in `aud` during a move to a new host (decision 12). Never published, never named in a challenge; a non-empty value logs a named startup warning. Read by `oauth::validate`. |
@@ -3862,9 +3881,10 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     larger than it → the same refusal. `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS` above 600 →
     `HttpConfigError::CodeTtlAboveCeiling`. A refresh idle timeout at or below the access-token
     lifetime, one above the family lifetime, and a family lifetime above 7776000 →
-    `HttpConfigError::RefreshLifetimes` naming the rule (decision 26). A short
-    `WILLIKINS_BOOTSTRAP_SECRET` → `HttpConfigError::WeakBootstrapSecret` (decision 27; test 34
-    has its other cases). A client-table
+    `HttpConfigError::RefreshLifetimes` naming the rule (decision 26). A
+    `WILLIKINS_BOOTSTRAP_SECRET` not in the generator's shape → `HttpConfigError::WeakBootstrapSecret`
+    from `serve --http` (decision 27; test 34 has its other cases), while `serve --stdio` with the
+    same value starts and ignores it. A client-table
     `refresh_tokens` that is not a boolean → `StartError::ClientTable`. A `WILLIKINS_PUBLIC_URL` carrying a path, a query or a fragment →
     `HttpConfigError::NonCanonicalUrl`, and so is one with an uppercase scheme or host
     (`HTTPS://h`, `https://H`), an explicit default port (`https://h:443`), or a trailing `/`
@@ -4243,8 +4263,10 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       does not see the section.
 
 34. **The bootstrap secret** (decision 27, task 28).
-    - **Startup.** A value shorter than 43 characters or outside base64url →
-      `HttpConfigError::WeakBootstrapSecret`, and the error text contains no byte of it. Unset →
+    - **Startup.** A value without the `wkbs1_` prefix, of the wrong length, outside base64url, or
+      with a checksum that does not match, and a hand-typed 55-character value of the right
+      alphabet → `HttpConfigError::WeakBootstrapSecret`, and the error text contains no byte of
+      it. Unset →
       every bootstrap route is 404 and `ServerStarted.bootstrap` is `unset`.
     - **Armed.** `GET /bootstrap` serves the form. A wrong secret → **403**
       `BootstrapSecretMismatch`. A right secret with a name in neither allowlist → **403** naming
@@ -4282,8 +4304,8 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     - **Floods and leaks.** Wrong secrets beyond the bucket answer **429** and journal coalesced
       lines, while a right pair after the flood still enrols. The secret, its digest and the
       recovery codes appear in no request line, log line, journal line or error body.
-    - **The CLI.** `willikins bootstrap-secret generate <file>` writes 43 base64url characters to a
-      new `0600` file, refuses an existing file, writes nothing to stdout or stderr, and its output
+    - **The CLI.** `willikins bootstrap-secret generate <file>` writes one `wkbs1_` value (the
+      prefix, 43 base64url characters and the 6-character checksum) to a new `0600` file, refuses an existing file, writes nothing to stdout or stderr, and its output
       arms a server that is then started with it.
 
 35. **Rollback over MCP** (decision 28, task 29). Against a fake-catalog server the test builds:
@@ -4400,7 +4422,7 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 24 | **Teardowns on the approvals page** (decision 4): `pending_teardowns` in `willikins-journal`, the teardown section through `mask_json`, session-bound nonces for teardown `plan_id`s, the same role rules. Pinned by: test 31, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` and `cargo test -p willikins-server --test it -j 2 -- approvals_teardowns:: rollback_r8::` | 9, 6 | sonnet test-first, opus attacks |
 | 29 | **Rollback over MCP** (decision 28, settled decision 8). The `rollback_plan` and `rollback_apply` `#[tool]`s in `mcp.rs`, taking the request's `Principal`; `TeardownPlanView` in `types.rs`, a schema-bearing view of a teardown's steps, shared in shape with task 24's section; `Butler::start_rollback` returning a `RunHandle`, and `Butler::apply_rollback` keeping its synchronous signature by joining the same thread (decision 28's shape (a)), on one shared path that mirrors `apply_inner`: pre-run checks, `TeardownStarted`, `guard.commit(run_id)`, then a thread that runs under `catch_unwind`, writes `TeardownFinished { Failed }` on a panic or an `apply_teardown` error, and resets `run_lock` to `Idle` on every exit, so the slot and graceful shutdown's drain cover a teardown; `Butler::plan_rollback` routed through `plan_rate_limiter`, sharing `plan`'s bucket; the `teardown_run` view in `willikins-journal` and `run_status` answering for a teardown run; the tool-list snapshot regenerated with both tools; test 7's rollback exception removed; the tool descriptions saying a teardown needs a human at the approvals page. Pinned by: test 35, test 7, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- mcp_rollback:: mcp_server:: oauth_scopes:: rollback_r8::`, `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- rollback_round_trip::` and `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` | 24, 7 | sonnet test-first, opus attacks: `rollback_apply` deletes |
 | 10 | **Recovery codes and the second credential.** **Its CLI half is replaced by task 28** (settled decision 6): the enrollment and break-glass subcommand, its one-time enrollment URL and its token rules are not built. What stays: codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule, with the passkey session's "add a passkey" and "revoke a credential" account actions (decision 4); the restricted recovery session (enrol one passkey and nothing else, then the session ends; revocation is a passkey-session action), journaled, and the next passkey login's notice of a recovery enrolment; `CredentialEnrolled` for `Session` and `Recovery`. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes:: approvals_login::` | 9 | sonnet, verified by opus |
-| 28 | **The one-time bootstrap secret** (decision 27, settled decision 6), replacing task 10's enrollment CLI on every host. `WILLIKINS_BOOTSTRAP_SECRET`: the 43-character base64url minimum and `HttpConfigError::WeakBootstrapSecret`, kept only as a SHA-256 digest and compared with `subtle`. The spent list in the credential store, synced before the passkey is committed; `ServerStarted.bootstrap`; the WARN line for a spent value left set, naming the variable only. `/bootstrap`: 404 unless armed, the secret-and-name form, the allowlist check, one ceremony at a time under `__Host-willikins-bootstrap`, the atomic claim at finish in decision 27's durable order (spent list, then `BootstrapSecretSpent` with its fingerprint, then the passkey), startup reading both the spent list and the journal's fingerprints, recovery codes shown once, no session, approval, consent or token. The failure bucket and the per-reason journal bucket; the five bootstrap `AuthFailedReason` variants, `BootstrapSecretReplayed` included for a spent secret presented again; `BootstrapSecretSpent` and `CredentialEnrolled` with `Bootstrap`. `willikins bootstrap-secret generate <file>` in `willikins-cli`. The README's first-enrolment and break-glass sections, and its variable row. Pinned by: test 34, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- bootstrap::` and `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- bootstrap_secret::` | 10 | **sonnet test-first, opus attacks**: it is the one static secret 2c keeps |
+| 28 | **The one-time bootstrap secret** (decision 27, settled decision 6), replacing task 10's enrollment CLI on every host. `WILLIKINS_BOOTSTRAP_SECRET`: the generator's checksummed `wkbs1_` shape, checked by `ServerConfig::from_vars` and refused by `HttpConfig::build` as `HttpConfigError::WeakBootstrapSecret` (ignored by `serve --stdio`), kept only as a SHA-256 digest and compared with `subtle`. The spent list in the credential store, synced before the passkey is committed; `ServerStarted.bootstrap`; the WARN line for a spent value left set, naming the variable only. `/bootstrap`: 404 unless armed, the secret-and-name form, the allowlist check, one ceremony at a time under `__Host-willikins-bootstrap`, the atomic claim at finish in decision 27's durable order (spent list, then `BootstrapSecretSpent` with its fingerprint, then the passkey), startup reading both the spent list and the journal's fingerprints, recovery codes shown once, no session, approval, consent or token. The failure bucket and the per-reason journal bucket; the five bootstrap `AuthFailedReason` variants, `BootstrapSecretReplayed` included for a spent secret presented again; `BootstrapSecretSpent` and `CredentialEnrolled` with `Bootstrap`. `willikins bootstrap-secret generate <file>` in `willikins-cli`. The README's first-enrolment and break-glass sections, and its variable row. Pinned by: test 34, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- bootstrap::` and `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- bootstrap_secret::` | 10 | **sonnet test-first, opus attacks**: it is the one static secret 2c keeps |
 | 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. `ServerStarted.clients_sha256`, and `--clients <file>` on `willikins documents check`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. The table's optional `refresh_tokens` key is parsed here and has no effect until task 26. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
 | 26 | **Refresh tokens** (decision 26, settled decision 5). The `refresh_token` grant at `/token`; `issuer::refresh`'s family store in the credential store directory (256-bit opaque tokens kept only as SHA-256 hashes, written durably before any response); the four bindings in the store and their order of checks; the atomic rotation claim and strict reuse detection revoking the family; the idle and absolute lifetimes, their two variables, `HttpConfigError::RefreshLifetimes`, and the access token's `exp` capped at the family's; `refresh_token` in the response exactly when the client's `refresh_tokens` is true; `grant_types_supported` gains `refresh_token`; the credential-revocation cascade; the six refresh `AuthFailedReason` variants and the three events, with no token value or hash in any line; README rows. One negative fixture per binding, as task 11's. Pinned by: test 32, test 20's grant list, test 23's `refresh_token` clause, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- refresh_tokens:: issuer_token:: oauth_metadata::` and `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- event_shapes::` | 11 | **opus writes or co-writes**: the refresh path is where both rauthy regressions lived |
 | 27 | **Revocation** (decision 26). `POST /revoke` per RFC 7009 (refresh tokens revoke their family; unknown is 200; another client's is `invalid_grant`; a compact JWS is `unsupported_token_type`; public-client identification and the empty-secret rule; `no-store`; the per-`client_id` miss bucket); `revocation_endpoint` and `revocation_endpoint_auth_methods_supported: ["none"]` in the RFC 8414 document; the approvals page's Connections section, approver-only, passkey sessions only, nonce-bound revoke and revoke-all. Pinned by: test 33, test 20's revocation members, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- token_revocation:: approvals_login:: oauth_metadata::` | 26, 9 | sonnet test-first, opus attacks |
