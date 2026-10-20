@@ -1,9 +1,12 @@
 //! Task 12 verification: what the container image holds, read from the
 //! repository's own `Dockerfile` and `.dockerignore` rather than from a
 //! built image (this host must never build one -- see the milestone 2
-//! plan's deployment addendum; Railway's builder is the build proof).
+//! plan's deployment addendum; Railway's builder is the build proof.
+//! Milestone 2c's task 1 confirmed this host also *cannot*: `colima`
+//! has no working virtualization here, so even inspecting a pulled
+//! image is out of reach -- see that plan's verify item 2).
 //!
-//! The three claims pinned here:
+//! The four claims pinned here:
 //!
 //! 1. Every `COPY` source in the file is one of a named, small set, so a
 //!    new one cannot appear without this test being updated on purpose.
@@ -16,6 +19,10 @@
 //! 3. The image's own command is `serve --http` and nothing else: no
 //!    `--fake`, no bind address, no principal. Only the environment may
 //!    make a deployment fake.
+//! 4. The builder installs exactly the native-dependency packages this
+//!    workspace needs (milestone 2c, task 1): nothing beyond `gcc` and
+//!    `libc6-dev` (for `ring`) and `libssl-dev` and `pkg-config` (for
+//!    `webauthn-rs-core`'s unconditional `openssl-sys`).
 //!
 //! What this test cannot pin: Railway's own start command overrides the
 //! image's `ENTRYPOINT` in exec form (Railway's start-command
@@ -212,6 +219,37 @@ fn is_ignored(patterns: &[String], relative: &str) -> bool {
         }
         relative == pattern || relative.starts_with(&format!("{pattern}/"))
     })
+}
+
+/// The builder installs exactly the native-dependency packages this
+/// workspace needs and nothing else: `gcc`/`libc6-dev` for `ring`'s
+/// C/assembly sources, and `libssl-dev`/`pkg-config` for
+/// `webauthn-rs-core`'s unconditional `openssl-sys` (milestone 2c, task
+/// 1). A package named here without one of those two reasons is apt
+/// bloat nobody decided to add. The check is a substring in the exact
+/// order the Dockerfile lists them, not a set: changing the order is
+/// also "on purpose" and flips this test the same as adding a package.
+#[test]
+fn the_builder_installs_exactly_the_four_native_dependency_packages() {
+    let dockerfile = read("Dockerfile");
+    let all = instructions(&dockerfile);
+    let installs: Vec<&str> = all
+        .iter()
+        .map(String::as_str)
+        .filter(|line| line.starts_with("RUN apt-get update"))
+        .collect();
+    assert_eq!(
+        installs.len(),
+        1,
+        "expected exactly one apt-get update/install RUN: {installs:?}"
+    );
+    assert!(
+        installs[0].contains(
+            "apt-get install -y --no-install-recommends gcc libc6-dev libssl-dev pkg-config"
+        ),
+        "builder apt-get install line changed; update this test on purpose: {}",
+        installs[0]
+    );
 }
 
 #[test]

@@ -36,19 +36,23 @@ RUN cargo chef prepare --recipe-path recipe.json
 # builds whenever only application code changes), then build the one
 # binary this image ships.
 #
-# The workspace's only native dependency is `ring` (confirmed with
+# The workspace has two native dependencies. `ring` (confirmed with
 # `cargo tree -i ring`, which shows exactly one path down through
-# `rustls` -> `ureq` -> `willikins-providers-http`; no `aws-lc-sys`,
-# `openssl-sys`, or `cmake` anywhere in the tree), which needs a C
-# compiler and libc headers to build its assembly/C sources. `gcc` and
-# `libc6-dev` are exactly that and nothing more -- `--no-install-
-# recommends` so apt does not also pull `make`, `g++`, and `dpkg-dev`
-# the way `build-essential` would, and the apt lists are removed in the
-# same layer so they do not persist in the image.
+# `rustls` -> `ureq` -> `willikins-providers-http`) needs a C compiler
+# and libc headers to build its assembly/C sources; `gcc` and
+# `libc6-dev` are exactly that and nothing more. `webauthn-rs-core`
+# (milestone 2c) depends **unconditionally** on `openssl-sys` -- no
+# pure-Rust backend and no feature to turn it off -- which needs
+# `libssl-dev` for the headers `openssl-sys`'s build script links
+# against and `pkg-config` to find them. Still no `aws-lc-sys` or
+# `cmake` anywhere in the tree. `--no-install-recommends` so apt does
+# not also pull `make`, `g++`, and `dpkg-dev` the way `build-essential`
+# would, and the apt lists are removed in the same layer so they do not
+# persist in the image.
 # ---------------------------------------------------------------------
 FROM chef AS builder
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && apt-get install -y --no-install-recommends gcc libc6-dev libssl-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
@@ -68,6 +72,14 @@ RUN cargo build --release --locked -p willikins-server --bin willikins-server
 # `gcr.io/distroless/cc-debian12` (glibc + libgcc, no package manager,
 # no shell, no CA bundle) sufficient rather than the heavier
 # `distroless/base`.
+#
+# `webauthn-rs-core`'s `openssl-sys` (milestone 2c) needs `libssl.so.3`
+# at runtime too. `cc-debian12` ships it already: distroless's own
+# build definition builds `base-debian12` (which `cc-debian12` adds
+# libgcc/libstdc++ on top of) from Debian's `libssl3` package, not its
+# `nossl` variant (verify item 2 of
+# docs/plans/2026-09-16-milestone-2c-authorization.md). No extra
+# package needed here.
 #
 # User: root, not the `:nonroot` (uid 65532) variant of this image.
 # Railway's own volume docs, fetched verbatim 2026-09-15:

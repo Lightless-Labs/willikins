@@ -72,6 +72,19 @@ rand = "0.9"
 mockito = "1"
 base64 = "0.23"
 p256 = "0.13"
+# The crypto backend is `rust_crypto`, not `aws_lc_rs`: this is already
+# the only backend the workspace builds (milestone 2c, task 1). Since
+# jsonwebtoken 10.0.0 it requires exactly one, and cargo unifies
+# features across the workspace, so switching it is workspace-wide, not
+# 2c-local -- it would re-test `apple_credential.rs` and `appstore.rs`
+# on the other backend and need `g++` in the builder. `rsa` is already
+# in the lock through `rust_crypto` (unconditionally; not new to 2c),
+# which is RUSTSEC-2023-0071 (a private-key signing-timing leak):
+# willikins never signs with the RSA family (decision 22 of the
+# 2026-09-16 milestone 2c plan), which is the normative constraint
+# that justifies ignoring it, now that a 2c issuer signs, rather than
+# the delegating draft's voided "a resource server only verifies"
+# claim.
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 crypto_box = { version = "0.9", features = ["seal"] }
 sha2 = "0.11"
@@ -79,12 +92,24 @@ rmcp = "3"
 tokio = "1"
 http = "1"
 axum = "0.8"
+axum-extra = { version = "0.12", default-features = false, features = ["cookie-signed"] }
 tower = "0.5"
 tower-http = { version = "0.7", default-features = false }
 subtle = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json"] }
 serde_urlencoded = "0.7"
+# Passkey enrollment and authentication (milestone 2c). Depends
+# unconditionally on `openssl`/`openssl-sys` -- see the Dockerfile.
+webauthn-rs = "0.5"
+# Dev-only: drives the ceremonies in tests with no browser (`SoftPasskey`).
+webauthn-authenticator-rs = "0.5"
+# Hashes the stored recovery codes (milestone 2c, decision 24); not a
+# password-only dependency.
+argon2 = "0.6"
+# PHC string encoding, direct dependency so a later parameter increase
+# is a per-hash migration rather than a flag day. 0.6.0 is yanked.
+password-hash = "0.6"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
