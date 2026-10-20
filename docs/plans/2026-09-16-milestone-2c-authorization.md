@@ -93,7 +93,10 @@ from the Claude or ChatGPT iOS apps, as a simple MCP". Both apps connect from th
 infrastructure. They call `/mcp`, both well-known documents and `/token` from there, open
 `/authorize` in the user's browser, and redirect to the vendor's own HTTPS callback. So the
 milestone is also not done until test 19 has connected each app on the web and used it from that
-app on iOS, against the public domain. Loopback redirects remain for local clients only.
+app on iOS, against the public domain. Loopback redirects remain for local clients only. Whether
+a custom ChatGPT plugin is usable from the ChatGPT iOS app at all is unverified (verify item 27);
+what "done" means if it is not is the operator's call (open question 6), and this sentence is not
+relaxed until they make it.
 
 ## Out of scope
 
@@ -168,7 +171,7 @@ no longer describe the system while still being cited as though they did.
    signing key pair, two only during a rotation overlap. It mints RFC 9068 access tokens for
    **one** audience. It issues **no** refresh token and runs **no** `/register`. It publishes only
    the public half, at `jwks_uri`. The private key never leaves the process, never reaches the
-   journal, a log line or an error body, and has a redacted `Debug` with no `Display` and no
+   journal, a log line or an error body, and has a redacted `Display` and `Debug` and no
    `Serialize` — the `Credential`/`Value` discipline the codebase already enforces, applied to a
    signing key. Tests 20, 21, 22, 23.
 2. **The inbound token is a credential for this server and for nothing else.** It is never
@@ -189,9 +192,10 @@ no longer describe the system while still being cited as though they did.
 
    The inbound token is never an input to any of them. **2c adds exactly one site, a sixth
    exception.** The ES256 signing key cannot sign without reading its bytes. So it becomes a
-   `#[domain(secret)]` type in `willikins-types`, modelled on `AppleSigningKey`, with its own
-   `reveal_for_signing` called only by `issuer::mint`. That exception is named in `clippy.toml`'s
-   reason and in `crates/willikins-core/tests/it/expose_secret_guard.rs`. The delegating draft's
+   `#[domain(secret)]` type in `willikins-types`, derived like `GitHubToken` (decision 22), with
+   its own `reveal_for_signing` called only by `issuer::mint`. That exception is named in
+   `clippy.toml`'s reason and in `crates/willikins-core/tests/it/expose_secret_guard.rs`, and its
+   single caller is held by its own `clippy.toml` `disallowed-methods` entry. The delegating draft's
    `Credential::authorize_basic` does not exist, because decision 4 removes the client and its
    secret together. Test 6.
 3. **Two surfaces, two credential kinds, two configured allowlists.** `/mcp` accepts an
@@ -902,7 +906,9 @@ workflows directory *is* about the trusted directory, so it belongs here, and it
 `HttpConfigError` (`crates/willikins-server/src/http/config.rs:212`, today `NoAgentHash`,
 `ApproverAmongAgentHashes`, `EmptyAllowedHosts`) gains **`RetiredVariable`**,
 **`SymmetricAlgorithm`**, **`CannotVerifyOwnTokens`**, **`SessionOutlivesApprovalWindow`**,
-**`InsecureUrl`**, **`NonCanonicalUrl`** (decision 12) and **`EmptyAllowlist`**; a required variable that is simply unset keeps reusing
+**`InsecureUrl`**, **`NonCanonicalUrl`** (decision 12), **`EmptyAllowlist`** and
+**`CodeTtlAboveCeiling`** (an authorization-code lifetime above draft-16's 600-second ceiling,
+decision 21); a required variable that is simply unset keeps reusing
 `ConfigError::Missing { variable }` (`crates/willikins-server/src/config.rs:33`), which is the
 shape `build_http_config` already reaches for.
 
@@ -910,8 +916,11 @@ shape `build_http_config` already reaches for.
 produced by the pure `HttpConfig::build`, which runs *before* the tokio runtime exists and before
 anything has touched the filesystem (see the ordering note under the task table). So the refusals
 that need the runtime or the disk go on `cli.rs`'s own `StartError`, beside `Bind` and
-`NoBindOrPort`: **no signing key is configured and none can be generated or written**, and **the
-credential store cannot be read or written**. The delegating draft put `JwksUnavailable` there for
+`NoBindOrPort`: **a configured signing key that cannot be loaded**, **the credential store cannot
+be read or written**, and **the client table cannot be read or is malformed** (decision 23). (The
+2026-09-16 text said "no signing key is configured and none can be generated or written", which
+described the volume branch settled decision 2 did not take. An unset key is
+`ConfigError::Missing`, like any other required variable.) The delegating draft put `JwksUnavailable` there for
 exactly this reason; decision 16 removes the startup JWKS fetch, so that variant has no producer
 and is not added — the reasoning outlived the variant.
 
@@ -1098,7 +1107,9 @@ items and where each one went are in the out-of-scope list above.
 
 ### 9. The go-live sequence
 
-Eleven steps, and the order matters. Six things freeze the host the moment they are published:
+Eleven steps, and the order matters. Steps 1 to 3 are prepared and measured first, but the custom domain reaches the live service only
+at step 6.4, after the 2c deploy is healthy (step 3 says why). Six things freeze the host the
+moment they are published:
 the resource identifier, the issuer identifier, the audience, both metadata documents' published
 values, the registered `redirect_uri`s and the **WebAuthn RP ID**. So the host is chosen before
 any of them is written anywhere. (Steps 2 to 5 were lost from this list by an edit on 2026-09-16.
@@ -1135,7 +1146,14 @@ are inserted after them.)
    settle this by applying.
 3. **Measure what the edge sends, and what it already bounds.** Before any allowed-hosts value is
    frozen, deploy a build that echoes the inbound `Host`, `X-Forwarded-Host` and `X-Railway-Edge`
-   on `/healthz`, and read them from a real public request. What `Host` reads at the service is
+   on `/healthz`, and read them from a real public request. **The echo build is never the live
+   service** (2026-10-20 review). It is cut from a throwaway branch off the deployed pre-2c commit,
+   serves `/healthz` and nothing else, and the operator deploys it to a disposable Railway
+   environment with the custom domain attached there for the measurement only. The live service
+   gets a public domain only once the step-6 deploy is healthy, which keeps `.railway/railway.ts`'s
+   rule that the service has no domain until 2c's OAuth lands (its header, lines 29-32), so no
+   public request ever meets the hash-and-Basic authentication. Moving the domain then costs a
+   second certificate issuance, which is why step 6 and step 10 are not the same visit. What `Host` reads at the service is
    documented nowhere on `docs.railway.com`. It decides both `WILLIKINS_ALLOWED_HOSTS` and rmcp's
    `allowed_hosts`, and the question now covers four unauthenticated routes rather than one
    (verify item 14). In the same visit, **measure what the edge does to a trickled header
@@ -1143,16 +1161,28 @@ are inserted after them.)
    closed. Railway documents a "Max 32 KB combined header size" and says "idle HTTP/1.1
    connections are closed after 60 seconds between requests". So the edge already bounds part of
    this shape, and task 17 is **defence in depth behind it**, not the only bound.
-4. **Enroll, and set both allowlists.** This step changed shape with the login. The operator runs
-   the **enrollment CLI** on the host and enrols **two** credentials (decision 24's rule:
-   prevention before recovery). The recovery codes are saved somewhere other than the deployment,
-   and the subject the CLI prints goes into `WILLIKINS_AGENT_SUBJECTS` and
-   `WILLIKINS_APPROVER_SUBJECTS` as needed. The `WrongRole` page keeps its bootstrap role as the
-   **second** path, for anyone who enrolled without noting the value down. Both variables are
-   required in http mode and an empty one refuses startup, so a reachable service never runs with
-   an unset allowlist. **Where "the host" is on this deployment is open question 2**: the image is
-   distroless, and the credential store and journal sit on the volume (decision 25). Whether
-   `railway ssh` reaches a shell-less container is verify item 29.
+4. **Enroll, and set both allowlists, in two halves** (split by the 2026-10-20 review). A passkey
+   ceremony runs in a browser against a 2c server at the RP ID's host, and that server is first
+   deployed at step 6.3. It also refuses to start with an empty allowlist
+   (`HttpConfigError::EmptyAllowlist`). So the subjects must exist before the server, and the
+   ceremonies must come after it.
+   - **4a, before step 6.** The operator runs the **enrollment CLI** once per human. It creates
+     the account in the durable credential store and prints its subject (test 25). Each subject
+     goes into step 6's staged block, under `WILLIKINS_AGENT_SUBJECTS` and
+     `WILLIKINS_APPROVER_SUBJECTS` as needed. No enrollment URL is minted yet.
+   - **4b, after the step-6 deploy is healthy and the domain answers.** The operator runs the CLI
+     again for each account. It mints a one-time enrollment URL, short-lived by design (decision
+     24), so this half never has to survive a redeploy. Each human opens the URL at
+     `https://willikins.example.com` and enrols **two** credentials (decision 24's rule:
+     prevention before recovery). The recovery codes are saved somewhere other than the
+     deployment.
+
+   The `WrongRole` page keeps its bootstrap role as the **second** path, for anyone who enrolled
+   without noting the value down. Both variables are required in http mode and an empty one
+   refuses startup, so a reachable service never runs with an unset allowlist. **Where "the host"
+   is on this deployment is open question 2**, for both halves: the image is distroless, and the
+   credential store and journal sit on the volume (decision 25). Whether `railway ssh` reaches a
+   shell-less container is verify item 29.
 5. **Populate the volume: the operator's documents and the client table** (decision 25). The
    operator publishes the private document set at a reviewed tag onto `/data/workflows`, by hand,
    following decision 25's procedure: a manifest from `willikins documents check`, an upload to a
@@ -1162,14 +1192,28 @@ are inserted after them.)
    entry per app, each with its exact HTTPS redirect URI (decision 23):
    `https://claude.ai/api/mcp/auth_callback` for the Claude apps, and
    `https://chatgpt.com/connector_platform_oauth_redirect` for ChatGPT. That is the stable URI
-   OpenAI documents for a server that advertises `iss` support, which decision 19 does. Any local
-   client the operator uses gets an entry with its loopback URIs. The client ids are the
-   operator's to pick (for example `claude-hosted` and `chatgpt`). The table lives outside
-   `workflows/`, where a non-document YAML would refuse startup.
+   OpenAI documents for a server that advertises `iss` support, which decision 19 does. **It is
+   provisional until step 10.** OpenAI also says: "Copy the exact production redirect URI shown in
+   the MCP server's management page into your authorization server's allowlist"
+   (developers.openai.com/plugins/build/auth.md, fetched 2026-10-20), and a server that misses the
+   issuer requirements gets `https://chatgpt.com/connector/oauth/{callback_id}` instead. Step 10
+   compares the two. Any local client the operator uses gets an entry with its loopback URIs; a
+   Claude Code entry registers both `http://localhost:<port>/callback` and
+   `http://127.0.0.1:<port>/callback` (decision 20). The client ids are the operator's to pick (for
+   example `claude-hosted` and `chatgpt`), except decision 21's reserved ceremony id. The file
+   follows decision 23's schema. The table lives outside `workflows/`, where a non-document YAML
+   would refuse startup.
 6. **One variable change, before the deploy that needs it, with `.railway/railway.ts` in the same
    change.** In a single staged edit:
-   - set the whole new block: the credential-store and client-table paths, both subject
-     allowlists, and the three lifetimes (the signing-key pair arrives through Doppler in step 7);
+   - set the whole new block: `WILLIKINS_PUBLIC_URL` (step 1's canonical value), the
+     credential-store and client-table paths, both subject allowlists (step 4a's subjects), and
+     the four lifetimes (`WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`,
+     `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS`, `WILLIKINS_SESSION_TTL_SECONDS` and
+     `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS`), or leave a lifetime unset to take its default;
+   - **inject `WILLIKINS_SIGNING_KEY_PEM` through Doppler's Railway integration in this same
+     change**, generated by `willikins signing-key generate` (decision 22) and visible as a
+     Railway variable before 6.3. The 2c binary refuses to start without it
+     (`ConfigError::Missing`, test 12), so it cannot wait for step 7;
    - check that `WILLIKINS_WORKFLOWS_DIR=/data/workflows` is still set (task 20 set it);
    - give `WILLIKINS_ALLOWED_HOSTS` the measured public host beside the private-domain reference;
    - delete `WILLIKINS_AGENT_TOKEN_HASHES` and `WILLIKINS_APPROVER_TOKEN_HASH`.
@@ -1182,17 +1226,26 @@ are inserted after them.)
    `.railway/railway.ts` must move with it. Its `env` block names five variables through
    `preserve()` today, and two of them are the retired hashes. **The file's own header says an
    omitted resource or field is an instruction to delete it, not to leave it alone.** So the file
-   drops those two rows and gains a `preserve()` row for **every** new `serve --http` variable;
-   without that, the next apply deletes the deployment's whole configuration and the service
-   stops starting. (The `WILLIKINS_WORKFLOWS_DIR` row arrives earlier, with task 20.) **Require a
-   read-only `railway config plan` showing no variable delete before any apply.** The same plan
-   must settle two questions that nothing documents: what `preserve()` does for a variable that
-   does not yet exist live, and whether a push-triggered deploy picks up variable edits staged on
-   Railway's variables page. The cutover order, and why:
+   drops those two rows and gains a `preserve()` row for **every** new `serve --http` variable
+   the operator sets on Railway; without that, the next apply deletes the deployment's whole
+   configuration and the service stops starting. (The `WILLIKINS_WORKFLOWS_DIR` row arrives
+   earlier, with task 20.) **Doppler-delivered variables get no row**: the signing keys, like the
+   provider credentials, follow the file's header rule that they "are absent by design" and reach
+   Railway only through the integration. Whether an apply deletes a Doppler-synced variable the
+   file does not name is a sub-question of verify item 20, and the plan read must show no delete
+   of any of them. **Require a read-only `railway config plan` showing no variable delete before
+   any apply.** The same plan must settle two questions that nothing documents: what `preserve()`
+   does for a variable that does not yet exist live, and whether a push-triggered deploy picks up
+   variable edits staged on Railway's variables page. The cutover order, and why:
 
-   1. Stage the whole variable change in Railway.
+   1. Stage the whole variable change in Railway, and confirm the Doppler-injected signing key is
+      visible on the service.
    2. Edit `.railway/railway.ts`, then read `railway config plan`.
-   3. Push the 2c commit, whose auto-deploy is what picks the staged variables up.
+   3. Merge the `m2c` branch into `main` and push. This is "the 2c commit": every 2c commit from
+      task 4 on lands on `m2c` and reaches `origin/main` only here (the push fence under Tasks).
+      Its auto-deploy is what picks the staged variables up.
+   4. Once the deploy is healthy, attach the custom domain to the live service (steps 1 and 2),
+      then wait for its certificate before step 4b.
 
    Staged edits might turn out **not** to be picked up by a push-triggered deploy. The fallback
    used to read: the previous healthy deployment stays active behind the healthcheck while the
@@ -1206,8 +1259,10 @@ are inserted after them.)
 7. **Connect Doppler's Railway integration for the secrets.** Doppler injects every provider
    credential the README's variable table names: today `WILLIKINS_GITHUB_TOKEN`,
    `WILLIKINS_DOPPLER_TOKEN`, `WILLIKINS_BUILDKITE_TOKEN` and `WILLIKINS_SIGNOZ_API_KEY`, with
-   `WILLIKINS_SIGNOZ_HOST` beside them. On open decision 2's branch it also injects
-   **`WILLIKINS_SIGNING_KEY_PEM`**, plus `WILLIKINS_SIGNING_KEY_RETIRING_PEM` during a rotation.
+   `WILLIKINS_SIGNOZ_HOST` beside them. Under settled decision 2 it also carries
+   **`WILLIKINS_SIGNING_KEY_PEM`**, which step 6 already injected because the 2c binary cannot
+   start without it, plus `WILLIKINS_SIGNING_KEY_RETIRING_PEM` during a rotation. So for the key
+   this step is a check.
    The App Store Connect signing keys are **not** deployment variables: a document reads them from
    Doppler at run time, through the Doppler credential. There is no
    `WILLIKINS_OAUTH_CLIENT_SECRET`, because the approvals page is not an OAuth client of anyone.
@@ -1215,7 +1270,9 @@ are inserted after them.)
    since milestone 2's task 12.
 8. **Remove `WILLIKINS_FAKE_CATALOG`.** Until this step the deployed service serves the fake,
    in-memory catalog; after it, the real one. It runs against the documents step 5 placed, so
-   that step comes first.
+   that step comes first. **`.railway/railway.ts` drops its `WILLIKINS_FAKE_CATALOG: preserve()`
+   row in the same change as the live delete**, after a read-only `railway config plan`.
+   Otherwise the file preserves a deleted variable, whose behaviour is verify item 20's unknown.
 9. **Back up what cannot be re-derived, and rehearse a restore.** That means the credential store,
    the signing key, the client table and the journal. This is the first backup-and-restore concern
    the project has ever had. Losing the store means every human re-enrols from the break-glass,
@@ -1227,16 +1284,31 @@ are inserted after them.)
    by re-publishing the tag from the operator's checkout (decision 25). Railway allows one volume
    per service, no replicas with a volume, and downtime on redeploy. The mount path is `/data`,
    taken from `.railway/railway.ts` (verify item 12, settled for that half).
-10. **Connect the apps.** In claude.ai, add a custom connector with the server URL
-    `https://willikins.example.com/mcp`. Pick **"Use your own OAuth client"**, enter the Claude
-    entry's client id, and leave the secret blank. The dialog's default (Claude's published
-    identity, a Client ID Metadata Document) fails against a server that advertises neither CIMD
-    nor a `registration_endpoint`. Anthropic says "You can't change authentication settings after
-    you add a connector", so a wrong pick means deleting the connector and adding it again. Then
-    use it from the Claude iOS app. In ChatGPT on the web, add the server as a custom MCP
-    connector with the ChatGPT entry's client id as its static credential. Whether that form
-    accepts a blank secret is verify item 27. Then use it from the ChatGPT iOS app. Each
-    connection is one passkey consent at `/authorize`.
+10. **Connect the apps** (rewritten 2026-10-20 against the vendors' pages, fetched that day:
+    claude.com/docs/connectors/custom/remote-mcp.md and
+    developers.openai.com/api/docs/guides/custom-mcp-server.md).
+    - **Claude.** In claude.ai, add a custom connector with the server URL
+      `https://willikins.example.com/mcp`. Anthropic: "The layout of the **Add custom connector**
+      dialog varies by organization. If yours shows a name, a URL, and **Advanced settings** on
+      one screen, enter the OAuth client ID and secret under **Advanced settings**. If yours has
+      two steps, it asks you to choose among the settings". On the two-step layout pick
+      **Sign in now** and then **Use your own OAuth client**. Either way, enter the Claude entry's
+      client id and leave the secret blank. The default (Claude's published identity, a Client ID
+      Metadata Document) fails against a server that advertises neither CIMD nor a
+      `registration_endpoint`. Anthropic says "You can't change authentication settings after you
+      add a connector", so a wrong pick means deleting the connector and adding it again. Then use
+      it from the Claude iOS app.
+    - **ChatGPT.** OpenAI: "**Access:** Use ChatGPT on the web". Go to ChatGPT Plugins, select
+      the plus button, then **Add custom MCP server**. Configure OAuth with the ChatGPT entry's
+      client id as a static credential and a blank secret (whether the form accepts a blank
+      secret is verify item 27). **Before connecting, read the redirect URI the form shows.** If
+      it differs from the one step 5 wrote, update the ChatGPT entry in `/data/clients.yaml` and
+      `railway restart`, because the table is read only at startup (decision 23). Then select
+      **Create as a plugin**, install it ("Install it before using it in a conversation"), and
+      invoke it in a conversation by typing `@` and selecting it. Then use it from the ChatGPT iOS
+      app, if a custom plugin is usable there at all (verify item 27; open question 6).
+
+    Each connection is one passkey consent at `/authorize`.
 11. **Record the tenancy.** The live service serves **one organization or workplace per provider
     credential**: one GitHub organization, one Doppler workplace, one Buildkite organization, one
     SigNoz host. That holds until milestone 3's credential routing lands. The operator runs
@@ -1725,10 +1797,34 @@ the tree.** `crates/willikins-providers-http/src/apple_credential.rs` already mi
 Connect JWTs: it calls `EncodingKey::from_ec_pem` at `:175` and `Header::new(Algorithm::ES256)` at
 `:213`, under the workspace's `jsonwebtoken = { version = "11", features = ["rust_crypto",
 "use_pem"] }`. `crates/willikins-types/src/appstore.rs` canonicalises SEC1 or PKCS#8 input to
-PKCS#8 with `p256` for exactly that call. The issuer copies that shape. The key is a
-`#[domain(secret)]` type in `willikins-types`, modelled on `AppleSigningKey`, whose own
-`reveal_for_signing` is the sixth token-less `expose_secret` exception (trust boundary 2), called
-only by `issuer::mint`.
+PKCS#8 with `p256` for exactly that call. The issuer copies that signing shape. **The type is not
+modelled on `AppleSigningKey`, though** (corrected by the 2026-10-20 review): that type is
+hand-written (`appstore.rs` implements `DomainType` itself) and its file is exempted for three
+functions, `expose`, `eq` and `reveal_for_signing`. The key is modelled on `GitHubToken` and
+`BuildkiteToken` instead: `#[derive(DomainType)]` with `#[domain(secret, pattern = …)]` matching
+PKCS#8 PEM armour, plus one hand-written `reveal_for_signing`. That keeps "one new exemption"
+true. It is PKCS#8 only: SEC1 input is refused, because nothing that produces this key emits
+SEC1 (the next bullet). Its `reveal_for_signing` is the sixth token-less `expose_secret` exception
+(trust boundary 2), and its single caller is enforced by a `clippy.toml` `disallowed-methods`
+entry for that method's own path, allowed only inside `issuer::mint` and in tests. That is the
+`SinkToken::new` and `TeardownToken::new` idiom; the `expose_secret` guard exempts by file and
+function and never looks at callers. The type does **not** join `registry::domain_types!`: it is
+not a document port type, and the registry already refuses an unregistered type as a literal or
+input. The same holds for `OAuthSubject` and `ClientId`, so none of the three appears in the
+catalog snapshot or the `list_tools` catalog JSON.
+
+- **How the key is produced: `willikins signing-key generate <file>`** (2026-10-20 review; the
+  plan never said). Settled decision 2 puts the key in Doppler, so the operator needs a PKCS#8
+  PEM to put there. The subcommand runs task 3's ES256 generation (`p256` with `rand_core::OsRng`)
+  and writes the PEM to an operator-named file. It creates the file new with mode `0600`, refuses
+  to overwrite, and never writes to stdout, a log line or the journal. It handles `p256`'s
+  zeroizing PEM directly and never constructs the secret type, so it is not a second
+  `reveal_for_signing` caller. The operator then stores the file's content as
+  `WILLIKINS_SIGNING_KEY_PEM` and deletes the file. A rotation runs it again and moves the old
+  value to `WILLIKINS_SIGNING_KEY_RETIRING_PEM`. That gives task 3's generation a production
+  caller, so `rand_core` stays a normal dependency. The external equivalent,
+  `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256`, was not fetched and is
+  unverified as to its output form.
 
 - **The token carries all seven of RFC 9068's REQUIRED claims** — `iss`, `exp`, `aud`, `sub`,
   `client_id`, `iat`, `jti` — with `jti` REQUIRED here even though it is OPTIONAL in plain RFC
@@ -1756,8 +1852,8 @@ only by `issuer::mint`.
 - **If Ed25519 is ever offered, PKCS#8 v1 only.** `Jwk::from_encoding_key` matches the Ed key
   length against exactly 48 bytes and every default generator examined emits v2. **ES256 has
   neither trap**, which is the quiet argument for choosing it and never reaching this row.
-- **The private key is persisted**, has a redacted `Debug`, no `Display`, no `Serialize`, and is
-  zeroized. Without persistence every outstanding access token dies silently on every restart: a
+- **The private key is persisted**, has a redacted `Display` and `Debug` (both print
+  `[REDACTED <Type>]`, as every secret type in the tree does), no `Serialize`, and is zeroized. Without persistence every outstanding access token dies silently on every restart: a
   new key has a different thumbprint, so lookup returns nothing for every older token and RFC 9068
   §4 requires `invalid_token`. Railway redeploys a volume-attached service with downtime anyway, so
   restarts are not rare. Redaction by construction is the codebase's own invariant, applied to a
@@ -1939,7 +2035,10 @@ image's ENV still in place, the server would then quietly start on the seventeen
 with real credentials. Without the ENV it refuses to start, which is the only acceptable outcome.
 
 **The cutover for task 20 happens before its commit is pushed**, because a push to `main`
-auto-deploys onto the live (private, fake-catalog) service. In order:
+auto-deploys onto the live (private, fake-catalog) service. **Tasks 21 and 22 land and deploy
+first** (reordered by the 2026-10-20 review): the procedure below needs `willikins documents
+check` from task 22 and the per-file startup log lines from task 21, both on the deployed commit,
+and neither task changes what the image carries or what startup requires. In order:
 
 1. The operator creates `/data/workflows` on the volume and publishes the current public
    `workflows/*.yaml` set into it, by the procedure below.
@@ -2334,8 +2433,9 @@ ten fields and not one of them is an authorization point.
 - `issuer::key` — ES256 generation, PKCS#8 loading, the RFC 7638 thumbprint that is the `kid`,
   the `JwkSet` assembly that sets that `kid` on the published JWK too, and the two-key overlap
   (decision 22). The private key is the `willikins-types` secret type described below: redacted
-  `Debug`, no `Display`, no `Serialize`, zeroized, and readable only through its own
-  `reveal_for_signing`.
+  `Display` and `Debug`, no `Serialize`, zeroized, and readable only through its own
+  `reveal_for_signing`. The generation function is also what `willikins signing-key generate`
+  calls (decision 22).
 - `issuer::mint(sub, scopes, aud) -> Jwt` — the issuer's whole input surface, **a function
   boundary and not a trait**. It emits all seven RFC 9068 REQUIRED claims and sets `typ` explicitly
   (decision 22).
@@ -2376,9 +2476,10 @@ They leave in two pieces, in the tasks that replace what each half fed — see d
 **`http::config`** gains the `HttpConfigError` variants of decisions 6, 7 and 15. `cli.rs`'s
 `StartError` gains the **runtime** refusals, for the reason decision 6 gives: `HttpConfigError` is
 `Copy` and is produced by the pure `HttpConfig::build` before the tokio runtime exists, so a
-refusal that needs the runtime or the filesystem cannot live there. Those refusals are **no signing
-key configured and none can be generated or written**, and **a credential store that cannot be read
-or written**. `StartError::JwksUnavailable` is **not** among them: decision 16 removes the startup
+refusal that needs the runtime or the filesystem cannot live there. Those refusals are **a
+configured signing key that cannot be loaded**, **a credential store that cannot be read or
+written**, and **a client table that cannot be read or is malformed** (`StartError::ClientTable`,
+decision 23). `StartError::JwksUnavailable` is **not** among them: decision 16 removes the startup
 JWKS fetch, so the variant the delegating draft introduced has no producer and is not added.
 `startup::StartupError` gains no variant: its eight variants (2b added `Compose`) are the
 trusted-directory refusals, and decision 25's symlinked-directory refusal reuses `Symlink`.
@@ -2391,14 +2492,21 @@ domain error, and a tool result cannot carry one (decision 3).
 
 ### willikins-types
 
-One secret type and two plain ones. The **signing key** is a `#[domain(secret)]` type modelled on
-`AppleSigningKey`. It accepts PKCS#8 PEM, as `appstore.rs` already canonicalises for
-`EncodingKey::from_ec_pem`, and its bytes are readable only through its own `reveal_for_signing`.
-That is the sixth token-less `expose_secret` exception, named in `clippy.toml` and in
-`crates/willikins-core/tests/it/expose_secret_guard.rs`, and called only from `issuer::mint`
-(trust boundary 2). It never implements `Display` or `Serialize`, and the type registry refuses it
-as a literal or input like every other secret type. `OAuthSubject` and `ClientId` are plain,
-non-identifier domain types, for the reason decision 2 gives. Because `willikins-types` enables its
+One secret type and two plain ones. The **signing key** is a `#[derive(DomainType)]`
+`#[domain(secret, pattern = …)]` type, shaped like `GitHubToken` and `BuildkiteToken` rather than
+the hand-written `AppleSigningKey` (decision 22). It accepts PKCS#8 PEM only, the form
+`EncodingKey::from_ec_pem` takes, and its bytes are readable only through its own hand-written
+`reveal_for_signing`. That is the sixth token-less `expose_secret` exception, named in
+`clippy.toml` and in `crates/willikins-core/tests/it/expose_secret_guard.rs` as one new
+`(file, ["reveal_for_signing"])` exemption, and its single caller, `issuer::mint`, is enforced by
+a `clippy.toml` `disallowed-methods` entry for that method's path (trust boundary 2). Its
+`Display` and `Debug` print `[REDACTED <Type>]`, as the derive emits for every secret type, and it
+never implements `Serialize`. `OAuthSubject` and `ClientId` are plain, non-identifier domain types,
+for the reason decision 2 gives. **None of the three joins `registry::domain_types!`**: none is a
+document port type, so none appears in the catalog snapshot or in `list_tools`' catalog JSON, and
+the registry refuses each as a literal or input because it is unregistered. If the derive requires
+an `example` on the key type, it contains the word `example`, the rule `redaction_adversarial`
+holds for every secret example. Because `willikins-types` enables its
 own `executor` feature through a self dev-dependency, the fourth gate (`cargo check -p
 willikins-types -j 2`) is what proves the new type builds the way its dependents see it.
 
@@ -2462,7 +2570,10 @@ carries the same "never point this at the committed file" warning.
 
 ### willikins-cli
 
-`hash-token` is removed. **Two subcommands arrive.** The second is `willikins documents check
+`hash-token` is removed, from `Command::HashToken` in `crates/willikins-cli/src/main.rs` (`:129`,
+dispatched at `:164`) as well as from `willikins-server` (task 12). **Three subcommands arrive.**
+The third is `willikins signing-key generate <file>` (task 3, decision 22), which writes a new
+ES256 PKCS#8 PEM to a new `0600` file and nowhere else. The second is `willikins documents check
 <dir>` (task 22, decision 25). It runs exactly the server's `scan_directory` over a directory and
 prints a `shasum -a 256`-format manifest that equals `ServerStarted.workflow_hashes`, so the
 operator can check a document set before publishing it. It reads only that directory and writes
@@ -2505,13 +2616,17 @@ build-blocking and is verify item 2.
 
 Doppler's Railway integration carries every provider credential the README names, plus, on open
 decision 2's branch, the signing key and its retiring sibling (go-live step 7).
-`WILLIKINS_OAUTH_CLIENT_SECRET` does not exist. `.railway/railway.ts` changes three times:
+`WILLIKINS_OAUTH_CLIENT_SECRET` does not exist. `.railway/railway.ts` changes four times:
 
 - In **task 20**, it gains `WILLIKINS_WORKFLOWS_DIR: preserve()`, after the operator has set the
   variable live and published the interim document set (decision 25's cutover).
-- In **task 19**, it gains a `domains` entry on the custom-domain branch of decision 9 step 2.
-- Also in task 19, at step 6, its `env` block drops the two retired `preserve()` rows and gains one
-  per new `serve --http` variable.
+- In **task 19**, at step 6, its `env` block drops the two retired `preserve()` rows and gains one
+  per new `serve --http` variable the operator sets on Railway. Doppler-delivered variables, the
+  signing keys included, get no row (decision 9 step 6).
+- Also in task 19, at step 6.4, it gains a `domains` entry on the custom-domain branch of decision 9
+  step 2, once the 2c deploy is healthy.
+- Also in task 19, at step 8, it drops the `WILLIKINS_FAKE_CATALOG: preserve()` row in the same
+  change as the live delete.
 
 Each change happens only after a read-only `railway config plan` that shows no delete, because the
 file's own rule is that an omitted field is an instruction to delete.
@@ -2549,7 +2664,7 @@ values and their shape, not their spelling.
 | Variable | Default | Required | Value and who reads it |
 | --- | --- | --- | --- |
 | `WILLIKINS_PUBLIC_URL` | none | `serve --http` | The canonical `https://` origin the service is reached at: lowercase scheme and host, no default port, no trailing `/`, no path, no query, no fragment. Anything else is refused with `HttpConfigError::NonCanonicalUrl`, checked on the raw string (decision 12). The **issuer identifier** is this value exactly; the audience is `<it>/mcp`; the RP ID is its host. Read by `oauth::config`, `oauth::metadata`, `issuer::mint`, the client-redirect matcher and the ceremonies. |
-| `WILLIKINS_SIGNING_KEY_PEM` | none | `serve --http` | The current ES256 signing key, PKCS#8 PEM, a secret with a redacted `Debug` and no `Display` or `Serialize`. Doppler only (open decision 2). Read by `issuer::key`. |
+| `WILLIKINS_SIGNING_KEY_PEM` | none | `serve --http` | The current ES256 signing key, PKCS#8 PEM, a secret whose `Display` and `Debug` print `[REDACTED <Type>]` and which has no `Serialize`. Doppler only (settled decision 2), generated by `willikins signing-key generate` (decision 22). Read by `issuer::key`. |
 | `WILLIKINS_SIGNING_KEY_RETIRING_PEM` | empty | optional | The previous signing key during a rotation overlap. Published in the JWKS, never used to sign. Two variables exist because one cannot express an overlap (decision 22). Read by `issuer::key`. |
 | `WILLIKINS_CREDENTIAL_STORE_PATH` | none | `serve --http` | The durable passkey and recovery-code store, on the volume at `/data/credentials/`, beside the journal and never inside `workflows/` (decision 25). Read by the ceremonies and the enrollment CLI. |
 | `WILLIKINS_CLIENTS_PATH` | none | `serve --http` | The pre-registered client table: client id, display name, registered redirect URIs (decision 23). On the volume at `/data/clients.yaml`, written by the operator by hand, never inside `workflows/`. Read by `issuer::clients`. |
@@ -2685,7 +2800,9 @@ at the test it was written about. The authorization-server half is tests 20 to 2
    appears anywhere. The guards gain **exactly one new allowed `expose_secret` site**: the signing
    key's own `reveal_for_signing`, called only from `issuer::mint`. That is the sixth token-less
    exception, beside the five `clippy.toml` already names (trust boundary 2). A second call site
-   anywhere fails the guard. `Credential::authorize_basic` does not exist.
+   anywhere fails `cargo clippy -D warnings`, through the method's own `disallowed-methods` entry;
+   the `expose_secret` guard exempts by file and function and does not check callers, so it is not
+   what holds this (decision 22). `Credential::authorize_basic` does not exist.
 7. **Subjects, scopes and the 403.** A valid token whose `sub` is **not in
    `WILLIKINS_AGENT_SUBJECTS`** → **403** `AuthFailedReason::UnlistedSubject` on every tool
    including the read ones, with the journal carrying no `ToolCalled` for it — the allowlist is
@@ -2763,7 +2880,7 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     `WILLIKINS_SESSION_TTL_SECONDS` larger than the approval window →
     `HttpConfigError::SessionOutlivesApprovalWindow`; `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS`
     larger than it → the same refusal. `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS` above 600 →
-    refused. A `WILLIKINS_PUBLIC_URL` carrying a path, a query or a fragment →
+    `HttpConfigError::CodeTtlAboveCeiling`. A `WILLIKINS_PUBLIC_URL` carrying a path, a query or a fragment →
     `HttpConfigError::NonCanonicalUrl`, and so is one with an uppercase scheme or host
     (`HTTPS://h`, `https://H`), an explicit default port (`https://h:443`), or a trailing `/`
     (`https://h/`). A canonical value derives an issuer, an audience and a PRM `resource` that are
@@ -2772,12 +2889,11 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     `WILLIKINS_PUBLIC_URL` that is `http://` on a **non-loopback** host →
     `HttpConfigError::InsecureUrl`; the same URL on `127.0.0.1`, `[::1]` or `localhost` →
     **starts**, with a startup warning naming it (decision 7, both readings). An **unset**
-    `WILLIKINS_SIGNING_KEY_PEM` → `ConfigError::Missing`, because at open decision 2's recommended
-    default the key is a required variable like any other; a key that is **present and cannot be
-    loaded** — the shape verify item 4's PKCS#8 round trip would fail in — and a credential store
-    that cannot be read or written → `StartError`, because both need the filesystem or the runtime
-    (decision 6). On the volume branch of open decision 2, "no key and none generatable" joins the
-    second group rather than the first. A loopback `--bind` with no OAuth configuration → the same refusals as any other
+    `WILLIKINS_SIGNING_KEY_PEM` → `ConfigError::Missing`, because under settled decision 2 the
+    key is a required variable like any other; a key that is **present and cannot be loaded** —
+    the shape verify item 4's PKCS#8 round trip would fail in — a credential store that cannot be
+    read or written, and a client table that cannot be read or is malformed → `StartError`,
+    because all three need the filesystem or the runtime (decision 6). A loopback `--bind` with no OAuth configuration → the same refusals as any other
     bind (decision 5). `hash-token` is gone from both binaries: invoking it exits non-zero with a
     usage error.
 13. **Bounded header read.** The pass-2 slowloris test, un-`#[ignore]`d: a client that trickles
@@ -2827,8 +2943,8 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     is recorded, and repeated against the public domain as a step of test 19.
 19. **Go-live checks**, run by hand with the operator. They are grouped by theme below, and each
     is run at the decision 9 step it belongs to.
-    - **Measured:** the `Host` and `X-Forwarded-Host` the service receives; what the edge does to a
-      trickled header stream.
+    - **Measured, on the disposable environment of step 3:** the `Host` and `X-Forwarded-Host` the
+      service receives; what the edge does to a trickled header stream.
     - **Over the public domain, with no credential:** both metadata documents and the JWKS, and a
       401 whose `resource_metadata` URL resolves. The domain resolves to a globally routable IPv4
       address, and the registered URL answers without a 3xx: Anthropic says "Claude drops the
@@ -2846,7 +2962,9 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       - Claude connected from claude.ai through "Use your own OAuth client" with a blank secret,
         then used from the Claude iOS app.
       - ChatGPT connected on the web with its static client id, recording whether a blank secret is
-        accepted (verify item 27), then used from the ChatGPT iOS app.
+        accepted (verify item 27) and the redirect URI the form shows, compared with the client
+        table's entry before connecting; then installed as a plugin, invoked with `@`, and used
+        from the ChatGPT iOS app if that app can use a custom plugin (open question 6).
       - For each, recorded rather than assumed:
         - the `Origin` header its backend sends on `initialize`, if any, before `allowed_origins`
           freezes (verify item 26);
@@ -2891,8 +3009,11 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     outstanding token valid; a restart **without** it refuses them with `invalid_token`, which is
     the cost decision 22 refuses to pay. Rotation: with two keys published, a token signed by the
     new one validates, a token signed by the retiring one validates, and the issuer signs with the
-    new one from the moment it is published. The private key's `Debug` prints no key material, it
-    has no `Display` and no `Serialize`, and it is zeroized on drop.
+    new one from the moment it is published. The private key's `Display` and `Debug` both print
+    `[REDACTED <Type>]` and no key byte, it has no `Serialize`, and it is zeroized on drop. A PEM
+    written by `willikins signing-key generate` loads through the type and signs a token that
+    validates; the command refuses to overwrite an existing file, creates the file with mode
+    `0600`, and writes no key byte to stdout or stderr. A SEC1 PEM is refused by name.
 22. **`/authorize`.** `response_type` other than `code` is refused and the implicit grant is
     structurally unrepresentable. A request with **no `code_challenge`** is refused; a
     `code_challenge_method` of `plain` is refused; an unsupported method answers `invalid_request`.
@@ -3036,11 +3157,28 @@ Go-live steps 7 and 8 are milestone 2's own remaining operator work, and step 8 
 Twenty-six tasks, plus the research that is already done, in dependency order. Tasks 20 to 25 are
 new on 2026-10-20. No earlier task is obsolete, but two lose a part: task 1 no longer builds both
 `jsonwebtoken` backends, and task 13 loses the two origin "fixes" that turned out to be current
-behaviour. **Everything runs sequentially on `main`**, one lane at a time. This host has 11 GB of
+behaviour. **Everything runs sequentially**, one lane at a time. This host has 11 GB of
 RAM shared with other sessions, and the milestone 2 experiment with parallel worktree lanes took
 six hours and was OOM-killed. Agents stage only their own paths, and the coordinator commits by
-path. The table is ordered as the tasks run: 20 to 22 come straight after 1b, because they move
-the documents off the image, are independent of OAuth, and gate nothing else's design.
+path. The table is ordered as the tasks run: 21, 22 and then 20 come straight after 1b, because
+they move the documents off the image, are independent of OAuth, and gate nothing else's design;
+20 comes last of the three because its cutover uses the other two (decision 25).
+
+**The push fence** (2026-10-20 review). Railway auto-deploys every push to `main` onto the live
+service (`.railway/railway.ts`: "branch main, auto-deploy on push"), and from task 4 on, a 2c
+binary refuses to start while `WILLIKINS_AGENT_TOKEN_HASHES: preserve()` is still live
+(`RetiredVariable`), which under `ON_FAILURE` is a crash loop. So:
+
+- Tasks 1, 1b, 21, 22 and 20 land on `main` and are pushed. Each is deployable onto the live
+  service as it stands, and tasks 1 and 20 need a real Railway build to be pinned at all.
+- **Every later task, from task 2 on, lands on a branch, `m2c`**, which may be pushed for
+  safekeeping but which Railway does not deploy. Whether Railway deploys any non-`main` branch
+  (PR or branch environments) is a sub-question of verify item 20, checked before the first push
+  of `m2c`. "Commit early and eagerly" is about commits; this rule is about what reaches
+  `origin/main`.
+- Task 25's document-only edits may land on `main`, since `main`'s deployable code is unchanged.
+- **`m2c` is merged into `main` and pushed at go-live step 6.3, and at no other time.** That merge
+  is "the 2c commit" the step names.
 
 Each "Pinned by" cell names the scoped run for the inner loop, in 3k's form (see Gates). A new
 test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` line in that crate's
@@ -3051,11 +3189,11 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 0 | Research: `docs/research/2026-09-16-m2c-authorization.md`, then `…-m2c-own-authorization-server.md` and `…-m2c-scope-revision.md`. **Done 2026-09-16.** The 2026-10-20 code audit, client-and-spec pass and volume pass are folded into this plan's 2026-10-20 addendum | | six parallel passes, then two; then three on 2026-10-20 |
 | 1 | **Dockerfile and dependency pins, first, because it is the one thing that can invalidate the shape.** **Record** the `jsonwebtoken` backend as the `rust_crypto` the workspace already uses (`Cargo.toml:75`), and do not build both: a switch would be workspace-wide and would touch App Store Connect (pinned dependencies). Add `libssl-dev` and `pkg-config` to the builder for `webauthn-rs-core`'s unconditional `openssl`/`openssl-sys`. **Verify that the distroless runtime image ships the `libssl.so.3` that `openssl-sys` 0.9.114 links against** (verify item 2, build-blocking). Rewrite the `Dockerfile:41` comment that claims no `openssl-sys` anywhere. Pins: `webauthn-rs` 0.5.5 (+ core/proto), `argon2` 0.6.0, `password-hash` **0.6.1**, `axum-extra` 0.12 `cookie-signed`, `rand_core = { version = "0.6", features = ["getrandom"] }` on `willikins-server` (the providers-github precedent, not `rand` 0.8), and `webauthn-authenticator-rs` 0.5.5 dev-only. Record the RUSTSEC-2023-0071 justification (pinned dependencies). Pinned by: the image builds on Railway's builder, the runtime container starts and serves `/healthz`, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- image_contents::`, and all four gates | 0 | sonnet, verified by opus |
 | 1b | rmcp 3.4.0 (conditional, decision 18): `cargo update -p rmcp --precise 3.4.0`, the `ServerInfo` rename at three `mcp.rs` sites, `enforce_origin_validation()`, all four gates. Lands it or records why not; nothing depends on it | 1 | sonnet |
-| 20 | **The image carries no workflow document** (decision 25). **Operator first, before this task's commit is pushed:** create `/data/workflows` and publish the public `workflows/*.yaml` into it by decision 25's procedure, then set `WILLIKINS_WORKFLOWS_DIR=/data/workflows` on the service. Then the task: drop `COPY workflows/*.yaml /app/workflows/`, `ENV WILLIKINS_WORKFLOWS_DIR=/app/workflows` and their comment from the Dockerfile; add `workflows`, `private` and `crates/willikins-cli/tests/operator_*` to `.dockerignore`; rewrite `image_contents.rs` to test 27's assertions (its seventeen-document test is replaced and its "three" module doc fixed); add `WILLIKINS_WORKFLOWS_DIR: preserve()` to `.railway/railway.ts`, after a read-only `railway config plan` shows no delete; and change the README's variable row. Pinned by: test 27, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- image_contents:: readme_variables::` | 1, operator | sonnet; the operator does the volume step and the plan read |
-| 21 | **Harden the trusted directory for a writable volume** (decision 25). Refuse a symlinked `WILLIKINS_WORKFLOWS_DIR` at start and on every scan (`StartupError::Symlink`). Open named documents with `O_NOFOLLOW` and check the opened handle. `scan_directory` hashes the bytes it parsed (`load_document_with_bytes`). Startup logs each name with its short sha, and warns on an empty directory and on a directory outside `RAILWAY_VOLUME_MOUNT_PATH`. Pinned by: test 28, a new module `trusted_directory_volume`, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- trusted_directory_volume:: acceptance_13_trusted_directory::` | 20 | sonnet test-first, opus attacks |
+| 21 | **Harden the trusted directory for a writable volume** (decision 25). Refuse a symlinked `WILLIKINS_WORKFLOWS_DIR` at start and on every scan (`StartupError::Symlink`). Open named documents with `O_NOFOLLOW` and check the opened handle. `scan_directory` hashes the bytes it parsed (`load_document_with_bytes`). Startup logs each name with its short sha, and warns on an empty directory and on a directory outside `RAILWAY_VOLUME_MOUNT_PATH`. Pinned by: test 28, a new module `trusted_directory_volume`, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- trusted_directory_volume:: acceptance_13_trusted_directory::` | 1 | sonnet test-first, opus attacks |
 | 22 | **`willikins documents check <dir>`** (decision 25): runs `scan_directory`, prints the `shasum -a 256` manifest equal to `ServerStarted.workflow_hashes`, writes nothing. README section on the publish procedure, with decision 25's "agents never write the volume" rule. Pinned by: test 29, `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- documents_check::` | 21 | sonnet |
+| 20 | **The image carries no workflow document** (decision 25). **Operator first, before this task's commit is pushed:** create `/data/workflows` and publish the public `workflows/*.yaml` into it by decision 25's procedure, then set `WILLIKINS_WORKFLOWS_DIR=/data/workflows` on the service. Then the task: drop `COPY workflows/*.yaml /app/workflows/`, `ENV WILLIKINS_WORKFLOWS_DIR=/app/workflows` and their comment from the Dockerfile; add `workflows`, `private` and `crates/willikins-cli/tests/operator_*` to `.dockerignore`; rewrite `image_contents.rs` to test 27's assertions (its seventeen-document test is replaced and its "three" module doc fixed); add `WILLIKINS_WORKFLOWS_DIR: preserve()` to `.railway/railway.ts`, after a read-only `railway config plan` shows no delete; and change the README's variable row. Pinned by: test 27, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- image_contents:: readme_variables::` | 22, operator | sonnet; the operator does the volume step and the plan read |
 | 2 | **First commit:** freeze `pre-2c-every-event.jsonl` from the current binary, before any 2c change (decision 2), through an `#[ignore]`d generator shaped like the two in `crates/willikins-journal/tests/it/pre_pass_2_replay.rs:311` and `tests/it/post_pass_2_shapes.rs:217`. It holds **every** `Event` variant, the four teardown variants included. Then the **foreign-issuer fixture** (decision 7): a fixed test key, a key set carrying a `kid`, `mint(flaws)` including the two new flaws, key rotation, and the shared environment-block helper. **No `/authorize`, no `/token`, no metadata documents, no HTTP JWKS route and no blocking `start()`**: each of those lost its consumer with decision 16, and the foreign-issuer assertion is made in process. Wire `SoftPasskey`. Shared test support, used by tasks 4, 5, 7, 9 and 16. Pinned by: all three fixtures replay through `Journal` and `replay`, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- pre_2c_replay:: pre_pass_2_replay:: post_pass_2_shapes::` | 1 | sonnet, verified by opus |
-| 3 | **The signing key and the issuer's mint.** The `#[domain(secret)]` signing-key type in `willikins-types`, modelled on `AppleSigningKey`, with its own `reveal_for_signing`. That is the sixth token-less exception, added to `clippy.toml`'s reason and to `crates/willikins-core/tests/it/expose_secret_guard.rs`. ES256 generation (`p256` with `rand_core::OsRng`), PKCS#8 loading from the Doppler variable (open decision 2), the RFC 7638 thumbprint as `kid` set on **both** the header and the published JWK, `JwkSet` assembly, the two-key overlap mechanism, `mint(sub, scopes, aud) -> Jwt` emitting all seven RFC 9068 claims with `typ` overwritten, and the `JwkSource` boundary with its in-process implementation. Pinned by: test 21, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_key::`, `cargo test -p willikins-core --test it -j 2 -- expose_secret_guard::`, `cargo check -p willikins-types -j 2` | 2 | sonnet, verified by opus |
+| 3 | **The signing key and the issuer's mint.** The signing-key type in `willikins-types`, `#[derive(DomainType)]` with `#[domain(secret, pattern = …)]` like `GitHubToken` (not hand-written like `AppleSigningKey`), with one hand-written `reveal_for_signing`. That is the sixth token-less exception, added to `clippy.toml`'s `expose_secret` reason and to `crates/willikins-core/tests/it/expose_secret_guard.rs`, plus a `disallowed-methods` entry for the method's own path, allowed only in `issuer::mint` and tests. Not registered in `domain_types!`, nor are `OAuthSubject` and `ClientId`. ES256 generation (`p256` with `rand_core::OsRng`) and the `willikins signing-key generate <file>` subcommand that writes it (decision 22), PKCS#8 loading from the Doppler variable (settled decision 2), the RFC 7638 thumbprint as `kid` set on **both** the header and the published JWK, `JwkSet` assembly, the two-key overlap mechanism, `mint(sub, scopes, aud) -> Jwt` emitting all seven RFC 9068 claims with `typ` overwritten, and the `JwkSource` boundary with its in-process implementation, which wraps the plain `jsonwebtoken::jwk::JwkSet` task 2's fixture exposes. `jsonwebtoken.workspace` and `p256.workspace` move from `willikins-server`'s dev-dependencies (task 2) to its dependencies. Pinned by: test 21, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_key::`, `cargo test -p willikins-core --test it -j 2 -- expose_secret_guard::`, `cargo check -p willikins-types -j 2` | 2 | sonnet, verified by opus |
 | 4 | **The resource-server middleware, against both issuers.** `OAuthConfig`, `validate`, `require_token`, the header strip, the subject-allowlist check, the new validating-half `AuthFailedReason` variants, and the refusals of decisions 6, 7, 12 (`NonCanonicalUrl`) and 15. Plus the assertion that the fixed-order path runs **identically** for a willikins-minted and a fixture-minted token. **Also removes `HttpConfig::build`'s agent-hash rules and retires `WILLIKINS_AGENT_TOKEN_HASHES`**, and migrates every `HttpConfig::build` call site (counted below). Pinned by: tests 3, 4, 5, 6, and test 12's validating-half refusals, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- oauth_validation:: adversarial_10b:: binary_startup::` and `cargo test -p willikins-server --lib -j 2 -- http::config::` | 3 | sonnet, verified by opus |
 | 5 | **Both metadata documents, the JWKS route and the challenge surface.** RFC 9728 at the insertion-built path, with `scopes_supported` the three MCP scopes and the root deliberately not a route. RFC 8414 with a byte-identical `issuer`, `authorization_endpoint`, `token_endpoint`, `response_types_supported: ["code"]`, `code_challenge_methods_supported`, explicit `grant_types_supported` and `token_endpoint_auth_methods_supported`, `authorization_response_iss_parameter_supported`, `jwks_uri`, the same `scopes_supported`, and zero-element arrays omitted. `/jwks.json`. All four routes outside the bearer middleware and rmcp's host check, as `/healthz` is. The 401 naming the three MCP scopes, and the 403. rmcp's `allowed_origins` set to the one derived public origin at 3.3.0 (decision 18). Pinned by: tests 1, 2, 20, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- oauth_metadata:: deploy_host_headers::` | 4 | sonnet, verified by opus |
 | 6 | Principal and journal: the `oauth-<12 hex>` derivation; the `Principal { id, claims }` signature change across **all eleven** `Butler` methods decision 2 lists (3m's `plan_rollback` and `apply_rollback` included), `record_auth_failure`, the eight `#[tool]` methods, `principal_for`, the approvals handlers, and `willikins-cli`'s commands including `rollback`; the optional claim fields on all eight principal-carrying events, bounded and escaped; `OAuthSubject` and `ClientId` as plain domain types. Pinned by: test 8, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- event_shapes:: pre_2c_replay::` and `cargo test -p willikins-server --test it -j 2 -- oauth_principal:: rollback_r8::` | 4 | sonnet, verified by opus |
@@ -3074,7 +3212,7 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 17 | Bound the header read: replace `axum::serve` with a `hyper::server::conn::http1` accept loop (timer first, decision 8) carrying graceful shutdown and connection accounting; flip the pass-2 slowloris test. Runs **after** pass 3, with a short pass-3 addendum recording that the transport changed under it. Pinned by: test 13, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: http_server:: http_smoke::` | 16 | sonnet, verified by opus |
 | 18 | **The conformance run.** The `live-tests` feature and its own `[[test]]` target (outside `tests/it/`, as 3k allows), and the harness that drives a stock local MCP client through discovery, `/authorize`, `/token` and `list_tools` against a locally bound server, unregistered and registered. Test 18 | 17 | sonnet writes the harness, run with the operator |
 | 25 | **The invariant's wording** (decision 25): the "trusted ref" invariant re-founded, edited together in `CLAUDE.md` and `AGENTS.md`; a design-doc addendum beside `docs/plans/2026-09-11-willikins-design.md`'s "a checkout of a trusted ref"; and the written rule that only the operator writes the volume, in both files and in memory. **The operator approves the wording first** (open question 3). No code | 20, operator | coordinator with the operator |
-| 19 | Go-live (decision 9): the domain; the measured `Host` and edge behaviour; allowed hosts; enrollment and both allowlists; the private documents and the client table on the volume; `.railway/railway.ts` and `railway config plan`; the retired variables removed in the same change; Doppler's secrets; the backups; `WILLIKINS_FAKE_CATALOG` removed; both apps connected and used from iOS; the stock-client run against the public domain; one real cycle. Mark this plan **Completed**. Test 19 | 18, 25, operator | coordinator with the operator |
+| 19 | Go-live (decision 9): the echo measurement on a disposable environment, never the live service; allowed hosts; step 4a's accounts and both allowlists; the private documents and the client table on the volume; the signing key generated and injected through Doppler, then the `m2c` merge and push (the push fence), with `.railway/railway.ts` and `railway config plan` and the retired variables removed in the same change; the domain attached once that deploy is healthy; step 4b's enrollments; Doppler's other secrets; the backups; `WILLIKINS_FAKE_CATALOG` removed with its `preserve()` row; both apps connected and used from iOS; the stock-client run against the public domain; one real cycle. Mark this plan **Completed**. Test 19 | 18, 25, operator | coordinator with the operator |
 
 **Why task 1 moved to the front.** In the delegating draft the Dockerfile question was a dependency
 footnote. It is now the item most likely to invalidate the milestone's shape. `webauthn-rs-core`
@@ -3263,8 +3401,11 @@ says so in the decision rather than waiting on a fetch.
     `.railway/railway.ts`. Read it from the dashboard or the CLI when it exists.
 20. **Task 19: whether an omitted `domains` key deletes an already-attached custom domain**, what
     `preserve()` does for a variable that does not yet exist live, and whether a push-triggered
-    deploy picks up variable edits staged on Railway's variables page. The documented "omit means
-    delete" exemption covers only generated domains. Settle all three with a read-only
+    deploy picks up variable edits staged on Railway's variables page. Two more since the
+    2026-10-20 review: whether an apply deletes a Doppler-synced variable the file does not name
+    (the file's header says such variables "are absent by design", decision 9 step 6), and whether
+    Railway deploys any pushed branch other than `main`, which the push fence relies on. The
+    documented "omit means delete" exemption covers only generated domains. Settle all three with a read-only
     `railway config plan` and one observed deploy; never by applying. If staged edits are not
     picked up by a push, the outcome this item used to accept was one failed deployment behind a
     healthcheck that keeps the previous one live. For a volume-backed service that is no longer
@@ -4125,3 +4266,9 @@ Each names what it blocks.
    confidential client with `client_secret_post`, which brings back a static shared secret that
    trust boundary 5 removed. That is the operator's call, not the plan's. *Blocks:* the ChatGPT
    half of go-live step 10 only.
+6. **What "done" means if ChatGPT's iOS app cannot use a custom plugin** (added by the 2026-10-20
+   review). OpenAI's page says "**Access:** Use ChatGPT on the web" for adding one, and says
+   nothing about iOS. The Goal requires each app to be used from iOS. One answer is to record a
+   vendor limit and mark the milestone Completed without that half. The other is to hold the
+   milestone open until the vendor supports it. The plan does not choose. *Blocks:* marking this
+   plan Completed, and only if test 19 finds the limit.
