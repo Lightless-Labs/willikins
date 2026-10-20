@@ -2691,7 +2691,19 @@ refresh path (`…-m2c-own-authorization-server.md` §6.6 and §6.7).
   Families live in the credential store directory (`WILLIKINS_CREDENTIAL_STORE_PATH`, decision
   25's layout). Each change is written, flushed and synced, then renamed into place, before any
   response that depends on it leaves the server. A family is pruned once its absolute expiry has
-  passed. In memory, families would die on every redeploy, which on a volume-backed service is
+  passed.
+
+  **A failed durable write changes nothing** (2026-10-20 review of the answers; the earlier text
+  left the family's state after a failed write unspecified). Under the store's lock, in order: the
+  checks run, the new state is written, flushed, synced and renamed into place, and only then is
+  the in-memory state committed. If the write fails, the in-memory state is untouched. The
+  presented token stays current, nothing is marked rotated past, and the answer is **503**, never
+  `invalid_grant`. So an I/O error neither revives a token after a restart nor makes the client's
+  retry count as a reuse. A revocation whose write fails is not a reported revocation: `/revoke`
+  answers 503, which RFC 7009 §2.2.1 tells the client to read as "the client must assume the token
+  still exists and may retry after a reasonable delay", and the Connections section shows the
+  failure and keeps the family listed. The bootstrap spent list follows the same rule (decision
+  27). In memory, families would die on every redeploy, which on a volume-backed service is
   every deploy, and the hourly re-consent would come back.
 - **The bindings, in the store, re-checked at every refresh: `client_id`, `sub`, the granted
   scope set and `resource`.** RFC 9700 §4.14.2: "If refresh tokens are issued, those refresh
@@ -2737,10 +2749,18 @@ refresh path (`…-m2c-own-authorization-server.md` §6.6 and §6.7).
   a code's claim does (decision 20). The bucket decides only how a miss is answered, so a flood
   that has exhausted it can never let a reused token pass without revoking its family. **The cost is stated rather than softened.** If a client's refresh response is lost in
   transit and the client retries with the same token, it loses its family and its human goes back
-  to a passkey. A grace window that tolerates one retry is the common softening, and it is not
-  built, because it is exactly the window an attacker races. Verify item 39 records whether either
-  app retries. If one does, the delta is a grace window of a few seconds that accepts only the
-  immediately previous token, once, from the same `client_id`. A refresh is one hash lookup, one
+  to a passkey. **The same holds for one client refreshing twice in parallel** (2026-10-20 review
+  of the answers). Claude "refreshes tokens reactively on a `401` response, and proactively up to
+  five minutes before the stored expiry". If two in-flight MCP calls both meet the 401 at expiry,
+  or a proactive refresh races a reactive one, and the app does not single-flight its refresh,
+  the second presentation is a reuse. The family would then die at every access-token boundary,
+  which silently restores the hourly re-consent that settled decision 5 exists to end. A grace
+  window that tolerates one retry is the common softening, and it is not built, because it is
+  exactly the window an attacker races. Verify item 39 records, per app, both retries and
+  concurrent or racing refreshes. If either occurs, the delta is a grace window of a few seconds
+  that accepts only the immediately previous token, once, from the same `client_id`. That window
+  bends the operator's "single-use", so it
+  goes back to the operator before it is built. A refresh is one hash lookup, one
   durable write and one signature. Anthropic allows "up to 30 seconds for refresh token requests",
   and a refresh answers well inside that.
 - **Lifetimes.** Access tokens stay at `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`, 3600 s (settled
@@ -4024,9 +4044,10 @@ at the test it was written about. The authorization-server half is tests 20 to 2
         - what the app does when the 3600 s token expires (verify item 32), and whether it
           then refreshes with the refresh token it was given without asking for `offline_access`
           (verify item 38);
-        - whether it retries a refresh with the same token after a timeout or a lost response
-          (verify item 39), whether it calls `/revoke` when its connector is removed (verify item
-          40), and how long it waits on a refresh (verify item 41);
+        - whether it presents one refresh token twice: a retry after a timeout or a lost
+          response, two refreshes from parallel requests at expiry, or a proactive refresh racing
+          a reactive one (verify item 39); whether it calls `/revoke` when its connector is removed
+          (verify item 40); and how long it waits on a refresh (verify item 41);
         - whether ChatGPT steps up on a 403 `insufficient_scope` (verify item 28).
     - **Then:** the stock-client run of test 18 repeated against the public domain, and one real
       plan-approve-apply cycle against the operator's documents.
@@ -4258,6 +4279,12 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       `RefreshTokenExpired`. A rotation bumps the idle time and never the absolute one. An access
       token minted an hour before the absolute expiry has its `exp` at that expiry.
     - A restart between two refreshes keeps the family, and the second refresh succeeds.
+    - **Fault injection** (2026-10-20 review of the answers). A durable write that fails during a
+      rotation answers 503, never `invalid_grant`. It leaves the presented token current and
+      nothing rotated past, and the client's retry with the same token then succeeds rather than
+      counting as a reuse. After a restart, the presented token is still the current one. A
+      revocation whose write fails answers 503 at `/revoke` and leaves the family live, and the
+      Connections section shows the failure.
     - A credential revoked from a passkey session revokes every family of its subject. A login
       that moves the stored counter, and an "add a passkey", each leave every family alive.
     - The success body is exactly `access_token`, `token_type`, `expires_in`, `scope` and
@@ -4781,10 +4808,15 @@ settled by test 19 with the operator.
     it nowhere (decision 26). Nothing fetched says what Claude or ChatGPT does with an unrequested
     refresh token. If either drops it, decision 26's delta applies: `offline_access` in the RFC
     8414 document only, never on the resource.
-39. **Task 19: whether either app retries a refresh with the same token after a timeout or a lost
-    response.** Decision 26's strict reuse detection answers that retry by revoking the family. If
-    an app does it in practice, the delta is a grace window of a few seconds for the immediately
-    previous token only.
+39. **Task 19: whether either app presents one refresh token twice.** Three shapes, recorded per
+    app: a retry with the same token after a timeout or a lost response; two refreshes from
+    parallel requests that both met the 401 at expiry; and a proactive refresh racing a reactive
+    one (widened by the 2026-10-20 review of the answers; the item used to ask about retries
+    only). Decision 26's strict reuse detection answers each by revoking the family. If an app
+    does any of them in practice, the delta is a grace window of a few seconds for the
+    immediately previous token only, once, from the same `client_id`, put to the operator before
+    it is built, because it bends "single-use". Test 19 records the shape on each app's first
+    access-token expiry, from the journal's `RefreshTokenRotated` and `RefreshTokenReused` lines.
 40. **Task 19: whether either app calls a `revocation_endpoint` when its connector is removed.**
     Nothing fetched says so. If neither does, a removed connector's family lives until its idle
     timeout, and the go-live note says to revoke it from the Connections section.
@@ -5016,7 +5048,7 @@ Then, in descending order of how likely each is to surprise someone:
   which keeps `todos/2026-09-16-unattended-agents-token-longevity.md`'s pairing rule. What that
   todo still holds: sender-constrained refresh tokens (DPoP or mTLS); an access-token `jti`
   denylist, if 3600 s ever stops being short enough; a reuse grace window, only if verify item 39
-  finds a client that retries; a longer per-client lifetime, which the client table has room for
+  finds a client that retries or refreshes concurrently, and only with the operator's agreement; a longer per-client lifetime, which the client table has room for
   as a new key; and capability tokens with offline attenuation (`biscuit-auth`, macaroons), which
   suit willikins' shaped authority — a plan is a fixed set of operations against named resources
   — and are unverified beyond the crate's existence. A family is still bound to a human's
