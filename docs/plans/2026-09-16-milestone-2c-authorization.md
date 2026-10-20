@@ -626,7 +626,9 @@ already journals for those calls in `ToolCalled` (`butler.rs:1300` and `:1509`):
 2026-09-16 text left the second unnamed). Task 29's tools use exactly those names.
 `run_status` for a teardown run stays under `willikins:read`. `rollback_plan` belongs with `plan` because `Butler::plan_rollback` re-observes
 provider state when it computes a teardown (`TeardownAction::Gone` is an observed state), so it
-spends provider budget the way `plan` does. The teardown apply deletes, so it is an apply. Neither
+spends provider budget the way `plan` does, and since the 2026-10-20 review of the answers it also
+draws on `plan`'s per-principal rate-limit bucket (decision 28). The teardown apply deletes, so it
+is an apply. Neither
 needs a scope of its own: every teardown already needs a human's approval, and the page's
 approver role is the gate for that.
 
@@ -1218,6 +1220,7 @@ new, and pass 3 must attack them at least as hard.
 | **Added 2026-10-20 (decision 28).** A `willikins:read` token calling `rollback_plan`, a `willikins:plan` token calling `rollback_apply`, and `rollback_apply` on a teardown nobody approved | 403 `scope="willikins:plan"`; 403 `scope="willikins:apply"`; refused `ApprovalRequired`, nothing deleted |
 | A `rollback_plan` and a teardown `run_status` result searched for a value or a whole identifier | neither appears: every identifier is a short prefix, as in every other MCP result |
 | A slow teardown applied over MCP | `rollback_apply` answers at once with a `run_id`; the request never waits on a provider |
+| **Added by the 2026-10-20 review of the answers.** An `apply` or a second `rollback_apply` while a teardown's deletions run; a graceful shutdown during them; a teardown whose provider stub panics; and a `rollback_plan` loop from one subject | `RunInProgress` naming the teardown's `run_id`; the drain waits for `TeardownFinished`; `teardown_run` ends `failed`, never `running` forever, and the slot is `Idle` again; `RateLimited` past `WILLIKINS_PLAN_RATE_PER_MINUTE` |
 | An authenticated `initialize` carrying an `Origin` listed in `WILLIKINS_EXTRA_ALLOWED_ORIGINS` (a synthetic value), and one carrying an unlisted foreign `Origin` | **not 403** for the listed one; **403** for the unlisted one, so the variable widens by exactly its entries (decision 18). The real vendor origins are test 19's to record |
 | `WILLIKINS_WORKFLOWS_DIR` swapped for a symlink after start, then read by a scan and by a named load; and an entry swapped for a symlink before its open | refused: the directory's `O_DIRECTORY \| O_NOFOLLOW` open fails (`StartupError::Symlink` for a scan, `UnknownWorkflow` for a named load), and the entry's `openat(O_NOFOLLOW)` fails. A swap of the mount point's own parents is out of reach without root and is not claimed (decision 25) |
 | A document changed on the volume between plan and approval | the page shows no stale description and names the change; apply refuses `DocumentChanged` |
@@ -2924,17 +2927,54 @@ and it cannot reach the deployment's journal.
   schema-bearing `TeardownPlanView` in `types.rs`. It maps each step to its instance, its action
   and the reason it is in the teardown: the rows the approvals page's teardown section renders
   (task 24), so both surfaces show one shape. The tool's description says every teardown needs a
-  human's approval, at the approvals page.
-- **`rollback_apply { plan_id }`** calls `Butler::apply_rollback`. **It must not run inside the
-  request.** `apply_rollback` runs synchronously today, and its doc comment says why: "there is no
-  `TeardownRunRecord`/per-step replay view to poll yet ... A later task driving this against a
+  human's approval, at the approvals page. **It is rate-limited like `plan`** (2026-10-20 review
+  of the answers). `plan_rollback_inner` consults no limiter today, and `rate_limit.rs` covers only
+  `plan` and the describe/validate bucket. Over MCP, any listed subject could otherwise loop
+  `rollback_plan`: unbounded live provider reads, each success journaling a `TeardownPlanned` that
+  crowds the approvals page's teardown section. So task 29 routes `Butler::plan_rollback` through
+  `plan_rate_limiter`, keyed by principal and **sharing `plan`'s bucket**, since both spend the
+  same provider budget. Beyond `WILLIKINS_PLAN_RATE_PER_MINUTE` it refuses
+  `ButlerError::RateLimited`. The CLI's `rollback` makes one call per process and never meets it.
+- **`rollback_apply { plan_id }`** calls a new `Butler::start_rollback`. **It must not run inside
+  the request.** `apply_rollback` runs synchronously today, and its doc comment says why: "there is
+  no `TeardownRunRecord`/per-step replay view to poll yet ... A later task driving this against a
   live provider may want to move it onto its own thread, the way `Self::apply` already does".
   Over MCP it would run inside the 30 s request timeout (`HttpConfig::DEFAULT_REQUEST_TIMEOUT`)
   and hold one of the 64 call permits, against live providers that delete. So task 29 does what
-  that comment anticipates. `apply_rollback` keeps its pre-run checks synchronous and refuses
-  exactly as today. Then it runs the teardown on its own thread and returns a `RunHandle`. The
-  tool returns `{ run_id, state: "running" }`, like `apply`. The CLI's `rollback` waits on the
-  handle, so its output and 3m's `rollback_r8` tests are unchanged.
+  that comment anticipates, **mirroring `apply_inner` step for step** (rewritten by the
+  2026-10-20 review of the answers; the earlier text said only "runs the teardown on its own
+  thread and returns a `RunHandle`"). Today `apply_rollback_inner` holds its `ApplyGuard`
+  uncommitted for the whole call (`butler.rs:1525-1533`: "never `commit`ted, since there is no run
+  thread to clear the slot") and has no panic path. `apply_inner` instead commits the guard after
+  `RunStarted` (`guard.commit(run_id)`, `:1052`), wraps the run in `catch_unwind` (`:1059`),
+  writes `RunFinished { Failed }` on a panic, and resets `run_lock` to `Idle` in the thread
+  (`:1106`). Graceful shutdown drains only while `run_in_progress()` reports
+  `RunState::Running` (`butler.rs:1242`, `http/mod.rs:227-233`). So the shared path is:
+  1. The pre-run checks run synchronously and refuse exactly as today, while the guard is still
+     `Preparing`.
+  2. `TeardownStarted` is appended synchronously.
+  3. `guard.commit(run_id)`, so the slot reads `Running(run_id)`.
+  4. The thread is spawned. It runs `apply_teardown` and the per-step appends inside
+     `catch_unwind`. On a panic, and on an `apply_teardown` error (today's synchronous
+     `ButlerError::TeardownApply`, raised after `TeardownStarted`), it appends
+     `TeardownFinished { Failed }`. It resets `run_lock` to `Idle` on every exit, after the
+     `TeardownFinished` append has been attempted, as the forward run thread does.
+
+  **The teardown thread holds the single-apply slot until `TeardownFinished` is attempted.** A
+  concurrent `apply` or `rollback_apply` during the deletions is refused `RunInProgress` with the
+  teardown's `run_id`, no longer `ApplyPreparing`, and graceful shutdown's drain
+  (`RUN_DRAIN_BOUND`) waits on an in-flight teardown as it does on a forward run.
+  **Two entry points share that path (shape (a) of the review).** `Butler::start_rollback ->
+  Result<RunHandle, ButlerError>` returns once the thread is spawned; the MCP tool calls it and
+  returns `{ run_id, state: "running" }`, like `apply`. `Butler::apply_rollback` keeps its
+  signature, `Result<TeardownRunResult, ButlerError>`: it runs the same path and joins the
+  thread's `JoinHandle`, which yields the `TeardownRunResult` or the `ButlerError::TeardownApply`
+  the synchronous code returns today. So the CLI's `rollback`, its `--fake-state-out` write after
+  the run, `render.rs`'s `TeardownRunResult` uses and the `apply_rollback` call sites in
+  `rollback_r8.rs` stay as they are. *The rejected shape (b):* changing `apply_rollback` to return
+  a `RunHandle` would mean migrating every `rollback_r8.rs` call site, a `wait_for_teardown` that
+  polls the `teardown_run` view and the slot as `wait_for_run` (`commands.rs:554`) polls forward
+  runs, and rebuilding the rendered result from the fold. That costs more and buys nothing.
 - **`run_status` answers for a teardown run too.** A new journal view, `teardown_run`, folds
   `TeardownStarted`, `TeardownStepFinished` and `TeardownFinished` into a record of state and
   per-step outcomes, masked like a forward run. One tool serves both kinds, because run ids share
@@ -3307,8 +3347,10 @@ trusted-directory refusals, and decision 25's symlinked-directory refusal reuses
 not a bare `PrincipalId` — and every `#[tool]` method passes it on to the `Butler` method it calls,
 which is the signature change decision 2 describes. It gains two `#[tool]`s, `rollback_plan` and
 `rollback_apply` (decision 28), and `run_status` reads teardown runs too. `rollback_plan`'s output
-is the new `TeardownPlanView` in `types.rs`, because `TeardownPlanResponse` has no `JsonSchema`,
-and `Butler::apply_rollback` moves its run onto its own thread and returns a `RunHandle`. It does **not** gain a scope refusal, because
+is the new `TeardownPlanView` in `types.rs`, because `TeardownPlanResponse` has no `JsonSchema`.
+`rollback_apply` calls the new `Butler::start_rollback`, which runs the teardown on its own thread
+holding the single-apply slot and returns a `RunHandle`; `Butler::apply_rollback` keeps its
+synchronous signature for the CLI by joining that thread (decision 28). It does **not** gain a scope refusal, because
 an authorization refusal is a transport-level status in the specification's table rather than a
 domain error, and a tool result cannot carry one (decision 3).
 
@@ -4173,7 +4215,20 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       masked, from the `teardown_run` view.
     - A `willikins:read` token calling `rollback_plan` → **403** `scope="willikins:plan"`; a
       `willikins:plan` token calling `rollback_apply` → **403** `scope="willikins:apply"`.
-    - The CLI's `rollback` still prints the finished result, and `rollback_r8` passes unchanged.
+    - **The run thread** (2026-10-20 review of the answers). While a teardown's blocking stub
+      runs, a concurrent `apply` and a second `rollback_apply` are each refused `RunInProgress`
+      naming the teardown's `run_id`. A graceful shutdown during it waits for `TeardownFinished`
+      within `RUN_DRAIN_BOUND`. A stub that panics ends `failed` in `teardown_run`, and
+      `run_in_progress()` is `None` afterwards. An `apply_teardown` error after `TeardownStarted`
+      ends `failed` in `teardown_run` and still surfaces as `ButlerError::TeardownApply` from the
+      joining `apply_rollback`.
+    - **The rate limit.** `rollback_plan` from one subject past `WILLIKINS_PLAN_RATE_PER_MINUTE`
+      → `ButlerError::RateLimited`, drawing on the same bucket as `plan`.
+    - The CLI's `rollback` still prints the finished result, because `apply_rollback` keeps its
+      synchronous signature by joining the thread (decision 28's shape (a)). `rollback_r8` and
+      `willikins-cli`'s `rollback_round_trip` pass unchanged. If a `rollback_r8` test meets the
+      shared bucket, it gets a raised `plan_rate_per_minute` in its config, named in task 29,
+      never a bypass.
 
 ## Gates
 
@@ -4257,7 +4312,7 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 9 | **Passkey enrollment and authentication, and the gate swap.** `webauthn-rs` wiring, the durable credential store at `/data/credentials/`, ceremony-to-account binding, UV Required, counter regression and `update_credential`, `exclude_credentials` and CredentialID uniqueness, the uniform username step, the inline script under a CSP nonce, logout, the `WrongRole` page (showing `sub` whole), and the **mint → `oauth::validate` → session** hop. **Removes `basic_auth`, `TokenHash`, `matches_any` and the constant-time compare, and retires `WILLIKINS_APPROVER_TOKEN_HASH` in this series**, so no commit on `main` has an unauthenticated `/approvals` and none has two gates on it. Drops `HttpConfig::build`'s `approver_hash` parameter at all 13 call sites. Flips the three `adversarial_10b.rs` pins named below and migrates every approvals test from Basic to a session through a new `tests/common` login helper (counted below). **Every `/approvals`-level assertion is this task's.** Pinned by: tests 9, 10, 11, 24, and test 12's approver-hash retirement, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_login:: passkey:: adversarial_10b:: http_server:: composition_s3::` | 8 | **sonnet test-first, opus attacks**: CVE-2026-69199's class lives here |
 | 23 | **The approvals page shows what was planned** (decision 25): the root's short sha beside the `used` closure, and "document says" only while the file's sha equals `record.document_sha256`, otherwise the `DocumentChanged` notice. Pinned by: test 30, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_document_identity::` | 9 | sonnet test-first, opus attacks |
 | 24 | **Teardowns on the approvals page** (decision 4): `pending_teardowns` in `willikins-journal`, the teardown section through `mask_json`, session-bound nonces for teardown `plan_id`s, the same role rules. Pinned by: test 31, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` and `cargo test -p willikins-server --test it -j 2 -- approvals_teardowns:: rollback_r8::` | 9, 6 | sonnet test-first, opus attacks |
-| 29 | **Rollback over MCP** (decision 28, settled decision 8). The `rollback_plan` and `rollback_apply` `#[tool]`s in `mcp.rs`, taking the request's `Principal`; `TeardownPlanView` in `types.rs`, a schema-bearing view of a teardown's steps, shared in shape with task 24's section; `Butler::apply_rollback` moved onto its own thread behind its unchanged synchronous pre-run checks, returning a `RunHandle`, with the CLI's `rollback` waiting on it; the `teardown_run` view in `willikins-journal` and `run_status` answering for a teardown run; the tool-list snapshot regenerated with both tools; test 7's rollback exception removed; the tool descriptions saying a teardown needs a human at the approvals page. Pinned by: test 35, test 7, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- mcp_rollback:: mcp_server:: oauth_scopes:: rollback_r8::` and `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` | 24, 7 | sonnet test-first, opus attacks: `rollback_apply` deletes |
+| 29 | **Rollback over MCP** (decision 28, settled decision 8). The `rollback_plan` and `rollback_apply` `#[tool]`s in `mcp.rs`, taking the request's `Principal`; `TeardownPlanView` in `types.rs`, a schema-bearing view of a teardown's steps, shared in shape with task 24's section; `Butler::start_rollback` returning a `RunHandle`, and `Butler::apply_rollback` keeping its synchronous signature by joining the same thread (decision 28's shape (a)), on one shared path that mirrors `apply_inner`: pre-run checks, `TeardownStarted`, `guard.commit(run_id)`, then a thread that runs under `catch_unwind`, writes `TeardownFinished { Failed }` on a panic or an `apply_teardown` error, and resets `run_lock` to `Idle` on every exit, so the slot and graceful shutdown's drain cover a teardown; `Butler::plan_rollback` routed through `plan_rate_limiter`, sharing `plan`'s bucket; the `teardown_run` view in `willikins-journal` and `run_status` answering for a teardown run; the tool-list snapshot regenerated with both tools; test 7's rollback exception removed; the tool descriptions saying a teardown needs a human at the approvals page. Pinned by: test 35, test 7, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- mcp_rollback:: mcp_server:: oauth_scopes:: rollback_r8::`, `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- rollback_round_trip::` and `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` | 24, 7 | sonnet test-first, opus attacks: `rollback_apply` deletes |
 | 10 | **Recovery codes and the second credential.** **Its CLI half is replaced by task 28** (settled decision 6): the enrollment and break-glass subcommand, its one-time enrollment URL and its token rules are not built. What stays: codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule, with the passkey session's "add a passkey" and "revoke a credential" account actions (decision 4); the restricted recovery session (enrol one passkey and nothing else, then the session ends; revocation is a passkey-session action), journaled, and the next passkey login's notice of a recovery enrolment; `CredentialEnrolled` for `Session` and `Recovery`. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes:: approvals_login::` | 9 | sonnet, verified by opus |
 | 28 | **The one-time bootstrap secret** (decision 27, settled decision 6), replacing task 10's enrollment CLI on every host. `WILLIKINS_BOOTSTRAP_SECRET`: the 43-character base64url minimum and `HttpConfigError::WeakBootstrapSecret`, kept only as a SHA-256 digest and compared with `subtle`. The spent list in the credential store, synced before the passkey is committed; `ServerStarted.bootstrap`; the WARN line for a spent value left set, naming the variable only. `/bootstrap`: 404 unless armed, the secret-and-name form, the allowlist check, one ceremony at a time under `__Host-willikins-bootstrap`, the atomic claim at finish, recovery codes shown once, no session, approval, consent or token. The failure bucket and the per-reason journal bucket; `BootstrapSecretMismatch`; `CredentialEnrolled` with `Bootstrap`. `willikins bootstrap-secret generate <file>` in `willikins-cli`. The README's first-enrolment and break-glass sections, and its variable row. Pinned by: test 34, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- bootstrap::` and `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- bootstrap_secret::` | 10 | **sonnet test-first, opus attacks**: it is the one static secret 2c keeps |
 | 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. `ServerStarted.clients_sha256`, and `--clients <file>` on `willikins documents check`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. The table's optional `refresh_tokens` key is parsed here and has no effect until task 26. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
