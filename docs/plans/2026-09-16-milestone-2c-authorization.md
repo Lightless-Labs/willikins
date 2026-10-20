@@ -3334,20 +3334,34 @@ willikins is writing it rather than buying it.** Stated in terms of what is expo
 `/token`, `/jwks.json`, both well-known documents, and the passkey ceremony endpoints. Before this
 revision the only anonymous surfaces were the protected-resource-metadata document and a 401.
 
-*What a bug in issuance buys an attacker:* a token minted with the operator's `sub` and
-`willikins:apply` — which is the eight MCP tools against the **one** GitHub organization and
-**one** Doppler workplace the deployment's two credentials cover, until milestone 3's credential
-routing lands. **Bounded by three things that do not depend on the issuing code being correct:** an
-unlisted `sub` is refused in the middleware before any tool runs (decision 3); anything `apply`
-touches that is not auto-approved still needs a human at the approvals page; and no caller token
-has ever reached an upstream API, because the `Credential` methods in `willikins-providers-http`
-are the only sites that put a credential on an outgoing wire. That third boundary is the
-resource-server half, which this revision leaves untouched.
+*What a bug in issuance buys an attacker* (recomputed 2026-10-20 from today's catalog): a token
+minted with the operator's `sub` and `willikins:apply`. That is the eight MCP tools against every
+provider the deployment holds a credential for, one organization or workplace each, until
+milestone 3's credential routing lands. Since milestone 2, `apply` has grown well past reading and
+setting secrets:
+
+- GitHub: create repositories, write contents, commit rendered scaffolds (3g, 3l), and set Actions
+  secrets.
+- Doppler: projects, configs and secrets.
+- Buildkite: pipelines and their stored configuration. The README says plainly that the token's
+  scope "can destroy or reconfigure any pipeline in the organisation it reaches".
+- SigNoz.
+- App Store Connect: bundle identifiers, capabilities and provisioning profiles, signed with keys
+  documents read from Doppler.
+- 3m's teardown, which **deletes**. It is reachable over MCP only once the rollback tools land,
+  and it always needs a human's approval.
+
+**Bounded by three things that do not depend on the issuing code being correct.** An unlisted
+`sub` is refused in the middleware before any tool runs (decision 3). Anything `apply` touches
+that is not auto-approved still needs a human at the approvals page, and so does every teardown.
+And no caller token has ever reached an upstream API: outgoing credentials are read only at the
+sites trust boundary 2 lists. That third boundary is the resource-server half, which this revision
+leaves untouched.
 
 *What makes it acceptable:* the profile willikins is building is kanidm's required profile — one
 grant, mandatory PKCE `S256`, one signing algorithm — **minus its client-authentication
-requirement**, because MCP clients here are public clients with loopback redirects and draft-16
-accepts exactly that given mandatory PKCE. At the size the research note measures: roughly 4,000 to
+requirement**, because every client here is public: local ones with loopback redirects, and the
+two hosted apps with their HTTPS callbacks. draft-16 accepts exactly that, given mandatory PKCE. At the size the research note measures: roughly 4,000 to
 6,000 implementation lines plus about 1.4 times that in tests, against a corpus where rauthy's
 protocol machinery is about 7,300 lines and Cloudflare's *complete* MCP authorization server is
 5,967 with the login declared out of scope. The alternatives were a 36,230-line six-week-old
@@ -3374,17 +3388,35 @@ Then, in descending order of how likely each is to surprise someone:
   `aws-lc-sys`, `openssl-sys` or `cmake` anywhere in the tree" comment becomes **false** and must
   be rewritten; the builder needs `libssl-dev` and `pkg-config`; and whether the distroless runtime
   image ships the matching `libssl.so.3` is **build-blocking** (verify item 2).
-- **`rsa` is still compiled in** under `jsonwebtoken`'s `rust_crypto` feature bundle, and
-  RUSTSEC-2023-0071 has `patched = []` deliberately. Its dismissal now survives **only** on
-  decision 22's normative constraint that willikins never signs with the RSA family. A future
-  `cargo-audit` or `cargo-deny` gate needs a documented ignore with a **rewritten** justification;
-  the old one, which rested on "a resource server only verifies", is void.
-- **The RP ID can never change.** Harder than the audience freeze and with no migration path at
-  all: `webauthn-rs` 0.5.5 has no Related Origin Requests support, and that would not solve a
-  domain *change* anyway. A domain move orphans every credential and every human re-enrols.
-- **First durable identity state.** The credential store is a backup-and-restore concern this
-  project has never had; the journal is append-only and is not a credential store. Railway further
-  constrains it: one volume per service, no replicas with volumes, and downtime on redeploy.
+- **`rsa` is already compiled in**, today, under `jsonwebtoken`'s `rust_crypto` feature bundle,
+  which the App Store Connect provider brought into the workspace. RUSTSEC-2023-0071 has
+  `patched = []` deliberately. Its dismissal survives **only** on decision 22's normative
+  constraint that willikins never signs with the RSA family. A future `cargo-audit` or `cargo-deny`
+  gate needs a documented ignore with a **rewritten** justification, and it needs it now, not only
+  after 2c. The old justification rested on "a resource server only verifies", and it is void.
+- **Moving the RP ID costs every enrolled passkey.** `webauthn-rs` 0.5.5 has no Related Origin
+  Requests support, and that would not solve a domain *change* anyway. So a domain move orphans
+  every credential, and every human re-enrols through the recovery path (decision 12, sibling
+  two). That is the price of the migration; it is not a ban (the operator's correction,
+  2026-09-16).
+- **First durable identity state, on a volume it now shares** (2026-10-20). The credential store is
+  a backup-and-restore concern this project has never had, and the journal is append-only and is
+  not a credential store. Railway allows one volume per service, no replicas with volumes, and
+  downtime on redeploy. **So one volume now holds identity state** (the credential store and the
+  client table), **audit state** (the journal) **and privileged content** (the documents), and
+  anyone who can write it can change all three. The answers are in decision 25: only the operator
+  writes it, the server never writes `workflows/`, every plan pins its documents' shas, and a
+  backup restore is never used for documents because it rewinds the other two.
+- **The binary and the documents now change version independently** (2026-10-20). A push deploys
+  the binary; a publish changes the documents. A catalog or DSL change that invalidates a private
+  document makes the next start refuse, and under `ON_FAILURE` that is a crash loop on a
+  shell-less service. The mitigation is procedural, and decision 25 states it: run `willikins
+  documents check` on both sides of every change. A slip costs an outage, not an exposure, because
+  the server fails closed.
+- **An agent with the operator's Railway access could write the volume** (2026-10-20). Railway
+  guards only `files delete` against agents. Every other write path (`upload`, `rename`,
+  `browse`, `railway ssh`, `scp`, `sftp`) is closed by a written rule (task 25), not by the
+  platform, and the plan says so rather than implying otherwise.
 - **Key loss is a total outage of every outstanding token**, and if the key is not persisted that
   happens on every restart. Verify item 16 asks whether it logs every human out as well.
 - **Milestone size.** The task count roughly doubles and the human half is where the cost is:
@@ -3437,13 +3469,15 @@ Then, in descending order of how likely each is to surprise someone:
   carry their own bound (an endpoint rate limit, a semaphore, a store cap) rather than leaning on
   one. A per-IP limiter cannot be built until verify item 18 settles whether any forwarded header
   is trustworthy, and pass 3 measures what a flood actually costs.
-- **Duplicate dependency majors and build time**, unchanged in kind and larger in degree.
-  `Cargo.lock` today holds one `base64` (0.23.1), one `sha2` (0.11.0), two `rand` majors and three
-  of `getrandom`. `jsonwebtoken` 11 and `axum-extra`'s signed-cookie feature want `base64` ^0.22
-  and `sha2` ^0.10; `p256` forces `rand` 0.8 as a third major; and `argon2`, `password-hash`,
-  `webauthn-rs` and its two siblings join what the crypto backend already pulls. Cargo compiles all
-  of them, which is minutes of cold build on an 11 GB host and a wider surface for the day an audit
-  gate exists.
+- **Duplicate dependency majors and build time**, unchanged in kind and smaller than this plan
+  first feared (recomputed 2026-10-20 from `Cargo.lock`). The lock already holds two `base64`
+  (0.22.1, 0.23.1), two `sha2` (0.10.9, 0.11.0), three `rand` (0.8.8, 0.9.5, 0.10.2), three
+  `rand_core` (0.6.4, 0.9.5, 0.10.1) and three `getrandom` (0.2.17, 0.3.4, 0.4.3). It also already
+  holds `jsonwebtoken` 11.1.0, `rsa` 0.9.10, `p256` 0.13.2, `p384` 0.13.1, `ed25519-dalek` 2.2.0 and
+  `hmac` 0.12.1. So `jsonwebtoken`, `p256` and the `rand_core` 0.6 bound add **no** new major. What
+  2c adds is `argon2`, `password-hash`, `axum-extra`'s signed cookies, and `webauthn-rs` with its
+  two siblings and OpenSSL. Cargo compiles all of them, which is minutes of cold build on an 11 GB
+  host and a wider surface for the day an audit gate exists.
 
 ## Notes for milestone 3
 
@@ -3503,6 +3537,21 @@ Then, in descending order of how likely each is to surprise someone:
   matching is IPv4-only and they need a plan allowance. Under Attack Mode cannot be used while
   `/mcp`, `/approvals` and the authorization-server routes share a domain, because it turns away
   every non-browser request — and three of those routes now *must* answer a non-browser client.
+- **Vendor egress and the anonymous rate limits** (2026-10-20). `/authorize` and `/token` carry a
+  global bucket (100 and 50 per 15 minutes, decision 20) with no per-IP key (verify item 18). So an
+  anonymous flood can spend the operator's own connect budget. Both vendors publish their egress:
+  Anthropic's "outbound traffic to your server originates from `160.79.104.0/21`", and OpenAI
+  publishes `https://openai.com/chatgpt-connectors.json`. Exempting those ranges from the global
+  bucket is a **deployment knob, not a security boundary**: it trusts a source address the edge
+  may not preserve, and it can only be built once verify item 18 is settled. Not built in 2c.
+  (OpenAI also says "ChatGPT presents an OpenAI-managed client certificate". Railway's edge
+  terminates TLS, so that certificate needs nothing from willikins.)
+- **Rollback over MCP**, `todos/2026-10-16-rollback-over-mcp.md`. 2c pre-assigns the scope rows
+  (decision 3) and builds the approvals page's teardown view (decision 4), so what remains is the
+  `rollback_plan` tool, teardown `run_status`, and their schemas in the tool-list snapshot.
+- **A document upload endpoint: not without its own design.** Decision 25 builds none. If one is
+  ever wanted, it is a new privileged surface, and it starts from three requirements: its own scope,
+  its own approval, and its own adversarial pass.
 
 ## Decisions the operator settled, and what each delta would have been
 
@@ -3552,7 +3601,8 @@ road not taken, because a decision whose alternative is forgotten cannot be revi
 4. **The access-token lifetime: 3600 seconds.** *The reason:* with no refresh tokens the lifetime
    is exactly how often a human must re-consent at `/authorize`, and an hour is the shortest span
    that does not interrupt a working session. It is also decision 22's key-rotation overlap window,
-   so the two numbers are one decision and move together.
+   so the two numbers are one decision and move together. *2026-10-20:* this stands. What it costs
+   on the phone use case is recorded as open question 1, not changed.
 
 **Not operator decisions, recorded here so they do not become a fifth.** `SameSite=Strict` versus
 `Lax` is a **browser measurement** (verify item 7), not a preference: measure whether `Strict`
@@ -3994,3 +4044,61 @@ question this plan no longer asks.
       cookie `Key`, a session minted on one replica is a **forgery** on another.
     - **57**'s count is superseded twice over and is recomputed from the rows of the variable
       table above: fifteen added, six required in http mode and nine optional.
+
+59. **The 2026-10-20 restatement** (a code audit, a client-and-spec pass and a volume pass, folded in
+    by the coordinator; see the 2026-10-20 addendum). It reverses no resolution. It corrects the
+    following against today's tree:
+    - **5 and 58's bullet on 5.** Trust boundary 2's "reverts to its milestone 2 form" was false by
+      2026-10-20: `clippy.toml` names five token-less exceptions, and 2c adds a sixth for the
+      signing key.
+    - **7.** "Ten" `Butler` methods are eleven after 3m.
+    - **9.** `StartupError` has eight variants, at `startup.rs:45`.
+    - **17.** Both generators moved under `tests/it/`, at `:311` and `:217`.
+    - **18 and 58's bullet on 10, 11, 18 and 24.** The backend is already `rust_crypto`, so there is
+      no build-both choice.
+    - **47 and 58's bullet on 47.** The count is 12 test sites in seven files with
+      `composition_s3.rs`, every path is now under `tests/it/`, and the bearer pin is at `:290`.
+    - **56.** Its claim did not match the body; see its correction.
+    - **57's count still holds.** `WILLIKINS_WORKFLOWS_DIR` changes rather than being added.
+
+    Two of decision 4's origin "fixes" turned out to be current behaviour, and they are now pinning
+    tests. The 401's fixed scope now names the three MCP scopes, for a client reason (decision 1).
+    `willikins:approve` leaves `scopes_supported`. Decision 25 and tasks 20 to 25 are new.
+
+## Open questions, 2026-10-20
+
+These are the operator's. Each one either touches a decision the operator settled or has no answer
+the code can supply. The plan is written so that **none of them blocks tasks 1 to 18 or 20 to 24**.
+Each names what it blocks.
+
+1. **Hourly passkey re-consent from the phone.** Out of scope: refresh tokens. Settled decision 4:
+   a 3600-second token. Together they mean the phone use case that put 2c on the critical path
+   (`todos/2026-09-20-remote-mcp-from-a-phone.md`) costs a browser round trip and a passkey every
+   hour, in each app, and possibly a trip to settings if the app flips to "Reconnect" (verify item
+   32). The plan does not change either decision. The cheapest way out is a longer per-client
+   lifetime, and the client table already has room for the column
+   (`todos/2026-09-16-unattended-agents-token-longevity.md`). Refresh plus revocation is the other.
+   *Blocks:* nothing in the code; the answer may change test 19's expectations.
+2. **Where decision 24's host-side enrollment CLI and break-glass run on this deployment.** Both
+   assume a host with a shell, holding the credential store and the journal. On Railway the image
+   is distroless and both files are on the volume (decision 25). Whether `railway ssh` reaches a
+   shell-less container is verify item 29. Some shapes, none of them chosen:
+   - a one-off Railway command running the same image;
+   - a separate operator-only image variant;
+   - running the CLI on the operator's machine against a downloaded copy, then publishing the
+     credential store back by the volume procedure, which moves identity state by hand.
+
+   *Blocks:* go-live step 4, and with it task 19.
+3. **The trusted-ref invariant's wording.** Decision 25 proposes new text for `CLAUDE.md` and
+   `AGENTS.md`, plus a design-doc addendum (task 25). This revision edited only this plan, so
+   neither file has changed. *Blocks:* task 25, and through it task 19.
+4. **Pull `rollback_plan` over MCP into 2c?** Decision 4 makes teardowns approvable on the rebuilt
+   page. But on the deployment, only `Butler::plan_rollback` can create a teardown, and its one
+   caller is the host CLI, which has the same reachability problem as question 2. So until
+   `todos/2026-10-16-rollback-over-mcp.md` lands, the view is exercised by tests and has no
+   production producer. Pulling the tool in is one more `#[tool]`, whose scope row is already
+   fixed, plus its snapshot. *Blocks:* nothing in 2c as written.
+5. **If ChatGPT's static-credential form refuses a blank secret** (verify item 27): the delta is a
+   confidential client with `client_secret_post`, which brings back a static shared secret that
+   trust boundary 5 removed. That is the operator's call, not the plan's. *Blocks:* the ChatGPT
+   half of go-live step 10 only.
