@@ -3132,7 +3132,9 @@ the behaviour, and every adversarial pass is opus.
 
 ## Verify with a browser
 
-Twenty-three items, merged from both research notes' own lists. These are the ones this plan
+Thirty-six items: twenty-three merged from both research notes' own lists, and items 24 to 36
+added on 2026-10-20 for what the client-and-spec and volume passes could not fetch verbatim.
+Items keep their numbers, because the resolutions cite them; one that is settled says so in place. These are the ones this plan
 depends on, each named with the task that owns it. **Nothing below may be written into frozen
 code before it is settled.** Items that existed only to choose or characterise an external
 identity provider are gone, not renumbered around: what `typ`, `alg` and claims a provider emits;
@@ -3140,11 +3142,11 @@ whether its access token carries `client_id`; and the six-provider caveat list. 
 of those by construction now, and where the answer still matters for an adapter's token the plan
 says so in the decision rather than waiting on a fetch.
 
-1. **Task 1: which `jsonwebtoken` crypto backend builds in the repository's Dockerfile.** No cargo
-   command was permitted during either research pass, so neither `rust_crypto` nor `aws_lc_rs` was
-   test-built. The blocker for `aws_lc_rs` is **`g++`**, not cmake: the fetched README says CMake,
-   bindgen and Go are never required for a non-FIPS build and a C/C++ compiler is, and the builder
-   installs `gcc` only.
+1. **Settled 2026-10-20: `rust_crypto` builds in the repository's Dockerfile**, because the shipped
+   image already compiles `jsonwebtoken` 11.1.0 with it (`Cargo.toml:75`, used by
+   `willikins-providers-http`), and Railway's builder is the build proof. `aws_lc_rs` stays
+   untested, and it would be a workspace-wide switch with the `g++` blocker the pinned-dependencies
+   section records.
 2. **Task 1: whether `gcr.io/distroless/cc-debian12` ships the `libssl.so.3` that `openssl-sys`
    0.9.114 links against.** The distroless README names no libssl version at all and was fetched
    from `main` rather than a tag. **Build-blocking**, and the weakest citation in either note.
@@ -3153,11 +3155,15 @@ says so in the decision rather than waiting on a fetch.
    The `ServerInfo` rename at three sites is the only breakage identifiable statically; 3.4.0's
    cancellation and pre-init changes were not verified against willikins' stateless configuration.
 4. **Task 3: whether the PKCS#8 a Rust key factory emits round-trips through `jsonwebtoken`.**
-   Whether `EncodingKey::from_ec_pem` accepts the PEM `elliptic_curve::SecretKey::to_pkcs8_pem`
-   emits — both sides are documented as PKCS#8 and the labels match, but the round trip was not
-   executed — and whether `ring`'s EC PKCS#8 output round-trips into `EncodingKey::from_ec_der`,
-   given ring deliberately omits the inner `parameters` field. The second decides whether `ring`
-   can be the key factory instead of `p256`, which would sidestep the `rand_core` 0.6 mismatch.
+   **The first half is exercised in-tree** (2026-10-20). `crates/willikins-types/src/appstore.rs`
+   re-encodes a P-256 key to PKCS#8 PEM with `p256`'s `EncodePrivateKey`, and
+   `crates/willikins-providers-http/src/apple_credential.rs:175` feeds that PEM to
+   `EncodingKey::from_ec_pem`. Task 3's test 21 still asserts the round trip for a key *generated*
+   by `SecretKey::random`, but nothing is unknown about the format. The second half stays open,
+   and it no longer matters, because the `rand_core` 0.6 bound is met by the providers-github
+   precedent: whether `ring`'s EC PKCS#8 output round-trips into `EncodingKey::from_ec_der`,
+   given ring deliberately omits the inner `parameters` field. It would have decided whether `ring`
+   could be the key factory instead of `p256`.
 5. **Tasks 4 and 11: every OAuth 2.1 section number.** draft-ietf-oauth-v2-1-16 is an
    Internet-Draft (rev 16, 2026-09-03, expires 2027-03-07) whose Status of This Memo forbids citing
    it other than as work in progress, and which already carries one unreconciled tension (refresh
@@ -3177,7 +3183,11 @@ says so in the decision rather than waiting on a fetch.
    also unfetched: whether any mainstream browser still applies Chrome's historical two-minute
    "Lax+POST" grace — it applies only to cookies with **no** explicit `SameSite`, which is not this
    case, so do not freeze a test asserting "Lax blocks a forged cross-site POST" without checking.
-8. **Task 11: whether `localhost` joins `127.0.0.1` and `[::1]` in the port-relaxed redirect set.**
+8. **Settled 2026-10-20: `localhost` joins**, because Claude Code registers both
+   `http://localhost/callback` and `http://127.0.0.1/callback` and needs both matched with the port
+   ignored (the 2026-10-20 client-and-spec pass, from Anthropic's connector docs). The port is
+   relaxed for the three hosts and never across them (decision 20). The original question:
+   **Task 11: whether `localhost` joins `127.0.0.1` and `[::1]` in the port-relaxed redirect set.**
    OAuth 2.1 writes the port exception for the IP literals and says `localhost` is NOT RECOMMENDED;
    the MCP CIMD example document registers `http://localhost:3000/callback` alongside the IP form;
    the TypeScript SDK relaxes the port for all three while forbidding cross-matching between them;
@@ -3200,11 +3210,14 @@ says so in the decision rather than waiting on a fetch.
 12. **Tasks 3 and 19: where the signing key lives, and the Railway volume's mount path.** Both a
     Railway volume file and a Doppler-injected variable fit the fetched platform facts; the project
     rule that every secret lives in Doppler pulls one way and first-boot self-provisioning pulls the
-    other (open decision 2). Separately, no `railway.json` or `railway.toml` is in the tree, so the
-    volume's mount path is written down nowhere fetchable and the credential store's home depends
-    on it.
-13. **Task 9: whether any browser in the operator's environment refuses `navigator.credentials` on
-    the deployment's domain.** Untested. The only mitigation the plan's shape offers is the
+    other (open decision 2). **The mount-path half is settled (2026-10-20): `/data`**, from
+    `.railway/railway.ts:58` (`volumeMounts: { "/data": willikinsVolume }`), which this item missed
+    by looking only for `railway.json` and `railway.toml`. Decision 25 fixes the layout under it.
+    The signing-key half is settled by open decision 2 (Doppler).
+13. **Tasks 9, 11 and 19: whether any browser in the operator's environment refuses
+    `navigator.credentials` on the deployment's domain**, and since 2026-10-20 **which browser
+    context the Claude and ChatGPT iOS apps open `/authorize` in, and whether the passkey ceremony,
+    the parked-request resume and the recovery-code path all work there** (decision 20). Untested. The only mitigation the plan's shape offers is the
     recovery-code path, which is why decision 24 refuses to defer it to a later milestone.
 14. **Tasks 5 and 19: whether the authorization-server routes must sit outside `allowed_hosts`.**
     The same question the resource-server note raised for the RFC 9728 route, now with
@@ -3230,8 +3243,9 @@ says so in the decision rather than waiting on a fetch.
     deploy picks up variable edits staged on Railway's variables page. The documented "omit means
     delete" exemption covers only generated domains. Settle all three with a read-only
     `railway config plan` and one observed deploy; never by applying. If staged edits are not
-    picked up by a push, the accepted outcome is one failed deployment behind a healthcheck that
-    keeps the previous one live, which is itself a step of test 19.
+    picked up by a push, the outcome this item used to accept was one failed deployment behind a
+    healthcheck that keeps the previous one live. For a volume-backed service that is no longer
+    assumed (item 30).
 21. **Settled for rmcp 3.3.0; open only for 3.4.0: whether a tool handler can set the HTTP
     response status.** At 3.3.0 it cannot. `jsonrpc_http_status`
     (`rmcp-3.3.0/src/transport/streamable_http_server/tower.rs:626`) maps a handler's error to
@@ -3247,6 +3261,69 @@ says so in the decision rather than waiting on a fetch.
     there. And `draft-ietf-oauth-client-id-metadata-document-00`, which MCP pins in every citation,
     **expired on 11 April 2026**; the working-group document is at revision 02 (2026-07-06) and the
     -00 to -02 diff was not read, which matters the day CIMD is added.
+
+**Added 2026-10-20.** Every Railway item below is settled **by the operator, by hand, in a
+disposable environment**, never by an agent and never against the live volume. Every app item is
+settled by test 19 with the operator.
+
+24. **Tasks 20 and 19: what `railway volume files` does.** Five questions, none answered by the
+    fetched pages:
+    - Does `files upload --overwrite` of a directory delete remote files that are absent locally?
+    - Is a single-file upload atomic, or can a reader see a partial file?
+    - Does `files rename` work on a directory, and atomically?
+    - Can `--concurrency` (default 32) expose a half-populated directory to `list_workflows`?
+    - Are `files` paths relative to the volume root? The examples (`/backup.tar`, `files list /`)
+      suggest so, which would make the container's `/data/workflows` `/workflows` to the CLI.
+
+    Decision 25's procedure stages, checks and swaps precisely because these are unknown.
+25. **Task 20: whether `files upload` needs the service running, and works against a distroless
+    image; and whether `upload` or `browse` can create a symlink.** Decision 25's directory-symlink
+    refusal and `O_NOFOLLOW` hold either way. The second question decides only whether the attack
+    is reachable through Railway's own tooling.
+26. **Tasks 5 and 19: which `Origin` header, if any, Anthropic's and OpenAI's backends send on
+    `initialize`.** No primary source states it. It decides whether decision 18's one-entry
+    `allowed_origins` list passes both apps or answers 403. Record it before the list freezes.
+27. **Task 19: whether ChatGPT's static-credential form accepts a client id with a blank secret.**
+    OpenAI's auth guide implies that method `none` works for predefined clients ("This applies to
+    CIMD, DCR, and predefined OAuth clients"), but the form itself was not observed. If it does
+    not, the delta is a confidential client and `client_secret_post`, which reopens trust boundary 5
+    (open question 5). Related, also unfetched (the help-centre page answered 403): which ChatGPT
+    plan tiers allow a custom connector, and whether such a connector is usable from the iOS app.
+28. **Task 19: whether ChatGPT steps up on willikins' transport-level 403 `insufficient_scope`.**
+    OpenAI documents re-linking only through per-tool `securitySchemes` plus a tool result carrying
+    `_meta["mcp/www_authenticate"]`. The 401 naming the three MCP scopes (decision 1) should make a
+    step-up rare. If test 19 shows ChatGPT needs the tool-level path, the delta is additive: a
+    `securitySchemes` field in each tool's metadata and the `_meta` challenge on a scope refusal.
+29. **Tasks 10 and 19: whether `railway ssh`, `scp` or `sftp` reach a shell-less distroless
+    container.** It decides decision 25's fallback transport, and where decision 24's host-side
+    enrollment CLI and break-glass can run at all (open question 2). The SSH username is the
+    service's domain, or its service instance id while it has none.
+30. **Task 19: what happens when a new deployment of a volume-backed service fails to start.**
+    Railway prevents two deployments from mounting the volume, so redeploys cost downtime. Whether
+    a failed new deployment hands the volume back to the old one is not stated. Until it is
+    measured, decision 9 step 6 plans for an outage.
+31. **Decision 25: whether a read-only mount option exists.** None appears on the fetched pages.
+    If one does, `/data/workflows` could be read-only to the process, which is stronger than "the
+    server never writes it". That would need a second mount, and a service has one volume, so it is
+    probably not available.
+32. **Task 19: what each app does when its 3600 s access token expires.** It might re-run OAuth
+    inline, or flip the connector to "Reconnect" so the user has to go to settings. That decides
+    how heavy open question 1's hourly re-consent really is.
+33. **Decision 25: whether a Railway rollback leaves the volume as it is.** The fetched page says a
+    rollback "restores a previous deployment's Docker image and its custom variables" and does not
+    mention volumes. That it leaves documents and the journal untouched is an inference.
+34. **Tasks 7 and 19: which MCP protocol revision each app negotiates against rmcp 3.3.0's
+    sessionless server.** If it is 2026-07-28, decision 3's middleware must check `Mcp-Name`
+    against `params.name`.
+35. **Task 11: whether Chrome and iOS WebKit follow the consent POST's redirect to a registered
+    HTTPS callback under `form-action 'self' <that origin>`.** MDN says browsers disagree about
+    `form-action` and redirects. Test 22's browser check measures it.
+36. **Go-live step 9: Railway volume backups in practice.** The fetched page gives the schedules
+    (daily backups "kept for 6 days") and the rules ("Backups can only be restored into the same
+    project + environment", "Wiping a volume deletes all backups"). Not established: whether a
+    restore is all-or-nothing for the volume (it would then rewind the journal, the credential
+    store, the client table and the documents together, which is why decision 25 never restores
+    for documents), and whether a restore rehearsal is possible in a disposable environment.
 
 ## Risks
 
