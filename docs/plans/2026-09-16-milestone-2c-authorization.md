@@ -379,8 +379,9 @@ simply absent (401) is verify item 22 — RFC 6750 §3.1 was not fetched — so 
 **Every check, and the `AuthFailedReason` it journals.** The variants are additive to
 `willikins_journal::AuthFailedReason` (`crates/willikins-journal/src/event.rs`), which today holds
 `MissingCredential`, `InvalidCredential`, `WrongRole`, `InvalidNonce`, `ForeignOrigin` and
-`MalformedUsername`. The authorization-server half adds twelve more, listed in the journal
-contract below.
+`MalformedUsername`. The authorization-server half adds twenty more (twelve before the
+operator's 2026-10-20 answers, then seven for decision 26 and one for decision 27), listed in the
+journal contract below.
 
 | Check | Status | Reason variant | State |
 | --- | --- | --- | --- |
@@ -1329,7 +1330,7 @@ are inserted after them.)
 3. **Measure what the edge sends, and what it already bounds.** Before any allowed-hosts value is
    frozen, deploy a build that echoes the inbound `Host`, `X-Forwarded-Host` and `X-Railway-Edge`
    on `/healthz`, and read them from a real public request. **The echo build is never the live
-   service** (2026-10-20 review). It is cut from a throwaway branch off the deployed pre-2c commit,
+   service** (2026-10-20 review; accepted by the coordinator the same day). It is cut from a throwaway branch off the deployed pre-2c commit,
    serves `/healthz` and nothing else, and the operator deploys it to a disposable Railway
    environment with the custom domain attached there for the measurement only. The live service
    gets a public domain only once the step-6 deploy is healthy, which keeps `.railway/railway.ts`'s
@@ -3049,6 +3050,12 @@ revision and still need them:
 | `hyper-util` | `{ version = "0.1", default-features = false, features = ["server", "http1", "tokio", "service"] }` (0.1.20 is already in the lock) | `rt::TokioIo`, `rt::TokioTimer` (decision 8: hyper 1.11 panics without a timer) and `service::TowerToHyperService`. **Not `server-auto`**, which would add HTTP/2 to a release binary that speaks only HTTP/1.1 |
 | `tracing-subscriber` | already a workspace dependency at `0.3`; task 14 **adds the `env-filter` feature** to the existing `features = ["json"]` | `WILLIKINS_LOG` is a filter directive and `EnvFilter` is behind that feature |
 
+**The operator's 2026-10-20 answers add no crate.** Decisions 26 and 27 use `sha2`, `subtle`,
+`base64`, `rand_core` and `zeroize`, which are already in the lock (`subtle` 2.6.1 and `sha2` are
+already `willikins-server` dependencies), and decision 28 uses only the tree's own crates. So
+`subtle` stays a `willikins-server` dependency after task 9 removes the hash compare that uses it
+today.
+
 **`ureq` stays a dev-dependency of `willikins-server`.** The delegating draft moved it into
 `[dependencies]` for the JWKS fetch; decision 16 removes that fetch, so the move is withdrawn and
 the crate keeps the position it has today.
@@ -3455,8 +3462,9 @@ mount-path half is settled; the volume's backup and restore behaviour is verify 
 
 ## Environment variables
 
-**Sixteen added**, six of them required in http mode and ten optional (the 2026-10-20 review
-added `WILLIKINS_EXTRA_ALLOWED_ORIGINS`). Every tunable names the
+**Nineteen added**, six of them required in http mode and thirteen optional (the 2026-10-20 review
+added `WILLIKINS_EXTRA_ALLOWED_ORIGINS`; the operator's 2026-10-20 answers added the two refresh
+lifetimes and `WILLIKINS_BOOTSTRAP_SECRET`). Every tunable names the
 component that reads it, so a value with no consumer cannot survive review. Four values that look
 like they should be here are not, and deliberately: the **audience**, the **issuer identifier**,
 the **redirect URI** and the **WebAuthn RP ID** are all derived from `WILLIKINS_PUBLIC_URL` and are
@@ -3515,11 +3523,12 @@ the code that reads each one.
 
 ## Acceptance tests
 
-Thirty-one. The milestone cannot ship without every one of them, and each names the exact status
+Thirty-five. The milestone cannot ship without every one of them, and each names the exact status
 or error kind it expects. Tests 1 to 19 keep the numbers the 2026-09-16 review left them with, even
 where their content changed, so that every cross-reference in the resolutions below still points
-at the test it was written about. The authorization-server half is tests 20 to 26, and the
-2026-10-20 addendum's are tests 27 to 31.
+at the test it was written about. The authorization-server half is tests 20 to 26, the
+2026-10-20 restatement's are tests 27 to 31, and the operator's 2026-10-20 answers add tests 32 to
+35 (refresh tokens, revocation, the bootstrap secret, rollback over MCP).
 
 **Where they live, after 3k.** Each crate's default-built integration tests compile as one binary,
 `tests/it/main.rs`, with one module per file. So every new acceptance-test file gets a
@@ -3612,7 +3621,9 @@ at the test it was written about. The authorization-server half is tests 20 to 2
    (`sink_token_guard.rs`) and 3m's `TeardownToken::new` guard (`teardown_token_guard.rs`). A sweep
    over the journal, every log line and every error body produced during a full
    plan-approve-apply cycle asserts that neither the token's bytes nor any byte of the private key
-   appears anywhere. The guards gain **exactly one new allowed `expose_secret` site**: the signing
+   appears anywhere, and since the operator's 2026-10-20 answers the same sweep covers a refresh
+   token and its hash (decision 26) and the bootstrap secret and its digest (decision 27), none of
+   which is a secret domain type or an `expose_secret` site. The guards gain **exactly one new allowed `expose_secret` site**: the signing
    key's own `reveal_for_signing`, called only from `issuer::mint`. That is the sixth token-less
    exception, beside the five `clippy.toml` already names (trust boundary 2). A second call site
    anywhere fails `cargo clippy -D warnings`, through the method's own `disallowed-methods` entry;
@@ -4155,10 +4166,13 @@ nothing instead of failing. A unit test inside a crate's `src/` runs with `--lib
 Go-live steps 7 and 8 are milestone 2's own remaining operator work, and step 8 is still work:
 `WILLIKINS_FAKE_CATALOG: preserve()` is still in `.railway/railway.ts`.
 
-Twenty-six tasks, plus the research that is already done, in dependency order. Tasks 20 to 25 are
-new on 2026-10-20. No earlier task is obsolete, but two lose a part: task 1 no longer builds both
-`jsonwebtoken` backends, and task 13 loses the two origin "fixes" that turned out to be current
-behaviour. **Everything runs sequentially**, one lane at a time. This host has 11 GB of
+Thirty tasks, plus the research that is already done, in dependency order. Tasks 20 to 25 are
+new on 2026-10-20, and tasks 26 to 29 come from the operator's answers the same day: refresh
+tokens (26), revocation (27), the bootstrap secret (28) and rollback over MCP (29). No earlier
+task is obsolete, but three lose a part: task 1 no longer builds both `jsonwebtoken` backends,
+task 13 loses the two origin "fixes" that turned out to be current behaviour, and task 10 loses
+its enrollment CLI to task 28. Task 28 runs straight after task 10, tasks 26 and 27 after task 11,
+and task 29 after task 24. **Everything runs sequentially**, one lane at a time. This host has 11 GB of
 RAM shared with other sessions, and the milestone 2 experiment with parallel worktree lanes took
 six hours and was OOM-killed. Agents stage only their own paths, and the coordinator commits by
 path. The table is ordered as the tasks run: 21, 22 and then 20 come straight after 1b, because
@@ -4170,6 +4184,10 @@ service (`.railway/railway.ts`: "branch main, auto-deploy on push"), and from ta
 binary refuses to start while `WILLIKINS_AGENT_TOKEN_HASHES: preserve()` is still live
 (`RetiredVariable`), which under `ON_FAILURE` is a crash loop. So:
 
+- **Accepted by the coordinator on 2026-10-20, with its check made a gate:** before the first
+  push of `m2c`, the operator confirms on the service's settings that Railway deploys `main`
+  only, with no PR or branch environments (verify item 20's branch sub-question). If it deploys
+  any other branch, `m2c` stays local until that is turned off.
 - Tasks 1, 1b, 21, 22 and 20 land on `main` and are pushed. Each is deployable onto the live
   service as it stands, and tasks 1 and 20 need a real Railway build to be pinned at all.
 - **Every later task, from task 2 on, lands on a branch, `m2c`**, which may be pushed for
@@ -4318,9 +4336,9 @@ the behaviour, and every adversarial pass is opus.
 
 ## Verify with a browser
 
-Thirty-seven items: twenty-three merged from both research notes' own lists, items 24 to 36
-added on 2026-10-20 for what the client-and-spec and volume passes could not fetch verbatim, and
-item 37 added by the 2026-10-20 review.
+Forty-one items: twenty-three merged from both research notes' own lists, items 24 to 36
+added on 2026-10-20 for what the client-and-spec and volume passes could not fetch verbatim, item
+37 added by the 2026-10-20 review, and items 38 to 41 added for decision 26.
 Items keep their numbers, because the resolutions cite them; one that is settled says so in place. These are the ones this plan
 depends on, each named with the task that owns it. **Nothing below may be written into frozen
 code before it is settled.** Items that existed only to choose or characterise an external
@@ -4939,8 +4957,9 @@ How each finding of the 2026-09-16 document review was resolved, and then how th
 revision moved them. Reviewers: coherence, feasibility, security-lens, scope-guardian, adversarial.
 Findings from two or more reviewers on the same point are merged; the reviewers in brackets are who
 raised it. Seventy-five findings merged into entries 1 to 57; entry 58 is the scope revision, and
-says which of the fifty-seven it supersedes. Entry 59 is the 2026-10-20 restatement, and entry 60
-the 2026-10-20 four-lens review of it.
+says which of the fifty-seven it supersedes. Entry 59 is the 2026-10-20 restatement, entry 60
+the 2026-10-20 four-lens review of it, and entry 61 the operator's answers to its seven open
+questions.
 
 **Entries 1 to 57 are kept verbatim as the record, so they cite the task and verify-item numbers
 the delegating draft had.** The key, once, rather than fifty-seven edits that would falsify the
@@ -5470,6 +5489,36 @@ question this plan no longer asks.
       (security P2); and PKCS#8 only, no SEC1, for the signing key (clients P1).
     - **Recovery sessions** are restricted as security asked. The cost to decision 24's
       browser-refusal mitigation is open question 7, not a silent loss.
+
+61. **The operator's answers to the seven open questions, 2026-10-20** (two in the operator's own
+    words, five as the coordinator relayed them; the addendum at the top quotes both kinds). It
+    reverses no resolution. Applied:
+    - **Question 1, refresh tokens** → settled decision 5 and decision 26. This reverses the
+      plan's earliest scope cut, the one resolution 58 inherited from the scope revision ("no
+      refresh tokens are issued"). Trust boundary 1b, the Out of scope list, decisions 12 and 19
+      to 23, and the rationales of settled decisions 2 and 4 are revised in place. RFC 9700 §4.14,
+      RFC 7009 §2, draft-16 §4.3, RFC 8414's revocation members and both vendors' token pages were
+      fetched verbatim for it. *A choice the answer left open, taken here:* `offline_access` stays
+      unadvertised, and issuance follows a per-client `refresh_tokens` key. The condition that
+      would reverse that is verify item 38.
+    - **Question 2, the bootstrap secret** → settled decision 6 and decision 27. *Choices the
+      answer left open, taken here and open to the operator's overruling.* First, the subject
+      becomes an operator-chosen account name, so that decision 3's empty-allowlist refusal can
+      stay. Second, a spent value left set is logged and refused at the page rather than refused
+      at startup, because the approved design restarts with the same value without reopening the
+      page. Third, the enrollment CLI is not built locally either.
+    - **Question 3** → settled decision 7; task 25 is unblocked.
+    - **Question 4** → settled decision 8 and decision 28, with both tools. *Found while applying
+      it:* `Butler::apply_rollback` runs synchronously, and `TeardownPlanResponse` has no
+      `JsonSchema`. The first is moved onto its own thread, and the second gets a view type.
+    - **Questions 5, 6 and 7** → settled decisions 9, 10 and 11, applied in the Goal, decisions 20,
+      21 and 24, go-live step 10, test 19, verify items 27 and 37, and Risks.
+    - **Sequencing:** the push fence gains its Railway-deploys-`main`-only check as a gate, and
+      step 3's disposable environment is recorded as accepted.
+
+    **Not applied:** nothing. Two consequences are recorded rather than designed around: a volume
+    restore rewinds both the refresh families and the bootstrap spent list (go-live step 9), and
+    refresh tokens raise the stake of consent phishing (Risks).
 
 ## Open questions, 2026-10-20: all answered
 
