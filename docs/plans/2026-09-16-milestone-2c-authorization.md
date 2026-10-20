@@ -395,7 +395,7 @@ journal contract below.
 | `aud` missing or not containing this resource | 401 | `InvalidAudience` | new |
 | `exp` past the leeway, or `nbf` in the future | 401 | `TokenExpired` | new |
 | `sub` absent | 401 | `MissingSubject` | new |
-| `sub` not in `WILLIKINS_AGENT_SUBJECTS` | 403 | `UnlistedSubject` | new |
+| `sub` not in `WILLIKINS_AGENT_SUBJECTS` | 403 (400 `invalid_grant` when a refresh at `/token` finds it, decision 26) | `UnlistedSubject` | new |
 | The token's scopes do not admit the tool named | 403 | `InsufficientScope { needed }` | new |
 | A `tools/call` with no `name`, or naming no tool in the scope table | **400** `invalid_request`, no `WWW-Authenticate` | `UnknownTool` | new (2026-10-20 review) |
 | A session whose `sub` is not in `WILLIKINS_APPROVER_SUBJECTS`, or whose token lacked `willikins:approve` | 403 | `WrongRole` | retained |
@@ -1507,7 +1507,9 @@ are inserted after them.)
 
     Each connection is one passkey consent at `/authorize`. With `refresh_tokens: true` on its
     entry, the next is due when the family ends: after 14 idle days, after 30 days, or on a reuse
-    or a revocation (decision 26).
+    or a revocation (decision 26). **After removing a connector in either app**, revoke its family
+    on the approvals page's Connections section, unless test 19 has shown that the app calls
+    `/revoke` itself (verify item 40).
 11. **Record the tenancy.** The live service serves **one organization or workplace per provider
     credential**: one GitHub organization, one Doppler workplace, one Buildkite organization, one
     SigNoz host. That holds until milestone 3's credential routing lands. The operator runs
@@ -1997,8 +1999,8 @@ discipline willikins already applies with domain newtypes, and the shape prior a
   `Cache-Control: no-store` set before anything else on the response. **The numbers are this
   plan's choice and no specification sets them**; the prior art they are taken from is
   Cloudflare's shipped MCP authorization server, which defaults to 100 requests per 15 minutes at
-  `/authorize` and 50 at `/token`. **The `/token` bucket counts failed redemptions only, per
-  `client_id`** (2026-10-20 review): a global bucket that counted every request let 50 junk POSTs
+  `/authorize` and 50 at `/token`. **The `/token` bucket counts failed redemptions and failed
+  refreshes only, per `client_id`** (2026-10-20 review; refreshes since decision 26): a global bucket that counted every request let 50 junk POSTs
   per 15 minutes refuse Claude's own valid redemption. A valid code is claimed before the bucket
   is consulted, so someone else's flood never refuses it, and a valid redemption needs a human's
   consent, which bounds it anyway. `/authorize` keeps its global bucket, because before phase 1
@@ -2341,7 +2343,7 @@ the real cost of the milestone is.
 
 *Settled by the operator (settled decisions 1, 6 and 11), and pinned by tests 10, 24, 25 and 34.*
 
-### One decision the 2026-10-20 addendum adds
+### One decision the 2026-10-20 restatement adds
 
 **25. The deployed server reads its workflow documents from the mounted volume, and the image
 carries none.** The operator, 2026-10-20: "I'd go with a mounted volume." The operator's documents
@@ -2696,7 +2698,9 @@ refresh path (`…-m2c-own-authorization-server.md` §6.6 and §6.7).
 
   Rotation is one atomic claim under the store's lock, the same discipline as the code's
   get-and-remove: two concurrent refreshes with one token yield one success, and the other is a
-  reuse. **The cost is stated rather than softened.** If a client's refresh response is lost in
+  reuse. **The lookup and reuse detection run before `/token`'s failure bucket is consulted**, as
+  a code's claim does (decision 20). The bucket decides only how a miss is answered, so a flood
+  that has exhausted it can never let a reused token pass without revoking its family. **The cost is stated rather than softened.** If a client's refresh response is lost in
   transit and the client retries with the same token, it loses its family and its human goes back
   to a passkey. A grace window that tolerates one retry is the common softening, and it is not
   built, because it is exactly the window an attacker races. Verify item 39 records whether either
@@ -2829,7 +2833,10 @@ credential store is on the volume, so the CLI had no host to run on.
 - **What the page does, and nothing else.** It is `GET /bootstrap` and its two POSTs. Unarmed or
   spent, every bootstrap route answers 404, with or without a secret. Armed:
   1. The form takes the secret and the account name in a POST body, never in a URL. A wrong
-     secret is 403, journaled `BootstrapSecretMismatch`. A right secret with a name in neither
+     secret is 403, journaled `BootstrapSecretMismatch`. That a 404 means unarmed and a 403 means
+     armed tells an anonymous caller whether a bootstrap is in progress. This is accepted: it
+     reveals nothing that helps against 256 bits, and the operator arms one only for an
+     enrolment about to happen. A right secret with a name in neither
      allowlist is 403 naming the rule, since whoever holds the secret is the operator.
   2. A right pair starts a registration ceremony for that account, creating the account if it
      does not exist. The ceremony is bound to the browser by a `__Host-willikins-bootstrap`
@@ -3313,13 +3320,13 @@ produce them, in tasks 9, 10 and 11, decision 26's in tasks 26 and 27, and decis
 | --- | --- |
 | `UnknownClient` | `/authorize` phase 1 (decision 20) |
 | `RedirectUriMismatch` | `/authorize` phase 1 (decision 20), and a `/token` request whose `redirect_uri` differs from the stored one (decision 21) |
-| `InvalidScope` | `/authorize`, when nothing grantable remains of the request (decision 20; added 2026-10-20) |
+| `InvalidScope` | `/authorize`, when nothing grantable remains of the request (decision 20; added 2026-10-20), and a refresh at `/token` asking for a wider `scope` (decision 26) |
 | `MissingCodeChallenge` | `/authorize` (decision 20) |
 | `UnsupportedCodeChallengeMethod` | `/authorize`, including `plain` (decision 20) |
 | `PkceVerifierMismatch` | `/token` (decision 21) |
 | `CodeReplayed` | `/token` (decision 21) |
 | `CodeExpired` | `/token` (decision 21) |
-| `ResourceWidened` | `/token` (decision 21) |
+| `ResourceWidened` | `/token`, at code redemption (decision 21) and at a refresh (decision 26) |
 | `InvalidClient` | `/token`, a non-empty client secret (decision 21; added 2026-10-20) |
 | `CeremonyAccountMismatch` | the passkey ceremonies (decision 24) |
 | `RecoveryCodeReplayed` | the recovery path (decision 24) |
