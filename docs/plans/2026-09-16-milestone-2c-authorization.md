@@ -33,14 +33,24 @@ disposition is review resolution 62). It changed:
   One question is open again, because the review's preferred fix would narrow an operator answer;
   it is in "Open questions" at the end.
 **Addendum:** 2026-10-20 (the operator answers all seven open questions; review resolution 61).
-Two answers are in the operator's own words. Question 2, the one-time bootstrap secret: "Approved,
-as long as its single-use". Question 3, the trusted-ref wording: "Approved". The other five reached
-this plan as the coordinator relayed them the same day:
-1. refresh tokens with rotation and revocation, agreed;
-4. rollback over MCP pulled into 2c, agreed;
-5. a ChatGPT client secret only if it is actually needed, so the public-client design stays;
-6. ChatGPT on iOS works, once a custom connector is set up on the web or in the desktop app;
-7. recovery-code sessions stay restricted to enrolling a passkey, agreed.
+All seven are in the operator's own words, 2026-10-20 (the coordinator confirms the earlier "as relayed"
+labels were only about how they reached the reviser; these are the operator's replies verbatim):
+1. refresh tokens with rotation and revocation: "Agreed";
+2. the one-time bootstrap secret: "Approved, as long as its single-use";
+3. the trusted-ref wording: "Approved";
+4. rollback over MCP pulled into 2c: "Agreed";
+5. a ChatGPT client secret: "Only if its actually needed";
+6. ChatGPT on iOS: "They can. Might have to set it up on the desktop app or web, but no reason it won't work";
+7. recovery-code sessions restricted to enrolling a passkey: "Agreed".
+
+The defaults the two review passes chose, which the operator may still overrule (the coordinator
+took them as written, 2026-10-20): the in-house subject is an account name the operator picks; a
+spent bootstrap secret left set is refused at the page with a WARN line, not at startup; no local
+enrollment CLI; refresh lifetimes 14 days idle, 30 days absolute, 90-day ceiling; the bootstrap
+secret by Railway variable or Doppler, the variable with a temporary preserve() row; a bootstrap
+into an existing account replaces its credentials; only the generator's checksummed `wkbs1_` value
+is accepted. A refresh-retry grace window is not built, and comes back to the operator only if
+verify item 39 shows an app needs one.
 
 The coordinator also accepted two sequencing recommendations: the `m2c` push fence, with a check
 that Railway deploys `main` only, and the disposable Railway environment for step 3's measurement.
@@ -5255,10 +5265,10 @@ alternative is forgotten cannot be revisited honestly.
    footing. Settled decision 5 adds refresh tokens, so for a client that has them the hour is no
    longer a re-consent interval. It is the window of a leaked access token, which `/revoke` cannot
    shorten (decision 26), and that is a reason to keep it short rather than lengthen it, which is
-   what settled decision 5's answer, as relayed, asks: access tokens stay short.
+   what settled decision 5's answer asks: access tokens stay short.
 
-**Settled 2026-10-20.** Answers 6 and 7 below are in the operator's own words; the other five are
-as the coordinator relayed them (the 2026-10-20 addendum at the top says which is which).
+**Settled 2026-10-20.** All seven answers below are in the operator's own words (the 2026-10-20
+addendum at the top quotes each).
 
 5. **Hourly re-consent: refresh tokens, with rotation and revocation** (was open question 1).
    *The reason:* the phone use case that put 2c on the critical path would otherwise cost a
