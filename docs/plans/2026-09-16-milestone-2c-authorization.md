@@ -3,6 +3,23 @@
 **Created:** 2026-09-16
 **Reviewed:** 2026-09-16 (via document-review workflow: coherence, feasibility, security-lens,
 scope-guardian, adversarial; findings folded in below)
+**Addendum:** 2026-10-20 (resumption, and one new operator decision). The plan was shelved on
+2026-09-16 while milestones 2b and 3g to 3o landed. It is now restated against today's code so it
+can be implemented. **The operator's new decision:** the deployed server reads its workflow
+documents from the **mounted volume**, because the operator's documents are private and must never
+ship in the public repository or its image (decision 25). Three research passes, all dated
+2026-10-20, are folded in here. A code audit corrects stale paths, the test layout after 3k,
+`StartupError`'s eight variants, eleven `Butler` methods once 3m's rollback is counted, the
+teardown events, the five token-less `expose_secret` exceptions already in `clippy.toml`, and a
+dependency tree that already carries `jsonwebtoken` 11 with `rust_crypto` and `p256`. It also
+restores go-live steps 2 to 5, which an earlier edit had dropped. A client-and-spec pass checks
+the plan against what the Claude and ChatGPT apps require. That pass adds four things: `state` is
+echoed on every authorization response; the 401 challenge names the MCP scopes an agent needs;
+the consent redirect gets an explicit CSP; and `WILLIKINS_PUBLIC_URL` must be canonical. A
+volume pass supplies decision 25's Railway facts and code changes. Each fact the passes could not
+fetch verbatim is a new verify item (24 onward). The precondition is met: the milestone 2 plan
+carries `Completed: 2026-09-16`. What still needs the operator is under "Open questions,
+2026-10-20" at the end.
 **Addendum:** 2026-09-16 (the operator rules out any external identity provider; willikins becomes
 its own authorization server). The operator's words: "I won't have the entire project's authn /
 authz depend on the 'open source' edition of a SaaS ... There is *no way* I'll shove such a tool
@@ -747,7 +764,7 @@ codebase: a variable that used to decide how the server authenticates must never
 no-op. An operator who upgrades the image and keeps the old variables set would otherwise have a
 service that looks configured and is in fact open to anyone it will issue a token to, which is the
 opposite of what those variables meant. Refusing is loud, happens before the listener binds, and
-costs one deployment step in the go-live sequence (step 5: the variable change lands *before* the
+costs one deployment step in the go-live sequence (step 6: the variable change lands *before* the
 deploy that needs it, never after).
 
 **No commit on `main` may hold the no-op state this decision forbids**, which is a sequencing rule
@@ -917,60 +934,156 @@ items and where each one went are in the out-of-scope list above.
 
 ### 9. The go-live sequence
 
-Nine steps, and the order matters: the resource identifier, the issuer identifier, the audience,
-both metadata documents' published values, the registered `redirect_uri`s and the **WebAuthn RP ID**
-all freeze the host the moment they are published, so the host is chosen before any of them is
-written anywhere.
+Eleven steps, and the order matters. Six things freeze the host the moment they are published:
+the resource identifier, the issuer identifier, the audience, both metadata documents' published
+values, the registered `redirect_uri`s and the **WebAuthn RP ID**. So the host is chosen before
+any of them is written anywhere. (Steps 2 to 5 were lost from this list by an edit on 2026-09-16.
+They are restored from commit 656613a, and the volume and client steps of the 2026-10-20 addendum
+are inserted after them.)
 
-1. **The host is `willikins.example.com`** (operator, 2026-09-16), a custom domain on a
-   name the operator owns rather than a generated `*.up.railway.app` one, so the identifier the
-   deployment publishes belongs to the operator and survives a move off Railway. This step got
-   **heavier** with this revision, and the extra weight is worth saying in one breath: that host is
-   now also the **issuer identifier** and the **WebAuthn RP ID**. The audience has a documented
-   migration path (decision 12); **the RP ID's migration is a re-enrolment** — `webauthn-rs` 0.5.5
-   has no Related Origin Requests, so changing the host invalidates every enrolled passkey and each
-   human enrols again at the new host through the recovery path of decision 25. Choose the host
-   knowing that, rather than believing it cannot be changed.
+1. **The host is `willikins.example.com`** (operator, 2026-09-16). It is a custom domain on a
+   name the operator owns, not a generated `*.up.railway.app` one, so the identifier the
+   deployment publishes belongs to the operator and survives a move off Railway. This revision
+   made the step heavier: that host is now also the **issuer identifier** and the **WebAuthn RP
+   ID**. The audience has a documented migration path (decision 12). **Moving the RP ID means
+   re-enrolling**: `webauthn-rs` 0.5.5 has no Related Origin Requests, so changing the host
+   invalidates every enrolled passkey, and each human enrols again at the new host through the
+   recovery path of decision 24 (and test 25). Choose the host knowing that; it can still be
+   changed. Therefore:
+   `WILLIKINS_PUBLIC_URL=https://willikins.example.com`, written in the canonical form decision 12
+   requires (lowercase scheme and host, no port, no trailing `/`). The issuer identifier is that
+   string exactly, the resource identifier and audience are `https://willikins.example.com/mcp`,
+   the two metadata documents are at `/.well-known/oauth-authorization-server` and
+   `/.well-known/oauth-protected-resource/mcp`, and the RP ID is `willikins.example.com`. Railway
+   does not attach a domain automatically: the operator adds it in the dashboard or with the CLI.
+   A custom domain needs **both** a CNAME and a TXT ownership record; with only the CNAME it
+   answers 404 even after DNS resolves. Railway then issues the certificate itself, and gives up
+   after 72 hours. Both vendor apps also require the name to resolve to a globally routable
+   **IPv4** address (Anthropic: "Connectors are IPv4-only"), which test 19 checks.
+2. **Declare it.** `.railway/railway.ts` can declare a custom domain (`domains: ["…"]`, or
+   `{ domain, port }`) and **cannot** declare a generated one. That is documented, and it is the
+   primary source behind the file's own header comment. So a custom domain goes in the file; a
+   generated one is created in the dashboard or by the CLI, and the file's header comment is
+   updated to say which. **This is conditional on a verify item.** Nothing states whether an
+   omitted `domains` key deletes an already-attached *custom* domain; the documented "omit means
+   delete" exemption covers only generated domains. So the file is never applied against a live
+   custom domain until a read-only `railway config plan` has shown what the apply would do. Never
+   settle this by applying.
+3. **Measure what the edge sends, and what it already bounds.** Before any allowed-hosts value is
+   frozen, deploy a build that echoes the inbound `Host`, `X-Forwarded-Host` and `X-Railway-Edge`
+   on `/healthz`, and read them from a real public request. What `Host` reads at the service is
+   documented nowhere on `docs.railway.com`. It decides both `WILLIKINS_ALLOWED_HOSTS` and rmcp's
+   `allowed_hosts`, and the question now covers four unauthenticated routes rather than one
+   (verify item 14). In the same visit, **measure what the edge does to a trickled header
+   stream**: open a connection, send headers one byte at a time, and record when and how it is
+   closed. Railway documents a "Max 32 KB combined header size" and says "idle HTTP/1.1
+   connections are closed after 60 seconds between requests". So the edge already bounds part of
+   this shape, and task 17 is **defence in depth behind it**, not the only bound.
+4. **Enroll, and set both allowlists.** This step changed shape with the login. The operator runs
+   the **enrollment CLI** on the host and enrols **two** credentials (decision 24's rule:
+   prevention before recovery). The recovery codes are saved somewhere other than the deployment,
+   and the subject the CLI prints goes into `WILLIKINS_AGENT_SUBJECTS` and
+   `WILLIKINS_APPROVER_SUBJECTS` as needed. The `WrongRole` page keeps its bootstrap role as the
+   **second** path, for anyone who enrolled without noting the value down. Both variables are
+   required in http mode and an empty one refuses startup, so a reachable service never runs with
+   an unset allowlist. **Where "the host" is on this deployment is open question 2**: the image is
+   distroless, and the credential store and journal sit on the volume (decision 25). Whether
+   `railway ssh` reaches a shell-less container is verify item 29.
+5. **Populate the volume: the operator's documents and the client table** (decision 25). The
+   operator publishes the private document set at a reviewed tag onto `/data/workflows`, by hand,
+   following decision 25's procedure: a manifest from `willikins documents check`, an upload to a
+   staging directory, a checksum comparison, then a swap. This replaces whatever interim set the
+   image-switch cutover of task 25a left there. In the same visit the operator writes the
+   pre-registered client table at `WILLIKINS_CLIENTS_PATH` (`/data/clients.yaml`). It holds one
+   entry per app, each with its exact HTTPS redirect URI (decision 23):
+   `https://claude.ai/api/mcp/auth_callback` for the Claude apps, and
+   `https://chatgpt.com/connector_platform_oauth_redirect` for ChatGPT. That is the stable URI
+   OpenAI documents for a server that advertises `iss` support, which decision 19 does. Any local
+   client the operator uses gets an entry with its loopback URIs. The client ids are the
+   operator's to pick (for example `claude-hosted` and `chatgpt`). The table lives outside
+   `workflows/`, where a non-document YAML would refuse startup.
+6. **One variable change, before the deploy that needs it, with `.railway/railway.ts` in the same
+   change.** In a single staged edit:
+   - set the whole new block: the credential-store and client-table paths, both subject
+     allowlists, and the three lifetimes (the signing-key pair arrives through Doppler in step 7);
+   - check that `WILLIKINS_WORKFLOWS_DIR=/data/workflows` is still set (task 25a set it);
+   - give `WILLIKINS_ALLOWED_HOSTS` the measured public host beside the private-domain reference;
+   - delete `WILLIKINS_AGENT_TOKEN_HASHES` and `WILLIKINS_APPROVER_TOKEN_HASH`.
+
+   If the deletion and the new block were two changes around the deploy, there would be a window
+   in which the service refuses to start, with `RetiredVariable` or `Missing` depending on which
+   half landed first. So they are one change. (`healthcheck.railway.app` needs no entry: `/healthz`
+   is served outside the host check.)
 
    `.railway/railway.ts` must move with it. Its `env` block names five variables through
-   `preserve()` today, two of which are the retired hashes, and **the file's own header states that
-   an omitted resource or field is an instruction to delete it, not to leave it alone**. So the
-   file drops those two rows and gains a `preserve()` row for **every** new `serve --http`
-   variable; without that, the next apply deletes the deployment's whole configuration and the
-   service stops starting. **Require a read-only `railway config plan` showing no variable delete
-   before any apply.** Two questions it must also settle, because neither is documented: what
-   `preserve()` does for a variable that does not yet exist live, and whether a push-triggered
-   deploy picks up variable edits staged on Railway's variables page. The cutover order, and why:
+   `preserve()` today, and two of them are the retired hashes. **The file's own header says an
+   omitted resource or field is an instruction to delete it, not to leave it alone.** So the file
+   drops those two rows and gains a `preserve()` row for **every** new `serve --http` variable;
+   without that, the next apply deletes the deployment's whole configuration and the service
+   stops starting. (The `WILLIKINS_WORKFLOWS_DIR` row arrives earlier, with task 25a.) **Require a
+   read-only `railway config plan` showing no variable delete before any apply.** The same plan
+   must settle two questions that nothing documents: what `preserve()` does for a variable that
+   does not yet exist live, and whether a push-triggered deploy picks up variable edits staged on
+   Railway's variables page. The cutover order, and why:
 
    1. Stage the whole variable change in Railway.
    2. Edit `.railway/railway.ts`, then read `railway config plan`.
    3. Push the 2c commit, whose auto-deploy is what picks the staged variables up.
 
-   If staged edits turn out **not** to be picked up by a push-triggered deploy, the fallback is
-   that the previous healthy deployment stays active behind the healthcheck while the new one fails
-   to start: one failed deployment, no outage, and then a deploy triggered by hand.
-6. **Connect Doppler's Railway integration for the secrets** — three, as before, but not the same
-   three. `WILLIKINS_GITHUB_TOKEN`, `WILLIKINS_DOPPLER_TOKEN`, and — on open decision 2's
-   recommended branch — the **signing key**, with its retiring sibling as an optional fourth during
-   a rotation. There is no `WILLIKINS_OAUTH_CLIENT_SECRET`: the approvals page is not an OAuth
-   client of anyone. Doppler's integration is the only path a real credential takes onto the
-   service, as it has been since milestone 2's task 12.
-7. **Remove `WILLIKINS_FAKE_CATALOG`.** Until this step the deployed service serves the fake,
-   in-memory catalog; after it, the real one.
-8. **Back up the credential store and the signing key, and rehearse a restore.** This is new, and
-   it is the first backup-and-restore concern the project has ever had. The journal is append-only
-   and is not a credential store; losing the store means every human re-enrols from the
-   break-glass, and losing the key refuses every outstanding token. Railway's constraints shape it:
-   one volume per service, no replicas with a volume, and downtime on redeploy. The mount path is
-   verify item 12.
-9. **Record the tenancy.** The live service serves **one GitHub organization and one Doppler
-   workplace** until milestone 3's credential routing lands. The operator runs several of each
-   (milestone 2 plan, "Notes for milestone 3"), and nothing in 2c changes that: a public domain
-   changes who may reach the server, not how many organizations its two credentials cover.
+   Staged edits might turn out **not** to be picked up by a push-triggered deploy. The fallback
+   used to read: the previous healthy deployment stays active behind the healthcheck while the
+   new one fails to start, then a deploy is triggered by hand. **That fallback is now
+   unverified.** For a service with a volume, Railway says "we prevent multiple deployments from
+   being active and mounted to the same service. This means that there will be a small amount of
+   downtime when re-deploying a service that has a volume attached, even if there is a
+   healthcheck endpoint configured" (docs.railway.com/volumes/reference, fetched 2026-10-20). Whether
+   a failed new deployment hands the volume back to the old one is not stated (verify item 30).
+   Plan for an outage, not for "no outage".
+7. **Connect Doppler's Railway integration for the secrets.** Doppler injects every provider
+   credential the README's variable table names: today `WILLIKINS_GITHUB_TOKEN`,
+   `WILLIKINS_DOPPLER_TOKEN`, `WILLIKINS_BUILDKITE_TOKEN` and `WILLIKINS_SIGNOZ_API_KEY`, with
+   `WILLIKINS_SIGNOZ_HOST` beside them. On open decision 2's branch it also injects
+   **`WILLIKINS_SIGNING_KEY_PEM`**, plus `WILLIKINS_SIGNING_KEY_RETIRING_PEM` during a rotation.
+   The App Store Connect signing keys are **not** deployment variables: a document reads them from
+   Doppler at run time, through the Doppler credential. There is no
+   `WILLIKINS_OAUTH_CLIENT_SECRET`, because the approvals page is not an OAuth client of anyone.
+   Doppler's integration is the only path a real credential takes onto the service, as it has been
+   since milestone 2's task 12.
+8. **Remove `WILLIKINS_FAKE_CATALOG`.** Until this step the deployed service serves the fake,
+   in-memory catalog; after it, the real one. It runs against the documents step 5 placed, so
+   that step comes first.
+9. **Back up what cannot be re-derived, and rehearse a restore.** That means the credential store,
+   the signing key, the client table and the journal. This is the first backup-and-restore concern
+   the project has ever had. Losing the store means every human re-enrols from the break-glass,
+   and losing the key refuses every outstanding token. The signing key's backup is Doppler's
+   version history (open decision 2). The volume's candidate mechanism is Railway's volume
+   backups; their schedule and restore rules are quoted in decision 25 and stay a verify item
+   until a restore has been rehearsed. **Documents are not restored from a volume backup.** A
+   restore rewinds the journal and the credential store along with them. Documents are recovered
+   by re-publishing the tag from the operator's checkout (decision 25). Railway allows one volume
+   per service, no replicas with a volume, and downtime on redeploy. The mount path is `/data`,
+   taken from `.railway/railway.ts` (verify item 12, settled for that half).
+10. **Connect the apps.** In claude.ai, add a custom connector with the server URL
+    `https://willikins.example.com/mcp`. Pick **"Use your own OAuth client"**, enter the Claude
+    entry's client id, and leave the secret blank. The dialog's default (Claude's published
+    identity, a Client ID Metadata Document) fails against a server that advertises neither CIMD
+    nor a `registration_endpoint`. Anthropic says "You can't change authentication settings after
+    you add a connector", so a wrong pick means deleting the connector and adding it again. Then
+    use it from the Claude iOS app. In ChatGPT on the web, add the server as a custom MCP
+    connector with the ChatGPT entry's client id as its static credential. Whether that form
+    accepts a blank secret is verify item 27. Then use it from the ChatGPT iOS app. Each
+    connection is one passkey consent at `/authorize`.
+11. **Record the tenancy.** The live service serves **one organization or workplace per provider
+    credential**: one GitHub organization, one Doppler workplace, one Buildkite organization, one
+    SigNoz host. That holds until milestone 3's credential routing lands. The operator runs
+    several GitHub organizations and Doppler workplaces (milestone 2 plan, "Notes for milestone
+    3"), and nothing in 2c changes that. A public domain changes who may reach the server, not how
+    many organizations its credentials cover.
 
-Steps 6 and 7 are milestone 2's own remaining operator steps. Read each as **"confirm it is
-already done (a milestone 2 follow-up), or do it now"**: if the milestone 2 go-live finished them,
-they are a check rather than work.
+Steps 7 and 8 are milestone 2's own remaining operator steps. The milestone 2 plan is
+`Completed`, and `WILLIKINS_FAKE_CATALOG: preserve()` is still in `.railway/railway.ts`. So step 8
+is still work, not a check, and step 7 is a check only for the credentials milestone 2 already
+connected.
 
 *Pinned by test 19, which is a checklist run by hand with the operator, not a cargo test.*
 
@@ -1063,7 +1176,7 @@ enrolled passkey stops working. That is a migration with a price, not a law — 
 correction, 2026-09-16: "All it takes for to stop being permanent is wiping accounts and changing
 the domain." So the price, stated plainly so nobody has to rediscover it: each human re-enrols a
 passkey at the new host, which means someone must be able to authenticate *to enrol*, which is
-what decision 25's recovery codes and the enrolment CLI are for. Task 10's break-glass path is
+what decision 24's recovery codes (test 25) and the enrolment CLI are for. Task 10's break-glass path is
 therefore also the domain-migration path, and it is tested as both. What is genuinely lost is the
 old credentials, and nothing else: the journal, the plans, the subject allowlists and the issued
 tokens' claims are unaffected, because a principal derives from issuer and subject, not from the
@@ -2540,7 +2653,7 @@ Then, in descending order of how likely each is to surprise someone:
   Authorization extension splits. Read
   `draft-ietf-oauth-identity-assertion-authz-grant` before freezing anything.
 - **Credential routing is unchanged by this milestone.** One GitHub organization, one Doppler
-  workplace, per go-live step 9. The proposed shape stays what milestone 2's notes recorded: route
+  workplace, per go-live step 11. The proposed shape stays what milestone 2's notes recorded: route
   by `GitHubOrg` to `WILLIKINS_GITHUB_TOKEN_<ORG>`, add a `DopplerWorkplace` input for the Doppler
   half, and prefer a GitHub App minting short-lived installation tokens. The OAuth principal this
   milestone introduces is what a per-organization authorization decision would key off, which is
@@ -2964,7 +3077,11 @@ question this plan no longer asks.
     contiguously to 1 through 8 after the two new steps landed, and the four cross-references
     outside decision 9 were checked and corrected — decision 6's "step 4" is now step 5; the
     deployment section's "step 2", Risks' "step 1" and Open decisions' "step 3" still point at the
-    right steps.
+    right steps. *Corrected 2026-10-20:* the body did not match this entry. Decision 9 said "Nine
+    steps" but numbered them 1, 6, 7, 8, 9: steps 2 to 5 had been lost, and step 5's cutover
+    sub-list was left nested under step 1. They are restored from commit 656613a. The 2026-10-20
+    addendum then inserts the volume-and-clients step (new 5) and the connect-the-apps step (new
+    10), so steps 5 to 9 of the 2026-09-16 text are now 6, 7, 8, 9 and 11.
 57. **The environment-variable count had to be restated** (scope, residual). After removing
     `WILLIKINS_OAUTH_ACCEPTED_TYP`, `WILLIKINS_OAUTH_AUDIENCE` and `WILLIKINS_OAUTH_REDIRECT_URI`
     and adding `WILLIKINS_AGENT_SUBJECTS` and `WILLIKINS_OAUTH_TOKEN_TIMEOUT_SECONDS`, the count
@@ -3013,7 +3130,7 @@ question this plan no longer asks.
       two retired `preserve()` rows, still gains one row per new `serve --http` variable, and still
       requires a read-only `railway config plan` showing no variable delete before any apply — but
       the rows it gains are the new variable set, and the same change now also carries the signing
-      key and the credential-store path (go-live step 5).
+      key and the credential-store path (go-live step 6 since the 2026-10-20 renumbering).
     - **19** survives with a different subject: the `live-tests` feature is now test 18's
       conformance harness rather than a live provider token.
     - **29 and 31** lose their subjects. There is no provider to recommend and therefore no
