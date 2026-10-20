@@ -206,9 +206,10 @@ no longer describe the system while still being cited as though they did.
 
 ## Decisions
 
-Twenty-four numbered decisions. Ten the milestone cannot start without, each with its reasoning and
+Twenty-five numbered decisions. Ten the milestone cannot start without, each with its reasoning and
 the acceptance test that pins it; then eight smaller ones the resource-server research left
-unresolved and the plan may not leave silent; then six the authorization-server half adds. Four
+unresolved and the plan may not leave silent; then six the authorization-server half adds; then
+one the 2026-10-20 addendum adds, on where the deployed server's documents come from. Four
 questions are the operator's and are in **Open decisions** at the end, with a recommended default
 and one reason each — **the plan below is written at all four defaults**, because a task table and
 a pin table cannot be conditional, and Open decisions is what names the delta if one is overridden.
@@ -993,7 +994,7 @@ are inserted after them.)
    operator publishes the private document set at a reviewed tag onto `/data/workflows`, by hand,
    following decision 25's procedure: a manifest from `willikins documents check`, an upload to a
    staging directory, a checksum comparison, then a swap. This replaces whatever interim set the
-   image-switch cutover of task 25a left there. In the same visit the operator writes the
+   image-switch cutover of task 20 left there. In the same visit the operator writes the
    pre-registered client table at `WILLIKINS_CLIENTS_PATH` (`/data/clients.yaml`). It holds one
    entry per app, each with its exact HTTPS redirect URI (decision 23):
    `https://claude.ai/api/mcp/auth_callback` for the Claude apps, and
@@ -1006,7 +1007,7 @@ are inserted after them.)
    change.** In a single staged edit:
    - set the whole new block: the credential-store and client-table paths, both subject
      allowlists, and the three lifetimes (the signing-key pair arrives through Doppler in step 7);
-   - check that `WILLIKINS_WORKFLOWS_DIR=/data/workflows` is still set (task 25a set it);
+   - check that `WILLIKINS_WORKFLOWS_DIR=/data/workflows` is still set (task 20 set it);
    - give `WILLIKINS_ALLOWED_HOSTS` the measured public host beside the private-domain reference;
    - delete `WILLIKINS_AGENT_TOKEN_HASHES` and `WILLIKINS_APPROVER_TOKEN_HASH`.
 
@@ -1020,7 +1021,7 @@ are inserted after them.)
    omitted resource or field is an instruction to delete it, not to leave it alone.** So the file
    drops those two rows and gains a `preserve()` row for **every** new `serve --http` variable;
    without that, the next apply deletes the deployment's whole configuration and the service
-   stops starting. (The `WILLIKINS_WORKFLOWS_DIR` row arrives earlier, with task 25a.) **Require a
+   stops starting. (The `WILLIKINS_WORKFLOWS_DIR` row arrives earlier, with task 20.) **Require a
    read-only `railway config plan` showing no variable delete before any apply.** The same plan
    must settle two questions that nothing documents: what `preserve()` does for a variable that
    does not yet exist live, and whether a push-triggered deploy picks up variable edits staged on
@@ -1587,6 +1588,223 @@ the real cost of the milestone is.
   domain (verify item 13), the recovery codes are the *only* mitigation the plan's shape offers.
 
 *Recommended by open decision 1, and pinned by tests 10, 24, 25.*
+
+### One decision the 2026-10-20 addendum adds
+
+**25. The deployed server reads its workflow documents from the mounted volume, and the image
+carries none.** The operator, 2026-10-20: "I'd go with a mounted volume." The operator's documents
+are private: they name an organization, its apps and its layout. They must never ship in the public
+repository, in its image, or in the build context. Today the image *is* the trust root. The
+Dockerfile copies the public `workflows/*.yaml` into `/app/workflows` and sets
+`ENV WILLIKINS_WORKFLOWS_DIR=/app/workflows`, and
+`crates/willikins-server/tests/it/image_contents.rs` pins both, plus "exactly the seventeen positive
+documents". Nothing in the plan before this addendum said where a deployed server's documents come
+from. Yet step 8 of the go-live sequence and test 19's real plan-approve-apply cycle both need the
+private set on the server.
+
+**The Railway facts it rests on**, fetched on 2026-10-20 as the `.md` twins `docs.railway.com/llms.txt`
+lists. A fact that is not quoted here is not assumed.
+
+- `docs.railway.com/volumes/reference`: "Each service can only have a single volume"; "Replicas
+  cannot be used with volumes"; "we prevent multiple deployments from being active and mounted to
+  the same service. This means that there will be a small amount of downtime when re-deploying a
+  service that has a volume attached, even if there is a healthcheck endpoint configured"; "Volume
+  files can be managed from the CLI with `railway volume browse` or `railway volume files`, and over
+  `sftp` or `scp` through a service the volume is attached to".
+- `docs.railway.com/volumes`: "Volumes are mounted to your service's container when it is started,
+  not during build time"; "Volumes are mounted as the `root` user"; `RAILWAY_VOLUME_MOUNT_PATH` is
+  the "Mount path of the volume".
+- `docs.railway.com/cli/volume`: `files upload` takes a "Local file or directory to upload";
+  `--overwrite` means "Replace the remote path if it already exists"; `--concurrency` "Defaults to
+  `32`"; and "`railway volume files delete` refuses to run when invoked by an AI agent and must be
+  run by a human."
+- `docs.railway.com/cli/restart`: "restarts the service without rebuilding it. The existing
+  deployment image is reused."
+- `docs.railway.com/guides/roll-back-bad-deploy`: "A rollback on Railway restores a previous
+  deployment's Docker image and its custom variables". Volume contents are not mentioned. The
+  plan's inference, which is not a quoted fact, is that a rollback leaves the volume as it is.
+- `docs.railway.com/volumes/backups`: daily backups are "kept for 6 days", "Wiping a volume deletes
+  all backups", and "Backups can only be restored into the same project + environment."
+- In the tree: `.railway/railway.ts:58` mounts `willikins-volume` at `/data` (5000 MB), and the
+  README puts the journal at `/data/journal.jsonl`.
+
+**Where the documents live.** There is one volume per service and the journal already holds it,
+so the documents share it. `WILLIKINS_WORKFLOWS_DIR=/data/workflows` becomes a service variable,
+kept by a `WILLIKINS_WORKFLOWS_DIR: preserve()` row in `.railway/railway.ts`. The layout of `/data`
+is fixed here, so that no two tenants of the one volume can collide:
+
+| Path | Holds | Written by |
+| --- | --- | --- |
+| `/data/journal.jsonl` | the journal (`WILLIKINS_JOURNAL_PATH`) | the server |
+| `/data/workflows/` | the documents: flat, `.yaml`/`.yml` only, never descended into | the operator, by hand |
+| `/data/workflows.next/` | staging for the next document set; the server never reads it | the operator, by hand |
+| `/data/credentials/` | the passkey and recovery-code store (`WILLIKINS_CREDENTIAL_STORE_PATH`) | the server and the enrollment CLI |
+| `/data/clients.yaml` | the pre-registered client table (`WILLIKINS_CLIENTS_PATH`) | the operator, by hand |
+
+The credential store and the client table must never sit inside `workflows/`: `Butler::start` scans
+that directory flat and refuses on the first YAML that is not a document. The path is **not**
+derived from `RAILWAY_VOLUME_MOUNT_PATH`. Deriving it would give the server a second way of
+choosing its trusted directory, and an unset `WILLIKINS_WORKFLOWS_DIR` should stay the
+`ConfigError::Missing` it is today (`crates/willikins-server/src/config.rs`). Startup only *warns*,
+by name, when `RAILWAY_VOLUME_MOUNT_PATH` is set and the workflows directory is not beneath it.
+
+**The image carries no workflow document** (task 20). The `COPY workflows/*.yaml /app/workflows/` and
+the `ENV WILLIKINS_WORKFLOWS_DIR=/app/workflows` both go. `.dockerignore` gains `workflows`,
+`private` and `crates/willikins-cli/tests/operator_*`. Railway's GitHub builds never see the last
+two, because they are gitignored. But `railway up` "Respects your `.gitignore` file" only unless it
+is given `--no-gitignore`, and a local `docker build` from the operator's checkout would put
+`private/` into the builder's `COPY . .` layers. The public `workflows/*.yaml` stay in the
+repository as examples and as positive fixtures. **Why the default must go rather than stay as a
+fallback:** `.railway/railway.ts`'s own rule is that an omitted field is an instruction to delete
+it. So one railway.ts edit that forgets the `preserve()` row deletes the service variable. With the
+image's ENV still in place, the server would then quietly start on the seventeen public samples,
+with real credentials. Without the ENV it refuses to start, which is the only acceptable outcome.
+
+**The cutover for task 20 happens before its commit is pushed**, because a push to `main`
+auto-deploys onto the live (private, fake-catalog) service. In order:
+
+1. The operator creates `/data/workflows` on the volume and publishes the current public
+   `workflows/*.yaml` set into it, by the procedure below.
+2. The operator sets `WILLIKINS_WORKFLOWS_DIR=/data/workflows` on the service.
+3. Task 20's commit lands with the `preserve()` row, after a read-only `railway config plan` that
+   shows no delete.
+
+Go-live step 5 later replaces that interim set with the operator's private one.
+
+**What makes a volume directory trusted.** The invariant used to be "run only from a trusted ref",
+and on the image the ref was the built commit. On a volume the documents have no ref, and the
+process that reads them could also write them: it runs as root, and the volume is writable. So the
+trust root is re-founded, and it holds by these rules together:
+
+- **The source of truth is the operator's private checkout at a reviewed commit.** The volume is a
+  copy of that commit's top-level documents, nothing else. That means no fake-state file, no
+  fixture and no test.
+- **Only the operator writes the volume, by hand, from their own machine.** Railway account access
+  is the same trust level as setting a service variable or wiring Doppler's integration, which is
+  consistent with the design doc's network trust boundary. **An agent never writes the volume.** No
+  agent runs `railway volume files upload`, `rename` or `browse`, `railway ssh`, `scp` or `sftp`
+  against the service. Railway's own guard covers only `files delete`, so this is a written rule
+  (task 25), not a platform guarantee.
+- **The server never writes `workflows/`, and there is no HTTP upload endpoint.** An upload endpoint
+  would be a new privileged surface: it would need its own scope, its own approval and its own pass
+  3 rows. It is not built, and a later milestone that wants one starts from that list.
+  `validate` and `describe` bodies are never persisted.
+- **Every plan pins the root document's sha256 and its `used` closure** (milestone 2b), and `apply`
+  and `plan_rollback` refuse `DocumentChanged` on any difference. `uses:` children resolve by name
+  in the same directory (`StartupError::Compose`), so the whole composition closure must be on the
+  volume, and each child is pinned too. Templates are document literals, so this covers them as
+  well.
+- **The approvals page shows the root's short sha beside the used closure, and shows the document's
+  description only while the file still has the planned bytes** (task 23). The approver can then
+  compare the page with the tag's manifest. Today `document_says`
+  (`crates/willikins-server/src/http/approvals.rs:107`) re-reads the *current* file at render time.
+  So after a re-publish, a plan built from version A would display version B's description, and
+  `record.document_sha256` is rendered nowhere.
+- **`ServerStarted` journals the whole set's hashes at each start**, and every publish ends in a
+  restart. So every document set that ever served appears in the journal.
+
+**A file that changes after startup gets the same refusals as one present at startup, and the set
+validated at startup is not authoritative.** That is today's behaviour, and it is kept on purpose.
+There is no cache and no watcher. `Butler::list_workflows` rescans the directory on every call
+(`crates/willikins-server/src/butler.rs:222`). `plan`, `validate`, `describe`, `apply` and
+`plan_rollback` re-read by name and run `check`. A file added after start is therefore refused on
+the first call that reads it, by exactly the rules startup would have applied (test 28 places a
+negative fixture after start and asserts it cannot be planned). Treating the startup set as
+authoritative would mean caching document bytes, which buys nothing over the pinning above. The
+costs are recorded rather than designed around:
+
+- One broken or half-uploaded file makes `list_workflows` fail for every document, and makes the
+  next restart refuse to start. The service is shell-less, so that outage is fixed by re-publishing,
+  never by hand-editing in place. The procedure's staging directory and checksum comparison exist
+  to prevent it.
+- A pending plan whose closure changed is refused at apply and must be re-planned.
+- A rollback of a run planned on an older set is refused (`DocumentChanged`) until that tag's set
+  is published again: publish the old set, roll back, then publish the current set.
+
+**Three code changes harden the trusted directory now that it can change under a running server**
+(task 21). Each is test-first.
+
+- **The directory itself must not be a symlink.** `scan_directory` calls `std::fs::read_dir(dir)`,
+  which follows `dir` when it is one, and only each entry's own file type is checked. So at start
+  and on every scan, a `WILLIKINS_WORKFLOWS_DIR` whose `symlink_metadata` is not a plain directory
+  is refused, reusing `StartupError::Symlink`. Each document is opened with `O_NOFOLLOW`, and
+  `is_file` is checked on the opened handle's metadata, which closes the gap between
+  `load_named_document`'s `symlink_metadata` and its open.
+- **The startup scan hashes exactly the bytes it parsed.** `scan_directory` parses through
+  `willikins_dsl::load_document` and then hashes a second `std::fs::read`
+  (`crates/willikins-server/src/startup.rs`, the scan loop). `document.rs` already fixed that
+  window for named loads in 2b's adversarial pass, and on an immutable image it was unreachable.
+  On a volume it is reachable. The scan moves to `load_document_with_bytes`.
+- **Startup logs each document's file name with its short sha**, and logs a named warning when the
+  directory holds zero documents.
+
+**The operator's procedure, human only.** The commands are the operator's; no agent runs any of
+them.
+
+1. Run `willikins documents check <dir>` (task 22, built from the *deployed* willikins commit) over
+   the private checkout at the reviewed tag. It runs exactly `scan_directory` and prints a manifest
+   in `shasum -a 256` format, which is the same data as `ServerStarted.workflow_hashes`. Commit the
+   manifest beside the tag, privately.
+2. Copy only the top-level documents into a clean local staging directory.
+3. `railway volume files upload <staging-dir> /workflows.next`. `railway volume files` paths are
+   relative to the volume root, so the container's `/data/workflows.next` is `/workflows.next` to
+   it (verify item 24).
+4. Download `/workflows.next` and compare `shasum -a 256` against the manifest.
+5. `files rename /workflows /workflows.prev`, then `files rename /workflows.next /workflows`. If
+   renaming a directory is unsupported or not atomic (verify item 24), upload file by file with
+   `--overwrite` into `/workflows` and delete removed files by hand, which Railway's guard makes
+   human-only anyway.
+6. `railway restart`, then confirm that the startup log's names and shas match the manifest.
+7. Re-plan anything that now refuses `DocumentChanged`.
+
+The fallback transport is `scp` or `sftp` to the container path `/data/workflows`, addressed by
+the service instance id while the service has no domain. Whether either works into a distroless
+container is verify item 29.
+
+**The binary and the documents now change version independently.** The binary deploys on a push to
+`main`; the documents arrive by publish. A catalog or DSL change that invalidates a private document
+makes the next start refuse, and under the `ON_FAILURE` restart policy that is a crash loop, on top
+of the volume's redeploy downtime. So two checks become part of every change:
+
+- Before a push that changes the catalog or the DSL, run that commit's `willikins documents check`
+  over the private set.
+- Before any publish, run the deployed commit's check over the new set.
+
+**Backups.** A volume-backup restore is never the way to recover documents. It rewinds the journal
+and the credential store to the backup point as well. Documents are recovered by re-publishing the
+tag. Volume backups exist for the journal, the credential store and the client table (go-live step
+9).
+
+**The test and fake path.**
+
+- Tests keep using temporary directories, and no test touches `/data`.
+- A fake-catalog deployment starts with an empty `/data/workflows` (logging the warning), or with
+  the public set published by the procedure above.
+- A local container mounts `-v "$PWD/workflows:/data/workflows:ro"` with
+  `-e WILLIKINS_WORKFLOWS_DIR=/data/workflows`, and only on a host that is allowed to build images.
+- The CLI's `--workflows-dir` is unchanged and points at the private checkout.
+
+**Must never happen**, gathered so a reviewer can check them in one place:
+
+- A private document in the public repository, the image or the build context.
+- An agent writing to the volume.
+- The server following a symlink out of the volume, whether at the directory or at an entry, or
+  descending into a subdirectory.
+- A fallback document path of any kind, or any write by the server to `workflows/`.
+- A volume-backup restore used to "fix" documents.
+- A non-document YAML inside `workflows/`.
+- Approving a plan during a publish without checking its shas against the manifest.
+
+**The invariant's wording moves with it** (task 25, edited together in `CLAUDE.md` and `AGENTS.md`,
+plus a design-doc addendum beside `docs/plans/2026-09-11-willikins-design.md`'s "a checkout of a
+trusted ref"). The proposed text: "Workflow documents and templates are privileged content: they run
+only from a source the deployment's operator controls — a checkout of a trusted ref locally, or on a
+deployment the mounted directory the operator populates from one — and every plan pins their
+sha256." `todos/2026-09-20-agent-authored-workflows.md` already records the operator's view that
+"What counts as the trusted ref is a property of a deployment". The wording is still the operator's
+to accept (open question 3).
+
+*Pinned by tests 27, 28, 29 and 30, and by test 19's volume checks.*
 
 ## The pluggable seam
 
