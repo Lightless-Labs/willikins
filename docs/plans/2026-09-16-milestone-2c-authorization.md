@@ -838,7 +838,7 @@ bound to the account it finishes against, is the same class of defect from the o
 `Path=/`, no `Domain`, and **no `Max-Age` and no `Expires`** — a non-persistent cookie, which OWASP
 names and the delegating draft did not. Signed through `axum-extra`'s `SignedCookieJar` and
 carrying an opaque **128-bit** session id from a CSPRNG; the session record itself (subject,
-issuer, granted scopes, expiry, and the credential hash of the revocation rule below) is
+issuer, granted scopes, expiry, and the credential epoch of the revocation rule below) is
 server-side and in memory, capped at **1,024** with the same 503. The signing `Key` is generated at
 startup and never configured: a session surviving a redeploy is not wanted, so there is nothing to
 keep stable, and one fewer secret is one fewer secret — with the single-replica consequence in
@@ -887,11 +887,21 @@ bolted on after a session shape has been frozen in tests.
    included — out of every cache, which is also the concrete answer to the edge-caching gap the
    earlier research flagged.
 4. **128-bit ids from a CSPRNG and a non-persistent cookie**, both named above.
-5. **Credential-change revocation.** The session is bound to a hash of the credential as of login
-   and the two are compared in constant time on every request, flushing the session on mismatch.
-   **This is the revocation the delegating draft's Risks section admitted it did not have**:
-   changing or removing a credential now kills every live session for that account, without a
-   redeploy. Since decision 26 it also revokes every refresh family of that account.
+5. **Credential-change revocation.** Each account carries a **credential epoch**, a counter in
+   the credential store. The session records the epoch it was minted at, and the two are
+   compared in constant time on every request, flushing the session on mismatch. **This is the
+   revocation the delegating draft's Risks section admitted it did not have**: removing a
+   credential now kills every live session for that account, without a redeploy. Since decision
+   26 it also revokes every refresh family of that account. **What bumps the epoch, exactly**
+   (2026-10-20 review of the answers): removing a credential, and a bootstrap into an existing
+   account, which replaces its credentials (decision 27). Nothing else does. Not
+   `Passkey::update_credential`, which decision 24 calls on every successful authentication and
+   which changes the stored counter and backup flags. Not adding a credential, which is how
+   decision 24's second passkey arrives from a live session (go-live step 4b). A hash over the
+   stored passkey records, the earlier wording, would have changed on every login. It would have
+   flushed every other session and killed every family at each one. The session performing a
+   removal is rebound to the new epoch if the credential it authenticated with survives, and is
+   flushed with the rest if it does not.
 
 **`Sec-Fetch-Site`, and the origin check.** OWASP now lists Fetch Metadata as a first-class CSRF
 defence with a **mandatory** fallback to origin verification, which willikins already has. So it is
@@ -2277,7 +2287,8 @@ the real cost of the milestone is.
   victim's. It is the same class as the two-approver attack decision 4 already closes, and the
   `__Host-willikins-login` cookie is the same answer in its WebAuthn form.
 - **`UserVerificationPolicy::Required`**, `require_valid_counter_value`,
-  `Passkey::update_credential` on every successful authentication, `exclude_credentials` at
+  `Passkey::update_credential` on every successful authentication (which never bumps decision
+  4's credential epoch), `exclude_credentials` at
   registration, and an assertion that a registered `CredentialID` has not previously been
   registered to any other account — the last being the caller's obligation, which the crate cannot
   enforce. UV Required is the crate's default and is what makes its own claim true that a passkey
@@ -3125,7 +3136,8 @@ Whether the runtime image (`gcr.io/distroless/cc-debian12`) ships the `libssl.so
   id-collision check are copied instead.
 - **`axum-login` 0.18.0** — no release in 14 months, and it pins `tower-sessions` 0.14 against a
   current 0.15 carrying a memory-ordering fix. Two ideas are copied and the crate is not:
-  `cycle_id()` at login, and a constant-time `auth_hash` compare for credential-change revocation.
+  `cycle_id()` at login, and a constant-time compare for credential-change revocation, kept as
+  decision 4's credential epoch rather than a hash of the mutable passkey records.
 - **`passkey-authenticator` 0.5.0** — an alternative test authenticator that would keep openssl out
   of the *dev*-dependency graph but not out of the build, since `webauthn-rs-core` needs it anyway.
 - **`reqwest` 0.13.5** — a second async HTTP+TLS stack in an image that has none.
@@ -3989,8 +4001,11 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     it: a login **rotates the session id unconditionally** and the previous id is destroyed, not
     merely superseded — a request carrying it afterwards has no session. The idle timer is bumped
     on a write and **not** on a read. The absolute timer is never bumped. A full store answers
-    **503**. A **credential change flushes every live session** for that account, through a
-    constant-time compare of the credential hash recorded at login. Session ids are 128 bits from a
+    **503**. A **credential removal flushes every live session** for that account, through a
+    constant-time compare of the credential epoch recorded at login, except the removing session
+    when its own credential survives. A login that moves the stored counter (`update_credential`),
+    and an "add a passkey", each leave every live session alive (2026-10-20 review of the
+    answers). Session ids are 128 bits from a
     CSPRNG. `Set-Cookie` is asserted as a **response header**, never as store contents, because the
     `SignedCookieJar` drop is silent. `Cache-Control: no-store` is present on every response that
     carries a session id. A non-safe method with `Sec-Fetch-Site: cross-site` **or `same-site`**
@@ -4078,7 +4093,8 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       `RefreshTokenExpired`. A rotation bumps the idle time and never the absolute one. An access
       token minted an hour before the absolute expiry has its `exp` at that expiry.
     - A restart between two refreshes keeps the family, and the second refresh succeeds.
-    - A credential revoked from a passkey session revokes every family of its subject.
+    - A credential revoked from a passkey session revokes every family of its subject. A login
+      that moves the stored counter, and an "add a passkey", each leave every family alive.
     - The success body is exactly `access_token`, `token_type`, `expires_in`, `scope` and
       `refresh_token`, with `Cache-Control: no-store`. A refresh error is `{"error":
       "invalid_grant"}` at 400, never `invalid_request`. Anthropic: "Return RFC 6749-compliant
@@ -4709,8 +4725,8 @@ Then, in descending order of how likely each is to surprise someone:
   connector. It touches trust boundary 5, and settled decision 9 makes it a fallback that is built
   only if verify item 37 shows a vendor does not bind `state`.
 - **A stolen session cookie is valid until its TTL expires, the idle timer fires, the browser logs
-  out, or the credential changes.** The last of those is new and is the real revocation: a
-  credential change flushes every live session for that account (decision 4). Beyond it there is
+  out, or a credential is removed.** The last of those is new and is the real revocation: a
+  credential removal flushes every live session for that account (decision 4). Beyond it there is
   still no operator-side "kill this session" surface, so the fallbacks are waiting out the shorter
   of the two timeouts, redeploying, or removing the subject from `WILLIKINS_APPROVER_SUBJECTS`.
 - **A stolen access token is valid until it expires.** `/revoke` and the Connections section end
