@@ -991,8 +991,11 @@ and it is still worth having for the adapter path, whose subjects nobody chooses
 **Account actions.** A passkey session, and only a passkey session, may enrol another passkey for
 its own account and revoke its own account's other credentials. The first is how decision 24's
 two-credential rule is met now that no CLI mints an enrollment URL (decision 27); the second also
-revokes the account's refresh families (decision 26). A recovery session may do the same two
-things and nothing else (decision 24). Each is a nonce-bound POST under the checks above, and each
+revokes the account's refresh families (decision 26). A recovery session may enrol one passkey and
+nothing else, and then it ends (decision 24, settled decision 11). Revoking a credential, and the
+refresh-family cascade with it, is a passkey-session action only (corrected by the 2026-10-20
+review of the answers; the earlier text let a recovery session revoke too, against the operator's
+"restricted to enrolling a passkey"). Each is a nonce-bound POST under the checks above, and each
 journals `CredentialEnrolled` or the revocation.
 
 **Lifetime.** The session's absolute lifetime is `WILLIKINS_SESSION_TTL_SECONDS`, default 3600, and
@@ -1221,6 +1224,7 @@ new, and pass 3 must attack them at least as hard.
 | A non-canonical `WILLIKINS_PUBLIC_URL` (uppercase host, `:443`, trailing `/`) | startup refuses with `NonCanonicalUrl`; no deployment publishes an identifier Claude's canonical `resource` cannot match |
 | **Added by the 2026-10-20 review.** A forged consent POST from a sibling host, one without its nonce, one with another session's nonce, and one carrying its own `redirect_uri` | **403** for the first three (`same-site` refused, `InvalidNonce`); the fourth gets the stored redirect, never the posted one |
 | A stolen recovery code used to approve a plan or consent to a `willikins:apply` token | **403**: a recovery session can only enrol a passkey |
+| **Added by the 2026-10-20 review of the answers.** A stolen recovery code walked to full authority: recovery login, enrol the attacker's passkey, passkey login, approve | the approve succeeds, as decision 24 now states plainly; the journal holds `CredentialEnrolled { Recovery }` before the `ApprovalGranted`, and the next passkey login on that account shows the recovery enrolment's notice |
 | **Replaced 2026-10-20 (decision 27).** A wrong bootstrap secret, a right one with a name in neither allowlist, and a flood of wrong ones | **403** `BootstrapSecretMismatch`; **403** naming the rule; the flood reaches 429 and journals coalesced lines, while a right pair after it still enrols |
 | A bootstrap secret used twice, by two concurrent ceremonies and by a second visit after the first enrolment; and a restart with the spent value still set | exactly one passkey is enrolled; every later route is 404; the restart starts, logs the spent variable by name, and reopens nothing |
 | A bootstrap ceremony finished in another browser, and a bootstrap page asked to approve, consent or log in | **400** (the `__Host-willikins-bootstrap` cookie does not match); no session, no approval, no consent and no token exists for the page to give |
@@ -2307,14 +2311,20 @@ the real cost of the milestone is.
   This is what puts `argon2` in the tree **on the passkey branch too**. The first set is issued
   when the bootstrap page enrols an account's first passkey, shown once (decision 27), and a
   break-glass enrolment replaces the whole set. **A recovery-code login
-  is a restricted session** (2026-10-20 review): it may register a new passkey, and revoke the
-  account's other credentials, and nothing else, and it ends when that is done. Approve, reject
-  and consent each require a session that came from a passkey ceremony, so a stolen recovery code
-  alone cannot approve a plan or consent to a `willikins:apply` token. A look-up secret is
+  is a restricted session** (2026-10-20 review): it may register one new passkey and nothing else,
+  and it ends when that is done. It cannot revoke a credential. Approve, reject, consent and every
+  revocation require a session that came from a passkey ceremony. A look-up secret is
   single-factor, and this decision's own case for passkeys is that they are "self-contained
-  multifactor authentication". Every recovery-code use is journaled as loudly as a bootstrap
-  enrolment. The operator kept this restriction on 2026-10-20 (settled decision 11). The cost is in
-  the last bullet.
+  multifactor authentication". The operator kept this restriction on 2026-10-20 (settled decision
+  11). **What the restriction buys, stated without overclaiming** (2026-10-20 review of the
+  answers; the earlier text said a stolen code "alone cannot approve a plan or consent"): a
+  recovery code is **one step from full authority**. Its holder enrols their own passkey, logs in
+  with it, and holds a full passkey session. The restriction forces that step to be a journaled
+  `CredentialEnrolled { Recovery }`, never a silent approval. So every recovery-code use is
+  journaled as loudly as a bootstrap enrolment, and the next passkey login on that account shows
+  a notice naming each credential enrolled from a recovery session since the last passkey login,
+  with its time, beside the account's revoke action. The cost of the restriction is in the last
+  bullet.
 - **Two credentials before enrollment is complete**, or the operator is nagged until a second
   exists. Prevention before recovery: a single-credential deployment is one lost device away from
   the break-glass, every time. The second is enrolled from a passkey session's "add a passkey"
@@ -2777,7 +2787,8 @@ refresh path (`…-m2c-own-authorization-server.md` §6.6 and §6.7).
   - **A credential revocation revokes the account's families.** RFC 9700 §4.14.2: "Authorization
     servers MAY revoke refresh tokens automatically in case of a security event, such as:
     password change or logout at the authorization server." Revoking a passkey, from a passkey
-    session or a recovery session, revokes every family of that subject. Logging out of the
+    session, revokes every family of that subject; a recovery session cannot revoke (settled
+    decision 11). Logging out of the
     approvals page does not, because the browser session and the app connections are different
     things.
 - **Journaled, with no token value in any line.** Three new additive events:
@@ -3995,8 +4006,10 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     nagged until one does; a passkey session's "add a passkey" enrols it, under the nonce, and
     journals `CredentialEnrolled` with `Session`. **A recovery-code session is restricted:** after
     a recovery-code login, the approve POST, the reject POST, the consent POST and the
-    connection-revoke POST are each **403**, and registering a passkey succeeds, journals
+    credential-revoke POST are each **403** (the connection-revoke POST's 403 is test 33's, since
+    the Connections section arrives with task 27), and registering a passkey succeeds, journals
     `CredentialEnrolled` with `Recovery`, and ends the session. Recovery-code use is journaled.
+    The next passkey login on that account shows the recovery enrolment's notice.
 26. **The session core.** Against a router the test builds, before `/approvals` depends on any of
     it: a login **rotates the session id unconditionally** and the previous id is destroyed, not
     merely superseded — a request carrying it afterwards has no session. The idle timer is bumped
@@ -4245,7 +4258,7 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 23 | **The approvals page shows what was planned** (decision 25): the root's short sha beside the `used` closure, and "document says" only while the file's sha equals `record.document_sha256`, otherwise the `DocumentChanged` notice. Pinned by: test 30, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_document_identity::` | 9 | sonnet test-first, opus attacks |
 | 24 | **Teardowns on the approvals page** (decision 4): `pending_teardowns` in `willikins-journal`, the teardown section through `mask_json`, session-bound nonces for teardown `plan_id`s, the same role rules. Pinned by: test 31, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` and `cargo test -p willikins-server --test it -j 2 -- approvals_teardowns:: rollback_r8::` | 9, 6 | sonnet test-first, opus attacks |
 | 29 | **Rollback over MCP** (decision 28, settled decision 8). The `rollback_plan` and `rollback_apply` `#[tool]`s in `mcp.rs`, taking the request's `Principal`; `TeardownPlanView` in `types.rs`, a schema-bearing view of a teardown's steps, shared in shape with task 24's section; `Butler::apply_rollback` moved onto its own thread behind its unchanged synchronous pre-run checks, returning a `RunHandle`, with the CLI's `rollback` waiting on it; the `teardown_run` view in `willikins-journal` and `run_status` answering for a teardown run; the tool-list snapshot regenerated with both tools; test 7's rollback exception removed; the tool descriptions saying a teardown needs a human at the approvals page. Pinned by: test 35, test 7, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- mcp_rollback:: mcp_server:: oauth_scopes:: rollback_r8::` and `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` | 24, 7 | sonnet test-first, opus attacks: `rollback_apply` deletes |
-| 10 | **Recovery codes and the second credential.** **Its CLI half is replaced by task 28** (settled decision 6): the enrollment and break-glass subcommand, its one-time enrollment URL and its token rules are not built. What stays: codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule, with the passkey session's "add a passkey" and "revoke a credential" account actions (decision 4); the restricted recovery session (enrol a passkey and revoke credentials, nothing else), journaled; `CredentialEnrolled` for `Session` and `Recovery`. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes:: approvals_login::` | 9 | sonnet, verified by opus |
+| 10 | **Recovery codes and the second credential.** **Its CLI half is replaced by task 28** (settled decision 6): the enrollment and break-glass subcommand, its one-time enrollment URL and its token rules are not built. What stays: codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule, with the passkey session's "add a passkey" and "revoke a credential" account actions (decision 4); the restricted recovery session (enrol one passkey and nothing else, then the session ends; revocation is a passkey-session action), journaled, and the next passkey login's notice of a recovery enrolment; `CredentialEnrolled` for `Session` and `Recovery`. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes:: approvals_login::` | 9 | sonnet, verified by opus |
 | 28 | **The one-time bootstrap secret** (decision 27, settled decision 6), replacing task 10's enrollment CLI on every host. `WILLIKINS_BOOTSTRAP_SECRET`: the 43-character base64url minimum and `HttpConfigError::WeakBootstrapSecret`, kept only as a SHA-256 digest and compared with `subtle`. The spent list in the credential store, synced before the passkey is committed; `ServerStarted.bootstrap`; the WARN line for a spent value left set, naming the variable only. `/bootstrap`: 404 unless armed, the secret-and-name form, the allowlist check, one ceremony at a time under `__Host-willikins-bootstrap`, the atomic claim at finish, recovery codes shown once, no session, approval, consent or token. The failure bucket and the per-reason journal bucket; `BootstrapSecretMismatch`; `CredentialEnrolled` with `Bootstrap`. `willikins bootstrap-secret generate <file>` in `willikins-cli`. The README's first-enrolment and break-glass sections, and its variable row. Pinned by: test 34, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- bootstrap::` and `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- bootstrap_secret::` | 10 | **sonnet test-first, opus attacks**: it is the one static secret 2c keeps |
 | 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. `ServerStarted.clients_sha256`, and `--clients <file>` on `willikins documents check`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. The table's optional `refresh_tokens` key is parsed here and has no effect until task 26. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
 | 26 | **Refresh tokens** (decision 26, settled decision 5). The `refresh_token` grant at `/token`; `issuer::refresh`'s family store in the credential store directory (256-bit opaque tokens kept only as SHA-256 hashes, written durably before any response); the four bindings in the store and their order of checks; the atomic rotation claim and strict reuse detection revoking the family; the idle and absolute lifetimes, their two variables, `HttpConfigError::RefreshLifetimes`, and the access token's `exp` capped at the family's; `refresh_token` in the response exactly when the client's `refresh_tokens` is true; `grant_types_supported` gains `refresh_token`; the credential-revocation cascade; the six refresh `AuthFailedReason` variants and the three events, with no token value or hash in any line; README rows. One negative fixture per binding, as task 11's. Pinned by: test 32, test 20's grant list, test 23's `refresh_token` clause, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- refresh_tokens:: issuer_token:: oauth_metadata::` and `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- event_shapes::` | 11 | **opus writes or co-writes**: the refresh path is where both rauthy regressions lived |
@@ -4724,6 +4737,11 @@ Then, in descending order of how likely each is to surprise someone:
   The stronger answer is a per-deployment client secret entered only in the operator's own
   connector. It touches trust boundary 5, and settled decision 9 makes it a fallback that is built
   only if verify item 37 shows a vendor does not bind `state`.
+- **A recovery code is one step from full authority** (2026-10-20 review of the answers). The
+  restricted session cannot approve, consent or revoke, but it can enrol a passkey, and that
+  passkey logs in as the account. The restriction turns a stolen code into a journaled
+  `CredentialEnrolled { Recovery }` and a notice at the next passkey login, not into a refusal.
+  Keep the codes offline, as go-live step 4b says.
 - **A stolen session cookie is valid until its TTL expires, the idle timer fires, the browser logs
   out, or a credential is removed.** The last of those is new and is the real revocation: a
   credential removal flushes every live session for that account (decision 4). Beyond it there is
