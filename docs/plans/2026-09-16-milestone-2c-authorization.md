@@ -133,8 +133,9 @@ entry allows, a rotating refresh token that keeps it connected without a passkey
 token **on the same fixed-order path it would validate any other token**, on every request, and
 never forwards it anywhere. The operator approves a plan by logging in with the same identity in a
 browser instead of typing a Basic-auth password the browser then stores. The static bearer hashes
-and `hash-token` are gone: no shared secret authenticates a *caller* to willikins any more (trust
-boundary 5 names the one secret that remains and says why it is not one).
+and `hash-token` are gone: no shared secret authenticates a *caller* to willikins any more. Trust
+boundary 5 names the signing secret, which authenticates nothing, and the one bounded exception:
+a single-use bootstrap secret that enrols one passkey and then dies (decision 27).
 
 One sentence of the delegating draft's goal does not survive, and it is replaced rather than
 quietly dropped. That draft promised a client that has never met this deployment could discover,
@@ -294,7 +295,13 @@ no longer describe the system while still being cited as though they did.
    must **not** be written in its place is a claim that willikins now holds no secret at all. It
    holds a **signing** secret, which authenticates nothing to anyone, is shared with nobody, and
    whose compromise is strictly worse than a shared secret's — it mints tokens rather than
-   presenting one. That statement belongs to boundary 1b, which is where it is. Test 12.
+   presenting one. That statement belongs to boundary 1b, which is where it is. **One bounded
+   carve-out, settled 2026-10-20** (settled decision 6, decision 27): the bootstrap secret. It is
+   a static secret in the deployment's configuration, and it authenticates a human for exactly
+   one act, enrolling one passkey on one named, allowlisted account. It never yields a session, an
+   approval, a consent or a token. Once used it is dead, durably, and only a fresh value re-arms
+   it. So the boundary's sentence holds in this form: no static secret authenticates a caller to
+   willikins for anything but one enrolment, and none for anything twice. Tests 12 and 34.
 
 ## Decisions
 
@@ -501,8 +508,9 @@ a derived, in-grammar, deterministic id keeps the existing discipline (the same 
 derives the same principal, distinct identities never collide) and keeps externally supplied text
 out of an identifier that is compared, indexed and printed. The `iss` is folded in because a `sub`
 is only unique within its issuer. **One note for the fold, now that willikins issues:** the
-in-house `sub` is a UUID willikins generates at enrollment and would fit the grammar directly. The
-derivation stays anyway, because it must keep working for a foreign `sub` that does not, and
+in-house `sub` is the account name the operator chooses (decision 27; until 2026-10-20 it was a
+UUID the enrollment CLI generated), constrained to `OAuthSubject`'s grammar. The derivation stays
+anyway, because it must keep working for a foreign `sub` that does not, and
 because a principal whose shape depended on who issued the token would be a second code path where
 the seam says there is one.
 
@@ -583,7 +591,7 @@ one whole (`CLAUDE.md`; `approvals.rs`'s decision b7). 2c adds surfaces that sho
 - the consent screen's client display name and redirect host;
 - the 401 and 403 bodies;
 - the journal's `subject`, `issuer` and `client_id`;
-- the enrollment CLI's printed subject.
+- the bootstrap page's account name (decision 27).
 
 The subject (`OAuthSubject`) and the client id (`ClientId`) are **plain, non-identifier domain
 types**, because the operator must copy them whole into `WILLIKINS_*_SUBJECTS` and the client
@@ -671,11 +679,11 @@ which is the flow milestone 2 built for.
 
 **Entries are bare `sub` values, not issuer-qualified ones**, and that argument is **stronger**
 after the revision, not weaker: a deployment has exactly one issuer and it is now its own, so a
-listed `sub` is unambiguous by construction. **Where the values come from changed.** They are
-willikins-generated enrollment identifiers, and the first path to them is the enrollment CLI, which
-prints the subject when it enrols a credential (decision 24, go-live step 4). The "log in once and
-read your own subject off the `WrongRole` page" bootstrap survives as the **second** path, for
-anyone who enrolled without noting it down. Two consequences are recorded rather than designed
+listed `sub` is unambiguous by construction. **Where the values come from changed twice.** They
+are account names the operator chooses (decision 27, 2026-10-20), written into both lists at
+go-live step 4a before the first 2c boot and typed at the bootstrap page, which refuses a name in
+neither list. The `WrongRole` page's display of a session's own subject survives as a check, for
+an operator unsure which name a session carries. Two consequences are recorded rather than designed
 around. A move to a different issuer — which on the in-house path means a host move, and on the
 adapter path means adopting somebody else's provider — rewrites **both** lists, because every
 subject is reissued; that is a go-live step, not a silent breakage. And if a deployment ever needs
@@ -891,7 +899,8 @@ purely additive: a non-safe method is refused **unless `Sec-Fetch-Site` is `same
 pointed out that the threat this decision names is a sibling host, whose forged POST arrives as
 `same-site` and would have passed.) The rule covers every non-safe method on a browser surface:
 the approve and reject POSTs, the consent POST, the ceremony and recovery finish endpoints, the
-connection-revoke POSTs (decision 26), and logout. `/token` and `/revoke` are not browser
+connection-revoke POSTs (decision 26), the account actions and the bootstrap POSTs (decision 27),
+and logout. `/token` and `/revoke` are not browser
 surfaces and are exempt; they are called server to server. **The two "fixes" this paragraph used to list are already
 how the code behaves** (corrected 2026-10-20; both have been in place since 0e329eb, 2026-09-15).
 `extract_authority` splits on `/`, `?` and `#`, and `host_matches`
@@ -962,10 +971,16 @@ producer: an agent-callable `rollback_plan` (its scope row is fixed in decision 
 
 **The `WrongRole` page tells the operator their own identity.** A session whose `sub` is not in
 `WILLIKINS_APPROVER_SUBJECTS` gets a 403 page that displays that session's own `sub` and `iss`,
-escaped the way every other authorization-server-supplied string on that page is. It is the
-**second** bootstrap path now — the enrollment CLI prints the subject first (decision 24) — and it
-is still worth having, because the first path is a command someone may have run without reading its
-output.
+escaped the way every other authorization-server-supplied string on that page is. Since the
+operator now chooses the subject (decision 27), this is a check rather than the way to learn it,
+and it is still worth having for the adapter path, whose subjects nobody chooses.
+
+**Account actions.** A passkey session, and only a passkey session, may enrol another passkey for
+its own account and revoke its own account's other credentials. The first is how decision 24's
+two-credential rule is met now that no CLI mints an enrollment URL (decision 27); the second also
+revokes the account's refresh families (decision 26). A recovery session may do the same two
+things and nothing else (decision 24). Each is a nonce-bound POST under the checks above, and each
+journals `CredentialEnrolled` or the revocation.
 
 **Lifetime.** The session's absolute lifetime is `WILLIKINS_SESSION_TTL_SECONDS`, default 3600, and
 it is **capped below the approval window** (default 86400): a session must expire well inside the
@@ -1003,7 +1018,9 @@ static bearer tokens", and a loopback exemption is precisely a static bearer tok
 provider, because the fake authorization server is test-support code that starts inside a
 `cargo test` process. Now that willikins issues its own tokens, a hand-run `serve --http` on
 loopback can **enroll a passkey and log in against itself**, with no external provider and no
-pasted token — the whole flow, in one process, on a developer's machine. That is stated as an
+pasted token — the whole flow, in one process, on a developer's machine. The enrolment goes through
+the same bootstrap page a deployment uses, armed by `WILLIKINS_BOOTSTRAP_SECRET` in the local
+environment (decision 27), so the local loop has no second path. That is stated as an
 improvement **conditional** on one unresolved question and not as a fact: whether `__Host-`prefixed
 cookies are honoured on `http://localhost` was not settled by any fetched source (verify item 9),
 and without them the session half of that loop does not run. The conditional half is the session;
@@ -1037,8 +1054,9 @@ workflows directory *is* about the trusted directory, so it belongs here, and it
 **`SymmetricAlgorithm`**, **`CannotVerifyOwnTokens`**, **`SessionOutlivesApprovalWindow`**,
 **`InsecureUrl`**, **`NonCanonicalUrl`** (decision 12), **`EmptyAllowlist`** and
 **`CodeTtlAboveCeiling`** (an authorization-code lifetime above draft-16's 600-second ceiling,
-decision 21) and **`RefreshLifetimes`** (refresh lifetimes out of order or above their ceiling,
-decision 26); a required variable that is simply unset keeps reusing
+decision 21), **`RefreshLifetimes`** (refresh lifetimes out of order or above their ceiling,
+decision 26) and **`WeakBootstrapSecret`** (a bootstrap secret shorter than 43 base64url
+characters, decision 27); a required variable that is simply unset keeps reusing
 `ConfigError::Missing { variable }` (`crates/willikins-server/src/config.rs:33`), which is the
 shape `build_http_config` already reaches for.
 
@@ -1047,7 +1065,8 @@ produced by the pure `HttpConfig::build`, which runs *before* the tokio runtime 
 anything has touched the filesystem (see the ordering note under the task table). So the refusals
 that need the runtime or the disk go on `cli.rs`'s own `StartError`, beside `Bind` and
 `NoBindOrPort`: **a configured signing key that cannot be loaded**, **the credential store cannot
-be read or written** (it now holds the refresh families too, decision 26), and **the client table cannot be read or is malformed** (decision 23). (The
+be read or written** (it now holds the refresh families and the bootstrap spent list too,
+decisions 26 and 27), and **the client table cannot be read or is malformed** (decision 23). (The
 2026-09-16 text said "no signing key is configured and none can be generated or written", which
 described the volume branch settled decision 2 did not take. An unset key is
 `ConfigError::Missing`, like any other required variable.) The delegating draft put `JwksUnavailable` there for
@@ -1186,7 +1205,10 @@ new, and pass 3 must attack them at least as hard.
 | A non-canonical `WILLIKINS_PUBLIC_URL` (uppercase host, `:443`, trailing `/`) | startup refuses with `NonCanonicalUrl`; no deployment publishes an identifier Claude's canonical `resource` cannot match |
 | **Added by the 2026-10-20 review.** A forged consent POST from a sibling host, one without its nonce, one with another session's nonce, and one carrying its own `redirect_uri` | **403** for the first three (`same-site` refused, `InvalidNonce`); the fourth gets the stored redirect, never the posted one |
 | A stolen recovery code used to approve a plan or consent to a `willikins:apply` token | **403**: a recovery session can only enrol a passkey |
-| An enrollment URL used after 15 minutes, replayed, or against another account | refused in each case; the token appears in no request line, log line or journal line |
+| **Replaced 2026-10-20 (decision 27).** A wrong bootstrap secret, a right one with a name in neither allowlist, and a flood of wrong ones | **403** `BootstrapSecretMismatch`; **403** naming the rule; the flood reaches 429 and journals coalesced lines, while a right pair after it still enrols |
+| A bootstrap secret used twice, by two concurrent ceremonies and by a second visit after the first enrolment; and a restart with the spent value still set | exactly one passkey is enrolled; every later route is 404; the restart starts, logs the spent variable by name, and reopens nothing |
+| A bootstrap ceremony finished in another browser, and a bootstrap page asked to approve, consent or log in | **400** (the `__Host-willikins-bootstrap` cookie does not match); no session, no approval, no consent and no token exists for the page to give |
+| The bootstrap secret, its digest and the fresh recovery codes searched for in every request line, log line, journal line and error body | absent everywhere, at every log level |
 | A sustained flood of username steps for invented accounts, and one naming the real account | no ceremony-store slot for the invented ones, so a real login still starts; the real account's flood stops at its per-account cap; the residual `/authorize` lockout is **measured** and recorded |
 | A flood of junk `/token` POSTs, then a valid redemption | the valid code is redeemed: the bucket counts failures per `client_id` after the claim |
 | **Added 2026-10-20 (decision 26).** A rotated refresh token presented again, by its own client | `invalid_grant` `RefreshTokenReused`; the whole family is revoked, so the current token is refused too |
@@ -1316,30 +1338,30 @@ are inserted after them.)
    closed. Railway documents a "Max 32 KB combined header size" and says "idle HTTP/1.1
    connections are closed after 60 seconds between requests". So the edge already bounds part of
    this shape, and task 17 is **defence in depth behind it**, not the only bound.
-4. **Enroll, and set both allowlists, in two halves** (split by the 2026-10-20 review). A passkey
-   ceremony runs in a browser against a 2c server at the RP ID's host, and that server is first
-   deployed at step 6.3. It also refuses to start with an empty allowlist
-   (`HttpConfigError::EmptyAllowlist`). So the subjects must exist before the server, and the
-   ceremonies must come after it.
-   - **4a, before step 6.** This half writes the durable credential store on the volume before
-     any 2c binary runs on Railway, so it needs open question 2's answer before go-live, as 4b
-     does. The operator runs the **enrollment CLI** once per human. It creates
-     the account in the durable credential store and prints its subject (test 25). Each subject
-     goes into step 6's staged block, under `WILLIKINS_AGENT_SUBJECTS` and
-     `WILLIKINS_APPROVER_SUBJECTS` as needed. No enrollment URL is minted yet.
-   - **4b, after the step-6 deploy is healthy and the domain answers.** The operator runs the CLI
-     again for each account. It mints a one-time enrollment URL, short-lived by design (decision
-     24), so this half never has to survive a redeploy. Each human opens the URL at
-     `https://willikins.example.com` and enrols **two** credentials (decision 24's rule:
-     prevention before recovery). The recovery codes are saved somewhere other than the
-     deployment.
+4. **Enroll, and set both allowlists, in two halves** (split by the 2026-10-20 review; rewritten
+   for the bootstrap secret by the operator's 2026-10-20 answers). A passkey ceremony runs in a
+   browser against a 2c server at the RP ID's host, and that server is first deployed at step 6.3.
+   It also refuses to start with an empty allowlist (`HttpConfigError::EmptyAllowlist`). So the
+   subjects must exist before the server, and the ceremonies must come after it. Decision 27 makes
+   that possible without a host-side command, because the subject is a name the operator chooses.
+   - **4a, before step 6, all in the operator's own configuration.** Choose one account name per
+     human and put each into step 6's staged block, under `WILLIKINS_AGENT_SUBJECTS` and
+     `WILLIKINS_APPROVER_SUBJECTS` as needed. Run `willikins bootstrap-secret generate <file>` on
+     the operator's machine and stage the value as `WILLIKINS_BOOTSTRAP_SECRET` in the same
+     change, through Doppler's integration or as a Railway variable. Nothing touches the volume.
+   - **4b, after the step-6 deploy is healthy and the domain answers.** Open
+     `https://willikins.example.com/bootstrap`, enter the secret and the first account name, and
+     enrol one passkey. Save the recovery codes the page shows once, somewhere other than the
+     deployment. Log in at `/approvals/login` and enrol a **second** passkey from the session's
+     "add a passkey" action (decision 24's rule: prevention before recovery). Then delete
+     `WILLIKINS_BOOTSTRAP_SECRET`. The startup log names it as spent until it is gone. Each
+     further human needs a fresh secret and a restart, then the same steps.
 
-   The `WrongRole` page keeps its bootstrap role as the **second** path, for anyone who enrolled
-   without noting the value down. Both variables are required in http mode and an empty one
-   refuses startup, so a reachable service never runs with an unset allowlist. **Where "the host"
-   is on this deployment is open question 2**, for both halves: the image is distroless, and the
-   credential store and journal sit on the volume (decision 25). Whether `railway ssh` reaches a
-   shell-less container is verify item 29.
+   The `WrongRole` page shows a session's own subject, as a check. Both variables are required in
+   http mode and an empty one refuses startup, so a reachable service never runs with an unset
+   allowlist. (Until 2026-10-20 this step ran an enrollment CLI on "the host", and where that host
+   was on a distroless deployment was an open question. Decision 27 removed the question with the
+   CLI.)
 5. **Populate the volume: the operator's documents and the client table** (decision 25). The
    operator publishes the private document set at a reviewed tag onto `/data/workflows`, by hand,
    following decision 25's procedure: a manifest from `willikins documents check`, an upload to a
@@ -1371,6 +1393,7 @@ are inserted after them.)
      `WILLIKINS_REFRESH_FAMILY_LIFETIME_SECONDS`), or leave a lifetime unset to take its default;
      `WILLIKINS_EXTRA_ALLOWED_ORIGINS` stays unset until step 10 finds a vendor `Origin`
      (decision 18), and gets its `preserve()` row only when it is set;
+   - stage `WILLIKINS_BOOTSTRAP_SECRET` (step 4a), with no `preserve()` row (decision 27);
    - **inject `WILLIKINS_SIGNING_KEY_PEM` through Doppler's Railway integration in this same
      change**, generated by `willikins signing-key generate` (decision 22) and visible as a
      Railway variable before 6.3. The 2c binary refuses to start without it
@@ -1388,8 +1411,9 @@ are inserted after them.)
    `preserve()` today, and two of them are the retired hashes. **The file's own header says an
    omitted resource or field is an instruction to delete it, not to leave it alone.** So the file
    drops those two rows and gains a `preserve()` row for **every** new `serve --http` variable
-   the operator sets on Railway; without that, the next apply deletes the deployment's whole
-   configuration and the service stops starting. (The `WILLIKINS_WORKFLOWS_DIR` row arrives
+   the operator sets on Railway, except the single-use `WILLIKINS_BOOTSTRAP_SECRET`, whose deletion
+   is the end state decision 27 wants; without those rows, the next apply deletes the deployment's
+   whole configuration and the service stops starting. (The `WILLIKINS_WORKFLOWS_DIR` row arrives
    earlier, with task 20.) **Doppler-delivered variables get no row**: the signing keys, like the
    provider credentials, follow the file's header rule that they "are absent by design" and reach
    Railway only through the integration. Whether an apply deletes a Doppler-synced variable the
@@ -1436,8 +1460,8 @@ are inserted after them.)
    Otherwise the file preserves a deleted variable, whose behaviour is verify item 20's unknown.
 9. **Back up what cannot be re-derived, and rehearse a restore.** That means the credential store,
    the signing key, the client table and the journal. This is the first backup-and-restore concern
-   the project has ever had. Losing the store means every human re-enrols from the break-glass,
-   and losing the key refuses every outstanding token. The signing key's backup is Doppler's
+   the project has ever had. Losing the store means every human re-enrols through a fresh
+   bootstrap secret (decision 27), and losing the key refuses every outstanding token. The signing key's backup is Doppler's
    version history (settled decision 2). The volume's candidate mechanism is Railway's volume
    backups; their schedule and restore rules are quoted in decision 25 and stay a verify item
    until a restore has been rehearsed. **Documents are not restored from a volume backup.** A
@@ -1445,7 +1469,9 @@ are inserted after them.)
    by re-publishing the tag from the operator's checkout (decision 25). **A restore also rewinds
    the refresh families** (decision 26): a family revoked after the backup point comes back to
    life. So every restore ends with the Connections section's revoke-all, and each app reconnects
-   with one passkey consent. Railway allows one volume
+   with one passkey consent. **A restore also rewinds the bootstrap spent list**, so a secret used
+   after the backup point would be armed again: after any restore, check that
+   `WILLIKINS_BOOTSTRAP_SECRET` is unset (decision 27). Railway allows one volume
    per service, no replicas with a volume, and downtime on redeploy. The mount path is `/data`,
    taken from `.railway/railway.ts` (verify item 12, settled for that half).
 10. **Connect the apps** (rewritten 2026-10-20 against the vendors' pages, fetched that day:
@@ -1595,8 +1621,9 @@ enrolled passkey stops working. That is a migration with a price, not a law — 
 correction, 2026-09-16: "All it takes for to stop being permanent is wiping accounts and changing
 the domain." So the price, stated plainly so nobody has to rediscover it: each human re-enrols a
 passkey at the new host, which means someone must be able to authenticate *to enrol*, which is
-what decision 24's recovery codes (test 25) and the enrolment CLI are for. Task 10's break-glass path is
-therefore also the domain-migration path, and it is tested as both. What is genuinely lost is the
+what decision 24's recovery codes (test 25) and decision 27's bootstrap secret (test 34) are for.
+The bootstrap secret's break-glass is therefore also the domain-migration path, and it is tested
+as both. What is genuinely lost is the
 old credentials, and nothing else: the journal, the plans, the subject allowlists and the issued
 tokens' claims are unaffected, because a principal derives from issuer and subject, not from the
 authenticator that proved the subject.
@@ -2221,7 +2248,7 @@ collector and a rate limit.
 
 *Settled by the operator (settled decision 3, pre-registration), and pinned by test 18's unregistered-then-registered pair.*
 
-**24. Authenticating the human: passkeys, recovery codes, and a host-side break-glass.** MCP says
+**24. Authenticating the human: passkeys, recovery codes, and a one-time bootstrap secret.** MCP says
 **nothing whatsoever** about this — no MUST, no SHOULD, no shape — and all three MCP reference
 implementations declare the login out of scope. Everything here is willikins' own, and it is where
 the real cost of the milestone is.
@@ -2258,35 +2285,29 @@ the real cost of the milestone is.
   invalidation plus reissue after use. **This plan follows the reading that satisfies both
   §4.2.1.1 and §3.1.2.2** — at least 128 bits *and* Argon2id — and says so rather than claiming the
   documents settle it; §3.2.2's throttling numbers were not read verbatim and are verify item 10.
-  This is what puts `argon2` in the tree **on the passkey branch too**. **A recovery-code login
+  This is what puts `argon2` in the tree **on the passkey branch too**. The first set is issued
+  when the bootstrap page enrols an account's first passkey, shown once (decision 27), and a
+  break-glass enrolment replaces the whole set. **A recovery-code login
   is a restricted session** (2026-10-20 review): it may register a new passkey, and revoke the
   account's other credentials, and nothing else, and it ends when that is done. Approve, reject
   and consent each require a session that came from a passkey ceremony, so a stolen recovery code
   alone cannot approve a plan or consent to a `willikins:apply` token. A look-up secret is
   single-factor, and this decision's own case for passkeys is that they are "self-contained
-  multifactor authentication". Every recovery-code use is journaled as loudly as the break-glass.
-  The cost is in the last bullet.
+  multifactor authentication". Every recovery-code use is journaled as loudly as a bootstrap
+  enrolment. The operator kept this restriction on 2026-10-20 (settled decision 11). The cost is in
+  the last bullet.
 - **Two credentials before enrollment is complete**, or the operator is nagged until a second
   exists. Prevention before recovery: a single-credential deployment is one lost device away from
-  the break-glass, every time.
-- **A host-side break-glass**: a CLI subcommand on the host that mints a one-time enrollment URL to
-  stdout and journals it as loudly as an approval. **The URL carries a bearer credential, so it is
-  specified like one** (2026-10-20 review; whoever holds it can enrol a passkey on the account):
-  - the token is at least 128 bits from the OS CSPRNG, and the credential store holds only its
-    hash;
-  - it lives **15 minutes**, checked against its own expiry independently of storage, which is
-    why go-live step 4b mints it only after the deploy;
-  - it is bound to one named account and can register **one** credential and nothing else;
-  - it travels in the URL **fragment**, which the browser never sends, and the page's script
-    POSTs it, so it appears in no request line and no access log;
-  - the journal records the account, the principal and the time, never the token or the URL,
-    and test 6's and test 15's sweeps cover it.
-
-  The CLI's first run for a new account creates the account and prints its subject (go-live
-  step 4a) without minting a URL. That is consistent with the design doc's own
-  trust model — the boundary is the network, and whoever holds host, environment and Doppler access
-  already controls the deployment. What a deployment must **not** do is add a fourth layer that
-  reintroduces a static shared secret, which trust boundary 5 forbids.
+  the break-glass, every time. The second is enrolled from a passkey session's "add a passkey"
+  action (decision 4), because the bootstrap page enrols exactly one.
+- **First enrolment and break-glass: decision 27's one-time bootstrap secret** (settled decision
+  6). It replaces the host-side CLI subcommand that this bullet used to specify, together with its
+  one-time enrollment URL, because a distroless deployment has no host to run that CLI on. The
+  2026-10-20 review's enrollment-token rules (128 bits, hashed, 15 minutes, one account, one
+  credential, carried in the fragment) lose their subject. The bootstrap secret has its own rules,
+  which keep the properties that mattered: one named account, one credential, nothing else, never
+  journaled. It is a static secret, so trust boundary 5 names it as its one carve-out, bounded by
+  single use.
 - **A username step that answers uniformly.** `start_passkey_authentication` takes the account's
   own credentials, so the server must know which account before it can build a challenge; the
   usernameless alternative needs a preview feature the crate's authors advise against. For a single
@@ -2305,14 +2326,14 @@ the real cost of the milestone is.
   five fields for the POST back — about a hundred lines. The approvals page contains no `<script>`
   today, so 2c's CSP grows a `script-src` it did not have.
 - **The recovery path is not deferrable to a later milestone**, and the reason is in the risks:
-  losing every enrolled device leaves recovery codes as the only way back in short of the
-  break-glass. **What it no longer mitigates** (2026-10-20 review): because a recovery session can
+  losing every enrolled device leaves recovery codes as the only way back in short of a fresh
+  bootstrap secret. **What it no longer mitigates** (2026-10-20 review): because a recovery session can
   only enrol a passkey, a browser context that refuses `navigator.credentials` on the deployment's
   domain (verify item 13) cannot be rescued by a recovery code. If test 19 finds an app's
   `/authorize` context refuses passkeys, that app cannot connect. The operator kept the
   restriction at that price (settled decision 11).
 
-*Settled by the operator (settled decision 1, passkeys), and pinned by tests 10, 24, 25.*
+*Settled by the operator (settled decisions 1, 6 and 11), and pinned by tests 10, 24, 25 and 34.*
 
 ### One decision the 2026-10-20 addendum adds
 
@@ -2363,7 +2384,7 @@ is fixed here, so that no two tenants of the one volume can collide:
 | `/data/journal.jsonl` | the journal (`WILLIKINS_JOURNAL_PATH`) | the server |
 | `/data/workflows/` | the documents: flat, `.yaml`/`.yml` only, never descended into | the operator, by hand |
 | `/data/workflows.next/` | staging for the next document set; the server never reads it | the operator, by hand |
-| `/data/credentials/` | the credential store (`WILLIKINS_CREDENTIAL_STORE_PATH`): passkeys, recovery codes and refresh families (decision 26) | the server and the enrollment CLI |
+| `/data/credentials/` | the credential store (`WILLIKINS_CREDENTIAL_STORE_PATH`): passkeys, recovery codes, refresh families (decision 26) and the bootstrap spent list (decision 27) | the server only |
 | `/data/clients.yaml` | the pre-registered client table (`WILLIKINS_CLIENTS_PATH`) | the operator, by hand |
 
 The credential store and the client table must never sit inside `workflows/`: `Butler::start` scans
@@ -2753,6 +2774,104 @@ refresh path (`…-m2c-own-authorization-server.md` §6.6 and §6.7).
 
 *Pinned by tests 32 and 33.*
 
+**27. First enrolment and break-glass: a one-time bootstrap secret** (settled decision 6). The
+operator approved the proposal on 2026-10-20: "Approved, as long as its single-use". As approved,
+the operator sets a bootstrap secret as a variable and restarts. While it is set **and** unused,
+the server offers exactly one passkey enrolment, at a page that demands the secret. Once used, it
+is dead, durably, so a restart with the same value does not reopen it. Break-glass is the same act
+with a fresh secret. This replaces decision 24's host-side enrollment CLI and its one-time
+enrollment URL, on the deployment and locally alike, because the image is distroless and the
+credential store is on the volume, so the CLI had no host to run on.
+
+- **The account name is the subject, and the operator chooses it.** Decision 3 refuses to start
+  with an empty allowlist, so a subject must exist before the first 2c boot, and with no CLI
+  nothing can print a generated one. So the operator names each account: an `OAuthSubject`,
+  written into `WILLIKINS_AGENT_SUBJECTS` and `WILLIKINS_APPROVER_SUBJECTS` at go-live step 4a,
+  typed at the bootstrap page with the secret, and typed at the login's username step thereafter.
+  The page refuses a name that is in neither allowlist. Decision 2's derivation is unchanged, and
+  only the in-house `sub` stops being a generated UUID. 2c deletes no account, so a name is never
+  reassigned to another human. *The rejected alternative* is a generated subject shown by the
+  page. It needs either a startup that tolerates an empty allowlist while a bootstrap is armed,
+  which weakens decision 3's refusal, or a second restart to add the subject, which costs another
+  volume-downtime outage.
+- **The variable is `WILLIKINS_BOOTSTRAP_SECRET`**, optional, set as a Railway variable or
+  through Doppler's integration. **Its minimum is 256 bits.** Startup refuses a value shorter than
+  43 characters or outside the base64url alphabet, with `HttpConfigError::WeakBootstrapSecret`,
+  naming the variable and never echoing the value. A length check is all a server can do; the
+  entropy comes from `willikins bootstrap-secret generate <file>`. That command writes 32 bytes
+  from the OS CSPRNG, as base64url, to a new `0600` file and nowhere else, with the refusals of
+  `signing-key generate` (decision 22). The operator pastes the value into the variable and later
+  into the page, then deletes the file.
+- **Kept and compared as a digest, in constant time.** `ServerConfig::from_vars` validates the
+  value, keeps only its SHA-256 digest and zeroizes the string. At 256 bits a fast hash is the
+  right one, for decision 26's reason. The page hashes what it is given and compares the two
+  digests with `subtle::ConstantTimeEq`, which is why `subtle` stays a dependency after task 9.
+  There is no secret domain type and no new `expose_secret` site.
+- **Armed, spent or unset, and spent is durable.** The credential store holds a **spent list**:
+  the digest of every bootstrap secret ever used, synced before the passkey it enrolled is
+  committed. At startup a set variable whose digest is on the list is **spent**, and one that is
+  not is **armed**. `ServerStarted` gains an optional `bootstrap` field naming the state, never
+  the value. Because the list holds digests, a fresh secret re-arms and an old one never does.
+
+  **Left set after use, it is refused, loudly.** The page answers as if unarmed. At every
+  startup, and at the moment of use, the server logs at WARN that `WILLIKINS_BOOTSTRAP_SECRET` is
+  spent and should be deleted, naming the variable and never its value. It is **not** a startup
+  refusal. The design the operator approved describes a restart with the same value that does
+  not reopen the page, and refusing to start would turn a forgotten variable into a crash loop under
+  `ON_FAILURE`. Decision 6's rule, that a variable which decided authentication never becomes a
+  silent no-op, is met by the log line, which is not silent.
+- **What the page does, and nothing else.** It is `GET /bootstrap` and its two POSTs. Unarmed or
+  spent, every bootstrap route answers 404, with or without a secret. Armed:
+  1. The form takes the secret and the account name in a POST body, never in a URL. A wrong
+     secret is 403, journaled `BootstrapSecretMismatch`. A right secret with a name in neither
+     allowlist is 403 naming the rule, since whoever holds the secret is the operator.
+  2. A right pair starts a registration ceremony for that account, creating the account if it
+     does not exist. The ceremony is bound to the browser by a `__Host-willikins-bootstrap`
+     cookie, as the login ceremony is by `__Host-willikins-login` (decision 4), and it lives in
+     the ceremony store. **One ceremony at a time:** a second start while one is in flight is 409
+     until the first finishes or its 300 s expire. A cancelled ceremony costs nothing, and the
+     secret stays armed.
+  3. The finish claims the secret atomically. The digest is synced to the spent list, then the
+     passkey is committed, then the response shows the account's fresh recovery codes once
+     (decision 24), replacing any earlier set. If the credential write fails after the digest is
+     spent, the secret is dead and no passkey exists. That costs a fresh secret and a restart, and
+     it never allows a second enrolment from one secret.
+
+  The page **never** creates a session, approves or rejects, reaches the consent screen or mints
+  a token. The human goes to `/approvals/login` next and logs in with the passkey just enrolled.
+  Decision 24's two-credential rule is then met from that passkey session's "add a passkey"
+  action (decision 4).
+- **Throttled, though throttling is not what protects it.** 256 bits do. The bounds limit what a
+  flood costs. The digest compare runs first and is cheap, so a right pair is never refused by a
+  bucket. Failures count in a global bucket of 10 per 15 minutes, and beyond it a wrong secret
+  answers 429. Every refusal passes decision 1's per-reason journal bucket. Both POSTs carry
+  `Cache-Control: no-store`, decision 4's header set and CSP, and the `Sec-Fetch-Site` and origin
+  checks.
+- **Journaled as loudly as an approval, never the secret.** A new additive event,
+  `CredentialEnrolled`, carries the subject, the time and how the credential arrived: `Bootstrap`,
+  `Session` (a passkey session's "add a passkey") or `Recovery`. The spent transition is that
+  event. The secret, its digest and the recovery codes appear in no journal line, log line or
+  error body (tests 6 and 15).
+- **Break-glass and further accounts are the same act with a fresh secret.** If a human has lost
+  every passkey and every recovery code: generate a new secret, set it, restart, and enrol at the
+  page into the existing account. The account keeps its subject, so the journal and the
+  allowlists are unaffected. Then revoke the lost credentials from the new passkey session, which
+  also revokes their refresh families (decision 26). For a second human, add the name to the
+  allowlists and set a fresh secret in one variable change and one restart. A domain move
+  (decision 12) is the same act, once per human, at the new host.
+- **No `preserve()` row** in `.railway/railway.ts`, if it is set as a Railway variable. An apply
+  that deletes it after use is the end state the procedure wants anyway; while it is armed, the
+  read-only `railway config plan` that precedes every apply shows the delete (verify item 20).
+  Doppler-delivered, it gets no row by the file's own rule.
+- **A volume restore can re-arm a spent secret.** The spent list is on the volume, and so is the
+  journal, so a restore to a point before the use rewinds both. The variable must therefore be
+  deleted after use, and go-live step 9 checks it is unset after any restore.
+- **The CLI.** No enrollment command is built, on any host. The same variable works on a
+  loopback `serve --http` (decision 5), so the local loop needs no second path. The CLI keeps only
+  `bootstrap-secret generate`, which touches no store.
+
+*Pinned by test 34.*
+
 ## The pluggable seam
 
 The operator banked pluggable authentication as a later improvement and this milestone builds one
@@ -3049,8 +3168,9 @@ ten fields and not one of them is an authorization point.
 **`http::approvals`** gains the human half: the passkey enrollment and authentication ceremonies,
 the durable credential store, the ceremony-to-account binding, the uniform username step, the
 inline script under a `script-src` nonce, logout, and the mint-then-validate hop that turns a
-finished ceremony into a session (decision 4), and the Connections section that lists and revokes
-refresh families (decision 26). The session itself lands first, as library code, in
+finished ceremony into a session (decision 4), the account actions (add a passkey, revoke a
+credential), the Connections section that lists and revokes refresh families (decision 26), and
+the `/bootstrap` page with its spent list and its one-ceremony-at-a-time rule (decision 27). The session itself lands first, as library code, in
 its own task: the signed `__Host-` cookie and jar, both bounded stores, unconditional id rotation,
 the absolute and idle timeouts, `no-store`, 128-bit ids, the non-persistent cookie,
 credential-change revocation, `X-Frame-Options`, the CSP, `Sec-Fetch-Site` and `Vary`, and
@@ -3126,7 +3246,7 @@ willikins-types -j 2`) is what proves the new type builds the way its dependents
 The new `AuthFailedReason` variants land in two batches, both additive. The validating half's
 variants land in **task 4**, with the middleware that produces them, because tests 3 to 5 assert
 them, except `UnknownTool`, which lands with the scope check in task 7; the claim fields land in task 6. The issuing half's variants land with the endpoints that
-produce them, in tasks 9, 10 and 11, and decision 26's in tasks 26 and 27:
+produce them, in tasks 9, 10 and 11, decision 26's in tasks 26 and 27, and decision 27's in task 28:
 
 | Refusal | Produced by |
 | --- | --- |
@@ -3149,6 +3269,7 @@ produce them, in tasks 9, 10 and 11, and decision 26's in tasks 26 and 27:
 | `RefreshClientMismatch` | `/token` and `/revoke`, a refresh token presented by a client it was not issued to (decision 26) |
 | `RefreshNotAllowed` | `/token`, a family whose client left the table or lost `refresh_tokens: true` (decision 26) |
 | `UnsupportedTokenType` | `/revoke`, a `token` in compact-JWS shape (decision 26) |
+| `BootstrapSecretMismatch` | the bootstrap page, a wrong secret (decision 27) |
 
 Every one of them is reachable by an **unauthenticated** request, so every one passes through
 decision 1's per-reason token bucket and carries its `suppressed` field when coalesced. That is the
@@ -3161,7 +3282,9 @@ and `suppressed`, written only on a coalesced line (decision 1). `ServerStarted`
 `clients_sha256`, the client table's hash at that start (decision 23). **Three new events**, all
 additive, carry decision 26's refresh lifecycle: `RefreshFamilyIssued`, `RefreshTokenRotated` and
 `RefreshFamilyRevoked`. Each names a random family id, a client id and a subject, and never a token
-or a token's hash. No existing field changes type,
+or a token's hash. A fourth, `CredentialEnrolled`, records each passkey enrolment with its subject
+and how it arrived (`Bootstrap`, `Session` or `Recovery`, decision 27), and `ServerStarted` gains an
+optional `bootstrap` field (`armed`, `spent` or `unset`), never the secret or its digest. No existing field changes type,
 **no variant is removed** — `InvalidCredential` and `MalformedUsername` stay in the enum and stop
 being produced, because `pre-pass-2-every-event.jsonl` carries both and removing a variant would
 break the replay the whole discipline exists to guarantee — and no field becomes required.
@@ -3202,11 +3325,11 @@ ES256 PKCS#8 PEM to a new `0600` file and nowhere else. The second is `willikins
 <dir>` (task 22, decision 25). It runs exactly the server's `scan_directory` over a directory and
 prints a `shasum -a 256`-format manifest that equals `ServerStarted.workflow_hashes`, so the
 operator can check a document set before publishing it. It reads only that directory and writes
-nothing. The first is the enrollment and break-glass command of decision 24. Its first run for a new account creates the account and prints its subject (go-live step 4a); a later run mints a one-time enrollment URL to stdout on the host and journals the act as
-loudly as an approval. It is a host-side command by design — the design doc's trust boundary is the
-network boundary, and whoever holds host, environment and Doppler access already controls the
-deployment — and it is explicitly **not** a fourth authentication layer: it introduces no static
-shared secret, which trust boundary 5 forbids. `serve --http` reaches the same configuration path
+nothing. The first is `willikins bootstrap-secret generate <file>` (task 28, decision 27), which
+writes a new 256-bit base64url secret to a new `0600` file and nowhere else, and touches no store.
+**The enrollment and break-glass command decision 24 used to specify is not built** (settled
+decision 6): the bootstrap page replaces it on every host, the operator's own machine included.
+`serve --http` reaches the same configuration path
 as the binary, so it inherits every new refusal. The CLI's commands in
 `crates/willikins-cli/src/commands.rs` pass `Principal { id, claims: None }` where they pass a bare
 `PrincipalId` today. The CLI's own flow (`plan`, `apply`, `approve`, `reject`, `runs`, `run`, and
@@ -3292,7 +3415,7 @@ values and their shape, not their spelling.
 | `WILLIKINS_PUBLIC_URL` | none | `serve --http` | The canonical `https://` origin the service is reached at: lowercase scheme and host, no default port, no trailing `/`, no path, no query, no fragment. Anything else is refused with `HttpConfigError::NonCanonicalUrl`, checked on the raw string (decision 12). The **issuer identifier** is this value exactly; the audience is `<it>/mcp`; the RP ID is its host. Read by `oauth::config`, `oauth::metadata`, `issuer::mint`, the client-redirect matcher and the ceremonies. |
 | `WILLIKINS_SIGNING_KEY_PEM` | none | `serve --http` | The current ES256 signing key, PKCS#8 PEM, a secret whose `Display` and `Debug` print `[REDACTED <Type>]` and which has no `Serialize`. Doppler only (settled decision 2), generated by `willikins signing-key generate` (decision 22). Read by `issuer::key`. |
 | `WILLIKINS_SIGNING_KEY_RETIRING_PEM` | empty | optional | The previous signing key during a rotation overlap. Published in the JWKS, never used to sign. Two variables exist because one cannot express an overlap (decision 22). Read by `issuer::key`. |
-| `WILLIKINS_CREDENTIAL_STORE_PATH` | none | `serve --http` | The durable credential store, a directory on the volume at `/data/credentials/`, beside the journal and never inside `workflows/` (decision 25): passkeys, recovery codes and refresh families (decision 26). Read by the ceremonies, `issuer::refresh` and the enrollment CLI. |
+| `WILLIKINS_CREDENTIAL_STORE_PATH` | none | `serve --http` | The durable credential store, a directory on the volume at `/data/credentials/`, beside the journal and never inside `workflows/` (decision 25): passkeys, recovery codes and refresh families (decision 26). Also the bootstrap spent list (decision 27). Read and written by the server only: the ceremonies, the bootstrap page and `issuer::refresh`. |
 | `WILLIKINS_CLIENTS_PATH` | none | `serve --http` | The pre-registered client table: client id, display name, registered redirect URIs, in decision 23's schema. On the volume at `/data/clients.yaml`, written by the operator by hand, never inside `workflows/`. Read once at startup by `issuer::clients`; a symlink or a malformed table is `StartError::ClientTable`, and a change needs a restart. |
 | `WILLIKINS_AGENT_SUBJECTS` | none | `serve --http` | Comma-separated `sub` values allowed to hold any MCP scope. Empty or unset refuses startup (decision 3). Read by `oauth::middleware::require_token`. |
 | `WILLIKINS_APPROVER_SUBJECTS` | none | `serve --http` | Comma-separated `sub` values allowed to approve. Empty or unset refuses startup. Read by the approvals decision handler. |
@@ -3304,6 +3427,7 @@ values and their shape, not their spelling.
 | `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS` | `60` | optional | The authorization code's own lifetime, checked independently of any store TTL. A value above **600** refuses startup, which is draft-16's RECOMMENDED maximum; the default itself is this plan's choice and no specification sets it. Read by `issuer::codes`. |
 | `WILLIKINS_SESSION_TTL_SECONDS` | `3600` | optional | The session's **absolute** lifetime, capped below `WILLIKINS_APPROVAL_WINDOW_SECONDS`; startup refuses a larger value. Read by the session store. |
 | `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS` | `300` | optional | The session's **idle** lifetime, bumped on writes and **not** on reads (decision 4). The default sits inside OWASP's fetched 2-to-5-minute range for high-value applications; the exact number is unpinned (verify item 11). Read by the session store. |
+| `WILLIKINS_BOOTSTRAP_SECRET` | unset | optional | A single-use secret of at least 43 base64url characters, generated by `willikins bootstrap-secret generate`; while set and not on the store's spent list it arms exactly one passkey enrolment at `/bootstrap` (decision 27). Kept only as a SHA-256 digest; a short value refuses startup with `HttpConfigError::WeakBootstrapSecret`; a spent value is logged by name, never by value, at every start. Doppler or a Railway variable, with no `preserve()` row. Read by `ServerConfig::from_vars` and the bootstrap page. |
 | `WILLIKINS_LOG` | the current INFO behaviour | optional | A `tracing_subscriber` filter directive (task 14). Read once, when the subscriber is built. |
 | `WILLIKINS_EXTRA_ALLOWED_ORIGINS` | empty | optional | Comma-separated exact `https://` origins appended to rmcp's `allowed_origins` after the derived public origin, for a vendor backend that sends an `Origin` on `initialize` (decision 18, verify item 26). Each is logged by name at startup; a non-`https://` or non-origin value refuses startup. Read by `http::router`'s rmcp configuration. |
 | `WILLIKINS_OAUTH_PREVIOUS_AUDIENCES` | empty | optional | Comma-separated resource identifiers this server also accepts in `aud` during a move to a new host (decision 12). Never published, never named in a challenge; a non-empty value logs a named startup warning. Read by `oauth::validate`. |
@@ -3464,13 +3588,13 @@ at the test it was written about. The authorization-server half is tests 20 to 2
 8. **Principal and journal.** The same `(iss, sub)` always derives the same
    `oauth-<12 hex>` principal and two different subjects never collide; the principal parses
    under `PrincipalId`'s grammar for a `sub` containing `|`, `:` and non-ASCII characters, and for
-   the in-house UUID subject, which would have fitted the grammar directly and is derived anyway.
+   an in-house account name chosen at the bootstrap page (decision 27), which is derived anyway.
    Every event carrying a principal also carries `subject`, `issuer` and `client_id` when present,
    each bounded and escaped; a token with no `client_id` claim journals without it and does not
    fail. `TeardownPlanned` and `TeardownStarted` carry the claim fields like every other
    principal-carrying event. `pre-2c-every-event.jsonl` holds every `Event` variant, the four
    teardown variants included, and it and both pass-2 fixtures replay through `Journal` and through
-   `replay` unchanged. The `WrongRole` page and the enrollment CLI print `sub` whole, because
+   `replay` unchanged. The `WrongRole` page and the bootstrap page show `sub` whole, because
    `OAuthSubject` is not an identifier type, while every plan or teardown rendering on the page is
    still `mask_json`-masked.
 9. **Transport separation, asserted as identity of response.** `GET /approvals` with a valid
@@ -3529,7 +3653,9 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     larger than it → the same refusal. `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS` above 600 →
     `HttpConfigError::CodeTtlAboveCeiling`. A refresh idle timeout at or below the access-token
     lifetime, one above the family lifetime, and a family lifetime above 7776000 →
-    `HttpConfigError::RefreshLifetimes` naming the rule (decision 26). A client-table
+    `HttpConfigError::RefreshLifetimes` naming the rule (decision 26). A short
+    `WILLIKINS_BOOTSTRAP_SECRET` → `HttpConfigError::WeakBootstrapSecret` (decision 27; test 34
+    has its other cases). A client-table
     `refresh_tokens` that is not a boolean → `StartError::ClientTable`. A `WILLIKINS_PUBLIC_URL` carrying a path, a query or a fragment →
     `HttpConfigError::NonCanonicalUrl`, and so is one with an uppercase scheme or host
     (`HTTPS://h`, `https://H`), an explicit default port (`https://h:443`), or a trailing `/`
@@ -3561,13 +3687,13 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     is exact, and a request carrying neither `Origin` nor `Referer` on a non-safe method is
     **403**.
 15. **Log level and the rmcp sweep.** With `WILLIKINS_LOG` raised to DEBUG and to TRACE, a full
-    cycle (enrollment, login, `/authorize`, `/token`, plan, approve, apply, a provider error, an
+    cycle (a bootstrap enrolment, login, `/authorize`, `/token`, plan, approve, apply, a provider error, an
     auth failure) emits no secret byte, no document text, no header value and no JSON-RPC request
     or response body on stderr. The sweep additionally covers **the signing key, the authorization
     code store, the ceremony endpoints and the recovery codes**: no private-key byte, no
     authorization code, no `code_verifier` and no recovery code reaches stderr at any level the
     binary can be configured to emit. **No query string, no `state`, no parked-request resume id
-    and no enrollment token** reaches it either: a case sends an `/authorize` carrying a marker
+    and no bootstrap secret, digest or freshly shown recovery code** reaches it either (the enrollment token it used to name went with decision 27): a case sends an `/authorize` carrying a marker
     `state` at TRACE and asserts the marker is absent from stderr (2026-10-20 review). **No refresh
     token and no refresh-token hash** either (decision 26): a case rotates a family and revokes it
     at TRACE and asserts neither value appears. The sweep records what rmcp itself emits at each level;
@@ -3771,23 +3897,19 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     started for is refused — CVE-2026-69199's shape, and the reason the binding is stored with the
     ceremony rather than taken from a request field. `backup_eligible` and `backup_state` are
     **recorded** and never used to refuse.
-25. **Recovery codes, the enrollment CLI and the break-glass.** A recovery code is at least 128
-    bits from a CSPRNG, is stored only as an Argon2id hash, logs in exactly once, and is
-    **replaced** by a freshly issued one after use; replaying it is refused with
-    `AuthFailedReason::RecoveryCodeReplayed`. Concurrent recovery attempts are bounded by a
-    semaphore, so an unauthenticated endpoint cannot turn 19 MiB per hash into a memory-exhaustion
-    path, and per-account throttling refuses beyond its bound. Enrollment is **not complete until a
-    second credential exists**, or the operator is nagged until one does. The CLI subcommand's
-    first run for a new account creates it and prints the subject to paste into both allowlists,
-    minting no URL (go-live step 4a). A later run mints a one-time enrollment URL to stdout and
-    journals the act as loudly as an approval; the URL is single-use. **The enrollment token
-    (2026-10-20 review):** it is at least 128 bits, stored only as a hash, and carried in the URL
-    fragment, so no request line the server sees contains it. It is refused after 15 minutes even
-    if the store still holds it, refused on replay, refused for a different account, and
-    registers exactly one credential. The journal line carries the account, the principal and the
-    time and contains no byte of the token. **A recovery-code session is restricted:** after a
-    recovery-code login, the approve POST, the reject POST and the consent POST are each **403**,
-    and registering a passkey succeeds and ends the session. Recovery-code use is journaled.
+25. **Recovery codes, the second credential and the restricted session.** (Until 2026-10-20 this
+    test also covered the enrollment CLI and its token; test 34 replaces those cases, because
+    decision 27 replaced the CLI.) A recovery code is at least 128 bits from a CSPRNG, is stored
+    only as an Argon2id hash, logs in exactly once, and is **replaced** by a freshly issued one
+    after use; replaying it is refused with `AuthFailedReason::RecoveryCodeReplayed`. Concurrent
+    recovery attempts are bounded by a semaphore, so an unauthenticated endpoint cannot turn 19
+    MiB per hash into a memory-exhaustion path, and per-account throttling refuses beyond its
+    bound. Enrollment is **not complete until a second credential exists**, or the operator is
+    nagged until one does; a passkey session's "add a passkey" enrols it, under the nonce, and
+    journals `CredentialEnrolled` with `Session`. **A recovery-code session is restricted:** after
+    a recovery-code login, the approve POST, the reject POST, the consent POST and the
+    connection-revoke POST are each **403**, and registering a passkey succeeds, journals
+    `CredentialEnrolled` with `Recovery`, and ends the session. Recovery-code use is journaled.
 26. **The session core.** Against a router the test builds, before `/approvals` depends on any of
     it: a login **rotates the session id unconditionally** and the previous id is destroyed, not
     merely superseded — a request carrying it afterwards has no session. The idle timer is bumped
@@ -3905,6 +4027,33 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       same-site`, or from a recovery session → **403**. A session whose `sub` is not an approver
       does not see the section.
 
+34. **The bootstrap secret** (decision 27, task 28).
+    - **Startup.** A value shorter than 43 characters or outside base64url →
+      `HttpConfigError::WeakBootstrapSecret`, and the error text contains no byte of it. Unset →
+      every bootstrap route is 404 and `ServerStarted.bootstrap` is `unset`.
+    - **Armed.** `GET /bootstrap` serves the form. A wrong secret → **403**
+      `BootstrapSecretMismatch`. A right secret with a name in neither allowlist → **403** naming
+      the rule. A right pair starts a ceremony and sets `__Host-willikins-bootstrap`; a second
+      start while it is in flight → **409**; a finish from a browser without the cookie → **400**.
+      A `SoftPasskey` finish enrols exactly one passkey on that account, creating it when absent,
+      shows recovery codes once, journals `CredentialEnrolled` with `Bootstrap`, and sets no
+      session cookie. The page offers no approve, consent or token route, and `/approvals` still
+      302s to login afterwards.
+    - **Spent.** After that finish, every bootstrap route is 404 with the same secret. A restart
+      with the variable still set **starts**, reports `ServerStarted.bootstrap` as `spent`, logs a
+      WARN line naming `WILLIKINS_BOOTSTRAP_SECRET` that contains no byte of the value, and the
+      page stays 404. A fresh secret re-arms it, and a break-glass enrolment into the existing
+      account keeps its subject and replaces its recovery codes.
+    - **Durable order.** A fault injected after the spent digest is synced and before the
+      credential is committed leaves the secret spent and no passkey enrolled, never the reverse.
+      Two concurrent finishes on one secret enrol one passkey.
+    - **Floods and leaks.** Wrong secrets beyond the bucket answer **429** and journal coalesced
+      lines, while a right pair after the flood still enrols. The secret, its digest and the
+      recovery codes appear in no request line, log line, journal line or error body.
+    - **The CLI.** `willikins bootstrap-secret generate <file>` writes 43 base64url characters to a
+      new `0600` file, refuses an existing file, writes nothing to stdout or stderr, and its output
+      arms a server that is then started with it.
+
 ## Gates
 
 ```
@@ -3980,19 +4129,20 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 9 | **Passkey enrollment and authentication, and the gate swap.** `webauthn-rs` wiring, the durable credential store at `/data/credentials/`, ceremony-to-account binding, UV Required, counter regression and `update_credential`, `exclude_credentials` and CredentialID uniqueness, the uniform username step, the inline script under a CSP nonce, logout, the `WrongRole` page (showing `sub` whole), and the **mint → `oauth::validate` → session** hop. **Removes `basic_auth`, `TokenHash`, `matches_any` and the constant-time compare, and retires `WILLIKINS_APPROVER_TOKEN_HASH` in this series**, so no commit on `main` has an unauthenticated `/approvals` and none has two gates on it. Drops `HttpConfig::build`'s `approver_hash` parameter at all 13 call sites. Flips the three `adversarial_10b.rs` pins named below and migrates every approvals test from Basic to a session through a new `tests/common` login helper (counted below). **Every `/approvals`-level assertion is this task's.** Pinned by: tests 9, 10, 11, 24, and test 12's approver-hash retirement, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_login:: passkey:: adversarial_10b:: http_server:: composition_s3::` | 8 | **sonnet test-first, opus attacks**: CVE-2026-69199's class lives here |
 | 23 | **The approvals page shows what was planned** (decision 25): the root's short sha beside the `used` closure, and "document says" only while the file's sha equals `record.document_sha256`, otherwise the `DocumentChanged` notice. Pinned by: test 30, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_document_identity::` | 9 | sonnet test-first, opus attacks |
 | 24 | **Teardowns on the approvals page** (decision 4): `pending_teardowns` in `willikins-journal`, the teardown section through `mask_json`, session-bound nonces for teardown `plan_id`s, the same role rules. Pinned by: test 31, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` and `cargo test -p willikins-server --test it -j 2 -- approvals_teardowns:: rollback_r8::` | 9, 6 | sonnet test-first, opus attacks |
-| 10 | **Recovery codes, the enrollment CLI and the break-glass.** Codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule; the restricted recovery session (enrol a passkey, nothing else), journaled; the CLI subcommand that creates an account and prints its subject, and on a later run mints a one-time enrollment URL to stdout and journals it as loudly as an approval, with decision 24's token rules (128 bits, hashed, 15 minutes, one account, one credential, carried in the fragment, never journaled). **Where this CLI runs against a distroless deployment is open question 2**, and the task does not guess. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes::` and `cargo test -p willikins-cli --test it -j 2 -- enroll::` | 9 | sonnet, verified by opus |
+| 10 | **Recovery codes and the second credential.** **Its CLI half is replaced by task 28** (settled decision 6): the enrollment and break-glass subcommand, its one-time enrollment URL and its token rules are not built. What stays: codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule, with the passkey session's "add a passkey" and "revoke a credential" account actions (decision 4); the restricted recovery session (enrol a passkey and revoke credentials, nothing else), journaled; `CredentialEnrolled` for `Session` and `Recovery`. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes:: approvals_login::` | 9 | sonnet, verified by opus |
+| 28 | **The one-time bootstrap secret** (decision 27, settled decision 6), replacing task 10's enrollment CLI on every host. `WILLIKINS_BOOTSTRAP_SECRET`: the 43-character base64url minimum and `HttpConfigError::WeakBootstrapSecret`, kept only as a SHA-256 digest and compared with `subtle`. The spent list in the credential store, synced before the passkey is committed; `ServerStarted.bootstrap`; the WARN line for a spent value left set, naming the variable only. `/bootstrap`: 404 unless armed, the secret-and-name form, the allowlist check, one ceremony at a time under `__Host-willikins-bootstrap`, the atomic claim at finish, recovery codes shown once, no session, approval, consent or token. The failure bucket and the per-reason journal bucket; `BootstrapSecretMismatch`; `CredentialEnrolled` with `Bootstrap`. `willikins bootstrap-secret generate <file>` in `willikins-cli`. The README's first-enrolment and break-glass sections, and its variable row. Pinned by: test 34, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- bootstrap::` and `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- bootstrap_secret::` | 10 | **sonnet test-first, opus attacks**: it is the one static secret 2c keeps |
 | 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. `ServerStarted.clients_sha256`, and `--clients <file>` on `willikins documents check`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. The table's optional `refresh_tokens` key is parsed here and has no effect until task 26. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
 | 26 | **Refresh tokens** (decision 26, settled decision 5). The `refresh_token` grant at `/token`; `issuer::refresh`'s family store in the credential store directory (256-bit opaque tokens kept only as SHA-256 hashes, written durably before any response); the four bindings in the store and their order of checks; the atomic rotation claim and strict reuse detection revoking the family; the idle and absolute lifetimes, their two variables, `HttpConfigError::RefreshLifetimes`, and the access token's `exp` capped at the family's; `refresh_token` in the response exactly when the client's `refresh_tokens` is true; `grant_types_supported` gains `refresh_token`; the credential-revocation cascade; the six refresh `AuthFailedReason` variants and the three events, with no token value or hash in any line; README rows. One negative fixture per binding, as task 11's. Pinned by: test 32, test 20's grant list, test 23's `refresh_token` clause, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- refresh_tokens:: issuer_token:: oauth_metadata::` and `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- event_shapes::` | 11 | **opus writes or co-writes**: the refresh path is where both rauthy regressions lived |
 | 27 | **Revocation** (decision 26). `POST /revoke` per RFC 7009 (refresh tokens revoke their family; unknown is 200; another client's is `invalid_grant`; a compact JWS is `unsupported_token_type`; public-client identification and the empty-secret rule; `no-store`; the per-`client_id` miss bucket); `revocation_endpoint` and `revocation_endpoint_auth_methods_supported: ["none"]` in the RFC 8414 document; the approvals page's Connections section, approver-only, passkey sessions only, nonce-bound revoke and revoke-all. Pinned by: test 33, test 20's revocation members, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- token_revocation:: approvals_login:: oauth_metadata::` | 26, 9 | sonnet test-first, opus attacks |
 | 12 | Delete `hash-token` from both binaries, its README section and the `hash_token` test module with its `mod` line; update the variable reference. On the `willikins` binary that means `Command::HashToken` and its doc in `crates/willikins-cli/src/main.rs` (`:124-129`, dispatched at `:164`), and `crates/willikins-cli/tests/it/serve_and_live.rs`'s `hash_token_dispatches_through_the_willikins_binary` (`:573`) flips into test 12's "exits non-zero with a usage error" case. Pinned by: test 12's last case, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- readme_variables:: binary_startup::` and `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- serve_and_live::` | 11 | sonnet |
 | 13 | Bracket-aware port stripping in the origin check, the one real defect (`approvals.rs:276-284`: `rsplit_once(':')` cuts `[::1]` to `[:`). Pinned by: test 14, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- origin_ipv6::` | 11 | sonnet |
-| 14 | Two steps, in order. (1) `WILLIKINS_LOG` as a `tracing_subscriber` `EnvFilter` directive, which flips `crates/willikins-server/tests/it/adversarial_13.rs`'s `the_binary_ignores_rust_log_and_emits_nothing_below_info` (line 1249) into its successor. (2) The sweep of everything the process emits at DEBUG and TRACE, rmcp's own output included, now also covering `/authorize`, `/token`, the ceremony endpoints, the code store, the parked-request store, `state`, the enrollment token, the signing key, and refresh tokens and their hashes at `/token`, `/revoke` and in the family store (decision 26), after replacing `TraceLayer::new_for_http()`'s default span with a custom `MakeSpan` that records the path only, never the query (decision 8), and correcting `http/mod.rs`'s comment about what the default logs. Amend milestone 2's trust boundary 5 in that plan's own addendum style. Pinned by: test 15, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: log_sweep::` | 12, 26, 27 | sonnet, swept by opus |
+| 14 | Two steps, in order. (1) `WILLIKINS_LOG` as a `tracing_subscriber` `EnvFilter` directive, which flips `crates/willikins-server/tests/it/adversarial_13.rs`'s `the_binary_ignores_rust_log_and_emits_nothing_below_info` (line 1249) into its successor. (2) The sweep of everything the process emits at DEBUG and TRACE, rmcp's own output included, now also covering `/authorize`, `/token`, the ceremony endpoints, the code store, the parked-request store, `state`, the bootstrap secret and its digest, the signing key, and refresh tokens and their hashes at `/token`, `/revoke` and in the family store (decision 26), after replacing `TraceLayer::new_for_http()`'s default span with a custom `MakeSpan` that records the path only, never the query (decision 8), and correcting `http/mod.rs`'s comment about what the default logs. Amend milestone 2's trust boundary 5 in that plan's own addendum style. Pinned by: test 15, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: log_sweep::` | 12, 26, 27, 28 | sonnet, swept by opus |
 | 15 | Move the concurrency permit into the blocking closure. Pinned by: test 16, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- blocking_pool_13::` | 12 | sonnet |
-| 16 | **Adversarial pass 3**, against the foreign-issuer fixture and against willikins' own endpoints: decision 7's whole table, recorded under `docs/research/`, plus the 2026-10-20 surfaces. Those are `state` tampering and omission; a parked request resumed from another browser; the consent CSP widened beyond the one origin; a forward-plan nonce against a teardown and the reverse; a symlinked or swapped workflows directory; a document changed between plan and approval; and the synthetic listed-origin row of `WILLIKINS_EXTRA_ALLOWED_ORIGINS`. The 2026-10-20 review's rows join them: the consent POST forgeries, the restricted recovery session, the enrollment token, the username and `/token` floods, and the scope-widening redemption. The 2026-10-20 answers add decision 26's rows: refresh reuse, concurrent rotation, wrong-client and widened refreshes, both lifetimes, a restart between refreshes, `/revoke`'s four answers and its flood, forged connection revokes, and the token-value sweep; the rotation lines join the fold measurement. Freeze `post-2c-new-shapes.jsonl`. Test 17 | 12, 13, 14, 15, 21, 22, 23, 24, 26, 27 | **opus** |
+| 16 | **Adversarial pass 3**, against the foreign-issuer fixture and against willikins' own endpoints: decision 7's whole table, recorded under `docs/research/`, plus the 2026-10-20 surfaces. Those are `state` tampering and omission; a parked request resumed from another browser; the consent CSP widened beyond the one origin; a forward-plan nonce against a teardown and the reverse; a symlinked or swapped workflows directory; a document changed between plan and approval; and the synthetic listed-origin row of `WILLIKINS_EXTRA_ALLOWED_ORIGINS`. The 2026-10-20 review's rows join them: the consent POST forgeries, the restricted recovery session, the username and `/token` floods, and the scope-widening redemption. The 2026-10-20 answers add decision 26's rows: refresh reuse, concurrent rotation, wrong-client and widened refreshes, both lifetimes, a restart between refreshes, `/revoke`'s four answers and its flood, forged connection revokes, and the token-value sweep; the rotation lines join the fold measurement. Decision 27's bootstrap rows replace the enrollment-token row. Freeze `post-2c-new-shapes.jsonl`. Test 17 | 12, 13, 14, 15, 21, 22, 23, 24, 26, 27, 28 | **opus** |
 | 17 | Bound the header read: replace `axum::serve` with a `hyper::server::conn::http1` accept loop (timer first, decision 8) carrying graceful shutdown and connection accounting; flip the pass-2 slowloris test. Runs **after** pass 3, with a short pass-3 addendum recording that the transport changed under it. Pinned by: test 13, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: http_server:: http_smoke::` | 16 | sonnet, verified by opus |
 | 18 | **The conformance run.** The `live-tests` feature and its own `[[test]]` target (outside `tests/it/`, as 3k allows), and the harness that drives a stock local MCP client through discovery, `/authorize`, `/token` and `list_tools` against a locally bound server, unregistered and registered, and, with the local entry's `refresh_tokens: true`, one refresh after the access token is made to expire. Test 18 | 17 | sonnet writes the harness, run with the operator |
 | 25 | **The invariant's wording** (decision 25): the "trusted ref" invariant re-founded, edited together in `CLAUDE.md` and `AGENTS.md`; a design-doc addendum beside `docs/plans/2026-09-11-willikins-design.md`'s "a checkout of a trusted ref"; and the written rule that only the operator writes the volume, in both files and in memory. The wording is the one decision 25 proposes, **approved by the operator on 2026-10-20** (settled decision 7), and it lands byte-identical in both files. No code | 20 | coordinator |
-| 19 | Go-live (decision 9): the echo measurement on a disposable environment, never the live service; allowed hosts; step 4a's accounts and both allowlists; the private documents and the client table on the volume; the signing key generated and injected through Doppler, then the `m2c` merge and push (the push fence), with `.railway/railway.ts` and `railway config plan` and the retired variables removed in the same change; the domain attached once that deploy is healthy; step 4b's enrollments; Doppler's other secrets; the backups; `WILLIKINS_FAKE_CATALOG` removed with its `preserve()` row; both apps connected and used from iOS; the stock-client run against the public domain; one real cycle. Mark this plan **Completed**. Test 19 | 18, 25, operator | coordinator with the operator |
+| 19 | Go-live (decision 9): the echo measurement on a disposable environment, never the live service; allowed hosts; step 4a's chosen account names in both allowlists and a generated bootstrap secret staged; the private documents and the client table on the volume; the signing key generated and injected through Doppler, then the `m2c` merge and push (the push fence), with `.railway/railway.ts` and `railway config plan` and the retired variables removed in the same change; the domain attached once that deploy is healthy; step 4b's bootstrap enrolments, second passkeys and the bootstrap variable deleted; Doppler's other secrets; the backups; `WILLIKINS_FAKE_CATALOG` removed with its `preserve()` row; both apps connected (ChatGPT set up on the web or desktop) and used from iOS; the stock-client run against the public domain; one real cycle. Mark this plan **Completed**. Test 19 | 18, 25, operator | coordinator with the operator |
 
 **Why task 1 moved to the front.** In the delegating draft the Dockerfile question was a dependency
 footnote. It is now the item most likely to invalidate the milestone's shape. `webauthn-rs-core`
@@ -4081,7 +4231,8 @@ header at `GET /approvals`; that becomes the 302 of decision 4, with no challeng
 
 **The new test modules named above are this plan's choice of spelling**: `pre_2c_replay`,
 `oauth_validation`, `oauth_metadata`, `oauth_principal`, `oauth_scopes`, `session_core`,
-`approvals_login`, `passkey`, `recovery_codes`, `enroll`, `issuer_key`, `issuer_authorize`,
+`approvals_login`, `passkey`, `recovery_codes`, `bootstrap`, `bootstrap_secret`, `refresh_tokens`,
+`token_revocation`, `issuer_key`, `issuer_authorize`,
 `issuer_token`, `origin_ipv6`, `log_sweep`, `trusted_directory_volume`, `documents_check`,
 `approvals_document_identity` and `approvals_teardowns`. An implementer may rename one, and the
 plan's cell moves with it. A filter that matches nothing passes silently, so each task's first
@@ -4183,8 +4334,9 @@ says so in the decision rather than waiting on a fetch.
 13. **Tasks 9, 11 and 19: whether any browser in the operator's environment refuses
     `navigator.credentials` on the deployment's domain**, and since 2026-10-20 **which browser
     context the Claude and ChatGPT iOS apps open `/authorize` in, and whether the passkey ceremony,
-    the parked-request resume and the recovery-code path all work there** (decision 20). Untested. The only mitigation the plan's shape offers is the
-    recovery-code path, which is why decision 24 refuses to defer it to a later milestone.
+    the parked-request resume and the recovery-code path all work there** (decision 20). Untested.
+    Since recovery sessions may only enrol a passkey (settled decision 11), the recovery-code path
+    no longer mitigates a browser that refuses passkeys; it still covers a lost device.
 14. **Tasks 5 and 19: whether the authorization-server routes must sit outside `allowed_hosts`.**
     The same question the resource-server note raised for the RFC 9728 route, now with
     `/authorize`, `/token`, `/jwks.json` and the second well-known path beside it.
@@ -4267,9 +4419,9 @@ settled by test 19 with the operator.
     `_meta["mcp/www_authenticate"]`. The 401 naming the three MCP scopes (decision 1) should make a
     step-up rare. If test 19 shows ChatGPT needs the tool-level path, the delta is additive: a
     `securitySchemes` field in each tool's metadata and the `_meta` challenge on a scope refusal.
-29. **Tasks 10 and 19: whether `railway ssh`, `scp` or `sftp` reach a shell-less distroless
-    container.** It decides decision 25's fallback transport, and where decision 24's host-side
-    enrollment CLI and break-glass can run at all (open question 2). The SSH username is the
+29. **Task 19: whether `railway ssh`, `scp` or `sftp` reach a shell-less distroless
+    container.** It decides decision 25's fallback transport. It no longer decides where
+    enrolment and break-glass run: decision 27 moved both to a page. The SSH username is the
     service's domain, or its service instance id while it has none.
 30. **Task 19: what happens when a new deployment of a volume-backed service fails to start.**
     Railway prevents two deployments from mounting the volume, so redeploys cost downtime. Whether
@@ -4415,6 +4567,15 @@ Then, in descending order of how likely each is to surprise someone:
   shell-less service. The mitigation is procedural, and decision 25 states it: run `willikins
   documents check` on both sides of every change. A slip costs an outage, not an exposure, because
   the server fails closed.
+- **A static secret is back, bounded** (2026-10-20, decision 27). The bootstrap secret sits in
+  the deployment's configuration, readable by anyone with Railway or Doppler access, which is
+  the trust level that can already change the deployment. Its bounds are single use, one named
+  and allowlisted account, one passkey, no session, and a spent list that survives restarts. Two
+  ways around the bounds are recorded rather than designed around. A spent value left set is
+  harmless but confusing, so the startup log names it. A volume restore rewinds the spent list,
+  so go-live step 9 checks the variable is unset after any restore. While a secret is armed, its
+  holder can add a passkey to any allowlisted account, so the operator arms it only for the
+  moment an enrolment is about to happen and uses it at once.
 - **An agent with the operator's Railway access could write the volume** (2026-10-20). Railway
   guards only `files delete` against agents. Every other write path (`upload`, `rename`,
   `browse`, `railway ssh`, `scp`, `sftp`) is closed by a written rule (task 25), not by the
