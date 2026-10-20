@@ -1245,7 +1245,8 @@ new, and pass 3 must attack them at least as hard.
 | A refresh with a wider `scope`, and one with a different `resource` | `invalid_scope`; `invalid_target` `ResourceWidened`; the family's stored set and resource are what any token carries |
 | A refresh after the idle timeout, after the absolute lifetime, and an access token minted on the family's last day | `invalid_grant` `RefreshTokenExpired` for the first two; the access token's `exp` is never past the family's absolute expiry |
 | A server restart between two refreshes | the family survives and rotates: it is on the volume |
-| `/revoke` with another client's refresh token, with an access token, and with an unknown value; then a flood | 400 `invalid_grant` and nothing revoked; 400 `unsupported_token_type`; 200; the flood counts per `client_id` and a valid revocation still lands |
+| `/revoke` with another client's refresh token, with an access token, and with an unknown value; then a flood | 400 `invalid_grant` with the family revoked (`RefreshClientMismatch`), as at `/token`; 400 `unsupported_token_type`; 200; the flood counts per `client_id` and a valid revocation still lands |
+| **Added by the 2026-10-20 review of the answers.** A consent phished through the shared hosted client id while the operator's own family is live | the Connections section flags the (client id, subject) pair as holding two live families, and shows each family's consent request age |
 | A forged connection-revoke POST, one from a recovery session, and one with another session's nonce | **403** in each case; no family is revoked |
 | A refresh token or its hash searched for in every journal line, log line and error body | absent everywhere, at every log level |
 
@@ -2798,9 +2799,16 @@ refresh path (`…-m2c-own-authorization-server.md` §6.6 and §6.7).
     - An unknown token answers 200. RFC 7009 §2.2: "The authorization server responds with HTTP
       status code 200 if the token has been revoked successfully or if the client submitted an
       invalid token."
-    - A refresh token of another client is refused, 400 `invalid_grant`, and nothing is revoked.
-      RFC 7009 §2.1: the server "verifies whether the token was issued to the client making the
-      revocation request. If this validation fails, the request is refused".
+    - A refresh token of another client is refused, 400 `invalid_grant`. RFC 7009 §2.1: the
+      server "verifies whether the token was issued to the client making the revocation request.
+      If this validation fails, the request is refused". **Its family is revoked too**, journaled
+      `RefreshClientMismatch`, exactly as `/token` treats the same presentation (binding step 1
+      above). (Changed by the 2026-10-20 review of the answers. The earlier text revoked nothing
+      here, so one compromise signal counted as compromise at `/token` and was ignored at
+      `/revoke`. It also left `/revoke`'s distinguishable 400 as a liveness oracle that `/token`
+      had closed.) Client ids are public, so the binding is a signal and not a barrier. The 400
+      still tells the caller that the token was live, but by the time it reads that, the token is
+      dead.
     - **An access token is not revocable.** A `token` in compact-JWS shape answers 400
       `unsupported_token_type`, which RFC 7009 §2.2.1 defines as "The authorization server does
       not support the revocation of the presented token type." That is the honest answer. A 200
@@ -2813,7 +2821,18 @@ refresh path (`…-m2c-own-authorization-server.md` §6.6 and §6.7).
   - **The operator's revoke, on the approvals page.** A passkey session whose `sub` is in
     `WILLIKINS_APPROVER_SUBJECTS` sees a **Connections** section. It lists each live family's
     client id and display name, subject, creation, last use, idle and absolute expiry, and a short
-    family id, and never a token or a hash. Each family has a revoke button, and one more revokes
+    family id, and never a token or a hash. **A phished family is made visible** (2026-10-20
+    review of the answers). Through a shared public `client_id`, an attacker's family and the
+    operator's own would otherwise be identical "Claude / <operator>" rows. So every
+    (client id, subject) pair with more than one live family is flagged. Each family also shows
+    the age its consent request had when the human approved it, recorded at issuance, beside its
+    creation time. A family the operator does not remember connecting, whose consent was approved
+    for a request hours old, is the one to revoke. *The rejected alternative* caps live families
+    per (client id, subject) at one, revoking the older with a `Superseded` reason. That would turn
+    a phish into a visible disconnection of the operator's own app. But one human with two vendor
+    accounts behind the same hosted client id, a personal one and a work one, would then
+    disconnect one account on every consent in the other. The flag gives the same signal without
+    that. Each family has a revoke button, and one more revokes
     all of them. Each is a POST bound by the session-bound nonce, under decision 4's
     `Sec-Fetch-Site` and origin checks. A recovery session cannot reach it (settled decision 11).
     It is not a CLI command: the image is distroless and the store is on the volume, which is the
@@ -2826,7 +2845,8 @@ refresh path (`…-m2c-own-authorization-server.md` §6.6 and §6.7).
     approvals page does not, because the browser session and the app connections are different
     things.
 - **Journaled, with no token value in any line.** Three new additive events:
-  - `RefreshFamilyIssued`: family id, client id, subject, scopes and absolute expiry;
+  - `RefreshFamilyIssued`: family id, client id, subject, scopes, absolute expiry and the consent
+    request's age at approval;
   - `RefreshTokenRotated`: family id and generation;
   - `RefreshFamilyRevoked`: family id and a reason (`Reused`, `ClientRequest`, `Operator`,
     `CredentialRevoked`, `ClientMismatch`, `SubjectUnlisted` or `ClientWithdrawn`), plus the
@@ -4297,14 +4317,18 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       family is refused at `/token` afterwards. The journal says `RefreshFamilyRevoked` with reason
       `ClientRequest`.
     - An unknown token → **200**, and nothing changes.
-    - Another client's refresh token → **400** `invalid_grant`, and nothing is revoked.
+    - Another client's refresh token → **400** `invalid_grant`, and its family is revoked:
+      `RefreshClientMismatch`, then `RefreshFamilyRevoked` with reason `ClientMismatch`, and the
+      family's current token is refused at `/token` afterwards, as for the same presentation
+      there.
     - A compact-JWS `token`, such as a valid access token → **400** `unsupported_token_type`, and
       that access token still validates at `/mcp` until its `exp`.
     - A non-empty client secret → **401** `invalid_client`. `token_type_hint` changes nothing.
     - A flood of unknown tokens does not stop a valid revocation that follows it.
     - **The Connections section.** An approver's passkey session lists each live family's client,
-      subject, creation, last use, both expiries and short family id, and the page's HTML contains
-      no token and no hash. Revoking one family, and revoking all, each journal
+      subject, creation, last use, both expiries, short family id and consent request age, and
+      the page's HTML contains no token and no hash. Two live families for one (client id,
+      subject) are both flagged; a single family is not. Revoking one family, and revoking all, each journal
       `RefreshFamilyRevoked` with reason `Operator` and the revoking principal's claim fields. A
       revoke POST without its nonce, with another session's nonce, with `Sec-Fetch-Site:
       same-site`, or from a recovery session → **403**. A session whose `sub` is not an approver
@@ -4473,7 +4497,7 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 28 | **The one-time bootstrap secret** (decision 27, settled decision 6), replacing task 10's enrollment CLI on every host. `WILLIKINS_BOOTSTRAP_SECRET`: the generator's checksummed `wkbs1_` shape, checked by `ServerConfig::from_vars` and refused by `HttpConfig::build` as `HttpConfigError::WeakBootstrapSecret` (ignored by `serve --stdio`), kept only as a SHA-256 digest and compared with `subtle`. The spent list in the credential store, synced before the passkey is committed; `ServerStarted.bootstrap`; the WARN line for a spent value left set, naming the variable only. `/bootstrap`: 404 unless armed, the secret-and-name form, the allowlist check, one ceremony at a time under `__Host-willikins-bootstrap`, the atomic claim at finish in decision 27's durable order (spent list, then `BootstrapSecretSpent` with its fingerprint, then the passkey), startup reading both the spent list and the journal's fingerprints, recovery codes shown once, no session, approval, consent or token. The failure bucket and the per-reason journal bucket; the five bootstrap `AuthFailedReason` variants, `BootstrapSecretReplayed` included for a spent secret presented again; `BootstrapSecretSpent` and `CredentialEnrolled` with `Bootstrap`. `willikins bootstrap-secret generate <file>` in `willikins-cli`. The README's first-enrolment and break-glass sections, and its variable row. Pinned by: test 34, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- bootstrap::` and `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- bootstrap_secret::` | 10 | **sonnet test-first, opus attacks**: it is the one static secret 2c keeps |
 | 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. `ServerStarted.clients_sha256`, and `--clients <file>` on `willikins documents check`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. The table's optional `refresh_tokens` key is parsed here and has no effect until task 26. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
 | 26 | **Refresh tokens** (decision 26, settled decision 5). The `refresh_token` grant at `/token`; `issuer::refresh`'s family store in the credential store directory (256-bit opaque tokens kept only as SHA-256 hashes, written durably before any response); the four bindings in the store and their order of checks; the atomic rotation claim and strict reuse detection revoking the family; the idle and absolute lifetimes, their two variables, `HttpConfigError::RefreshLifetimes`, and the access token's `exp` capped at the family's; `refresh_token` in the response exactly when the client's `refresh_tokens` is true; `grant_types_supported` gains `refresh_token`; the credential-revocation cascade; the six refresh `AuthFailedReason` variants and the three events, with no token value or hash in any line; README rows. One negative fixture per binding, as task 11's. Pinned by: test 32, test 20's grant list, test 23's `refresh_token` clause, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- refresh_tokens:: issuer_token:: oauth_metadata::` and `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- event_shapes::` | 11 | **opus writes or co-writes**: the refresh path is where both rauthy regressions lived |
-| 27 | **Revocation** (decision 26). `POST /revoke` per RFC 7009 (refresh tokens revoke their family; unknown is 200; another client's is `invalid_grant`; a compact JWS is `unsupported_token_type`; public-client identification and the empty-secret rule; `no-store`; the per-`client_id` miss bucket); `revocation_endpoint` and `revocation_endpoint_auth_methods_supported: ["none"]` in the RFC 8414 document; the approvals page's Connections section, approver-only, passkey sessions only, nonce-bound revoke and revoke-all. Pinned by: test 33, test 20's revocation members, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- token_revocation:: approvals_login:: oauth_metadata::` | 26, 9 | sonnet test-first, opus attacks |
+| 27 | **Revocation** (decision 26). `POST /revoke` per RFC 7009 (refresh tokens revoke their family; unknown is 200; another client's is `invalid_grant` and revokes its family, as at `/token`; a compact JWS is `unsupported_token_type`; public-client identification and the empty-secret rule; `no-store`; the per-`client_id` miss bucket); `revocation_endpoint` and `revocation_endpoint_auth_methods_supported: ["none"]` in the RFC 8414 document; the approvals page's Connections section, approver-only, passkey sessions only, nonce-bound revoke and revoke-all, with the flag on a (client id, subject) pair holding more than one live family and each family's consent request age. Pinned by: test 33, test 20's revocation members, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- token_revocation:: approvals_login:: oauth_metadata::` | 26, 9 | sonnet test-first, opus attacks |
 | 12 | Delete `hash-token` from both binaries, its README section and the `hash_token` test module with its `mod` line; update the variable reference. On the `willikins` binary that means `Command::HashToken` and its doc in `crates/willikins-cli/src/main.rs` (`:124-129`, dispatched at `:164`), and `crates/willikins-cli/tests/it/serve_and_live.rs`'s `hash_token_dispatches_through_the_willikins_binary` (`:573`) flips into test 12's "exits non-zero with a usage error" case. Pinned by: test 12's last case, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- readme_variables:: binary_startup::` and `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- serve_and_live::` | 11 | sonnet |
 | 13 | Bracket-aware port stripping in the origin check, the one real defect (`approvals.rs:276-284`: `rsplit_once(':')` cuts `[::1]` to `[:`). Pinned by: test 14, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- origin_ipv6::` | 11 | sonnet |
 | 14 | Two steps, in order. (1) `WILLIKINS_LOG` as a `tracing_subscriber` `EnvFilter` directive, which flips `crates/willikins-server/tests/it/adversarial_13.rs`'s `the_binary_ignores_rust_log_and_emits_nothing_below_info` (line 1249) into its successor. (2) The sweep of everything the process emits at DEBUG and TRACE, rmcp's own output included, now also covering `/authorize`, `/token`, the ceremony endpoints, the code store, the parked-request store, `state`, the bootstrap secret and its digest, the signing key, and refresh tokens and their hashes at `/token`, `/revoke` and in the family store (decision 26), after replacing `TraceLayer::new_for_http()`'s default span with a custom `MakeSpan` that records the path only, never the query (decision 8), and correcting `http/mod.rs`'s comment about what the default logs. Amend milestone 2's trust boundary 5 in that plan's own addendum style. Pinned by: test 15, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: log_sweep::` | 12, 26, 27, 28 | sonnet, swept by opus |
@@ -4983,7 +5007,8 @@ Then, in descending order of how likely each is to surprise someone:
 - **Refresh tokens raise the stake of consent phishing.** Before them, a phished consent through
   a shared public client id yielded at most an hour; now it can yield a family of up to 30 days.
   The consent screen says the client will stay connected (decision 20), and the operator can see
-  and revoke every family on the Connections section. Verify item 37 still decides whether the
+  and revoke every family on the Connections section, which flags a second live family for the
+  same client and subject and shows the request age each consent was given at (decision 26). Verify item 37 still decides whether the
   code reaches an attacker at all, and settled decision 9's fallback is what closes it if it
   does.
 - **Sessions, ceremonies, authorization codes and the cookie signing key are process memory, and
