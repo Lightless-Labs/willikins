@@ -2155,25 +2155,35 @@ the seam makes the protocol swappable and it does not make the history portable.
 
 Caret requirements on the major; `Cargo.lock` pins the rest. Every version, licence and MSRV cell
 below is quoted in `docs/research/2026-09-16-m2c-own-authorization-server.md` §8 from a source
-fetched on 2026-09-16 — each licence and MSRV checked against
-`crates.io/api/v1/crates/<name>/<version>` at the exact version pinned here — and every one was
+fetched on 2026-09-16. Each licence and MSRV was checked against
+`crates.io/api/v1/crates/<name>/<version>` at the exact version pinned here, and every one was
 measured against the workspace's **declared** MSRV of 1.88 (`Cargo.toml:21`), not against the 1.97
 toolchain the Dockerfile builds with. **No cargo command was run during either research pass**, so
 every claim about what the image builds is dependency-graph inference from a fetched manifest and
 is task 1's to settle.
 
-**Taken.** The risk column is the research note's own, carried across wherever it names a trap.
+**Restated against the tree of 2026-10-20.** Since this table was written, the App Store Connect
+provider has brought several of these crates in. The rows below say which crates are already
+workspace dependencies and which are new, and the lock facts are read from the current
+`Cargo.lock`.
+
+**Already in the workspace, so 2c adds no requirement for them.**
+
+| Crate | Where it is today | What 2c uses it for | Risk |
+| --- | --- | --- | --- |
+| `jsonwebtoken` | `Cargo.toml:75`: `{ version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }`, locked at **11.1.0**, used by `willikins-providers-http` | Signs (`encode`), publishes the JWKS (`Jwk::from_encoding_key`), derives the `kid` (`thumbprint`) and validates: the whole issuing half for **zero new crates**. MSRV 1.88, the workspace floor, with zero headroom | "Two silent traps (§3.3): `kid` is `None` by default and `JwkSet::find` skips such keys; Ed25519 needs PKCS#8 **v1**." `rust_crypto` drags `rsa` in unconditionally, and **it already does in the shipped binary** |
+| `p256` | `Cargo.toml:74`: `"0.13"` (0.13.2 locked; `p384` 0.13.1 beside it), a dependency of `willikins-types` | ES256 key generation into PKCS#8 (`SecretKey::random`, `to_pkcs8_pem`), the same `EncodePrivateKey` path `appstore.rs` already uses | Binds `rand_core` **0.6**, which the workspace's `rand = "0.9"` does not satisfy (next row) |
+| `rand_core` | `crates/willikins-providers-github/Cargo.toml:47`: `{ version = "0.6", features = ["getrandom"] }`, used as `rand_core::OsRng` in `seal.rs` | The CSPRNG handed to `p256`'s key generation. The issuing crate declares the same requirement the GitHub provider does | None new: the lock already holds `rand_core` 0.6.4. **This replaces the earlier `rand = "0.8"` row**: a direct `rand` 0.8 was never needed, only its `rand_core` |
+
+**New in 2c.** The risk column is the research note's own, carried across wherever it names a trap.
 
 | Crate | Requirement | Licence / MSRV | What it does here | Risk |
 | --- | --- | --- | --- | --- |
-| `jsonwebtoken` | `{ version = "11", default-features = false, features = ["<backend>"] }` (11.0.0, 2026-07-24) | MIT; MSRV 1.88 = the workspace floor, zero headroom | Signs (`encode`), publishes the JWKS (`Jwk::from_encoding_key`), derives the `kid` (`thumbprint`) and validates — the whole issuing half for **zero new crates** | "Two silent traps (§3.3): `kid` is `None` by default and `JwkSet::find` skips such keys; Ed25519 needs PKCS#8 **v1**. `rust_crypto` drags `rsa` in unconditionally (§3.4)" |
 | `webauthn-rs` (+ `-core`, `-proto`) | `0.5.5` | MPL-2.0; MSRV 1.88 = the workspace floor | Registration and authentication ceremonies, `Passkey` persistence, UV Required, counter-regression detection. It is the only serious Rust relying party there is | "`webauthn-rs-core` depends **unconditionally** on `openssl` + `openssl-sys` (§4.2). No Related Origin Requests, so the RP ID can never change. Ceremony state must be server-side" |
 | `webauthn-authenticator-rs` | `0.5.5`, **dev-dependency only** | MPL-2.0; MSRV 1.88 | `SoftPasskey` drives the ceremony tests with no browser; `new(falsify_uv)` and its own counter are what make the UV-lie and counter-regression cases testable | Pulls tokio, hex and serde_bytes into dev-dependencies only |
 | `argon2` | `0.6.0` | MIT OR Apache-2.0; MSRV 1.85, edition 2024 | Hashes the stored recovery codes (decision 24). It is **not** a password-only dependency: it arrives on the passkey branch too | "`Argon2::default()` is already OWASP's config — pin it with a test rather than trusting the default to stay put. 19 MiB **per concurrent hash** makes an unauthenticated login endpoint a memory-exhaustion surface without a semaphore" |
 | `password-hash` | **`0.6.1`** — 0.6.0 is **yanked** | MIT OR Apache-2.0; MSRV 1.85 | PHC string encoding, so a later parameter increase is a per-hash migration rather than a flag day | Low |
 | `axum-extra` | `{ version = "0.12", default-features = false, features = ["cookie-signed"] }` (0.12.6) | MIT | The approvals session cookie and its jar | "The jar must be **returned** from the handler or `Set-Cookie` is silently dropped (§5.7) — assert the header in tests. A startup-generated `Key` makes sessions replica-local" |
-| `p256` / `p384` / `elliptic-curve` | `0.13.2` / `0.13.0` / `0.13.8`, **already pulled** by `jsonwebtoken`'s `rust_crypto` with defaults on, so no feature change | Apache-2.0 OR MIT; MSRV 1.65 | ES256 key generation into PKCS#8 (`SecretKey::random`, `to_pkcs8_der`/`to_pkcs8_pem`) | "Binds `rand_core` **0.6**, which neither of the tree's `rand` majors satisfies — declare `rand = \"0.8\"` directly (§3.6)" |
-| `rand` | `"0.8"`, a **direct** dependency beside the tree's 0.9.5 and 0.10.2 | MIT OR Apache-2.0 | The only `rand` major that satisfies `p256`'s `rand_core` 0.6 bound. It exists for key generation and for nothing else | A third `rand` major in the lock. Cargo compiles all three, which costs build time and audit surface, not correctness |
 
 **Carried unchanged from the delegating draft**, because tasks 14 and 17 are untouched by this
 revision and still need them:
@@ -2188,23 +2198,38 @@ revision and still need them:
 `[dependencies]` for the JWKS fetch; decision 16 removes that fetch, so the move is withdrawn and
 the crate keeps the position it has today.
 
-**The one open dependency question is still a Dockerfile question, and it is now three.** Since
-10.0.0 `jsonwebtoken` requires exactly one crypto backend. `rust_crypto` is pure Rust and builds in
-the current image unchanged, but pulls `rsa` 0.9, which carries RUSTSEC-2023-0071 with
-`patched = []`. **That advisory's old dismissal is void.** The delegating draft dismissed it because
-"a resource server only verifies with public keys"; willikins now signs, and the advisory is a
-private-key timing leak observable over the network. What replaces the dismissal is decision 22's
-normative constraint — willikins never signs with the RSA family — and a future `cargo-audit` or
-`cargo-deny` gate needs a documented ignore whose justification is **rewritten**, not reused. The
-alternative backend, `aws_lc_rs`, avoids `rsa` entirely; its blocker is **`g++`**, not cmake. The
-fetched README says CMake, bindgen and Go are never required for a non-FIPS build and a C/C++
-compiler is, and the builder stage installs `gcc` only, deliberately avoiding `build-essential`.
-Two further Dockerfile facts arrive with `webauthn-rs`: the builder needs **`libssl-dev` and
-`pkg-config`**, and the Dockerfile's own comment claiming no `aws-lc-sys`, `openssl-sys` or `cmake`
-anywhere in the tree becomes **false** and must be rewritten. Whether the runtime image
-(`gcr.io/distroless/cc-debian12`) ships the `libssl.so.3` that `openssl-sys` 0.9.114 links against
-is the weakest citation in either note and is **build-blocking**: verify items 1 and 2, task 1's to
-settle, which is why task 1 moved to the front.
+**The `jsonwebtoken` backend is already chosen: `rust_crypto`** (corrected 2026-10-20; the earlier
+text asked task 1 to "build both"). Since 10.0.0 `jsonwebtoken` requires exactly one crypto backend,
+and the workspace already enables `rust_crypto` for App Store Connect. Cargo unifies features across
+the workspace, so switching 2c to `aws_lc_rs` would switch it everywhere. That is not a 2c-local
+choice. Its price, recorded so it is not re-proposed by accident:
+
+- `apple_credential.rs` and `appstore.rs` would be re-tested on the other backend.
+- The builder would need `g++` (the fetched README says CMake, bindgen and Go are never required
+  for a non-FIPS build and a C/C++ compiler is; the builder installs `gcc` only, deliberately
+  avoiding `build-essential`).
+- The Dockerfile's "no `aws-lc-sys`" comment would become false.
+
+What it buys is `rsa` leaving the tree. So task 1 **records** `rust_crypto` and does not build both.
+
+**RUSTSEC-2023-0071 is a today problem, not a 2c one.** `rsa` 0.9.10 is already compiled into the
+shipped binary through `rust_crypto`, with `patched = []`. The advisory is a private-key
+signing-timing leak observable over the network. The delegating draft dismissed it because "a
+resource server only verifies with public keys". That dismissal was void before 2c signed anything,
+because the App Store Connect provider signs (ES256, so the advisory's RSA path is not exercised).
+What justifies ignoring it, today and after 2c, is a normative constraint: willikins never signs
+with the RSA family (decision 22). A future `cargo-audit` or `cargo-deny` gate therefore needs a
+documented ignore with that justification, rewritten rather than reused.
+
+**The Dockerfile questions that remain are OpenSSL's.** Two facts arrive with `webauthn-rs`:
+
+- The builder needs **`libssl-dev` and `pkg-config`**.
+- The Dockerfile's own comment claiming no `aws-lc-sys`, `openssl-sys` or `cmake` anywhere in the
+  tree (`Dockerfile:41`) becomes **false** for `openssl-sys` and must be rewritten.
+
+Whether the runtime image (`gcr.io/distroless/cc-debian12`) ships the `libssl.so.3` that
+`openssl-sys` 0.9.114 links against is the weakest citation in either note, and it is
+**build-blocking**. It is verify item 2, task 1's to settle, which is why task 1 runs first.
 
 **Rejected**, each for a fetched reason:
 
@@ -2247,7 +2272,7 @@ what survives is that it buys nothing `jsonwebtoken` 11 does not already do.
 `oauth2`'s rejection does not rest on a version-unification claim. An earlier draft said its
 `base64 >=0.21, <0.23` bound "cannot unify with the tree's 0.23.1"; that is not how cargo works —
 two semver-incompatible majors coexist in one build, which this tree already demonstrates
-(`Cargo.lock` holds `rand` 0.9.5 **and** 0.10.2, and three majors of `getrandom`). What duplicate
+(`Cargo.lock` holds `rand` 0.8.8, 0.9.5 **and** 0.10.2, and three majors of `getrandom`). What duplicate
 majors actually cost is build time and audit surface, and that is recorded under Risks.
 
 ## Crate contracts
@@ -2283,7 +2308,8 @@ ten fields and not one of them is an authorization point.
   refusal it journals through `Butler::record_auth_failure` and answers decision 1's challenge.
 - `oauth::scope` — the four scopes, the hierarchy, the `scope`/`scp` claim readers, and the
   tool-to-scope table of decision 3, shared with the consent screen so the two cannot disagree
-  about what a scope admits.
+  about what a scope admits. The table carries the rollback rows ahead of their tools, and test 7
+  ties it to the snapshotted tool list, so a `#[tool]` without a row fails the gate.
 - `oauth::metadata` — **both** documents (decision 19) as `#[derive(Serialize)]` structs with
   `skip_serializing_if = "Vec::is_empty"` on every array field, plus their routes and the
   `/jwks.json` route, registered on the root router outside both the auth middleware and rmcp's
@@ -2291,11 +2317,11 @@ ten fields and not one of them is an authorization point.
 
 **New module `src/issuer/`** — the issuing half.
 
-- `issuer::key` — ES256 generation, PKCS#8 persistence, the RFC 7638 thumbprint that is the `kid`,
+- `issuer::key` — ES256 generation, PKCS#8 loading, the RFC 7638 thumbprint that is the `kid`,
   the `JwkSet` assembly that sets that `kid` on the published JWK too, and the two-key overlap
-  (decision 22). The private key has a redacted `Debug`, no `Display`, no `Serialize`, and is
-  zeroized — the `Credential`/`Value` discipline the codebase already enforces, applied to a
-  signing key.
+  (decision 22). The private key is the `willikins-types` secret type described below: redacted
+  `Debug`, no `Display`, no `Serialize`, zeroized, and readable only through its own
+  `reveal_for_signing`.
 - `issuer::mint(sub, scopes, aud) -> Jwt` — the issuer's whole input surface, **a function
   boundary and not a trait**. It emits all seven RFC 9068 REQUIRED claims and sets `typ` explicitly
   (decision 22).
@@ -2304,7 +2330,8 @@ ten fields and not one of them is an authorization point.
 - `issuer::codes` — the authorization-code store of decision 21: the four stored bindings, the
   atomic get-and-remove claim, and the independent expiry check.
 - `issuer::authorize` and `issuer::token` — the two endpoints, their two-phase error split, the
-  consent screen, and the `iss` parameter on every response including errors (decisions 20, 21).
+  consent screen and its own CSP, the parked-request store for an `/authorize` with no session,
+  and `state` echoed beside `iss` on every response including errors (decisions 20, 21).
 
 **`http::approvals`** gains the human half: the passkey enrollment and authentication ceremonies,
 the durable credential store, the ceremony-to-account binding, the uniform username step, the
@@ -2312,10 +2339,21 @@ inline script under a `script-src` nonce, logout, and the mint-then-validate hop
 finished ceremony into a session (decision 4). The session itself lands first, as library code, in
 its own task: the signed `__Host-` cookie and jar, both bounded stores, unconditional id rotation,
 the absolute and idle timeouts, `no-store`, 128-bit ids, the non-persistent cookie,
-credential-change revocation, `X-Frame-Options`, the CSP, `Sec-Fetch-Site` and `Vary`, and the
-trailing-`/` origin fix. The nonce store, the Origin/Referer check and the body cap are untouched
-apart from task 13. **There is no `/approvals/callback`, no `state` store, no `code_verifier` and
+credential-change revocation, `X-Frame-Options`, the CSP, `Sec-Fetch-Site` and `Vary`, and
+pinning tests for the origin check's exact-match and both-absent behaviour, which already ship
+(decision 4). The nonce store, the Origin/Referer check and the body cap are untouched apart from
+task 13. Two additions from the 2026-10-20 addendum also land here. Pending **teardowns** get
+their own section and nonces (task 24, decision 4). And each plan section shows the root
+document's short sha, and shows "document says" only while the current file still has the
+planned sha (task 23, decision 25). **There is no `/approvals/callback`, no `state` store, no `code_verifier` and
 no token exchange**: the approvals page is no longer an OAuth client of anyone, willikins included.
+
+**`startup` and `document`** gain decision 25's hardening (task 21). `scan_directory` refuses a
+`WILLIKINS_WORKFLOWS_DIR` that is itself a symlink, reusing `StartupError::Symlink`. It hashes
+exactly the bytes it parsed, through `load_document_with_bytes`. And it logs each file name with
+its short sha, plus a named warning for an empty directory, or for one outside
+`RAILWAY_VOLUME_MOUNT_PATH` when that is set. Named loads open with `O_NOFOLLOW` and check the
+opened handle. Nothing in the server writes under `WILLIKINS_WORKFLOWS_DIR`.
 
 **`http::auth`** loses `bearer_auth`'s hash comparison and `basic_auth` entirely. `TokenHash`,
 `matches_any` and the constant-time compare go with them; nothing else in the crate uses them.
@@ -2336,6 +2374,19 @@ not a bare `PrincipalId` — and every `#[tool]` method passes it on to the `But
 which is the signature change decision 2 describes. It does **not** gain a scope refusal, because
 an authorization refusal is a transport-level status in the specification's table rather than a
 domain error, and a tool result cannot carry one (decision 3).
+
+### willikins-types
+
+One secret type and two plain ones. The **signing key** is a `#[domain(secret)]` type modelled on
+`AppleSigningKey`. It accepts PKCS#8 PEM, as `appstore.rs` already canonicalises for
+`EncodingKey::from_ec_pem`, and its bytes are readable only through its own `reveal_for_signing`.
+That is the sixth token-less `expose_secret` exception, named in `clippy.toml` and in
+`crates/willikins-core/tests/it/expose_secret_guard.rs`, and called only from `issuer::mint`
+(trust boundary 2). It never implements `Display` or `Serialize`, and the type registry refuses it
+as a literal or input like every other secret type. `OAuthSubject` and `ClientId` are plain,
+non-identifier domain types, for the reason decision 2 gives. Because `willikins-types` enables its
+own `executor` feature through a self dev-dependency, the fourth gate (`cargo check -p
+willikins-types -j 2`) is what proves the new type builds the way its dependents see it.
 
 ### willikins-journal
 
@@ -2369,59 +2420,105 @@ and `suppressed`, written only on a coalesced line (decision 1). No existing fie
 being produced, because `pre-pass-2-every-event.jsonl` carries both and removing a variant would
 break the replay the whole discipline exists to guarantee — and no field becomes required.
 
+**The events that carry a principal**, by name, so the claim fields cannot miss one. `ToolCalled`,
+`PlanRecorded`, `ApprovalGranted` and `ApprovalRejected` (field `approver`), `ApplyRefused`,
+`RunStarted`, and 3m's `TeardownPlanned` and `TeardownStarted`. The three claim fields land on all
+eight.
+
+**One read-side view is added**: `pending_teardowns`, beside `pending_approvals_view`
+(`crates/willikins-journal/src/journal.rs:295`), folding teardowns that need a decision the same way
+that view folds plans (decision 4, task 24). It is a fold over existing events, with no new
+event and no new field.
+
 Three fixtures replay unchanged through `Journal` and through `willikins_journal::replay`: both
 existing ones and the new `pre-2c-every-event.jsonl`. `post-pass-2-new-shapes.jsonl`, which pass 2
-froze as "the next pass's baseline", is that baseline; `pre-2c-every-event.jsonl` supplements it
-with the events this milestone touches, cut from the current binary before task 3 changes anything.
+froze as "the next pass's baseline", is that baseline. `pre-2c-every-event.jsonl` supplements it:
+it is cut from the current binary before task 3 changes anything, and it carries **every** `Event`
+variant, including `TeardownPlanned`, `TeardownStarted`, `TeardownStepFinished` and
+`TeardownFinished`.
 
 **How the new fixture is produced.** Both existing fixtures came from an `#[ignore]`d generator
 test in `willikins-journal` — `regenerate_the_frozen_fixture`, one in
-`crates/willikins-journal/tests/pre_pass_2_replay.rs:291` and one in
-`crates/willikins-journal/tests/post_pass_2_shapes.rs:217`, each writing to
+`crates/willikins-journal/tests/it/pre_pass_2_replay.rs:311` and one in
+`crates/willikins-journal/tests/it/post_pass_2_shapes.rs:217` (both moved under `tests/it/` by 3k),
+each writing to
 `$WILLIKINS_FIXTURE_OUT` and each kept in the tree as the fixture's provenance rather than as a way
 to refresh it. `pre-2c-every-event.jsonl` is generated the same way, by the same shape of test, and
 carries the same "never point this at the committed file" warning.
 
 ### willikins-cli
 
-`hash-token` is removed. **One subcommand arrives**: the enrollment and break-glass command of
-decision 24, which mints a one-time enrollment URL to stdout on the host and journals the act as
+`hash-token` is removed. **Two subcommands arrive.** The second is `willikins documents check
+<dir>` (task 22, decision 25). It runs exactly the server's `scan_directory` over a directory and
+prints a `shasum -a 256`-format manifest that equals `ServerStarted.workflow_hashes`, so the
+operator can check a document set before publishing it. It reads only that directory and writes
+nothing. The first is the enrollment and break-glass command of decision 24, which mints a one-time enrollment URL to stdout on the host and journals the act as
 loudly as an approval. It is a host-side command by design — the design doc's trust boundary is the
 network boundary, and whoever holds host, environment and Doppler access already controls the
 deployment — and it is explicitly **not** a fourth authentication layer: it introduces no static
 shared secret, which trust boundary 5 forbids. `serve --http` reaches the same configuration path
 as the binary, so it inherits every new refusal. The CLI's commands in
 `crates/willikins-cli/src/commands.rs` pass `Principal { id, claims: None }` where they pass a bare
-`PrincipalId` today. The CLI's own flow (`plan`, `apply`, `approve`, `reject`, `runs`, `run`
-against a journal file) is unauthenticated and unchanged: it is the operator's local flow, on the
+`PrincipalId` today. The CLI's own flow (`plan`, `apply`, `approve`, `reject`, `runs`, `run`, and
+3m's `rollback`, which calls `Butler::plan_rollback` and `apply_rollback`, against a journal file)
+is unauthenticated and unchanged: it is the operator's local flow, on the
 machine that holds the credentials, and decision 5's argument for removing loopback bearer tokens
 rests on it staying that way.
 
 ### Dockerfile and deployment
 
-Three build inputs change, not one. The `jsonwebtoken` backend is still task 1's build-both
-choice; the builder stage gains **`libssl-dev` and `pkg-config`** for `webauthn-rs-core`'s
-unconditional `openssl-sys`; and the Dockerfile's own comment asserting no `aws-lc-sys`,
-`openssl-sys` or `cmake` anywhere in the tree becomes **false** and is rewritten in the same
-commit that makes it false. Whether the distroless runtime image carries the matching `libssl.so.3`
-is build-blocking and is verify item 2.
+Four build inputs change.
 
-Doppler's Railway integration carries a **different** third secret from the one the delegating
-draft named. `WILLIKINS_OAUTH_CLIENT_SECRET` does not exist; what takes its place, on open decision
-2's recommended branch, is the signing key and its retiring sibling.
-`.railway/railway.ts` changes twice, both in task 19: it gains a `domains` entry on the
-custom-domain branch of decision 9 step 2, and its `env` block drops the two retired `preserve()`
-rows and gains one per new `serve --http` variable at step 5. Both only after a read-only
-`railway config plan` that shows no delete, because the file's own rule is that an omitted field is
-an instruction to delete.
+- The `jsonwebtoken` backend does **not** change: it is already `rust_crypto` (see the pinned
+  dependencies).
+- The builder stage gains **`libssl-dev` and `pkg-config`** for `webauthn-rs-core`'s
+  unconditional `openssl-sys`. The Dockerfile's own comment (`Dockerfile:41`) asserting no
+  `aws-lc-sys`, `openssl-sys` or `cmake` anywhere in the tree becomes **false** and is rewritten
+  in the same commit that makes it false.
+- **The runtime stage stops carrying workflow documents** (task 20, decision 25). The
+  `COPY workflows/*.yaml /app/workflows/` and the `ENV WILLIKINS_WORKFLOWS_DIR=/app/workflows`
+  (`Dockerfile:92`, `:93`) go, along with their comment (which still says "Only the two real
+  workflow documents"). The runtime stage then copies the binary and nothing else.
+- `.dockerignore` gains `workflows`, `private` and `crates/willikins-cli/tests/operator_*`.
 
-**The credential store and the signing key are the first state this project has ever had to back
-up.** The journal is append-only and is not a credential store; losing the credential store means
-every human re-enrols, and losing the signing key refuses every outstanding token. Railway
-constrains where that state can live: one volume per service, no replicas with a volume, and
-downtime on redeploy. Go-live step 8 is the backup step, and the volume's mount path is verify
-item 12 because no `railway.json` or `railway.toml` is in the tree and it is written down nowhere
-fetchable.
+`crates/willikins-server/tests/it/image_contents.rs` flips with the image. It currently pins the
+COPY (`:92`), the ENV (`:149`, `:166`) and
+`the_image_workflows_directory_holds_exactly_the_seventeen_positive_documents` (`:250`), and its
+module doc still says "three". It is rewritten to assert three things: the runtime stage copies
+only the binary; no `ENV` sets `WILLIKINS_WORKFLOWS_DIR`; and `.dockerignore` excludes the three
+paths (test 27). Whether the distroless runtime image carries the matching `libssl.so.3` is
+build-blocking and is verify item 2.
+
+Doppler's Railway integration carries every provider credential the README names, plus, on open
+decision 2's branch, the signing key and its retiring sibling (go-live step 7).
+`WILLIKINS_OAUTH_CLIENT_SECRET` does not exist. `.railway/railway.ts` changes three times:
+
+- In **task 20**, it gains `WILLIKINS_WORKFLOWS_DIR: preserve()`, after the operator has set the
+  variable live and published the interim document set (decision 25's cutover).
+- In **task 19**, it gains a `domains` entry on the custom-domain branch of decision 9 step 2.
+- Also in task 19, at step 6, its `env` block drops the two retired `preserve()` rows and gains one
+  per new `serve --http` variable.
+
+Each change happens only after a read-only `railway config plan` that shows no delete, because the
+file's own rule is that an omitted field is an instruction to delete.
+
+**One volume now holds identity state, audit state and privileged content together.** The volume
+is mounted at `/data` (`.railway/railway.ts:58`, 5000 MB), and Railway allows one per service. So
+the journal, the credential store, the client table and the documents all live on it, in decision
+25's layout:
+
+| Path | Variable |
+| --- | --- |
+| `/data/journal.jsonl` | `WILLIKINS_JOURNAL_PATH` |
+| `/data/credentials/` | `WILLIKINS_CREDENTIAL_STORE_PATH` |
+| `/data/clients.yaml` | `WILLIKINS_CLIENTS_PATH` |
+| `/data/workflows/` | `WILLIKINS_WORKFLOWS_DIR` |
+
+The credential store, the client table and the journal are the first state this project has had
+to back up. Losing the credential store means every human re-enrols, and losing the signing key
+(in Doppler) refuses every outstanding token. Documents are not backed up from the volume: they
+are re-published from the operator's checkout. Go-live step 9 is the backup step. Verify item 12's
+mount-path half is settled; the volume's backup and restore behaviour is verify item 36.
 
 ## Environment variables
 
@@ -2437,11 +2534,11 @@ values and their shape, not their spelling.
 
 | Variable | Default | Required | Value and who reads it |
 | --- | --- | --- | --- |
-| `WILLIKINS_PUBLIC_URL` | none | `serve --http` | The canonical `https://` origin the service is reached at; no path, no query, no fragment, refused otherwise. The **issuer identifier** is this value exactly; the audience is `<it>/mcp`; the RP ID is its host. Read by `oauth::config`, `oauth::metadata`, `issuer::mint`, the client-redirect matcher and the ceremonies. |
+| `WILLIKINS_PUBLIC_URL` | none | `serve --http` | The canonical `https://` origin the service is reached at: lowercase scheme and host, no default port, no trailing `/`, no path, no query, no fragment. Anything else is refused with `HttpConfigError::NonCanonicalUrl`, checked on the raw string (decision 12). The **issuer identifier** is this value exactly; the audience is `<it>/mcp`; the RP ID is its host. Read by `oauth::config`, `oauth::metadata`, `issuer::mint`, the client-redirect matcher and the ceremonies. |
 | `WILLIKINS_SIGNING_KEY_PEM` | none | `serve --http` | The current ES256 signing key, PKCS#8 PEM, a secret with a redacted `Debug` and no `Display` or `Serialize`. Doppler only (open decision 2). Read by `issuer::key`. |
 | `WILLIKINS_SIGNING_KEY_RETIRING_PEM` | empty | optional | The previous signing key during a rotation overlap. Published in the JWKS, never used to sign. Two variables exist because one cannot express an overlap (decision 22). Read by `issuer::key`. |
-| `WILLIKINS_CREDENTIAL_STORE_PATH` | none | `serve --http` | The durable passkey and recovery-code store, on the Railway volume beside the journal. Read by the ceremonies and the enrollment CLI. |
-| `WILLIKINS_CLIENTS_PATH` | none | `serve --http` | The pre-registered client table: client id, display name, registered redirect URIs (decision 23). Read by `issuer::clients`. |
+| `WILLIKINS_CREDENTIAL_STORE_PATH` | none | `serve --http` | The durable passkey and recovery-code store, on the volume at `/data/credentials/`, beside the journal and never inside `workflows/` (decision 25). Read by the ceremonies and the enrollment CLI. |
+| `WILLIKINS_CLIENTS_PATH` | none | `serve --http` | The pre-registered client table: client id, display name, registered redirect URIs (decision 23). On the volume at `/data/clients.yaml`, written by the operator by hand, never inside `workflows/`. Read by `issuer::clients`. |
 | `WILLIKINS_AGENT_SUBJECTS` | none | `serve --http` | Comma-separated `sub` values allowed to hold any MCP scope. Empty or unset refuses startup (decision 3). Read by `oauth::middleware::require_token`. |
 | `WILLIKINS_APPROVER_SUBJECTS` | none | `serve --http` | Comma-separated `sub` values allowed to approve. Empty or unset refuses startup. Read by the approvals decision handler. |
 | `WILLIKINS_OAUTH_ALGORITHMS` | `ES256` | optional | Comma-separated JWA names for the **validator's** allowlist. Asymmetric families only; intersected per key; must contain `ES256` (decision 15). Read by `oauth::validate`. |
@@ -2462,11 +2559,20 @@ them set: `WILLIKINS_OAUTH_ISSUER` (now derived), `WILLIKINS_OAUTH_CLIENT_ID`,
 
 Retired, and refused at startup: `WILLIKINS_AGENT_TOKEN_HASHES`, `WILLIKINS_APPROVER_TOKEN_HASH`.
 
-Unchanged: `WILLIKINS_WORKFLOWS_DIR`, `WILLIKINS_JOURNAL_PATH`, `WILLIKINS_ALLOWED_HOSTS` (which
+**Changed, not added:** `WILLIKINS_WORKFLOWS_DIR` (task 20, decision 25). Its name and meaning are
+the same, but the image no longer sets it. On the deployment it becomes a service variable set to
+`/data/workflows` and kept by a `preserve()` row in `.railway/railway.ts`. Unset, it is
+`ConfigError::Missing`, never a fallback to a baked-in directory. The README's row, which today says
+"Always. The image sets this; do not set it again.", changes in task 20, and
+`crates/willikins-server/tests/it/readme_variables.rs` is what holds the README table to the code.
+
+Unchanged: `WILLIKINS_JOURNAL_PATH` (`/data/journal.jsonl`), `WILLIKINS_ALLOWED_HOSTS` (which
 gains the measured public host at go-live), `WILLIKINS_PLAN_TTL_SECONDS`,
 `WILLIKINS_APPROVAL_WINDOW_SECONDS`, `WILLIKINS_PLAN_RATE_PER_MINUTE`,
-`WILLIKINS_READ_RATE_PER_MINUTE`, `WILLIKINS_GITHUB_TOKEN`, `WILLIKINS_DOPPLER_TOKEN`,
-`WILLIKINS_FAKE_CATALOG`, `PORT`. The README's variable reference is updated in the same task as
+`WILLIKINS_READ_RATE_PER_MINUTE`, the provider credentials `WILLIKINS_GITHUB_TOKEN`,
+`WILLIKINS_DOPPLER_TOKEN`, `WILLIKINS_BUILDKITE_TOKEN` and `WILLIKINS_SIGNOZ_API_KEY`,
+`WILLIKINS_SIGNOZ_HOST`, `WILLIKINS_FAKE_CATALOG`, and `PORT`. The App Store Connect keys are not
+deployment variables: documents read them from Doppler at run time. The README's variable reference is updated in the same task as
 the code that reads each one.
 
 ## Acceptance tests
