@@ -1046,9 +1046,19 @@ the same bootstrap page a deployment uses, armed by `WILLIKINS_BOOTSTRAP_SECRET`
 environment (decision 27), so the local loop has no second path. That is stated as an
 improvement **conditional** on one unresolved question and not as a fact: whether `__Host-`prefixed
 cookies are honoured on `http://localhost` was not settled by any fetched source (verify item 9),
-and without them the session half of that loop does not run. The conditional half is the session;
-discovery, `/authorize`, `/token` and a `list_tools` call work on loopback either way, which is
-what test 18's harness drives.
+and without them **nothing past discovery runs on plain loopback** (corrected by the 2026-10-20
+review of the answers; the earlier text said `/authorize`, `/token` and `list_tools` worked
+"either way"). The bootstrap ceremony is bound by `__Host-willikins-bootstrap`, the login by
+`__Host-willikins-login`, and the consent screen that `/authorize` must reach requires a session
+(decision 20). So the first enrolment, every consent, every code redemption and test 18's
+registered flow all hang on item 9. Only discovery and the unregistered client's refusal work
+either way. **If verify item 9 fails, the fallback** runs the local server behind a
+TLS-terminating loopback proxy with a locally trusted certificate. `WILLIKINS_PUBLIC_URL` is then
+`https://localhost:<port>`, and every cookie is `Secure` over real TLS. The shipped binary is
+unchanged, so this reopens nothing: no loopback relaxation of the cookie prefix, no second
+authentication path, and the rejected local enrolment command stays rejected (decision 27). Its
+cost is a local certificate the stock client must also trust, and that is part of verify item
+9.
 
 What has not changed is the refusal that matters: a `--dev-token` flag, an "insecure mode", or a
 fake issuer the shipped binary can start are all a **second authentication path**, which is the
@@ -3044,7 +3054,9 @@ credential store is on the volume, so the CLI had no host to run on.
   journal, so a restore to a point before the use rewinds both. The variable must therefore be
   deleted after use, and go-live step 9 checks it is unset after any restore.
 - **The CLI.** No enrollment command is built, on any host. The same variable works on a
-  loopback `serve --http` (decision 5), so the local loop needs no second path. The CLI keeps only
+  loopback `serve --http` (decision 5), on plain `http://` if verify item 9 holds and behind
+  decision 5's TLS-terminating loopback proxy if it does not, so the local loop needs no second
+  path. The CLI keeps only
   `bootstrap-secret generate`, which touches no store.
 
 *Pinned by test 34.*
@@ -4032,8 +4044,11 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     its access token is made to expire, which is the only stock-client exercise decision 26 gets
     before test 19. Then the refusals that need no minting: no token, a truncated token, a token with
     a tampered signature, and the same token against a server started with a **different
-    `WILLIKINS_PUBLIC_URL`**, which is how the audience is varied now that it is derived. The run
-    is recorded, and repeated against the public domain as a step of test 19.
+    `WILLIKINS_PUBLIC_URL`**, which is how the audience is varied now that it is derived. The
+    registered half needs a bootstrap enrolment, a login and a consent, all cookie-bound. So it
+    runs on plain loopback only if verify item 9 holds, and otherwise behind decision 5's
+    TLS-terminating loopback proxy, with the same binary (2026-10-20 review of the answers). The
+    run is recorded, and repeated against the public domain as a step of test 19.
 19. **Go-live checks**, run by hand with the operator. They are grouped by theme below, and each
     is run at the decision 9 step it belongs to.
     - **Measured, on the disposable environment of step 3:** the `Host` and `X-Forwarded-Host` the
@@ -4688,10 +4703,15 @@ says so in the decision rather than waiting on a fetch.
    the TypeScript SDK relaxes the port for all three while forbidding cross-matching between them;
    `oxide-auth` has an `IgnorePortOnLocalhost` variant. Four sources, three behaviours. Decide
    deliberately and fixture it.
-9. **Tasks 9 and 18: whether `__Host-`prefixed cookies are honoured on `http://localhost`.** The
-   prefix requires `Secure` and browsers treat localhost as a secure context, but no primary source
-   was fetched for the prefix specifically. It decides only whether decision 5's improved developer
-   loop is real.
+9. **Tasks 9, 18 and 28: whether `__Host-`prefixed cookies are honoured on `http://localhost`.**
+   The prefix requires `Secure` and browsers treat localhost as a secure context, but no primary
+   source was fetched for the prefix specifically. **It gates more than a nicety** (widened by
+   the 2026-10-20 review of the answers): with no enrollment command, it decides whether a local
+   bootstrap enrolment, a login, a consent and therefore test 18's registered flow run on plain
+   loopback at all. If it fails, decision 5's fallback, a TLS-terminating loopback proxy with a
+   locally trusted certificate, carries them. Two things about that fallback are unverified too:
+   which proxy the operator's machine runs it with, and how Claude Code, a Node.js process, is
+   told to trust the local certificate at `/token`.
 10. **Tasks 9 and 10: NIST SP 800-63B-4 §3.2.2 (throttling) was not read verbatim**, so the
     recovery-code throttle number is unpinned. So is the apparent tension between §4.2.1.1 (at
     least 64 bits, stored hashed) and §3.1.2.2 (look-up secrets shorter than 112 bits SHALL use a
@@ -5250,8 +5270,8 @@ as the coordinator relayed them (the 2026-10-20 addendum at the top says which i
 withholds the session cookie on an externally-initiated top-level navigation to `/authorize` before
 flipping anything, and default to `Lax` until it is measured. Whether `localhost` joins `127.0.0.1`
 and `[::1]` in the port-relaxed redirect set is a fixture decision for task 11 (verify item 8).
-Whether `__Host-` cookies are honoured on `http://localhost` decides only whether decision 5's
-improved developer loop is real (verify item 9).
+Whether `__Host-` cookies are honoured on `http://localhost` decides whether local enrolment,
+consent and test 18 run on plain loopback or behind decision 5's TLS fallback (verify item 9).
 
 ## Review resolutions
 
